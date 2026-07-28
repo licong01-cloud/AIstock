@@ -342,11 +342,16 @@ def _load_l1_source_inputs(
     source = request["source"]
     security_identity_manifest = _load_security_identity_manifest(source)
     provider_absence_manifest = _load_provider_absence_manifest(source)
+    source_start = _date(source.get("source_start"), "source_start")
     source_spec = StockFactSourceSpec(
         universe_key=str(source.get("universe_key") or ""),
         universe_rule_version=str(source.get("universe_rule_version") or ""),
-        source_start=_date(source.get("source_start"), "source_start"),
+        source_start=source_start,
         source_end=_date(source.get("source_end"), "source_end"),
+        circ_mv_history_start=_date(
+            source.get("circ_mv_history_start") or source_start.isoformat(),
+            "circ_mv_history_start",
+        ),
     )
     conn, db_identity = _connect_readonly(db_prefix)
     try:
@@ -604,6 +609,9 @@ def _c009_train_source_request(request_template: dict[str, Any]) -> dict[str, An
     if train_start < source_start or train_end > source_end:
         raise StateModelSetError("C-009 train window escapes the immutable source window")
     request = deepcopy(request_template)
+    request["source"]["circ_mv_history_start"] = str(
+        request_template["source"].get("circ_mv_history_start") or source_start.isoformat()
+    )
     request["source"]["source_start"] = train_start.isoformat()
     request["source"]["source_end"] = train_end.isoformat()
     return request
@@ -620,6 +628,12 @@ def _c009_source_statistics(inputs: dict[str, Any]) -> dict[str, Any]:
         "circ_mv_asof_stale_count",
         "circ_mv_asof_max_staleness_trading_days",
         "circ_mv_asof_stale_key_sha256",
+        "circ_mv_lookback_contract_version",
+        "circ_mv_history_start",
+        "circ_mv_pit_boundary_crossing_count",
+        "circ_mv_pit_boundary_crossing_available_count",
+        "circ_mv_pit_boundary_crossing_invalid_count",
+        "circ_mv_pit_boundary_crossing_key_sha256",
     )
     mismatches = [field for field in fields if l1.get(field) != l2.get(field)]
     if mismatches:

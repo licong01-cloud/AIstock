@@ -869,6 +869,44 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
     `9f38e61ee2c6b93795a14640adeca4f17ba22e7e2021272fbe23f37238565e3f`。5/5 opportunity hashes、排除 symbol、四项
     candidate 与最低行数均和审核修复后报告一致；所有 fit/write/action flags 继续为 `false`。
 
+##### BUG-892. PIT entry 与 causal `circ_mv` denominator 的时间域冲突
+
+1. **根因事实**：C-010-DIAG-02 的 fail-closed evidence 包含 1,073 个精确 `symbol/date`、1,072 只证券和 455 个交易日；
+   全部发生在 `trade_date == stock_universe_pit_spans.eligible_start`，其中 `ipo_365d=955`、`st_restore=118`。
+   这些证券全部具有当日价格、当日正数 `circ_mv` 和 `<t` 的正数 authoritative `daily_basic.circ_mv`；955 项可使用 exact
+   previous-market-day row，118 项使用 C-009-A 已批准的最新 causal row，staleness 为 1 个市场交易日。因此该缺口不是 DB/H5、
+   Tushare provider、证券代码 identity 或 moneyflow 事实缺失，而是 reader 把当前 PIT span 的 `eligible_start` 错当成
+   `circ_mv` 历史事实可见性的下界。
+2. **批准的修复边界**：用户于 2026-07-28 授权登记 BUG-892 并按上述根因执行修复。PIT span 继续唯一决定证券是否进入当日
+   eligible universe；`circ_mv` lookup 则使用版本 `hmm_risk_causal_circ_mv_source_window_v1`，在同一 immutable source/security
+   identity 下先选择满足
+   `request.source_start <= source_date <= prev_market_trade_date(t) < t` 的最新 authoritative row；该最新 row 的 `circ_mv`
+   必须 finite 且严格为正，否则显式 fail closed，不得跳过它后回退到更早 row。
+   `source_date` 可以早于当前 PIT span 的 `eligible_start`，但禁止早于 immutable request source window；不得使用当日/未来 row、
+   0、均值、行业代理、neutral、当前值 fallback 或删除当日新进入证券。
+3. **语义隔离**：该修复只把 PIT membership 时间域与 causal float-market-value 权重事实时间域分离。C-007-A 的
+   `previous_close`/return 仍不得跨 listing/PIT entry，ST/退市股票的 PIT 选择语义、hard semantic authority、两个 family、
+   D3/D4/D5/D6 及 model/READY 条件均不改变。首个 eligible day 的 return 缺失继续由既有 count/weight coverage 显式衡量，
+   不得把 denominator 修复解释为该股票的 feature row 已完整。
+4. **审计证据**：每个 stock-fact row 持久化 `circ_mv_source_date`、trading-day staleness、`circ_mv_history_start`、
+   `circ_mv_pit_eligible_start`、`circ_mv_crossed_pit_entry_boundary` 和 lookback contract version；dataset manifest 保存 crossing
+   count、ordered key hash、source-window identity 与 contract version。crossing=true 但日期顺序、staleness 或 contract identity
+   不完整时以 `hmm_risk_stock_fact_circ_mv_pit_boundary_evidence_invalid` fail closed，不压缩为 generic missing。
+5. **验证边界**：直接测试必须覆盖 PIT-entry 前一日正数事实可用、source window 之前的事实仍被拒绝、alias/no-alias SQL 使用同一
+   history boundary、crossing receipt/hash 可回读。随后仅执行 601 日 no-fit denominator/preflight：1,073 项必须全部得到 causal
+   weight，P/F/O、invalid sector/date 与 row-count evidence 重新计算；在该 evidence 完整前仍禁止 5184 fits、selection、D6、
+   model/READY。该重跑不是新增人工门禁，也不授权 DDL、DML、依赖安装或 runtime action。
+6. **正式审核修正**：direct SQL 与 missing-price direct 路径不得以 `circ_mv` 数值是否有效决定是否保留 source date、staleness 或
+   PIT-boundary crossing。时间因果性与数值有效性必须独立：最新 causal row 即使为 NULL、非数值、非有限或非正，也必须保留其
+   source identity，并以稳定 `circ_mv_fact_status`/`circ_mv_reason_code` 使 denominator fail closed；不得把“最新 row 数值无效”
+   伪装成“source row 不存在”。crossing authority 必须由日期关系推导，调用方布尔值与推导结果任一方向不一致均以
+   `hmm_risk_stock_fact_circ_mv_pit_boundary_evidence_invalid` 拒绝。crossing receipt/hash 同时绑定 fact status 与 reason code。
+7. **C-009 窗口修正**：`source_start/source_end` 是本次 stock-fact observation 输出窗口；`circ_mv_history_start` 是从原始冻结 request
+   继承的 causal denominator 历史下界，两者不得再次压缩成同一个字段。C-009 将 observation window 收窄到 601 日 train window 时，
+   必须保持原 request 的 `circ_mv_history_start=2020-07-30`，否则 2022 年首个交易日所需的 2021-12-31 causal row 会再次被错误排除。
+   L1/L2 preflight source statistics 必须同时比较 crossing total、available、invalid 和 ordered key hash；只有 total=available=1,073 且
+   invalid=0 才证明本 BUG denominator 根因闭合。该历史窗口只服务 `<t` 权重，不扩展 observation、PIT membership 或 return history。
+
 ##### BUG-870. 正式 train coverage preflight 与 child failure receipt
 
 1. **失败事实**：clean producer `1ad5ff6209d723c41537d51b1d2d750a95a2e371` 的 identity preflight 通过后，
@@ -1783,6 +1821,7 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-009-D | 三类缺口按什么顺序实现和恢复正式训练 | `PREFLIGHT_EXECUTED_BLOCKED_TRAIN_COVERAGE` | 601 日 source-only preflight 已执行且无 DB/runtime write；legacy L1 31/31、legacy L2 130/131、autocycle L1/L2 0 complete；不得训练、selection、D6 或 READY |
 | BUG-886 | provider absence 如何避免放大为无关 feature/sector 的全局 train coverage failure | `SOURCE_REVIEW_FIX_VALIDATED_DIAGNOSTIC_VERIFIED_FORMAL_POLICY_PENDING` | 正式/诊断 schema、统一 diagnostic denominator、exact opportunity date-set/hash 与单一 receipt 已修复；rebase 后权威 601 日 report `2b1f4acc…7260` 回读通过，PIT/selection/runtime prediction universe 不变，正式 policy 与训练保持 blocked |
 | C-010-DIAG-01 | 是否先执行 601 日 feature-domain eligibility/mask 只读诊断 | `VERIFIED_AFTER_REVIEW_FIX_NO_FIT_NO_SELECTION_NO_ARTIFACT` | 当前 source ancestry 的 clean producer report canonical `2b1f4acc…7260`；5 个 exact opportunity hashes 完整，仅排除 `689009.SH` moneyflow contribution，四项 candidate valid 且无需删 feature；旧 `ded02740…251f` 仅为 failed-review identity，`ac218d78…6b3ae` 为 pre-rebase verified evidence |
+| BUG-892 | PIT entry day 的 causal `circ_mv` 为什么形成结构性 denominator failure | `SOURCE_REVIEW_FIX_VERIFIED_DENOMINATOR_COMPLETE_DOWNSTREAM_TRAIN_COVERAGE_BLOCKED` | producer `77265dd6...` 的 601 日 no-fit receipt `7c36f228...fdd1ca`：crossing total/available/invalid=`1073/1073/0`，history start=`2020-07-30`，ordered key hash=`0b89a9d5...53c8f19`；PIT-entry denominator 根因闭合。整体 preflight 仅因既有 train observation coverage blocked（legacy L2 `801881.SI=102<120`、autocycle L2 coverage）而保持 blocked；未执行 fit/selection/D6/model/READY/DB/runtime action，且不改变 PIT、return 或 hard semantic 语义 |
 | BUG-870 | formal preflight 是否在grid前闭合四个family/level的train coverage并持久化child typed failure | `SOURCE_FIX_IN_PROGRESS_FORMAL_GRID_BLOCKED` | clean main正式执行在首fit前因`801010.SI`仅10行失败；新增完整coverage preflight、blocked receipt和typed child failure receipt；不改变feature/PIT/cross-section/120行合同，不恢复grid |
 | C-008-B3-D4-02-DIAG-03 | 是否仅重聚合 sector-local covariance reference 与候选 bounds sensitivity | `VERIFIED_DIAGNOSTIC_ONLY_NO_REFIT_NO_SELECTION_NO_ARTIFACT` | canonical report `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；统一 `[1e-4,200]` 被证据否定，未批准替代 bound |
 | C-008-B3-D3-03/D4-02-DIAG-04 | 是否用 scale-aware initialization/prior 在固定环境执行两次完整 refit 诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | producer `94abea6c...`；992 fits；payload hash `3abb384e...19aac` bitwise equal；report canonical `2c9136d5...74c9b`；无正式 acceptance、selection、model/READY/DB/runtime write |

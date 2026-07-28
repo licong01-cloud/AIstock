@@ -64,6 +64,12 @@ def _preflight_inputs() -> dict:
                 "circ_mv_asof_stale_count": 466,
                 "circ_mv_asof_max_staleness_trading_days": 9,
                 "circ_mv_asof_stale_key_sha256": "3" * 64,
+                "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
+                "circ_mv_history_start": "2020-07-30",
+                "circ_mv_pit_boundary_crossing_count": 1_073,
+                "circ_mv_pit_boundary_crossing_available_count": 1_073,
+                "circ_mv_pit_boundary_crossing_invalid_count": 0,
+                "circ_mv_pit_boundary_crossing_key_sha256": "4" * 64,
             },
             "calendar_benchmark": {"schema_version": "calendar_v1", "row_count": 601},
             "security_source_identity": {
@@ -87,6 +93,12 @@ def _preflight_inputs() -> dict:
             "circ_mv_asof_stale_count": 466,
             "circ_mv_asof_max_staleness_trading_days": 9,
             "circ_mv_asof_stale_key_sha256": "3" * 64,
+            "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
+            "circ_mv_history_start": "2020-07-30",
+            "circ_mv_pit_boundary_crossing_count": 1_073,
+            "circ_mv_pit_boundary_crossing_available_count": 1_073,
+            "circ_mv_pit_boundary_crossing_invalid_count": 0,
+            "circ_mv_pit_boundary_crossing_key_sha256": "4" * 64,
         },
         "panel": [object()] * 35_712,
         "l2_panel": [object()] * 150_912,
@@ -257,11 +269,15 @@ def test_c009_preflight_uses_immutable_train_window_and_never_runs_model_stages(
     assert report["status"] == "preflight_complete"
     assert observed["source"]["source_start"] == "2022-01-01"
     assert observed["source"]["source_end"] == "2024-06-30"
+    assert observed["source"]["circ_mv_history_start"] == "2020-07-30"
     assert observed["db_prefix"] == "TDX_DB_"
     assert report["trading_date_count"] == 601
     assert report["source_statistics"]["moneyflow_provider_absence_count"] == 502
     assert report["source_statistics"]["moneyflow_alias_resolution_count"] == 591
     assert report["source_statistics"]["circ_mv_asof_stale_count"] == 466
+    assert report["source_statistics"]["circ_mv_pit_boundary_crossing_count"] == 1_073
+    assert report["source_statistics"]["circ_mv_pit_boundary_crossing_available_count"] == 1_073
+    assert report["source_statistics"]["circ_mv_pit_boundary_crossing_invalid_count"] == 0
     assert report["provider_absence_authority"]["manifest_sha256"] == "b" * 64
     assert report["approved_source_coverage_contract_applied"] is True
     for field in (
@@ -282,6 +298,17 @@ def test_c009_preflight_uses_immutable_train_window_and_never_runs_model_stages(
 def test_c009_preflight_rejects_l1_l2_source_evidence_drift(monkeypatch) -> None:
     inputs = _preflight_inputs()
     inputs["l2_stock_fact_manifest"]["moneyflow_provider_absence_count"] = 501
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "e" * 40)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, req: _coverage_preflight())
+
+    with pytest.raises(StateModelSetError, match="C-009 L1/L2 source evidence mismatch"):
+        subject.prepare_c009_stock_fact_preflight(_request(), db_prefix="TDX_DB_")
+
+
+def test_c009_preflight_rejects_l1_l2_circ_mv_crossing_evidence_drift(monkeypatch) -> None:
+    inputs = _preflight_inputs()
+    inputs["l2_stock_fact_manifest"]["circ_mv_pit_boundary_crossing_available_count"] = 1_072
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "e" * 40)
     monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
     monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, req: _coverage_preflight())
@@ -348,7 +375,12 @@ def test_c010_diagnostic_compares_baseline_and_masks_without_model_actions(monke
     assert report["baseline_train_coverage"]["train_coverage_valid"] is False
     assert report["observation_eligibility"]["excluded_moneyflow_symbols"] == ["689009.SH"]
     assert observed == {
-        "source": {**_request()["source"], "source_start": "2022-01-01", "source_end": "2024-06-30"},
+        "source": {
+            **_request()["source"],
+            "source_start": "2022-01-01",
+            "source_end": "2024-06-30",
+            "circ_mv_history_start": "2020-07-30",
+        },
         "db_prefix": "TDX_DB_",
         "diagnostic": True,
     }
