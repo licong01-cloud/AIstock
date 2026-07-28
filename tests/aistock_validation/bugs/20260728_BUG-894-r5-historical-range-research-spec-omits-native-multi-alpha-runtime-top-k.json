@@ -123,10 +123,9 @@
   "required_verification": [
     "l0",
     "paper_v2_backend",
-    "frontend_tsc",
+    "frontend_type_lint",
     "paper_v2_ui",
-    "backend/tests/watchlist/test_advisory_api.py",
-    "backend/tests/watchlist/test_advisory_program.py"
+    "watchlist_backend"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -148,10 +147,9 @@
       "type:bug"
     ],
     "recommended_verification": [
-      "frontend_tsc",
+      "frontend_type_lint",
       "paper_v2_ui",
-      "backend/tests/watchlist/test_advisory_api.py",
-      "backend/tests/watchlist/test_advisory_program.py",
+      "watchlist_backend",
       "l0"
     ],
     "reproduce_required": true,
@@ -224,9 +222,8 @@
     ],
     "premerge_required_plans": [
       "l0",
-      "frontend_tsc",
-      "backend/tests/watchlist/test_advisory_api.py",
-      "backend/tests/watchlist/test_advisory_program.py"
+      "frontend_type_lint",
+      "watchlist_backend"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -287,9 +284,8 @@
       ],
       "premerge_required_plans": [
         "l0",
-        "frontend_tsc",
-        "backend/tests/watchlist/test_advisory_api.py",
-        "backend/tests/watchlist/test_advisory_program.py"
+        "frontend_type_lint",
+        "watchlist_backend"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
