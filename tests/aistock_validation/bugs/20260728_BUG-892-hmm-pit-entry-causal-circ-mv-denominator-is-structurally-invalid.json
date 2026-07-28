@@ -2,7 +2,10 @@
   "actual": "C-010-DIAG-02 proves 1,073 exact symbol/date cases are all PIT eligible_start events (955 ipo_365d, 118 st_restore). All have authoritative positive causal daily_basic.circ_mv before t, but PostgresStockFactReader rejects every source date earlier than the current PIT span eligible_start while A2 includes the entrant in P/F and requires finite weights. This creates structural denominator failure across 990 L1 and 1,049 L2 sector/date entries. Repair must preserve PIT membership, hard semantic authority and no-lookahead; no current-day/future/zero/default fill, no symbol exclusion, no HMM/selection/D6/model/READY.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260728_BUG-892-hmm-pit-entry-causal-circ-mv-denominator-is-structurally-invalid.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/hmm_risk/stock_fact_repository.py",
+    "backend/tests/hmm_risk/test_stock_fact_repository.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-892",
