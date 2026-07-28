@@ -286,6 +286,17 @@ jobs:
             'aiosqlite'
           python -m pip check
 
+      - name: Bootstrap disposable Watchlist test schema
+        if: matrix.session == 'watchlist_backend'
+        env:
+          AISTOCK_CI_DISPOSABLE_POSTGRES: '1'
+          TDX_DB_HOST: 127.0.0.1
+          TDX_DB_PORT: 5433
+          TDX_DB_NAME: aistock_dev
+          TDX_DB_USER: aistock
+          TDX_DB_PASSWORD: aistock_dev_password
+        run: python -m backend.tests.watchlist.bootstrap_disposable_schema
+
       - name: nox -s ${{ matrix.session }}
         env:
           TDX_DB_HOST: 127.0.0.1

@@ -1,6 +1,8 @@
 {
   "actual": "The required watchlist_backend lane selected by PR #2834 fails reproducibly on two attempts because the GitHub Actions PostgreSQL service is blank and the job invokes nox directly without bootstrapping app.watchlist_categories, app.watchlist_items, or app.watchlist_item_categories. The lane therefore reports 2 failed and 4 errors before exercising the changed Advisory code. Repair must bootstrap only the disposable CI database through an explicit test-only environment contract, must not run DDL against developer or production databases, and must keep the watchlist tests fail-loud when schema initialization fails.",
   "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "backend/tests/watchlist/bootstrap_disposable_schema.py",
     "tests/aistock_validation/bugs/20260728_BUG-898-watchlist-backend-ci-runs-against-an-uninitialized-disposable-postgresql.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -8,8 +10,9 @@
   "bug_id": "BUG-898",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
+    "Bootstrap the repository-owned Watchlist schema only for the watchlist_backend job's disposable PostgreSQL service.",
+    "Keep schema initialization fail-loud and avoid any DDL path for other CI sessions, developer databases, or production databases.",
+    "Run workflow smoke, YAML parsing, L0, module ownership, and the GitHub watchlist_backend lane.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-28T16:34:18.417354Z",
@@ -22,8 +25,10 @@
       "timestamp": "2026-07-28T16:34:18.417350Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "github-actions://runs/30354115585/attempts/1-2/jobs/watchlist_backend"
+  ],
+  "expected": "The required watchlist_backend CI lane must initialize its own disposable service database before pytest and then execute Watchlist behavior tests instead of failing on missing tables.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +57,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "gh run view 30354115585 --attempt 2 --log-failed",
   "required_verification": [
     "l0",
     "validation_center_backend"
