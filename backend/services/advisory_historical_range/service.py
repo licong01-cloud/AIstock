@@ -22,7 +22,9 @@ from .executor import HistoricalRangeBatchExecutionService
 from .artifact_store import HistoricalRangeArtifactStore
 from .models import (
     OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
+    SOURCE_CATALOG_CHECKPOINT_SCHEMA_VERSION,
     HistoricalRangeArtifactKind,
+    HistoricalRangeCatalogPhase,
     ExistingProgramSpecV1,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeBackgroundDispatchFailureV1,
@@ -35,11 +37,13 @@ from .models import (
     HistoricalRangeOutcomeRefreshRequestV1,
     HistoricalRangeOutcomeRefreshReceiptV1,
     HistoricalRangeResearchBatchRequestV1,
+    HistoricalRangeSourceCatalogCheckpointV1,
+    HistoricalRangeUnresolvedRequirementV1,
     ResearchProgramSpecV1,
     derive_prefixed_id,
 )
 from .outcome_service import HistoricalRangeOutcomeApplicationService
-from .planning_service import HistoricalRangePlanningService
+from .planning_service import PLANNING_PRODUCER_CONTRACT_VERSION, HistoricalRangePlanningService
 from .query_repository import PostgresHistoricalRangeQueryRepository
 from .repository import PostgresHistoricalRangeRepository
 from .runtime_factories import HistoricalRangeOutcomeCommandPlan
@@ -570,16 +574,57 @@ class ResponseBoundHistoricalRangeDispatcher:
     def _expired_catalog_attempt(
         *, runtime: HistoricalRangeRuntime, operation: Mapping[str, Any]
     ) -> HistoricalRangeOperationAttemptV1:
-        batch = runtime.query.get_batch(str(operation["batch_id"]))
-        ref_payload = operation.get("latest_checkpoint_ref") or batch.get("requirement_plan_ref")
-        if not isinstance(ref_payload, dict):
+        if runtime.artifact_store is None:
             raise HistoricalRangeServiceError(
                 "ADVISORY_HR_OPERATION_LEASE_IDENTITY_MISSING",
-                "expired catalog operation has no durable checkpoint",
+                "expired catalog operation requires an artifact store",
                 retryable=True,
                 context={"operation_id": operation["operation_id"]},
             )
-        ref = HistoricalRangeArtifactRefV1.model_validate(ref_payload)
+        state = runtime.repository.load_catalog_planning_state(operation_id=str(operation["operation_id"]))
+        if state.checkpoint_chain:
+            ref = state.checkpoint_chain[-1][0]
+        else:
+            cursor = int(
+                (operation.get("stable_keyset_cursor_json") or {}).get("next_requirement_ordinal") or 1
+            )
+            if cursor > len(state.plan.requirements):
+                raise HistoricalRangeServiceError(
+                    "ADVISORY_HR_OPERATION_LEASE_IDENTITY_MISSING",
+                    "expired catalog operation cursor is outside the requirement plan",
+                    retryable=True,
+                    context={"operation_id": operation["operation_id"], "cursor": cursor},
+                )
+            checkpoint = HistoricalRangeSourceCatalogCheckpointV1(
+                requirement_plan_hash=state.plan.requirement_plan_hash,
+                catalog_generation=int(operation["catalog_generation"]),
+                phase=HistoricalRangeCatalogPhase(str(operation["catalog_phase"])),
+                ordinal_start=cursor,
+                ordinal_end=cursor,
+                next_requirement_ordinal=cursor,
+                unresolved_requirement_delta=(
+                    HistoricalRangeUnresolvedRequirementV1(
+                        ordinal=cursor,
+                        requirement_id=state.plan.requirements[cursor - 1].requirement_id,
+                        reason_code="ADVISORY_HR_OPERATION_LEASE_EXPIRED",
+                        context={
+                            "operation_id": operation["operation_id"],
+                            "attempt_no": operation["attempt_no"],
+                        },
+                    ),
+                ),
+                cumulative_resolved_count=int(operation["cumulative_resolved_count"]),
+                cumulative_member_chain_hash=str(operation["cumulative_member_chain_hash"]),
+            )
+            ref = runtime.artifact_store.publish_planning_payload(
+                artifact_kind=HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+                planning_identity_hash=str(operation["planning_identity_hash"]),
+                batch_id=str(operation["batch_id"]),
+                catalog_generation=int(operation["catalog_generation"]),
+                producer_contract_version=PLANNING_PRODUCER_CONTRACT_VERSION,
+                payload_schema_version=SOURCE_CATALOG_CHECKPOINT_SCHEMA_VERSION,
+                payload=checkpoint.model_dump(mode="json"),
+            ).ref
         lease_expires_at = datetime.fromisoformat(str(operation["lease_expires_at"]))
         return HistoricalRangeOperationAttemptV1(
             attempt_id=derive_prefixed_id(

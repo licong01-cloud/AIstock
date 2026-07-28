@@ -8,6 +8,10 @@ import pytest
 from backend.services.advisory_historical_range.service import ResponseBoundHistoricalRangeDispatcher
 from backend.services.advisory_historical_range.models import HistoricalRangeBackgroundDispatchFailureV1
 from backend.services.advisory_historical_range.models import HistoricalRangeContractError
+from backend.services.advisory_historical_range.models import (
+    HistoricalRangeArtifactKind,
+    HistoricalRangeArtifactRefV1,
+)
 from backend.services.advisory_historical_range.repository import (
     PostgresHistoricalRangePreclaimFailureRepository,
 )
@@ -62,6 +66,68 @@ def test_catalog_dispatcher_defers_rollover_deadline_until_after_chunk_execution
     assert len(calls) == 1
     assert calls[0]["next_lease_duration"] == timedelta(minutes=5)
     assert "next_lease_expires_at" not in calls[0]
+
+
+def test_expired_first_catalog_attempt_publishes_checkpoint_kind_receipt() -> None:
+    operation = {
+        "operation_id": "ahrop_1",
+        "batch_id": "ahrb_1",
+        "attempt_no": 1,
+        "worker_id": "worker-1",
+        "lease_token": "lease-1",
+        "fencing_token": 1,
+        "lease_expires_at": "2026-07-28T05:00:00+00:00",
+        "planning_identity_hash": "a" * 64,
+        "catalog_generation": 1,
+        "catalog_phase": "DISCOVER",
+        "cumulative_resolved_count": 0,
+        "cumulative_member_chain_hash": "b" * 64,
+        "stable_keyset_cursor_json": None,
+    }
+    state = SimpleNamespace(
+        checkpoint_chain=(),
+        plan=SimpleNamespace(
+            requirement_plan_hash="c" * 64,
+            requirements=(SimpleNamespace(requirement_id="requirement-1"),),
+        ),
+    )
+    published = []
+    checkpoint_ref = HistoricalRangeArtifactRefV1(
+        artifact_kind=HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+        relative_path="source-catalog-checkpoints/checkpoint.json",
+        producer_contract_version="phase1r_r2b",
+        payload_schema_version="advisory_historical_range_source_catalog_checkpoint_v1",
+        semantic_content_hash="d" * 64,
+        payload_sha256="e" * 64,
+        file_sha256="f" * 64,
+    )
+
+    def publish_planning_payload(**kwargs):
+        published.append(kwargs)
+        return SimpleNamespace(ref=checkpoint_ref)
+
+    runtime = SimpleNamespace(
+        repository=SimpleNamespace(load_catalog_planning_state=lambda **_kwargs: state),
+        artifact_store=SimpleNamespace(publish_planning_payload=publish_planning_payload),
+    )
+
+    attempt = ResponseBoundHistoricalRangeDispatcher._expired_catalog_attempt(
+        runtime=runtime,
+        operation=operation,
+    )
+
+    assert attempt.attempt_receipt_ref == checkpoint_ref
+    assert attempt.result_hash == checkpoint_ref.semantic_content_hash
+    assert published[0]["artifact_kind"] is HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT
+    assert published[0]["payload"]["unresolved_requirement_delta"] == [
+        {
+            "ordinal": 1,
+            "requirement_id": "requirement-1",
+            "reason_code": "ADVISORY_HR_OPERATION_LEASE_EXPIRED",
+            "blocked_by_requirement_ids": [],
+            "context": {"operation_id": "ahrop_1", "attempt_no": 1},
+        }
+    ]
 
 
 def test_dispatcher_captures_only_json_round_tripped_identity() -> None:
