@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import lru_cache
 
 import pytest
 
@@ -15,6 +16,11 @@ from backend.services.miniqmt_execution_runtime.kernel_ingress import (
     KernelEventRoutingError,
     KernelIngressCoordinatorV1,
     route_event_targets_v1,
+)
+from backend.services.miniqmt_execution_runtime.kernel_callback_events import (
+    build_kernel_order_event_payload_v1,
+    build_kernel_order_reconcile_event_payload_v1,
+    build_kernel_trade_event_payload_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1, thaw_json_v1
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
@@ -33,6 +39,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
 from backend.services.miniqmt_execution_runtime.plugin_registry import build_plugin_catalog_v2
 
 
+@lru_cache(maxsize=1)
 def _catalog():
     return build_plugin_catalog_v2(
         descriptors=current_three_descriptors_v2(),
@@ -105,6 +112,7 @@ def _algo(*, slot: str, status: ExecutionAlgoPersistenceStatusV2, symbol: str = 
 
 
 def _event(event_type: EventTypeV2) -> RuntimeEventEnvelopeV2:
+    payload = None
     if event_type is EventTypeV2.TICK:
         values = dict(
             source=EventSourceV2.B0_QUOTE_V2,
@@ -130,7 +138,22 @@ def _event(event_type: EventTypeV2) -> RuntimeEventEnvelopeV2:
                 "session_epoch": "session_k2b",
             },
         )
-    else:
+    elif event_type is EventTypeV2.ORDER:
+        payload = build_kernel_order_event_payload_v1(
+            raw_payload={"order_status": 48},
+            order_event_id="order_event_k2b",
+            runtime_id="runtime_k2b",
+            algo_instance_id="algo_callback_k2b",
+            parent_intent_id="intent_callback_k2b",
+            strategy_slot_id="slot_callback_k2b",
+            mapping_id="mapping_callback_k2b",
+            command_id="command_callback_k2b",
+            local_vt_orderid="local_order_callback_k2b",
+            broker_order_id="broker_order_callback_k2b",
+            symbol="600000.SH",
+            side=SideV1.BUY,
+            requested_quantity=100,
+        )
         values = dict(
             source=EventSourceV2.QMT_GATEWAY_CALLBACK,
             symbol="600000.SH",
@@ -143,13 +166,14 @@ def _event(event_type: EventTypeV2) -> RuntimeEventEnvelopeV2:
         event_type=event_type,
         event_time_utc="2026-07-26T01:30:00Z",
         monotonic_ns=None,
-        payload={"kind": event_type.value},
+        payload=(payload.model_dump(mode="json") if payload is not None else {"kind": event_type.value}),
         correlation={},
         **values,
     )
 
 
 def _owner_event(event_type: EventTypeV2, *, algo=None) -> RuntimeEventEnvelopeV2:
+    payload = None
     if event_type is EventTypeV2.ALGO_START:
         if algo is None:
             raise ValueError("ALGO_START test event requires an algo")
@@ -186,20 +210,6 @@ def _owner_event(event_type: EventTypeV2, *, algo=None) -> RuntimeEventEnvelopeV
                 None,
                 None,
             ),
-            EventTypeV2.TRADE: (
-                EventSourceV2.QMT_GATEWAY_CALLBACK,
-                "miniqmt_trade_fact_v1",
-                {"trade_id": "trade_k2b"},
-                "600000.SH",
-                None,
-            ),
-            EventTypeV2.RECONCILE: (
-                EventSourceV2.QMT_OMS_RECONCILIATION,
-                "miniqmt_reconciliation_receipt_v1",
-                {"receipt_id": "reconcile_k2b", "receipt_sha256": "d" * 64},
-                None,
-                None,
-            ),
             EventTypeV2.OPERATOR: (
                 EventSourceV2.SIMULATION_RUNTIME_OPERATOR,
                 "miniqmt_operator_command_v1",
@@ -208,7 +218,64 @@ def _owner_event(event_type: EventTypeV2, *, algo=None) -> RuntimeEventEnvelopeV
                 None,
             ),
         }
-        values = matrix[event_type]
+        if event_type is EventTypeV2.TRADE:
+            if algo is None:
+                raise ValueError("TRADE test event requires an algo")
+            payload = build_kernel_trade_event_payload_v1(
+                raw_payload={"trade_id": "trade_k2b"},
+                runtime_id=algo.runtime_id,
+                algo_instance_id=algo.algo_instance_id,
+                parent_intent_id=algo.parent_intent_id,
+                strategy_slot_id=algo.strategy_slot_id,
+                mapping_id="mapping_owner_k2b",
+                command_id="command_owner_k2b",
+                local_vt_orderid="local_order_owner_k2b",
+                broker_order_id="broker_order_owner_k2b",
+                symbol=algo.symbol,
+                side=algo.side,
+                trade_quantity=1,
+                trade_price_decimal="10",
+            )
+            values = (
+                EventSourceV2.QMT_GATEWAY_CALLBACK,
+                "miniqmt_trade_fact_v1",
+                {"trade_id": payload.trade_id},
+                algo.symbol,
+                None,
+            )
+        elif event_type is EventTypeV2.RECONCILE:
+            if algo is None:
+                raise ValueError("RECONCILE test event requires an algo")
+            payload = build_kernel_order_reconcile_event_payload_v1(
+                ordered_trade_refs=(),
+                requested_quantity=algo.remaining_quantity,
+                receipt_id="reconcile_k2b",
+                receipt_sha256="d" * 64,
+                runtime_id=algo.runtime_id,
+                algo_instance_id=algo.algo_instance_id,
+                parent_intent_id=algo.parent_intent_id,
+                strategy_slot_id=algo.strategy_slot_id,
+                mapping_id="mapping_owner_k2b",
+                local_vt_orderid="local_order_owner_k2b",
+                broker_order_id="broker_order_owner_k2b",
+                symbol=algo.symbol,
+                side=algo.side,
+                normalized_order_status="ACCEPTED",
+                authoritative_cumulative_filled_quantity=0,
+                authoritative_remaining_quantity=algo.remaining_quantity,
+                callback_watermark=f"{algo.runtime_id}:1",
+                snapshot_sha256="e" * 64,
+            )
+            values = (
+                EventSourceV2.QMT_OMS_RECONCILIATION,
+                "miniqmt_reconciliation_receipt_v1",
+                {"receipt_id": payload.receipt_id, "receipt_sha256": payload.receipt_sha256},
+                algo.symbol,
+                None,
+            )
+        else:
+            payload = None
+            values = matrix[event_type]
     source, schema, identity, symbol, monotonic_ns = values
     return RuntimeEventEnvelopeV2.create(
         runtime_id="runtime_k2b",
@@ -219,7 +286,7 @@ def _owner_event(event_type: EventTypeV2, *, algo=None) -> RuntimeEventEnvelopeV
         source=source,
         symbol=symbol,
         payload_schema_version=schema,
-        payload={"kind": event_type.value},
+        payload=(payload.model_dump(mode="json") if payload is not None else {"kind": event_type.value}),
         source_identity=identity,
         correlation={},
     )

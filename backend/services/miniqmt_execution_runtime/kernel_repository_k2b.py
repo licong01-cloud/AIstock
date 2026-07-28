@@ -500,26 +500,35 @@ class KernelRepositoryK2BMixin:
                     """
                     SELECT mapping_json FROM qmt_strategy.execution_child_order
                     WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-                      AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
-                    ORDER BY child_order_id FOR UPDATE
+                    ORDER BY local_vt_orderid,mapping_id FOR UPDATE
                     """,
                     (claimed.runtime_id, claimed.algo_instance_id),
                 )
-                active_mappings = tuple(
+                locked_mappings = tuple(
                     _model_from_json(ExecutionCommandChildMappingV1, _row_json(row, "mapping_json"))
                     for row in cur.fetchall()
                 )
                 cur.execute(
                     """
                     SELECT carrier_json FROM qmt_strategy.execution_algo_command_outbox
-                    WHERE runtime_id=%s AND algo_instance_id=%s AND command_type='SUBMIT_LIMIT'
-                      AND status IN ('PENDING','CLAIMED','FAILED_RETRYABLE','DISPATCHING','OUTCOME_UNKNOWN','RECONCILING')
-                    ORDER BY mapping_id,command_id FOR UPDATE
+                    WHERE runtime_id=%s AND algo_instance_id=%s
+                    ORDER BY local_vt_orderid,command_id FOR UPDATE
                     """,
                     (claimed.runtime_id, claimed.algo_instance_id),
                 )
-                active_command_outboxes = tuple(
+                locked_command_outboxes = tuple(
                     _model_from_json(BrokerCommandOutboxV1, _row_json(row, "carrier_json")) for row in cur.fetchall()
+                )
+                active_mappings = tuple(
+                    item
+                    for item in locked_mappings
+                    if item.mapping_status.value
+                    in {
+                        "RESERVED",
+                        "DISPATCHING",
+                        "BROKER_ACCEPTED",
+                        "OUTCOME_UNKNOWN",
+                    }
                 )
                 cur.execute(
                     """
@@ -538,8 +547,8 @@ class KernelRepositoryK2BMixin:
                     claimed,
                     algo,
                     previous_state,
-                    active_mappings,
-                    active_command_outboxes,
+                    locked_mappings,
+                    locked_command_outboxes,
                     active_timer_schedules,
                 )
                 if not isinstance(bundle, KernelTransitionWriteBundleV1):

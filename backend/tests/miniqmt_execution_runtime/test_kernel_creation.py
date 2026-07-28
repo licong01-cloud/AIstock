@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from types import SimpleNamespace
 
 import pytest
@@ -46,6 +47,7 @@ class _CapturingRepository:
         }
 
 
+@lru_cache(maxsize=1)
 def _catalog():
     return build_plugin_catalog_v2(
         descriptors=current_three_descriptors_v2(),

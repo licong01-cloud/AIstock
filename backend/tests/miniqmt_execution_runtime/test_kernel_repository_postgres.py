@@ -26,6 +26,10 @@ from backend.services.miniqmt_execution_runtime.kernel_materializer import (
     materialize_failure_transition_v1,
     materialize_skip_transition_v1,
 )
+from backend.services.miniqmt_execution_runtime.kernel_callback_events import (
+    build_kernel_order_event_payload_v1,
+    build_kernel_order_reconcile_event_payload_v1,
+)
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     ActiveChildClosureStatusV1,
     AlgoDeliveryPersistenceV1,
@@ -39,7 +43,6 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     BrokerCommandTypeV2,
     BrokerCommandV2,
     BrokerDispatchAttemptV1,
-    BrokerNonAcceptanceReceiptV1,
     BrokerOutcomeReconciliationReceiptV1,
     BrokerUnknownOutcomeReceiptV1,
     CommandChildMappingStatusV1,
@@ -1387,28 +1390,15 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
         assert repository.append_dispatch_attempt(dispatch_attempt) == dispatch_attempt
         assert repository.append_dispatch_attempt(dispatch_attempt) == dispatch_attempt
         retry_evidence = KernelErrorEvidenceV1.create(
-            stage="OUTBOX_RECONCILE",
-            stable_reason_code="MINIQMT_COMMAND_EXACT_NON_ACCEPTANCE_PROVEN",
-            exception=RuntimeError("exact non-acceptance proven"),
-            message="exact non-acceptance proven",
+            stage="OUTBOX_PRE_CALL",
+            stable_reason_code="MINIQMT_COMMAND_PRE_CALL_RETRYABLE",
+            exception=RuntimeError("pre-call retryable failure"),
+            message="pre-call retryable failure",
             retryable=True,
             terminal=False,
             broker_called=False,
             primary_context={"command_id": outbox.command_id},
             secondary_errors=(),
-        )
-        non_acceptance = BrokerNonAcceptanceReceiptV1.create(
-            command_id=outbox.command_id,
-            deterministic_client_order_ref=outbox.deterministic_client_order_ref,
-            gateway_route_id="gateway_route_repo_k2",
-            gateway_catalog_sha256="3" * 64,
-            query_criteria_sha256="4" * 64,
-            callback_watermark_before="watermark_before_repo_k2",
-            callback_watermark_after="watermark_after_repo_k2",
-            order_snapshot_sha256="5" * 64,
-            trade_snapshot_sha256="6" * 64,
-            observed_at_utc="2026-07-25T01:31:00Z",
-            reason_code="MINIQMT_COMMAND_EXACT_NON_ACCEPTANCE_PROVEN",
         )
         retryable_outbox = BrokerCommandOutboxV1.create(
             command=submit_command,
@@ -1420,13 +1410,13 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_fence_token=None,
             lease_expires_at=None,
             dispatch_attempt_id=dispatch_attempt.dispatch_attempt_id,
-            callback_watermark_before_call="runtime_k2:1",
+            callback_watermark_before_call=None,
             next_attempt_at_utc="2026-07-25T01:31:01Z",
             broker_called=False,
             broker_order_id=None,
             ack_receipt_json=None,
             ack_receipt_sha256=None,
-            non_acceptance_receipt=non_acceptance,
+            non_acceptance_receipt=None,
             unknown_outcome_receipt=None,
             reconcile_receipt=None,
             last_error_json=retry_evidence.model_dump(mode="json"),
@@ -1689,6 +1679,26 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
                 f"UPDATE {schema}.execution_runtime SET last_event_sequence=%s WHERE runtime_id='runtime_k2'",
                 (accepted_event_sequence - 1,),
             )
+        accepted_reconcile_payload = build_kernel_order_reconcile_event_payload_v1(
+            ordered_trade_refs=(),
+            requested_quantity=submit_command.quantity,
+            receipt_id="reconcile_broker_ack_k2",
+            receipt_sha256="5" * 64,
+            runtime_id=dispatching_mapping.runtime_id,
+            algo_instance_id=dispatching_mapping.algo_instance_id,
+            parent_intent_id=dispatching_mapping.parent_intent_id,
+            strategy_slot_id=dispatching_mapping.strategy_slot_id,
+            mapping_id=dispatching_mapping.mapping_id,
+            local_vt_orderid=dispatching_mapping.local_vt_orderid,
+            broker_order_id="broker_repo_k2",
+            symbol=dispatching_mapping.symbol,
+            side=dispatching_mapping.side,
+            normalized_order_status="ACCEPTED",
+            authoritative_cumulative_filled_quantity=0,
+            authoritative_remaining_quantity=submit_command.quantity,
+            callback_watermark="runtime_k2:2",
+            snapshot_sha256="6" * 64,
+        )
         accepted_event = RuntimeEventEnvelopeV2.create(
             runtime_id="runtime_k2",
             sequence=accepted_event_sequence,
@@ -1698,16 +1708,11 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             source=EventSourceV2.QMT_OMS_RECONCILIATION,
             symbol=dispatching_mapping.symbol,
             payload_schema_version="miniqmt_reconciliation_receipt_v1",
-            payload={
-                "runtime_id": dispatching_mapping.runtime_id,
-                "algo_instance_id": dispatching_mapping.algo_instance_id,
-                "parent_intent_id": dispatching_mapping.parent_intent_id,
-                "mapping_id": dispatching_mapping.mapping_id,
-                "local_vt_orderid": dispatching_mapping.local_vt_orderid,
-                "broker_order_id": "broker_repo_k2",
-                "terminal": False,
+            payload=accepted_reconcile_payload.model_dump(mode="json"),
+            source_identity={
+                "receipt_id": accepted_reconcile_payload.receipt_id,
+                "receipt_sha256": accepted_reconcile_payload.receipt_sha256,
             },
-            source_identity={"receipt_id": "reconcile_broker_ack_k2", "receipt_sha256": "5" * 64},
             correlation={
                 "algo_instance_id": dispatching_mapping.algo_instance_id,
                 "mapping_id": dispatching_mapping.mapping_id,
@@ -1734,12 +1739,13 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             expected_mapping_version=dispatching_mapping.mapping_version,
             expected_algo_row_version=accepted_algo.row_version,
         )
-        repository.ingest_routed_event_atomic(
+        accepted_ingress_receipt = repository.ingest_routed_event_atomic(
             event=accepted_event,
             catalog_runtime=_ingress_catalog(),
             correlated_algo_instance_ids=(accepted_mapping.algo_instance_id,),
             callback_mapping_update=accepted_update,
         )
+        accepted_delivery = repository.read_event_transaction(accepted_ingress_receipt.event_id)["deliveries"][0]
         assert repository.read_command_identity_chain(submit_command.command_id) == {
             "mapping": accepted_mapping,
             "outbox": accepted_outbox,
@@ -2021,30 +2027,8 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             )
         assert repository.read_event_transaction(event.event_id)["event"] == event
 
-        algo_event = RuntimeEventEnvelopeV2.create(
-            runtime_id="runtime_k2",
-            sequence=2,
-            event_type=EventTypeV2.TICK,
-            event_time_utc="2026-07-25T01:33:00Z",
-            monotonic_ns=None,
-            source=EventSourceV2.B0_QUOTE_V2,
-            symbol="600000.SH",
-            payload_schema_version="miniqmt_market_data_view_v2",
-            payload={"last_price": "10.010000"},
-            source_identity={"market_data_id": "market_data_failure_k2"},
-            correlation={"trace_id": "trace_failure_k2"},
-        )
-        algo_delivery = _delivery(
-            algo_event,
-            algo_instance_id=_algo_id(),
-            algo_delivery_sequence=2,
-            previous_delivery_id=submit_delivery.delivery_id,
-        )
-        algo_event_receipt = _seed_event_receipt_deliveries(
-            repository,
-            event=algo_event,
-            deliveries=(algo_delivery,),
-        )
+        algo_event = accepted_event
+        algo_delivery = accepted_delivery
         delivery_fence = kernel_lease_fence_token_v1(
             owner_type="DELIVERY",
             owner_id=algo_delivery.delivery_id,
@@ -2057,13 +2041,10 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             lease_epoch=1,
             lease_fence_token=delivery_fence,
             lease_expires_at="2026-07-25T01:40:00Z",
-            updated_at_utc="2026-07-25T01:32:00Z",
+            updated_at_utc="2026-07-25T01:32:32Z",
             expected_row_version=1,
         )
-        assert (
-            _seed_event_receipt_deliveries(repository, event=algo_event, deliveries=(algo_delivery,))
-            == algo_event_receipt
-        )
+        assert repository.read_event_transaction(algo_event.event_id)["deliveries"] == (claimed_delivery,)
         assert repository.list_recovery_deliveries(
             runtime_id="runtime_k2", trade_date=date(2026, 7, 25), statuses=("CLAIMED",), limit=10
         ) == (claimed_delivery,)
@@ -2371,6 +2352,22 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             return clone_schema, PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(clone_schema))
 
         def callback_event(*, sequence: int, broker_order_id: str, suffix: str) -> RuntimeEventEnvelopeV2:
+            order_event_id = f"order_callback_{suffix}_k2"
+            payload = build_kernel_order_event_payload_v1(
+                raw_payload={"order_status": 54, "traded_volume": 0},
+                order_event_id=order_event_id,
+                runtime_id=accepted_mapping.runtime_id,
+                algo_instance_id=accepted_mapping.algo_instance_id,
+                parent_intent_id=accepted_mapping.parent_intent_id,
+                strategy_slot_id=accepted_mapping.strategy_slot_id,
+                mapping_id=accepted_mapping.mapping_id,
+                command_id=submit_command.command_id,
+                local_vt_orderid=accepted_mapping.local_vt_orderid,
+                broker_order_id=broker_order_id,
+                symbol=accepted_mapping.symbol,
+                side=accepted_mapping.side,
+                requested_quantity=submit_command.quantity,
+            )
             return RuntimeEventEnvelopeV2.create(
                 runtime_id="runtime_k2",
                 sequence=sequence,
@@ -2380,16 +2377,8 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
                 source=EventSourceV2.QMT_GATEWAY_CALLBACK,
                 symbol=accepted_mapping.symbol,
                 payload_schema_version="miniqmt_order_event_v1",
-                payload={
-                    "runtime_id": accepted_mapping.runtime_id,
-                    "algo_instance_id": accepted_mapping.algo_instance_id,
-                    "parent_intent_id": accepted_mapping.parent_intent_id,
-                    "mapping_id": accepted_mapping.mapping_id,
-                    "local_vt_orderid": accepted_mapping.local_vt_orderid,
-                    "broker_order_id": broker_order_id,
-                    "terminal": True,
-                },
-                source_identity={"order_event_id": f"order_callback_{suffix}_k2"},
+                payload=payload.model_dump(mode="json"),
+                source_identity={"order_event_id": order_event_id},
                 correlation={"trace_id": f"trace_callback_{suffix}_k2"},
             )
 
@@ -2610,7 +2599,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             mapping_id=mapping.mapping_id,
             lease_fence_token=cancel_fence,
             uncertain_stage="GATEWAY_RETURN",
-            callback_watermark="callback_watermark_cancel_k2",
+            callback_watermark=dispatching_cancel.callback_watermark_before_call,
             reason_code="MINIQMT_CANCEL_OUTCOME_UNKNOWN",
             observed_at_utc="2026-07-25T01:34:30Z",
         )
@@ -2770,7 +2759,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             accepted=True,
             broker_order_id=accepted_mapping.broker_order_id,
             reason_code="CANCEL_TERMINAL_CONFIRMED",
-            ack_payload_sha256="2" * 64,
+            ack_payload_sha256=reconciled.receipt_sha256,
             observed_at_utc="2026-07-25T01:35:00Z",
         )
         terminal_cancel = BrokerCommandOutboxV1.create(

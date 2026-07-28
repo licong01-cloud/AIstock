@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 import pytest
 
 import backend.services.miniqmt_execution_runtime.kernel_delivery as kernel_delivery
+import backend.services.miniqmt_execution_runtime.kernel_materializer as kernel_materializer
 from backend.execution_algos.vnpy_compat.receipts import build_current_three_compatibility_receipts_v1
 from backend.execution_algos.vnpy_style.plugin_manifests import (
     current_three_creation_bindings_v1,
@@ -15,6 +18,7 @@ from backend.services.miniqmt_execution_runtime.kernel_delivery import (
     KernelPluginInvocationError,
     KernelRequiredProviderUnavailable,
     ResolvedKernelPluginV1,
+    build_command_lifecycle_projection_v1,
     invoke_plugin_initialize_v1,
     invoke_plugin_transition_v1,
     resolve_plugin_for_restore_v1,
@@ -36,11 +40,17 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AlgoTransitionV1,
     BrokerCommandOutboxStatusV1,
     BrokerCommandOutboxV1,
+    BrokerCommandAckReceiptV1,
+    BrokerAckSourceV1,
+    BrokerUnknownOutcomeReceiptV1,
+    BrokerUncertainStageV1,
     BrokerCommandTypeV2,
     BrokerCommandV2,
     ConsumedLineageRefV1,
     ConsumedLineageTypeV1,
     CommandChildMappingStatusV1,
+    CurrentThreeActiveOrderStateV3,
+    CurrentThreeActiveOrderStatusV3,
     DeliveryStatusV1,
     DeterministicExecutionContextV1,
     DiagnosticObservationV1,
@@ -57,6 +67,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     ExecutionCommandChildMappingV1,
     ActiveChildClosureStatusV1,
     KernelErrorEvidenceV1,
+    KernelCommandLifecycleProjectionV1,
     OrderTypeV1,
     RuntimeEventEnvelopeV2,
     SessionPhaseV1,
@@ -71,6 +82,7 @@ from backend.services.miniqmt_execution_runtime.plugin_registry import build_plu
 from backend.tests.miniqmt_execution_runtime.test_current_three_plugin_manifests import _state
 
 
+@lru_cache(maxsize=1)
 def _catalog():
     return build_plugin_catalog_v2(
         descriptors=current_three_descriptors_v2(),
@@ -417,7 +429,6 @@ def test_pure_transition_is_rebuilt_from_durable_state_and_immutable_services() 
         session_phase=SessionPhaseV1.CONTINUOUS_AM,
         input_projection_sha256=projection_set.projection_set_sha256,
     )
-
     transition = invoke_plugin_transition_v1(
         plugin=_PurePlugin(manifest=descriptor.manifest, context=context),
         expected_manifest=descriptor.manifest,
@@ -617,7 +628,7 @@ def test_initialize_invocation_uses_exact_manifest_and_rejects_plugin_or_result_
     assert raised.value.reason_code == "MINIQMT_ALGO_INITIALIZATION_RESULT_INVALID"
 
 
-def test_delivery_worker_applies_valid_pure_transition_without_retry_or_fallback(
+def test_delivery_worker_applies_exact_lifecycle_projection_and_terminalizes_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event, delivery, algo, state = _worker_facts()
@@ -680,6 +691,18 @@ def test_delivery_worker_applies_valid_pure_transition_without_retry_or_fallback
             state_codec=lambda _manifest, payload: payload,
         ),
     )
+    lineage_refs = (
+        ConsumedLineageRefV1.create(
+            lineage_type=ConsumedLineageTypeV1.EVENT,
+            identity=event.event_id,
+            payload_sha256=event.payload_sha256,
+        ),
+        ConsumedLineageRefV1.create(
+            lineage_type=ConsumedLineageTypeV1.MARKET_DATA,
+            identity="market_k2b",
+            payload_sha256=market_projection_hash,
+        ),
+    )
     worker = KernelDeliveryWorkerV1(
         repository=repository,
         catalog_runtime=_catalog(),
@@ -693,23 +716,39 @@ def test_delivery_worker_applies_valid_pure_transition_without_retry_or_fallback
         input_builder=lambda *_args: KernelDeliveryExecutionInputV1(
             services=services,
             deterministic_context=context,
-            consumed_lineage_refs=(
-                ConsumedLineageRefV1.create(
-                    lineage_type=ConsumedLineageTypeV1.EVENT,
-                    identity=event.event_id,
-                    payload_sha256=event.payload_sha256,
-                ),
-                ConsumedLineageRefV1.create(
-                    lineage_type=ConsumedLineageTypeV1.MARKET_DATA,
-                    identity="market_k2b",
-                    payload_sha256=market_projection_hash,
-                ),
-            ),
+            consumed_lineage_refs=lineage_refs,
+            command_lifecycle_projection=_args[-1],
         ),
     )
     assert repository.delivery.lease_owner == owner
     assert result["bundle"].delivery.status is DeliveryStatusV1.APPLIED
     assert repository.retry_calls == []
+
+    drift_repository = _WorkerRepository(event=event, delivery=delivery, algo=algo, state=state)
+    drift_result = KernelDeliveryWorkerV1(
+        repository=drift_repository,
+        catalog_runtime=_catalog(),
+        worker_id="worker_k2b",
+        process_incarnation_id="incarnation_k2b",
+    ).process_once(
+        delivery_id=delivery.delivery_id,
+        lease_expires_at="2026-07-26T01:31:00Z",
+        logical_time_utc=event.event_time_utc,
+        input_builder=lambda *_args: KernelDeliveryExecutionInputV1(
+            services=services,
+            deterministic_context=context,
+            consumed_lineage_refs=lineage_refs,
+            command_lifecycle_projection=KernelCommandLifecycleProjectionV1.create(
+                runtime_id=event.runtime_id,
+                algo_instance_id=algo.algo_instance_id,
+                event_id=event.event_id,
+                delivery_id="delivery_stale_lifecycle_projection",
+                ordered_items=(),
+            ),
+        ),
+    )
+    assert drift_result["bundle"].delivery.status is DeliveryStatusV1.FAILED_TERMINAL
+    assert drift_result["bundle"].receipt.stable_reason_code == "MINIQMT_ALGO_DELIVERY_LIFECYCLE_PROJECTION_DRIFT"
 
 
 def test_skip_materializer_rejects_nonfailed_algo_owner() -> None:
@@ -961,6 +1000,565 @@ def _worker_facts(*, attempt_count: int = 0, failed_algo: bool = False):
         archived_at_utc=None,
     )
     return event, delivery, algo, state
+
+
+def _empty_lifecycle_projection(
+    event: RuntimeEventEnvelopeV2,
+    delivery: AlgoDeliveryPersistenceV1,
+    algo: ExecutionAlgoInstancePersistenceV2,
+) -> KernelCommandLifecycleProjectionV1:
+    return KernelCommandLifecycleProjectionV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=delivery.delivery_id,
+        ordered_items=(),
+    )
+
+
+def test_locked_command_lifecycle_projection_closes_empty_v3_state() -> None:
+    event, delivery, algo, state = _worker_facts()
+    projection = build_command_lifecycle_projection_v1(
+        event=event,
+        delivery=delivery,
+        previous_state=state,
+        mappings=(),
+        outboxes=(),
+    )
+
+    assert projection.runtime_id == event.runtime_id
+    assert projection.algo_instance_id == algo.algo_instance_id
+    assert projection.event_id == event.event_id
+    assert projection.delivery_id == delivery.delivery_id
+    assert projection.ordered_items == ()
+
+
+@pytest.mark.parametrize(
+    "lifecycle_status",
+    [
+        CurrentThreeActiveOrderStatusV3.COMMAND_PENDING,
+        CurrentThreeActiveOrderStatusV3.SUBMITTED,
+        CurrentThreeActiveOrderStatusV3.CANCEL_PENDING,
+        CurrentThreeActiveOrderStatusV3.OUTCOME_UNKNOWN,
+        CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING,
+    ],
+)
+def test_lifecycle_projection_validates_every_durable_active_order_state(
+    lifecycle_status: CurrentThreeActiveOrderStatusV3,
+) -> None:
+    event, delivery, algo, previous_state = _worker_facts()
+    descriptor = next(
+        item
+        for item in _catalog().snapshot.registration_descriptors
+        if item.manifest.manifest_sha256 == algo.plugin_manifest_sha256
+    )
+    submit = BrokerCommandV2.create(
+        command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        parent_intent_id=algo.parent_intent_id,
+        transition_id="mqtransition_lifecycle_matrix",
+        ordinal=0,
+        local_vt_orderid=None,
+        symbol=algo.symbol,
+        side=algo.side,
+        order_type=OrderTypeV1.LIMIT,
+        price_decimal="10",
+        quantity=300,
+        owned_broker_order_id=None,
+        reason_code="K3_LIFECYCLE_MATRIX_SUBMIT",
+        metadata={},
+    )
+    broker_id = None if lifecycle_status is CurrentThreeActiveOrderStatusV3.COMMAND_PENDING else "broker_lifecycle"
+    mapping_status = {
+        CurrentThreeActiveOrderStatusV3.COMMAND_PENDING: CommandChildMappingStatusV1.RESERVED,
+        CurrentThreeActiveOrderStatusV3.SUBMITTED: CommandChildMappingStatusV1.BROKER_ACCEPTED,
+        CurrentThreeActiveOrderStatusV3.CANCEL_PENDING: CommandChildMappingStatusV1.BROKER_ACCEPTED,
+        CurrentThreeActiveOrderStatusV3.OUTCOME_UNKNOWN: CommandChildMappingStatusV1.BROKER_ACCEPTED,
+        CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING: CommandChildMappingStatusV1.TERMINAL,
+    }[lifecycle_status]
+    mapping = ExecutionCommandChildMappingV1.create(
+        command=submit,
+        strategy_slot_id=algo.strategy_slot_id,
+        mapping_status=mapping_status,
+        mapping_version=1 if mapping_status is CommandChildMappingStatusV1.RESERVED else 2,
+        broker_order_id=broker_id,
+        broker_identity_source_event_id=None if broker_id is None else "event_lifecycle_broker",
+        last_order_event_id=(
+            "event_lifecycle_terminal"
+            if lifecycle_status is CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING
+            else None
+        ),
+        last_trade_event_id=None,
+        updated_by_event_id=None if broker_id is None else "event_lifecycle_broker",
+        created_at_utc="2026-07-26T01:29:00Z",
+        updated_at_utc=(
+            "2026-07-26T01:29:00Z" if mapping_status is CommandChildMappingStatusV1.RESERVED else "2026-07-26T01:29:30Z"
+        ),
+    )
+    current_command = submit
+    pending_type = BrokerCommandTypeV2.SUBMIT_LIMIT
+    pending_id = submit.command_id
+    if lifecycle_status in {
+        CurrentThreeActiveOrderStatusV3.SUBMITTED,
+        CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING,
+    }:
+        pending_type = None
+        pending_id = None
+    elif lifecycle_status in {
+        CurrentThreeActiveOrderStatusV3.CANCEL_PENDING,
+        CurrentThreeActiveOrderStatusV3.OUTCOME_UNKNOWN,
+    }:
+        current_command = BrokerCommandV2.create(
+            command_type=BrokerCommandTypeV2.CANCEL_ORDER,
+            runtime_id=event.runtime_id,
+            algo_instance_id=algo.algo_instance_id,
+            parent_intent_id=algo.parent_intent_id,
+            transition_id="mqtransition_lifecycle_cancel",
+            ordinal=0,
+            local_vt_orderid=submit.local_vt_orderid,
+            symbol=algo.symbol,
+            side=algo.side,
+            order_type=OrderTypeV1.LIMIT,
+            price_decimal="10",
+            quantity=300,
+            owned_broker_order_id=broker_id,
+            reason_code="K3_LIFECYCLE_MATRIX_CANCEL",
+            metadata={"submit_command_id": submit.command_id},
+        )
+        pending_type = BrokerCommandTypeV2.CANCEL_ORDER
+        pending_id = current_command.command_id
+    active_item = CurrentThreeActiveOrderStateV3.create(
+        local_vt_orderid=submit.local_vt_orderid,
+        submit_command_id=submit.command_id,
+        broker_order_id=broker_id,
+        symbol=algo.symbol,
+        side=algo.side,
+        status=lifecycle_status,
+        pending_command_type=pending_type,
+        pending_command_id=pending_id,
+        requested_price_decimal="10",
+        requested_quantity=300,
+        cumulative_filled_quantity=0,
+        remaining_quantity=300,
+        last_order_event_id=(
+            "event_lifecycle_terminal"
+            if lifecycle_status is CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING
+            else None
+        ),
+        last_trade_event_id=None,
+        last_command_outcome_event_id=None,
+        last_oms_reconcile_event_id=None,
+        terminal_order_status=(
+            "CANCELLED" if lifecycle_status is CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING else None
+        ),
+        terminal_observed_cumulative_filled_quantity=(
+            100 if lifecycle_status is CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING else None
+        ),
+        market_data_lineage=thaw_json_v1(previous_state.state)["last_market_data_lineage"],
+    )
+    state_payload = thaw_json_v1(previous_state.state)
+    state_payload["active_orders"] = [active_item.model_dump(mode="json")]
+    state_hash = hash_hex_v1("execution_algo_state_v2", state_payload)
+    previous_state_payload = previous_state.model_dump(mode="python")
+    previous_state_payload.update(state=state_payload, state_sha256=state_hash)
+    previous_state = AlgoStateSnapshotV2.model_validate(previous_state_payload)
+    previous_algo_payload = algo.model_dump(mode="python")
+    previous_algo_payload.update(
+        state_json=state_payload,
+        state_sha256=state_hash,
+        active_child_count=1,
+    )
+    previous_algo = ExecutionAlgoInstancePersistenceV2.model_validate(previous_algo_payload)
+
+    if lifecycle_status is CurrentThreeActiveOrderStatusV3.COMMAND_PENDING:
+        outbox = BrokerCommandOutboxV1.create(
+            command=current_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.PENDING,
+            attempt_count=0,
+            lease_owner=None,
+            lease_epoch=0,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id=None,
+            callback_watermark_before_call=None,
+            next_attempt_at_utc=None,
+            broker_called=None,
+            broker_order_id=None,
+            ack_receipt_json=None,
+            ack_receipt_sha256=None,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=None,
+            reconcile_receipt=None,
+            last_error_json=None,
+            row_version=1,
+            created_at_utc="2026-07-26T01:29:30Z",
+            updated_at_utc="2026-07-26T01:29:30Z",
+            closed_at_utc=None,
+        )
+    elif lifecycle_status is CurrentThreeActiveOrderStatusV3.OUTCOME_UNKNOWN:
+        unknown = BrokerUnknownOutcomeReceiptV1.create(
+            command_id=current_command.command_id,
+            dispatch_attempt_id="dispatch_lifecycle_unknown",
+            mapping_id=mapping.mapping_id,
+            lease_fence_token=kernel_lease_fence_token_v1(
+                owner_type="COMMAND",
+                owner_id=current_command.command_id,
+                lease_epoch=1,
+                lease_owner="worker_lifecycle_unknown:incarnation_1",
+            ),
+            uncertain_stage=BrokerUncertainStageV1.GATEWAY_RETURN,
+            callback_watermark=f"{event.runtime_id}:1",
+            reason_code="OUTCOME_UNKNOWN",
+            observed_at_utc="2026-07-26T01:29:30Z",
+        )
+        outbox = BrokerCommandOutboxV1.create(
+            command=current_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
+            attempt_count=1,
+            lease_owner=None,
+            lease_epoch=1,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id="dispatch_lifecycle_unknown",
+            callback_watermark_before_call=f"{event.runtime_id}:1",
+            next_attempt_at_utc=None,
+            broker_called=None,
+            broker_order_id=None,
+            ack_receipt_json=None,
+            ack_receipt_sha256=None,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=unknown,
+            reconcile_receipt=None,
+            last_error_json=None,
+            row_version=3,
+            created_at_utc="2026-07-26T01:29:30Z",
+            updated_at_utc="2026-07-26T01:29:30Z",
+            closed_at_utc=None,
+        )
+    elif lifecycle_status is CurrentThreeActiveOrderStatusV3.CANCEL_PENDING:
+        outbox = BrokerCommandOutboxV1.create(
+            command=current_command,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.PENDING,
+            attempt_count=0,
+            lease_owner=None,
+            lease_epoch=0,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id=None,
+            callback_watermark_before_call=None,
+            next_attempt_at_utc=None,
+            broker_called=None,
+            broker_order_id=None,
+            ack_receipt_json=None,
+            ack_receipt_sha256=None,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=None,
+            reconcile_receipt=None,
+            last_error_json=None,
+            row_version=1,
+            created_at_utc="2026-07-26T01:29:30Z",
+            updated_at_utc="2026-07-26T01:29:30Z",
+            closed_at_utc=None,
+        )
+    else:
+        ack = BrokerCommandAckReceiptV1.create(
+            command_id=submit.command_id,
+            mapping_id=mapping.mapping_id,
+            deterministic_client_order_ref=mapping.deterministic_client_order_ref,
+            gateway_route_id="gateway_lifecycle",
+            gateway_catalog_sha256="a" * 64,
+            source=BrokerAckSourceV1.SYNCHRONOUS_RETURN,
+            accepted=True,
+            broker_order_id=broker_id,
+            reason_code="BROKER_ACCEPTED",
+            ack_payload_sha256="b" * 64,
+            observed_at_utc="2026-07-26T01:29:30Z",
+        )
+        outbox = BrokerCommandOutboxV1.create(
+            command=submit,
+            mapping_id=mapping.mapping_id,
+            status=BrokerCommandOutboxStatusV1.ACKED,
+            attempt_count=1,
+            lease_owner=None,
+            lease_epoch=1,
+            lease_fence_token=None,
+            lease_expires_at=None,
+            dispatch_attempt_id="dispatch_lifecycle_ack",
+            callback_watermark_before_call=f"{event.runtime_id}:1",
+            next_attempt_at_utc=None,
+            broker_called=True,
+            broker_order_id=broker_id,
+            ack_receipt_json=ack,
+            ack_receipt_sha256=ack.receipt_sha256,
+            non_acceptance_receipt=None,
+            unknown_outcome_receipt=None,
+            reconcile_receipt=None,
+            last_error_json=None,
+            row_version=3,
+            created_at_utc="2026-07-26T01:29:30Z",
+            updated_at_utc="2026-07-26T01:29:30Z",
+            closed_at_utc="2026-07-26T01:29:30Z",
+        )
+
+    projection = build_command_lifecycle_projection_v1(
+        event=event,
+        delivery=delivery,
+        previous_state=previous_state,
+        mappings=(mapping,),
+        outboxes=(outbox,),
+    )
+    context = DeterministicExecutionContextV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=delivery.delivery_id,
+        plugin_manifest_sha256=algo.plugin_manifest_sha256,
+        transition_sequence=2,
+        logical_time_utc=event.event_time_utc,
+        exchange_trade_date="2026-07-26",
+        session_epoch="session_worker_k2b",
+        session_phase=SessionPhaseV1.CONTINUOUS_AM,
+        input_projection_sha256="c" * 64,
+    )
+    next_state = AlgoStateSnapshotV2.create(
+        plugin_manifest=descriptor.manifest,
+        deterministic_context=context,
+        transition_sequence=2,
+        last_applied_delivery_sequence=2,
+        last_applied_delivery_id=delivery.delivery_id,
+        last_closed_delivery_sequence=2,
+        state=state_payload,
+        last_applied_event_id=event.event_id,
+    )
+    transition = AlgoTransitionV1(
+        schema_version="miniqmt_algo_transition_v1",
+        next_state=next_state,
+        broker_commands=(),
+        timer_mutations=(),
+        diagnostic_observations=(),
+        terminal_outcome=None,
+        effect_set_sha256=hash_hex_v1(
+            "miniqmt_algo_effect_set_v1",
+            {
+                "next_state_sha256": next_state.state_sha256,
+                "ordered_command_ids": [],
+                "ordered_timer_mutation_ids": [],
+                "ordered_diagnostic_observation_ids": [],
+                "terminal_outcome": None,
+            },
+        ),
+    )
+
+    kernel_materializer._validate_command_lifecycle_projection_v1(
+        event=event,
+        predecessor_delivery=delivery,
+        previous_algo=previous_algo,
+        transition=transition,
+        projection=projection,
+        existing_mappings_by_local_vt_orderid={mapping.local_vt_orderid: mapping},
+        new_mappings=(),
+        new_outboxes=(),
+    )
+
+
+def test_materializer_lifecycle_failures_are_typed_for_malformed_state_and_duplicate_identity() -> None:
+    with pytest.raises(KernelEffectMaterializationError, match="active_orders list"):
+        kernel_materializer._active_order_items_v3({})
+    with pytest.raises(KernelEffectMaterializationError, match="not a strict object"):
+        kernel_materializer._active_order_items_v3({"active_orders": ["not-an-object"]})
+    with pytest.raises(KernelEffectMaterializationError, match="strict v3 readback"):
+        kernel_materializer._active_order_items_v3({"active_orders": [{"local_vt_orderid": "partial"}]})
+
+    event, _delivery, _algo, state = _worker_facts()
+    payload = thaw_json_v1(state.state)
+    item = CurrentThreeActiveOrderStateV3.create(
+        local_vt_orderid="local_duplicate_lifecycle",
+        submit_command_id="command_duplicate_lifecycle",
+        broker_order_id="broker_duplicate_lifecycle",
+        symbol="600000.SH",
+        side=SideV1.BUY,
+        status=CurrentThreeActiveOrderStatusV3.SUBMITTED,
+        pending_command_type=None,
+        pending_command_id=None,
+        requested_price_decimal="10",
+        requested_quantity=100,
+        cumulative_filled_quantity=0,
+        remaining_quantity=100,
+        last_order_event_id=None,
+        last_trade_event_id=None,
+        last_command_outcome_event_id=None,
+        last_oms_reconcile_event_id=None,
+        terminal_order_status=None,
+        terminal_observed_cumulative_filled_quantity=None,
+        market_data_lineage=payload["last_market_data_lineage"],
+    ).model_dump(mode="json")
+    with pytest.raises(KernelEffectMaterializationError, match="duplicate local identities"):
+        kernel_materializer._active_order_items_v3({"active_orders": [item, item]})
+
+
+def test_materializer_rejects_invalid_terminal_timer_lineage_and_cancel_owner() -> None:
+    with pytest.raises(KernelEffectMaterializationError, match="failure receipt"):
+        kernel_materializer._terminal_status(
+            TerminalOutcomeV1.REJECTED,
+            initialization=False,
+            previous_status=ExecutionAlgoPersistenceStatusV2.ACTIVE,
+        )
+
+    event, _delivery, algo, _state = _worker_facts()
+    timer = TimerMutationV1.create(
+        mutation_type=TimerMutationTypeV1.CANCEL,
+        algo_instance_id=algo.algo_instance_id,
+        transition_id="mqtransition_timer_missing_owner",
+        ordinal=0,
+        timer_name="timer_missing_owner",
+        schedule_epoch="schedule_epoch_missing_owner",
+        due_at_exchange_utc=None,
+        catch_up_policy="SKIP_MISSED",
+        payload={"reason_code": "MISSING_OWNER"},
+    )
+    timer_state = _worker_facts()[3]
+    empty_state = AlgoTransitionV1(
+        schema_version="miniqmt_algo_transition_v1",
+        next_state=timer_state,
+        broker_commands=(),
+        timer_mutations=(timer,),
+        diagnostic_observations=(),
+        terminal_outcome=None,
+        effect_set_sha256=hash_hex_v1(
+            "miniqmt_algo_effect_set_v1",
+            {
+                "next_state_sha256": timer_state.state_sha256,
+                "ordered_command_ids": [],
+                "ordered_timer_mutation_ids": [timer.mutation_identity_v1()],
+                "ordered_diagnostic_observation_ids": [],
+                "terminal_outcome": None,
+            },
+        ),
+    )
+    with pytest.raises(KernelEffectMaterializationError, match="no exact durable schedule owner"):
+        kernel_materializer._materialize_timers(
+            runtime_id=event.runtime_id,
+            transition=empty_state,
+            logical_time_utc=event.event_time_utc,
+            existing_timer_schedules={},
+        )
+
+    event_ref = ConsumedLineageRefV1.create(
+        lineage_type=ConsumedLineageTypeV1.EVENT,
+        identity=event.event_id,
+        payload_sha256=event.payload_sha256,
+    )
+    projection_set = ExecutionProjectionSetV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id="delivery_lineage_duplicate",
+        projection_refs=(_market_ref(event),),
+    )
+    with pytest.raises(KernelEffectMaterializationError, match="duplicate authority identity"):
+        kernel_materializer._validate_projection_lineage_v1(
+            event=event,
+            projection_set=projection_set,
+            consumed_lineage_refs=(event_ref, event_ref),
+            has_broker_commands=False,
+        )
+    with pytest.raises(TypeError, match="ConsumedLineageRefV1"):
+        kernel_materializer._validate_projection_lineage_v1(
+            event=event,
+            projection_set=projection_set,
+            consumed_lineage_refs=(object(),),
+            has_broker_commands=False,
+        )
+
+    empty_projection_set = ExecutionProjectionSetV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id="delivery_lineage_missing_market",
+        projection_refs=(),
+    )
+    with pytest.raises(KernelEffectMaterializationError, match="market-data projection"):
+        kernel_materializer._validate_projection_lineage_v1(
+            event=event,
+            projection_set=empty_projection_set,
+            consumed_lineage_refs=(event_ref,),
+            has_broker_commands=False,
+        )
+
+
+def test_lifecycle_projection_rejects_noncarrier_owner_and_hash_drift() -> None:
+    event, delivery, algo, state = _worker_facts()
+    descriptor = next(
+        item
+        for item in _catalog().snapshot.registration_descriptors
+        if item.manifest.manifest_sha256 == algo.plugin_manifest_sha256
+    )
+    projection_set = ExecutionProjectionSetV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=delivery.delivery_id,
+        projection_refs=_command_projection_refs(event),
+    )
+    context = DeterministicExecutionContextV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=delivery.delivery_id,
+        plugin_manifest_sha256=algo.plugin_manifest_sha256,
+        transition_sequence=2,
+        logical_time_utc=event.event_time_utc,
+        exchange_trade_date="2026-07-26",
+        session_epoch="session_worker_k2b",
+        session_phase=SessionPhaseV1.CONTINUOUS_AM,
+        input_projection_sha256=projection_set.projection_set_sha256,
+    )
+    services = AlgoReadOnlyServicesV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=delivery.delivery_id,
+        contract_projection_id=None,
+        contract_projection=None,
+        market_data_projection_id="market_k2b",
+        market_data_projection={"last_price_decimal": "10.000000"},
+        account_projection_id=None,
+        account_projection=None,
+        execution_projection_set=projection_set,
+    )
+    transition = invoke_plugin_transition_v1(
+        plugin=_PurePlugin(manifest=descriptor.manifest, context=context),
+        expected_manifest=descriptor.manifest,
+        state_codec=lambda _manifest, payload: payload,
+        state=state,
+        event=event,
+        services=services,
+        deterministic_context=context,
+    )
+    valid = _empty_lifecycle_projection(event, delivery, algo)
+    common = {
+        "event": event,
+        "predecessor_delivery": delivery,
+        "previous_algo": algo,
+        "transition": transition,
+        "existing_mappings_by_local_vt_orderid": {},
+        "new_mappings": (),
+        "new_outboxes": (),
+    }
+    with pytest.raises(KernelEffectMaterializationError, match="requires one strict"):
+        kernel_materializer._validate_command_lifecycle_projection_v1(projection=object(), **common)
+    with pytest.raises(KernelEffectMaterializationError, match="owner differs"):
+        kernel_materializer._validate_command_lifecycle_projection_v1(
+            projection=valid.model_copy(update={"delivery_id": "wrong_delivery"}), **common
+        )
+    with pytest.raises(KernelEffectMaterializationError, match="hash differs"):
+        kernel_materializer._validate_command_lifecycle_projection_v1(
+            projection=valid.model_copy(update={"projection_sha256": "0" * 64}), **common
+        )
 
 
 class _WorkerRepository:
@@ -1335,6 +1933,7 @@ def test_applied_materializer_uses_strict_state_quantity_authority_and_rejects_f
         algo_code=algo.algo_code,
         symbol=algo.symbol,
         side=algo.side,
+        command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
         existing_mappings_by_local_vt_orderid={},
         existing_timer_schedules={},
         initialization=False,
@@ -1369,6 +1968,7 @@ def test_applied_materializer_uses_strict_state_quantity_authority_and_rejects_f
             algo_code=algo.algo_code,
             symbol=algo.symbol,
             side=algo.side,
+            command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
             existing_mappings_by_local_vt_orderid={},
             existing_timer_schedules={},
             initialization=False,
@@ -1413,7 +2013,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
         session_phase=SessionPhaseV1.CONTINUOUS_AM,
         input_projection_sha256=projection_set.projection_set_sha256,
     )
-    next_state = AlgoStateSnapshotV2.create(
+    unchanged_state = AlgoStateSnapshotV2.create(
         plugin_manifest=descriptor.manifest,
         deterministic_context=context,
         transition_sequence=2,
@@ -1449,6 +2049,40 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
         owned_broker_order_id=None,
         reason_code="MINIQMT_ALGO_SLICE_DUE",
         metadata={"slice": 1},
+    )
+    next_state_payload = thaw_json_v1(state.state)
+    next_state_payload["active_orders"] = [
+        CurrentThreeActiveOrderStateV3.create(
+            local_vt_orderid=command.local_vt_orderid,
+            submit_command_id=command.command_id,
+            broker_order_id=None,
+            symbol=command.symbol,
+            side=command.side,
+            status=CurrentThreeActiveOrderStatusV3.COMMAND_PENDING,
+            pending_command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
+            pending_command_id=command.command_id,
+            requested_price_decimal=command.price_decimal,
+            requested_quantity=command.quantity,
+            cumulative_filled_quantity=0,
+            remaining_quantity=command.quantity,
+            last_order_event_id=None,
+            last_trade_event_id=None,
+            last_command_outcome_event_id=None,
+            last_oms_reconcile_event_id=None,
+            terminal_order_status=None,
+            terminal_observed_cumulative_filled_quantity=None,
+            market_data_lineage=next_state_payload["last_market_data_lineage"],
+        ).model_dump(mode="json")
+    ]
+    next_state = AlgoStateSnapshotV2.create(
+        plugin_manifest=descriptor.manifest,
+        deterministic_context=context,
+        transition_sequence=2,
+        last_applied_delivery_sequence=2,
+        last_applied_delivery_id=claimed.delivery_id,
+        last_closed_delivery_sequence=2,
+        state=next_state_payload,
+        last_applied_event_id=event.event_id,
     )
     timer = TimerMutationV1.create(
         mutation_type=TimerMutationTypeV1.UPSERT_ONE_SHOT,
@@ -1502,6 +2136,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
         algo_code=algo.algo_code,
         symbol=algo.symbol,
         side=algo.side,
+        command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
         existing_mappings_by_local_vt_orderid={},
         existing_timer_schedules={},
         initialization=False,
@@ -1528,6 +2163,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
             algo_code=algo.algo_code,
             symbol=algo.symbol,
             side=algo.side,
+            command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
             existing_mappings_by_local_vt_orderid={},
             existing_timer_schedules={},
             initialization=False,
@@ -1558,6 +2194,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
             algo_code=algo.algo_code,
             symbol=algo.symbol,
             side=algo.side,
+            command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
             existing_mappings_by_local_vt_orderid={},
             existing_timer_schedules={},
             initialization=False,
@@ -1600,6 +2237,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
             algo_code=algo.algo_code,
             symbol=algo.symbol,
             side=algo.side,
+            command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
             existing_mappings_by_local_vt_orderid={},
             existing_timer_schedules={},
             initialization=False,
@@ -1646,6 +2284,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
                 algo_code=algo.algo_code,
                 symbol=algo.symbol,
                 side=algo.side,
+                command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
                 existing_mappings_by_local_vt_orderid={},
                 existing_timer_schedules={},
                 initialization=False,
@@ -1724,6 +2363,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
             algo_code=algo.algo_code,
             symbol=algo.symbol,
             side=algo.side,
+            command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
             existing_mappings_by_local_vt_orderid={},
             existing_timer_schedules={},
             initialization=False,
@@ -1742,7 +2382,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
         payload={},
     )
     timer_effect = {
-        "next_state_sha256": next_state.state_sha256,
+        "next_state_sha256": unchanged_state.state_sha256,
         "ordered_command_ids": [],
         "ordered_timer_mutation_ids": [cancel_timer.mutation_identity_v1()],
         "ordered_diagnostic_observation_ids": [],
@@ -1750,7 +2390,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
     }
     timer_transition = AlgoTransitionV1(
         schema_version="miniqmt_algo_transition_v1",
-        next_state=next_state,
+        next_state=unchanged_state,
         broker_commands=(),
         timer_mutations=(cancel_timer,),
         diagnostic_observations=(),
@@ -1774,6 +2414,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
             algo_code=algo.algo_code,
             symbol=algo.symbol,
             side=algo.side,
+            command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
             existing_mappings_by_local_vt_orderid={},
             existing_timer_schedules={},
             initialization=False,
@@ -1781,7 +2422,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
     assert timer_owner.value.reason_code == "MINIQMT_TIMER_CANCEL_OWNER_INVALID"
 
     rejected_effect = {
-        "next_state_sha256": next_state.state_sha256,
+        "next_state_sha256": unchanged_state.state_sha256,
         "ordered_command_ids": [],
         "ordered_timer_mutation_ids": [],
         "ordered_diagnostic_observation_ids": [],
@@ -1789,7 +2430,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
     }
     rejected = AlgoTransitionV1(
         schema_version="miniqmt_algo_transition_v1",
-        next_state=next_state,
+        next_state=unchanged_state,
         broker_commands=(),
         timer_mutations=(),
         diagnostic_observations=(),
@@ -1813,6 +2454,7 @@ def test_applied_materializer_persists_submit_timer_and_diagnostic_effect_closur
             algo_code=algo.algo_code,
             symbol=algo.symbol,
             side=algo.side,
+            command_lifecycle_projection=_empty_lifecycle_projection(event, claimed, algo),
             existing_mappings_by_local_vt_orderid={},
             existing_timer_schedules={},
             initialization=False,
