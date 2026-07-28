@@ -150,6 +150,47 @@ DEFAULT_REVIEW_POLICY: dict[str, Any] = {
 }
 
 
+def normalize_advisory_review_policy(
+    raw: Mapping[str, Any] | None,
+    *,
+    target_count: int,
+) -> dict[str, Any]:
+    """Build the canonical policy shared by current and historical Advisory."""
+
+    if target_count <= 0 or target_count > 100:
+        raise RuntimeConfigInvalidError(
+            "advisory target_count must be between 1 and 100",
+            context={"target_count": target_count},
+        )
+    policy = {
+        **DEFAULT_REVIEW_POLICY,
+        "rank_enter_threshold": target_count,
+        "rank_exit_threshold": target_count * 2,
+        **dict(raw or {}),
+    }
+    for key in (
+        "rank_enter_threshold",
+        "rank_exit_threshold",
+        "rank_exit_confirm_days",
+        "daily_replacement_budget",
+        "stop_loss_bps",
+        "take_profit_bps",
+        "trailing_stop_bps",
+        "time_stop_days",
+    ):
+        policy[key] = int(policy[key])
+        if policy[key] < 0:
+            raise RuntimeConfigInvalidError(
+                "advisory review policy values must be non-negative",
+                context={"field": key},
+            )
+    if policy["rank_enter_threshold"] <= 0 or policy["rank_exit_threshold"] < policy["rank_enter_threshold"]:
+        raise RuntimeConfigInvalidError("rank_exit_threshold must be >= rank_enter_threshold > 0")
+    if policy["daily_replacement_budget"] <= 0:
+        raise RuntimeConfigInvalidError("daily_replacement_budget must be positive")
+    return policy
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -3172,30 +3213,7 @@ class AdvisoryProgramService:
 
     @staticmethod
     def _normalize_review_policy(raw: Mapping[str, Any] | None, *, target_count: int) -> dict[str, Any]:
-        policy = {
-            **DEFAULT_REVIEW_POLICY,
-            "rank_enter_threshold": target_count,
-            "rank_exit_threshold": target_count * 2,
-            **dict(raw or {}),
-        }
-        for key in (
-            "rank_enter_threshold",
-            "rank_exit_threshold",
-            "rank_exit_confirm_days",
-            "daily_replacement_budget",
-            "stop_loss_bps",
-            "take_profit_bps",
-            "trailing_stop_bps",
-            "time_stop_days",
-        ):
-            policy[key] = int(policy[key])
-            if policy[key] < 0:
-                raise RuntimeConfigInvalidError("advisory review policy values must be non-negative", context={"field": key})
-        if policy["rank_enter_threshold"] <= 0 or policy["rank_exit_threshold"] < policy["rank_enter_threshold"]:
-            raise RuntimeConfigInvalidError("rank_exit_threshold must be >= rank_enter_threshold > 0")
-        if policy["daily_replacement_budget"] <= 0:
-            raise RuntimeConfigInvalidError("daily_replacement_budget must be positive")
-        return policy
+        return normalize_advisory_review_policy(raw, target_count=target_count)
 
     @staticmethod
     def _normalize_price_basis(value: str) -> str:

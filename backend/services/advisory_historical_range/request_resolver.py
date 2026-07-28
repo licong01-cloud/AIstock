@@ -16,7 +16,11 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeResearchBatchRequestV1,
     ResearchProgramSpecV1,
 )
-from backend.services.advisory_program import AdvisoryProgram, AdvisoryStrategyBindingVersion
+from backend.services.advisory_program import (
+    AdvisoryProgram,
+    AdvisoryStrategyBindingVersion,
+    normalize_advisory_review_policy,
+)
 from backend.services.strategy_package.advisory_input_projection import (
     StrategyPackageHistoricalRangeInputProjectionV1,
     get_strategy_package_inference_required_window,
@@ -175,7 +179,10 @@ class HistoricalRangeProgramResolver:
             source_program_version = program.version
             source_binding_version_id = binding.binding_version_id
             runtime_config = dict(binding.runtime_config_json)
-            review_policy = dict(program.review_policy)
+            review_policy = normalize_advisory_review_policy(
+                program.review_policy,
+                target_count=program.target_count,
+            )
             program_config = {
                 "program_id": program.program_id,
                 "program_version": program.version,
@@ -195,8 +202,14 @@ class HistoricalRangeProgramResolver:
             source_program_version = None
             source_binding_version_id = None
             runtime_config = dict(spec.runtime_config)
-            review_policy = dict(spec.review_policy)
-            program_config = spec.semantic_payload()
+            review_policy = normalize_advisory_review_policy(
+                spec.review_policy,
+                target_count=spec.target_count,
+            )
+            program_config = {
+                **spec.semantic_payload(),
+                "review_policy": review_policy,
+            }
             style_profile_ref = spec.style_profile_ref
             style_profile_hash = spec.style_profile_hash
         resolved_package = resolved_packages.get(package_id)
