@@ -557,7 +557,7 @@ class ResponseBoundHistoricalRangeDispatcher:
                     "ahrclease",
                     {"operation_id": operation_id, "worker_id": worker_id, "row_version": next_row_version + 1},
                 ),
-                next_lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                next_lease_duration=timedelta(minutes=5),
             )
             claimed = result.operation
             if result.sealed_batch is not None:

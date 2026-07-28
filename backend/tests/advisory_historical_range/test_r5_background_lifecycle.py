@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -19,6 +19,49 @@ class _Background:
 
     def add_task(self, func, *args, **kwargs):
         self.task = (func, args, kwargs)
+
+
+def test_catalog_dispatcher_defers_rollover_deadline_until_after_chunk_execution() -> None:
+    operation = {
+        "operation_id": "ahrop_1",
+        "batch_id": "ahrb_1",
+        "status": "WAITING_INPUT",
+        "row_version": 3,
+        "attempt_no": 1,
+        "fencing_token": 1,
+    }
+    query = SimpleNamespace(get_operation_internal=lambda _operation_id: operation)
+    repository = SimpleNamespace(
+        claim_catalog_operation=lambda **_kwargs: {
+            **operation,
+            "status": "RUNNING",
+            "row_version": 4,
+            "attempt_no": 2,
+            "fencing_token": 2,
+        }
+    )
+    calls = []
+
+    def execute_claimed_chunk(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(operation={"status": "WAITING_INPUT"}, sealed_batch=None)
+
+    runtime = SimpleNamespace(
+        query=query,
+        repository=repository,
+        planning=SimpleNamespace(execute_claimed_chunk=execute_claimed_chunk),
+    )
+    dispatcher = ResponseBoundHistoricalRangeDispatcher(runtime_factory=lambda: runtime)
+
+    dispatcher._run_catalog(
+        runtime=runtime,
+        payload={"operation_id": "ahrop_1", "batch_id": "ahrb_1"},
+        worker_id="worker-1",
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["next_lease_duration"] == timedelta(minutes=5)
+    assert "next_lease_expires_at" not in calls[0]
 
 
 def test_dispatcher_captures_only_json_round_tripped_identity() -> None:

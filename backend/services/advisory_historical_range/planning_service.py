@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .artifact_store import HistoricalRangeArtifactStore
@@ -157,9 +157,23 @@ class HistoricalRangePlanningService:
         expected_fencing_token: int,
         next_worker_id: str,
         next_lease_token: str,
-        next_lease_expires_at: datetime,
+        next_lease_expires_at: datetime | None = None,
+        next_lease_duration: timedelta | None = None,
         chunk_size: int = 32,
     ) -> HistoricalRangeCatalogChunkExecutionResult:
+        if (next_lease_expires_at is None) == (next_lease_duration is None):
+            raise ValueError(
+                "catalog rollover requires exactly one lease deadline or duration"
+            )
+        if next_lease_duration is not None and next_lease_duration <= timedelta(0):
+            raise ValueError("catalog rollover lease duration must be positive")
+
+        def rollover_lease_expires_at() -> datetime:
+            if next_lease_duration is not None:
+                return datetime.now(UTC) + next_lease_duration
+            assert next_lease_expires_at is not None
+            return next_lease_expires_at
+
         state = self._repository.load_catalog_planning_state(operation_id=operation_id)
         operation = state.operation
         if (
@@ -201,7 +215,7 @@ class HistoricalRangePlanningService:
                 drift_receipt_ref=drift_ref,
                 next_worker_id=next_worker_id,
                 next_lease_token=next_lease_token,
-                next_lease_expires_at=next_lease_expires_at,
+                next_lease_expires_at=rollover_lease_expires_at(),
                 error_json={"reason_code": exc.reason_code, "message": str(exc), "context": exc.context},
             )
             return HistoricalRangeCatalogChunkExecutionResult(operation=restarted)
@@ -245,7 +259,7 @@ class HistoricalRangePlanningService:
             advance_to_verify=chunk.phase_complete,
             next_worker_id=next_worker_id,
             next_lease_token=next_lease_token,
-            next_lease_expires_at=next_lease_expires_at,
+            next_lease_expires_at=rollover_lease_expires_at(),
         )
         return HistoricalRangeCatalogChunkExecutionResult(operation=updated)
 
