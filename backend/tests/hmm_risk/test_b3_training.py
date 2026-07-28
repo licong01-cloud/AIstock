@@ -50,7 +50,26 @@ def _train_manifest(
         "dataset_manifest_hash": "a" * 64,
         "mapping_manifest_hash": "b" * 64,
         "calendar_manifest_hash": "c" * 64,
+        "feature_domain_policy_sha256": TEST_POLICY_SHA256,
     }
+
+
+def _feature_domain_policy_manifest() -> dict:
+    ledger_entry = {"canonical_ts_code": "000001.SZ", "moneyflow_contributor_eligible": True}
+    ledger = [{**ledger_entry, "entry_sha256": canonical_sha256(ledger_entry)}]
+    body = {
+        "schema_version": "hmm_risk_c010_feature_domain_policy_v1",
+        "formula_version": "hmm_risk_l1_sector_factor_formula_v2_c010",
+        "eligibility_entry_count": len(ledger),
+        "contributor_ledger": ledger,
+        "contributor_ledger_sha256": canonical_sha256(ledger),
+        "excluded_moneyflow_symbols": [],
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+TEST_POLICY_MANIFEST = _feature_domain_policy_manifest()
+TEST_POLICY_SHA256 = TEST_POLICY_MANIFEST["receipt_sha256"]
 
 
 def _model(*, family: str = "legacy_covfix", level: str = "L1", seed: int = 42, code: str = "S001") -> B3FittedModel:
@@ -371,6 +390,7 @@ def _semantic_receipt(model_hash: str, *, level: str, sector_code: str) -> dict:
         "mapping_manifest_hash": "b" * 64,
         "calendar_manifest_hash": "c" * 64,
         "l2_stock_fact_manifest_hash": "d" * 64,
+        "feature_domain_policy_sha256": TEST_POLICY_SHA256,
         "source_cutoff": utility["source_cutoff"],
         "formula_version": utility["formula_version"],
         "utility_component_sha256": component_hashes,
@@ -456,6 +476,7 @@ def _selection(family: str, level: str, training_receipts: list[dict]) -> dict:
         "evidence": {
             "family": family,
             "level": level,
+            "feature_domain_policy_sha256": TEST_POLICY_SHA256,
             "selected_seed": 42,
             "selected_schedule_index": 0,
             "canonical_sector_codes": codes,
@@ -521,6 +542,7 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
     pairs = {key: _selected_artifact(*key) for key in keys}
     artifacts = {key: pair[0] for key, pair in pairs.items()}
     selections = {key: pair[1] for key, pair in pairs.items()}
+    policy_manifest = _feature_domain_policy_manifest()
     manifest_path = write_b3_ready_model_set(
         tmp_path,
         selected_artifacts=artifacts,
@@ -529,12 +551,38 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
         mapping_manifest_hash="b" * 64,
         calendar_manifest_hash="c" * 64,
         l2_stock_fact_manifest_hash="d" * 64,
+        feature_domain_policy_sha256=policy_manifest["receipt_sha256"],
+        feature_domain_policy_manifest=policy_manifest,
         producer_commit="c" * 40,
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "hmm_risk_state_model_set_v1"
     assert manifest["status"] == "READY"
     assert len(manifest["layers"]) == 4
+    assert manifest["feature_domain_policy_sha256"] == policy_manifest["receipt_sha256"]
+    assert manifest["feature_domain_policy_manifest"] == policy_manifest
+
+    invalid_policy = json.loads(json.dumps(policy_manifest))
+    invalid_entry = invalid_policy["contributor_ledger"][0]
+    invalid_entry["moneyflow_contributor_eligible"] = "true"
+    invalid_entry_body = {key: value for key, value in invalid_entry.items() if key != "entry_sha256"}
+    invalid_entry["entry_sha256"] = canonical_sha256(invalid_entry_body)
+    invalid_policy["contributor_ledger_sha256"] = canonical_sha256(invalid_policy["contributor_ledger"])
+    invalid_policy_body = {key: value for key, value in invalid_policy.items() if key != "receipt_sha256"}
+    invalid_policy["receipt_sha256"] = canonical_sha256(invalid_policy_body)
+    with pytest.raises(StateModelSetError, match="contributor ledger entry is invalid"):
+        write_b3_ready_model_set(
+            tmp_path / "invalid-policy",
+            selected_artifacts=artifacts,
+            selection_receipts=selections,
+            dataset_manifest_hash="a" * 64,
+            mapping_manifest_hash="b" * 64,
+            calendar_manifest_hash="c" * 64,
+            l2_stock_fact_manifest_hash="d" * 64,
+            feature_domain_policy_sha256=invalid_policy["receipt_sha256"],
+            feature_domain_policy_manifest=invalid_policy,
+            producer_commit="c" * 40,
+        )
 
     incomplete = dict(artifacts)
     incomplete.pop(("legacy_covfix", "L2"))
@@ -547,6 +595,8 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            feature_domain_policy_sha256=policy_manifest["receipt_sha256"],
+            feature_domain_policy_manifest=policy_manifest,
             producer_commit="c" * 40,
         )
 
@@ -561,6 +611,7 @@ def test_ready_writer_rejects_declared_count_without_durable_entries(tmp_path) -
     target_body = {key: value for key, value in target.items() if key != "artifact_sha256"}
     target["artifact_sha256"] = canonical_sha256(target_body)
     artifacts[("legacy_covfix", "L1")] = target
+    policy_manifest = _feature_domain_policy_manifest()
 
     with pytest.raises(StateModelSetError, match="selected entry count"):
         write_b3_ready_model_set(
@@ -571,6 +622,8 @@ def test_ready_writer_rejects_declared_count_without_durable_entries(tmp_path) -
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            feature_domain_policy_sha256=policy_manifest["receipt_sha256"],
+            feature_domain_policy_manifest=policy_manifest,
             producer_commit="c" * 40,
         )
 
@@ -603,6 +656,7 @@ def test_ready_layer_rejects_rehashed_but_empty_semantic_evidence() -> None:
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            feature_domain_policy_sha256=TEST_POLICY_SHA256,
         )
 
 
@@ -628,4 +682,23 @@ def test_ready_layer_rejects_selection_receipt_hashes_not_linked_to_durable_trai
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            feature_domain_policy_sha256=TEST_POLICY_SHA256,
+        )
+
+
+def test_ready_layer_rejects_feature_domain_policy_lineage_drift() -> None:
+    artifact, selection = _selected_artifact("legacy_covfix", "L1")
+
+    with pytest.raises(StateModelSetError, match="selection contract is invalid"):
+        training_subject._validate_ready_layer(
+            artifact,
+            selection,
+            family="legacy_covfix",
+            level="L1",
+            expected_count=31,
+            dataset_manifest_hash="a" * 64,
+            mapping_manifest_hash="b" * 64,
+            calendar_manifest_hash="c" * 64,
+            l2_stock_fact_manifest_hash="d" * 64,
+            feature_domain_policy_sha256="0" * 64,
         )

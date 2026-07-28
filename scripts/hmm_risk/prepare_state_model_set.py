@@ -49,8 +49,11 @@ from backend.services.hmm_risk.b3_training import (  # noqa: E402
     write_b3_ready_model_set,
 )
 from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
+    C010_FORMULA_VERSION,
+    C010_POLICY_VERSION,
     MIN_COVERAGE,
     OBSERVATION_VERSION,
+    build_c010_feature_domain_panel,
     build_l1_feature_panel,
     build_l1_training_series,
 )
@@ -73,6 +76,7 @@ from backend.services.hmm_risk.stock_fact_repository import (  # noqa: E402
 
 REQUEST_SCHEMA = "hmm_risk_state_model_set_preparation_request_v1"
 B3_PREFLIGHT_SCHEMA = "hmm_risk_b3_formal_preflight_v1"
+C010_FORMAL_PREFLIGHT_SCHEMA = "hmm_risk_c010_formal_preflight_v1"
 C009_STOCK_FACT_PREFLIGHT_SCHEMA = "hmm_risk_c009_stock_fact_preflight_v1"
 C010_OBSERVATION_ELIGIBILITY_SCHEMA = "hmm_risk_c010_observation_eligibility_diagnostic_v1"
 B3_TRAIN_COVERAGE_PREFLIGHT_VERSION = "hmm_risk_b3_train_coverage_preflight_set_v1"
@@ -298,17 +302,30 @@ def _family_spec(
     )
 
 
+def _request_train_window(request: dict[str, Any]) -> tuple[date, date]:
+    windows = {
+        (_date(family.get("train_start"), "train_start"), _date(family.get("train_end"), "train_end"))
+        for family in request["families"]
+    }
+    if len(windows) != 1:
+        raise StateModelSetError("C-010 requires one immutable train window across both families")
+    train_start, train_end = next(iter(windows))
+    if train_start > train_end:
+        raise StateModelSetError("C-010 train window is invalid")
+    return train_start, train_end
+
+
 def _c010_expected_opportunity_dates(
     conn: Any,
     source_spec: StockFactSourceSpec,
-    symbols: list[str],
+    *,
+    train_start: date,
+    train_end: date,
 ) -> dict[str, tuple[date, ...]]:
-    if not symbols:
-        return {}
     with conn.cursor() as cursor:
         cursor.execute(
             """
-            SELECT DISTINCT price.ts_code,price.trade_date
+            SELECT price.ts_code,array_agg(DISTINCT price.trade_date ORDER BY price.trade_date)
             FROM market.kline_daily_raw price
             JOIN market.stock_universe_pit_spans spans
               ON spans.ts_code=price.ts_code AND spans.universe_key=%s
@@ -317,19 +334,19 @@ def _c010_expected_opportunity_dates(
             JOIN market.sw_index_member member
               ON member.ts_code=price.ts_code AND member.in_date<=price.trade_date
              AND (member.out_date IS NULL OR member.out_date>=price.trade_date)
-            WHERE price.trade_date BETWEEN %s AND %s AND price.ts_code=ANY(%s)
-            ORDER BY price.ts_code,price.trade_date
+            WHERE price.trade_date BETWEEN %s AND %s
+            GROUP BY price.ts_code
+            ORDER BY price.ts_code
             """,
-            (source_spec.universe_key, source_spec.source_start, source_spec.source_end, symbols),
+            (source_spec.universe_key, train_start, train_end),
         )
         rows = cursor.fetchall()
-    grouped: dict[str, list[date]] = {symbol: [] for symbol in symbols}
-    for symbol, trade_date in rows:
-        grouped.setdefault(str(symbol), []).append(trade_date)
-    result = {symbol: tuple(dates) for symbol, dates in grouped.items() if dates}
-    missing = sorted(set(symbols) - set(result))
-    if missing:
-        raise StateModelSetError(f"C-010 provider-absence symbols lack expected opportunity evidence: {missing}")
+    result = {str(symbol): tuple(dates) for symbol, dates in rows if dates}
+    if not result:
+        raise StateModelSetError(
+            "hmm_risk_c010_expected_opportunity_missing: "
+            "C-010 full-universe expected opportunity query returned no rows"
+        )
     return result
 
 
@@ -338,7 +355,10 @@ def _load_l1_source_inputs(
     *,
     db_prefix: str,
     c010_diagnostic: bool = False,
+    c010_formal: bool = False,
 ) -> dict[str, Any]:
+    if c010_diagnostic and c010_formal:
+        raise StateModelSetError("C-010 diagnostic and formal policy modes are mutually exclusive")
     source = request["source"]
     security_identity_manifest = _load_security_identity_manifest(source)
     provider_absence_manifest = _load_provider_absence_manifest(source)
@@ -385,26 +405,26 @@ def _load_l1_source_inputs(
             source_spec.source_end,
         )
         c010_payload = None
-        if c010_diagnostic:
-            symbols = sorted(
-                {
-                    row.canonical_ts_code
-                    for row in provider_absence_manifest.rows
-                    if source_spec.source_start <= row.trade_date <= source_spec.source_end
-                }
+        if c010_diagnostic or c010_formal:
+            train_start, train_end = _request_train_window(request)
+            expected_dates = _c010_expected_opportunity_dates(
+                conn,
+                source_spec,
+                train_start=train_start,
+                train_end=train_end,
             )
-            expected_dates = _c010_expected_opportunity_dates(conn, source_spec, symbols)
             eligibility = build_train_only_observation_eligibility(
                 provider_absence_manifest.rows,
                 expected_opportunity_dates_by_symbol=expected_dates,
-                train_start=source_spec.source_start,
-                train_end=source_spec.source_end,
+                train_start=train_start,
+                train_end=train_end,
                 minimum_availability_ratio=MIN_COVERAGE,
             )
             diagnostic_l1, diagnostic_l2, aggregate_evidence = load_feature_domain_direct_aggregates(
                 reader,
                 eligibility,
                 min_coverage=MIN_COVERAGE,
+                formal_policy=c010_formal,
             )
             c010_payload = {
                 "eligibility": eligibility,
@@ -429,29 +449,29 @@ def _load_l1_source_inputs(
     )
     c010_diagnostic_payload = None
     if c010_payload is not None:
-        diagnostic_l1_panel, diagnostic_l1_definition = build_l1_feature_panel(
+        diagnostic_l1_panel, diagnostic_l1_definition, diagnostic_l1_cross_section = build_c010_feature_domain_panel(
             c010_payload["l1_aggregates"],
             trading_dates=calendar,
             csi300_returns=benchmark,
-            cross_section_min_coverage=MIN_COVERAGE,
-            use_moneyflow_amount_denominator=True,
+            diagnostic_only=c010_diagnostic,
         )
-        diagnostic_l2_panel, diagnostic_l2_definition = build_l1_feature_panel(
+        diagnostic_l2_panel, diagnostic_l2_definition, diagnostic_l2_cross_section = build_c010_feature_domain_panel(
             c010_payload["l2_aggregates"],
             trading_dates=calendar,
             csi300_returns=benchmark,
             expected_sector_count=131,
             direct_sector_level="L2",
-            cross_section_min_coverage=MIN_COVERAGE,
-            use_moneyflow_amount_denominator=True,
+            diagnostic_only=c010_diagnostic,
         )
         c010_diagnostic_payload = {
-            "eligibility": c010_payload["eligibility"].evidence(),
+            "eligibility": c010_payload["eligibility"].evidence(formal_policy=c010_formal),
             "aggregate_evidence": c010_payload["aggregate_evidence"],
             "l1_panel": diagnostic_l1_panel,
             "l2_panel": diagnostic_l2_panel,
             "l1_feature_definition": diagnostic_l1_definition,
             "l2_feature_definition": diagnostic_l2_definition,
+            "l1_cross_section_evidence": diagnostic_l1_cross_section,
+            "l2_cross_section_evidence": diagnostic_l2_cross_section,
         }
     dataset_manifest = {
         "schema_version": "hmm_risk_state_model_set_dataset_manifest_v1",
@@ -461,6 +481,20 @@ def _load_l1_source_inputs(
         "security_source_identity": security_identity_manifest.evidence(),
         "provider_absence_authority": provider_absence_manifest.evidence(),
     }
+    if c010_formal and c010_diagnostic_payload is not None:
+        dataset_manifest["c010_feature_domain_inputs"] = {
+            "schema_version": "hmm_risk_c010_feature_domain_input_manifest_v1",
+            "eligibility_receipt_sha256": c010_diagnostic_payload["eligibility"]["receipt_sha256"],
+            "aggregate_receipt_sha256": c010_diagnostic_payload["aggregate_evidence"]["receipt_sha256"],
+            "l1_cross_section_receipt_sha256": c010_diagnostic_payload["l1_cross_section_evidence"]["receipt_sha256"],
+            "l2_cross_section_receipt_sha256": c010_diagnostic_payload["l2_cross_section_evidence"]["receipt_sha256"],
+            "l1_feature_definition_sha256": canonical_sha256(c010_diagnostic_payload["l1_feature_definition"]),
+            "l2_feature_definition_sha256": canonical_sha256(c010_diagnostic_payload["l2_feature_definition"]),
+        }
+        panel = c010_diagnostic_payload["l1_panel"]
+        l2_panel = c010_diagnostic_payload["l2_panel"]
+        feature_definition = c010_diagnostic_payload["l1_feature_definition"]
+        l2_feature_definition = c010_diagnostic_payload["l2_feature_definition"]
     return {
         "source_spec": source_spec,
         "database": db_identity,
@@ -475,6 +509,7 @@ def _load_l1_source_inputs(
         "security_identity_manifest": security_identity_manifest.evidence(),
         "provider_absence_manifest": provider_absence_manifest.evidence(),
         "c010_diagnostic": c010_diagnostic_payload,
+        "trading_dates": tuple(calendar),
     }
 
 
@@ -507,6 +542,8 @@ def _b3_train_coverage_preflight(inputs: dict[str, Any], request_template: dict[
     valid = len(reports) == 4 and all(report["train_coverage_valid"] for report in reports.values())
     body = {
         "schema_version": B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
+        "feature_domain_policy_sha256": inputs.get("feature_domain_policy_sha256"),
+        "formula_version": C010_FORMULA_VERSION if inputs.get("feature_domain_policy_sha256") else None,
         "reports": reports,
         "report_count": len(reports),
         "train_coverage_valid": valid,
@@ -521,22 +558,208 @@ def _b3_train_coverage_preflight(inputs: dict[str, Any], request_template: dict[
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def _require_canonical_receipt(value: dict[str, Any], *, label: str) -> None:
+    identity = str(value.get("receipt_sha256") or "")
+    body = {key: item for key, item in value.items() if key != "receipt_sha256"}
+    if len(identity) != 64 or identity != canonical_sha256(body):
+        raise StateModelSetError(f"{label} receipt identity is invalid")
+
+
+def _require_entry_receipts(values: Any, *, label: str) -> None:
+    if not isinstance(values, list):
+        raise StateModelSetError(f"{label} entries are missing")
+    for index, value in enumerate(values):
+        if not isinstance(value, dict):
+            raise StateModelSetError(f"{label} entry {index} is invalid")
+        identity = str(value.get("entry_sha256") or "")
+        body = {key: item for key, item in value.items() if key != "entry_sha256"}
+        if len(identity) != 64 or identity != canonical_sha256(body):
+            raise StateModelSetError(f"{label} entry {index} identity is invalid")
+
+
+def _c010_policy_manifest(
+    inputs: dict[str, Any],
+    request: dict[str, Any],
+    *,
+    producer_commit: str,
+) -> dict[str, Any]:
+    c010 = inputs.get("c010_diagnostic")
+    if not isinstance(c010, dict):
+        raise StateModelSetError("C-010 formal feature-domain payload is missing")
+    train_start, train_end = _request_train_window(request)
+    eligibility = c010.get("eligibility")
+    aggregate = c010.get("aggregate_evidence")
+    l1_cross = c010.get("l1_cross_section_evidence")
+    l2_cross = c010.get("l2_cross_section_evidence")
+    if not all(isinstance(value, dict) for value in (eligibility, aggregate, l1_cross, l2_cross)):
+        raise StateModelSetError("C-010 formal feature-domain receipts are incomplete")
+    for label, value in (
+        ("C-010 eligibility", eligibility),
+        ("C-010 aggregate", aggregate),
+        ("C-010 L1 cross-section", l1_cross),
+        ("C-010 L2 cross-section", l2_cross),
+    ):
+        _require_canonical_receipt(value, label=label)
+    _require_entry_receipts(eligibility.get("entries"), label="C-010 eligibility")
+    for field in ("l1_domain_receipts", "l2_domain_receipts", "l1_invalid_price_domain", "l2_invalid_price_domain"):
+        _require_entry_receipts(aggregate.get(field), label=f"C-010 aggregate {field}")
+    _require_entry_receipts(l1_cross.get("entries"), label="C-010 L1 cross-section")
+    _require_entry_receipts(l2_cross.get("entries"), label="C-010 L2 cross-section")
+    if (
+        eligibility.get("entry_count") != len(eligibility["entries"])
+        or eligibility.get("entry_count", 0) <= 0
+        or aggregate.get("l1_aggregate_count") != len(aggregate["l1_domain_receipts"])
+        or aggregate.get("l2_aggregate_count") != len(aggregate["l2_domain_receipts"])
+        or aggregate.get("l1_aggregate_count", 0) <= 0
+        or aggregate.get("l2_aggregate_count", 0) <= 0
+        or l1_cross.get("entry_count") != len(l1_cross["entries"])
+        or l2_cross.get("entry_count") != len(l2_cross["entries"])
+        or l1_cross.get("entry_count") != 4 * len(inputs.get("trading_dates") or ())
+        or l2_cross.get("entry_count") != 4 * len(inputs.get("trading_dates") or ())
+    ):
+        raise StateModelSetError("C-010 formal receipt set cardinality is invalid")
+    if eligibility.get("formal_policy_activated") is not True or eligibility.get("diagnostic_only") is not False:
+        raise StateModelSetError("C-010 formal eligibility receipt is not active")
+    feature_definitions = {
+        "L1": c010.get("l1_feature_definition"),
+        "L2": c010.get("l2_feature_definition"),
+    }
+    if any(
+        not isinstance(value, dict)
+        or value.get("schema_version") != C010_FORMULA_VERSION
+        or value.get("feature_domain_policy_version") != C010_POLICY_VERSION
+        or value.get("diagnostic_only") is not False
+        for value in feature_definitions.values()
+    ):
+        raise StateModelSetError(
+            "hmm_risk_c010_feature_identity_drift: C-010 formal feature definition identity is invalid"
+        )
+    if (
+        aggregate.get("formal_policy_activated") is not True
+        or l1_cross.get("diagnostic_only") is not False
+        or l2_cross.get("diagnostic_only") is not False
+        or l1_cross.get("direct_sector_level") != "L1"
+        or l1_cross.get("expected_sector_count") != 31
+        or l2_cross.get("direct_sector_level") != "L2"
+        or l2_cross.get("expected_sector_count") != 131
+    ):
+        raise StateModelSetError("C-010 formal aggregate/cross-section receipts are not active or complete")
+    stock_fact = inputs["dataset_manifest"]["stock_facts"]
+    l2_stock_fact = inputs["l2_stock_fact_manifest"]
+    circ_mv_identity = {
+        "L1": {
+            field: stock_fact.get(field)
+            for field in (
+                "circ_mv_lookback_contract_version",
+                "circ_mv_history_start",
+                "circ_mv_pit_boundary_crossing_key_sha256",
+            )
+        },
+        "L2": {
+            field: l2_stock_fact.get(field)
+            for field in (
+                "circ_mv_lookback_contract_version",
+                "circ_mv_history_start",
+                "circ_mv_pit_boundary_crossing_key_sha256",
+            )
+        },
+    }
+    if any(not value for level in circ_mv_identity.values() for value in level.values()):
+        raise StateModelSetError("C-010 causal circ-mv identity is incomplete")
+    feature_order_by_family = {
+        "legacy_covfix": list(BASE_FEATURES),
+        "autocycle_all_core": list(ALL_CORE_FEATURES),
+    }
+    body = {
+        "schema_version": C010_POLICY_VERSION,
+        "formula_version": C010_FORMULA_VERSION,
+        "producer_commit": producer_commit,
+        "train_start": train_start.isoformat(),
+        "train_end": train_end.isoformat(),
+        "contributor_min_availability": MIN_COVERAGE,
+        "domain_min_count_coverage": MIN_COVERAGE,
+        "domain_min_weight_coverage": MIN_COVERAGE,
+        "feature_cross_section_min_coverage": MIN_COVERAGE,
+        "moneyflow_mandatory_fields": list(feature_definitions["L1"]["moneyflow_mandatory_fields"]),
+        "eligibility_receipt_sha256": eligibility.get("receipt_sha256"),
+        "eligibility_entry_count": int(eligibility.get("entry_count") or 0),
+        "contributor_ledger": eligibility["entries"],
+        "contributor_ledger_sha256": canonical_sha256(eligibility["entries"]),
+        "excluded_moneyflow_symbols": list(eligibility.get("excluded_moneyflow_symbols") or ()),
+        "excluded_moneyflow_symbol_sha256": canonical_sha256(list(eligibility.get("excluded_moneyflow_symbols") or ())),
+        "aggregate_receipt_sha256": aggregate.get("receipt_sha256"),
+        "l1_cross_section_receipt_sha256": l1_cross.get("receipt_sha256"),
+        "l2_cross_section_receipt_sha256": l2_cross.get("receipt_sha256"),
+        "l1_feature_definition_sha256": canonical_sha256(feature_definitions["L1"]),
+        "l2_feature_definition_sha256": canonical_sha256(feature_definitions["L2"]),
+        "feature_order_by_family": feature_order_by_family,
+        "feature_order_sha256": canonical_sha256(feature_order_by_family),
+        "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+        "calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+        "security_identity_manifest_sha256": inputs["security_identity_manifest"].get("manifest_sha256"),
+        "provider_absence_manifest_sha256": inputs["provider_absence_manifest"].get("manifest_sha256"),
+        "causal_circ_mv_identity": circ_mv_identity,
+        "causal_circ_mv_identity_sha256": canonical_sha256(circ_mv_identity),
+        "pit_universe_changed": False,
+        "selection_universe_changed": False,
+        "runtime_prediction_eligibility_changed": False,
+    }
+    if body["eligibility_entry_count"] <= 0:
+        raise StateModelSetError("C-010 formal eligibility ledger is empty")
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _require_c010_policy_identity(request: dict[str, Any]) -> None:
+    manifest = request.get("feature_domain_policy_manifest")
+    identity = str(request.get("feature_domain_policy_sha256") or "")
+    if not isinstance(manifest, dict):
+        raise StateModelSetError(
+            "hmm_risk_c010_policy_identity_mismatch: formal B3 request C-010 policy manifest is missing"
+        )
+    manifest_body = {key: value for key, value in manifest.items() if key != "receipt_sha256"}
+    if (
+        manifest.get("schema_version") != C010_POLICY_VERSION
+        or manifest.get("formula_version") != C010_FORMULA_VERSION
+        or identity != canonical_sha256(manifest_body)
+        or identity != manifest.get("receipt_sha256")
+    ):
+        raise StateModelSetError(
+            "hmm_risk_c010_policy_identity_mismatch: formal B3 request C-010 policy identity is invalid"
+        )
+    if request.get("parent_frozen_identities") != B3_APPROVED_FROZEN_IDENTITIES:
+        raise StateModelSetError("formal B3 request parent frozen identity is invalid")
+
+
 def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
-    """Freeze current PIT identities without fitting, selecting, or writing model artifacts."""
+    """Freeze the approved C-010 policy and current PIT identities without model actions."""
 
     producer_commit = _formal_producer_commit()
-    inputs = _load_l1_source_inputs(request_template, db_prefix=db_prefix)
+    _require_approved_b3_identities(request_template)
+    inputs = _load_l1_source_inputs(request_template, db_prefix=db_prefix, c010_formal=True)
     dataset_hash = canonical_sha256(inputs["dataset_manifest"])
     mapping_hash = canonical_sha256(inputs["mapping_manifest"])
     l2_stock_fact_hash = canonical_sha256(inputs["l2_stock_fact_manifest"])
-    frozen_identities = {
-        "dataset_manifest_hash": dataset_hash,
-        "mapping_manifest_hash": mapping_hash,
-        "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
-    }
-    _require_approved_b3_identities(frozen_identities)
+    policy_manifest = _c010_policy_manifest(inputs, request_template, producer_commit=producer_commit)
+    policy_sha256 = str(policy_manifest["receipt_sha256"])
+    inputs["feature_domain_policy_sha256"] = policy_sha256
     train_coverage = _b3_train_coverage_preflight(inputs, request_template)
+    _require_canonical_receipt(train_coverage, label="C-010 formal train coverage")
+    if (
+        train_coverage.get("feature_domain_policy_sha256") != policy_sha256
+        or train_coverage.get("formula_version") != C010_FORMULA_VERSION
+    ):
+        raise StateModelSetError("C-010 formal train coverage policy identity is invalid")
     train_coverage_valid = train_coverage["train_coverage_valid"] is True
+    train_start, train_end = _request_train_window(request_template)
+    train_trading_dates = tuple(
+        value for value in inputs.get("trading_dates") or () if train_start <= value <= train_end
+    )
+    if len(train_trading_dates) != 601:
+        raise StateModelSetError(
+            f"C-010 frozen train calendar must contain 601 trading dates, got {len(train_trading_dates)}"
+        )
     request_candidate = deepcopy(request_template)
     request_candidate.update(
         {
@@ -544,6 +767,9 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
             "dataset_manifest_hash": dataset_hash,
             "mapping_manifest_hash": mapping_hash,
             "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+            "parent_frozen_identities": dict(B3_APPROVED_FROZEN_IDENTITIES),
+            "feature_domain_policy_manifest": policy_manifest,
+            "feature_domain_policy_sha256": policy_sha256,
             "train_coverage_contract_version": B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": train_coverage["receipt_sha256"],
         }
@@ -551,13 +777,28 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
     l1_stock_facts = inputs["dataset_manifest"]["stock_facts"]
     l2_stock_facts = inputs["l2_stock_fact_manifest"]
     body = {
-        "schema_version": B3_PREFLIGHT_SCHEMA,
+        "schema_version": C010_FORMAL_PREFLIGHT_SCHEMA,
         "status": "candidate_ready" if train_coverage_valid else "blocked",
         "source_template_producer_commit": str(request_template.get("producer_commit") or ""),
         "producer_commit": producer_commit,
         "database": inputs["database"],
         "approved_frozen_identities": dict(B3_APPROVED_FROZEN_IDENTITIES),
         "approved_frozen_identities_match": True,
+        "feature_domain_policy_manifest": policy_manifest,
+        "feature_domain_policy_sha256": policy_sha256,
+        "feature_domain_policy_evidence": {
+            "eligibility": inputs["c010_diagnostic"]["eligibility"],
+            "aggregate": inputs["c010_diagnostic"]["aggregate_evidence"],
+            "L1_cross_section": inputs["c010_diagnostic"]["l1_cross_section_evidence"],
+            "L2_cross_section": inputs["c010_diagnostic"]["l2_cross_section_evidence"],
+            "L1_feature_definition": inputs["c010_diagnostic"]["l1_feature_definition"],
+            "L2_feature_definition": inputs["c010_diagnostic"]["l2_feature_definition"],
+        },
+        "formula_version": C010_FORMULA_VERSION,
+        "train_start": train_start.isoformat(),
+        "train_end": train_end.isoformat(),
+        "train_trading_date_count": len(train_trading_dates),
+        "train_trading_date_sha256": canonical_sha256([value.isoformat() for value in train_trading_dates]),
         "dataset_manifest_hash": dataset_hash,
         "mapping_manifest_hash": mapping_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
@@ -748,6 +989,8 @@ def prepare_c010_observation_eligibility_diagnostic(
         "feature_domain_aggregate_evidence": aggregate_evidence,
         "l1_feature_definition": c010["l1_feature_definition"],
         "l2_feature_definition": c010["l2_feature_definition"],
+        "l1_cross_section_evidence": c010["l1_cross_section_evidence"],
+        "l2_cross_section_evidence": c010["l2_cross_section_evidence"],
         "feature_mask_candidate_reports": reports,
         "feature_mask_candidate_valid": candidate_valid,
         "pit_universe_changed": False,
@@ -1156,12 +1399,17 @@ def _direct_l2_constituents(inputs: dict[str, Any]) -> dict[str, dict[str, Any]]
 
 
 def _frozen_input_identity(inputs: dict[str, Any]) -> dict[str, Any]:
-    return {
+    identity = {
         "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
         "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
         "calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
         "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
     }
+    policy_sha256 = str(inputs.get("feature_domain_policy_sha256") or "")
+    if policy_sha256:
+        identity["feature_domain_policy_sha256"] = policy_sha256
+        identity["formula_version"] = C010_FORMULA_VERSION
+    return identity
 
 
 def _direct_series_for_family(
@@ -1242,11 +1490,11 @@ def prepare_b3_single_pass(
     """Run one complete train-only B3 pass; selection and D6 are parent-only."""
 
     producer_commit = _formal_producer_commit()
-    _require_approved_b3_identities(request)
+    _require_c010_policy_identity(request)
     _require_formal_train_coverage_identity(request)
     if str(request.get("producer_commit") or "") != producer_commit:
         raise StateModelSetError("B3 request producer_commit differs from current code")
-    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix)
+    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix, c010_formal=True)
     dataset_hash = canonical_sha256(inputs["dataset_manifest"])
     mapping_hash = canonical_sha256(inputs["mapping_manifest"])
     l2_stock_fact_hash = canonical_sha256(inputs["l2_stock_fact_manifest"])
@@ -1256,7 +1504,19 @@ def prepare_b3_single_pass(
         raise StateModelSetError("B3 frozen mapping manifest hash mismatch")
     if str(request.get("l2_stock_fact_manifest_hash") or "") != l2_stock_fact_hash:
         raise StateModelSetError("B3 frozen L2 stock-fact manifest hash mismatch")
+    recomputed_policy = _c010_policy_manifest(inputs, request, producer_commit=producer_commit)
+    if request["feature_domain_policy_sha256"] != recomputed_policy["receipt_sha256"]:
+        raise StateModelSetError("B3 C-010 feature-domain policy hash mismatch")
+    if request["feature_domain_policy_manifest"] != recomputed_policy:
+        raise StateModelSetError("B3 C-010 feature-domain policy manifest mismatch")
+    inputs["feature_domain_policy_sha256"] = recomputed_policy["receipt_sha256"]
     train_coverage = _b3_train_coverage_preflight(inputs, request)
+    _require_canonical_receipt(train_coverage, label="B3 formal train coverage")
+    if (
+        train_coverage.get("feature_domain_policy_sha256") != recomputed_policy["receipt_sha256"]
+        or train_coverage.get("formula_version") != C010_FORMULA_VERSION
+    ):
+        raise StateModelSetError("B3 formal train coverage policy identity mismatch")
     if train_coverage["train_coverage_valid"] is not True:
         raise StateModelSetError("B3 formal train coverage is insufficient")
     if request["train_coverage_receipt_sha256"] != train_coverage["receipt_sha256"]:
@@ -1292,6 +1552,8 @@ def prepare_b3_single_pass(
         "mapping_manifest_hash": mapping_hash,
         "calendar_manifest_hash": calendar_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+        "feature_domain_policy_sha256": recomputed_policy["receipt_sha256"],
+        "formula_version": C010_FORMULA_VERSION,
         "level_repeats": level_repeats,
         "selection_performed": False,
         "validation_accessed_for_selection": False,
@@ -1370,6 +1632,8 @@ def _persist_b3_child_failure(
 def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
     """Run two fresh processes, select train-only identities, then execute D6 once."""
 
+    _require_c010_policy_identity(request)
+    _require_formal_train_coverage_identity(request)
     environment = os.environ.copy()
     for key in (
         "OMP_NUM_THREADS",
@@ -1413,7 +1677,11 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         raise StateModelSetError("formal B3 fresh processes used different calendar manifests")
     if repeats[0]["l2_stock_fact_manifest_hash"] != repeats[1]["l2_stock_fact_manifest_hash"]:
         raise StateModelSetError("formal B3 fresh processes used different L2 stock-fact manifests")
-    inputs = _load_l1_source_inputs(request, db_prefix=str(args.db_env_prefix))
+    if repeats[0]["feature_domain_policy_sha256"] != repeats[1]["feature_domain_policy_sha256"]:
+        raise StateModelSetError("formal B3 fresh processes used different C-010 policy identities")
+    if repeats[0]["feature_domain_policy_sha256"] != request.get("feature_domain_policy_sha256"):
+        raise StateModelSetError("formal B3 fresh-process policy identity differs from request")
+    inputs = _load_l1_source_inputs(request, db_prefix=str(args.db_env_prefix), c010_formal=True)
     if canonical_sha256(inputs["dataset_manifest"]) != repeats[0]["dataset_manifest_hash"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen dataset manifest")
     if canonical_sha256(inputs["mapping_manifest"]) != repeats[0]["mapping_manifest_hash"]:
@@ -1422,6 +1690,10 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen calendar manifest")
     if canonical_sha256(inputs["l2_stock_fact_manifest"]) != repeats[0]["l2_stock_fact_manifest_hash"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen L2 stock-fact manifest")
+    recomputed_policy = _c010_policy_manifest(inputs, request, producer_commit=_formal_producer_commit())
+    if recomputed_policy["receipt_sha256"] != repeats[0]["feature_domain_policy_sha256"]:
+        raise StateModelSetError("formal B3 D6 reload drifted from the C-010 policy identity")
+    inputs["feature_domain_policy_sha256"] = recomputed_policy["receipt_sha256"]
     selections: dict[tuple[str, str], dict[str, Any]] = {}
     selected_artifacts: dict[tuple[str, str], dict[str, Any]] = {}
     family_map = {str(item["family"]): item for item in request["families"]}
@@ -1439,6 +1711,7 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
                 level=level,
                 expected_sector_codes=tuple(sorted(series_by_level[level])),
                 feature_count=feature_count,
+                feature_domain_policy_sha256=repeats[0]["feature_domain_policy_sha256"],
             )
             selections[(family, level)] = selection
             if selection["level_selection_valid"]:
@@ -1469,6 +1742,8 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
             mapping_manifest_hash=repeats[0]["mapping_manifest_hash"],
             calendar_manifest_hash=repeats[0]["calendar_manifest_hash"],
             l2_stock_fact_manifest_hash=repeats[0]["l2_stock_fact_manifest_hash"],
+            feature_domain_policy_sha256=repeats[0]["feature_domain_policy_sha256"],
+            feature_domain_policy_manifest=request["feature_domain_policy_manifest"],
             producer_commit=_git_commit(),
         )
     body = {
@@ -1479,6 +1754,8 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         "mapping_manifest_hash": repeats[0]["mapping_manifest_hash"],
         "calendar_manifest_hash": repeats[0]["calendar_manifest_hash"],
         "l2_stock_fact_manifest_hash": repeats[0]["l2_stock_fact_manifest_hash"],
+        "feature_domain_policy_sha256": repeats[0]["feature_domain_policy_sha256"],
+        "formula_version": C010_FORMULA_VERSION,
         "fresh_process_receipt_hashes": [repeat["single_pass_receipt_sha256"] for repeat in repeats],
         "selections": {f"{family}:{level}": selections[(family, level)] for family, level in sorted(selections)},
         "selected_artifacts": {
@@ -1665,7 +1942,7 @@ def main() -> int:
             report_path = Path(args.b3_preflight_output).resolve()
             report_sha256 = _write_diagnostic_report(report_path, report)
             receipt = {
-                "schema_version": "hmm_risk_b3_formal_preflight_cli_receipt_v1",
+                "schema_version": "hmm_risk_c010_formal_preflight_cli_receipt_v1",
                 "status": report["status"],
                 "report_path": str(report_path),
                 "report_sha256": report_sha256,
@@ -1674,6 +1951,8 @@ def main() -> int:
                 "dataset_manifest_hash": report["dataset_manifest_hash"],
                 "mapping_manifest_hash": report["mapping_manifest_hash"],
                 "l2_stock_fact_manifest_hash": report["l2_stock_fact_manifest_hash"],
+                "feature_domain_policy_sha256": report["feature_domain_policy_sha256"],
+                "formula_version": report["formula_version"],
                 "train_coverage_valid": report["train_coverage_valid"],
                 "failure_reason_codes": report["failure_reason_codes"],
                 "fit_performed": False,

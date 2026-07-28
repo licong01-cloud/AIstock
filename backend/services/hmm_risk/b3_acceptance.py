@@ -449,7 +449,12 @@ def evaluate_train_occupancy(
             evidence={},
         )
     ordered_date_strings = [value.isoformat() for value in ordered_dates]
-    required_hashes = ("dataset_manifest_hash", "mapping_manifest_hash", "calendar_manifest_hash")
+    required_hashes = (
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "calendar_manifest_hash",
+        "feature_domain_policy_sha256",
+    )
     if (
         frozen_input_manifest.get("schema_version") != "hmm_risk_d4_train_frozen_input_manifest_v1"
         or frozen_input_manifest.get("direct_sector_level") not in {"L1", "L2"}
@@ -547,15 +552,19 @@ def select_level_restart(
     level: str,
     expected_sector_codes: Sequence[str],
     feature_count: int,
+    feature_domain_policy_sha256: str,
 ) -> dict[str, Any]:
     """Apply D5-01-B after D5-02 bitwise repeat equality, without reading validation evidence."""
 
     codes = tuple(sorted(str(value) for value in expected_sector_codes))
+    policy_identity_valid = _valid_sha256(feature_domain_policy_sha256)
     expected_count = 31 if level == "L1" else 131 if level == "L2" else 0
     blockers: list[str] = []
     failures: list[str] = []
     if len(codes) != expected_count or len(set(codes)) != expected_count:
         failures.append("hmm_risk_model_selection_level_incomplete")
+    if not policy_identity_valid:
+        blockers.append("hmm_risk_model_selection_contract_unsatisfied")
     for repeat in (first_repeat, second_repeat):
         if tuple(repeat.get("schedule") or ()) != RESTART_SCHEDULE:
             blockers.append("hmm_risk_model_restart_schedule_incomplete")
@@ -731,6 +740,7 @@ def select_level_restart(
     evidence = {
         "family": family,
         "level": level,
+        "feature_domain_policy_sha256": feature_domain_policy_sha256,
         "canonical_sector_codes": list(codes),
         "canonical_sector_set_sha256": canonical_sha256(list(codes)),
         "schedule": list(RESTART_SCHEDULE),
@@ -782,6 +792,7 @@ def evaluate_semantic_validation(
         "mapping_manifest_hash",
         "calendar_manifest_hash",
         "l2_stock_fact_manifest_hash",
+        "feature_domain_policy_sha256",
     )
     if manifest_valid and (
         frozen_input_manifest.get("schema_version") != "hmm_risk_d6_frozen_input_manifest_v1"

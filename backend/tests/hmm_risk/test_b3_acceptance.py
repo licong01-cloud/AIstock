@@ -112,6 +112,7 @@ def _train_manifest(dates: tuple[date, ...]) -> dict:
         "dataset_manifest_hash": "a" * 64,
         "mapping_manifest_hash": "b" * 64,
         "calendar_manifest_hash": "c" * 64,
+        "feature_domain_policy_sha256": "e" * 64,
     }
 
 
@@ -224,12 +225,31 @@ def test_d5_selects_one_level_global_seed_for_complete_l1_and_l2(
         level=level,
         expected_sector_codes=[f"S{index:03d}" for index in range(count)],
         feature_count=7,
+        feature_domain_policy_sha256="e" * 64,
     )
 
     assert receipt["level_selection_status"] == "accepted"
     assert receipt["level_selection_valid"] is True
     assert receipt["evidence"]["selected_seed"] == preferred_seed
+    assert receipt["evidence"]["feature_domain_policy_sha256"] == "e" * 64
     assert receipt["evidence"]["selection_followed_by_refit"] is False
+
+
+def test_d5_rejects_missing_feature_domain_policy_identity() -> None:
+    first = _selection_repeat(level="L1", preferred_seed=46)
+    second = _selection_repeat(level="L1", preferred_seed=46)
+    receipt = subject.select_level_restart(
+        first,
+        second,
+        family="legacy_covfix",
+        level="L1",
+        expected_sector_codes=[f"S{index:03d}" for index in range(31)],
+        feature_count=7,
+        feature_domain_policy_sha256="invalid",
+    )
+
+    assert receipt["level_selection_valid"] is False
+    assert "hmm_risk_model_selection_contract_unsatisfied" in receipt["blocking_reason_codes"]
 
 
 def test_d5_repeat_mismatch_and_validation_access_fail_closed() -> None:
@@ -244,6 +264,7 @@ def test_d5_repeat_mismatch_and_validation_access_fail_closed() -> None:
         level="L1",
         expected_sector_codes=[f"S{index:03d}" for index in range(31)],
         feature_count=7,
+        feature_domain_policy_sha256="e" * 64,
     )
     assert receipt["level_selection_status"] == "failed"
     assert "hmm_risk_model_selection_repeat_mismatch" in receipt["failure_reason_codes"]
@@ -297,6 +318,7 @@ def _validation_manifest(dates: tuple[date, ...], utility: dict) -> dict:
         "mapping_manifest_hash": "b" * 64,
         "calendar_manifest_hash": "c" * 64,
         "l2_stock_fact_manifest_hash": "d" * 64,
+        "feature_domain_policy_sha256": "e" * 64,
         "source_cutoff": utility["source_cutoff"],
         "formula_version": utility["formula_version"],
         "utility_component_sha256": {

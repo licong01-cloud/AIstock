@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 import numpy as np
@@ -198,6 +199,46 @@ def test_singleton_sector_keeps_price_domain_and_marks_moneyflow_structurally_un
     assert aggregate.count_coverage == 1.0
 
 
+def test_formal_feature_domain_weight_and_amount_denominators_fail_closed_with_typed_state() -> None:
+    rows = [_stock_row(index) for index in range(10)]
+    eligibility = {row["symbol"]: True for row in rows}
+    with pytest.raises(StateModelSetError, match="hmm_risk_c010_feature_identity_drift"):
+        subject.aggregate_l1_day(
+            rows,
+            min_coverage=0.91,
+            moneyflow_contributor_eligibility=eligibility,
+        )
+    rows[0]["prev_circ_mv_cny"] = None
+    with pytest.raises(subject.ObservationCoverageError) as exc_info:
+        subject.aggregate_l1_day(rows, moneyflow_contributor_eligibility=eligibility)
+    assert exc_info.value.reason_code == "hmm_risk_c010_price_domain_weight_denominator_invalid"
+
+    rows = [_stock_row(index) for index in range(10)]
+    for row in rows:
+        row["amount_cny"] = 0.0
+    aggregate = subject.aggregate_l1_day(rows, moneyflow_contributor_eligibility=eligibility)
+    assert aggregate.moneyflow_domain_status == "denominator_invalid"
+    assert aggregate.moneyflow_amount is None
+    assert aggregate.net_mf_amount is None
+
+    unseen = _stock_row(0)
+    aggregate = subject.aggregate_l1_day([unseen], moneyflow_contributor_eligibility={})
+    assert aggregate.moneyflow_domain_status == "structurally_unavailable"
+    assert aggregate.missing_evidence[-1]["moneyflow_eligibility_status"] == "train_eligibility_unavailable"
+
+    rows = [_stock_row(index, complete=index != 9) for index in range(10)]
+    eligibility = {row["symbol"]: True for row in rows}
+    exact_boundary = subject.aggregate_l1_day(rows, moneyflow_contributor_eligibility=eligibility)
+    assert exact_boundary.moneyflow_domain_status == "available"
+    assert exact_boundary.moneyflow_count_coverage == pytest.approx(0.9)
+    assert exact_boundary.moneyflow_weight_coverage == pytest.approx(0.9)
+    rows[9]["prev_circ_mv_cny"] = 200_000.0
+    below_weight_boundary = subject.aggregate_l1_day(rows, moneyflow_contributor_eligibility=eligibility)
+    assert below_weight_boundary.moneyflow_domain_status == "coverage_insufficient"
+    assert below_weight_boundary.moneyflow_count_coverage == pytest.approx(0.9)
+    assert below_weight_boundary.moneyflow_weight_coverage < 0.9
+
+
 def test_diagnostic_moneyflow_features_use_only_contributor_amount() -> None:
     calendar = [date(2024, 1, 2) + timedelta(days=index) for index in range(5)]
     aggregates = []
@@ -272,6 +313,17 @@ def _aggregate(day: date, code_index: int, day_index: int) -> subject.L1DailyAgg
         count_coverage=1.0,
         weight_coverage=1.0,
         missing_evidence=(),
+    )
+
+
+def _feature_domain_aggregate(day: date, code_index: int, day_index: int) -> subject.FeatureDomainDailyAggregate:
+    base = _aggregate(day, code_index, day_index)
+    return subject.FeatureDomainDailyAggregate(
+        **base.__dict__,
+        moneyflow_amount=base.l1_amount,
+        moneyflow_count_coverage=1.0,
+        moneyflow_weight_coverage=1.0,
+        moneyflow_domain_status="available",
     )
 
 
@@ -351,6 +403,98 @@ def test_cross_sectional_features_fail_closed_when_one_l1_day_is_missing() -> No
     assert definition["cross_section_contract"] == "coverage_aware_diagnostic"
     assert definition["cross_section_min_coverage"] == 0.90
     assert set(definition["moneyflow_denominator_by_feature"].values()) == {"l1_amount"}
+
+
+def test_c010_feature_domain_panel_uses_per_feature_masks_and_never_resurrects_invalid_current_date() -> None:
+    calendar = [item.date() for item in pd.bdate_range("2023-01-02", periods=12)]
+    aggregates = [
+        _feature_domain_aggregate(day, code_index, day_index)
+        for day_index, day in enumerate(calendar)
+        for code_index in range(31)
+    ]
+    last_day = calendar[-1]
+    exact_boundary_day = calendar[-2]
+    updated = []
+    for aggregate in aggregates:
+        if aggregate.trade_date == last_day and int(aggregate.l1_code[-2:]) >= 27:
+            aggregate = replace(aggregate, l1_range_ratio=float("nan"))
+        elif aggregate.trade_date == exact_boundary_day and int(aggregate.l1_code[-2:]) >= 28:
+            aggregate = replace(aggregate, l1_range_ratio=float("nan"))
+        if aggregate.trade_date == last_day and aggregate.l1_code == "L1-00":
+            aggregate = replace(
+                aggregate,
+                net_mf_amount=None,
+                buy_sm_amount=None,
+                sell_sm_amount=None,
+                buy_elg_amount=None,
+                sell_elg_amount=None,
+                moneyflow_amount=None,
+                moneyflow_domain_status="coverage_insufficient",
+            )
+        updated.append(aggregate)
+
+    panel, definition, evidence = subject.build_c010_feature_domain_panel(
+        updated,
+        trading_dates=calendar,
+        csi300_returns={value: 0.0 for value in calendar},
+    )
+
+    exact_row = panel.loc[(pd.Timestamp(exact_boundary_day), "L1-00")]
+    assert np.isfinite(exact_row["sf_range_vs_market_10d"])
+    assert np.isnan(panel.loc[(pd.Timestamp(exact_boundary_day), "L1-30"), "sf_range_vs_market_10d"])
+    last_row = panel.loc[(pd.Timestamp(last_day), "L1-00")]
+    assert np.isfinite(last_row["volume_ratio"])
+    assert np.isnan(last_row["sf_range_vs_market_10d"])
+    assert np.isnan(last_row["sf_small_net_ratio_5d"])
+    assert definition["schema_version"] == subject.C010_FORMULA_VERSION
+    assert definition["cross_section_min_valid_sector_count"] == 28
+    assert definition["range_cross_section_rolling_post_mask_required"] is True
+    assert set(definition["formula_diff_by_feature"]) == {
+        "net_mf_ratio",
+        "elg_net_mf_ratio",
+        "sf_mf_net_ratio_std_5d_neg",
+        "sf_small_net_ratio_5d",
+        "volume_ratio",
+        "sf_range_vs_market_10d",
+        "sf_vol_vs_market_20d",
+        "sf_excess_breadth_5d",
+    }
+    receipt = next(
+        item
+        for item in evidence["entries"]
+        if item["feature_name"] == "sf_range_vs_market_10d" and item["trade_date"] == last_day.isoformat()
+    )
+    assert receipt["status"] == "coverage_insufficient"
+    assert receipt["valid_sector_count"] == 27
+    assert receipt["post_mask_subset_of_pre_mask"] is True
+
+
+def test_c010_feature_domain_panel_records_reference_invalid_without_default_value() -> None:
+    calendar = [item.date() for item in pd.bdate_range("2023-01-02", periods=3)]
+    aggregates = [
+        replace(_feature_domain_aggregate(day, code_index, day_index), l1_volume=0.0)
+        for day_index, day in enumerate(calendar)
+        for code_index in range(31)
+    ]
+
+    panel, _, evidence = subject.build_c010_feature_domain_panel(
+        aggregates,
+        trading_dates=calendar,
+        csi300_returns={value: 0.0 for value in calendar},
+    )
+
+    assert panel["volume_ratio"].isna().all()
+    volume_receipts = [item for item in evidence["entries"] if item["feature_name"] == "volume_ratio"]
+    assert {item["status"] for item in volume_receipts} == {"reference_invalid"}
+    assert {item["source_domain"] for item in volume_receipts} == {"price"}
+    all_false_mask = subject.canonical_sha256(
+        [{"sector_code": f"L1-{index:02d}", "active": False} for index in range(31)]
+    )
+    assert {item["pre_mask_sha256"] for item in volume_receipts} == {all_false_mask}
+    assert {item["post_mask_sha256"] for item in volume_receipts} == {all_false_mask}
+    assert {item["reason_code"] for item in volume_receipts} == {
+        "hmm_risk_c010_feature_cross_section_reference_invalid"
+    }
 
 
 def test_direct_l2_projection_uses_canonical_stock_fact_identity_without_mutating_l1() -> None:

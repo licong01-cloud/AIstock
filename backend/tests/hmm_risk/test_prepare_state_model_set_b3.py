@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -49,7 +50,7 @@ def _request() -> dict:
 
 
 def _preflight_inputs() -> dict:
-    return {
+    values = {
         "database": {"host": "127.0.0.1", "port": 5432, "dbname": "aistock"},
         "dataset_manifest": {
             "schema_version": "dataset_v1",
@@ -111,23 +112,104 @@ def _preflight_inputs() -> dict:
             "manifest_sha256": "b" * 64,
         },
     }
+    definition = {
+        "schema_version": subject.C010_FORMULA_VERSION,
+        "feature_domain_policy_version": subject.C010_POLICY_VERSION,
+        "diagnostic_only": False,
+        "moneyflow_mandatory_fields": [
+            "buy_sm_amount_cny",
+            "sell_sm_amount_cny",
+            "buy_elg_amount_cny",
+            "sell_elg_amount_cny",
+            "net_mf_amount_cny",
+        ],
+    }
+
+    def entry(value: dict) -> dict:
+        return {**value, "entry_sha256": subject.canonical_sha256(value)}
+
+    def receipt(value: dict) -> dict:
+        return {**value, "receipt_sha256": subject.canonical_sha256(value)}
+
+    eligibility_entries = [
+        entry({"canonical_ts_code": symbol, "moneyflow_contributor_eligible": True})
+        for symbol in ("000001.SZ", "000002.SZ")
+    ]
+    domain_entry = entry({"direct_sector_level": "L1", "sector_code": "801010.SI", "trade_date": "2022-01-04"})
+    l2_domain_entry = entry({"direct_sector_level": "L2", "sector_code": "801012.SI", "trade_date": "2022-01-04"})
+    trading_dates = tuple(date(2022, 1, 1) + timedelta(days=index) for index in range(601))
+    cross_entries = [entry({"index": index}) for index in range(4 * len(trading_dates))]
+    eligibility = receipt(
+        {
+            "schema_version": "hmm_risk_c010_train_observation_eligibility_v1",
+            "entry_count": len(eligibility_entries),
+            "entries": eligibility_entries,
+            "excluded_moneyflow_symbols": ["689009.SH"],
+            "diagnostic_only": False,
+            "formal_policy_activated": True,
+        }
+    )
+    aggregate = receipt(
+        {
+            "schema_version": "hmm_risk_c010_feature_domain_aggregate_evidence_v1",
+            "l1_aggregate_count": 1,
+            "l2_aggregate_count": 1,
+            "l1_domain_receipts": [domain_entry],
+            "l2_domain_receipts": [l2_domain_entry],
+            "l1_invalid_price_domain": [],
+            "l2_invalid_price_domain": [],
+            "formal_policy_activated": True,
+        }
+    )
+    l1_cross = receipt(
+        {
+            "schema_version": "hmm_risk_c010_feature_cross_section_receipt_set_v1",
+            "direct_sector_level": "L1",
+            "expected_sector_count": 31,
+            "entry_count": len(cross_entries),
+            "entries": cross_entries,
+            "diagnostic_only": False,
+        }
+    )
+    l2_cross = receipt(
+        {
+            "schema_version": "hmm_risk_c010_feature_cross_section_receipt_set_v1",
+            "direct_sector_level": "L2",
+            "expected_sector_count": 131,
+            "entry_count": len(cross_entries),
+            "entries": cross_entries,
+            "diagnostic_only": False,
+        }
+    )
+    values["c010_diagnostic"] = {
+        "eligibility": eligibility,
+        "aggregate_evidence": aggregate,
+        "l1_cross_section_evidence": l1_cross,
+        "l2_cross_section_evidence": l2_cross,
+        "l1_feature_definition": dict(definition),
+        "l2_feature_definition": dict(definition),
+    }
+    values["trading_dates"] = trading_dates
+    return values
 
 
-def _approve_preflight_inputs(monkeypatch, inputs: dict) -> None:
+def _approve_preflight_template(monkeypatch, request: dict) -> None:
     monkeypatch.setattr(
         subject,
         "B3_APPROVED_FROZEN_IDENTITIES",
         {
-            "dataset_manifest_hash": subject.canonical_sha256(inputs["dataset_manifest"]),
-            "mapping_manifest_hash": subject.canonical_sha256(inputs["mapping_manifest"]),
-            "l2_stock_fact_manifest_hash": subject.canonical_sha256(inputs["l2_stock_fact_manifest"]),
+            "dataset_manifest_hash": request["dataset_manifest_hash"],
+            "mapping_manifest_hash": request["mapping_manifest_hash"],
+            "l2_stock_fact_manifest_hash": request["l2_stock_fact_manifest_hash"],
         },
     )
 
 
-def _coverage_preflight(*, valid: bool = True) -> dict:
+def _coverage_preflight(*, valid: bool = True, policy_sha256: str | None = None) -> dict:
     body = {
         "schema_version": "hmm_risk_b3_train_coverage_preflight_set_v1",
+        "feature_domain_policy_sha256": policy_sha256,
+        "formula_version": subject.C010_FORMULA_VERSION if policy_sha256 else None,
         "reports": {},
         "report_count": 4,
         "train_coverage_valid": valid,
@@ -177,7 +259,7 @@ def test_source_loader_requires_explicit_identity_and_provider_absence_manifests
 def test_preflight_rejects_live_manifest_drift_before_candidate_ready(monkeypatch) -> None:
     inputs = _preflight_inputs()
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
 
     with pytest.raises(StateModelSetError, match="formal B3 frozen identity mismatch"):
         subject.prepare_b3_preflight_candidate(_request(), db_prefix="TDX_DB_")
@@ -187,21 +269,41 @@ def test_preflight_freezes_current_identities_without_fit_selection_or_writes(mo
     request = _request()
     old_producer = request["producer_commit"]
     inputs = _preflight_inputs()
-    _approve_preflight_inputs(monkeypatch, inputs)
+    _approve_preflight_template(monkeypatch, request)
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
-    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda inputs, request: _coverage_preflight())
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda inputs, request: _coverage_preflight(policy_sha256=inputs["feature_domain_policy_sha256"]),
+    )
 
     report = subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
 
     candidate = report["request_candidate"]
-    assert report["schema_version"] == subject.B3_PREFLIGHT_SCHEMA
+    assert report["schema_version"] == subject.C010_FORMAL_PREFLIGHT_SCHEMA
     assert report["status"] == "candidate_ready"
     assert report["source_template_producer_commit"] == old_producer
     assert candidate["producer_commit"] == "d" * 40
     assert candidate["dataset_manifest_hash"] == subject.canonical_sha256(inputs["dataset_manifest"])
     assert candidate["mapping_manifest_hash"] == subject.canonical_sha256(inputs["mapping_manifest"])
     assert candidate["l2_stock_fact_manifest_hash"] == subject.canonical_sha256(inputs["l2_stock_fact_manifest"])
+    assert candidate["feature_domain_policy_sha256"] == report["feature_domain_policy_sha256"]
+    assert candidate["feature_domain_policy_manifest"] == report["feature_domain_policy_manifest"]
+    assert report["feature_domain_policy_evidence"]["eligibility"]["entry_count"] == 2
+    assert report["feature_domain_policy_evidence"]["aggregate"]["l1_aggregate_count"] == 1
+    assert report["feature_domain_policy_manifest"]["feature_order_by_family"] == {
+        "legacy_covfix": list(BASE_FEATURES),
+        "autocycle_all_core": list(ALL_CORE_FEATURES),
+    }
+    subject._require_c010_policy_identity(candidate)
+    tampered_candidate = json.loads(json.dumps(candidate))
+    tampered_candidate["feature_domain_policy_manifest"]["domain_min_count_coverage"] = 0.80
+    with pytest.raises(StateModelSetError, match="policy identity is invalid"):
+        subject._require_c010_policy_identity(tampered_candidate)
+    assert candidate["parent_frozen_identities"] == subject.B3_APPROVED_FROZEN_IDENTITIES
+    assert report["formula_version"] == subject.C010_FORMULA_VERSION
+    assert report["train_trading_date_count"] == 601
     assert candidate["train_coverage_contract_version"] == subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION
     assert candidate["train_coverage_receipt_sha256"] == report["train_coverage"]["receipt_sha256"]
     assert report["request_candidate_sha256"] == subject.canonical_sha256(candidate)
@@ -230,13 +332,16 @@ def test_preflight_freezes_current_identities_without_fit_selection_or_writes(mo
 def test_preflight_blocks_insufficient_train_coverage_without_request_candidate(monkeypatch) -> None:
     request = _request()
     inputs = _preflight_inputs()
-    _approve_preflight_inputs(monkeypatch, inputs)
+    _approve_preflight_template(monkeypatch, request)
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(
         subject,
         "_b3_train_coverage_preflight",
-        lambda inputs, request: _coverage_preflight(valid=False),
+        lambda inputs, request: _coverage_preflight(
+            valid=False,
+            policy_sha256=inputs["feature_domain_policy_sha256"],
+        ),
     )
 
     report = subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
@@ -299,7 +404,7 @@ def test_c009_preflight_rejects_l1_l2_source_evidence_drift(monkeypatch) -> None
     inputs = _preflight_inputs()
     inputs["l2_stock_fact_manifest"]["moneyflow_provider_absence_count"] = 501
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "e" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, req: _coverage_preflight())
 
     with pytest.raises(StateModelSetError, match="C-009 L1/L2 source evidence mismatch"):
@@ -310,7 +415,7 @@ def test_c009_preflight_rejects_l1_l2_circ_mv_crossing_evidence_drift(monkeypatc
     inputs = _preflight_inputs()
     inputs["l2_stock_fact_manifest"]["circ_mv_pit_boundary_crossing_available_count"] = 1_072
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "e" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, req: _coverage_preflight())
 
     with pytest.raises(StateModelSetError, match="C-009 L1/L2 source evidence mismatch"):
@@ -337,6 +442,8 @@ def test_c010_diagnostic_compares_baseline_and_masks_without_model_actions(monke
         "l2_panel": object(),
         "l1_feature_definition": {"cross_section_contract": "coverage_aware_diagnostic"},
         "l2_feature_definition": {"cross_section_contract": "coverage_aware_diagnostic"},
+        "l1_cross_section_evidence": {"receipt_sha256": "7" * 64},
+        "l2_cross_section_evidence": {"receipt_sha256": "8" * 64},
     }
     observed = {}
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "f" * 40)
@@ -426,10 +533,14 @@ def test_main_preflight_writes_immutable_candidate_and_receipt(monkeypatch, tmp_
     candidate_path = tmp_path / "candidate.json"
     report_path = tmp_path / "preflight.json"
     inputs = _preflight_inputs()
-    _approve_preflight_inputs(monkeypatch, inputs)
+    _approve_preflight_template(monkeypatch, request)
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
-    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda inputs, request: _coverage_preflight())
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda inputs, request: _coverage_preflight(policy_sha256=inputs["feature_domain_policy_sha256"]),
+    )
     monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
     monkeypatch.setattr(
         subject,
@@ -464,13 +575,16 @@ def test_main_blocked_preflight_does_not_overwrite_stale_candidate(monkeypatch, 
     candidate_path.write_text('{"stale":true}\n', encoding="utf-8")
     report_path = tmp_path / "preflight.json"
     inputs = _preflight_inputs()
-    _approve_preflight_inputs(monkeypatch, inputs)
+    _approve_preflight_template(monkeypatch, request)
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(
         subject,
         "_b3_train_coverage_preflight",
-        lambda inputs, request: _coverage_preflight(valid=False),
+        lambda inputs, request: _coverage_preflight(
+            valid=False,
+            policy_sha256=inputs["feature_domain_policy_sha256"],
+        ),
     )
     monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
     monkeypatch.setattr(
@@ -517,6 +631,8 @@ def test_formal_parent_persists_typed_child_failure_receipt(monkeypatch, tmp_pat
         "run",
         lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=b"", stderr=stderr),
     )
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda request: None)
 
     with pytest.raises(StateModelSetError, match="801010.SI train-only observation coverage is insufficient: 10"):
         subject.run_b3_repeated(args, _request())
@@ -554,11 +670,13 @@ def test_child_failure_receipt_bounds_untrusted_error_text(monkeypatch, tmp_path
 
 def test_formal_single_pass_runs_both_families_and_levels_without_selection_or_validation(monkeypatch) -> None:
     request = _request()
-    coverage = _coverage_preflight()
+    coverage = _coverage_preflight(policy_sha256="f" * 64)
     request.update(
         {
             "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": coverage["receipt_sha256"],
+            "feature_domain_policy_manifest": {"receipt_sha256": "f" * 64},
+            "feature_domain_policy_sha256": "f" * 64,
         }
     )
     inputs = {
@@ -570,8 +688,13 @@ def test_formal_single_pass_runs_both_families_and_levels_without_selection_or_v
         "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
     }
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
-    monkeypatch.setattr(subject, "_require_approved_b3_identities", lambda request: None)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(
+        subject,
+        "_c010_policy_manifest",
+        lambda values, request, producer_commit: request["feature_domain_policy_manifest"],
+    )
     monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda inputs, request: coverage)
     monkeypatch.setattr(
         subject,
@@ -610,14 +733,16 @@ def test_formal_single_pass_rejects_frozen_manifest_drift(monkeypatch) -> None:
         {
             "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": "a" * 64,
+            "feature_domain_policy_manifest": {"receipt_sha256": "f" * 64},
+            "feature_domain_policy_sha256": "f" * 64,
         }
     )
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
-    monkeypatch.setattr(subject, "_require_approved_b3_identities", lambda request: None)
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
     monkeypatch.setattr(
         subject,
         "_load_l1_source_inputs",
-        lambda request, db_prefix: {
+        lambda request, db_prefix, c010_formal=False: {
             "dataset_manifest": {"schema_version": "drifted"},
             "mapping_manifest": {"schema_version": "mapping_v1"},
             "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
@@ -637,6 +762,8 @@ def test_formal_single_pass_rejects_stale_train_coverage_receipt_before_fit(monk
         {
             "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": "a" * 64,
+            "feature_domain_policy_manifest": {"receipt_sha256": "f" * 64},
+            "feature_domain_policy_sha256": "f" * 64,
         }
     )
     inputs = {
@@ -648,9 +775,18 @@ def test_formal_single_pass_rejects_stale_train_coverage_receipt_before_fit(monk
         "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
     }
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
-    monkeypatch.setattr(subject, "_require_approved_b3_identities", lambda request: None)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
-    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda inputs, request: _coverage_preflight())
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(
+        subject,
+        "_c010_policy_manifest",
+        lambda values, request, producer_commit: request["feature_domain_policy_manifest"],
+    )
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda inputs, request: _coverage_preflight(policy_sha256="f" * 64),
+    )
     fit_called = False
 
     def unexpected_fit(*args, **kwargs):

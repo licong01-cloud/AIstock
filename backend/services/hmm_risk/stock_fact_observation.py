@@ -23,6 +23,9 @@ from .state_model_set import (
 
 OBSERVATION_VERSION = "hmm_risk_l1_stock_fact_observation_v1"
 FORMULA_VERSION = "hmm_risk_l1_sector_factor_formula_v1"
+C010_FORMULA_VERSION = "hmm_risk_l1_sector_factor_formula_v2_c010"
+C010_POLICY_VERSION = "hmm_risk_c010_feature_domain_policy_v1"
+C010_CROSS_SECTION_RECEIPT_VERSION = "hmm_risk_c010_feature_cross_section_receipt_set_v1"
 SOURCE_VERSION = "hmm_risk_l1_stock_fact_source_v1"
 MIN_COVERAGE = 0.90
 MIN_TRAINING_ROWS = 120
@@ -69,6 +72,7 @@ class ObservationCoverageError(StateModelSetError):
         count_coverage: float,
         weight_coverage: float,
         missing_evidence: Sequence[Mapping[str, Any]],
+        reason_code: str = "hmm_risk_model_stock_fact_coverage_insufficient",
     ) -> None:
         super().__init__(message)
         self.trade_date = trade_date
@@ -76,6 +80,7 @@ class ObservationCoverageError(StateModelSetError):
         self.count_coverage = count_coverage
         self.weight_coverage = weight_coverage
         self.missing_evidence = tuple(dict(item) for item in missing_evidence)
+        self.reason_code = reason_code
 
 
 def _finite_number(value: Any, field: str, *, positive: bool = False, non_negative: bool = False) -> float:
@@ -236,7 +241,7 @@ class L1DailyAggregate:
 
 @dataclass(frozen=True)
 class FeatureDomainDailyAggregate(L1DailyAggregate):
-    """Diagnostic aggregate whose extra fields never enter formal source manifests."""
+    """Feature-domain aggregate with independently audited price and moneyflow evidence."""
 
     net_mf_amount: float | None
     buy_sm_amount: float | None
@@ -248,6 +253,14 @@ class FeatureDomainDailyAggregate(L1DailyAggregate):
     moneyflow_weight_coverage: float | None = None
     moneyflow_domain_status: str = "same_as_price_domain"
     moneyflow_excluded_symbols: tuple[str, ...] = ()
+    price_expected_symbols: tuple[str, ...] = ()
+    price_complete_symbols: tuple[str, ...] = ()
+    price_expected_weight: float = 0.0
+    price_complete_weight: float = 0.0
+    moneyflow_expected_symbols: tuple[str, ...] = ()
+    moneyflow_complete_symbols: tuple[str, ...] = ()
+    moneyflow_expected_weight: float = 0.0
+    moneyflow_complete_weight: float = 0.0
 
 
 def _row_complete(row: Mapping[str, Any]) -> tuple[bool, list[str]]:
@@ -308,9 +321,12 @@ def _aggregate_feature_domain_day(
     l1_code: str,
     l1_name: str,
     min_coverage: float,
-    moneyflow_excluded_symbols: frozenset[str],
+    moneyflow_contributor_eligibility: Mapping[str, bool],
 ) -> FeatureDomainDailyAggregate:
-    expected = [row for row in rows if not bool(row.get("is_suspended"))]
+    expected = sorted(
+        (row for row in rows if not bool(row.get("is_suspended"))),
+        key=lambda row: str(row.get("symbol") or ""),
+    )
     if not expected:
         raise StateModelSetError(f"{l1_code}/{trade_date} has no observed denominator")
     expected_weights: list[float] = []
@@ -330,8 +346,19 @@ def _aggregate_feature_domain_day(
             count_coverage=float(known_count_coverage),
             weight_coverage=0.0,
             missing_evidence=missing_weight_evidence,
+            reason_code="hmm_risk_c010_price_domain_weight_denominator_invalid",
         )
-    expected_weight = float(sum(expected_weights))
+    expected_weight = float(math.fsum(expected_weights))
+    if not math.isfinite(expected_weight) or expected_weight <= 0:
+        raise ObservationCoverageError(
+            f"{l1_code}/{trade_date} price-domain expected weight denominator is invalid",
+            trade_date=trade_date,
+            l1_code=l1_code,
+            count_coverage=0.0,
+            weight_coverage=0.0,
+            missing_evidence=(),
+            reason_code="hmm_risk_c010_price_domain_weight_denominator_invalid",
+        )
     price_complete: list[Mapping[str, Any]] = []
     price_missing: list[dict[str, Any]] = []
     for row in expected:
@@ -363,9 +390,9 @@ def _aggregate_feature_domain_day(
         else:
             price_complete.append(row)
     price_count_coverage = len(price_complete) / len(expected)
-    price_complete_weight = sum(float(row["prev_circ_mv_cny"]) for row in price_complete)
+    price_complete_weight = math.fsum(float(row["prev_circ_mv_cny"]) for row in price_complete)
     price_weight_coverage = price_complete_weight / expected_weight
-    if price_count_coverage < min_coverage or price_weight_coverage < min_coverage:
+    if (10 * len(price_complete)) < (9 * len(expected)) or price_weight_coverage < min_coverage:
         raise ObservationCoverageError(
             f"{l1_code}/{trade_date} price-domain stock coverage is insufficient "
             f"count={price_count_coverage:.6f} weight={price_weight_coverage:.6f}",
@@ -374,9 +401,12 @@ def _aggregate_feature_domain_day(
             count_coverage=float(price_count_coverage),
             weight_coverage=float(price_weight_coverage),
             missing_evidence=price_missing,
+            reason_code="hmm_risk_c010_price_domain_coverage_insufficient",
         )
 
-    moneyflow_expected = [row for row in expected if str(row.get("symbol") or "") not in moneyflow_excluded_symbols]
+    moneyflow_expected = [
+        row for row in expected if moneyflow_contributor_eligibility.get(str(row.get("symbol") or "")) is True
+    ]
     moneyflow_complete: list[Mapping[str, Any]] = []
     moneyflow_missing: list[dict[str, Any]] = []
     for row in moneyflow_expected:
@@ -396,17 +426,39 @@ def _aggregate_feature_domain_day(
         else:
             moneyflow_complete.append(row)
     if not moneyflow_expected:
+        moneyflow_expected_weight = 0.0
+        moneyflow_complete_weight = 0.0
         moneyflow_count_coverage = 0.0
         moneyflow_weight_coverage = 0.0
         moneyflow_status = "structurally_unavailable"
     else:
-        moneyflow_expected_weight = sum(float(row["prev_circ_mv_cny"]) for row in moneyflow_expected)
-        moneyflow_complete_weight = sum(float(row["prev_circ_mv_cny"]) for row in moneyflow_complete)
+        moneyflow_expected_weight = math.fsum(float(row["prev_circ_mv_cny"]) for row in moneyflow_expected)
+        moneyflow_complete_weight = math.fsum(float(row["prev_circ_mv_cny"]) for row in moneyflow_complete)
+        if not math.isfinite(moneyflow_expected_weight) or moneyflow_expected_weight <= 0:
+            raise ObservationCoverageError(
+                f"{l1_code}/{trade_date} moneyflow-domain expected weight denominator is invalid",
+                trade_date=trade_date,
+                l1_code=l1_code,
+                count_coverage=0.0,
+                weight_coverage=0.0,
+                missing_evidence=moneyflow_missing,
+                reason_code="hmm_risk_c010_moneyflow_domain_weight_denominator_invalid",
+            )
+        if (
+            not math.isfinite(moneyflow_complete_weight)
+            or moneyflow_complete_weight < 0
+            or moneyflow_complete_weight > moneyflow_expected_weight
+        ):
+            raise StateModelSetError(
+                f"hmm_risk_c010_contributor_receipt_mismatch: {l1_code}/{trade_date} "
+                "moneyflow complete weight escapes expected weight"
+            )
         moneyflow_count_coverage = len(moneyflow_complete) / len(moneyflow_expected)
         moneyflow_weight_coverage = moneyflow_complete_weight / moneyflow_expected_weight
         moneyflow_status = (
             "available"
-            if moneyflow_count_coverage >= min_coverage and moneyflow_weight_coverage >= min_coverage
+            if (10 * len(moneyflow_complete)) >= (9 * len(moneyflow_expected))
+            and moneyflow_weight_coverage >= min_coverage
             else "coverage_insufficient"
         )
 
@@ -440,19 +492,32 @@ def _aggregate_feature_domain_day(
     moneyflow_amount: float | None = None
     if moneyflow_status == "available":
         moneyflow_values = {
-            field: float(sum(float(row[field]) for row in moneyflow_complete)) for field in MONEYFLOW_STOCK_FIELDS
+            field: float(math.fsum(float(row[field]) for row in moneyflow_complete)) for field in MONEYFLOW_STOCK_FIELDS
         }
-        moneyflow_amount = float(sum(float(row["amount_cny"]) for row in moneyflow_complete))
+        moneyflow_amount = float(math.fsum(float(row["amount_cny"]) for row in moneyflow_complete))
         if not all(math.isfinite(value) for value in (*moneyflow_values.values(), moneyflow_amount)):
             raise StateModelSetError(f"{l1_code}/{trade_date} feature-domain moneyflow aggregate is non-finite")
+        if moneyflow_amount <= 0:
+            moneyflow_status = "denominator_invalid"
+            moneyflow_values = None
+            moneyflow_amount = None
     excluded_evidence = [
         {
             "symbol": str(row.get("symbol") or ""),
             "fields": list(MONEYFLOW_STOCK_FIELDS),
-            "moneyflow_eligibility_status": "train_frozen_excluded",
+            "moneyflow_eligibility_status": (
+                "train_frozen_excluded"
+                if str(row.get("symbol") or "") in moneyflow_contributor_eligibility
+                else "train_eligibility_unavailable"
+            ),
+            "reason_code": (
+                None
+                if str(row.get("symbol") or "") in moneyflow_contributor_eligibility
+                else "hmm_risk_c010_train_eligibility_unavailable"
+            ),
         }
         for row in expected
-        if str(row.get("symbol") or "") in moneyflow_excluded_symbols
+        if moneyflow_contributor_eligibility.get(str(row.get("symbol") or "")) is not True
     ]
     return FeatureDomainDailyAggregate(
         trade_date=trade_date,
@@ -491,6 +556,14 @@ def _aggregate_feature_domain_day(
         moneyflow_weight_coverage=float(moneyflow_weight_coverage),
         moneyflow_domain_status=moneyflow_status,
         moneyflow_excluded_symbols=tuple(sorted({item["symbol"] for item in excluded_evidence})),
+        price_expected_symbols=tuple(str(row["symbol"]) for row in expected),
+        price_complete_symbols=tuple(str(row["symbol"]) for row in price_complete),
+        price_expected_weight=expected_weight,
+        price_complete_weight=float(price_complete_weight),
+        moneyflow_expected_symbols=tuple(str(row["symbol"]) for row in moneyflow_expected),
+        moneyflow_complete_symbols=tuple(str(row["symbol"]) for row in moneyflow_complete),
+        moneyflow_expected_weight=float(moneyflow_expected_weight),
+        moneyflow_complete_weight=float(moneyflow_complete_weight),
     )
 
 
@@ -499,6 +572,7 @@ def aggregate_l1_day(
     *,
     min_coverage: float = MIN_COVERAGE,
     moneyflow_excluded_symbols: frozenset[str] | None = None,
+    moneyflow_contributor_eligibility: Mapping[str, bool] | None = None,
 ) -> L1DailyAggregate:
     """Aggregate one sorted L1/date group with explicit count and cap-weight coverage."""
 
@@ -515,14 +589,27 @@ def aggregate_l1_day(
     symbols = [str(row.get("symbol") or "") for row in rows]
     if any(not symbol for symbol in symbols) or len(symbols) != len(set(symbols)):
         raise StateModelSetError(f"{l1_code}/{trade_date} contains empty or duplicate canonical symbols")
-    if moneyflow_excluded_symbols is not None:
+    if moneyflow_excluded_symbols is not None and moneyflow_contributor_eligibility is not None:
+        raise StateModelSetError("moneyflow exclusion set and contributor eligibility map are mutually exclusive")
+    if moneyflow_excluded_symbols is not None or moneyflow_contributor_eligibility is not None:
+        if min_coverage != MIN_COVERAGE:
+            raise StateModelSetError(
+                "hmm_risk_c010_feature_identity_drift: C-010 feature-domain coverage must remain exactly 0.90"
+            )
+        eligibility = (
+            dict(moneyflow_contributor_eligibility)
+            if moneyflow_contributor_eligibility is not None
+            else {symbol: symbol not in moneyflow_excluded_symbols for symbol in symbols}
+        )
+        if any(not symbol or not isinstance(value, bool) for symbol, value in eligibility.items()):
+            raise StateModelSetError("moneyflow contributor eligibility map is invalid")
         return _aggregate_feature_domain_day(
             rows,
             trade_date=trade_date,
             l1_code=l1_code,
             l1_name=l1_name,
             min_coverage=min_coverage,
-            moneyflow_excluded_symbols=moneyflow_excluded_symbols,
+            moneyflow_contributor_eligibility=eligibility,
         )
 
     expected = [row for row in rows if not bool(row.get("is_suspended"))]
@@ -860,6 +947,261 @@ def build_l1_feature_panel(
             }
         )
     return panel, feature_definition
+
+
+def _cross_section_mask_hash(codes: Sequence[str], active: set[str]) -> str:
+    return canonical_sha256([{"sector_code": code, "active": code in active} for code in codes])
+
+
+def build_c010_feature_domain_panel(
+    aggregates: Sequence[FeatureDomainDailyAggregate],
+    *,
+    trading_dates: Sequence[date],
+    csi300_returns: Mapping[date, float],
+    expected_sector_count: int = 31,
+    direct_sector_level: str = "L1",
+    diagnostic_only: bool = False,
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
+    """Build the approved C-010 formula-v2 panel and immutable per-feature receipts."""
+
+    panel, feature_definition = build_l1_feature_panel(
+        aggregates,
+        trading_dates=trading_dates,
+        csi300_returns=csi300_returns,
+        expected_sector_count=expected_sector_count,
+        direct_sector_level=direct_sector_level,
+    )
+    required_domain_columns = {
+        "moneyflow_amount",
+        "moneyflow_domain_status",
+        "l1_volume",
+        "l1_range_ratio",
+        "l1_return",
+        "breadth_5d",
+    }
+    missing_domain_columns = sorted(required_domain_columns - set(panel.columns))
+    if missing_domain_columns:
+        raise StateModelSetError(f"C-010 feature-domain panel lacks columns: {missing_domain_columns}")
+    codes = tuple(sorted(str(value) for value in panel.index.get_level_values("l1_code").unique()))
+    calendar = tuple(pd.Timestamp(value) for value in trading_dates)
+    if (direct_sector_level, expected_sector_count) not in {("L1", 31), ("L2", 131)} or len(
+        codes
+    ) != expected_sector_count:
+        raise StateModelSetError("C-010 feature-domain panel has an invalid canonical sector set")
+
+    moneyflow_available = panel["moneyflow_domain_status"] == "available"
+    moneyflow_denominator = panel["moneyflow_amount"].where(moneyflow_available)
+    moneyflow_denominator = moneyflow_denominator.where(moneyflow_denominator > 0)
+    panel["net_mf_ratio"] = (panel["net_mf_amount"] / moneyflow_denominator).where(moneyflow_available)
+    panel["elg_net_mf_ratio"] = ((panel["buy_elg_amount"] - panel["sell_elg_amount"]) / moneyflow_denominator).where(
+        moneyflow_available
+    )
+    panel["small_net_ratio"] = ((panel["buy_sm_amount"] - panel["sell_sm_amount"]) / moneyflow_denominator).where(
+        moneyflow_available
+    )
+    by_sector = panel.groupby(level="l1_code", group_keys=False)
+    panel["sf_mf_net_ratio_std_5d_neg"] = (
+        -by_sector["net_mf_ratio"].rolling(5, min_periods=5).std(ddof=1).droplevel(0)
+    ).where(moneyflow_available)
+    panel["sf_small_net_ratio_5d"] = (by_sector["small_net_ratio"].rolling(5, min_periods=3).mean().droplevel(0)).where(
+        moneyflow_available
+    )
+
+    vol20 = by_sector["l1_return"].rolling(20, min_periods=10).std(ddof=1).droplevel(0)
+    inputs = {
+        "volume_ratio": panel["l1_volume"],
+        "sf_range_vs_market_10d": panel["l1_range_ratio"],
+        "sf_vol_vs_market_20d": vol20,
+        "sf_excess_breadth_5d": panel["breadth_5d"],
+    }
+    operators = {
+        "volume_ratio": "sector_volume/sum_valid_sector_volume",
+        "sf_range_vs_market_10d": "rolling_mean_10_min5(sector_range/median_valid_sector_range)",
+        "sf_vol_vs_market_20d": "sector_vol20/median_valid_sector_vol20",
+        "sf_excess_breadth_5d": "sector_breadth5-mean_valid_sector_breadth5",
+    }
+    outputs = {name: pd.Series(np.nan, index=panel.index, dtype="float64") for name in inputs}
+    pre_masks = {name: pd.Series(False, index=panel.index, dtype="bool") for name in inputs}
+    entry_state: dict[tuple[str, pd.Timestamp], dict[str, Any]] = {}
+
+    for feature_name, source in inputs.items():
+        for timestamp in calendar:
+            day = source.xs(timestamp, level="trade_date").reindex(codes)
+            valid_codes: list[str] = []
+            for code, raw_value in day.items():
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(value):
+                    continue
+                if feature_name in {"volume_ratio", "sf_range_vs_market_10d", "sf_vol_vs_market_20d"} and value < 0:
+                    continue
+                if feature_name == "sf_excess_breadth_5d" and not 0 <= value <= 1:
+                    continue
+                valid_codes.append(str(code))
+            valid = tuple(sorted(valid_codes))
+            missing = tuple(code for code in codes if code not in set(valid))
+            coverage = len(valid) / expected_sector_count
+            state = {
+                "status": "accepted",
+                "reason_code": None,
+                "valid": valid,
+                "missing": missing,
+                "coverage": float(coverage),
+                "reference": None,
+                "pre_mask": (),
+            }
+            if (10 * len(valid)) < (9 * expected_sector_count):
+                state["status"] = "coverage_insufficient"
+                state["reason_code"] = "hmm_risk_c010_feature_cross_section_coverage_insufficient"
+                entry_state[(feature_name, timestamp)] = state
+                continue
+            values = [float(day.loc[code]) for code in valid]
+            if feature_name == "volume_ratio":
+                reference = float(math.fsum(values))
+            elif feature_name in {"sf_range_vs_market_10d", "sf_vol_vs_market_20d"}:
+                reference = float(np.median(np.asarray(values, dtype=np.float64)))
+            else:
+                reference = float(math.fsum(values) / len(values))
+            state["reference"] = reference
+            positive_required = feature_name != "sf_excess_breadth_5d"
+            if not math.isfinite(reference) or (positive_required and reference <= 0):
+                state["status"] = "reference_invalid"
+                state["reason_code"] = "hmm_risk_c010_feature_cross_section_reference_invalid"
+                entry_state[(feature_name, timestamp)] = state
+                continue
+            index = pd.MultiIndex.from_product([[timestamp], valid], names=panel.index.names)
+            pre_masks[feature_name].loc[index] = True
+            state["pre_mask"] = valid
+            if feature_name == "sf_excess_breadth_5d":
+                outputs[feature_name].loc[index] = [float(day.loc[code]) - reference for code in valid]
+            else:
+                outputs[feature_name].loc[index] = [float(day.loc[code]) / reference for code in valid]
+            entry_state[(feature_name, timestamp)] = state
+
+    range_daily = outputs["sf_range_vs_market_10d"]
+    range_rolling = (
+        range_daily.groupby(level="l1_code", group_keys=False).rolling(10, min_periods=5).mean().droplevel(0)
+    )
+    outputs["sf_range_vs_market_10d"] = range_rolling.where(pre_masks["sf_range_vs_market_10d"])
+
+    receipts: list[dict[str, Any]] = []
+    for feature_name in inputs:
+        output = outputs[feature_name]
+        illegal_mask = output.notna() & ~pre_masks[feature_name]
+        if bool(illegal_mask.any()):
+            raise StateModelSetError(
+                f"hmm_risk_c010_feature_cross_section_mask_mismatch: {direct_sector_level}/{feature_name}"
+            )
+        for timestamp in calendar:
+            state = entry_state[(feature_name, timestamp)]
+            day_output = output.xs(timestamp, level="trade_date").reindex(codes)
+            finite_output_codes = {
+                str(code) for code, value in day_output.items() if pd.notna(value) and math.isfinite(float(value))
+            }
+            non_finite_output = [
+                str(code) for code, value in day_output.items() if pd.notna(value) and not math.isfinite(float(value))
+            ]
+            if non_finite_output:
+                index = pd.MultiIndex.from_product([[timestamp], codes], names=panel.index.names)
+                output.loc[index] = np.nan
+                finite_output_codes.clear()
+                state["status"] = "output_non_finite"
+                state["reason_code"] = "hmm_risk_c010_feature_cross_section_output_non_finite"
+            entry = {
+                "feature_name": feature_name,
+                "trade_date": timestamp.date().isoformat(),
+                "direct_sector_level": direct_sector_level,
+                "operator": operators[feature_name],
+                "source_domain": "price",
+                "expected_sector_count": expected_sector_count,
+                "expected_sector_sha256": canonical_sha256(list(codes)),
+                "valid_sector_count": len(state["valid"]),
+                "valid_sector_codes": list(state["valid"]),
+                "valid_sector_sha256": canonical_sha256(list(state["valid"])),
+                "missing_sector_codes": list(state["missing"]),
+                "missing_sector_sha256": canonical_sha256(list(state["missing"])),
+                "feature_cross_section_coverage": state["coverage"],
+                "reference_value": state["reference"],
+                "pre_mask_sha256": _cross_section_mask_hash(codes, set(state["pre_mask"])),
+                "post_mask_sha256": _cross_section_mask_hash(codes, finite_output_codes),
+                "post_mask_subset_of_pre_mask": finite_output_codes.issubset(set(state["pre_mask"])),
+                "status": state["status"],
+                "reason_code": state["reason_code"],
+            }
+            receipts.append({**entry, "entry_sha256": canonical_sha256(entry)})
+        panel[feature_name] = output
+
+    panel = panel.replace([np.inf, -np.inf], np.nan)
+    feature_definition.update(
+        {
+            "schema_version": C010_FORMULA_VERSION,
+            "feature_domain_policy_version": C010_POLICY_VERSION,
+            "diagnostic_only": diagnostic_only,
+            "cross_section_contract": "feature_domain_coverage_v1",
+            "cross_section_min_coverage": MIN_COVERAGE,
+            "cross_section_min_valid_sector_count": 28 if expected_sector_count == 31 else 118,
+            "moneyflow_mandatory_fields": list(MONEYFLOW_STOCK_FIELDS),
+            "moneyflow_denominator_by_feature": {
+                "net_mf_ratio": "moneyflow_contributor_amount",
+                "elg_net_mf_ratio": "moneyflow_contributor_amount",
+                "sf_mf_net_ratio_std_5d_neg": "moneyflow_contributor_amount",
+                "sf_small_net_ratio_5d": "moneyflow_contributor_amount",
+            },
+            "cross_section_operator_by_feature": operators,
+            "formula_diff_by_feature": {
+                "net_mf_ratio": {
+                    "v1": "sector_net_mf_amount/price_domain_l1_amount",
+                    "v2": "complete_moneyflow_net_mf_amount/moneyflow_contributor_amount",
+                },
+                "elg_net_mf_ratio": {
+                    "v1": "sector_elg_net_mf_amount/price_domain_l1_amount",
+                    "v2": "complete_moneyflow_elg_net_mf_amount/moneyflow_contributor_amount",
+                },
+                "sf_mf_net_ratio_std_5d_neg": {
+                    "v1": "rolling_std_5_min5(net_mf_ratio_v1)_neg",
+                    "v2": "rolling_std_5_min5(net_mf_ratio_v2)_neg_with_current_moneyflow_post_mask",
+                },
+                "sf_small_net_ratio_5d": {
+                    "v1": "rolling_mean_5_min3(small_net_ratio_v1)",
+                    "v2": "rolling_mean_5_min3(small_net_ratio_v2)_with_current_moneyflow_post_mask",
+                },
+                "volume_ratio": {
+                    "v1": "sector_volume/sum_all_sector_volume",
+                    "v2": operators["volume_ratio"],
+                },
+                "sf_range_vs_market_10d": {
+                    "v1": "exact_complete_global_mask_then_rolling_mean_10_min5",
+                    "v2": operators["sf_range_vs_market_10d"],
+                },
+                "sf_vol_vs_market_20d": {
+                    "v1": "exact_complete_l1_return_surrogate_mask",
+                    "v2": operators["sf_vol_vs_market_20d"],
+                },
+                "sf_excess_breadth_5d": {
+                    "v1": "exact_complete_l1_return_surrogate_mask",
+                    "v2": operators["sf_excess_breadth_5d"],
+                },
+            },
+            "moneyflow_rolling_post_mask_required": True,
+            "range_cross_section_rolling_post_mask_required": True,
+        }
+    )
+    evidence_body = {
+        "schema_version": C010_CROSS_SECTION_RECEIPT_VERSION,
+        "formula_version": C010_FORMULA_VERSION,
+        "feature_domain_policy_version": C010_POLICY_VERSION,
+        "direct_sector_level": direct_sector_level,
+        "expected_sector_count": expected_sector_count,
+        "expected_sector_codes": list(codes),
+        "expected_sector_sha256": canonical_sha256(list(codes)),
+        "entry_count": len(receipts),
+        "entries": receipts,
+        "diagnostic_only": diagnostic_only,
+    }
+    evidence = {**evidence_body, "receipt_sha256": canonical_sha256(evidence_body)}
+    return panel, feature_definition, evidence
 
 
 def _future_sum(series: pd.Series, horizon: int) -> pd.Series:
