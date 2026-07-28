@@ -2,7 +2,12 @@
   "actual": "After backend restart, Phase 3 HTTP routes and production schema are healthy, but the registered backend tool qe_archive_query_long_trend_quality is absent from backend/mcp/tool_manifest.py and the standalone QE Archive MCP wrapper. Gateway search returns zero results, so clients cannot discover or invoke the delivered read-only MCP contract. Fix must synchronize all authoritative MCP surfaces, add direct manifest/wrapper tests, preserve bounded read-only behavior, and introduce no fallback or research gate.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260728_BUG-899-f-014-phase-3-long-trend-mcp-tool-is-absent-from-gateway-manifest.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/mcp/tool_manifest.py",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "tests/mcp/test_mcp_tool_manifest.py",
+    "tests/mcp/test_mcp_inventory_diff.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-899",
@@ -54,7 +59,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -162,5 +168,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
