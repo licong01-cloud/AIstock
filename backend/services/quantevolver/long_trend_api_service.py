@@ -78,6 +78,40 @@ class QELongTrendAPIService:
             task_id=task_id,
             loop_index=loop_index,
         )
+        existing_candidates = await asyncio.to_thread(
+            self.result_repository.find_materializable_candidates,
+            run_id=str(context["run_id"]),
+            task_id=task_id,
+            loop_index=loop_index,
+            profile_id=request.profile_id,
+            outcome_dataset_snapshot_id=request.outcome_dataset_snapshot_id,
+        )
+        if len(existing_candidates) > 1:
+            raise QELongTrendAPIServiceError(
+                "multiple terminal CAS evaluations match the requested QE Loop identity",
+                reason_code="QELT_CONTROL_STATE_CONFLICT",
+                context={
+                    "task_id": task_id,
+                    "loop_index": loop_index,
+                    "matches": [str(item["evaluation_id"]) for item in existing_candidates],
+                },
+            )
+        if existing_candidates:
+            evaluation_id = str(existing_candidates[0]["evaluation_id"])
+            persisted = await asyncio.to_thread(self._materialize_existing, evaluation_id)
+            row = dict(persisted.control_row)
+            return {
+                "evaluation_id": evaluation_id,
+                "status": row.get("status"),
+                "run_id": row.get("run_id"),
+                "task_id": task_id,
+                "loop_index": loop_index,
+                "ready_for_node": False,
+                "family_status": row.get("family_status_json") or {},
+                "platform_delivery_status": row.get("platform_delivery_status_json") or {},
+                "data_action_plan": row.get("data_action_plan_json") or [],
+                "reason_code": row.get("reason_code"),
+            }
         node_id = str(context["node_id"])
         async with QEWorkspaceClient.for_node(node_id) as client:
             archived_feature_snapshot_id = str(

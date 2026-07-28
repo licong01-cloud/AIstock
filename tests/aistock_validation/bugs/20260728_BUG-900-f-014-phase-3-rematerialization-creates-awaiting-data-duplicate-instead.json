@@ -2,7 +2,11 @@
   "actual": "Production Phase 3 canary POST for R8B Loop4 found an existing terminal CAS-published evaluation but create_or_update resolved missing archived feature identity first and created a new awaiting_data control row. The API must reuse a unique existing terminal CAS evaluation for the same authoritative QE run/task/Loop/profile/outcome before requiring new snapshot resolution; zero candidates retain current resolution flow, and multiple candidates fail explicitly without guessing. No evidence deletion, retraining, fallback, or research gate.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260728_BUG-900-f-014-phase-3-rematerialization-creates-awaiting-data-duplicate-instead.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/qe_archive/long_trend_repository.py",
+    "backend/services/quantevolver/long_trend_api_service.py",
+    "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py",
+    "backend/tests/unified_engine/test_qe_long_trend_phase3_api.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-900",
@@ -54,7 +58,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -162,5 +167,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
