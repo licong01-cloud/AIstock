@@ -249,7 +249,15 @@ Body：
       "package_id": "pkg_...",
       "target_count": 5,
       "review_policy": {},
-      "runtime_config": {},
+      "runtime_config": {
+        "top_k": 5,
+        "display_top_n": 5,
+        "runtime_profile": {
+          "selection": {
+            "top_k": 5
+          }
+        }
+      },
       "entry_price_basis": "next_open_executable",
       "exit_price_basis": "next_open_executable",
       "style_profile_ref": null,
@@ -260,6 +268,8 @@ Body：
   "end_trade_date": "2026-07-21"
 }
 ```
+
+`RESEARCH_PROGRAM_SPEC.target_count` 是荐股列表目标容量；其 selection `top_k` 是平台运行合同，不属于 StrategyPackage 资产或准入结论。R5 UI 必须使用与当前荐股一致的确定性映射：`top_k = clamp(target_count, 1, 50)`，并同时写入顶层 `top_k/display_top_n` 与 `runtime_profile.selection.top_k`。该映射对单 Alpha 和原生多 Alpha 父包完全相同，不读取或改写 package manifest，不执行二次 package 校验，也不得在缺失时依赖推理层默认值或静默 fallback。
 
 服务端补充 `request_id/requested_at/requested_by/data_source/origin/research_scope/evidence_level/execution_prohibited`，并把 Header 映射为 domain `client_idempotency_key`。客户端不得提交：
 
@@ -794,7 +804,7 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 | F-757 | no DDL；R1-R4 execution algorithms 不变；共享 operation 状态机仅 additive 增加 typed pre-claim `QUEUED -> RETRYABLE_FAILED`，不伪造 attempt | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `git diff --check` | verified | none |
 | F-758 | READ ONLY REPEATABLE READ queries and resource-specific keysets | `backend/tests/advisory_historical_range/test_r5_query_repository.py` | verified | none |
 | F-759 | responsive evidence UI and typed Dataset bridge receipt readback | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` covers SEALED/VALID_EMPTY and 375/768/1440 widths | verified | none |
-| F-760 | guarded PostgreSQL/UI E2E entrypoints only | `backend/tests/advisory_historical_range/test_r5_postgres_e2e.py` skipped; explicit configuration probe found all seven required roots absent | blocked_external_configuration | incomplete: single-Alpha/native-multi create/resume/query/outcome/summary/bridge mutation E2E and UI readback cannot run without explicit roots; no acceptance exception has been granted |
+| F-760 | guarded PostgreSQL/UI E2E entrypoints plus explicit single/native-multi runtime request contract | seven explicit roots configured; options API HTTP 200; `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` asserts identical target-count/top-k mapping for single and native multi-Alpha | incomplete_real_e2e | Real DEV batch `ahrb_11a2ed1158e2f91febd0d079244dbef1` reached execution. Native multi-Alpha exposed BUG-894 (`runtime_config` omitted `selection.top_k`), now fixed at request construction; single-Alpha remains `WAITING_INPUT` because DEV `daily_basic/moneyflow_ts/bak_basic/cyq_perf` and range-complete `sector_data` are absent. A fresh post-fix 15-day API/UI E2E and readback are still required; no acceptance exception has been granted. |
 | F-761 | `scripts/aistock_feature_workflow.py` and this reconciled matrix | validation-receipt: `aistock_feature_workflow F2` final local gate | verified | none |
 | F-762 | this design and PR acceptance evidence | artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` | verified | none |
 | F-763 | parent design plus this matrix | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`; F-740-F-762 audit | incomplete_dependency | Phase 1R completion must not be claimed while F-760 remains incomplete; no acceptance exception has been granted |
@@ -859,4 +869,4 @@ PASS_DESIGN。没有角色、审批、双人复核、package 二次验证、最�
 
 R5 源码已按 R5-A 至 R5-D 落地，并通过变更模块、直接依赖、TypeScript、Playwright、所有权、guardrail 和静态合同验证。实现保持 R1-R4、Selection、当前 Advisory、Paper、Simulation、QE/Qlib/QMT 隔离；没有 DDL/DML、服务重启、runtime activation、角色、审批或额外业务门禁。
 
-F-760 所要求的单 Alpha 与原生多 Alpha 真实 mutation E2E 和 UI readback 仍因七个显式 roots 未配置而未执行，F-763 因此保持未完成。当前不得声明 R5、Phase 1R 或合入验收完成，也不得以 mock、只读 smoke 或文字状态替代该证据；后续必须提供明确 roots 并完成真实 E2E，或由用户明确批准对应验收例外。
+F-760 所要求的七个显式 roots 已配置，options API 已通过；首轮真实 DEV batch 已完成 catalog 并进入逐日执行，暴露的 catalog 租约问题由 BUG-893 修复，原生多 Alpha `selection.top_k` 请求缺口由 BUG-894 修复。单 Alpha 仍因 DEV 正式行情/基本面输入不完整而 `WAITING_INPUT`，当前运行的 8001 实例也不是该 DEV batch 的 UI readback 目标。F-760 与 F-763 因此继续保持未完成；不得把已修复源码、mock 或只读 smoke 冒充真实单/多 Alpha 15 日 E2E。后续必须补齐 DEV 数据、运行包含 BUG-893/BUG-894 的 DEV backend、重新创建全新 batch，并完成 API/UI readback、outcome、summary 与 bridge 验收。
