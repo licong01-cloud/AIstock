@@ -32,9 +32,17 @@
       "actor": "codex",
       "note": "Separated temporal and numeric circ_mv evidence, added typed invalid-latest-row status/reasons, enforced derived crossing parity, and kept full 601-day no-fit acceptance pending.",
       "timestamp": "2026-07-28T03:43:53.3180006Z"
+    },
+    {
+      "action": "formal_601_no_fit_preflight",
+      "actor": "codex",
+      "note": "Producer 77265dd6 verified PIT-entry crossing total/available/invalid=1073/1073/0 with receipt 7c36f228b704cf74784358dd7306d0d71363faa340c832b0512f53cfb4fdd1ca; remaining train observation coverage blockers are outside the BUG-892 denominator root cause.",
+      "timestamp": "2026-07-28T04:52:28.2503892Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "tmp/validation/hmm_risk/bug892_c009_stock_fact_preflight_77265dd6.json"
+  ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
@@ -152,7 +160,7 @@
   "fixed_at": null,
   "github_issue_number": 2822,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2822",
-  "last_seen_at": "2026-07-28T02:14:41.108316Z",
+  "last_seen_at": "2026-07-28T04:52:28.2503892Z",
   "module": "hmm.risk",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -282,5 +290,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "fix_in_progress_full_601_preflight_pending"
+  "workflow_gate": "ready_for_pr"
 }
