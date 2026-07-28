@@ -3,7 +3,7 @@
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
 - 修订日期：2026-07-28
-- 状态：`C010_FORMAL_POLICY_A1_A4_USER_APPROVED_IMPLEMENTATION_PENDING`
+- 状态：`C010_FORMAL_POLICY_A1_A4_USER_APPROVED_DESIGN_REVIEW_PASSED_IMPLEMENTATION_PENDING`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.12
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
@@ -871,10 +871,10 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
 
 ##### C-010-FORMAL-A. 正式 feature-domain contributor 与逐 feature cross-section 政策（用户已批准，源码实现 pending）
 
-本节把已完成的 C-010 只读诊断收敛为一个可送审的正式训练输入合同。其 algorithm/policy version 固定候选为
+本节把已完成的 C-010 只读诊断收敛为正式训练输入合同。其 algorithm/policy version 固定为
 `hmm_risk_c010_feature_domain_policy_v1`；用户已于 2026-07-28 明确批准 C-010-A1/A2/A3/A4，当前状态为
 `RESOLVED_USER_APPROVED_FORMAL_CONTRACT_IMPLEMENTATION_PENDING`。本节不激活正式政策，
-不授权源码实现、HMM fit、D5、D6、model/READY、数据库写入或 runtime action。为避免一次批准掩盖不同业务语义，正式候选拆成
+不授权源码实现、HMM fit、D5、D6、model/READY、数据库写入或 runtime action。为避免一次批准掩盖不同业务语义，正式合同拆成
 四个稳定决策项：C-010-A1=full-universe train-frozen contributor ledger；C-010-A2=price/moneyflow 双层 coverage 与同源
 moneyflow denominator；C-010-A3=逐 feature cross-section；C-010-A4=公式/政策 identity、formal preflight 与激活边界。
 
@@ -898,35 +898,68 @@ moneyflow denominator；C-010-A3=逐 feature cross-section；C-010-A4=公式/政
 4. **price domain 第一层 coverage**：每个 `direct sector × trade_date` 的 expected price contributors 仍为当日非停牌且 PIT/SW
    identity 有效的完整证券集合；`prev_circ_mv_cny` 必须按 BUG-892 的 causal history contract 有效。只对 price mandatory fields
    finite 的 row 聚合，并继续同时要求 count coverage 与 `prev_circ_mv_cny` weight coverage 均 `>=0.90`。不满足时仅该
-   sector/date 形成 typed invalid price observation；不得因 moneyflow eligibility 缩小 price denominator。
+   sector/date 形成 typed invalid price observation；不得因 moneyflow eligibility 缩小 price denominator。price expected set 的每个
+   contributor 必须有同一 identity/date receipt 下 finite 且严格正的 `prev_circ_mv_cny`；按 canonical symbol 顺序以 `math.fsum`
+   计算的 `price_expected_weight` 必须 finite 且严格大于 0。任一 expected weight 缺失/非有限/非正或 sum 非有限/非正时，状态固定为
+   `weight_denominator_invalid` 并使用 price-domain 专属 reason；contributor identity 重复或 row/hash 不一致使用
+   `contributor_receipt_mismatch`。两类失败均禁止从 expected set 删除问题 row 后继续计算 coverage。
 5. **moneyflow domain 第二层 coverage**：每个 `direct sector × trade_date` 的 expected moneyflow contributors 等于第一层 expected
-   contributors 中 `moneyflow_contributor_eligible=true` 的集合。complete moneyflow contributors 必须同时具有五个 moneyflow 字段、
-   `amount_cny` 与 causal `prev_circ_mv_cny` 的 finite/合法值，并在该缩小后的 expected set 上分别满足 count coverage 与
+   contributors 中 `moneyflow_contributor_eligible=true` 的集合。五个且仅有五个 moneyflow mandatory fields 固定为
+   `buy_sm_amount_cny`、`sell_sm_amount_cny`、`buy_elg_amount_cny`、`sell_elg_amount_cny`、`net_mf_amount_cny`；`amount_cny` 与
+   causal `prev_circ_mv_cny` 是额外的 domain completeness 字段，不得把 medium/large tier 或其他未批准字段加入该集合。
+   complete moneyflow contributors 必须满足：五个 moneyflow 字段均 finite（signed amount 允许为负）；`amount_cny` finite 且非负；
+   `prev_circ_mv_cny` finite 且严格正。不得用非负约束错误拒绝 net/small/elg signed flow，也不得接受负成交额或非正权重。
+   complete rows 在该缩小后的 expected set 上分别满足 count coverage 与
    `prev_circ_mv_cny` weight coverage 均 `>=0.90`；count coverage 使用 `10*complete_count >= 9*expected_count`，weight coverage
-   沿用既有 finite float64 `complete_weight/expected_weight >=0.90` 且不增加 epsilon/tolerance。expected set 为空为 `structurally_unavailable`，coverage 不足为
-   `coverage_insufficient`；两者均使该 sector/date 的 moneyflow features 保持 NA/invalid，不得填 0、前值、均值、行业代理或 neutral。
+   沿用既有 finite float64 `complete_weight/expected_weight >=0.90` 且不增加 epsilon/tolerance。moneyflow coverage 必须复用第 4 项
+   已验证的同一 `prev_circ_mv_cny` row identity；expected/complete weight 均按 canonical symbol 顺序以 `math.fsum` 聚合，
+   `moneyflow_expected_weight` 必须 finite 且严格大于 0，`complete_weight` 必须 finite、
+   非负且不大于 expected weight。任一 weight 缺失/非有限/非正 denominator 时状态固定为 `weight_denominator_invalid`；
+   `complete_weight > expected_weight`、identity 重复或 row/hash 不一致使用 `contributor_receipt_mismatch`。不得从 expected set
+   再删除 row 或把异常压缩成普通 coverage insufficient。expected set 为空为
+   `structurally_unavailable`，coverage 不足为 `coverage_insufficient`；这些状态均使该 sector/date 的 moneyflow features 保持
+   NA/invalid，不得填 0、前值、均值、行业代理或 neutral。
 6. **moneyflow numerator/denominator 同源**：`net_mf_ratio`、`elg_net_mf_ratio`、`sf_mf_net_ratio_std_5d_neg` 与
    `sf_small_net_ratio_5d` 的 numerator 只汇总 complete moneyflow contributors；denominator 固定为同一 contributor set 的
    `moneyflow_contributor_amount=sum(amount_cny)`。禁止继续以包含 excluded/missing contributor 的全 price-domain `l1_amount`
    作为上述四项 denominator，也禁止 numerator/denominator 使用不同 identity/date/coverage receipt。denominator 必须 finite 且严格
    大于 0，否则该 sector/date 的 moneyflow domain 以 `denominator_invalid` fail closed。
-7. **逐 feature cross-section policy**：cross-section validity 不再由“任一 sector 任一 feature 缺失”全局扩散。当前 7/20 维合同中
+7. **逐 feature cross-section policy**：cross-section validity 不再由“任一 sector 任一 feature 缺失”全局扩散。L1 与 direct L2
+   使用同一算子合同但各自只读取本 level 的 direct stock-fact aggregate；禁止从 L1 推导 L2 或在两个 level 间借用 valid set/reference。
+   当前 7/20 维合同中
    必须逐项显式处理的 price-domain cross-section features 固定为 `volume_ratio`、`sf_range_vs_market_10d`、
    `sf_vol_vs_market_20d` 与 `sf_excess_breadth_5d`；当前没有 moneyflow-domain cross-section feature，四个 moneyflow feature
-   只按第 5/6 项的 sector-local domain 计算。每个上述 price feature 按当日 finite direct-sector input 建立 ordered valid-sector set；
+   只按第 5/6 项的 sector-local domain 计算。令 level `q` 的 canonical expected sector set 为 `E_q`，L1/L2 分别严格为 31/131；
+   每个 feature `f` 按下列精确 pre-cross-section input 建立当日 ordered valid-sector set `V(f,t) ⊆ E_q`，不得用 `l1_return` 或其他
+   surrogate 的 completeness 代替该 feature 自身的 finite input：
+   - `volume_ratio`：input 为当日 direct-sector `sector_volume`，必须 finite 且非负；reference 为
+     `sum_{h in V(volume_ratio,t)} sector_volume(h,t)`；
+   - `sf_range_vs_market_10d`：daily input 为 finite 且非负的 `sector_range_ratio`；daily reference 为
+     `median_{h in V(range,t)} sector_range_ratio(h,t)`，先形成 daily relative ratio，再按 sector 执行已批准
+     `rolling(10,min_periods=5).mean()`；
+   - `sf_vol_vs_market_20d`：input 为各 sector 已按 `rolling(20,min_periods=10).std(ddof=1)` 形成的 finite 且非负
+     `sector_vol20`；reference 为
+     `median_{h in V(vol20,t)} sector_vol20(h,t)`；
+   - `sf_excess_breadth_5d`：input 为 finite 且位于闭区间 `[0,1]` 的 sector-local `sf_breadth_5d`；reference 为
+     `mean_{h in V(breadth,t)} sf_breadth_5d(h,t)`。
    L1 denominator 固定 31、L2 固定 131，`feature_cross_section_coverage=valid_sector_count/expected_sector_count` 必须 `>=0.90`
    才允许对该 feature/date 计算横截面值，等价最小 valid count 分别为 L1=`28`、L2=`118`。
-   不足时仅该 feature/date 的全部 cross-section output 为 typed invalid；达到阈值时只对 valid-sector set 计算，并让缺失 sector 保持 NA。
+   不足时仅该 feature/date 的全部 cross-section output 为 typed invalid；达到阈值时只对 `V(f,t)` 计算，并让缺失 sector 保持 NA。
+   `volume_ratio` 的 sum、range/volatility 的 median 与 breadth 的 mean reference 必须 finite；前三者还必须严格大于 0。reference
+   缺失/非有限/非正时该 feature/date 使用独立 `reference_invalid` 状态，不得改成 coverage insufficient、回退全 31/131、填 epsilon
+   或借用另一 feature 的 set。任何输出非有限时使用 `output_non_finite` fail closed。对
+   `sf_range_vs_market_10d`，daily coverage/reference mask 必须在 rolling 前形成且在 rolling 后再次应用：即使 prior days 已满足
+   `min_periods=5`，当前 `feature/date` coverage 不足或当前 sector 不在 `V(f,t)` 时，最终当前值仍必须为 NA，禁止 rolling resurrect。
    price-domain feature 不得被 moneyflow 缺失影响；moneyflow-domain feature 不得借用 price-domain completeness。每个
-   `feature/date/level` 必须保存 expected/valid/missing sector set、ordered hashes、coverage 与 source domain。该 `0.90` 复用既有
-   coverage authority，不引入 95% 或其他新阈值。
+   `feature/date/level` 必须保存 expected/valid/missing sector set、ordered hashes、coverage、exact operator/reference value、
+   pre/post-rolling mask hash 与 source domain。该 `0.90` 复用既有 coverage authority，不引入 95% 或其他新阈值。
    contributor availability、sector/date count、sector/date weight 与 feature cross-section 四个数值虽都为 `0.90`，manifest 必须分别命名
    `contributor_min_availability`、`domain_min_count_coverage`、`domain_min_weight_coverage` 与
    `feature_cross_section_min_coverage`，不得用一个含糊字段替代四种语义。
 8. **feature set 不变、公式 identity 显式升级**：legacy 7 维与 autocycle 20 维 feature 名称、顺序和 rolling min-periods 保持已批准
    合同；C-010-DIAG-01 已证明四个 `family × level` 无需删除 feature，因此正式 policy 的 feature mask 必须与批准 feature list 完全相等。
    但第 6 项的 moneyflow denominator 与第 7 项的 cross-section validity 明确改变四个 moneyflow feature/横截面派生 feature 的计算语义，
-   不能伪装成旧 `hmm_risk_l1_sector_factor_formula_v1`。若 A2/A3 获批准，正式 formula version 必须升级为
+   不能伪装成旧 `hmm_risk_l1_sector_factor_formula_v1`。A2/A3 已获批准，正式 formula version 必须升级为
    `hmm_risk_l1_sector_factor_formula_v2_c010` 并逐 feature 保存 old/new formula diff；旧 v1 artifact/diagnostic 保持历史只读，禁止
    原地改写。`moneyflow_domain_excluded_candidate` 只保留历史诊断证据，不得在正式入口自动删 feature；任何未声明 formula/feature
    identity 漂移均 fail closed。A2/A3 已获批准，因此未来 formal implementation 必须使用 v2，并只在第 6 项四个 moneyflow
@@ -944,14 +977,19 @@ moneyflow denominator；C-010-A3=逐 feature cross-section；C-010-A4=公式/政
     model/READY/database/runtime flags 全为 false。
 11. **稳定错误分类**：实现必须至少区分 `hmm_risk_c010_expected_opportunity_missing`、
     `hmm_risk_c010_provider_absence_outside_opportunity`、`hmm_risk_c010_contributor_receipt_mismatch`、
-    `hmm_risk_c010_price_domain_coverage_insufficient`、`hmm_risk_c010_moneyflow_domain_structurally_unavailable`、
+    `hmm_risk_c010_price_domain_weight_denominator_invalid`、`hmm_risk_c010_price_domain_coverage_insufficient`、
+    `hmm_risk_c010_moneyflow_domain_weight_denominator_invalid`、`hmm_risk_c010_moneyflow_domain_structurally_unavailable`、
     `hmm_risk_c010_moneyflow_domain_coverage_insufficient`、`hmm_risk_c010_feature_cross_section_coverage_insufficient`、
-    `hmm_risk_c010_moneyflow_denominator_invalid`、`hmm_risk_c010_train_eligibility_unavailable`、
+    `hmm_risk_c010_feature_cross_section_reference_invalid`、`hmm_risk_c010_feature_cross_section_output_non_finite`、
+    `hmm_risk_c010_feature_cross_section_mask_mismatch`、`hmm_risk_c010_moneyflow_denominator_invalid`、
+    `hmm_risk_c010_train_eligibility_unavailable`、
     `hmm_risk_c010_feature_identity_drift` 与 `hmm_risk_c010_policy_identity_mismatch`。不得压缩成 generic missing、静默跳过、
     fallback success 或自动放宽阈值。
 12. **验证矩阵**：直接测试必须覆盖 full-universe 无 absence entry、恰好/略低于 `0.90` contributor 边界、absence 非 opportunity 子集、
-    price 与 moneyflow domain 隔离、moneyflow expected set 为空、两层 count/weight 边界、numerator/denominator 同一 contributor set、
-    denominator 为 0/non-finite、train 后新证券、L1/L2 逐 feature cross-section 恰好/略低于 `0.90`、缺失 sector 保持 NA、
+    price 与 moneyflow domain 隔离、exact five-field moneyflow dependency、moneyflow expected set 为空、两层 count/weight 边界、
+    expected weight 缺失/非有限/非正/越界、numerator/denominator 同一 contributor set、amount denominator 为 0/non-finite、
+    train 后新证券、L1/L2 逐 feature cross-section 恰好/略低于 `0.90`、四项 exact operator/reference、reference 为 0/non-finite、
+    缺失 sector 保持 NA、range rolling 不得 resurrect 当前 invalid date、pre/post mask hash 不一致 fail closed、
     7/20 维 feature set 不变且 formula v1/v2 identity 不混用、validation/future utility 不可见、
     policy/receipt/hash 漂移、两次 fresh-process preflight identity 一致及全部副作用 flags=false。
 13. **证据边界与推荐**：当前权威 C-010-DIAG-01 canonical report `2b1f4acc…7260` 证明仅 `689009.SH`
@@ -1857,13 +1895,15 @@ primary module required plan。未映射文件先修 catalog。`impact_modules`�
   family blocked 时不得写 READY。未确认的阈值不得先写测试再反向成为业务合同。
 - C-008-B3 artifact contract smoke 必须回读批准schedule的全部candidate摘要、四个selected family/level identities及配对关系、未选reason、
   完整算法/依赖/数值环境版本、validation mapping/receipt，并按批准的数值可复现性合同验证 selection receipt/hash。
-- C-010-FORMAL-A fix-point 在用户批准并进入源码实现后必须覆盖：full-universe contributor ledger 而非 absence-only entries；
+- C-010-FORMAL-A 已获用户批准；源码实现 fix-point 必须覆盖：full-universe contributor ledger 而非 absence-only entries；
   `O_s/A_s` 有序日期集合及 `A_s ⊆ O_s`；availability 恰好/略低于 `0.90`；train-only 冻结后在 validation/replay/runtime
-  原样应用且不改变业务 universe；price 与 moneyflow 两层 count/weight coverage；moneyflow numerator/denominator 同一 contributor set；
-  L1 31/L2 131 的逐 feature cross-section `0.90` 闭边界、domain 隔离与缺失 sector NA；7/20 维 feature order/hash 不变；
+  原样应用且不改变业务 universe；price 与 moneyflow 两层 count/weight coverage及各自 weight denominator invalid；exact five-field
+  moneyflow dependency；moneyflow numerator/denominator 同一 contributor set；L1 31/L2 131 的逐 feature cross-section `0.90`
+  闭边界、四项 exact operator/reference、reference invalid、domain 隔离、缺失 sector NA、range rolling 不得 resurrect 当前 invalid date；
+  pre/post mask hash 一致；7/20 维 feature order/hash 不变；
   policy/request/child/candidate/READY receipt 绑定；601 日四个 family/level `>=120` 行；两个 fresh-process preflight identity
   一致；任一 failure 时 request candidate 为空且 fit/selection/D6/model/READY/database/runtime flags 全为 false。该 fix-point 当前
-  只进入 proposed design，不得以测试名称或 diagnostic artifact 反向激活正式 policy。
+  已完成正式设计复审但尚未进入源码，不得以测试名称或 diagnostic artifact 反向激活正式 policy。
 
 旧 gate frozen 且不在 changed files 中，因此不运行 legacy/QE/Selection 模块测试。只有未来 PR 真实修改共享 artifact
 contract 时，才能基于明确依赖边追加对应 contract smoke，并在验证证据中写明原因。
@@ -1916,12 +1956,12 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-009-B | 新旧证券代码如何在不改写 raw source 的前提下连接同一稳定证券身份 | `IMPLEMENTED_VERIFIED_READONLY` | immutable source-specific resolver 解析 591 个 moneyflow key；canonical/source/authority/hash evidence 完整，raw source 未改写 |
 | C-009-C | Tushare authority 不存在的 stock/date moneyflow 如何使用 NA | `IMPLEMENTED_VERIFIED_READONLY` | provider-audit manifest 精确绑定 502 个 NA key；继续执行 0.90 count/weight coverage，未填 0/前值/代理，因 coverage 不足正确 blocked |
 | C-009-D | 三类缺口按什么顺序实现和恢复正式训练 | `PREFLIGHT_EXECUTED_BLOCKED_TRAIN_COVERAGE` | 601 日 source-only preflight 已执行且无 DB/runtime write；legacy L1 31/31、legacy L2 130/131、autocycle L1/L2 0 complete；不得训练、selection、D6 或 READY |
-| BUG-886 | provider absence 如何避免放大为无关 feature/sector 的全局 train coverage failure | `SOURCE_REVIEW_FIX_VALIDATED_DIAGNOSTIC_VERIFIED_FORMAL_POLICY_PENDING` | 正式/诊断 schema、统一 diagnostic denominator、exact opportunity date-set/hash 与单一 receipt 已修复；rebase 后权威 601 日 report `2b1f4acc…7260` 回读通过，PIT/selection/runtime prediction universe 不变，正式 policy 与训练保持 blocked |
+| BUG-886 | provider absence 如何避免放大为无关 feature/sector 的全局 train coverage failure | `SOURCE_REVIEW_FIX_VALIDATED_DIAGNOSTIC_VERIFIED_FORMAL_POLICY_APPROVED_IMPLEMENTATION_PENDING` | 正式/诊断 schema、统一 diagnostic denominator、exact opportunity date-set/hash 与单一 receipt 已修复；rebase 后权威 601 日 report `2b1f4acc…7260` 回读通过，PIT/selection/runtime prediction universe 不变；C-010 formal policy 已批准并通过设计复审，但源码、formal preflight 与训练仍 blocked |
 | C-010-DIAG-01 | 是否先执行 601 日 feature-domain eligibility/mask 只读诊断 | `VERIFIED_AFTER_REVIEW_FIX_NO_FIT_NO_SELECTION_NO_ARTIFACT` | 当前 source ancestry 的 clean producer report canonical `2b1f4acc…7260`；5 个 exact opportunity hashes 完整，仅排除 `689009.SH` moneyflow contribution，四项 candidate valid 且无需删 feature；旧 `ded02740…251f` 仅为 failed-review identity，`ac218d78…6b3ae` 为 pre-rebase verified evidence |
 | C-010-FORMAL-A | 是否采用 full-universe train-frozen contributor ledger、price/moneyflow 双层 coverage、同源 moneyflow denominator 与逐 feature `0.90` cross-section 的正式政策 | `RESOLVED_USER_APPROVED_C010_FORMAL_A` | 用户于 2026-07-28 明确批准；version=`hmm_risk_c010_feature_domain_policy_v1`，不删除证券或 feature，不改变 PIT/回测/实盘/预测 universe，train-derived eligibility 在 validation/replay/runtime 原样应用；源码实现、formal preflight、fit/selection/D6/READY 仍未执行 |
 | C-010-A1 | 是否以 full-universe `O_s/A_s` ledger 冻结 train-derived moneyflow contributor eligibility | `RESOLVED_USER_APPROVED_C010_A1` | 每个 train opportunity symbol 显式入账，`A_s ⊆ O_s`，availability `>=0.90` eligible；train 后新证券保留业务/price eligibility但 moneyflow=`train_eligibility_unavailable`，不得默认 eligible或删除证券 |
-| C-010-A2 | 是否采用 price/moneyflow 两层 count+weight coverage 与同一 moneyflow contributor set 的 numerator/denominator | `RESOLVED_USER_APPROVED_C010_A2` | price denominator 不受 moneyflow exclusion影响；moneyflow expected set仅含 A1 eligible contributor，count/weight均`>=0.90`；四项 moneyflow ratio使用严格正的`moneyflow_contributor_amount`，不填值或借用`l1_amount` |
-| C-010-A3 | 是否把 exact-complete 全局传播改为按 feature domain 独立的 `0.90` cross-section | `RESOLVED_USER_APPROVED_C010_A3` | 每个 feature/date/level保存 expected/valid/missing sector set/hash；达到0.90只对valid set计算、缺失sector保持NA，不足仅该feature/date invalid；L1/L2最小valid count为28/118，禁止跨domain借 completeness |
+| C-010-A2 | 是否采用 price/moneyflow 两层 count+weight coverage 与同一 moneyflow contributor set 的 numerator/denominator | `RESOLVED_USER_APPROVED_C010_A2` | price denominator 不受 moneyflow exclusion影响；moneyflow expected set仅含 A1 eligible contributor，exact five fields固定，count/weight均`>=0.90`；price/moneyflow weight denominator invalid 独立 fail closed；四项 moneyflow ratio使用严格正的`moneyflow_contributor_amount`，不填值或借用`l1_amount` |
+| C-010-A3 | 是否把 exact-complete 全局传播改为按 feature domain 独立的 `0.90` cross-section | `RESOLVED_USER_APPROVED_C010_A3` | 每个 feature/date/level保存 expected/valid/missing sector set/hash及exact operator/reference；达到0.90只对valid set计算、缺失sector保持NA，不足仅该feature/date invalid；L1/L2最小valid count为28/118；reference invalid、output non-finite、pre/post mask mismatch独立fail closed，rolling不得复活当前invalid date |
 | C-010-A4 | 是否升级 formula/policy identity并以601日formal preflight绑定后续B3执行 | `RESOLVED_USER_APPROVED_C010_A4` | feature set/order/rolling不变；formula升级`hmm_risk_l1_sector_factor_formula_v2_c010`，旧v1只读；policy hash绑定request/child/candidate/READY，四family/level全sector `>=120`行前禁止fit |
 | BUG-892 | PIT entry day 的 causal `circ_mv` 为什么形成结构性 denominator failure | `SOURCE_REVIEW_FIX_VERIFIED_DENOMINATOR_COMPLETE_DOWNSTREAM_TRAIN_COVERAGE_BLOCKED` | producer `77265dd6...` 的 601 日 no-fit receipt `7c36f228...fdd1ca`：crossing total/available/invalid=`1073/1073/0`，history start=`2020-07-30`，ordered key hash=`0b89a9d5...53c8f19`；PIT-entry denominator 根因闭合。整体 preflight 仅因既有 train observation coverage blocked（legacy L2 `801881.SI=102<120`、autocycle L2 coverage）而保持 blocked；未执行 fit/selection/D6/model/READY/DB/runtime action，且不改变 PIT、return 或 hard semantic 语义 |
 | BUG-870 | formal preflight 是否在grid前闭合四个family/level的train coverage并持久化child typed failure | `SOURCE_FIX_IN_PROGRESS_FORMAL_GRID_BLOCKED` | clean main正式执行在首fit前因`801010.SI`仅10行失败；新增完整coverage preflight、blocked receipt和typed child failure receipt；不改变feature/PIT/cross-section/120行合同，不恢复grid |
@@ -2097,8 +2137,8 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
   独立，不按sector拼接，也不在family之间淘汰方向；不迁移或覆盖旧candidate/snapshot；
   删除未经确认的 calibration/holdout split 与阈值。C-009 只改变事实解析与缺失表达，不改变两个 family、7/20 维公式、
   hard semantic authority、train/validation 窗口、D3-D6、0.90 count/weight coverage 或 120/30 row contract；identity mapping 不进入特征。
-  C-010-FORMAL-A 保留证券、sector、feature set、PIT、回测、选股、实盘和 prediction universe，但 A2/A3 明确提出 moneyflow
-  denominator 与 feature-local cross-section 的业务公式变化；因此必须使用新 formula version 并等待本次用户决定，不能静默继承 v1
+  C-010-FORMAL-A 保留证券、sector、feature set、PIT、回测、选股、实盘和 prediction universe；A2/A3 的 moneyflow
+  denominator 与 feature-local cross-section 业务公式变化已获用户批准，因此必须使用新 formula version，不能静默继承 v1
   identity。train-derived ledger 在 validation/replay/runtime 原样应用，禁止 validation-driven 重算。
 - no_unrequested_gate_or_approval：D4-01-A、D4-02-A、D4-03-B、D5-01-B与D6-01-B是用户明确批准的确定性模型合同，不是运行时人工审批；未获确认的
   split/holdout不进入active contract；未来确认的
@@ -2107,26 +2147,29 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
   研究方向淘汰；D3-D7设计合同虽已闭合但尚未由实现执行，保持blocked是未授权实现和完整READY合取的准确状态。C-009 不新增
   95% coverage、最大 staleness、人工 alias 确认或数据源准入门禁；C-009-A/B/C/D 已于 2026-07-27 获用户明确批准，
   当前 source implementation/preflight 状态不构成新增人工审批或恢复模型训练的授权。C-010-FORMAL-A 的 `0.90`、120 行与
-  full-universe/双层/逐 feature receipts 是确定性候选合同，不是运行时人工审批；当前仍为 proposed 只因用户尚未确认业务语义，
-  不得把该状态转化为每次训练、每只股票或每个 artifact 的新人工门禁。
+  full-universe/双层/逐 feature receipts 是用户已批准的确定性合同，不是运行时人工审批；源码实现与 formal preflight pending
+  不得被转化为每次训练、每只股票或每个 artifact 的新人工门禁。
 
 ### 23.1 C-010-FORMAL-A 正式设计审核结论
 
-- no simplified/subset/POC：`PASS_USER_APPROVED_DESIGN`。A1 覆盖 full-universe ledger 与 train 后新证券，A2 覆盖 price/moneyflow
+- no simplified/subset/POC：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX`。A1 覆盖 full-universe ledger 与 train 后新证券，A2 覆盖 price/moneyflow
   两层 count+weight 和同源 denominator，A3 固定四个 cross-section feature 及 L1=28/L2=118 边界，A4 绑定 formula/policy/request/
   child/candidate/READY identity；不以 `689009.SH` hard-code、absence-only 清单、单层 coverage 或 feature deletion 代替完整方案。
-- no silent error/fail-open：`PASS_USER_APPROVED_DESIGN`。零 opportunity、越界 absence、unseen train eligibility、structurally unavailable、
-  coverage insufficient、denominator invalid、cross-section insufficient、formula/policy/hash drift 均有独立状态和 reason code；
+- no silent error/fail-open：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX`。零 opportunity、越界 absence、unseen train eligibility、
+  structurally unavailable、price/moneyflow weight denominator invalid、coverage insufficient、moneyflow amount denominator invalid、
+  cross-section coverage/reference/output/mask invalid、formula/policy/hash drift 均有独立状态和 reason code；
   未定义任何填 0、前值、代理、neutral、默认 eligible 或 old-v1 fallback。
-- no business semantic drift：`PASS_USER_APPROVED_DESIGN_WITH_EXPLICIT_FORMULA_CHANGE`。证券、PIT、sector、feature set、hard semantic、
+- no business semantic drift：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX_WITH_EXPLICIT_FORMULA_CHANGE`。证券、PIT、sector、feature set、hard semantic、
   train/validation 窗口和 D3-D6 均保持；A2/A3 对四个 moneyflow denominator 与四个 price cross-section features 的计算语义变化已
-  明确标为已批准的 `hmm_risk_l1_sector_factor_formula_v2_c010`，未伪装成 v1 不变或在源码中提前激活。
-- no unauthorized gate/approval：`PASS_USER_APPROVED_DESIGN`。数值只复用既有 `0.90` 与 120 行 authority，并分别命名四种 coverage 语义；
+  明确标为已批准的 `hmm_risk_l1_sector_factor_formula_v2_c010`；四项 operator/reference、L1/L2 authority 与 rolling 后 mask 已精确固定，
+  未伪装成 v1 不变或在源码中提前激活。
+- no unauthorized gate/approval：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX`。数值只复用既有 `0.90` 与 120 行 authority，并分别命名四种 coverage 语义；
   没有 95%、staleness cap、人工逐股确认、运行时 acknowledge、方向淘汰或每次训练审批。当前用户决定只用于批准明确的 formula/policy
   amendment；批准后 implementation、preflight、PR merge、5184 fits 与 runtime 仍按既有边界分别执行和报告。
 
-综合结论：`PASS_USER_APPROVED_NOT_IMPLEMENTATION_READY`。C-010-A1/A2/A3/A4 的完整正式合同已获用户批准；源码实现、601 日 formal
-preflight 与相应验收证据尚未完成，因此不得恢复 5184 fits。
+综合结论：`PASS_USER_APPROVED_DESIGN_IMPLEMENTATION_READY`。C-010-A1/A2/A3/A4 的完整正式合同已获用户批准，且 formula v2、失败语义、
+exact fields、mask/rolling 与状态一致性缺口均已修复；这只表示设计可进入独立源码实现，不表示源码、601 日 formal preflight、
+5184 fits、D5/D6 或 model/READY 已完成。
 
 ## 24. 当前完成状态与下一步
 
