@@ -901,6 +901,11 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
    source identity，并以稳定 `circ_mv_fact_status`/`circ_mv_reason_code` 使 denominator fail closed；不得把“最新 row 数值无效”
    伪装成“source row 不存在”。crossing authority 必须由日期关系推导，调用方布尔值与推导结果任一方向不一致均以
    `hmm_risk_stock_fact_circ_mv_pit_boundary_evidence_invalid` 拒绝。crossing receipt/hash 同时绑定 fact status 与 reason code。
+7. **C-009 窗口修正**：`source_start/source_end` 是本次 stock-fact observation 输出窗口；`circ_mv_history_start` 是从原始冻结 request
+   继承的 causal denominator 历史下界，两者不得再次压缩成同一个字段。C-009 将 observation window 收窄到 601 日 train window 时，
+   必须保持原 request 的 `circ_mv_history_start=2020-07-30`，否则 2022 年首个交易日所需的 2021-12-31 causal row 会再次被错误排除。
+   L1/L2 preflight source statistics 必须同时比较 crossing total、available、invalid 和 ordered key hash；只有 total=available=1,073 且
+   invalid=0 才证明本 BUG denominator 根因闭合。该历史窗口只服务 `<t` 权重，不扩展 observation、PIT membership 或 return history。
 
 ##### BUG-870. 正式 train coverage preflight 与 child failure receipt
 

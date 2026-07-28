@@ -65,7 +65,7 @@ def _preflight_inputs() -> dict:
                 "circ_mv_asof_max_staleness_trading_days": 9,
                 "circ_mv_asof_stale_key_sha256": "3" * 64,
                 "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
-                "circ_mv_history_start": "2022-01-01",
+                "circ_mv_history_start": "2020-07-30",
                 "circ_mv_pit_boundary_crossing_count": 1_073,
                 "circ_mv_pit_boundary_crossing_available_count": 1_073,
                 "circ_mv_pit_boundary_crossing_invalid_count": 0,
@@ -94,7 +94,7 @@ def _preflight_inputs() -> dict:
             "circ_mv_asof_max_staleness_trading_days": 9,
             "circ_mv_asof_stale_key_sha256": "3" * 64,
             "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
-            "circ_mv_history_start": "2022-01-01",
+            "circ_mv_history_start": "2020-07-30",
             "circ_mv_pit_boundary_crossing_count": 1_073,
             "circ_mv_pit_boundary_crossing_available_count": 1_073,
             "circ_mv_pit_boundary_crossing_invalid_count": 0,
@@ -269,6 +269,7 @@ def test_c009_preflight_uses_immutable_train_window_and_never_runs_model_stages(
     assert report["status"] == "preflight_complete"
     assert observed["source"]["source_start"] == "2022-01-01"
     assert observed["source"]["source_end"] == "2024-06-30"
+    assert observed["source"]["circ_mv_history_start"] == "2020-07-30"
     assert observed["db_prefix"] == "TDX_DB_"
     assert report["trading_date_count"] == 601
     assert report["source_statistics"]["moneyflow_provider_absence_count"] == 502
@@ -374,7 +375,12 @@ def test_c010_diagnostic_compares_baseline_and_masks_without_model_actions(monke
     assert report["baseline_train_coverage"]["train_coverage_valid"] is False
     assert report["observation_eligibility"]["excluded_moneyflow_symbols"] == ["689009.SH"]
     assert observed == {
-        "source": {**_request()["source"], "source_start": "2022-01-01", "source_end": "2024-06-30"},
+        "source": {
+            **_request()["source"],
+            "source_start": "2022-01-01",
+            "source_end": "2024-06-30",
+            "circ_mv_history_start": "2020-07-30",
+        },
         "db_prefix": "TDX_DB_",
         "diagnostic": True,
     }

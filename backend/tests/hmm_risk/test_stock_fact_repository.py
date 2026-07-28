@@ -142,12 +142,13 @@ class _Connection:
         return _Cursor(self, name=name)
 
 
-def _spec() -> subject.StockFactSourceSpec:
+def _spec(*, circ_mv_history_start: date | None = None) -> subject.StockFactSourceSpec:
     return subject.StockFactSourceSpec(
         universe_key="immutable_v1",
         universe_rule_version="rule_v1",
         source_start=date(2022, 1, 1),
         source_end=date(2025, 4, 30),
+        circ_mv_history_start=circ_mv_history_start,
     )
 
 
@@ -170,10 +171,14 @@ def _provider_absence_manifest():
     return load_provider_absence_manifest(path, expected_sha256=canonical_sha256(payload))
 
 
-def _reader(connection: _Connection) -> subject.PostgresStockFactReader:
+def _reader(
+    connection: _Connection,
+    *,
+    circ_mv_history_start: date | None = None,
+) -> subject.PostgresStockFactReader:
     return subject.PostgresStockFactReader(
         connection,
-        _spec(),
+        _spec(circ_mv_history_start=circ_mv_history_start),
         security_identity_manifest=_identity_manifest(),
         provider_absence_manifest=_provider_absence_manifest(),
     )
@@ -436,6 +441,64 @@ def test_reader_rejects_circ_mv_before_immutable_source_window() -> None:
     assert row["circ_mv_history_start"] == date(2022, 1, 1)
     assert row["circ_mv_fact_status"] == "source_unavailable"
     assert row["circ_mv_reason_code"] == "hmm_risk_stock_fact_circ_mv_source_unavailable"
+
+
+def test_reader_uses_separate_immutable_circ_mv_history_before_observation_window() -> None:
+    connection = _Connection()
+    connection.stock_rows = [
+        (
+            date(2022, 1, 3),
+            "000001.SZ",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            date(2022, 1, 3),
+            1,
+            10_000,
+            11_000,
+            9_000,
+            10_500,
+            100,
+            1_000_000,
+            date(2021, 12, 31),
+            10_000,
+            date(2021, 12, 24),
+            9_000,
+            date(2021, 12, 17),
+            8_000,
+            100.0,
+            date(2021, 12, 31),
+            date(2021, 12, 31),
+            80.0,
+            0,
+            "000001.SZ",
+            2.0,
+            1.0,
+            4.0,
+            3.0,
+            2.0,
+            "000001.SZ",
+            11.0,
+        )
+    ]
+
+    row = next(
+        _reader(
+            connection,
+            circ_mv_history_start=date(2020, 7, 30),
+        ).iter_stock_fact_rows()
+    )
+
+    assert row["prev_circ_mv_cny"] == 800_000.0
+    assert row["circ_mv_source_date"] == date(2021, 12, 31)
+    assert row["circ_mv_crossed_pit_entry_boundary"] is True
+    assert row["circ_mv_history_start"] == date(2020, 7, 30)
+
+
+def test_stock_fact_spec_rejects_circ_mv_history_after_observation_start() -> None:
+    with pytest.raises(StateModelSetError, match="history window must start no later"):
+        _spec(circ_mv_history_start=date(2022, 1, 2)).validate()
 
 
 def test_circ_mv_sql_fragments_use_source_history_start_not_pit_entry() -> None:
