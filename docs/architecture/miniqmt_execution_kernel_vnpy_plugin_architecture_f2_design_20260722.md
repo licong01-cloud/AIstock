@@ -6,7 +6,7 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A、K2-A-M1、K2-B、K2-C和K2-D均已`implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入，`source_merge=merged_pr_2804`。K3-A source 当前为`implemented_verified_local_pending_pr`，K3-B/K4为`not_started`，K3 overall=`implementation_in_progress`；现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A、K2-A-M1、K2-B、K2-C和K2-D均已`implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入，`source_merge=merged_pr_2804`。K3-A 已通过 PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b` 完成`implemented_verified + merged`，K3-B/K4为`not_started`，K3 overall=`implementation_in_progress`；现有产品runtime未切换，production/runtime gates均为`noop`。
 >
 > K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B、K2-C和K2-D均为`implemented_verified + merged`，K2 overall=`implemented_verified + merged`。K2-D direct outbox/diagnostics/ops=`111 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；required CI run `30269640126` 全绿。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
@@ -16,7 +16,7 @@
 
 ## 0. Executive Decision / 核心决策
 
-K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is `implementation_verified`: K2-A, K2-A-M1, K2-B, K2-C and K2-D are `implemented_verified + merged`; K2-D is closed by PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29`, so K2 overall is `implemented_verified + merged`. K3-A is `implemented_verified_local_pending_pr`, K3-B/K4 remain `not_started`, and K3 overall is `implementation_in_progress`; product runtime is not switched and production gates remain `noop`.
+K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is `implementation_verified`: K2-A, K2-A-M1, K2-B, K2-C and K2-D are `implemented_verified + merged`; K2-D is closed by PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29`, so K2 overall is `implemented_verified + merged`. K3-A is `implemented_verified + merged` through PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b`; K3-B/K4 remain `not_started`, and K3 overall is `implementation_in_progress`; product runtime is not switched and production gates remain `noop`.
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -797,7 +797,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - immutable ALGO_LOCAL before/after parity由单事务committed legacy repository snapshot驱动；K3 command/mapping与legacy child按step/effect ordinal及价量reason一对一关联，再走真实callback-before-ACK ingress，不伪造shadow ACK或broker call；legacy repeated cancel只允许形成hash-covered transport suppression；同时保留policy/state和dependent-BUY coordinator zero-write inventory；
 - legacy dependent-BUY 卖出回款协调器是跨parent execution coordination，不属于三个算法；K2现有OMS `PASS|REJECT`、transition、mapping/outbox和repository没有durable deferred-command owner，K3禁止把该语义塞入plugin state或普通diagnostic；
 - K3-A pure plugin/binding 与 K3-B parity/inventory/shadow orchestration 两个PR均保持shadow-only；
-- 当前详细设计=`implementation_in_progress`；K3-A=`implemented_verified_local_pending_pr`，真实验证为 direct `317 passed`、DEV PostgreSQL `1 passed`、MiniQMT `934 passed,27 skipped`、Paper `1050 passed,2 skipped,2 xfailed`，核心coverage均达到line>=80/branch>=70；K3-B=`not_started`，K3 overall仍未完成；
+- 当前详细设计=`implementation_in_progress`；K3-A=`implemented_verified + merged`，PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b`，真实验证为 direct `317 passed`、DEV PostgreSQL `1 passed`、MiniQMT `934 passed,27 skipped`、Paper `1050 passed,2 skipped,2 xfailed`，核心coverage均达到line>=80/branch>=70；K3-B=`not_started`，K3 overall仍未完成；
 - 预计 2 PR，13–20 人日；增加的工作来自不可省略的strict callback/outcome seam、pre-ACK/CANCEL lifecycle closure、production-shape shadow source与dependent-BUY zero-write inventory，不得以mock-only、沿用不相容v2或删除资金因果语义缩短。
 
 ### K4：vn.py compatibility façade
