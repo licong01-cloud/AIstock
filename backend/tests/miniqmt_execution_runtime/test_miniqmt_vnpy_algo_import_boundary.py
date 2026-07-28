@@ -16,6 +16,13 @@ def _imports(path: Path) -> list[str]:
 
 
 def test_vnpy_style_algo_core_import_boundary_has_no_runtime_or_broker_coupling() -> None:
+    allowed_shadow_contract_modules = {
+        "backend.services.miniqmt_execution_runtime.deterministic_context",
+        "backend.services.miniqmt_execution_runtime.kernel_callback_events",
+        "backend.services.miniqmt_execution_runtime.plugin_canonical",
+        "backend.services.miniqmt_execution_runtime.plugin_contracts",
+        "backend.services.miniqmt_execution_runtime.plugin_registry",
+    }
     forbidden_prefixes = (
         "backend.db",
         "backend.infra",
@@ -29,6 +36,9 @@ def test_vnpy_style_algo_core_import_boundary_has_no_runtime_or_broker_coupling(
         if path.name in {"legacy_adapter.py", "plugin_manifests.py"}:
             continue
         for imported in _imports(path):
+            if imported.startswith("backend.services"):
+                assert imported in allowed_shadow_contract_modules, f"{path} imports non-contract service {imported}"
+                continue
             assert not imported.startswith(forbidden_prefixes), f"{path} imports forbidden runtime token {imported}"
 
 

@@ -36,6 +36,8 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AbsenceDispositionV1,
+    CurrentThreeActiveOrderStateV3,
+    CurrentThreeActiveOrderStatusV3,
     DeterministicExecutionContextV1,
     EventTypeV2,
     MarketDataCapabilityV1,
@@ -73,30 +75,45 @@ def _lineage() -> dict[str, object]:
 
 def _active_order(
     *,
+    local_vt_orderid: str = "vord_1",
+    submit_command_id: str = "mqcommand_1",
+    broker_order_id: str = "broker_1",
+    last_order_event_id: str = "mqrtevt_order_1",
+    last_trade_event_id: str = "mqrtevt_trade_1",
     symbol: str = "600000.SH",
     side: str = "BUY",
     price: str = "10",
     requested_quantity: int = 300,
     cumulative_filled_quantity: int = 100,
 ) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "parent_intent_id": "parent_1",
-        "local_vt_orderid": "vord_1",
-        "submit_command_id": "mqcommand_1",
-        "broker_order_id": "broker_1",
-        "symbol": symbol,
-        "side": side,
-        "status": "PARTIALLY_FILLED",
-        "requested_price_decimal": price,
-        "requested_quantity": requested_quantity,
-        "cumulative_filled_quantity": cumulative_filled_quantity,
-        "remaining_quantity": requested_quantity - cumulative_filled_quantity,
-        "last_order_event_id": "mqrtevt_order_1",
-        "last_trade_event_id": "mqrtevt_trade_1",
-        "market_data_lineage": _lineage(),
-    }
-    payload["mapping_sha256"] = hash_hex_v1("miniqmt_plugin_active_order_state_v1", payload)
-    return payload
+    return CurrentThreeActiveOrderStateV3.create(
+        local_vt_orderid=local_vt_orderid,
+        submit_command_id=submit_command_id,
+        broker_order_id=broker_order_id,
+        symbol=symbol,
+        side=side,
+        status=CurrentThreeActiveOrderStatusV3.PARTIALLY_FILLED,
+        pending_command_type=None,
+        pending_command_id=None,
+        requested_price_decimal=price,
+        requested_quantity=requested_quantity,
+        cumulative_filled_quantity=cumulative_filled_quantity,
+        remaining_quantity=requested_quantity - cumulative_filled_quantity,
+        last_order_event_id=last_order_event_id,
+        last_trade_event_id=last_trade_event_id,
+        last_command_outcome_event_id="mqrtevt_outcome_1",
+        last_oms_reconcile_event_id=None,
+        terminal_order_status=None,
+        terminal_observed_cumulative_filled_quantity=None,
+        market_data_lineage=_lineage(),
+    ).model_dump(mode="json")
+
+
+def _rehash_active(active: dict[str, object]) -> None:
+    active["active_order_state_sha256"] = hash_hex_v1(
+        "miniqmt_plugin_active_order_state_v3",
+        {key: value for key, value in active.items() if key != "active_order_state_sha256"},
+    )
 
 
 def _state(algo_code: str) -> dict[str, object]:
@@ -158,7 +175,7 @@ def _state(algo_code: str) -> dict[str, object]:
 def test_current_three_identity_hash_and_creation_binding_closure() -> None:
     manifests = current_three_manifests_v2()
     assert {item.algo_code: item.plugin_id for item in manifests} == EXPECTED
-    assert {item.plugin_version for item in manifests} == {"2.0.0"}
+    assert {item.plugin_version for item in manifests} == {"3.0.0"}
     assert {item.algo_code for item in manifests} == set(legacy_registry.VNPY_STYLE_ASSETS)
     for manifest in manifests:
         assert manifest.config_schema_sha256 == hash_hex_v1(
@@ -233,15 +250,12 @@ def _state_with_schema_violations(count: int) -> dict[str, object]:
     state = _state("TWAP_LITE_MINIQMT")
     active_orders: list[dict[str, object]] = []
     for index in range(count):
-        active = _active_order()
-        active["local_vt_orderid"] = f"vord_{index:04d}"
-        active["submit_command_id"] = f"mqcommand_{index:04d}"
-        active["broker_order_id"] = f"broker_{index:04d}"
-        active["last_order_event_id"] = f"mqrtevt_order_{index:04d}"
-        active["last_trade_event_id"] = f"mqrtevt_trade_{index:04d}"
-        active["mapping_sha256"] = hash_hex_v1(
-            "miniqmt_plugin_active_order_state_v1",
-            {key: value for key, value in active.items() if key != "mapping_sha256"},
+        active = _active_order(
+            local_vt_orderid=f"vord_{index:04d}",
+            submit_command_id=f"mqcommand_{index:04d}",
+            broker_order_id=f"broker_{index:04d}",
+            last_order_event_id=f"mqrtevt_order_{index:04d}",
+            last_trade_event_id=f"mqrtevt_trade_{index:04d}",
         )
         active["unexpected_schema_field"] = index
         active_orders.append(active)
@@ -346,11 +360,18 @@ def test_state_codec_requires_restart_and_active_order_lineage(algo_code: str) -
         validate_current_three_state_v2(_manifest(algo_code), state)
 
 
-def test_active_order_schema_requires_parent_and_market_data_lineage() -> None:
+def test_active_order_schema_requires_v3_lifecycle_and_market_data_lineage() -> None:
     state_schema = thaw_json_v1(_manifest("BEST_LIMIT_MINIQMT").state_schema)
     active_order_schema = state_schema["properties"]["active_orders"]["items"]
 
-    assert {"parent_intent_id", "market_data_lineage"}.issubset(active_order_schema["required"])
+    assert {
+        "pending_command_type",
+        "pending_command_id",
+        "last_command_outcome_event_id",
+        "last_oms_reconcile_event_id",
+        "market_data_lineage",
+        "active_order_state_sha256",
+    }.issubset(active_order_schema["required"])
 
 
 def test_state_codec_rejects_cross_field_restart_conflicts() -> None:
@@ -423,17 +444,13 @@ def test_best_limit_active_order_closes_price_quantity_symbol_side_and_lineage()
     for field, value in (
         ("requested_price_decimal", "10.00"),
         ("remaining_quantity", 201),
-        ("parent_intent_id", "parent_other"),
         ("symbol", "000001.SZ"),
         ("side", "SELL"),
     ):
         malformed = _state("BEST_LIMIT_MINIQMT")
         malformed_active = _active_order()
         malformed_active[field] = value
-        malformed_active["mapping_sha256"] = hash_hex_v1(
-            "miniqmt_plugin_active_order_state_v1",
-            {key: item for key, item in malformed_active.items() if key != "mapping_sha256"},
-        )
+        _rehash_active(malformed_active)
         malformed.update(
             {
                 "active_orders": [malformed_active],
@@ -504,7 +521,7 @@ def test_active_order_same_hash_cannot_cover_different_identity_or_market_data_p
             }
         )
 
-        with pytest.raises(ValueError, match="mapping_sha256"):
+        with pytest.raises(ValueError, match="active_order_state_sha256"):
             validate_current_three_state_v2(_manifest("BEST_LIMIT_MINIQMT"), state)
 
 

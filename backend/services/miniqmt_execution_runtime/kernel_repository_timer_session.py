@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import replace
+from datetime import date, datetime, time
 from typing import Any, Sequence
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
 
 from .plugin_canonical import canonical_utc_datetime_v1, thaw_json_v1
+from .kernel_clock import ExchangeSessionProjectionV1, project_exchange_session_v1
 from .kernel_repository_common import (
     KernelRepositoryConflict,
     _bounded_limit,
@@ -514,6 +517,45 @@ class KernelRepositoryTimerSessionMixin:
         if row["exchange_trade_date"] != row["runtime_trade_date"]:
             raise KernelRepositoryConflict("exchange-session trade date drifts from runtime owner")
         return authority
+
+    def _read_exchange_session_projection(
+        self,
+        *,
+        runtime_id: str,
+        observed_at_utc: Any,
+    ) -> ExchangeSessionProjectionV1:
+        """Internal exact projection for events emitted outside the clock worker."""
+
+        observed_text = canonical_utc_datetime_v1(observed_at_utc, field_name="observed_at_utc")
+        observed = datetime.fromisoformat(observed_text.replace("Z", "+00:00"))
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT trade_date FROM qmt_strategy.execution_runtime WHERE runtime_id=%s",
+                    (runtime_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise KeyError(runtime_id)
+        trade_date = row["trade_date"]
+        if type(trade_date) is not date:
+            raise KernelRepositoryConflict("runtime trade date readback is invalid")
+        authority = self.read_exchange_session_authority(
+            runtime_id=runtime_id,
+            exchange_trade_date=trade_date,
+        )
+        local_date = observed.astimezone(ZoneInfo("Asia/Shanghai")).date()
+        if local_date < trade_date:
+            raise KernelRepositoryConflict("outcome event time precedes its runtime exchange trade date")
+        if local_date == trade_date:
+            return project_exchange_session_v1(authority, observed)
+        close_anchor = datetime.combine(
+            trade_date,
+            time(23, 59, 59, 999999),
+            tzinfo=ZoneInfo("Asia/Shanghai"),
+        )
+        closed = project_exchange_session_v1(authority, close_anchor)
+        return replace(closed, observed_at_utc=observed_text)
 
     def read_runtime_last_event_sequence(self, runtime_id: str) -> int:
         if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Callable, Protocol, Sequence, runtime_checkable
 
 from .plugin_canonical import freeze_json_v1, hash_hex_v1, json_safe_evidence_v1, thaw_json_v1
@@ -17,6 +18,7 @@ from .plugin_contracts import (
     AlgoTransitionReceiptV1,
     AlgoTransitionV1,
     BrokerCommandOutboxV1,
+    CurrentThreeActiveOrderStateV3,
     DeterministicExecutionContextV1,
     DiagnosticObservationV1,
     ExecutionAlgoInstancePersistenceV2,
@@ -25,9 +27,13 @@ from .plugin_contracts import (
     ExecutionCommandChildMappingV1,
     ExecutionProjectionSetV1,
     ExecutionProjectionRefV1,
+    EventTypeV2,
     FrozenJsonObjectFieldV1,
     FrozenStrictModel,
     KernelErrorEvidenceV1,
+    KernelCommandLifecycleProjectionItemV1,
+    KernelCommandLifecycleProjectionV1,
+    KernelCommandOutcomeEventPayloadV1,
     KernelProjectionTypeV1,
     RuntimeEventEnvelopeV2,
     SessionPhaseV1,
@@ -158,6 +164,123 @@ class KernelDeliveryExecutionInputV1:
     services: AlgoReadOnlyServicesV1
     deterministic_context: DeterministicExecutionContextV1
     consumed_lineage_refs: tuple[ConsumedLineageRefV1, ...]
+    command_lifecycle_projection: KernelCommandLifecycleProjectionV1
+
+
+def build_command_lifecycle_projection_v1(
+    *,
+    event: RuntimeEventEnvelopeV2,
+    delivery: AlgoDeliveryPersistenceV1,
+    previous_state: AlgoStateSnapshotV2,
+    mappings: Sequence[ExecutionCommandChildMappingV1],
+    outboxes: Sequence[BrokerCommandOutboxV1],
+) -> KernelCommandLifecycleProjectionV1:
+    state_payload = thaw_json_v1(previous_state.state)
+    active_items = state_payload.get("active_orders")
+    if not isinstance(active_items, list):
+        raise ValueError("durable state must expose active_orders for lifecycle projection")
+    state_by_local: dict[str, CurrentThreeActiveOrderStateV3] = {}
+    for item in active_items:
+        if not isinstance(item, dict):
+            raise ValueError("active-order lifecycle state is not a strict object")
+        strict_item = CurrentThreeActiveOrderStateV3.model_validate_json(
+            json.dumps(item, sort_keys=True, separators=(",", ":"))
+        )
+        local_id = strict_item.local_vt_orderid
+        if local_id in state_by_local:
+            raise ValueError("active-order lifecycle state contains duplicate local identities")
+        state_by_local[local_id] = strict_item
+    mapping_by_local = {item.local_vt_orderid: item for item in mappings}
+    if len(mapping_by_local) != len(tuple(mappings)):
+        raise ValueError("durable lifecycle mapping set contains duplicate local identities")
+    if any(
+        item.runtime_id != event.runtime_id or item.algo_instance_id != previous_state.algo_instance_id
+        for item in mappings
+    ):
+        raise ValueError("durable lifecycle mapping set crosses runtime or algo owner")
+    relevant_local_ids = sorted(
+        set(state_by_local)
+        | {
+            item.local_vt_orderid
+            for item in mappings
+            if item.mapping_status.value in {"RESERVED", "DISPATCHING", "BROKER_ACCEPTED", "OUTCOME_UNKNOWN"}
+        }
+    )
+    outbox_by_command = {item.command_id: item for item in outboxes}
+    if len(outbox_by_command) != len(tuple(outboxes)):
+        raise ValueError("durable lifecycle outbox set contains duplicate command identities")
+    if any(
+        item.runtime_id != event.runtime_id or item.algo_instance_id != previous_state.algo_instance_id
+        for item in outboxes
+    ):
+        raise ValueError("durable lifecycle outbox set crosses runtime or algo owner")
+    strict_outcome = None
+    if event.event_type is EventTypeV2.COMMAND_OUTCOME:
+        strict_outcome = KernelCommandOutcomeEventPayloadV1.model_validate_json(
+            json.dumps(thaw_json_v1(event.payload), sort_keys=True, separators=(",", ":"))
+        )
+    projection_items: list[KernelCommandLifecycleProjectionItemV1] = []
+    for local_id in relevant_local_ids:
+        mapping = mapping_by_local.get(local_id)
+        state_item = state_by_local.get(local_id)
+        if mapping is None or state_item is None:
+            raise ValueError("active state and durable mapping lifecycle sets differ")
+        command_id = state_item.pending_command_id or state_item.submit_command_id
+        outbox = outbox_by_command.get(command_id)
+        if outbox is None or outbox.mapping_id != mapping.mapping_id:
+            raise ValueError("active state current command has no exact durable outbox")
+        outcome_values: dict[str, Any] = {
+            "outcome_receipt_sha256": None,
+            "latest_command_outcome_event_id": None,
+            "latest_command_outcome_payload_sha256": None,
+            "command_outcome_delivery_id": None,
+            "command_outcome_delivery_status": None,
+        }
+        if strict_outcome is not None and strict_outcome.command_id == outbox.command_id:
+            if (
+                strict_outcome.runtime_id != event.runtime_id
+                or strict_outcome.algo_instance_id != previous_state.algo_instance_id
+                or strict_outcome.parent_intent_id != mapping.parent_intent_id
+                or strict_outcome.strategy_slot_id != mapping.strategy_slot_id
+                or strict_outcome.mapping_id != mapping.mapping_id
+                or strict_outcome.command_type is not outbox.command_type
+                or strict_outcome.local_vt_orderid != local_id
+                or strict_outcome.outbox_row_version != outbox.row_version
+                or strict_outcome.outbox_status != outbox.status.value
+                or strict_outcome.broker_order_id not in {None, outbox.broker_order_id, mapping.broker_order_id}
+            ):
+                raise ValueError("COMMAND_OUTCOME delivery conflicts with locked outbox readback")
+            outcome_values = {
+                "outcome_receipt_sha256": strict_outcome.outcome_receipt_sha256,
+                "latest_command_outcome_event_id": event.event_id,
+                "latest_command_outcome_payload_sha256": event.payload_sha256,
+                "command_outcome_delivery_id": delivery.delivery_id,
+                "command_outcome_delivery_status": delivery.status,
+            }
+        projection_items.append(
+            KernelCommandLifecycleProjectionItemV1(
+                mapping_id=mapping.mapping_id,
+                mapping_version=mapping.mapping_version,
+                mapping_payload_sha256=mapping.payload_sha256,
+                local_vt_orderid=mapping.local_vt_orderid,
+                submit_command_id=mapping.command_id,
+                broker_order_id=mapping.broker_order_id,
+                mapping_status=mapping.mapping_status,
+                current_outbox_command_id=outbox.command_id,
+                current_outbox_command_type=outbox.command_type,
+                current_outbox_status=outbox.status,
+                current_outbox_row_version=outbox.row_version,
+                current_outbox_payload_sha256=outbox.payload_sha256,
+                **outcome_values,
+            )
+        )
+    return KernelCommandLifecycleProjectionV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=previous_state.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=delivery.delivery_id,
+        ordered_items=tuple(projection_items),
+    )
 
 
 class KernelDeliveryRepositoryV1(Protocol):
@@ -208,7 +331,9 @@ class KernelDeliveryWorkerV1:
                 ExecutionAlgoInstancePersistenceV2,
                 AlgoStateSnapshotV2 | None,
                 tuple[ExecutionCommandChildMappingV1, ...],
+                tuple[BrokerCommandOutboxV1, ...],
                 tuple[ExecutionAlgoTimerScheduleV1, ...],
+                KernelCommandLifecycleProjectionV1,
             ],
             KernelDeliveryExecutionInputV1,
         ],
@@ -277,6 +402,27 @@ class KernelDeliveryWorkerV1:
             active_command_outboxes: tuple[BrokerCommandOutboxV1, ...],
             active_timers: tuple[ExecutionAlgoTimerScheduleV1, ...],
         ) -> KernelTransitionWriteBundleV1:
+            failure_mapping_statuses = {
+                "RESERVED",
+                "DISPATCHING",
+                "BROKER_ACCEPTED",
+                "OUTCOME_UNKNOWN",
+            }
+            failure_outbox_statuses = {
+                "PENDING",
+                "CLAIMED",
+                "DISPATCHING",
+                "FAILED_RETRYABLE",
+                "OUTCOME_UNKNOWN",
+                "RECONCILING",
+            }
+            failure_mappings = tuple(
+                item for item in active_mappings if item.mapping_status.value in failure_mapping_statuses
+            )
+            failure_command_outboxes = tuple(
+                item for item in active_command_outboxes if item.status.value in failure_outbox_statuses
+            )
+
             def terminal_failure(
                 exc: Exception,
                 *,
@@ -304,8 +450,8 @@ class KernelDeliveryWorkerV1:
                     exception=exc,
                     failure_context=(context if context is not None else {"stage": "ALGO_DELIVERY_APPLY"}),
                     projection_set=projection_set,
-                    active_mappings=active_mappings,
-                    active_command_outboxes=active_command_outboxes,
+                    active_mappings=failure_mappings,
+                    active_command_outboxes=failure_command_outboxes,
                     active_timer_schedules=active_timers,
                     logical_time_utc=logical_time_utc,
                     initialization=False,
@@ -334,13 +480,29 @@ class KernelDeliveryWorkerV1:
                     context=exc.context,
                 )
             try:
+                lifecycle_projection = build_command_lifecycle_projection_v1(
+                    event=event,
+                    delivery=locked_delivery,
+                    previous_state=previous_state,
+                    mappings=active_mappings,
+                    outboxes=active_command_outboxes,
+                )
+            except Exception as exc:
+                return terminal_failure(
+                    exc,
+                    reason_code="MINIQMT_ALGO_DELIVERY_LIFECYCLE_PROJECTION_INVALID",
+                    context={"stage": "DELIVERY_LIFECYCLE_PROJECTION_READBACK"},
+                )
+            try:
                 inputs = input_builder(
                     event,
                     locked_delivery,
                     locked_algo,
                     previous_state,
                     active_mappings,
+                    active_command_outboxes,
                     active_timers,
+                    lifecycle_projection,
                 )
             except KernelRequiredProviderUnavailable as exc:
                 if locked_delivery.attempt_count < 5:
@@ -362,6 +524,23 @@ class KernelDeliveryWorkerV1:
                     exc,
                     reason_code="MINIQMT_ALGO_DELIVERY_INPUT_INVALID",
                     context={"stage": "DELIVERY_INPUT_READBACK", "result_type": type(inputs).__name__},
+                )
+            if inputs.command_lifecycle_projection != lifecycle_projection:
+                exc = KernelPluginInvocationError(
+                    "MINIQMT_ALGO_DELIVERY_LIFECYCLE_PROJECTION_DRIFT",
+                    "delivery input lifecycle projection differs from the locked durable readback",
+                    context={
+                        "delivery_id": locked_delivery.delivery_id,
+                        "expected_projection_sha256": lifecycle_projection.projection_sha256,
+                        "actual_projection_sha256": inputs.command_lifecycle_projection.projection_sha256,
+                    },
+                    broker_called=False,
+                )
+                return terminal_failure(
+                    exc,
+                    reason_code=exc.reason_code,
+                    context=exc.context,
+                    projection_set=inputs.services.execution_projection_set,
                 )
             try:
                 resolved = resolve_plugin_for_restore_v1(
@@ -397,6 +576,7 @@ class KernelDeliveryWorkerV1:
                     algo_code=locked_algo.algo_code,
                     symbol=locked_algo.symbol,
                     side=locked_algo.side,
+                    command_lifecycle_projection=lifecycle_projection,
                     existing_mappings_by_local_vt_orderid={item.local_vt_orderid: item for item in active_mappings},
                     existing_timer_schedules={item.schedule_id: item for item in active_timers},
                     initialization=False,
@@ -780,9 +960,11 @@ __all__ = [
     "ExecutionAlgoPluginV2",
     "KernelAlgoStartWriteBundleV1",
     "KernelAlgoCreationRequestV1",
+    "KernelDeliveryExecutionInputV1",
     "KernelPluginInvocationError",
     "KernelTransitionWriteBundleV1",
     "ResolvedKernelPluginV1",
+    "build_command_lifecycle_projection_v1",
     "invoke_plugin_initialize_v1",
     "invoke_plugin_transition_v1",
     "resolve_plugin_for_restore_v1",
