@@ -26,6 +26,7 @@ from backend.services.advisory_historical_range.models import (
     OPERATION_TRANSITIONS,
     PROGRAM_TRANSITIONS,
     REASON_DAY_PLAN_CONFLICT,
+    REASON_IDENTITY_CONFLICT,
     REASON_IDEMPOTENCY_CONFLICT,
     REASON_REPOSITORY_CONFLICT,
     REASON_ROW_VERSION_CONFLICT,
@@ -34,6 +35,7 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactRefV1,
     HistoricalRangeArtifactEnvelopeV1,
     HistoricalRangeBatchStatus,
+    HistoricalRangeBackgroundDispatchFailureV1,
     HistoricalRangeBridgeResultStatus,
     HistoricalRangeCandidateFactV1,
     HistoricalRangeCandidateArtifactPayloadV2,
@@ -195,6 +197,75 @@ def _catalog_operation_is_sealable(
         and int(unresolved_count) == 0
         and operation.get("latest_checkpoint_ref") is not None
     )
+
+
+class PostgresHistoricalRangePreclaimFailureRepository:
+    """Persist typed pre-claim failure evidence without requiring an artifact root."""
+
+    def __init__(self, *, conn_factory: ConnFactory) -> None:
+        if conn_factory is None:
+            raise ValueError("conn_factory is required")
+        self._conn_factory = conn_factory
+
+    def record_retryable_failure(
+        self, failure: HistoricalRangeBackgroundDispatchFailureV1
+    ) -> dict[str, Any]:
+        payload = failure.model_dump(mode="json")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    UPDATE app.advisory_historical_range_operation
+                    SET status = 'RETRYABLE_FAILED',
+                        row_version = row_version + 1,
+                        error_json = %s,
+                        finished_at = NULL
+                    WHERE operation_id = %s
+                      AND batch_id = %s
+                      AND status = 'QUEUED'
+                    RETURNING *
+                    """,
+                    (
+                        psycopg2.extras.Json(payload),
+                        failure.operation_id,
+                        failure.batch_id,
+                    ),
+                )
+                updated = cur.fetchone()
+                if updated is not None:
+                    return dict(updated)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM app.advisory_historical_range_operation
+                    WHERE operation_id = %s
+                    """,
+                    (failure.operation_id,),
+                )
+                current = cur.fetchone()
+                if current is None:
+                    raise HistoricalRangeContractError(
+                        REASON_REPOSITORY_CONFLICT,
+                        "background operation does not exist",
+                        context={"operation_id": failure.operation_id},
+                    )
+                if str(current["batch_id"]) != failure.batch_id:
+                    raise HistoricalRangeContractError(
+                        REASON_IDENTITY_CONFLICT,
+                        "background operation belongs to a different batch",
+                        context={
+                            "operation_id": failure.operation_id,
+                            "expected_batch_id": failure.batch_id,
+                            "actual_batch_id": str(current["batch_id"]),
+                        },
+                    )
+                if str(current["status"]) == HistoricalRangeOperationStatus.QUEUED.value:
+                    raise HistoricalRangeContractError(
+                        REASON_REPOSITORY_CONFLICT,
+                        "background operation remained queued after failure recording",
+                        context={"operation_id": failure.operation_id},
+                    )
+                return dict(current)
 
 
 class PostgresHistoricalRangeRepository:

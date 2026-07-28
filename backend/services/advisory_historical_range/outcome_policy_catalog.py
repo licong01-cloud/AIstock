@@ -210,6 +210,14 @@ def _load_catalog(*, version: str) -> HistoricalRangeOutcomePolicyCatalogDocumen
     return HistoricalRangeOutcomePolicyCatalogDocumentV1.model_validate(payload)
 
 
+def load_historical_range_outcome_policy_catalog(
+    *, version: str = "v1"
+) -> HistoricalRangeOutcomePolicyCatalogDocumentV1:
+    """Expose the immutable R4 catalog for read-only R5 option projection."""
+
+    return _load_catalog(version=version)
+
+
 def _resolve_style(
     *,
     frozen_program: HistoricalRangeFrozenProgramV1,

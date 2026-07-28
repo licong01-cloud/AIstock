@@ -22,6 +22,7 @@ import { selectionCenterApi } from "@/lib/paper-v2/api";
 import { packageDisplayLabel, shortHash } from "@/lib/paper-v2/format";
 import type { SelectablePackage } from "@/lib/paper-v2/types";
 import type { JsonObject } from "@/lib/api/selectionCenter";
+import { HistoricalRangeResearchView } from "./historical-range";
 
 type SortDirection = "asc" | "desc";
 type ActivePoolSortKey =
@@ -47,7 +48,6 @@ type ProgramStrategyDraft = {
   rows: PackageWeightRow[];
   activationReason: string;
   activeBindingVersionId?: string | null;
-  replayResult: JsonObject | null;
   applyResult: AdvisoryStrategyBindingVersion | null;
 };
 type ReviewDateOption = {
@@ -502,7 +502,6 @@ function strategyDraftFromProgram(program: AdvisoryProgram, binding?: AdvisorySt
     rows: packageRowsFromIds(source.package_ids, source.package_weights || {}),
     activationReason: `替换荐股任务「${program.program_name}」策略包配置`,
     activeBindingVersionId: binding?.binding_version_id || null,
-    replayResult: null,
     applyResult: null,
   };
 }
@@ -613,6 +612,10 @@ function loadingReviewState(hint: string) {
 function AdvisoryPageContent() {
   const params = useSearchParams();
   const prefillPackages = params.get("package_ids") || "";
+  const [activeView, setActiveView] = useState<"current" | "historical-range">(
+    params.get("view") === "historical-range" ? "historical-range" : "current",
+  );
+  const [historicalProgramId, setHistoricalProgramId] = useState(params.get("program_id") || "");
   const [programs, setPrograms] = useState<AdvisoryProgram[]>([]);
   const [leaderboard, setLeaderboard] = useState<AdvisoryLeaderboardRow[]>([]);
   const [selectedProgramId, setSelectedProgramId] = useState("");
@@ -639,9 +642,6 @@ function AdvisoryPageContent() {
   const [reviewPageSize, setReviewPageSize] = useState<(typeof REVIEW_PAGE_SIZE_OPTIONS)[number]>(20);
   const [returns, setReturns] = useState<AdvisoryEpisode[]>([]);
   const [reviewResult, setReviewResult] = useState<AdvisoryReviewResult | null>(null);
-  const [replayStart, setReplayStart] = useState("");
-  const [replayEnd, setReplayEnd] = useState("");
-  const [replayResult, setReplayResult] = useState<JsonObject | null>(null);
   const [expandedStrategyProgramId, setExpandedStrategyProgramId] = useState("");
   const [programStrategyDrafts, setProgramStrategyDrafts] = useState<Record<string, ProgramStrategyDraft>>({});
   const [strategyActionKey, setStrategyActionKey] = useState("");
@@ -904,12 +904,6 @@ function AdvisoryPageContent() {
     }
   }, [prefillPackages]);
 
-  useEffect(() => {
-    if (!tradingDefaults) return;
-    setReplayStart((current) => current || tradingDefaults.replay_start_date || tradingDefaults.trading_days?.[0] || "");
-    setReplayEnd((current) => current || tradingDefaults.replay_end_date || tradingDefaults.latest_trading_day || "");
-  }, [tradingDefaults]);
-
   async function createProgram() {
     setError(null);
     try {
@@ -1039,21 +1033,6 @@ function AdvisoryPageContent() {
     }
   }
 
-  async function runReplay() {
-    if (!selectedProgram) return;
-    setError(null);
-    setReplayResult(null);
-    try {
-      const replay = await advisoryApi.replay(selectedProgram.program_id, {
-        start_date: replayStart,
-        end_date: replayEnd,
-      });
-      setReplayResult(replay);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    }
-  }
-
   function setProgramStrategyDraft(programId: string, updater: (draft: ProgramStrategyDraft) => ProgramStrategyDraft) {
     setProgramStrategyDrafts((drafts) => {
       const program = programs.find((item) => item.program_id === programId) || leaderboard.find((item) => item.program_id === programId);
@@ -1097,36 +1076,6 @@ function AdvisoryPageContent() {
     }));
   }
 
-  async function runProgramStrategyReplay(program: AdvisoryProgram) {
-    const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
-    const startDate = replayStart || tradingDefaults?.replay_start_date || tradingDefaults?.trading_days?.[0] || "";
-    const endDate = replayEnd || tradingDefaults?.replay_end_date || tradingDefaults?.latest_trading_day || "";
-    if (!startDate || !endDate) {
-      setError("请先选择回放验证的开始和结束交易日。");
-      return;
-    }
-    setError(null);
-    setStrategyActionKey(`${program.program_id}:replay`);
-    try {
-      const binding = bindingPayloadFromDraft(draft);
-      const replay = await advisoryApi.replay(program.program_id, {
-        start_date: startDate,
-        end_date: endDate,
-        draft_binding: binding,
-        compare_to_binding_version_id: draft.activeBindingVersionId || activeBindingForProgram(program.program_id)?.binding_version_id || null,
-        include_daily_items: false,
-      });
-      setProgramStrategyDrafts((drafts) => ({
-        ...drafts,
-        [program.program_id]: { ...(drafts[program.program_id] || draft), replayResult: replay },
-      }));
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setStrategyActionKey("");
-    }
-  }
-
   async function applyProgramStrategyBinding(program: AdvisoryProgram) {
     const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
     const activationReason = draft.activationReason.trim() || `更新荐股任务「${program.program_name}」策略包配置`;
@@ -1134,12 +1083,11 @@ function AdvisoryPageContent() {
     setStrategyActionKey(`${program.program_id}:apply`);
     try {
       const binding = bindingPayloadFromDraft(draft);
-      const replayRun = draft.replayResult?.replay_run as JsonObject | undefined;
       const defaults = await advisoryApi.bindingDefaults(program.program_id);
       const result = await advisoryApi.applyBinding(program.program_id, {
         binding,
         activation_reason: activationReason,
-        source_replay_run_id: typeof replayRun?.replay_run_id === "string" ? replayRun.replay_run_id : null,
+        source_replay_run_id: null,
         expected_program_version: defaults.expected_program_version,
         expected_binding_version_id: defaults.expected_binding_version_id,
         effective_from_trade_date: defaults.effective_from_trade_date,
@@ -1151,7 +1099,6 @@ function AdvisoryPageContent() {
           ...strategyDraftFromProgram(result.program, result.binding),
           activationReason,
           activeBindingVersionId: result.binding.binding_version_id,
-          replayResult: draft.replayResult,
           applyResult: result.binding,
         },
       }));
@@ -1163,6 +1110,16 @@ function AdvisoryPageContent() {
     } finally {
       setStrategyActionKey("");
     }
+  }
+
+  function openView(view: "current" | "historical-range", programId = "") {
+    setActiveView(view);
+    if (programId) setHistoricalProgramId(programId);
+    const query = new URLSearchParams(window.location.search);
+    query.set("view", view);
+    if (programId) query.set("program_id", programId);
+    else if (view === "current") query.delete("program_id");
+    window.history.pushState({}, "", `${window.location.pathname}?${query.toString()}`);
   }
 
   async function buildQualityReport() {
@@ -1351,10 +1308,7 @@ function AdvisoryPageContent() {
   function renderStrategyManager(program: AdvisoryProgram): ReactNode {
     const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
     const loadingBinding = strategyActionKey === `${program.program_id}:load-binding`;
-    const replayRunning = strategyActionKey === `${program.program_id}:replay`;
     const applyRunning = strategyActionKey === `${program.program_id}:apply`;
-    const replayRun = draft.replayResult?.replay_run as JsonObject | undefined;
-    const replaySummary = draft.replayResult?.summary as JsonObject | undefined;
     if (isLegacyManualMultiPackage(program)) {
       return (
         <div className="pv2-readable-panel" data-testid={`advisory-strategy-manager-${program.program_id}`}>
@@ -1378,7 +1332,7 @@ function AdvisoryPageContent() {
             <div className="pv2-kicker">独立策略包配置</div>
             <h3 style={{ margin: 0 }}>{program.program_name}</h3>
             <p className="pv2-muted" data-testid={`advisory-strategy-manager-hint-${program.program_id}`}>
-              当前面板只作用于本荐股任务；回放与应用都会按 program_id 调用接口，不会修改其他任务的荐股列表或 active binding。
+              当前面板只作用于本荐股任务；历史研究请进入独立的 Phase 1R 范围，不会修改本任务荐股列表或 active binding。
             </p>
           </div>
           <button
@@ -1399,7 +1353,7 @@ function AdvisoryPageContent() {
               max={100}
               type="number"
               value={draft.targetCount}
-              onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, targetCount: event.target.value, replayResult: null, applyResult: null }))}
+              onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, targetCount: event.target.value, applyResult: null }))}
             />
           </label>
           <label className="pv2-field">
@@ -1445,34 +1399,26 @@ function AdvisoryPageContent() {
           </table>
         </div>
         <div className="pv2-row-actions" style={{ marginTop: 10 }}>
-          <span className="pv2-muted">回放区间：{replayStart || "未选择"} 至 {replayEnd || "未选择"}；可在页面底部回放区间中调整。</span>
-        </div>
-        <div className="pv2-row-actions" style={{ marginTop: 10 }}>
           <button
             className="pv2-button"
             data-testid={`advisory-strategy-replay-${program.program_id}`}
-            disabled={loadingBinding || replayRunning || applyRunning || !replayStart || !replayEnd}
-            onClick={() => void runProgramStrategyReplay(program)}
+            disabled={loadingBinding || applyRunning}
+            onClick={() => openView("historical-range", program.program_id)}
             type="button"
           >
-            {replayRunning ? "回放验证中..." : "回放验证"}
+            在历史验证中研究
           </button>
           <button
             className="pv2-button-primary"
             data-testid={`advisory-strategy-apply-${program.program_id}`}
-            disabled={loadingBinding || replayRunning || applyRunning}
+            disabled={loadingBinding || applyRunning}
             onClick={() => void applyProgramStrategyBinding(program)}
             type="button"
           >
             {applyRunning ? "应用中..." : "应用新策略绑定"}
           </button>
-          <span className="pv2-muted">回放是人工验证入口，不设置程序硬门禁；应用后仅替换本任务策略包配置，后续复评继续从本任务最新荐股列表迭代。</span>
+          <span className="pv2-muted">历史验证是独立研究路径，不作为应用绑定的程序硬门禁；应用后仅替换本任务策略包配置。</span>
         </div>
-        {draft.replayResult ? (
-          <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-replay-result-${program.program_id}`}>
-            回放状态：{String(replayRun?.status || "-")}；胜率 {fmtPct(replaySummary?.win_rate as number | null | undefined)}；平均涨幅 {fmtBps(replaySummary?.avg_return_bps as number | null | undefined)}
-          </div>
-        ) : null}
         {draft.applyResult ? (
           <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-apply-result-${program.program_id}`}>
             已应用新策略绑定：{draft.applyResult.package_mode} / {packageSummary(draft.applyResult.package_ids)}
@@ -1484,6 +1430,13 @@ function AdvisoryPageContent() {
 
   return (
     <main className="pv2-main">
+      <nav className="ahr-view-switch" aria-label="荐股研究视图" data-testid="advisory-view-switch">
+        <button aria-current={activeView === "current" ? "page" : undefined} className={activeView === "current" ? "is-active" : ""} onClick={() => openView("current")} type="button">当前荐股</button>
+        <button aria-current={activeView === "historical-range" ? "page" : undefined} className={activeView === "historical-range" ? "is-active" : ""} onClick={() => openView("historical-range")} type="button">历史验证</button>
+      </nav>
+      {activeView === "historical-range" ? (
+        <HistoricalRangeResearchView prefillProgramId={historicalProgramId} />
+      ) : <>
       <section className="pv2-card">
         <div className="pv2-card-head">
           <div>
@@ -1979,18 +1932,6 @@ function AdvisoryPageContent() {
 
       <section className="pv2-card">
         <div className="pv2-card-head">
-          <div><div className="pv2-kicker">生命周期回放</div><h2>历史荐股生命周期回放</h2><p className="pv2-muted">回放仅为投顾事后诊断；按全局交易日服务与任务绑定策略包运行，不模拟账户，也不产生交易副作用。</p></div>
-          <button className="pv2-button-primary" onClick={runReplay} disabled={!selectedProgram || !replayStart || !replayEnd} type="button">执行回放</button>
-        </div>
-        <div className="pv2-form-grid">
-          <label className="pv2-field">开始<input className="pv2-input" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} /></label>
-          <label className="pv2-field">结束<input className="pv2-input" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} /></label>
-        </div>
-        {replayResult ? <div className="pv2-readable-panel">回放状态： {String((replayResult.replay_run as JsonObject | undefined)?.status || "-")} / 胜率 {fmtPct((replayResult.summary as JsonObject | undefined)?.win_rate as number | null | undefined)}</div> : null}
-      </section>
-
-      <section className="pv2-card">
-        <div className="pv2-card-head">
           <div><div className="pv2-kicker">质量报告</div><h2>事后诊断</h2><p className="pv2-muted">用结构化字段录入诊断样本；decision input 中禁止未来结果字段，报告不是 validated PnL。</p></div>
           <div className="pv2-row-actions">
             <button className="pv2-button" onClick={() => setQualityRows((rows) => [...rows, newQualityRow(rows.length + 1)])} type="button">添加样本</button>
@@ -2027,6 +1968,7 @@ function AdvisoryPageContent() {
           </div>
         ) : null}
       </section>
+      </>}
     </main>
   );
 }

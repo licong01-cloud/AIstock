@@ -91,6 +91,17 @@ class ArtifactHistoricalRangeOutcomePolicyProvider:
                 raise ValueError("registered range policy ref/hash pair is invalid")
         self._cache: dict[str, HistoricalRangeValuationPolicySetV1] = {}
 
+    def register(self, policy_bundle_hash: str, ref: HistoricalRangeArtifactRefV1) -> None:
+        """Add one exact ref before use; conflicting identities remain fail-closed."""
+
+        digest = require_sha256(policy_bundle_hash, field_name="policy_bundle_hash")
+        if ref.artifact_kind is not HistoricalRangeArtifactKind.REQUEST or ref.payload_sha256 != digest:
+            raise ValueError("registered range policy ref/hash pair is invalid")
+        existing = self._refs.get(digest)
+        if existing is not None and existing != ref:
+            raise ValueError("range policy hash is already registered with a different ref")
+        self._refs[digest] = ref
+
     def load(self, policy_bundle_hash: str) -> HistoricalRangeValuationPolicySetV1:
         policy_bundle_hash = require_sha256(
             policy_bundle_hash, field_name="policy_bundle_hash"

@@ -54,6 +54,7 @@ SUMMARY_ARTIFACT_SCHEMA_VERSION_V2 = "advisory_historical_range_summary_artifact
 OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION = "advisory_historical_range_outcome_refresh_receipt_v1"
 DATASET_BRIDGE_REQUEST_SCHEMA_VERSION = "advisory_historical_range_dataset_bridge_request_v1"
 DATASET_BRIDGE_RECEIPT_SCHEMA_VERSION = "advisory_historical_range_dataset_bridge_receipt_v1"
+BACKGROUND_DISPATCH_FAILURE_SCHEMA_VERSION = "advisory_historical_range_background_dispatch_failure_v1"
 PHASE0A_LINEAGE_IDENTITY_SCHEMA_VERSION = "advisory_phase1_phase0a_lineage_identity_v1"
 HISTORICAL_RANGE_LINEAGE_IDENTITY_SCHEMA_VERSION = "advisory_phase1_historical_range_lineage_identity_v1"
 
@@ -1890,6 +1891,27 @@ class HistoricalRangeOperationRequestV1(_StrictContract):
         elif self.request_payload_sha256 is None:
             raise ValueError("sealed operations require request_payload_sha256")
         return self
+
+
+class HistoricalRangeBackgroundDispatchFailureV1(_StrictContract):
+    """Durable evidence for a background command that failed before domain claim."""
+
+    schema_version: Literal["advisory_historical_range_background_dispatch_failure_v1"] = (
+        BACKGROUND_DISPATCH_FAILURE_SCHEMA_VERSION
+    )
+    operation_id: str = Field(min_length=1, max_length=160)
+    batch_id: str = Field(min_length=1, max_length=160)
+    command: str = Field(min_length=1, max_length=80)
+    stage: Literal["RUNTIME_RECONSTRUCTION", "REQUEST_RECONSTRUCTION", "CLAIM_AND_EXECUTION"]
+    reason_code: str = Field(min_length=1, max_length=200)
+    error_type: str = Field(min_length=1, max_length=200)
+    retryable: Literal[True] = True
+    recorded_at: datetime
+
+    @field_validator("recorded_at")
+    @classmethod
+    def _recorded_at(cls, value: datetime) -> datetime:
+        return _aware_utc(value, field_name="recorded_at")
 
 
 class HistoricalRangePlanningArtifactBindingsV1(_StrictContract):
@@ -4427,7 +4449,9 @@ OUTCOME_TRANSITIONS: dict[HistoricalRangeOutcomeStatus, frozenset[HistoricalRang
 }
 
 OPERATION_TRANSITIONS: dict[HistoricalRangeOperationStatus, frozenset[HistoricalRangeOperationStatus]] = {
-    HistoricalRangeOperationStatus.QUEUED: frozenset({HistoricalRangeOperationStatus.RUNNING}),
+    HistoricalRangeOperationStatus.QUEUED: frozenset(
+        {HistoricalRangeOperationStatus.RUNNING, HistoricalRangeOperationStatus.RETRYABLE_FAILED}
+    ),
     HistoricalRangeOperationStatus.RUNNING: frozenset(
         {
             HistoricalRangeOperationStatus.COMPLETED,

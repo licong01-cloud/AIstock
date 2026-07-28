@@ -1,0 +1,200 @@
+{
+  "actual": "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py requires AISTOCK_PHASE1R_R5_DEV_DSN, a one-off variable not used by the AIstock DEV database workflow.",
+  "allowed_write_scope": [
+    "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py",
+    "tests/aistock_validation/bugs/20260728_BUG-890-r5-postgresql-e2e-requires-redundant-dev-dsn-instead-of-standard-dev-dat.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-890",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-28T01:52:04.557261Z",
+  "description": "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py requires AISTOCK_PHASE1R_R5_DEV_DSN, a one-off variable not used by the AIstock DEV database workflow.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260728-e1782a16197b",
+      "timestamp": "2026-07-28T01:52:04.557256Z"
+    }
+  ],
+  "evidence_uris": [
+    "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py:12"
+  ],
+  "expected": "R5 DEV PostgreSQL E2E loads the existing TDX_DB_DEV_* fields from the authoritative env file, validates the DEV target, and reports missing standard fields explicitly without requiring a second DSN variable.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py"
+      ],
+      "impacted_modules": [
+        "advisory.historical_range",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/advisory_historical_range/test_r5_postgres_e2e.py"
+    ]
+  },
+  "first_seen_at": "2026-07-28T01:52:04.557261Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2820,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2820",
+  "last_seen_at": "2026-07-28T01:52:04.557261Z",
+  "module": "advisory_historical_range",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r5_postgres_e2e.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_historical_range"
+  ],
+  "title": "R5 PostgreSQL E2E requires redundant DEV DSN instead of standard DEV database env",
+  "trigger_condition": {
+    "fingerprint": "e1782a16197b7ff22d11b50e",
+    "source_event_id": "FE-20260728-e1782a16197b"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_historical_range"
+      ],
+      "plans": [
+        "advisory_historical_range_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_historical_range"
+        ],
+        "plans": [
+          "advisory_historical_range_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
