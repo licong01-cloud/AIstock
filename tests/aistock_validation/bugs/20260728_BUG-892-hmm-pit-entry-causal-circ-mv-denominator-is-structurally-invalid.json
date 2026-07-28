@@ -5,6 +5,8 @@
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "backend/services/hmm_risk/stock_fact_repository.py",
     "backend/tests/hmm_risk/test_stock_fact_repository.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
   ],
   "assigned_agent": null,
@@ -39,6 +41,8 @@
     "changed_files": [
       "backend/services/hmm_risk/stock_fact_repository.py",
       "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
       "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
       "tests/aistock_validation/bugs/.bug_id_allocator.json",
       "tests/aistock_validation/bugs/20260728_BUG-892-hmm-pit-entry-causal-circ-mv-denominator-is-structurally-invalid.json"
@@ -47,6 +51,8 @@
       "changed_files": [
         "backend/services/hmm_risk/stock_fact_repository.py",
         "backend/tests/hmm_risk/test_stock_fact_repository.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
         "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
         "tests/aistock_validation/bugs/.bug_id_allocator.json",
         "tests/aistock_validation/bugs/20260728_BUG-892-hmm-pit-entry-causal-circ-mv-denominator-is-structurally-invalid.json"
@@ -67,6 +73,20 @@
         },
         {
           "file": "backend/tests/hmm_risk/test_stock_fact_repository.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "scripts/hmm_risk/prepare_state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
           "impact_modules": [],
           "primary_module": "hmm.risk",
           "risk_level": "high",
@@ -107,6 +127,8 @@
       "suggested_scope": [
         "backend/services/hmm_risk/stock_fact_repository.py",
         "backend/tests/hmm_risk/test_stock_fact_repository.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
         "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
         "tests/aistock_validation/bugs/.bug_id_allocator.json",
         "tests/aistock_validation/bugs/20260728_BUG-892-hmm-pit-entry-causal-circ-mv-denominator-is-structurally-invalid.json"
@@ -117,6 +139,8 @@
     "scope_files": [
       "backend/services/hmm_risk/stock_fact_repository.py",
       "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
       "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
       "tests/aistock_validation/bugs/.bug_id_allocator.json",
       "tests/aistock_validation/bugs/20260728_BUG-892-hmm-pit-entry-causal-circ-mv-denominator-is-structurally-invalid.json"

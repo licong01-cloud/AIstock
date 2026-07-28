@@ -620,6 +620,12 @@ def _c009_source_statistics(inputs: dict[str, Any]) -> dict[str, Any]:
         "circ_mv_asof_stale_count",
         "circ_mv_asof_max_staleness_trading_days",
         "circ_mv_asof_stale_key_sha256",
+        "circ_mv_lookback_contract_version",
+        "circ_mv_history_start",
+        "circ_mv_pit_boundary_crossing_count",
+        "circ_mv_pit_boundary_crossing_available_count",
+        "circ_mv_pit_boundary_crossing_invalid_count",
+        "circ_mv_pit_boundary_crossing_key_sha256",
     )
     mismatches = [field for field in fields if l1.get(field) != l2.get(field)]
     if mismatches:

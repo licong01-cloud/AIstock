@@ -762,7 +762,32 @@ def test_daily_aggregate_manifest_persists_pit_boundary_crossing_receipt() -> No
     _, manifest = subject.load_daily_aggregates(BoundaryReader())
 
     assert manifest["circ_mv_pit_boundary_crossing_count"] == 1
+    assert manifest["circ_mv_pit_boundary_crossing_available_count"] == 1
+    assert manifest["circ_mv_pit_boundary_crossing_invalid_count"] == 0
     assert len(manifest["circ_mv_pit_boundary_crossing_key_sha256"]) == 64
+
+
+def test_daily_aggregate_manifest_counts_invalid_latest_crossing_without_fallback() -> None:
+    class BoundaryReader(_FactReader):
+        def iter_stock_fact_rows(self):
+            for index, row in enumerate(super().iter_stock_fact_rows()):
+                if index == 0:
+                    yield {
+                        **row,
+                        "prev_circ_mv_cny": None,
+                        "circ_mv_crossed_pit_entry_boundary": True,
+                        "circ_mv_pit_eligible_start": date(2024, 1, 2),
+                        "circ_mv_fact_status": "latest_value_missing",
+                        "circ_mv_reason_code": "hmm_risk_stock_fact_circ_mv_latest_value_missing",
+                    }
+                else:
+                    yield row
+
+    _, manifest = subject.load_daily_aggregates(BoundaryReader())
+
+    assert manifest["circ_mv_pit_boundary_crossing_count"] == 1
+    assert manifest["circ_mv_pit_boundary_crossing_available_count"] == 0
+    assert manifest["circ_mv_pit_boundary_crossing_invalid_count"] == 1
 
 
 def test_daily_aggregate_manifest_rejects_crossing_with_wrong_history_identity() -> None:

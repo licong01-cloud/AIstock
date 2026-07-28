@@ -1675,6 +1675,10 @@ def _stock_fact_manifest(
     circ_mv_pit_boundary_crossing_keys.sort(
         key=lambda item: (item["trade_date"], item["canonical_ts_code"], item["circ_mv_source_date"])
     )
+    circ_mv_pit_boundary_available_count = sum(
+        item["fact_status"] == "available" for item in circ_mv_pit_boundary_crossing_keys
+    )
+    circ_mv_pit_boundary_invalid_count = len(circ_mv_pit_boundary_crossing_keys) - circ_mv_pit_boundary_available_count
     manifest = {
         "schema_version": "hmm_risk_stock_fact_dataset_manifest_v1",
         "source_window_start": reader.spec.source_start.isoformat(),
@@ -1700,6 +1704,8 @@ def _stock_fact_manifest(
         "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
         "circ_mv_history_start": reader.spec.source_start.isoformat(),
         "circ_mv_pit_boundary_crossing_count": len(circ_mv_pit_boundary_crossing_keys),
+        "circ_mv_pit_boundary_crossing_available_count": circ_mv_pit_boundary_available_count,
+        "circ_mv_pit_boundary_crossing_invalid_count": circ_mv_pit_boundary_invalid_count,
         "circ_mv_pit_boundary_crossing_key_sha256": hashlib.sha256(
             canonical_json_bytes(circ_mv_pit_boundary_crossing_keys)
         ).hexdigest(),
