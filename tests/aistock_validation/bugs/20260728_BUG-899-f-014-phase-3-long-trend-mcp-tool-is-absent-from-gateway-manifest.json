@@ -7,7 +7,8 @@
     "scripts/aistock_qe_archive_mcp_server.py",
     "tests/mcp/test_mcp_tool_manifest.py",
     "tests/mcp/test_mcp_inventory_diff.py",
-    "backend/tests/test_aistock_qe_mcp_servers.py"
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-899",

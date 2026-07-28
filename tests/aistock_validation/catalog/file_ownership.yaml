@@ -294,6 +294,8 @@ rules:
       - backend/mcp/modules/qe_archive.py
       - backend/mcp/tool_manifest.py
       - backend/tests/mcp/test_qe_archive_module.py
+      - backend/tests/test_aistock_qe_mcp_servers.py
+      - scripts/aistock_qe_archive_mcp_server.py
     primary_module: qe.data_completeness
     impact_modules: [qe.archive, platform.mcp_gateway]
     layer: mcp_gateway
