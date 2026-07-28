@@ -131,7 +131,7 @@ class QELongTrendArtifactStore:
                 "worker terminal evaluation identity mismatch",
                 reason_code=QELongTrendReason.CAS_MANIFEST_CONFLICT.value,
             )
-        required, typed_absence = _required_matrix(worker_terminal)
+        required, typed_absence = required_artifact_matrix(worker_terminal)
         supplied = set(artifact_files)
         unknown = sorted(supplied - set(ALLOWED_ARTIFACT_SCHEMAS))
         if unknown:
@@ -143,6 +143,12 @@ class QELongTrendArtifactStore:
         if missing:
             raise QELongTrendArtifactStoreError(
                 f"worker terminal required artifacts are missing: {missing}",
+                reason_code=QELongTrendReason.ARTIFACT_SCHEMA_MISMATCH.value,
+            )
+        contradictory = sorted(supplied.intersection(typed_absence))
+        if contradictory:
+            raise QELongTrendArtifactStoreError(
+                f"typed-absent artifacts were also supplied: {contradictory}",
                 reason_code=QELongTrendReason.ARTIFACT_SCHEMA_MISMATCH.value,
             )
         self.ensure_ready()
@@ -237,7 +243,7 @@ class QELongTrendArtifactStore:
         path = self.manifest_path(evaluation_id)
         with _exclusive_file_lock(path.parent / ".publish.lock"):
             if path.exists():
-                existing = _read_json(path)
+                existing = self.load_manifest(evaluation_id)
                 if str(existing.get("artifact_manifest_sha256") or "") != manifest_sha:
                     raise QELongTrendArtifactStoreError(
                         "successful evaluation manifest already exists with different content",
@@ -249,7 +255,13 @@ class QELongTrendArtifactStore:
 
     def load_manifest(self, evaluation_id_or_uri: str) -> dict[str, Any]:
         evaluation_id = _evaluation_id_from_value(evaluation_id_or_uri)
-        payload = _read_json(self.manifest_path(evaluation_id))
+        path = self.manifest_path(evaluation_id)
+        if not path.is_file() or path.is_symlink():
+            raise QELongTrendArtifactStoreError(
+                "stored long-trend manifest is missing or linked",
+                reason_code=QELongTrendReason.ARTIFACT_STREAM_INTERRUPTED.value,
+            )
+        payload = _read_json(path)
         expected = str(payload.get("artifact_manifest_sha256") or "")
         content = {key: value for key, value in payload.items() if key not in {"artifact_manifest_sha256", "uri", "published_at"}}
         if canonical_sha256(content) != expected:
@@ -258,6 +270,96 @@ class QELongTrendArtifactStore:
                 reason_code=QELongTrendReason.CAS_MANIFEST_CONFLICT.value,
             )
         return payload
+
+    def load_json_artifact(self, *, evaluation_id: str, artifact_type: str) -> dict[str, Any]:
+        """Read one manifest-bound JSON artifact and re-verify its immutable identity."""
+
+        _validate_evaluation_id(evaluation_id)
+        _validate_artifact_type(artifact_type)
+        if artifact_type in {"signal_observations", "holding_episodes", "published_compact_receipt"}:
+            raise QELongTrendArtifactStoreError(
+                f"artifact type is not a manifest JSON receipt: {artifact_type}",
+                reason_code=QELongTrendReason.ARTIFACT_SCHEMA_MISMATCH.value,
+            )
+        manifest = self.load_manifest(evaluation_id)
+        matches = [
+            item
+            for item in manifest.get("artifacts") or []
+            if isinstance(item, Mapping) and item.get("artifact_type") == artifact_type
+        ]
+        if len(matches) != 1:
+            raise QELongTrendArtifactStoreError(
+                f"manifest must contain exactly one {artifact_type}",
+                reason_code=QELongTrendReason.ARTIFACT_SCHEMA_MISMATCH.value,
+            )
+        item = matches[0]
+        path = self.blob_path(str(item.get("sha256") or ""))
+        if not path.is_file() or path.is_symlink():
+            raise QELongTrendArtifactStoreError(
+                f"stored JSON artifact is missing or linked: {artifact_type}",
+                reason_code=QELongTrendReason.ARTIFACT_STREAM_INTERRUPTED.value,
+            )
+        try:
+            encoded = path.read_bytes()
+        except OSError as exc:
+            raise QELongTrendArtifactStoreError(
+                f"cannot read stored JSON artifact: {artifact_type}",
+                reason_code=QELongTrendReason.ARTIFACT_STREAM_INTERRUPTED.value,
+            ) from exc
+        actual_sha = hashlib.sha256(encoded).hexdigest()
+        actual_size = len(encoded)
+        if actual_sha != item.get("sha256") or actual_size != item.get("size_bytes"):
+            raise QELongTrendArtifactStoreError(
+                f"stored JSON artifact differs from manifest: {artifact_type}",
+                reason_code=QELongTrendReason.ARTIFACT_HASH_MISMATCH.value,
+            )
+        payload = _decode_json_bytes(encoded, artifact_label=artifact_type)
+        if (
+            payload.get("schema_version") != ALLOWED_ARTIFACT_SCHEMAS[artifact_type]
+            or payload.get("evaluation_id") != evaluation_id
+        ):
+            raise QELongTrendArtifactStoreError(
+                f"stored JSON artifact schema or evaluation identity differs: {artifact_type}",
+                reason_code=QELongTrendReason.ARTIFACT_SCHEMA_MISMATCH.value,
+            )
+        return payload
+
+    def load_published_compact_receipt(self, evaluation_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Read and verify the post-manifest compact receipt without exposing its local path."""
+
+        manifest = self.load_manifest(evaluation_id)
+        target = self.root / "evaluations" / evaluation_id / "published_compact_receipt.json"
+        if not target.is_file() or target.is_symlink():
+            raise QELongTrendArtifactStoreError(
+                "published compact receipt is missing or linked",
+                reason_code=QELongTrendReason.ARTIFACT_STREAM_INTERRUPTED.value,
+            )
+        try:
+            encoded = target.read_bytes()
+        except OSError as exc:
+            raise QELongTrendArtifactStoreError(
+                "cannot read published compact receipt",
+                reason_code=QELongTrendReason.ARTIFACT_STREAM_INTERRUPTED.value,
+            ) from exc
+        digest = hashlib.sha256(encoded).hexdigest()
+        payload = _decode_json_bytes(encoded, artifact_label="published_compact_receipt")
+        if (
+            payload.get("schema_version") != ALLOWED_ARTIFACT_SCHEMAS["published_compact_receipt"]
+            or payload.get("evaluation_id") != evaluation_id
+            or payload.get("artifact_manifest_uri") != manifest.get("uri")
+            or payload.get("artifact_manifest_sha256") != manifest.get("artifact_manifest_sha256")
+        ):
+            raise QELongTrendArtifactStoreError(
+                "published compact receipt differs from the immutable manifest",
+                reason_code=QELongTrendReason.CAS_MANIFEST_CONFLICT.value,
+            )
+        return payload, {
+            "artifact_type": "published_compact_receipt",
+            "schema_version": ALLOWED_ARTIFACT_SCHEMAS["published_compact_receipt"],
+            "uri": artifact_uri(evaluation_id, "published_compact_receipt"),
+            "sha256": digest,
+            "size_bytes": len(encoded),
+        }
 
     def publish_compact_receipt(
         self,
@@ -313,8 +415,12 @@ class QELongTrendArtifactStore:
             "uri": artifact_uri(evaluation_id, "published_compact_receipt"),
             "sha256": digest,
             "size_bytes": len(encoded),
-            "path": str(target),
         }
+
+
+def required_artifact_matrix(worker_terminal: Mapping[str, Any]) -> tuple[set[str], dict[str, Any]]:
+    """Return the authoritative required/typed-absence artifact contract."""
+    return _required_matrix(worker_terminal)
 
 
 def _required_matrix(worker_terminal: Mapping[str, Any]) -> tuple[set[str], dict[str, Any]]:
@@ -441,6 +547,24 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise QELongTrendArtifactStoreError(
             f"long-trend JSON artifact must be an object: {path}",
+            reason_code=QELongTrendReason.ARTIFACT_SCHEMA_MISMATCH.value,
+        )
+    return payload
+
+
+def _decode_json_bytes(encoded: bytes, *, artifact_label: str) -> dict[str, Any]:
+    """Decode bytes already bound to a verified digest; never re-read the path."""
+
+    try:
+        payload = json.loads(encoded.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise QELongTrendArtifactStoreError(
+            f"stored long-trend JSON artifact is invalid: {artifact_label}",
+            reason_code=QELongTrendReason.ARTIFACT_SCHEMA_MISMATCH.value,
+        ) from exc
+    if not isinstance(payload, dict):
+        raise QELongTrendArtifactStoreError(
+            f"stored long-trend JSON artifact must be an object: {artifact_label}",
             reason_code=QELongTrendReason.ARTIFACT_SCHEMA_MISMATCH.value,
         )
     return payload

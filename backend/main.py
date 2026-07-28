@@ -464,8 +464,9 @@ async def _lifespan(app: FastAPI):
 
     async def _qe_long_trend_reconcile_loop(stop_event: asyncio.Event):
         from .services.quantevolver.long_trend_evaluation_phase2 import QELongTrendPhase2Service
+        from .services.qe_archive.long_trend_repository import QELongTrendEvaluationResultRepository
 
-        service = QELongTrendPhase2Service()
+        service = QELongTrendPhase2Service(result_repository=QELongTrendEvaluationResultRepository())
         logger = logging.getLogger("aistock.qe_long_trend_phase2")
         while not stop_event.is_set():
             try:

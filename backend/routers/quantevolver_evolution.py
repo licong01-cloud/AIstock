@@ -11,7 +11,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body, Path as PathParam
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
 
@@ -42,6 +42,18 @@ from ..services.quantevolver.long_trend_evaluation_contract import QELongTrendEr
 from ..services.quantevolver.long_trend_evaluation_phase2 import (
     QELongTrendPhase2Error,
     QELongTrendPhase2Service,
+)
+from ..services.quantevolver.long_trend_artifact_store import QELongTrendArtifactStoreError
+from ..services.quantevolver.long_trend_evaluation_control_repository import QELongTrendControlRepositoryError
+from ..services.quantevolver.long_trend_api_service import (
+    LongTrendCreateRequest,
+    QELongTrendAPIService,
+    QELongTrendAPIServiceError,
+)
+from ..services.quantevolver.long_trend_snapshot_resolver import QELongTrendSnapshotResolutionError
+from ..services.qe_archive.long_trend_repository import (
+    QELongTrendEvaluationResultRepository,
+    QELongTrendResultRepositoryError,
 )
 from ..services.quantevolver.qe_workspace_client import QELongTrendWorkspaceError, QEWorkspaceClient
 from ..services.quantevolver.experiment_config import (
@@ -719,6 +731,123 @@ async def get_evolution_task_detail(
     except Exception as e:
         logger.error(f"Failed to get task detail: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class LongTrendEvaluationCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str = Field("qe_long_trend_v1", min_length=1, max_length=64)
+    outcome_dataset_snapshot_id: str = Field(..., min_length=1, max_length=200)
+
+
+def _raise_long_trend_http(exc: Exception) -> None:
+    reason_code = str(getattr(exc, "reason_code", "QELT_PLATFORM_ERROR"))
+    raw_context = dict(getattr(exc, "context", {}) or {})
+    public_context_keys = {
+        "task_id", "loop_index", "node_id", "requested_snapshot_id",
+        "snapshot_role", "node_bindings", "matches",
+    }
+    context = {key: value for key, value in raw_context.items() if key in public_context_keys}
+    safe_message_types = (
+        QELongTrendAPIServiceError,
+        QELongTrendSnapshotResolutionError,
+        QELongTrendResultRepositoryError,
+    )
+    message = str(exc) if isinstance(exc, safe_message_types) else "F-014 operation failed"
+    if reason_code in {"QELT_NON_QE_SOURCE_REJECTED", "QELT_ARCHIVE_RUN_UNAVAILABLE"}:
+        status_code = 404
+    elif reason_code in {
+        "QELT_PROFILE_INVALID",
+        "QELT_SNAPSHOT_RESOLUTION_INVALID",
+        "QELT_QUERY_INVALID",
+    }:
+        status_code = 400
+    elif reason_code in {
+        "QELT_RESULT_PERSISTENCE_CONFLICT",
+        "QELT_SNAPSHOT_IDENTITY_AMBIGUOUS",
+        "QELT_CONTROL_STATE_CONFLICT",
+        "QELT_CAS_MANIFEST_CONFLICT",
+        "QELT_ARTIFACT_HASH_MISMATCH",
+        "QELT_ARTIFACT_SCHEMA_MISMATCH",
+    }:
+        status_code = 409
+    else:
+        status_code = 503
+    raise HTTPException(
+        status_code=status_code,
+        detail={"reason_code": reason_code, "message": message, "context": context},
+    ) from exc
+
+
+@router.post(
+    "/tasks/{task_id}/loops/{loop_index}/long-trend-evaluations",
+    summary="生成或更新已完成 QE Loop 的长期趋势评价",
+)
+async def create_or_update_long_trend_evaluation(
+    body: LongTrendEvaluationCreateBody,
+    task_id: str = PathParam(..., min_length=1, max_length=200),
+    loop_index: int = PathParam(..., ge=1),
+):
+    try:
+        return await QELongTrendAPIService().create_or_update(
+            task_id=task_id,
+            loop_index=loop_index,
+            request=LongTrendCreateRequest(
+                profile_id=body.profile_id,
+                outcome_dataset_snapshot_id=body.outcome_dataset_snapshot_id,
+            ),
+        )
+    except (
+        QELongTrendAPIServiceError,
+        QELongTrendSnapshotResolutionError,
+        QELongTrendPhase2Error,
+        QELongTrendWorkspaceError,
+        QELongTrendArtifactStoreError,
+        QELongTrendControlRepositoryError,
+        QELongTrendResultRepositoryError,
+        QELongTrendError,
+    ) as exc:
+        _raise_long_trend_http(exc)
+
+
+@router.get("/tasks/{task_id}/loops/{loop_index}/long-trend-evaluations")
+def list_long_trend_evaluations(
+    task_id: str = PathParam(..., min_length=1, max_length=200),
+    loop_index: int = PathParam(..., ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=4096),
+):
+    try:
+        return QELongTrendEvaluationResultRepository().list_evaluations(
+            task_id=task_id,
+            loop_index=loop_index,
+            limit=limit,
+            cursor=cursor,
+        )
+    except QELongTrendResultRepositoryError as exc:
+        _raise_long_trend_http(exc)
+
+
+@router.get("/long-trend-evaluations/{evaluation_id}")
+def get_long_trend_evaluation(
+    evaluation_id: str = PathParam(..., pattern=r"^qelt_[0-9a-f]{64}$"),
+    metric_limit: int = Query(100, ge=1, le=100),
+    metric_cursor: str | None = Query(None, max_length=4096),
+):
+    try:
+        result = QELongTrendEvaluationResultRepository().get_evaluation(
+            evaluation_id,
+            metric_limit=metric_limit,
+            metric_cursor=metric_cursor,
+        )
+    except QELongTrendResultRepositoryError as exc:
+        _raise_long_trend_http(exc)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason_code": "QELT_EVALUATION_NOT_FOUND", "evaluation_id": evaluation_id},
+        )
+    return result
 
 
 @router.get("/tasks/{task_id}/loops/comparison", summary="获取任务所有 Loop 的标量对比表")
@@ -1936,7 +2065,12 @@ async def register_long_trend_postprocess(
         if str(parent.get("node_id") or "") != payload.node_id:
             raise QEResourcePhaseError(AUTH_FAILED_REASON, "parent resource node binding is invalid")
         opt_in = LongTrendEvaluationOptIn.model_validate(payload.long_trend_evaluation)
-        service = QELongTrendPhase2Service(resource_service=resource_service)
+        from backend.services.qe_archive.long_trend_repository import QELongTrendEvaluationResultRepository
+
+        service = QELongTrendPhase2Service(
+            resource_service=resource_service,
+            result_repository=QELongTrendEvaluationResultRepository(),
+        )
         async with QEWorkspaceClient.for_node(payload.node_id) as client:
             prepared = await service.prepare_normal_postprocess(
                 task_id=payload.task_id,

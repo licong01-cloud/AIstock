@@ -32,10 +32,11 @@ modules:
     parent_module: qe
     module_type: data_pipeline
     risk_level: high
-    description: F-014 QE-only long-horizon signal, episode, execution, sector evidence, node compute, and dedicated CAS lifecycle.
-    description_zh: F-014 QE 专属长期趋势信号、持仓阶段、执行、板块证据、节点计算及独立 CAS 生命周期。
+    description: F-014 QE-only long-horizon signal, episode, execution, sector evidence, node compute, dedicated CAS, compact warehouse, and bounded API/MCP.
+    description_zh: F-014 QE 专属长期趋势信号、持仓阶段、执行、板块证据、节点计算、独立 CAS、紧凑数仓及有界 API/MCP。
+    api_routes: [/api/v1/quantevolver/evolution/*/long-trend-evaluations*, /api/v1/qe-archive/analytics/long-trend-quality]
     test_plans:
-      required_on_change: [l0, qe_long_trend_phase2_backend]
+      required_on_change: [l0, qe_long_trend_phase2_backend, qe_long_trend_phase3_platform]
       recommended: [qe_read_backend]
   - module_id: qe.sector_risk_overlay
     display_name: QE sector-risk overlay
