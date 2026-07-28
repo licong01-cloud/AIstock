@@ -24,6 +24,9 @@ from .stock_fact_observation import (
 )
 
 
+CIRC_MV_LOOKBACK_CONTRACT_VERSION = "hmm_risk_causal_circ_mv_source_window_v1"
+
+
 @dataclass(frozen=True)
 class StockFactSourceSpec:
     universe_key: str
@@ -106,21 +109,18 @@ class PostgresStockFactReader:
     def _load_initial_circ_mv_state(
         self,
         *,
-        eligible_start_by_code: dict[str, date],
+        canonical_codes: set[str],
         before_date: date,
     ) -> dict[str, tuple[date, Any]]:
-        if not eligible_start_by_code:
+        if not canonical_codes:
             return {}
-        request_rows = [
-            {"ts_code": code, "eligible_start": eligible_start.isoformat()}
-            for code, eligible_start in sorted(eligible_start_by_code.items())
-        ]
+        request_rows = [{"ts_code": code} for code in sorted(canonical_codes)]
         with self._conn.cursor() as cursor:
             cursor.execute(
                 """
                 WITH requested AS (
-                  SELECT ts_code,eligible_start::date
-                  FROM jsonb_to_recordset(%s::jsonb) AS item(ts_code text,eligible_start text)
+                  SELECT ts_code
+                  FROM jsonb_to_recordset(%s::jsonb) AS item(ts_code text)
                 )
                 SELECT requested.ts_code,previous.trade_date,previous.circ_mv
                 FROM requested
@@ -128,14 +128,14 @@ class PostgresStockFactReader:
                   SELECT db.trade_date,db.circ_mv
                   FROM market.daily_basic db
                   WHERE db.ts_code=requested.ts_code
-                    AND db.trade_date>=requested.eligible_start
+                    AND db.trade_date>=%s
                     AND db.trade_date<%s
                   ORDER BY db.trade_date DESC
                   LIMIT 1
                 ) previous ON true
                 ORDER BY requested.ts_code
                 """,
-                (json.dumps(request_rows, separators=(",", ":")), before_date),
+                (json.dumps(request_rows, separators=(",", ":")), self.spec.source_start, before_date),
             )
             rows = cursor.fetchall()
         return {str(code): (source_date, circ_mv) for code, source_date, circ_mv in rows if source_date is not None}
@@ -300,7 +300,6 @@ class PostgresStockFactReader:
         sector_level: str,
     ) -> Iterator[dict[str, Any]]:
         trading_ordinals: dict[date, int] | None = None
-        calendar_start: date | None = None
         for window_start, window_end in self._month_windows(self.spec.source_start, self.spec.source_end):
             base_rows = self._load_missing_price_base_rows(
                 window_start=window_start,
@@ -310,25 +309,17 @@ class PostgresStockFactReader:
             )
             if not base_rows:
                 continue
-            eligible_start_by_code: dict[str, date] = {}
-            for row in base_rows:
-                code = str(row[1])
-                eligible_start = row[7]
-                previous = eligible_start_by_code.get(code)
-                if previous is None or eligible_start < previous:
-                    eligible_start_by_code[code] = eligible_start
-            minimum_eligible_start = min(eligible_start_by_code.values())
-            if trading_ordinals is None or calendar_start is None or minimum_eligible_start < calendar_start:
-                calendar_start = minimum_eligible_start
-                trading_ordinals = self._load_trading_date_ordinals(calendar_start)
+            canonical_codes = {str(row[1]) for row in base_rows}
+            if trading_ordinals is None:
+                trading_ordinals = self._load_trading_date_ordinals(self.spec.source_start)
             circ_mv_state = self._load_initial_circ_mv_state(
-                eligible_start_by_code=eligible_start_by_code,
+                canonical_codes=canonical_codes,
                 before_date=window_start,
             )
             daily_basic = self._load_daily_basic_map(
                 window_start=window_start,
                 window_end=window_end,
-                canonical_codes=set(eligible_start_by_code),
+                canonical_codes=canonical_codes,
             )
             daily_events = sorted((key[0], key[1], value[1]) for key, value in daily_basic.items())
             event_index = 0
@@ -358,7 +349,7 @@ class PostgresStockFactReader:
                     or previous_market_date is None
                     or circ_mv_source_date >= trade_date_value
                     or circ_mv_source_date > previous_market_date
-                    or circ_mv_source_date < eligible_start
+                    or circ_mv_source_date < self.spec.source_start
                 ):
                     circ_mv_source_date = None
                     previous_circ_mv = None
@@ -372,6 +363,9 @@ class PostgresStockFactReader:
                         raise StateModelSetError("hmm_risk_stock_fact_calendar_mismatch: circ_mv source date") from exc
                     if circ_mv_staleness < 0:
                         raise StateModelSetError("hmm_risk_stock_fact_causal_circ_mv_invalid: negative staleness")
+                crossed_pit_entry_boundary = bool(
+                    circ_mv_source_date is not None and circ_mv_source_date < eligible_start
+                )
                 current_basic = daily_basic.get((trade_date_value, code))
                 moneyflow_resolution = self.security_identity_manifest.resolve(
                     code, trade_date_value, "market.moneyflow_ts"
@@ -397,6 +391,10 @@ class PostgresStockFactReader:
                     "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
                     "circ_mv_source_date": circ_mv_source_date,
                     "circ_mv_staleness_trading_days": circ_mv_staleness,
+                    "circ_mv_crossed_pit_entry_boundary": crossed_pit_entry_boundary,
+                    "circ_mv_pit_eligible_start": eligible_start,
+                    "circ_mv_history_start": self.spec.source_start,
+                    "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
                     "buy_sm_amount_cny": None,
                     "sell_sm_amount_cny": None,
                     "buy_elg_amount_cny": None,
@@ -511,7 +509,6 @@ class PostgresStockFactReader:
     ) -> Iterator[dict[str, Any]]:
         circ_mv_state: dict[str, tuple[date, Any]] = {}
         trading_ordinals: dict[date, int] | None = None
-        calendar_start: date | None = None
         for window_start, window_end in self._month_windows(self.spec.source_start, self.spec.source_end):
             base_rows = self._load_stock_base_rows(
                 window_start=window_start,
@@ -522,28 +519,21 @@ class PostgresStockFactReader:
             if not base_rows:
                 continue
             canonical_codes = {str(row[1]) for row in base_rows}
-            eligible_start_by_code: dict[str, date] = {}
             moneyflow_source_codes = set(canonical_codes)
             for row in base_rows:
                 code = str(row[1])
-                eligible_start = row[6]
-                previous = eligible_start_by_code.get(code)
-                if previous is None or eligible_start < previous:
-                    eligible_start_by_code[code] = eligible_start
                 resolution = self.security_identity_manifest.resolve(code, row[0], "market.moneyflow_ts")
                 moneyflow_source_codes.add(resolution.source_ts_code)
             prior_state = self._load_initial_circ_mv_state(
-                eligible_start_by_code=eligible_start_by_code,
+                canonical_codes=canonical_codes,
                 before_date=window_start,
             )
             for code, candidate in prior_state.items():
                 existing = circ_mv_state.get(code)
                 if existing is None or candidate[0] > existing[0]:
                     circ_mv_state[code] = candidate
-            minimum_eligible_start = min(eligible_start_by_code.values())
-            if trading_ordinals is None or calendar_start is None or minimum_eligible_start < calendar_start:
-                calendar_start = minimum_eligible_start
-                trading_ordinals = self._load_trading_date_ordinals(calendar_start)
+            if trading_ordinals is None:
+                trading_ordinals = self._load_trading_date_ordinals(self.spec.source_start)
             daily_basic, moneyflow, limits = self._load_window_fact_maps(
                 window_start=window_start,
                 window_end=window_end,
@@ -581,7 +571,7 @@ class PostgresStockFactReader:
                     or previous_market_date is None
                     or circ_mv_source_date >= trade_date_value
                     or circ_mv_source_date > previous_market_date
-                    or circ_mv_source_date < eligible_start
+                    or circ_mv_source_date < self.spec.source_start
                 ):
                     circ_mv_source_date = None
                     previous_circ_mv = None
@@ -595,6 +585,9 @@ class PostgresStockFactReader:
                         raise StateModelSetError("hmm_risk_stock_fact_calendar_mismatch: circ_mv source date") from exc
                     if circ_mv_staleness < 0:
                         raise StateModelSetError("hmm_risk_stock_fact_causal_circ_mv_invalid: negative staleness")
+                crossed_pit_entry_boundary = bool(
+                    circ_mv_source_date is not None and circ_mv_source_date < eligible_start
+                )
                 current_basic = daily_basic.get((trade_date_value, code))
                 total_mv = None if current_basic is None else current_basic[0]
                 moneyflow_resolution = self.security_identity_manifest.resolve(
@@ -644,6 +637,10 @@ class PostgresStockFactReader:
                     "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
                     "circ_mv_source_date": circ_mv_source_date,
                     "circ_mv_staleness_trading_days": circ_mv_staleness,
+                    "circ_mv_crossed_pit_entry_boundary": crossed_pit_entry_boundary,
+                    "circ_mv_pit_eligible_start": eligible_start,
+                    "circ_mv_history_start": self.spec.source_start,
+                    "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
                     "buy_sm_amount_cny": _scaled(moneyflow_values[0], 0.0001),
                     "sell_sm_amount_cny": _scaled(moneyflow_values[1], 0.0001),
                     "buy_elg_amount_cny": _scaled(moneyflow_values[2], 0.0001),
@@ -664,7 +661,7 @@ class PostgresStockFactReader:
                 event_index += 1
 
     @staticmethod
-    def _circ_mv_asof_fragments(*, previous_date: str, eligible_start: str, has_alias: bool) -> tuple[str, str, str]:
+    def _circ_mv_asof_fragments(*, previous_date: str, history_start: str, has_alias: bool) -> tuple[str, str, str]:
         if not has_alias:
             return (
                 "",
@@ -675,7 +672,7 @@ class PostgresStockFactReader:
                   FROM market.daily_basic canonical_db
                   WHERE canonical_db.ts_code=c.ts_code
                     AND canonical_db.trade_date<={previous_date}
-                    AND canonical_db.trade_date>={eligible_start}
+                    AND canonical_db.trade_date>={history_start}
                   ORDER BY canonical_db.trade_date DESC
                   LIMIT 1
                 ) pb ON true
@@ -694,7 +691,7 @@ class PostgresStockFactReader:
               WHERE alias_identity.canonical_ts_code IS NULL
                 AND canonical_db.ts_code=c.ts_code
                 AND canonical_db.trade_date<={previous_date}
-                AND canonical_db.trade_date>={eligible_start}
+                AND canonical_db.trade_date>={history_start}
               ORDER BY canonical_db.trade_date DESC
               LIMIT 1
             ) canonical_pb ON true
@@ -705,7 +702,7 @@ class PostgresStockFactReader:
                 FROM market.daily_basic canonical_db
                 WHERE canonical_db.ts_code=c.ts_code
                   AND canonical_db.trade_date<={previous_date}
-                  AND canonical_db.trade_date>={eligible_start}
+                  AND canonical_db.trade_date>={history_start}
                   AND NOT EXISTS (
                     SELECT 1 FROM daily_basic_identity_alias identity_alias
                     WHERE identity_alias.canonical_ts_code=c.ts_code
@@ -719,7 +716,7 @@ class PostgresStockFactReader:
                  AND aliased_db.trade_date BETWEEN identity_alias.effective_start AND identity_alias.effective_end
                 WHERE identity_alias.canonical_ts_code=c.ts_code
                   AND aliased_db.trade_date<={previous_date}
-                  AND aliased_db.trade_date>={eligible_start}
+                  AND aliased_db.trade_date>={history_start}
               ) identity_candidate
               WHERE alias_identity.canonical_ts_code IS NOT NULL
               ORDER BY identity_candidate.trade_date DESC
@@ -952,7 +949,7 @@ class PostgresStockFactReader:
         moneyflow_alias_json = self._identity_alias_json("market.moneyflow_ts")
         circ_mv_history_cte, circ_mv_select_sql, circ_mv_join_sql = self._circ_mv_asof_fragments(
             previous_date="ch.previous_trade_date",
-            eligible_start="c.eligible_start",
+            history_start="(SELECT history_start FROM circ_mv_contract)",
             has_alias=bool(daily_basic_alias_rows),
         )
         cursor_prefix = "hmm_risk_stock_fact_source" if sector_level == "L1" else "hmm_risk_stock_fact_source_l2"
@@ -970,6 +967,8 @@ class PostgresStockFactReader:
               SELECT LEAST(%s::date,COALESCE(min(eligible_start),%s::date)) history_start,
                      %s::date history_end
               FROM market.stock_universe_pit_spans WHERE universe_key=%s
+            ), circ_mv_contract AS (
+              SELECT %s::date history_start
             ), calendar_ordinal AS (
               SELECT cal_date::date trade_date,row_number() OVER (ORDER BY cal_date) trade_ordinal
               FROM market.trading_calendar,source_bounds
@@ -1088,6 +1087,7 @@ class PostgresStockFactReader:
                 _window_start,
                 _window_end,
                 self.spec.universe_key,
+                self.spec.source_start,
                 price_history_start,
                 _window_end,
                 daily_basic_alias_json,
@@ -1117,11 +1117,12 @@ class PostgresStockFactReader:
                     row[23]
                     if circ_mv_source_date is not None
                     and circ_mv_source_date < row[0]
-                    and circ_mv_source_date >= eligible_start
+                    and circ_mv_source_date >= self.spec.source_start
                     and circ_mv_staleness is not None
                     and int(circ_mv_staleness) >= 0
                     else None
                 )
+                crossed_pit_entry_boundary = bool(previous_circ_mv is not None and circ_mv_source_date < eligible_start)
                 moneyflow_resolution = self.security_identity_manifest.resolve(
                     str(row[1]), row[0], "market.moneyflow_ts"
                 )
@@ -1171,6 +1172,10 @@ class PostgresStockFactReader:
                     "circ_mv_staleness_trading_days": (
                         int(circ_mv_staleness) if previous_circ_mv is not None else None
                     ),
+                    "circ_mv_crossed_pit_entry_boundary": crossed_pit_entry_boundary,
+                    "circ_mv_pit_eligible_start": eligible_start,
+                    "circ_mv_history_start": self.spec.source_start,
+                    "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
                     "buy_sm_amount_cny": _scaled(row[26], 0.0001),
                     "sell_sm_amount_cny": _scaled(row[27], 0.0001),
                     "buy_elg_amount_cny": _scaled(row[28], 0.0001),
@@ -1212,7 +1217,7 @@ class PostgresStockFactReader:
         )
         circ_mv_history_cte, circ_mv_select_sql, circ_mv_join_sql = self._circ_mv_asof_fragments(
             previous_date="c.previous_trade_date",
-            eligible_start="c.eligible_start",
+            history_start="(SELECT history_start FROM circ_mv_contract)",
             has_alias=bool(daily_basic_alias_rows),
         )
         cursor_name = "hmm_risk_missing_price_source" if sector_level == "L1" else "hmm_risk_missing_price_source_l2"
@@ -1229,6 +1234,8 @@ class PostgresStockFactReader:
               SELECT LEAST(%s::date,COALESCE(min(eligible_start),%s::date)) history_start,
                      %s::date history_end
               FROM market.stock_universe_pit_spans WHERE universe_key=%s
+            ), circ_mv_contract AS (
+              SELECT %s::date history_start
             ), calendar_ordinal AS (
               SELECT cal_date::date trade_date,row_number() OVER (ORDER BY cal_date) trade_ordinal
               FROM market.trading_calendar,source_bounds
@@ -1306,6 +1313,7 @@ class PostgresStockFactReader:
                 self.spec.source_end,
                 self.spec.universe_key,
                 self.spec.source_start,
+                self.spec.source_start,
                 self.spec.source_end,
                 daily_basic_alias_json,
                 price_history_start,
@@ -1325,11 +1333,12 @@ class PostgresStockFactReader:
                     row[11]
                     if circ_mv_source_date is not None
                     and circ_mv_source_date < row[0]
-                    and circ_mv_source_date >= row[7]
+                    and circ_mv_source_date >= self.spec.source_start
                     and circ_mv_staleness is not None
                     and int(circ_mv_staleness) >= 0
                     else None
                 )
+                crossed_pit_entry_boundary = bool(previous_circ_mv is not None and circ_mv_source_date < row[7])
                 moneyflow_resolution = self.security_identity_manifest.resolve(
                     str(row[1]), row[0], "market.moneyflow_ts"
                 )
@@ -1356,6 +1365,10 @@ class PostgresStockFactReader:
                     "circ_mv_staleness_trading_days": (
                         int(circ_mv_staleness) if previous_circ_mv is not None else None
                     ),
+                    "circ_mv_crossed_pit_entry_boundary": crossed_pit_entry_boundary,
+                    "circ_mv_pit_eligible_start": row[7],
+                    "circ_mv_history_start": self.spec.source_start,
+                    "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
                     "buy_sm_amount_cny": None,
                     "sell_sm_amount_cny": None,
                     "buy_elg_amount_cny": None,
@@ -1434,9 +1447,11 @@ def load_mapping_manifest(reader: PostgresStockFactReader) -> tuple[dict[str, An
 def _record_source_evidence(
     row: dict[str, Any],
     *,
+    expected_circ_mv_history_start: date,
     provider_absence_keys: list[dict[str, str]],
     alias_resolution_keys: list[dict[str, str]],
     circ_mv_stale_keys: list[dict[str, Any]],
+    circ_mv_pit_boundary_crossing_keys: list[dict[str, Any]],
 ) -> None:
     trade_date_value = row.get("trade_date")
     symbol = str(row.get("symbol") or "")
@@ -1483,6 +1498,32 @@ def _record_source_evidence(
                 "staleness_trading_days": staleness,
             }
         )
+    if row.get("circ_mv_crossed_pit_entry_boundary") is True:
+        pit_eligible_start = row.get("circ_mv_pit_eligible_start")
+        circ_mv_history_start = row.get("circ_mv_history_start")
+        if not (
+            isinstance(trade_date_value, date)
+            and isinstance(circ_mv_source_date, date)
+            and isinstance(pit_eligible_start, date)
+            and isinstance(circ_mv_history_start, date)
+            and circ_mv_history_start == expected_circ_mv_history_start
+            and isinstance(staleness, int)
+            and staleness >= 0
+            and circ_mv_history_start <= circ_mv_source_date < pit_eligible_start <= trade_date_value
+            and row.get("circ_mv_lookback_contract_version") == CIRC_MV_LOOKBACK_CONTRACT_VERSION
+        ):
+            raise StateModelSetError("hmm_risk_stock_fact_circ_mv_pit_boundary_evidence_invalid")
+        circ_mv_pit_boundary_crossing_keys.append(
+            {
+                "trade_date": trade_date_value.isoformat(),
+                "canonical_ts_code": symbol,
+                "circ_mv_source_date": circ_mv_source_date.isoformat(),
+                "circ_mv_history_start": circ_mv_history_start.isoformat(),
+                "pit_eligible_start": pit_eligible_start.isoformat(),
+                "staleness_trading_days": staleness,
+                "lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
+            }
+        )
 
 
 def _stock_fact_manifest(
@@ -1498,10 +1539,14 @@ def _stock_fact_manifest(
     provider_absence_keys: list[dict[str, str]],
     alias_resolution_keys: list[dict[str, str]],
     circ_mv_stale_keys: list[dict[str, Any]],
+    circ_mv_pit_boundary_crossing_keys: list[dict[str, Any]],
 ) -> dict[str, Any]:
     provider_absence_keys.sort(key=lambda item: (item["trade_date"], item["canonical_ts_code"], item["source_ts_code"]))
     alias_resolution_keys.sort(key=lambda item: (item["trade_date"], item["canonical_ts_code"], item["source_ts_code"]))
     circ_mv_stale_keys.sort(
+        key=lambda item: (item["trade_date"], item["canonical_ts_code"], item["circ_mv_source_date"])
+    )
+    circ_mv_pit_boundary_crossing_keys.sort(
         key=lambda item: (item["trade_date"], item["canonical_ts_code"], item["circ_mv_source_date"])
     )
     manifest = {
@@ -1526,6 +1571,12 @@ def _stock_fact_manifest(
             default=0,
         ),
         "circ_mv_asof_stale_key_sha256": hashlib.sha256(canonical_json_bytes(circ_mv_stale_keys)).hexdigest(),
+        "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
+        "circ_mv_history_start": reader.spec.source_start.isoformat(),
+        "circ_mv_pit_boundary_crossing_count": len(circ_mv_pit_boundary_crossing_keys),
+        "circ_mv_pit_boundary_crossing_key_sha256": hashlib.sha256(
+            canonical_json_bytes(circ_mv_pit_boundary_crossing_keys)
+        ).hexdigest(),
         "raw_jsonl_sha256": raw_jsonl_sha256,
         "aggregate_row_count": len(aggregates),
         "invalid_l1_date_count": len(invalid_sector_dates),
@@ -1585,6 +1636,7 @@ def load_daily_aggregates(
     moneyflow_provider_absence_keys: list[dict[str, str]] = []
     moneyflow_alias_resolution_keys: list[dict[str, str]] = []
     circ_mv_stale_keys: list[dict[str, Any]] = []
+    circ_mv_pit_boundary_crossing_keys: list[dict[str, Any]] = []
 
     missing_rows = list(
         reader.iter_missing_price_rows()
@@ -1605,9 +1657,11 @@ def load_daily_aggregates(
         for row in merged_rows:
             _record_source_evidence(
                 row,
+                expected_circ_mv_history_start=reader.spec.source_start,
                 provider_absence_keys=moneyflow_provider_absence_keys,
                 alias_resolution_keys=moneyflow_alias_resolution_keys,
                 circ_mv_stale_keys=circ_mv_stale_keys,
+                circ_mv_pit_boundary_crossing_keys=circ_mv_pit_boundary_crossing_keys,
             )
             serialized = {key: (value.isoformat() if isinstance(value, date) else value) for key, value in row.items()}
             digest.update(canonical_json_bytes(serialized))
@@ -1646,6 +1700,7 @@ def load_daily_aggregates(
         provider_absence_keys=moneyflow_provider_absence_keys,
         alias_resolution_keys=moneyflow_alias_resolution_keys,
         circ_mv_stale_keys=circ_mv_stale_keys,
+        circ_mv_pit_boundary_crossing_keys=circ_mv_pit_boundary_crossing_keys,
     )
     return aggregates, manifest
 
@@ -1673,6 +1728,7 @@ def load_direct_daily_aggregates(
     provider_absence_keys: list[dict[str, str]] = []
     alias_resolution_keys: list[dict[str, str]] = []
     circ_mv_stale_keys: list[dict[str, Any]] = []
+    circ_mv_pit_boundary_crossing_keys: list[dict[str, Any]] = []
 
     for _, day_group in itertools.groupby(merged_rows, key=lambda row: row["trade_date"]):
         day_rows = list(day_group)
@@ -1681,9 +1737,11 @@ def load_direct_daily_aggregates(
         for row in l1_rows:
             _record_source_evidence(
                 row,
+                expected_circ_mv_history_start=reader.spec.source_start,
                 provider_absence_keys=provider_absence_keys,
                 alias_resolution_keys=alias_resolution_keys,
                 circ_mv_stale_keys=circ_mv_stale_keys,
+                circ_mv_pit_boundary_crossing_keys=circ_mv_pit_boundary_crossing_keys,
             )
             serialized = {key: (value.isoformat() if isinstance(value, date) else value) for key, value in row.items()}
             l1_digest.update(canonical_json_bytes(serialized))
@@ -1729,6 +1787,7 @@ def load_direct_daily_aggregates(
         provider_absence_keys=list(provider_absence_keys),
         alias_resolution_keys=list(alias_resolution_keys),
         circ_mv_stale_keys=list(circ_mv_stale_keys),
+        circ_mv_pit_boundary_crossing_keys=list(circ_mv_pit_boundary_crossing_keys),
     )
     l2_manifest = _stock_fact_manifest(
         reader,
@@ -1742,5 +1801,6 @@ def load_direct_daily_aggregates(
         provider_absence_keys=list(provider_absence_keys),
         alias_resolution_keys=list(alias_resolution_keys),
         circ_mv_stale_keys=list(circ_mv_stale_keys),
+        circ_mv_pit_boundary_crossing_keys=list(circ_mv_pit_boundary_crossing_keys),
     )
     return l1_aggregates, l1_manifest, l2_aggregates, l2_manifest

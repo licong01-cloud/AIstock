@@ -67,11 +67,11 @@ class _Cursor:
                 current = date.fromordinal(current.toordinal() + 1)
             return rows
         if "FROM requested LEFT JOIN LATERAL" in self.sql:
-            before_date = self.params[1]
+            history_start, before_date = self.params[1:3]
             latest = {}
             for row in self.connection.stock_rows:
                 source_date = row[22]
-                if source_date is not None and source_date < before_date:
+                if source_date is not None and history_start <= source_date < before_date:
                     key = row[1]
                     candidate = (key, source_date, row[23])
                     if key not in latest or source_date > latest[key][1]:
@@ -335,6 +335,117 @@ def test_reader_uses_latest_causal_circ_mv_before_previous_market_day() -> None:
     assert rejected["circ_mv_staleness_trading_days"] is None
 
 
+def test_reader_preserves_causal_circ_mv_across_current_pit_entry_boundary() -> None:
+    connection = _Connection()
+    connection.stock_rows = [
+        (
+            date(2024, 1, 3),
+            "000001.SZ",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            date(2024, 1, 3),
+            1,
+            10_000,
+            11_000,
+            9_000,
+            10_500,
+            100,
+            1_000_000,
+            date(2024, 1, 2),
+            10_000,
+            date(2023, 12, 25),
+            9_000,
+            date(2023, 12, 18),
+            8_000,
+            100.0,
+            date(2024, 1, 2),
+            date(2024, 1, 2),
+            80.0,
+            0,
+            "000001.SZ",
+            2.0,
+            1.0,
+            4.0,
+            3.0,
+            2.0,
+            "000001.SZ",
+            11.0,
+        )
+    ]
+
+    row = next(_reader(connection).iter_stock_fact_rows())
+
+    assert row["prev_circ_mv_cny"] == 800_000.0
+    assert row["circ_mv_source_date"] == date(2024, 1, 2)
+    assert row["circ_mv_staleness_trading_days"] == 0
+    assert row["circ_mv_crossed_pit_entry_boundary"] is True
+    assert row["circ_mv_history_start"] == date(2022, 1, 1)
+    assert row["circ_mv_lookback_contract_version"] == "hmm_risk_causal_circ_mv_source_window_v1"
+
+
+def test_reader_rejects_circ_mv_before_immutable_source_window() -> None:
+    connection = _Connection()
+    connection.stock_rows = [
+        (
+            date(2022, 1, 3),
+            "000001.SZ",
+            "L1-00",
+            "L1 Sector 0",
+            "L2-000",
+            "L2 Sector 0",
+            date(2022, 1, 3),
+            1,
+            10_000,
+            11_000,
+            9_000,
+            10_500,
+            100,
+            1_000_000,
+            date(2021, 12, 31),
+            10_000,
+            date(2021, 12, 24),
+            9_000,
+            date(2021, 12, 17),
+            8_000,
+            100.0,
+            date(2021, 12, 31),
+            date(2021, 12, 31),
+            80.0,
+            0,
+            "000001.SZ",
+            2.0,
+            1.0,
+            4.0,
+            3.0,
+            2.0,
+            "000001.SZ",
+            11.0,
+        )
+    ]
+
+    row = next(_reader(connection).iter_stock_fact_rows())
+
+    assert row["prev_circ_mv_cny"] is None
+    assert row["circ_mv_source_date"] is None
+    assert row["circ_mv_staleness_trading_days"] is None
+    assert row["circ_mv_crossed_pit_entry_boundary"] is False
+    assert row["circ_mv_history_start"] == date(2022, 1, 1)
+
+
+def test_circ_mv_sql_fragments_use_source_history_start_not_pit_entry() -> None:
+    for has_alias, expected_count in ((False, 1), (True, 3)):
+        _, _, join_sql = subject.PostgresStockFactReader._circ_mv_asof_fragments(
+            previous_date="calendar.previous_trade_date",
+            history_start="contract.history_start",
+            has_alias=has_alias,
+        )
+
+        assert join_sql.count("trade_date>=contract.history_start") == expected_count
+        assert "eligible_start" not in join_sql
+
+
 def test_reader_resolves_historical_moneyflow_source_without_rewriting_canonical_symbol() -> None:
     connection = _Connection()
     connection.stock_rows = [
@@ -571,6 +682,12 @@ class _FactReader:
                     "prev_close_10_yuan": close / 1.10,
                     "total_mv_cny": 1_000_000.0,
                     "prev_circ_mv_cny": 800_000.0,
+                    "circ_mv_source_date": date(2024, 1, 1),
+                    "circ_mv_staleness_trading_days": 0,
+                    "circ_mv_crossed_pit_entry_boundary": False,
+                    "circ_mv_pit_eligible_start": date(2020, 1, 1),
+                    "circ_mv_history_start": date(2022, 1, 1),
+                    "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
                     "buy_sm_amount_cny": 100.0,
                     "sell_sm_amount_cny": 90.0,
                     "buy_elg_amount_cny": 200.0,
@@ -587,6 +704,48 @@ def test_daily_aggregate_loader_hashes_raw_rows_and_returns_all_l1() -> None:
     assert manifest["raw_row_count"] == 310
     assert manifest["aggregate_row_count"] == 31
     assert len(manifest["raw_jsonl_sha256"]) == 64
+    assert manifest["circ_mv_lookback_contract_version"] == "hmm_risk_causal_circ_mv_source_window_v1"
+    assert manifest["circ_mv_pit_boundary_crossing_count"] == 0
+
+
+def test_daily_aggregate_manifest_persists_pit_boundary_crossing_receipt() -> None:
+    class BoundaryReader(_FactReader):
+        def iter_stock_fact_rows(self):
+            for index, row in enumerate(super().iter_stock_fact_rows()):
+                if index == 0:
+                    yield {
+                        **row,
+                        "circ_mv_crossed_pit_entry_boundary": True,
+                        "circ_mv_pit_eligible_start": date(2024, 1, 2),
+                    }
+                else:
+                    yield row
+
+    _, manifest = subject.load_daily_aggregates(BoundaryReader())
+
+    assert manifest["circ_mv_pit_boundary_crossing_count"] == 1
+    assert len(manifest["circ_mv_pit_boundary_crossing_key_sha256"]) == 64
+
+
+def test_daily_aggregate_manifest_rejects_crossing_with_wrong_history_identity() -> None:
+    class BoundaryReader(_FactReader):
+        def iter_stock_fact_rows(self):
+            for index, row in enumerate(super().iter_stock_fact_rows()):
+                if index == 0:
+                    yield {
+                        **row,
+                        "circ_mv_crossed_pit_entry_boundary": True,
+                        "circ_mv_pit_eligible_start": date(2024, 1, 2),
+                        "circ_mv_history_start": date(2023, 1, 1),
+                    }
+                else:
+                    yield row
+
+    with pytest.raises(
+        StateModelSetError,
+        match="hmm_risk_stock_fact_circ_mv_pit_boundary_evidence_invalid",
+    ):
+        subject.load_daily_aggregates(BoundaryReader())
 
 
 def test_direct_loader_builds_l1_l2_from_one_database_stream() -> None:
