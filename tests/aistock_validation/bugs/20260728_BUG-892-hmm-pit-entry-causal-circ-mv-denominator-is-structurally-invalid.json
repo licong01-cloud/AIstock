@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-892",
-  "closed_at": null,
+  "closed_at": "2026-07-28T05:13:35Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -156,8 +156,8 @@
   },
   "first_seen_at": "2026-07-28T02:14:41.108316Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b7ab238348740c0e04a655c99dd0e337c1305fb0",
+  "fixed_at": "2026-07-28T05:17:14.189105Z",
   "github_issue_number": 2822,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2822",
   "last_seen_at": "2026-07-28T04:52:28.2503892Z",
@@ -165,6 +165,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2824",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -177,7 +178,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -186,6 +187,9 @@
     "fingerprint": "fa2f8d5c474e3b491c29f9dd",
     "source_event_id": "FE-20260728-fa2f8d5c474e"
   },
+  "validation_evidence": [
+    "44 direct hmm_risk tests passed; nox l0 passed; module registry 8 passed 14/14 mapped; PR CI passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
