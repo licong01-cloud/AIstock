@@ -809,6 +809,20 @@ def test_daily_aggregate_loader_hashes_raw_rows_and_returns_all_l1() -> None:
     assert manifest["circ_mv_pit_boundary_crossing_count"] == 0
 
 
+def test_daily_aggregate_uses_effective_circ_mv_history_contract_identity() -> None:
+    class HistoryReader(_FactReader):
+        spec = _spec(circ_mv_history_start=date(2020, 7, 30))
+
+        def iter_stock_fact_rows(self):
+            for row in super().iter_stock_fact_rows():
+                yield {**row, "circ_mv_history_start": date(2020, 7, 30)}
+
+    _, manifest = subject.load_daily_aggregates(HistoryReader())
+
+    assert manifest["source_window_start"] == "2022-01-01"
+    assert manifest["circ_mv_history_start"] == "2020-07-30"
+
+
 def test_daily_aggregate_manifest_persists_pit_boundary_crossing_receipt() -> None:
     class BoundaryReader(_FactReader):
         def iter_stock_fact_rows(self):

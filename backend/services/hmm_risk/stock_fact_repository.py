@@ -1800,7 +1800,7 @@ def load_daily_aggregates(
         for row in merged_rows:
             _record_source_evidence(
                 row,
-                expected_circ_mv_history_start=reader.spec.source_start,
+                expected_circ_mv_history_start=reader.spec.effective_circ_mv_history_start,
                 provider_absence_keys=moneyflow_provider_absence_keys,
                 alias_resolution_keys=moneyflow_alias_resolution_keys,
                 circ_mv_stale_keys=circ_mv_stale_keys,
@@ -1880,7 +1880,7 @@ def load_direct_daily_aggregates(
         for row in l1_rows:
             _record_source_evidence(
                 row,
-                expected_circ_mv_history_start=reader.spec.source_start,
+                expected_circ_mv_history_start=reader.spec.effective_circ_mv_history_start,
                 provider_absence_keys=provider_absence_keys,
                 alias_resolution_keys=alias_resolution_keys,
                 circ_mv_stale_keys=circ_mv_stale_keys,
