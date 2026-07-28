@@ -6359,7 +6359,10 @@ class PostgresHistoricalRangeRepository:
             if day_run_id is not None and upstream.day_run_id not in allowed_day_ids:
                 raise ValueError("upstream artifact belongs to a different day run")
             next_day_run_id = day_run_id
-            next_predecessor_day_run_id: str | None = None
+            # Same-day evidence nodes inherit the predecessor proven by their
+            # containing typed day receipt. Crossing into that receipt advances
+            # the recursive identity to its own typed predecessor below.
+            next_predecessor_day_run_id = allow_direct_predecessor_day_run_id
             if (
                 upstream_ref.artifact_kind is HistoricalRangeArtifactKind.DAY_RECEIPT
                 and upstream.day_run_id is not None
@@ -6370,6 +6373,7 @@ class PostgresHistoricalRangeRepository:
                     raise ValueError("cross-day ancestor must be a typed successful DAY_RECEIPT")
                 if range_receipt_to_day or cross_day:
                     next_day_run_id = str(upstream.day_run_id)
+                    next_predecessor_day_run_id = None
                     if upstream.payload_schema_version == DAY_RECEIPT_PAYLOAD_SCHEMA_VERSION_V2:
                         typed_receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(upstream.payload)
                         if typed_receipt.previous_day_receipt_ref is not None:

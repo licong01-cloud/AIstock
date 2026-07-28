@@ -1,6 +1,8 @@
 {
   "actual": "Real DEV 15-day single-Alpha and native multi-Alpha replay both fail deterministically on ordinal 3 while committing decision-mark evidence. Repository recursive upstream validation permits only the current and direct predecessor day identities, so traversal from day 3 through the typed day-2 receipt rejects the valid day-1 ancestor with ValueError: upstream artifact belongs to a different day run. Repair must preserve exact resolved request/range identity, typed successful DAY_RECEIPT predecessor linkage, cycle detection and fail-closed rejection of cross-run or unlinked ancestors; add a three-day regression for both valid and invalid chains.",
   "allowed_write_scope": [
+    "backend/services/advisory_historical_range/repository.py",
+    "backend/tests/advisory_historical_range/test_r3_repository.py",
     "tests/aistock_validation/bugs/20260728_BUG-897-r5-historical-evidence-closure-rejects-valid-grandparent-day-receipt-on.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -8,8 +10,9 @@
   "bug_id": "BUG-897",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
+    "Preserve a typed predecessor day identity while recursively traversing same-day R3 evidence nodes.",
+    "Advance the permitted predecessor only through an exact typed DAY_RECEIPT edge and reject unlinked or cross-range ancestors.",
+    "Run the direct three-day regression, advisory historical-range module tests, L0, and module ownership verification.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-28T15:52:43.108115Z",
@@ -22,8 +25,12 @@
       "timestamp": "2026-07-28T15:52:43.108111Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "dev://advisory/historical-range-batches/ahrb_e062e4bea1243e7f24e84b66c8e9cd0e",
+    "dev://advisory/historical-range-runs/ahrr_751639f217e0b11d53130d86a8afa4e8/days/2026-07-03",
+    "dev://advisory/historical-range-runs/ahrr_8425f390fb2e16b3348af717d4e25e0b/days/2026-07-03"
+  ],
+  "expected": "A day-three decision-mark closure must accept the immutable day-two receipt and its exact typed day-one predecessor while continuing to reject any unlinked day or different-range ancestor.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +59,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r3_repository.py::test_recursive_r3_closure_accepts_typed_grandparent_and_rejects_unlinked_day -q -p no:cacheprovider",
   "required_verification": [
     "l0"
   ],
