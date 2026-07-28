@@ -383,6 +383,8 @@ def test_reader_preserves_causal_circ_mv_across_current_pit_entry_boundary() -> 
     assert row["circ_mv_crossed_pit_entry_boundary"] is True
     assert row["circ_mv_history_start"] == date(2022, 1, 1)
     assert row["circ_mv_lookback_contract_version"] == "hmm_risk_causal_circ_mv_source_window_v1"
+    assert row["circ_mv_fact_status"] == "available"
+    assert row["circ_mv_reason_code"] is None
 
 
 def test_reader_rejects_circ_mv_before_immutable_source_window() -> None:
@@ -432,6 +434,8 @@ def test_reader_rejects_circ_mv_before_immutable_source_window() -> None:
     assert row["circ_mv_staleness_trading_days"] is None
     assert row["circ_mv_crossed_pit_entry_boundary"] is False
     assert row["circ_mv_history_start"] == date(2022, 1, 1)
+    assert row["circ_mv_fact_status"] == "source_unavailable"
+    assert row["circ_mv_reason_code"] == "hmm_risk_stock_fact_circ_mv_source_unavailable"
 
 
 def test_circ_mv_sql_fragments_use_source_history_start_not_pit_entry() -> None:
@@ -444,6 +448,38 @@ def test_circ_mv_sql_fragments_use_source_history_start_not_pit_entry() -> None:
 
         assert join_sql.count("trade_date>=contract.history_start") == expected_count
         assert "eligible_start" not in join_sql
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected_status", "expected_reason"),
+    [
+        (None, "latest_value_missing", "hmm_risk_stock_fact_circ_mv_latest_value_missing"),
+        (0, "latest_value_non_positive", "hmm_risk_stock_fact_circ_mv_latest_value_non_positive"),
+        (-1, "latest_value_non_positive", "hmm_risk_stock_fact_circ_mv_latest_value_non_positive"),
+        (float("nan"), "latest_value_non_finite", "hmm_risk_stock_fact_circ_mv_latest_value_non_finite"),
+        ("invalid", "latest_value_non_numeric", "hmm_risk_stock_fact_circ_mv_latest_value_non_numeric"),
+    ],
+)
+def test_circ_mv_invalid_latest_value_preserves_causal_source_without_fallback(
+    raw_value,
+    expected_status,
+    expected_reason,
+) -> None:
+    evidence = subject._build_circ_mv_evidence(
+        raw_value=raw_value,
+        source_date=date(2024, 1, 2),
+        staleness_trading_days=0,
+        trade_date=date(2024, 1, 3),
+        pit_eligible_start=date(2024, 1, 3),
+        history_start=date(2022, 1, 1),
+    )
+
+    assert evidence.accepted_value is None
+    assert evidence.source_date == date(2024, 1, 2)
+    assert evidence.staleness_trading_days == 0
+    assert evidence.crossed_pit_entry_boundary is True
+    assert evidence.fact_status == expected_status
+    assert evidence.reason_code == expected_reason
 
 
 def test_reader_resolves_historical_moneyflow_source_without_rewriting_canonical_symbol() -> None:
@@ -688,6 +724,8 @@ class _FactReader:
                     "circ_mv_pit_eligible_start": date(2020, 1, 1),
                     "circ_mv_history_start": date(2022, 1, 1),
                     "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
+                    "circ_mv_fact_status": "available",
+                    "circ_mv_reason_code": None,
                     "buy_sm_amount_cny": 100.0,
                     "sell_sm_amount_cny": 90.0,
                     "buy_elg_amount_cny": 200.0,
@@ -737,6 +775,26 @@ def test_daily_aggregate_manifest_rejects_crossing_with_wrong_history_identity()
                         "circ_mv_crossed_pit_entry_boundary": True,
                         "circ_mv_pit_eligible_start": date(2024, 1, 2),
                         "circ_mv_history_start": date(2023, 1, 1),
+                    }
+                else:
+                    yield row
+
+    with pytest.raises(
+        StateModelSetError,
+        match="hmm_risk_stock_fact_circ_mv_evidence_contract_invalid",
+    ):
+        subject.load_daily_aggregates(BoundaryReader())
+
+
+def test_daily_aggregate_manifest_rejects_false_crossing_flag_for_derived_boundary() -> None:
+    class BoundaryReader(_FactReader):
+        def iter_stock_fact_rows(self):
+            for index, row in enumerate(super().iter_stock_fact_rows()):
+                if index == 0:
+                    yield {
+                        **row,
+                        "circ_mv_crossed_pit_entry_boundary": False,
+                        "circ_mv_pit_eligible_start": date(2024, 1, 2),
                     }
                 else:
                     yield row

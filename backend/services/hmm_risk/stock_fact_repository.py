@@ -41,6 +41,107 @@ class StockFactSourceSpec:
             raise StateModelSetError("stock-fact source window is invalid")
 
 
+@dataclass(frozen=True)
+class CircMvEvidence:
+    accepted_value: Any
+    source_date: date | None
+    staleness_trading_days: int | None
+    crossed_pit_entry_boundary: bool
+    fact_status: str
+    reason_code: str | None
+
+
+def _build_circ_mv_evidence(
+    *,
+    raw_value: Any,
+    source_date: Any,
+    staleness_trading_days: Any,
+    trade_date: date,
+    pit_eligible_start: date,
+    history_start: date,
+) -> CircMvEvidence:
+    normalized_source_date = source_date if isinstance(source_date, date) else None
+    normalized_staleness = staleness_trading_days if isinstance(staleness_trading_days, int) else None
+    crossed_boundary = bool(normalized_source_date is not None and normalized_source_date < pit_eligible_start)
+    if normalized_source_date is None:
+        return CircMvEvidence(
+            accepted_value=None,
+            source_date=None,
+            staleness_trading_days=None,
+            crossed_pit_entry_boundary=False,
+            fact_status="source_unavailable",
+            reason_code="hmm_risk_stock_fact_circ_mv_source_unavailable",
+        )
+    if not (
+        history_start <= normalized_source_date < trade_date
+        and normalized_staleness is not None
+        and normalized_staleness >= 0
+    ):
+        return CircMvEvidence(
+            accepted_value=None,
+            source_date=normalized_source_date,
+            staleness_trading_days=normalized_staleness,
+            crossed_pit_entry_boundary=crossed_boundary,
+            fact_status="causal_source_invalid",
+            reason_code="hmm_risk_stock_fact_circ_mv_causal_source_invalid",
+        )
+    if raw_value is None:
+        return CircMvEvidence(
+            accepted_value=None,
+            source_date=normalized_source_date,
+            staleness_trading_days=normalized_staleness,
+            crossed_pit_entry_boundary=crossed_boundary,
+            fact_status="latest_value_missing",
+            reason_code="hmm_risk_stock_fact_circ_mv_latest_value_missing",
+        )
+    if isinstance(raw_value, bool):
+        return CircMvEvidence(
+            accepted_value=None,
+            source_date=normalized_source_date,
+            staleness_trading_days=normalized_staleness,
+            crossed_pit_entry_boundary=crossed_boundary,
+            fact_status="latest_value_non_numeric",
+            reason_code="hmm_risk_stock_fact_circ_mv_latest_value_non_numeric",
+        )
+    try:
+        normalized_value = float(raw_value)
+    except (TypeError, ValueError, OverflowError):
+        return CircMvEvidence(
+            accepted_value=None,
+            source_date=normalized_source_date,
+            staleness_trading_days=normalized_staleness,
+            crossed_pit_entry_boundary=crossed_boundary,
+            fact_status="latest_value_non_numeric",
+            reason_code="hmm_risk_stock_fact_circ_mv_latest_value_non_numeric",
+        )
+    if not math.isfinite(normalized_value):
+        return CircMvEvidence(
+            accepted_value=None,
+            source_date=normalized_source_date,
+            staleness_trading_days=normalized_staleness,
+            crossed_pit_entry_boundary=crossed_boundary,
+            fact_status="latest_value_non_finite",
+            reason_code="hmm_risk_stock_fact_circ_mv_latest_value_non_finite",
+        )
+    if normalized_value <= 0:
+        return CircMvEvidence(
+            accepted_value=None,
+            source_date=normalized_source_date,
+            staleness_trading_days=normalized_staleness,
+            crossed_pit_entry_boundary=crossed_boundary,
+            fact_status="latest_value_non_positive",
+            reason_code="hmm_risk_stock_fact_circ_mv_latest_value_non_positive",
+        )
+    return CircMvEvidence(
+        accepted_value=raw_value,
+        source_date=normalized_source_date,
+        staleness_trading_days=normalized_staleness,
+        crossed_pit_entry_boundary=crossed_boundary,
+        fact_status="available",
+        reason_code=None,
+    )
+
+
 class PostgresStockFactReader:
     """Stream explicit stock facts from an already read-only connection."""
 
@@ -344,17 +445,8 @@ class PostgresStockFactReader:
                 circ_state = circ_mv_state.get(code)
                 circ_mv_source_date = None if circ_state is None else circ_state[0]
                 previous_circ_mv = None if circ_state is None else circ_state[1]
-                if (
-                    circ_mv_source_date is None
-                    or previous_market_date is None
-                    or circ_mv_source_date >= trade_date_value
-                    or circ_mv_source_date > previous_market_date
-                    or circ_mv_source_date < self.spec.source_start
-                ):
-                    circ_mv_source_date = None
-                    previous_circ_mv = None
                 circ_mv_staleness = None
-                if circ_mv_source_date is not None:
+                if isinstance(circ_mv_source_date, date) and isinstance(previous_market_date, date):
                     try:
                         circ_mv_staleness = (
                             trading_ordinals[previous_market_date] - trading_ordinals[circ_mv_source_date]
@@ -363,8 +455,13 @@ class PostgresStockFactReader:
                         raise StateModelSetError("hmm_risk_stock_fact_calendar_mismatch: circ_mv source date") from exc
                     if circ_mv_staleness < 0:
                         raise StateModelSetError("hmm_risk_stock_fact_causal_circ_mv_invalid: negative staleness")
-                crossed_pit_entry_boundary = bool(
-                    circ_mv_source_date is not None and circ_mv_source_date < eligible_start
+                circ_mv_evidence = _build_circ_mv_evidence(
+                    raw_value=previous_circ_mv,
+                    source_date=circ_mv_source_date,
+                    staleness_trading_days=circ_mv_staleness,
+                    trade_date=trade_date_value,
+                    pit_eligible_start=eligible_start,
+                    history_start=self.spec.source_start,
                 )
                 current_basic = daily_basic.get((trade_date_value, code))
                 moneyflow_resolution = self.security_identity_manifest.resolve(
@@ -388,13 +485,15 @@ class PostgresStockFactReader:
                     "prev_close_5_yuan": None,
                     "prev_close_10_yuan": None,
                     "total_mv_cny": _scaled(None if current_basic is None else current_basic[0], 0.0001),
-                    "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
-                    "circ_mv_source_date": circ_mv_source_date,
-                    "circ_mv_staleness_trading_days": circ_mv_staleness,
-                    "circ_mv_crossed_pit_entry_boundary": crossed_pit_entry_boundary,
+                    "prev_circ_mv_cny": _scaled(circ_mv_evidence.accepted_value, 0.0001),
+                    "circ_mv_source_date": circ_mv_evidence.source_date,
+                    "circ_mv_staleness_trading_days": circ_mv_evidence.staleness_trading_days,
+                    "circ_mv_crossed_pit_entry_boundary": circ_mv_evidence.crossed_pit_entry_boundary,
                     "circ_mv_pit_eligible_start": eligible_start,
                     "circ_mv_history_start": self.spec.source_start,
                     "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
+                    "circ_mv_fact_status": circ_mv_evidence.fact_status,
+                    "circ_mv_reason_code": circ_mv_evidence.reason_code,
                     "buy_sm_amount_cny": None,
                     "sell_sm_amount_cny": None,
                     "buy_elg_amount_cny": None,
@@ -566,17 +665,8 @@ class PostgresStockFactReader:
                 circ_state = circ_mv_state.get(code)
                 circ_mv_source_date = None if circ_state is None else circ_state[0]
                 previous_circ_mv = None if circ_state is None else circ_state[1]
-                if (
-                    circ_mv_source_date is None
-                    or previous_market_date is None
-                    or circ_mv_source_date >= trade_date_value
-                    or circ_mv_source_date > previous_market_date
-                    or circ_mv_source_date < self.spec.source_start
-                ):
-                    circ_mv_source_date = None
-                    previous_circ_mv = None
                 circ_mv_staleness = None
-                if circ_mv_source_date is not None:
+                if isinstance(circ_mv_source_date, date) and isinstance(previous_market_date, date):
                     try:
                         circ_mv_staleness = (
                             trading_ordinals[previous_market_date] - trading_ordinals[circ_mv_source_date]
@@ -585,8 +675,13 @@ class PostgresStockFactReader:
                         raise StateModelSetError("hmm_risk_stock_fact_calendar_mismatch: circ_mv source date") from exc
                     if circ_mv_staleness < 0:
                         raise StateModelSetError("hmm_risk_stock_fact_causal_circ_mv_invalid: negative staleness")
-                crossed_pit_entry_boundary = bool(
-                    circ_mv_source_date is not None and circ_mv_source_date < eligible_start
+                circ_mv_evidence = _build_circ_mv_evidence(
+                    raw_value=previous_circ_mv,
+                    source_date=circ_mv_source_date,
+                    staleness_trading_days=circ_mv_staleness,
+                    trade_date=trade_date_value,
+                    pit_eligible_start=eligible_start,
+                    history_start=self.spec.source_start,
                 )
                 current_basic = daily_basic.get((trade_date_value, code))
                 total_mv = None if current_basic is None else current_basic[0]
@@ -634,13 +729,15 @@ class PostgresStockFactReader:
                     "prev_close_5_yuan": _scaled(previous_close_5, 1000.0),
                     "prev_close_10_yuan": _scaled(previous_close_10, 1000.0),
                     "total_mv_cny": _scaled(total_mv, 0.0001),
-                    "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
-                    "circ_mv_source_date": circ_mv_source_date,
-                    "circ_mv_staleness_trading_days": circ_mv_staleness,
-                    "circ_mv_crossed_pit_entry_boundary": crossed_pit_entry_boundary,
+                    "prev_circ_mv_cny": _scaled(circ_mv_evidence.accepted_value, 0.0001),
+                    "circ_mv_source_date": circ_mv_evidence.source_date,
+                    "circ_mv_staleness_trading_days": circ_mv_evidence.staleness_trading_days,
+                    "circ_mv_crossed_pit_entry_boundary": circ_mv_evidence.crossed_pit_entry_boundary,
                     "circ_mv_pit_eligible_start": eligible_start,
                     "circ_mv_history_start": self.spec.source_start,
                     "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
+                    "circ_mv_fact_status": circ_mv_evidence.fact_status,
+                    "circ_mv_reason_code": circ_mv_evidence.reason_code,
                     "buy_sm_amount_cny": _scaled(moneyflow_values[0], 0.0001),
                     "sell_sm_amount_cny": _scaled(moneyflow_values[1], 0.0001),
                     "buy_elg_amount_cny": _scaled(moneyflow_values[2], 0.0001),
@@ -1113,16 +1210,14 @@ class PostgresStockFactReader:
                 previous_close_10 = row[19] if row[18] is not None and row[18] >= eligible_start else None
                 circ_mv_source_date = row[22]
                 circ_mv_staleness = row[24]
-                previous_circ_mv = (
-                    row[23]
-                    if circ_mv_source_date is not None
-                    and circ_mv_source_date < row[0]
-                    and circ_mv_source_date >= self.spec.source_start
-                    and circ_mv_staleness is not None
-                    and int(circ_mv_staleness) >= 0
-                    else None
+                circ_mv_evidence = _build_circ_mv_evidence(
+                    raw_value=row[23],
+                    source_date=circ_mv_source_date,
+                    staleness_trading_days=circ_mv_staleness,
+                    trade_date=row[0],
+                    pit_eligible_start=eligible_start,
+                    history_start=self.spec.source_start,
                 )
-                crossed_pit_entry_boundary = bool(previous_circ_mv is not None and circ_mv_source_date < eligible_start)
                 moneyflow_resolution = self.security_identity_manifest.resolve(
                     str(row[1]), row[0], "market.moneyflow_ts"
                 )
@@ -1167,15 +1262,15 @@ class PostgresStockFactReader:
                     "prev_close_5_yuan": _scaled(previous_close_5, 1000.0),
                     "prev_close_10_yuan": _scaled(previous_close_10, 1000.0),
                     "total_mv_cny": _scaled(row[20], 0.0001),
-                    "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
-                    "circ_mv_source_date": circ_mv_source_date if previous_circ_mv is not None else None,
-                    "circ_mv_staleness_trading_days": (
-                        int(circ_mv_staleness) if previous_circ_mv is not None else None
-                    ),
-                    "circ_mv_crossed_pit_entry_boundary": crossed_pit_entry_boundary,
+                    "prev_circ_mv_cny": _scaled(circ_mv_evidence.accepted_value, 0.0001),
+                    "circ_mv_source_date": circ_mv_evidence.source_date,
+                    "circ_mv_staleness_trading_days": circ_mv_evidence.staleness_trading_days,
+                    "circ_mv_crossed_pit_entry_boundary": circ_mv_evidence.crossed_pit_entry_boundary,
                     "circ_mv_pit_eligible_start": eligible_start,
                     "circ_mv_history_start": self.spec.source_start,
                     "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
+                    "circ_mv_fact_status": circ_mv_evidence.fact_status,
+                    "circ_mv_reason_code": circ_mv_evidence.reason_code,
                     "buy_sm_amount_cny": _scaled(row[26], 0.0001),
                     "sell_sm_amount_cny": _scaled(row[27], 0.0001),
                     "buy_elg_amount_cny": _scaled(row[28], 0.0001),
@@ -1329,16 +1424,14 @@ class PostgresStockFactReader:
                     )
                 circ_mv_source_date = row[10]
                 circ_mv_staleness = row[12]
-                previous_circ_mv = (
-                    row[11]
-                    if circ_mv_source_date is not None
-                    and circ_mv_source_date < row[0]
-                    and circ_mv_source_date >= self.spec.source_start
-                    and circ_mv_staleness is not None
-                    and int(circ_mv_staleness) >= 0
-                    else None
+                circ_mv_evidence = _build_circ_mv_evidence(
+                    raw_value=row[11],
+                    source_date=circ_mv_source_date,
+                    staleness_trading_days=circ_mv_staleness,
+                    trade_date=row[0],
+                    pit_eligible_start=row[7],
+                    history_start=self.spec.source_start,
                 )
-                crossed_pit_entry_boundary = bool(previous_circ_mv is not None and circ_mv_source_date < row[7])
                 moneyflow_resolution = self.security_identity_manifest.resolve(
                     str(row[1]), row[0], "market.moneyflow_ts"
                 )
@@ -1360,15 +1453,15 @@ class PostgresStockFactReader:
                     "prev_close_5_yuan": None,
                     "prev_close_10_yuan": None,
                     "total_mv_cny": _scaled(row[8], 0.0001),
-                    "prev_circ_mv_cny": _scaled(previous_circ_mv, 0.0001),
-                    "circ_mv_source_date": circ_mv_source_date if previous_circ_mv is not None else None,
-                    "circ_mv_staleness_trading_days": (
-                        int(circ_mv_staleness) if previous_circ_mv is not None else None
-                    ),
-                    "circ_mv_crossed_pit_entry_boundary": crossed_pit_entry_boundary,
+                    "prev_circ_mv_cny": _scaled(circ_mv_evidence.accepted_value, 0.0001),
+                    "circ_mv_source_date": circ_mv_evidence.source_date,
+                    "circ_mv_staleness_trading_days": circ_mv_evidence.staleness_trading_days,
+                    "circ_mv_crossed_pit_entry_boundary": circ_mv_evidence.crossed_pit_entry_boundary,
                     "circ_mv_pit_eligible_start": row[7],
                     "circ_mv_history_start": self.spec.source_start,
                     "circ_mv_lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
+                    "circ_mv_fact_status": circ_mv_evidence.fact_status,
+                    "circ_mv_reason_code": circ_mv_evidence.reason_code,
                     "buy_sm_amount_cny": None,
                     "sell_sm_amount_cny": None,
                     "buy_elg_amount_cny": None,
@@ -1484,6 +1577,43 @@ def _record_source_evidence(
         )
     staleness = row.get("circ_mv_staleness_trading_days")
     circ_mv_source_date = row.get("circ_mv_source_date")
+    pit_eligible_start = row.get("circ_mv_pit_eligible_start")
+    circ_mv_history_start = row.get("circ_mv_history_start")
+    declared_crossing = row.get("circ_mv_crossed_pit_entry_boundary")
+    fact_status = row.get("circ_mv_fact_status")
+    reason_code = row.get("circ_mv_reason_code")
+    status_reason_codes = {
+        "source_unavailable": "hmm_risk_stock_fact_circ_mv_source_unavailable",
+        "causal_source_invalid": "hmm_risk_stock_fact_circ_mv_causal_source_invalid",
+        "latest_value_missing": "hmm_risk_stock_fact_circ_mv_latest_value_missing",
+        "latest_value_non_numeric": "hmm_risk_stock_fact_circ_mv_latest_value_non_numeric",
+        "latest_value_non_finite": "hmm_risk_stock_fact_circ_mv_latest_value_non_finite",
+        "latest_value_non_positive": "hmm_risk_stock_fact_circ_mv_latest_value_non_positive",
+    }
+    if not (
+        isinstance(trade_date_value, date)
+        and isinstance(pit_eligible_start, date)
+        and isinstance(circ_mv_history_start, date)
+        and circ_mv_history_start == expected_circ_mv_history_start
+        and isinstance(declared_crossing, bool)
+        and row.get("circ_mv_lookback_contract_version") == CIRC_MV_LOOKBACK_CONTRACT_VERSION
+    ):
+        raise StateModelSetError("hmm_risk_stock_fact_circ_mv_evidence_contract_invalid")
+    derived_crossing = bool(isinstance(circ_mv_source_date, date) and circ_mv_source_date < pit_eligible_start)
+    if declared_crossing != derived_crossing:
+        raise StateModelSetError("hmm_risk_stock_fact_circ_mv_pit_boundary_evidence_invalid")
+    if fact_status == "available":
+        try:
+            available_value = float(row.get("prev_circ_mv_cny"))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise StateModelSetError("hmm_risk_stock_fact_circ_mv_evidence_contract_invalid") from exc
+        if not math.isfinite(available_value) or available_value <= 0 or reason_code is not None:
+            raise StateModelSetError("hmm_risk_stock_fact_circ_mv_evidence_contract_invalid")
+    elif fact_status in status_reason_codes:
+        if row.get("prev_circ_mv_cny") is not None or reason_code != status_reason_codes[fact_status]:
+            raise StateModelSetError("hmm_risk_stock_fact_circ_mv_evidence_contract_invalid")
+    else:
+        raise StateModelSetError("hmm_risk_stock_fact_circ_mv_evidence_contract_invalid")
     if (
         isinstance(staleness, int)
         and staleness > 0
@@ -1498,15 +1628,9 @@ def _record_source_evidence(
                 "staleness_trading_days": staleness,
             }
         )
-    if row.get("circ_mv_crossed_pit_entry_boundary") is True:
-        pit_eligible_start = row.get("circ_mv_pit_eligible_start")
-        circ_mv_history_start = row.get("circ_mv_history_start")
+    if derived_crossing:
         if not (
-            isinstance(trade_date_value, date)
-            and isinstance(circ_mv_source_date, date)
-            and isinstance(pit_eligible_start, date)
-            and isinstance(circ_mv_history_start, date)
-            and circ_mv_history_start == expected_circ_mv_history_start
+            isinstance(circ_mv_source_date, date)
             and isinstance(staleness, int)
             and staleness >= 0
             and circ_mv_history_start <= circ_mv_source_date < pit_eligible_start <= trade_date_value
@@ -1522,6 +1646,8 @@ def _record_source_evidence(
                 "pit_eligible_start": pit_eligible_start.isoformat(),
                 "staleness_trading_days": staleness,
                 "lookback_contract_version": CIRC_MV_LOOKBACK_CONTRACT_VERSION,
+                "fact_status": fact_status,
+                "reason_code": reason_code,
             }
         )
 

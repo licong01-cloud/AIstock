@@ -896,6 +896,11 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
    history boundary、crossing receipt/hash 可回读。随后仅执行 601 日 no-fit denominator/preflight：1,073 项必须全部得到 causal
    weight，P/F/O、invalid sector/date 与 row-count evidence 重新计算；在该 evidence 完整前仍禁止 5184 fits、selection、D6、
    model/READY。该重跑不是新增人工门禁，也不授权 DDL、DML、依赖安装或 runtime action。
+6. **正式审核修正**：direct SQL 与 missing-price direct 路径不得以 `circ_mv` 数值是否有效决定是否保留 source date、staleness 或
+   PIT-boundary crossing。时间因果性与数值有效性必须独立：最新 causal row 即使为 NULL、非数值、非有限或非正，也必须保留其
+   source identity，并以稳定 `circ_mv_fact_status`/`circ_mv_reason_code` 使 denominator fail closed；不得把“最新 row 数值无效”
+   伪装成“source row 不存在”。crossing authority 必须由日期关系推导，调用方布尔值与推导结果任一方向不一致均以
+   `hmm_risk_stock_fact_circ_mv_pit_boundary_evidence_invalid` 拒绝。crossing receipt/hash 同时绑定 fact status 与 reason code。
 
 ##### BUG-870. 正式 train coverage preflight 与 child failure receipt
 
@@ -1811,7 +1816,7 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-009-D | 三类缺口按什么顺序实现和恢复正式训练 | `PREFLIGHT_EXECUTED_BLOCKED_TRAIN_COVERAGE` | 601 日 source-only preflight 已执行且无 DB/runtime write；legacy L1 31/31、legacy L2 130/131、autocycle L1/L2 0 complete；不得训练、selection、D6 或 READY |
 | BUG-886 | provider absence 如何避免放大为无关 feature/sector 的全局 train coverage failure | `SOURCE_REVIEW_FIX_VALIDATED_DIAGNOSTIC_VERIFIED_FORMAL_POLICY_PENDING` | 正式/诊断 schema、统一 diagnostic denominator、exact opportunity date-set/hash 与单一 receipt 已修复；rebase 后权威 601 日 report `2b1f4acc…7260` 回读通过，PIT/selection/runtime prediction universe 不变，正式 policy 与训练保持 blocked |
 | C-010-DIAG-01 | 是否先执行 601 日 feature-domain eligibility/mask 只读诊断 | `VERIFIED_AFTER_REVIEW_FIX_NO_FIT_NO_SELECTION_NO_ARTIFACT` | 当前 source ancestry 的 clean producer report canonical `2b1f4acc…7260`；5 个 exact opportunity hashes 完整，仅排除 `689009.SH` moneyflow contribution，四项 candidate valid 且无需删 feature；旧 `ded02740…251f` 仅为 failed-review identity，`ac218d78…6b3ae` 为 pre-rebase verified evidence |
-| BUG-892 | PIT entry day 的 causal `circ_mv` 为什么形成结构性 denominator failure | `SOURCE_IMPLEMENTED_DIRECT_AND_EXACT_KEY_VERIFIED_FULL_601_DEFERRED` | 1,073 项全部为 `trade_date=eligible_start` 且已有 `<t` 正数 authoritative circ_mv；以 immutable request source window 替代当前 PIT span 作为 lookup 下界，保留 crossing receipt/hash；direct tests 与 IPO/ST-restore 实库 smoke 通过，完整 601 日 P/F/O 重聚合按本地预算委托 nightly；不改变 PIT、return、HMM、selection、D6 或 READY 语义 |
+| BUG-892 | PIT entry day 的 causal `circ_mv` 为什么形成结构性 denominator failure | `SOURCE_REVIEW_FIX_IMPLEMENTED_FULL_601_PENDING` | 1,073 项全部为 `trade_date=eligible_start` 且已有 `<t` 正数 authoritative circ_mv；以 immutable request source window 替代当前 PIT span 作为 lookup 下界；正式审核后补齐 invalid-latest-row 来源证据、typed status/reason 与 crossing 双向一致性；direct tests 通过，完整 601 日 P/F/O 重聚合仍待执行；不改变 PIT、return、HMM、selection、D6 或 READY 语义 |
 | BUG-870 | formal preflight 是否在grid前闭合四个family/level的train coverage并持久化child typed failure | `SOURCE_FIX_IN_PROGRESS_FORMAL_GRID_BLOCKED` | clean main正式执行在首fit前因`801010.SI`仅10行失败；新增完整coverage preflight、blocked receipt和typed child failure receipt；不改变feature/PIT/cross-section/120行合同，不恢复grid |
 | C-008-B3-D4-02-DIAG-03 | 是否仅重聚合 sector-local covariance reference 与候选 bounds sensitivity | `VERIFIED_DIAGNOSTIC_ONLY_NO_REFIT_NO_SELECTION_NO_ARTIFACT` | canonical report `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；统一 `[1e-4,200]` 被证据否定，未批准替代 bound |
 | C-008-B3-D3-03/D4-02-DIAG-04 | 是否用 scale-aware initialization/prior 在固定环境执行两次完整 refit 诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | producer `94abea6c...`；992 fits；payload hash `3abb384e...19aac` bitwise equal；report canonical `2c9136d5...74c9b`；无正式 acceptance、selection、model/READY/DB/runtime write |
