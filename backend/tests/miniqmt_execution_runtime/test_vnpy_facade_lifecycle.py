@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+
+import pytest
 
 from backend.execution_algos.vnpy_compat.facade_adapter import (
     VnpyFacadeBackedPluginAdapterV1,
@@ -15,6 +18,7 @@ from backend.execution_algos.vnpy_compat.facade_characterization import (
     load_pinned_vnpy_algorithm_classes_v1,
 )
 from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeActiveOrderV1,
     VnpyFacadeAlgorithmBindingV1,
     VnpyFacadeAlgorithmCharacterizationReceiptV1,
     VnpyFacadeAuthorityInputV1,
@@ -23,8 +27,10 @@ from backend.execution_algos.vnpy_compat.facade_contracts import (
     VnpyFacadeConformanceBuildItemV1,
     VnpyFacadeConformanceReceiptV1,
     VnpyFacadeConformanceSetV1,
+    VnpyFacadeContractError,
     VnpyFacadeInitializationInputV1,
     VnpyFacadeRuntimeBindingDispositionV1,
+    VnpyFacadeStateEnvelopeV1,
     VnpyFacadeTransitionInputV1,
 )
 from backend.execution_algos.vnpy_compat.receipts import (
@@ -36,13 +42,19 @@ from backend.execution_algos.vnpy_style.plugin_manifests import (
 )
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     hash_hex_v1,
+    thaw_json_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     ActiveChildClosureStatusV1,
     AlgoDeliveryPersistenceV1,
     AlgoEventDeliveryV1,
     AlgoReadOnlyServicesV1,
+    AlgoStateSnapshotV2,
     AlgoStartContextV1,
+    BrokerCommandOutboxStatusV1,
+    BrokerCommandTypeV2,
+    BrokerCommandV2,
+    CommandChildMappingStatusV1,
     DeliveryStatusV1,
     DeterministicExecutionContextV1,
     EventSourceV2,
@@ -50,10 +62,12 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoPersistenceStatusV2,
     ExecutionAlgoPluginManifestV2,
+    ExecutionCommandChildMappingV1,
     ExecutionProjectionRefV1,
     ExecutionProjectionSetV1,
     GatewayCapabilityCatalogV1,
     KernelCommandLifecycleProjectionV1,
+    KernelCommandLifecycleProjectionItemV1,
     KernelProjectionTypeV1,
     MarketDataCapabilityV1,
     OrderTypeV1,
@@ -438,6 +452,9 @@ def _transition(
     fixture: _Fixture,
     initialization: VnpyFacadeInitializationInputV1,
     state,
+    *,
+    market_overrides: dict[str, object] | None = None,
+    active_mappings: tuple[ExecutionCommandChildMappingV1, ...] = (),
 ) -> VnpyFacadeTransitionInputV1:
     context = initialization.start_context
     event = RuntimeEventEnvelopeV2.create(
@@ -537,7 +554,7 @@ def _transition(
         status=ExecutionAlgoPersistenceStatusV2.ACTIVE,
         failure_receipt_id=None,
         active_child_closure_status=ActiveChildClosureStatusV1.NOT_APPLICABLE,
-        active_child_count=0,
+        active_child_count=len(active_mappings),
         row_version=1,
         created_at_utc="2026-07-29T01:20:00Z",
         updated_at_utc="2026-07-29T01:20:00Z",
@@ -562,6 +579,8 @@ def _transition(
         "limit_up": "11",
         "limit_down": "9",
     }
+    if market_overrides:
+        market.update(market_overrides)
     refs = tuple(
         sorted(
             (
@@ -605,12 +624,34 @@ def _transition(
         account_projection=None,
         execution_projection_set=projection_set,
     )
+    lifecycle_items = tuple(
+        KernelCommandLifecycleProjectionItemV1(
+            mapping_id=mapping.mapping_id,
+            mapping_version=mapping.mapping_version,
+            mapping_payload_sha256=mapping.payload_sha256,
+            local_vt_orderid=mapping.local_vt_orderid,
+            submit_command_id=mapping.command_id,
+            broker_order_id=mapping.broker_order_id,
+            mapping_status=mapping.mapping_status,
+            current_outbox_command_id=mapping.command_id,
+            current_outbox_command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
+            current_outbox_status=BrokerCommandOutboxStatusV1.PENDING,
+            current_outbox_row_version=1,
+            current_outbox_payload_sha256=mapping.payload_sha256,
+            outcome_receipt_sha256=None,
+            latest_command_outcome_event_id=None,
+            latest_command_outcome_payload_sha256=None,
+            command_outcome_delivery_id=None,
+            command_outcome_delivery_status=None,
+        )
+        for mapping in active_mappings
+    )
     lifecycle = KernelCommandLifecycleProjectionV1.create(
         runtime_id=context.runtime_id,
         algo_instance_id=context.algo_instance_id,
         event_id=event.event_id,
         delivery_id=delivery.delivery_id,
-        ordered_items=(),
+        ordered_items=lifecycle_items,
     )
     return VnpyFacadeTransitionInputV1.create(
         runtime_event=event,
@@ -621,7 +662,7 @@ def _transition(
         before_state=state,
         read_only_services=services,
         command_lifecycle_projection=lifecycle,
-        ordered_active_mappings=(),
+        ordered_active_mappings=active_mappings,
         deterministic_context=deterministic,
         transition_sequence=2,
     )
@@ -652,3 +693,247 @@ def test_real_pinned_sniper_initialize_restore_tick_and_freeze() -> None:
     assert transitioned.broker_commands[0].quantity == 100
     assert transitioned.broker_commands[0].price_decimal == "10.01"
     assert transitioned.terminal_outcome is None
+
+
+@pytest.mark.parametrize(
+    "market_overrides",
+    (
+        {"ask_volume_1": True},
+        {"logical_at_utc": "not-a-time"},
+        {"symbol": "000001.SZ"},
+    ),
+)
+def test_public_transition_rejects_malformed_market_projection_without_business_fallback(
+    market_overrides: dict[str, object],
+) -> None:
+    fixture = _fixture()
+    initialization = _initialization(fixture)
+    initialized = fixture.adapter.initialize_with_facade(initialization)
+    transition_input = _transition(
+        fixture,
+        initialization,
+        initialized.next_state,
+        market_overrides=market_overrides,
+    )
+
+    with pytest.raises(VnpyFacadeContractError) as caught:
+        fixture.adapter.transition_with_facade(transition_input)
+    assert caught.value.reason_code == "MINIQMT_VNPY_FACADE_MARKET_DATA_INVALID"
+
+
+def test_transition_input_rejects_sequence_and_predecessor_drift_before_callback() -> None:
+    fixture = _fixture()
+    initialization = _initialization(fixture)
+    initialized = fixture.adapter.initialize_with_facade(initialization)
+    transition_input = _transition(fixture, initialization, initialized.next_state)
+    base = transition_input.model_dump(mode="python", exclude={"input_sha256"})
+
+    for delivery_update, context_update in (
+        ({"algo_delivery_sequence": 1}, {}),
+        ({"previous_delivery_id": "wrong_delivery"}, {}),
+        ({}, {"transition_sequence": 3}),
+    ):
+        delivery = transition_input.delivery.model_copy(update=delivery_update)
+        deterministic = DeterministicExecutionContextV1.create(
+            **{
+                **transition_input.deterministic_context.model_dump(
+                    mode="python", exclude={"schema_version", "context_sha256"}
+                ),
+                **context_update,
+            }
+        )
+        with pytest.raises(ValueError, match="sequence|predecessor"):
+            VnpyFacadeTransitionInputV1.create(
+                **{
+                    **base,
+                    "delivery": delivery,
+                    "deterministic_context": deterministic,
+                    "transition_sequence": deterministic.transition_sequence,
+                }
+            )
+
+
+def test_transition_input_rejects_hash_closed_mapping_owner_drift() -> None:
+    fixture = _fixture()
+    initialization = _initialization(fixture)
+    initialized = fixture.adapter.initialize_with_facade(initialization)
+    transition_input = _transition(fixture, initialization, initialized.next_state)
+    submitted = fixture.adapter.transition_with_facade(transition_input).broker_commands[0]
+    wrong_parent_command = BrokerCommandV2.create(
+        command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
+        runtime_id=submitted.runtime_id,
+        algo_instance_id=submitted.algo_instance_id,
+        parent_intent_id="wrong_parent_k4",
+        transition_id=submitted.transition_id,
+        ordinal=submitted.ordinal,
+        local_vt_orderid=None,
+        symbol=submitted.symbol,
+        side=submitted.side,
+        order_type=submitted.order_type,
+        price_decimal=submitted.price_decimal,
+        quantity=submitted.quantity,
+        owned_broker_order_id=None,
+        reason_code=submitted.reason_code,
+        metadata=submitted.canonical_payload_v1()["metadata"],
+    )
+    mapping = ExecutionCommandChildMappingV1.create(
+        command=wrong_parent_command,
+        strategy_slot_id=transition_input.algo_instance.strategy_slot_id,
+        mapping_status=CommandChildMappingStatusV1.RESERVED,
+        mapping_version=1,
+        broker_order_id=None,
+        broker_identity_source_event_id=None,
+        last_order_event_id=None,
+        last_trade_event_id=None,
+        updated_by_event_id=None,
+        created_at_utc=transition_input.deterministic_context.logical_time_utc,
+        updated_at_utc=transition_input.deterministic_context.logical_time_utc,
+    )
+    lifecycle_item = KernelCommandLifecycleProjectionItemV1(
+        mapping_id=mapping.mapping_id,
+        mapping_version=mapping.mapping_version,
+        mapping_payload_sha256=mapping.payload_sha256,
+        local_vt_orderid=mapping.local_vt_orderid,
+        submit_command_id=mapping.command_id,
+        broker_order_id=None,
+        mapping_status=mapping.mapping_status,
+        current_outbox_command_id=mapping.command_id,
+        current_outbox_command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
+        current_outbox_status=BrokerCommandOutboxStatusV1.PENDING,
+        current_outbox_row_version=1,
+        current_outbox_payload_sha256=wrong_parent_command.payload_sha256,
+        outcome_receipt_sha256=None,
+        latest_command_outcome_event_id=None,
+        latest_command_outcome_payload_sha256=None,
+        command_outcome_delivery_id=None,
+        command_outcome_delivery_status=None,
+    )
+    lifecycle = KernelCommandLifecycleProjectionV1.create(
+        runtime_id=transition_input.deterministic_context.runtime_id,
+        algo_instance_id=transition_input.deterministic_context.algo_instance_id,
+        event_id=transition_input.deterministic_context.event_id,
+        delivery_id=transition_input.deterministic_context.delivery_id,
+        ordered_items=(lifecycle_item,),
+    )
+    base = transition_input.model_dump(mode="python", exclude={"input_sha256"})
+
+    with pytest.raises(ValueError, match="active mapping owner"):
+        VnpyFacadeTransitionInputV1.create(
+            **{
+                **base,
+                "command_lifecycle_projection": lifecycle,
+                "ordered_active_mappings": (mapping,),
+            }
+        )
+
+
+def test_transition_input_closes_valid_active_mapping_lifecycle_and_before_state() -> None:
+    fixture = _fixture()
+    initialization = _initialization(fixture)
+    initialized = fixture.adapter.initialize_with_facade(initialization)
+    context = initialization.start_context
+    command = BrokerCommandV2.create(
+        command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
+        runtime_id=context.runtime_id,
+        algo_instance_id=context.algo_instance_id,
+        parent_intent_id=context.parent_intent_id,
+        transition_id="transition_k4_previous_submit",
+        ordinal=0,
+        local_vt_orderid=None,
+        symbol=context.symbol,
+        side=context.side,
+        order_type=OrderTypeV1.LIMIT,
+        price_decimal="10",
+        quantity=100,
+        owned_broker_order_id=None,
+        reason_code="K4_ACTIVE_MAPPING_CLOSURE",
+        metadata={},
+    )
+    mapping = ExecutionCommandChildMappingV1.create(
+        command=command,
+        strategy_slot_id=context.strategy_slot_id,
+        mapping_status=CommandChildMappingStatusV1.RESERVED,
+        mapping_version=1,
+        broker_order_id=None,
+        broker_identity_source_event_id=None,
+        last_order_event_id=None,
+        last_trade_event_id=None,
+        updated_by_event_id=None,
+        created_at_utc=context.deterministic_context.logical_time_utc,
+        updated_at_utc=context.deterministic_context.logical_time_utc,
+    )
+    before_envelope = VnpyFacadeStateEnvelopeV1.model_validate_json(
+        json.dumps(thaw_json_v1(initialized.next_state.state), sort_keys=True, separators=(",", ":")),
+        strict=True,
+    )
+    active = VnpyFacadeActiveOrderV1.create(
+        local_vt_orderid=mapping.local_vt_orderid,
+        broker_order_id=mapping.broker_order_id,
+        command_id=mapping.command_id,
+        child_order_id=mapping.child_order_id,
+        symbol=mapping.symbol,
+        side=mapping.side.value,
+        price_decimal=mapping.requested_price_decimal,
+        requested_quantity=mapping.requested_quantity,
+        cumulative_quantity=0,
+        remaining_quantity=mapping.requested_quantity,
+        status=mapping.mapping_status.value,
+        last_order_event_id=mapping.last_order_event_id,
+        last_trade_event_id=mapping.last_trade_event_id,
+    )
+    envelope_with_active = VnpyFacadeStateEnvelopeV1.create(
+        **{
+            **before_envelope.canonical_payload_v1(
+                exclude={"schema_version", "ordered_active_orders", "state_envelope_sha256"}
+            ),
+            "contract_view": before_envelope.contract_view,
+            "ordered_active_orders": (active,),
+            "ordered_parameters": before_envelope.ordered_parameters,
+            "ordered_variables": before_envelope.ordered_variables,
+        }
+    )
+    state_with_active = AlgoStateSnapshotV2.create(
+        plugin_manifest=fixture.manifest,
+        deterministic_context=context.deterministic_context,
+        transition_sequence=1,
+        last_applied_delivery_sequence=1,
+        last_applied_delivery_id=context.start_delivery_id,
+        last_closed_delivery_sequence=1,
+        state=envelope_with_active.canonical_payload_v1(),
+        last_applied_event_id=context.start_event_id,
+    )
+
+    transition = _transition(
+        fixture,
+        initialization,
+        state_with_active,
+        active_mappings=(mapping,),
+    )
+
+    assert transition.ordered_active_mappings == (mapping,)
+    assert transition.command_lifecycle_projection.ordered_items[0].mapping_payload_sha256 == mapping.payload_sha256
+
+    drifted_item = transition.command_lifecycle_projection.ordered_items[0].model_copy(
+        update={"mapping_version": mapping.mapping_version + 1}
+    )
+    drifted_lifecycle = KernelCommandLifecycleProjectionV1.create(
+        runtime_id=context.runtime_id,
+        algo_instance_id=context.algo_instance_id,
+        event_id=transition.runtime_event.event_id,
+        delivery_id=transition.delivery.delivery_id,
+        ordered_items=(drifted_item,),
+    )
+    with pytest.raises(ValueError, match="command lifecycle facts"):
+        VnpyFacadeTransitionInputV1.create(
+            runtime_event=transition.runtime_event,
+            delivery=transition.delivery,
+            algo_instance=transition.algo_instance,
+            manifest=transition.manifest,
+            authority_input=transition.authority_input,
+            before_state=transition.before_state,
+            read_only_services=transition.read_only_services,
+            command_lifecycle_projection=drifted_lifecycle,
+            ordered_active_mappings=transition.ordered_active_mappings,
+            deterministic_context=transition.deterministic_context,
+            transition_sequence=transition.transition_sequence,
+        )

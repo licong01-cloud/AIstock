@@ -6,6 +6,7 @@ broker, event loop, clock, random generator, or product-route decision.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Literal, Self
@@ -1437,6 +1438,8 @@ class VnpyFacadeAuthorityInputV1(FrozenStrictModel):
         )
         if compatibility != (self.pinned_compatibility_receipt,):
             raise ValueError("facade authority pinned compatibility receipt conflicts with catalog")
+        if self.facade_conformance_set.plugin_catalog_sha256 != self.plugin_catalog_snapshot.catalog_sha256:
+            raise ValueError("facade conformance set conflicts with catalog identity")
         self.route_compatibility_receipt.validate_against_authority_v1(
             catalog_snapshot=self.plugin_catalog_snapshot,
             gateway_catalog=self.gateway_capability_catalog,
@@ -1449,7 +1452,12 @@ class VnpyFacadeAuthorityInputV1(FrozenStrictModel):
             for item in self.facade_conformance_set.ordered_receipts
             if (item.plugin_id, item.plugin_version, item.manifest_sha256) == self.plugin_key.sort_key_v1()
         )
-        if matches != (receipt,) or receipt.status is not VnpyFacadeCompatibilityStatusV1.PASSED:
+        if (
+            matches != (receipt,)
+            or receipt.status is not VnpyFacadeCompatibilityStatusV1.PASSED
+            or receipt.algo_code != self.manifest.algo_code
+            or receipt.manifest_sha256 != self.manifest.manifest_sha256
+        ):
             raise ValueError("facade authority requires one exact PASSED conformance receipt")
         k1 = self.pinned_compatibility_receipt
         component_pairs = (
@@ -1596,16 +1604,84 @@ class VnpyFacadeTransitionInputV1(FrozenStrictModel):
             or self.delivery.event_id != context.event_id
             or self.delivery.delivery_id != context.delivery_id
             or self.delivery.transition_id is None
+            or self.delivery.algo_delivery_sequence != self.transition_sequence
+            or self.delivery.previous_delivery_id != self.before_state.last_applied_delivery_id
             or self.manifest != self.authority_input.manifest
             or self.before_state.plugin_manifest_sha256 != self.manifest.manifest_sha256
             or self.transition_sequence != context.transition_sequence
         ):
-            raise ValueError("facade transition event/delivery/manifest context is not closed")
+            raise ValueError("facade transition event/delivery/manifest sequence or predecessor context is not closed")
+        previous_sequence = self.transition_sequence - 1
+        if (
+            self.before_state.transition_sequence != previous_sequence
+            or self.before_state.last_applied_delivery_sequence != previous_sequence
+            or self.before_state.last_closed_delivery_sequence != previous_sequence
+            or self.algo_instance.transition_sequence != previous_sequence
+            or self.algo_instance.last_applied_delivery_sequence != previous_sequence
+            or self.algo_instance.last_closed_delivery_sequence != previous_sequence
+            or self.algo_instance.last_applied_delivery_id != self.before_state.last_applied_delivery_id
+            or self.algo_instance.state_sha256 != self.before_state.state_sha256
+        ):
+            raise ValueError("facade transition sequence or predecessor state closure drifted")
+        if (
+            self.command_lifecycle_projection.event_id != context.event_id
+            or self.command_lifecycle_projection.delivery_id != context.delivery_id
+            or self.read_only_services.event_id != context.event_id
+            or self.read_only_services.delivery_id != context.delivery_id
+        ):
+            raise ValueError("facade transition projection event/delivery owner drifted")
         if any(
-            (item.runtime_id, item.algo_instance_id) != (context.runtime_id, context.algo_instance_id)
+            (
+                item.runtime_id,
+                item.algo_instance_id,
+                item.parent_intent_id,
+                item.strategy_slot_id,
+                item.symbol,
+                item.side,
+            )
+            != (
+                context.runtime_id,
+                context.algo_instance_id,
+                self.algo_instance.parent_intent_id,
+                self.algo_instance.strategy_slot_id,
+                self.algo_instance.symbol,
+                self.algo_instance.side,
+            )
             for item in mappings
         ):
             raise ValueError("active mapping owner conflicts with transition")
+        for mapping, lifecycle in zip(mappings, self.command_lifecycle_projection.ordered_items, strict=True):
+            if (
+                lifecycle.mapping_id != mapping.mapping_id
+                or lifecycle.mapping_version != mapping.mapping_version
+                or lifecycle.mapping_payload_sha256 != mapping.payload_sha256
+                or lifecycle.local_vt_orderid != mapping.local_vt_orderid
+                or lifecycle.submit_command_id != mapping.command_id
+                or lifecycle.broker_order_id != mapping.broker_order_id
+                or lifecycle.mapping_status is not mapping.mapping_status
+            ):
+                raise ValueError("active mapping conflicts with command lifecycle facts")
+        before = VnpyFacadeStateEnvelopeV1.model_validate_json(
+            json.dumps(thaw_json_v1(self.before_state.state), sort_keys=True, separators=(",", ":")),
+            strict=True,
+        )
+        active_by_local = {item.local_vt_orderid: item for item in before.ordered_active_orders}
+        if tuple(sorted(active_by_local)) != local_ids:
+            raise ValueError("facade before-state active orders conflict with durable mapping identities")
+        for mapping in mappings:
+            active = active_by_local[mapping.local_vt_orderid]
+            if (
+                active.broker_order_id != mapping.broker_order_id
+                or active.command_id != mapping.command_id
+                or active.child_order_id != mapping.child_order_id
+                or active.symbol != mapping.symbol
+                or active.side != mapping.side.value
+                or active.price_decimal != mapping.requested_price_decimal
+                or active.requested_quantity != mapping.requested_quantity
+                or active.last_order_event_id != mapping.last_order_event_id
+                or active.last_trade_event_id != mapping.last_trade_event_id
+            ):
+                raise ValueError("facade before-state active order conflicts with durable mapping facts")
         expected = hash_hex_v1(
             "miniqmt_vnpy_facade_transition_input_v1",
             self.canonical_payload_v1(exclude={"input_sha256"}),

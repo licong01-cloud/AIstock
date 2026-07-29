@@ -420,6 +420,27 @@ def test_active_order_state_uses_exact_order_and_trade_callback_facts() -> None:
     assert (trade_state[0].cumulative_quantity, trade_state[0].remaining_quantity) == (35, 65)
     assert trade_state[0].last_trade_event_id == trade_event.event_id
 
+    callback_before_ack = VnpyFacadeActiveOrderV1.create(
+        **{
+            **active.canonical_payload_v1(exclude={"schema_version", "active_order_sha256"}),
+            "broker_order_id": None,
+            "cumulative_quantity": 0,
+            "remaining_quantity": 100,
+            "status": "COMMAND_PENDING",
+        }
+    )
+    callback_before_ack_state = adapter._active_orders_v1(
+        algorithm=SimpleNamespace(active_orders={}),
+        invocation_input=VnpyFacadeTransitionInputV1.model_construct(
+            runtime_event=trade_event,
+            ordered_active_mappings=(SimpleNamespace(local_vt_orderid=active.local_vt_orderid),),
+        ),
+        collector=collector,
+        before_envelope=SimpleNamespace(ordered_active_orders=(callback_before_ack,)),
+    )
+    assert callback_before_ack_state[0].broker_order_id == "broker_k4_callback"
+    assert callback_before_ack_state[0].cumulative_quantity == 10
+
     regressed_event = _event(
         EventTypeV2.ORDER,
         {

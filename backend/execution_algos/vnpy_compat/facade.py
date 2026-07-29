@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Mapping
+from datetime import datetime
 from enum import Enum
 from typing import Any, Self
 
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     canonical_decimal_string_v1,
+    canonical_utc_datetime_v1,
     hash_hex_v1,
     thaw_json_v1,
 )
@@ -545,24 +547,53 @@ class VnpyAlgoEngineFacadeV1:
             "limit_up",
             "limit_down",
         }
-        if not required.issubset(payload) or payload["symbol"] != self._symbol:
-            return None
-        from datetime import datetime
-
-        logical = payload["logical_at_utc"]
-        if type(logical) is str:
-            logical = datetime.fromisoformat(logical.replace("Z", "+00:00"))
-        return TickData(
-            vt_symbol=self._symbol.replace(".SH", ".SSE").replace(".SZ", ".SZSE").replace(".BJ", ".BSE"),
-            datetime=logical,
-            bid_price_1=float(payload["bid_price_1"]),
-            bid_volume_1=float(payload["bid_volume_1"]),
-            ask_price_1=float(payload["ask_price_1"]),
-            ask_volume_1=float(payload["ask_volume_1"]),
-            last_price=float(payload["last_price"]),
-            limit_up=float(payload["limit_up"]),
-            limit_down=float(payload["limit_down"]),
-        )
+        missing = sorted(required - set(payload))
+        try:
+            if missing:
+                raise ValueError("market-data projection is missing required fields")
+            if type(payload["symbol"]) is not str or payload["symbol"] != self._symbol:
+                raise ValueError("market-data projection symbol conflicts with transition owner")
+            logical = datetime.fromisoformat(
+                canonical_utc_datetime_v1(payload["logical_at_utc"], field_name="market_data.logical_at_utc").replace(
+                    "Z", "+00:00"
+                )
+            )
+            prices = {
+                field: float(
+                    canonical_decimal_string_v1(
+                        payload[field],
+                        field_name=f"market_data.{field}",
+                        allow_zero=True,
+                    )
+                )
+                for field in ("bid_price_1", "ask_price_1", "last_price", "limit_up", "limit_down")
+            }
+            volumes: dict[str, float] = {}
+            for field in ("bid_volume_1", "ask_volume_1"):
+                value = payload[field]
+                if type(value) is not int or value < 0:
+                    raise TypeError(f"market_data.{field} must be a non-negative strict integer share quantity")
+                volumes[field] = float(value)
+            return TickData(
+                vt_symbol=self._symbol.replace(".SH", ".SSE").replace(".SZ", ".SZSE").replace(".BJ", ".BSE"),
+                datetime=logical,
+                bid_price_1=prices["bid_price_1"],
+                bid_volume_1=volumes["bid_volume_1"],
+                ask_price_1=prices["ask_price_1"],
+                ask_volume_1=volumes["ask_volume_1"],
+                last_price=prices["last_price"],
+                limit_up=prices["limit_up"],
+                limit_down=prices["limit_down"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _facade_error(
+                "MINIQMT_VNPY_FACADE_MARKET_DATA_INVALID",
+                "immutable market-data projection is malformed",
+                symbol=self._symbol,
+                missing_fields=missing,
+                error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
+                error_message=str(exc),
+            ) from exc
 
     def send_order(
         self,

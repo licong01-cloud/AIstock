@@ -23,9 +23,7 @@ from backend.execution_algos.vnpy_compat.facade_characterization import (
     build_vnpy_facade_terminal_mappings_v1,
     load_pinned_vnpy_algorithm_classes_v1,
     readback_vnpy_facade_contract_v1,
-    readback_vnpy_facade_algorithm_bindings_v1,
     readback_vnpy_facade_characterization_receipt_v1,
-    readback_vnpy_facade_conformance_set_v1,
     readback_vnpy_facade_implementation_bindings_v1,
     readback_vnpy_facade_state_mappings_v1,
     readback_vnpy_facade_terminal_mappings_v1,
@@ -34,6 +32,7 @@ from backend.execution_algos.vnpy_compat.facade_contracts import (
     VnpyFacadeCharacterizationRequirementV1,
     VnpyFacadeCharacterizationVectorV1,
     VnpyFacadeCompatibilityStatusV1,
+    VnpyFacadeContractError,
     VnpyFacadeDeterministicInputsV1,
     VnpyFacadeImplementationBindingV1,
     VnpyFacadeStateFieldMappingV1,
@@ -310,53 +309,22 @@ def _characterization_authority():
     return facade_contract, source_manifest, receipts, vectors, results
 
 
-def test_characterization_algorithm_binding_and_current_conformance_readback() -> None:
+def test_caller_supplied_characterization_observation_cannot_self_certify_passed() -> None:
     facade_contract, source_manifest, receipts, vectors, results = _characterization_authority()
-    bindings = build_vnpy_facade_algorithm_bindings_v1(
-        characterization_receipts=receipts,
-        adapter_contract_sha256=facade_contract.facade_contract_sha256,
+    assert all(item.status is VnpyFacadeCompatibilityStatusV1.FAILED for item in receipts.values())
+    assert all(
+        any(
+            failure.reason_code == "MINIQMT_VNPY_FACADE_CHARACTERIZATION_EXECUTION_UNAVAILABLE"
+            for failure in item.ordered_failures
+        )
+        for item in receipts.values()
     )
-    assert len(bindings) == 5
-    assert (
-        readback_vnpy_facade_algorithm_bindings_v1(
-            [item.model_dump(mode="python") for item in bindings],
+
+    with pytest.raises(VnpyFacadeContractError, match="source execution authority"):
+        build_vnpy_facade_algorithm_bindings_v1(
             characterization_receipts=receipts,
             adapter_contract_sha256=facade_contract.facade_contract_sha256,
         )
-        == bindings
-    )
-
-    runtime = build_plugin_catalog_v2(
-        descriptors=current_three_descriptors_v2(),
-        creation_bindings=current_three_creation_bindings_v1(),
-        process_bindings=current_three_process_bindings_v2(),
-        pinned_compatibility_receipts=build_current_three_compatibility_receipts_v1(),
-    )
-    binding_map = {item.algo_code: item for item in bindings}
-    conformance = build_vnpy_facade_conformance_set_v1(
-        catalog_runtime=runtime,
-        facade_contract=facade_contract,
-        source_manifest=source_manifest,
-        characterization_receipts=receipts,
-        algorithm_bindings=binding_map,
-    )
-    assert len(conformance.ordered_receipts) == 3
-    assert all(
-        item.runtime_binding_disposition.value == "PURE_PLUGIN_SHADOW_CONFORMANCE"
-        and item.status is VnpyFacadeCompatibilityStatusV1.PASSED
-        for item in conformance.ordered_receipts
-    )
-    assert (
-        readback_vnpy_facade_conformance_set_v1(
-            conformance.model_dump(mode="python"),
-            catalog_runtime=runtime,
-            facade_contract=facade_contract,
-            source_manifest=source_manifest,
-            characterization_receipts=receipts,
-            algorithm_bindings=binding_map,
-        )
-        == conformance
-    )
 
     requirement, vector = vectors["STOP"]
     assert (
@@ -373,6 +341,28 @@ def test_characterization_algorithm_binding_and_current_conformance_readback() -
     )
 
 
+def test_characterization_observation_rejects_malformed_public_inputs_without_secondary_error() -> None:
+    facade_contract, source_manifest, _receipts, vectors, results = _characterization_authority()
+    requirement, vector = vectors["STOP"]
+    authority = {
+        "requirement": requirement,
+        "source_manifest": source_manifest,
+        "facade_contract": facade_contract,
+        "factory_probe_config": {"price_add": "0.01"},
+        "vectors": (vector,),
+        "executed_vector_results": {vector.vector_id: results["STOP"]},
+    }
+
+    with pytest.raises(TypeError, match="source_manifest"):
+        build_vnpy_facade_characterization_receipt_v1(**{**authority, "source_manifest": {}})
+    with pytest.raises(TypeError, match="vectors"):
+        build_vnpy_facade_characterization_receipt_v1(**{**authority, "vectors": [vector]})
+    with pytest.raises(TypeError, match="executed_vector_results"):
+        build_vnpy_facade_characterization_receipt_v1(
+            **{**authority, "executed_vector_results": {vector.vector_id: []}}
+        )
+
+
 def test_characterization_drift_produces_explicit_failed_receipt() -> None:
     facade_contract, source_manifest, receipts, vectors, results = _characterization_authority()
     requirement, vector = vectors["ICEBERG"]
@@ -386,5 +376,48 @@ def test_characterization_drift_produces_explicit_failed_receipt() -> None:
         executed_vector_results={vector.vector_id: drifted},
     )
     assert failed.status is VnpyFacadeCompatibilityStatusV1.FAILED
-    assert failed.ordered_failures[0].reason_code == "MINIQMT_VNPY_FACADE_CHARACTERIZATION_DRIFT"
-    assert receipts["ICEBERG"].status is VnpyFacadeCompatibilityStatusV1.PASSED
+    assert {item.reason_code for item in failed.ordered_failures} == {
+        "MINIQMT_VNPY_FACADE_CHARACTERIZATION_DRIFT",
+        "MINIQMT_VNPY_FACADE_CHARACTERIZATION_EXECUTION_UNAVAILABLE",
+    }
+    assert receipts["ICEBERG"].status is VnpyFacadeCompatibilityStatusV1.FAILED
+
+
+def test_k4a_binding_and_conformance_publication_fail_closed_without_source_executor() -> None:
+    facade_contract, source_manifest, receipts, _vectors, _results = _characterization_authority()
+    runtime = build_plugin_catalog_v2(
+        descriptors=current_three_descriptors_v2(),
+        creation_bindings=current_three_creation_bindings_v1(),
+        process_bindings=current_three_process_bindings_v2(),
+        pinned_compatibility_receipts=build_current_three_compatibility_receipts_v1(),
+    )
+    with pytest.raises(VnpyFacadeContractError, match="source execution authority"):
+        build_vnpy_facade_algorithm_bindings_v1(
+            characterization_receipts=receipts,
+            adapter_contract_sha256=facade_contract.facade_contract_sha256,
+        )
+    with pytest.raises(VnpyFacadeContractError, match="source execution authority"):
+        build_vnpy_facade_conformance_set_v1(
+            catalog_runtime=runtime,
+            facade_contract=facade_contract,
+            source_manifest=source_manifest,
+            characterization_receipts=receipts,
+            algorithm_bindings={},
+        )
+
+    with pytest.raises(TypeError, match="string-keyed mapping"):
+        build_vnpy_facade_algorithm_bindings_v1(
+            characterization_receipts={1: receipts["STOP"]},  # type: ignore[dict-item]
+            adapter_contract_sha256=facade_contract.facade_contract_sha256,
+        )
+    with pytest.raises(TypeError, match="adapter_contract_sha256"):
+        build_vnpy_facade_algorithm_bindings_v1(
+            characterization_receipts=receipts,
+            adapter_contract_sha256=1,  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="source_root"):
+        build_vnpy_facade_algorithm_bindings_v1(
+            characterization_receipts=receipts,
+            adapter_contract_sha256=facade_contract.facade_contract_sha256,
+            source_root="not-a-path",  # type: ignore[arg-type]
+        )

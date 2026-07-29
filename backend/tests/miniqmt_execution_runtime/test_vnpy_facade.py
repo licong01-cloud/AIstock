@@ -18,7 +18,12 @@ from backend.execution_algos.vnpy_compat.facade_projection import (
 )
 from backend.execution_algos.vnpy_style.plugin_manifests import current_three_manifests_v2
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
+    BrokerCommandTypeV2,
+    BrokerCommandV2,
+    CommandChildMappingStatusV1,
     DeterministicExecutionContextV1,
+    ExecutionCommandChildMappingV1,
+    OrderTypeV1,
     SessionPhaseV1,
     SideV1,
 )
@@ -51,6 +56,7 @@ def _facade(
     *,
     contract: ContractData | None = None,
     tick: TickData | None = None,
+    active_mappings: tuple[ExecutionCommandChildMappingV1, ...] = (),
 ) -> tuple[VnpyAlgoEngineFacadeV1, VnpyFacadeEffectCollectorV1, _AlgoOwner]:
     context = _context()
     collector = VnpyFacadeEffectCollectorV1.create(
@@ -65,7 +71,7 @@ def _facade(
         side=SideV1.BUY,
         contract=contract,
         tick=tick,
-        active_mappings=(),
+        active_mappings=active_mappings,
         manifest=current_three_manifests_v2()[1],
         effect_collector=collector,
     )
@@ -116,6 +122,49 @@ def test_characterization_facade_uses_existing_submit_constructor_and_ordinals()
     assert collector.broker_commands[0].ordinal == 1
     assert collector.broker_commands[0].quantity == 200
     assert collector.broker_commands[0].side is SideV1.BUY
+
+
+def test_characterization_facade_cancel_uses_exact_owned_mapping_and_broker_identity() -> None:
+    context = _context()
+    submit = BrokerCommandV2.create(
+        command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
+        runtime_id=context.runtime_id,
+        algo_instance_id=context.algo_instance_id,
+        parent_intent_id="parent_k4_char",
+        transition_id="transition_k4_previous",
+        ordinal=0,
+        local_vt_orderid=None,
+        symbol="600000.SH",
+        side=SideV1.BUY,
+        order_type=OrderTypeV1.LIMIT,
+        price_decimal="10",
+        quantity=100,
+        owned_broker_order_id=None,
+        reason_code="K4_CANCEL_POSITIVE_FIXTURE",
+        metadata={},
+    )
+    mapping = ExecutionCommandChildMappingV1.create(
+        command=submit,
+        strategy_slot_id="slot_k4_char",
+        mapping_status=CommandChildMappingStatusV1.BROKER_ACCEPTED,
+        mapping_version=2,
+        broker_order_id="broker_k4_owned",
+        broker_identity_source_event_id="order_event_k4_owned",
+        last_order_event_id="order_event_k4_owned",
+        last_trade_event_id=None,
+        updated_by_event_id="order_event_k4_owned",
+        created_at_utc="2026-07-29T01:29:00Z",
+        updated_at_utc="2026-07-29T01:30:00Z",
+    )
+    facade, collector, algo = _facade(contract=_contract(), tick=_tick(), active_mappings=(mapping,))
+
+    facade.cancel_order(algo, mapping.local_vt_orderid)
+
+    assert len(collector.broker_commands) == 1
+    cancel = collector.broker_commands[0]
+    assert cancel.command_type is BrokerCommandTypeV2.CANCEL_ORDER
+    assert cancel.local_vt_orderid == mapping.local_vt_orderid
+    assert cancel.owned_broker_order_id == mapping.broker_order_id
 
 
 def test_missing_contract_and_rounded_zero_are_visible_and_create_no_command() -> None:

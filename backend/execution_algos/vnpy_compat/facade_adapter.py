@@ -158,6 +158,12 @@ class VnpyFacadeBackedPluginAdapterV1:
                 expected=algorithm_binding.class_ref,
                 actual=f"{algorithm_class.__module__}:{algorithm_class.__qualname__}",
             )
+        if algorithm_binding.algo_code != manifest.algo_code:
+            raise _binding_error(
+                "algorithm binding algo identity conflicts with manifest",
+                expected=manifest.algo_code,
+                actual=algorithm_binding.algo_code,
+            )
         if state_mapping_set_sha256_v1(state_mappings) != algorithm_binding.state_mapping_set_sha256:
             raise _binding_error("state mapping set conflicts with algorithm binding")
         if terminal_mapping_set_sha256_v1(terminal_mappings) != algorithm_binding.terminal_mapping_set_sha256:
@@ -265,8 +271,8 @@ class VnpyFacadeBackedPluginAdapterV1:
             invocation_input.algo_instance.parent_intent_id,
             invocation_input.delivery.transition_id,
         )
-        facade = VnpyAlgoEngineFacadeV1.create(invocation_input, collector)
         try:
+            facade = VnpyAlgoEngineFacadeV1.create(invocation_input, collector)
             algorithm = self.restore_algorithm_v1(before, facade=facade)
             self._invoke_callback_once_v1(
                 algorithm=algorithm,
@@ -661,6 +667,7 @@ class VnpyFacadeBackedPluginAdapterV1:
                 remaining = existing.requested_quantity - cumulative
                 by_local[target] = replace_order(
                     existing,
+                    broker_order_id=payload["broker_order_id"],
                     cumulative_quantity=cumulative,
                     remaining_quantity=remaining,
                     status="FILLED" if remaining == 0 else "PARTIALLY_FILLED",
@@ -785,8 +792,8 @@ class VnpyFacadeBackedPluginAdapterV1:
             )
         return None
 
-    @staticmethod
     def _validate_invocation_receipt_v1(
+        self,
         invocation_input: VnpyFacadeInitializationInputV1 | VnpyFacadeTransitionInputV1,
     ) -> None:
         receipt = invocation_input.authority_input.facade_conformance_receipt
@@ -798,6 +805,24 @@ class VnpyFacadeBackedPluginAdapterV1:
                 "runtime adapter invocation requires exact shadow adapter conformance",
                 runtime_binding_disposition=receipt.runtime_binding_disposition.value,
                 command_authority_disposition=receipt.command_authority_disposition.value,
+            )
+        if (
+            receipt.algo_code != self.manifest.algo_code
+            or receipt.manifest_sha256 != self.manifest.manifest_sha256
+            or receipt.algorithm_binding_sha256 != self._algorithm_binding.binding_sha256
+            or receipt.algorithm_characterization_receipt_sha256
+            != self._algorithm_binding.characterization_receipt_sha256
+            or receipt.state_mapping_set_sha256
+            != invocation_input.authority_input.facade_conformance_set.state_mapping_set_sha256
+            or receipt.terminal_mapping_set_sha256
+            != invocation_input.authority_input.facade_conformance_set.terminal_mapping_set_sha256
+        ):
+            raise _binding_error(
+                "runtime adapter invocation authority conflicts with sealed adapter binding",
+                algo_code=self.manifest.algo_code,
+                manifest_sha256=self.manifest.manifest_sha256,
+                algorithm_binding_sha256=self._algorithm_binding.binding_sha256,
+                conformance_receipt_sha256=receipt.receipt_sha256,
             )
 
 
