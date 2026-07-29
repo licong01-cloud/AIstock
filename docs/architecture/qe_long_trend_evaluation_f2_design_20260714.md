@@ -1,12 +1,12 @@
 # QE 长期上涨趋势评价层 F2 设计
 
-- 版本：v1.13
-- 日期：2026-07-15；Phase 2 运行态核验：2026-07-23；Phase 3 源码实现与本地验证：2026-07-28；Phase 3 单 canary 物化核验：2026-07-29；Phase 4 Loop/Archive UI 源码与只读 live smoke：2026-07-29；PR #2875 第三次正式审核：2026-07-29
-- 状态：`PHASE3_SINGLE_CANARY_VERIFIED_PHASE4_UI_SLICE_SOURCE_CI_VERIFIED_RUNTIME_NOT_ACTIVATED_PHASE5_PENDING`
+- 版本：v1.14
+- 日期：2026-07-15；Phase 2 运行态核验：2026-07-23；Phase 3 源码实现与本地验证：2026-07-28；Phase 3 单 canary 物化核验：2026-07-29；Phase 4 Loop/Archive UI 源码与只读 live smoke：2026-07-29；PR #2875 第三次正式审核、合入及用户重启后运行态回读：2026-07-29
+- 状态：`PHASE3_SINGLE_CANARY_VERIFIED_PHASE4_UI_SLICE_SOURCE_CI_MERGED_RUNTIME_API_VERIFIED_FRONTEND_VISUAL_PENDING_PHASE5_PENDING`
 - 任务分级：`T3 / F2`
 - 模块：`QuantEvolver / QE-only Evaluation Store / QE Archive Read Model / QE UI`
 - 风险等级：高（跨计算节点、制品、数仓、API、MCP 与 UI）
-- 当前阶段：Phase 1 纯计算核、Phase 2 control/worker/QE-only CAS 与 Phase 3 三表/API/MCP 已按既有 receipt 完成；R8B Loop4 existing-CAS 已物化 2,004 条 metric 与 6 条 artifact，exact replay 保持 row version `42`、更新时间、主键范围、摘要和 task evaluation 数量不变。PR #2875 第三次正式审核关闭 v1.12 的合入阻断：Loop detail/list 展示 evaluation as-of、逐 family reason/coverage/limitations/missing inputs/data actions、maturity/execution coverage、删失及阻断证据；Archive 将 metric/horizon 下推 bounded API，并同时支持 entry/exit 成交状态与 canonical evidence-level quality 过滤；validation catalog 使用受控 command key 与 3012；`mcp[cli]` 固定为仓库契约的 1.25.0。定向后端、Phase 2/3、TypeScript/ESLint、mock Playwright、catalog/module ownership、F2/L0 与 PR CI 均通过，F-017/F-020/F-021 对本 PR slice 恢复 `verified / none`。当前 `8001` OpenAPI 仍缺 `metric_key` 和 entry/exit evidence-level 参数，证明新源码尚未运行态激活；旧 evaluation receipt 没有新增 evidence-level summary key 时不会被质量过滤器静默匹配。任务创建页不可变 profile 开关、独立历史输入可用性预览、其余 5 个 R8B CAS、Phase 5 中断恢复/完整 E2E 与任何服务重启仍待独立任务或授权
+- 当前阶段：Phase 1 纯计算核、Phase 2 control/worker/QE-only CAS 与 Phase 3 三表/API/MCP 已按既有 receipt 完成；R8B Loop4 existing-CAS 已物化 2,004 条 metric 与 6 条 artifact，exact replay 保持 row version `42`、更新时间、主键范围、摘要和 task evaluation 数量不变。PR #2875 第三次正式审核关闭 v1.12 的合入阻断：Loop detail/list 展示 evaluation as-of、逐 family reason/coverage/limitations/missing inputs/data actions、maturity/execution coverage、删失及阻断证据；Archive 将 metric/horizon 下推 bounded API，并同时支持 entry/exit 成交状态与 canonical evidence-level quality 过滤；validation catalog 使用受控 command key 与 3012；`mcp[cli]` 固定为仓库契约的 1.25.0。定向后端、Phase 2/3、TypeScript/ESLint、mock Playwright、catalog/module ownership、F2/L0 与 PR CI 均通过，F-017/F-020/F-021 对本 PR slice 恢复 `verified / none`。PR 已以 squash commit `5413d799c59d16b8bf53689cca856f669f283fcf` 合入，root 已同步且源码分支/worktree 已清理；用户完成服务重启后，`8001` health 与 `3000/qe-archive` HTTP 均为 200，OpenAPI 已包含 `metric_key`、`horizon` 及 entry/exit evidence-level 参数。固定 R8B Loop4 evaluation 的 list/detail/Archive 只读回读均为 200，`rank_ic + horizon=60` 精确返回 3 条；旧 evaluation receipt 不含新增 evidence-level summary key，按该维度查询返回 0 条，符合 fail-closed 合同。当前浏览器运行时无可用实例，因此前端逐控件可视验收仍待补充，不能由 HTTP 存活或 mock Playwright 冒充。任务创建页不可变 profile 开关、独立历史输入可用性预览、其余 5 个 R8B CAS 与 Phase 5 中断恢复/完整 E2E 仍待独立任务或授权
 - 上位蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` 第 9.6 节与 F-014
 - 相关蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` Phase 8
 
@@ -759,7 +759,7 @@ Phase 1–5 是依赖顺序，不要求所有开发串行。实际实施拆为�
 
 A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 research-ready 或研究许可状态。A 中任一指标族形成可复算 receipt 后即可用于科研分析；B/C 的 CAS、DB、API/MCP/UI 和历史补算状态不改变该结果，只决定持久化、查询和展示能力。调用方不得把 `NOT_COMPUTABLE/NOT_VERIFIABLE` 伪装为已计算，但可以继续运行所有不依赖缺失项的实验与分析。
 
-### 12.2 v1.13 当前实施进度（2026-07-29）
+### 12.2 v1.14 当前实施进度（2026-07-29）
 
 | 子项 | 状态 | 实现 / 证据 | 未完成边界 |
 |---|---|---|---|
@@ -767,12 +767,12 @@ A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 res
 | Phase 2 编排、资源、恢复与 QE-only CAS | `RUNTIME_CANARY_VERIFIED` | AIstock PR #2630/#2643/#2654/#2668/#2670/#2672/#2674；RD-Agent PR #7/#8；DEV/生产 control DDL 已回读；8001/9000 已加载；R8B 6/6 为唯一 job/attempt、六族计算、partial + CAS published；后端重启后同 identity 幂等 replay | metric/artifact 明细表和公共用户链属于 Phase 3–5 |
 | Phase 2 真实样本 | `R8B_6_OF_6_PARTIAL_CAS_PUBLISHED` | 12,024 项指标、13,241,712 行 signal observations、13,726 行 holding episodes、2,898 个 portfolio trading days；各 Loop coverage/limitations 独立保存 | `partial` 是指标族数据可得性事实，不是科研失败或方向淘汰状态 |
 | Phase 3 数仓/API/MCP | `SINGLE_CANARY_MATERIALIZATION_VERIFIED` | PR #2835 与 BUG-899/900/903 修复已合入；R8B Loop4 `qelt_89331d…` 从 existing CAS 物化 2,004 metric + 6 artifact，manifest SHA-256 `82db1d6b…14ceeb`；detail/quality 共 21 页/2,004 metric，MCP bounded 首屏 100 条与 API payload 相同；Phase 3 专属矩阵 `102 passed` | 仅 1/6 R8B 已物化；其余 5 个 R8B 与 Phase 5 中断恢复/批量 E2E 继续单列；当前连接 DB 的数据写入 receipt 不替代任何未来目标特定 DDL 授权 |
-| Phase 4 UI/历史操作面 | `UI_SLICE_SOURCE_CI_VERIFIED_RUNTIME_NOT_ACTIVATED` | PR #2875：Loop DB 恢复/唯一 POST/as-of/六族失败证据/coverage/censoring/entry-exit 证据；Archive 同 snapshot 跨 run/model/seed/factor-set，metric+horizon server filter，成交状态与 evidence-level quality filter；mock Playwright `2 passed/1 skipped`，Phase 2 `122 passed`，Phase 3 `102 passed`，catalog 0 findings，F2 24/24，PR CI verdict PASS | 当前 8001 尚未加载本 PR，旧 receipt 不含新增 evidence-level summary 时不会匹配该质量筛选；任务创建页不可变 profile 开关、独立历史输入可用性预览仍是 Phase 4 后续 slice；历史评价执行和其余 R8B 物化需单独授权 |
+| Phase 4 UI/历史操作面 | `UI_SLICE_SOURCE_CI_MERGED_RUNTIME_API_VERIFIED_FRONTEND_VISUAL_PENDING` | PR #2875 已合入 `5413d799…`；Loop DB 恢复/唯一 POST/as-of/六族失败证据/coverage/censoring/entry-exit 证据；Archive 同 snapshot 跨 run/model/seed/factor-set，metric+horizon server filter，成交状态与 evidence-level quality filter；mock Playwright `2 passed/1 skipped`，Phase 2 `122 passed`，Phase 3 `102 passed`，catalog 0 findings，F2 24/24，PR CI verdict PASS。用户重启后，8001 OpenAPI 新参数可见；固定 evaluation list/detail/Archive 为 200，`rank_ic + horizon=60` 返回 3 条；3000 页面 HTTP 为 200 | 浏览器运行时无可用实例，前端逐控件可视验收待补；旧 receipt 不含新增 evidence-level summary，相关筛选返回空集而非静默匹配；任务创建页不可变 profile 开关、独立历史输入可用性预览仍是 Phase 4 后续 slice；历史评价执行和其余 R8B 物化需单独授权 |
 | Phase 5 E2E/发布准备 | `DESIGN_AUDITED_DEVELOPMENT_READY` | deterministic fixture、真实非生产 Recorder、重启/重复 callback/CAS-DB 中断恢复和非 QE 零影响矩阵已有验证计划 | 尚未执行；不阻断已有 receipt 的科研使用 |
 
 ### 12.3 Phase 3–5 开发就绪性审计（2026-07-29）
 
-审计结论更新为 `SINGLE_CANARY_DATA_PATH_VERIFIED_PHASE4_PR2875_UI_SLICE_SOURCE_CI_VERIFIED_RUNTIME_NOT_ACTIVATED`。这表示 Phase 3 单 canary 链保持闭合，PR #2875 的 Loop/Archive UI slice 已通过详细设计第三审与源码 CI；它不表示任务创建 profile、历史输入预览、其余 R8B、运行态激活、历史批量补算或中断恢复已经完成，也不是科研审批、方向门禁、服务重启或未来生产 DDL 授权。
+审计结论更新为 `SINGLE_CANARY_DATA_PATH_VERIFIED_PHASE4_PR2875_UI_SLICE_SOURCE_CI_MERGED_RUNTIME_API_VERIFIED_FRONTEND_VISUAL_PENDING`。这表示 Phase 3 单 canary 链保持闭合，PR #2875 的 Loop/Archive UI slice 已通过详细设计第三审与源码 CI、完成合入，并在用户重启后通过后端 OpenAPI 与固定历史回执的只读 API 回读；它不表示前端逐控件可视验收、任务创建 profile、历史输入预览、其余 R8B、历史批量补算或中断恢复已经完成，也不是科研审批、方向门禁、未来服务控制或生产 DDL 授权。
 
 | 审计项 | 当前结论 | 编码时必须保持的契约 |
 |---|---|---|
@@ -796,7 +796,7 @@ A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 res
 4. Playwright/contract tests：逐项断言上述字段、过滤参数、失败原因可见性和 DB 刷新恢复；mock 只验证前端合同，live smoke 继续只读且不得替代 CI/catalog；
 5. 重新运行 `nox -s validation_catalog_integrity`、`nox -s validation_module_registry_l0`、`nox -s qe_long_trend_phase4_ui`、F2 validator 和完整 PR CI；四项 `DESIGN-COMPLIANCE-001` 均有直接证据后，F-017/F-020/F-021 才能恢复 `verified / none`。
 
-第三次审核回读：上述 1–5 已由 PR #2875 source head `bcced35a855df2b7e6cd369eaef04a778509c254` 闭合；审核额外发现并修正“execution status 不等于 execution evidence quality”的语义混用，现同时保留两类独立 server-side filters。该结论仅适用于本 PR 的 Loop/Archive UI slice；运行态、旧 receipt 新字段可用性和 Phase 4 余项继续单列。
+第三次审核回读：上述 1–5 已由 PR #2875 source head `bcced35a855df2b7e6cd369eaef04a778509c254` 闭合；审核额外发现并修正“execution status 不等于 execution evidence quality”的语义混用，现同时保留两类独立 server-side filters。PR 后续合入为 `5413d799c59d16b8bf53689cca856f669f283fcf`；用户重启后的 OpenAPI 与固定历史回执证明新后端合同已加载。旧 receipt 的新 evidence-level 维度仍不可用，前端可视验收因无浏览器实例待补，Phase 4 余项继续单列。
 
 逐文件开发顺序冻结为：
 
@@ -912,7 +912,7 @@ completed Recorder
 4. `[COMPLETED]` Phase 3 metric/artifact 两表、API/MCP 源码由 PR #2835 合入，后续三项修复已合入；
 5. `[COMPLETED_SINGLE_CANARY]` 当前 `8001` 连接 DB 的 result schema readiness、四条 route 与 R8B Loop4 非空物化已验证；本次没有执行 DDL；
 6. `[COMPLETED_SINGLE_CANARY]` existing-CAS exact replay 未新增 evaluation/metric/artifact，row version、更新时间、主键范围与摘要均不变；API/MCP bounded readback 一致；
-7. `[UI_SLICE_SOURCE_CI_VERIFIED_RUNTIME_NOT_ACTIVATED]` PR #2875 的 Loop/Archive UI slice 已关闭 12.4 合入阻断并通过第三次审核；当前 8001 仍是旧合同，不把源码验收写成运行态激活；
+7. `[UI_SLICE_SOURCE_CI_MERGED_RUNTIME_API_VERIFIED_FRONTEND_VISUAL_PENDING]` PR #2875 的 Loop/Archive UI slice 已关闭 12.4 合入阻断、通过第三次审核并合入；用户重启后 8001 新合同与固定 evaluation API readback 已验证，前端逐控件可视验收仍待浏览器实例；
 8. `[NEXT_SOURCE_DELIVERY]` 实现任务创建页不可变 profile 开关、历史输入可用性预览，以及 Phase 5 重启、重复 callback、CAS-DB 中断恢复、非 QE 零影响 E2E；
 9. 其余 5 个 R8B 或更大历史批量物化属于独立运行授权，不随单 canary 或 UI 完成自动执行。
 
@@ -934,7 +934,7 @@ completed Recorder
 | 唯一硬边界 | `QE_ONLY_ZERO_NON_QE_IMPACT` | 所有任务、数据读取、CAS、表、API/MCP/UI 和写入仅限 QE；非 QE 变更必须为零 |
 | QE core compute | Phase 1 已实现并定向验证 | 纯函数、严格 QE reader 和 unit oracle 已存在；Phase 2 已用真实 evaluation task 验证，不代表 Phase 3–5 平台用户链完成 |
 | QE control schema/runtime | Phase 2 已应用并验证 | control DDL、worker、CAS、恢复和 R8B 6/6 已有运行态证据 |
-| QE result schema/API/MCP/UI | Phase 3 source/schema/runtime 与单 canary 数据链已验证；PR #2875 Loop/Archive UI slice source/CI 已通过，runtime 未激活 | R8B Loop4 已有 2,004 metric + 6 artifact；PR source 补齐 as-of、失败证据、coverage/censoring 与 server filters；当前 8001 OpenAPI 仍缺新参数。其余 5 个 R8B、创建页 profile、历史输入预览和恢复 E2E 继续作为独立 `platform_delivery_status` |
+| QE result schema/API/MCP/UI | Phase 3 source/schema/runtime 与单 canary 数据链已验证；PR #2875 Loop/Archive UI slice source/CI 已通过并合入，用户重启后后端运行态 API 已验证，前端可视验收待补 | R8B Loop4 已有 2,004 metric + 6 artifact；PR source 补齐 as-of、失败证据、coverage/censoring 与 server filters；当前 8001 OpenAPI 和固定 evaluation readback 已通过，旧 receipt evidence-level 查询为空符合 fail-closed 合同。其余 5 个 R8B、创建页 profile、历史输入预览、前端逐控件验收和恢复 E2E 继续作为独立 `platform_delivery_status` |
 | QE result data write | `single_canary_applied_and_verified` | 仅写 `qelt_89331d…` 的 canonical metric/artifact；exact replay no-op；没有批量补算、删除或覆盖历史 evidence |
 | frontend/backend dependency | 当前无新增依赖 | 未来变化按平台状态记录，不形成研究门禁 |
 | runtime restart | Phase 2 已执行并验证幂等回放；2026-07-29 用户再次重启 backend 并加载 Phase 3 routes | 只读复核确认 `8001` 监听和 route/schema readiness；本次未启停服务，2,004 + 6 结果行来自单独授权的 existing-CAS 物化而非重启动作 |
