@@ -87,6 +87,13 @@ B3_APPROVED_FROZEN_IDENTITIES = {
     "mapping_manifest_hash": "9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159",
     "l2_stock_fact_manifest_hash": "d4a5cc86f3230a7bbd5704b81e63fa16cf4dc5a074f461f28112d3c9582d1730",
 }
+B3_APPROVED_WINDOWS = {
+    "train_start": "2022-01-01",
+    "train_end": "2024-06-30",
+    "validation_start": "2024-07-01",
+    "validation_end": "2025-03-31",
+    "common_data_watermark": "2025-04-30",
+}
 
 
 def _read_env_file(path: Path) -> None:
@@ -139,6 +146,115 @@ def _require_approved_b3_identities(value: dict[str, Any]) -> None:
             mismatches.append(f"{field} expected={expected} actual={actual or '<missing>'}")
     if mismatches:
         raise StateModelSetError("formal B3 frozen identity mismatch: " + "; ".join(mismatches))
+
+
+def _freeze_approved_b3_windows(request_template: dict[str, Any]) -> dict[str, Any]:
+    request = deepcopy(request_template)
+    families = list(request.get("families") or ())
+    family_names = {str(family.get("family") or "") for family in families}
+    if family_names != {"legacy_covfix", "autocycle_all_core"} or len(families) != 2:
+        raise StateModelSetError("formal B3 requires exactly the two approved families")
+    for family in families:
+        family_name = str(family["family"])
+        for field in ("train_start", "train_end"):
+            actual = _date(family.get(field), field).isoformat()
+            expected = B3_APPROVED_WINDOWS[field]
+            if actual != expected:
+                raise StateModelSetError(
+                    f"formal B3 train window mismatch: family={family_name} field={field} "
+                    f"expected={expected} actual={actual}"
+                )
+        for field in ("validation_start", "validation_end"):
+            raw = family.get(field)
+            expected = B3_APPROVED_WINDOWS[field]
+            if raw in (None, ""):
+                family[field] = expected
+                continue
+            actual = _date(raw, field).isoformat()
+            if actual != expected:
+                raise StateModelSetError(
+                    f"formal B3 validation window mismatch: family={family_name} field={field} "
+                    f"expected={expected} actual={actual}"
+                )
+            family[field] = actual
+    return request
+
+
+def _require_approved_b3_windows(request: dict[str, Any]) -> None:
+    families = list(request.get("families") or ())
+    family_names = {str(family.get("family") or "") for family in families}
+    if family_names != {"legacy_covfix", "autocycle_all_core"} or len(families) != 2:
+        raise StateModelSetError("formal B3 requires exactly the two approved families")
+    for family in families:
+        family_name = str(family["family"])
+        for field in ("train_start", "train_end", "validation_start", "validation_end"):
+            raw = family.get(field)
+            if raw in (None, ""):
+                window = "validation" if field.startswith("validation_") else "train"
+                raise StateModelSetError(f"formal B3 {window} window is missing: family={family_name} field={field}")
+            actual = _date(raw, field).isoformat()
+            expected = B3_APPROVED_WINDOWS[field]
+            if actual != expected:
+                window = "validation" if field.startswith("validation_") else "train"
+                raise StateModelSetError(
+                    f"formal B3 {window} window mismatch: family={family_name} field={field} "
+                    f"expected={expected} actual={actual}"
+                )
+
+
+def _b3_semantic_source_request(request: dict[str, Any]) -> dict[str, Any]:
+    _require_approved_b3_windows(request)
+    semantic_request = deepcopy(request)
+    source = semantic_request["source"]
+    source_start = _date(source.get("source_start"), "source_start")
+    source_end = _date(source.get("source_end"), "source_end")
+    semantic_start = _date(B3_APPROVED_WINDOWS["train_start"], "train_start")
+    semantic_end = _date(B3_APPROVED_WINDOWS["common_data_watermark"], "common_data_watermark")
+    if source_start > semantic_start or source_end < semantic_end:
+        raise StateModelSetError("formal B3 semantic window escapes the immutable source window")
+    circ_mv_history_start = str(source.get("circ_mv_history_start") or source.get("source_start") or "")
+    source["source_start"] = B3_APPROVED_WINDOWS["train_start"]
+    source["source_end"] = B3_APPROVED_WINDOWS["common_data_watermark"]
+    source["circ_mv_history_start"] = circ_mv_history_start
+    return semantic_request
+
+
+def _require_formal_semantic_identity(request: dict[str, Any]) -> None:
+    source = request.get("semantic_source")
+    if not isinstance(source, dict):
+        raise StateModelSetError("formal B3 semantic source identity is missing")
+    expected_source = _b3_semantic_source_request(request)["source"]
+    if source != expected_source:
+        raise StateModelSetError("formal B3 semantic source identity mismatch")
+    for field in (
+        "semantic_dataset_manifest_hash",
+        "semantic_mapping_manifest_hash",
+        "semantic_calendar_manifest_hash",
+        "semantic_l2_stock_fact_manifest_hash",
+    ):
+        identity = str(request.get(field) or "")
+        if len(identity) != 64 or any(character not in "0123456789abcdef" for character in identity.lower()):
+            raise StateModelSetError(f"formal B3 {field} is missing or invalid")
+
+
+def _semantic_input_identities(inputs: dict[str, Any]) -> dict[str, str]:
+    return {
+        "semantic_dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "semantic_mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "semantic_calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+        "semantic_l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+    }
+
+
+def _load_verified_formal_semantic_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    _require_formal_semantic_identity(request)
+    semantic_request = deepcopy(request)
+    semantic_request["source"] = deepcopy(request["semantic_source"])
+    inputs = _load_l1_source_inputs(semantic_request, db_prefix=db_prefix, c010_formal=True)
+    for field, actual in _semantic_input_identities(inputs).items():
+        if request[field] != actual:
+            raise StateModelSetError(f"formal B3 semantic input drifted from {field}")
+    return inputs
 
 
 def _require_formal_train_coverage_identity(value: dict[str, Any]) -> None:
@@ -754,11 +870,15 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
 
     producer_commit = _formal_producer_commit()
     _require_approved_b3_identities(request_template)
-    train_request = _c009_train_source_request(request_template)
+    approved_request = _freeze_approved_b3_windows(request_template)
+    train_request = _c009_train_source_request(approved_request)
+    semantic_request = _b3_semantic_source_request(approved_request)
     inputs = _load_l1_source_inputs(train_request, db_prefix=db_prefix, c010_formal=True)
+    semantic_inputs = _load_l1_source_inputs(semantic_request, db_prefix=db_prefix, c010_formal=True)
     dataset_hash = canonical_sha256(inputs["dataset_manifest"])
     mapping_hash = canonical_sha256(inputs["mapping_manifest"])
     l2_stock_fact_hash = canonical_sha256(inputs["l2_stock_fact_manifest"])
+    semantic_identities = _semantic_input_identities(semantic_inputs)
     policy_manifest = _c010_policy_manifest(inputs, train_request, producer_commit=producer_commit)
     policy_sha256 = str(policy_manifest["receipt_sha256"])
     inputs["feature_domain_policy_sha256"] = policy_sha256
@@ -785,6 +905,8 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
             "dataset_manifest_hash": dataset_hash,
             "mapping_manifest_hash": mapping_hash,
             "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+            "semantic_source": deepcopy(semantic_request["source"]),
+            **semantic_identities,
             "parent_frozen_identities": dict(B3_APPROVED_FROZEN_IDENTITIES),
             "feature_domain_policy_manifest": policy_manifest,
             "feature_domain_policy_sha256": policy_sha256,
@@ -815,11 +937,15 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
         "formula_version": C010_FORMULA_VERSION,
         "train_start": train_start.isoformat(),
         "train_end": train_end.isoformat(),
+        "validation_start": B3_APPROVED_WINDOWS["validation_start"],
+        "validation_end": B3_APPROVED_WINDOWS["validation_end"],
+        "common_data_watermark": B3_APPROVED_WINDOWS["common_data_watermark"],
         "train_trading_date_count": len(train_trading_dates),
         "train_trading_date_sha256": canonical_sha256([value.isoformat() for value in train_trading_dates]),
         "dataset_manifest_hash": dataset_hash,
         "mapping_manifest_hash": mapping_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+        **semantic_identities,
         "request_candidate": request_candidate,
         "request_candidate_sha256": canonical_sha256(request_candidate),
         "l1_sector_count": 31,
@@ -1508,6 +1634,7 @@ def prepare_b3_single_pass(
     """Run one complete train-only B3 pass; selection and D6 are parent-only."""
 
     producer_commit = _formal_producer_commit()
+    _require_approved_b3_windows(request)
     _require_c010_policy_identity(request)
     _require_formal_train_coverage_identity(request)
     if str(request.get("producer_commit") or "") != producer_commit:
@@ -1650,8 +1777,14 @@ def _persist_b3_child_failure(
 def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
     """Run two fresh processes, select train-only identities, then execute D6 once."""
 
+    _require_approved_b3_windows(request)
+    _require_formal_semantic_identity(request)
     _require_c010_policy_identity(request)
     _require_formal_train_coverage_identity(request)
+    _load_verified_formal_semantic_inputs(
+        request,
+        db_prefix=str(args.db_env_prefix),
+    )
     environment = os.environ.copy()
     for key in (
         "OMP_NUM_THREADS",
@@ -1699,24 +1832,30 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         raise StateModelSetError("formal B3 fresh processes used different C-010 policy identities")
     if repeats[0]["feature_domain_policy_sha256"] != request.get("feature_domain_policy_sha256"):
         raise StateModelSetError("formal B3 fresh-process policy identity differs from request")
-    inputs = _load_l1_source_inputs(request, db_prefix=str(args.db_env_prefix), c010_formal=True)
-    if canonical_sha256(inputs["dataset_manifest"]) != repeats[0]["dataset_manifest_hash"]:
+    train_inputs = _load_l1_source_inputs(request, db_prefix=str(args.db_env_prefix), c010_formal=True)
+    if canonical_sha256(train_inputs["dataset_manifest"]) != repeats[0]["dataset_manifest_hash"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen dataset manifest")
-    if canonical_sha256(inputs["mapping_manifest"]) != repeats[0]["mapping_manifest_hash"]:
+    if canonical_sha256(train_inputs["mapping_manifest"]) != repeats[0]["mapping_manifest_hash"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen mapping manifest")
-    if canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]) != repeats[0]["calendar_manifest_hash"]:
+    if canonical_sha256(train_inputs["dataset_manifest"]["calendar_benchmark"]) != repeats[0]["calendar_manifest_hash"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen calendar manifest")
-    if canonical_sha256(inputs["l2_stock_fact_manifest"]) != repeats[0]["l2_stock_fact_manifest_hash"]:
+    if canonical_sha256(train_inputs["l2_stock_fact_manifest"]) != repeats[0]["l2_stock_fact_manifest_hash"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen L2 stock-fact manifest")
-    recomputed_policy = _c010_policy_manifest(inputs, request, producer_commit=_formal_producer_commit())
+    recomputed_policy = _c010_policy_manifest(train_inputs, request, producer_commit=_formal_producer_commit())
     if recomputed_policy["receipt_sha256"] != repeats[0]["feature_domain_policy_sha256"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the C-010 policy identity")
-    inputs["feature_domain_policy_sha256"] = recomputed_policy["receipt_sha256"]
+    train_inputs["feature_domain_policy_sha256"] = recomputed_policy["receipt_sha256"]
+    semantic_inputs = _load_verified_formal_semantic_inputs(
+        request,
+        db_prefix=str(args.db_env_prefix),
+    )
+    semantic_identities = _semantic_input_identities(semantic_inputs)
+    semantic_inputs["feature_domain_policy_sha256"] = recomputed_policy["receipt_sha256"]
     selections: dict[tuple[str, str], dict[str, Any]] = {}
     selected_artifacts: dict[tuple[str, str], dict[str, Any]] = {}
     family_map = {str(item["family"]): item for item in request["families"]}
     for family in ("legacy_covfix", "autocycle_all_core"):
-        series_by_level = _direct_series_for_family(inputs, family_map[family])
+        series_by_level = _direct_series_for_family(semantic_inputs, family_map[family])
         feature_count = len(tuple(family_map[family]["feature_names"]))
         for level in ("L1", "L2"):
             key = f"{family}:{level}"
@@ -1760,6 +1899,10 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
             mapping_manifest_hash=repeats[0]["mapping_manifest_hash"],
             calendar_manifest_hash=repeats[0]["calendar_manifest_hash"],
             l2_stock_fact_manifest_hash=repeats[0]["l2_stock_fact_manifest_hash"],
+            semantic_dataset_manifest_hash=semantic_identities["semantic_dataset_manifest_hash"],
+            semantic_mapping_manifest_hash=semantic_identities["semantic_mapping_manifest_hash"],
+            semantic_calendar_manifest_hash=semantic_identities["semantic_calendar_manifest_hash"],
+            semantic_l2_stock_fact_manifest_hash=semantic_identities["semantic_l2_stock_fact_manifest_hash"],
             feature_domain_policy_sha256=repeats[0]["feature_domain_policy_sha256"],
             feature_domain_policy_manifest=request["feature_domain_policy_manifest"],
             producer_commit=_git_commit(),
@@ -1772,6 +1915,7 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         "mapping_manifest_hash": repeats[0]["mapping_manifest_hash"],
         "calendar_manifest_hash": repeats[0]["calendar_manifest_hash"],
         "l2_stock_fact_manifest_hash": repeats[0]["l2_stock_fact_manifest_hash"],
+        **semantic_identities,
         "feature_domain_policy_sha256": repeats[0]["feature_domain_policy_sha256"],
         "formula_version": C010_FORMULA_VERSION,
         "fresh_process_receipt_hashes": [repeat["single_pass_receipt_sha256"] for repeat in repeats],

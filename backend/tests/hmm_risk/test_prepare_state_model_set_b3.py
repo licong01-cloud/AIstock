@@ -37,6 +37,8 @@ def _request() -> dict:
                 "preprocess_family": "identity",
                 "train_start": "2022-01-01",
                 "train_end": "2024-06-30",
+                "validation_start": "2024-07-01",
+                "validation_end": "2025-03-31",
             },
             {
                 "family": "autocycle_all_core",
@@ -44,6 +46,8 @@ def _request() -> dict:
                 "preprocess_family": "winsor_zscore_1_99_train_global_v1",
                 "train_start": "2022-01-01",
                 "train_end": "2024-06-30",
+                "validation_start": "2024-07-01",
+                "validation_end": "2025-03-31",
             },
         ],
     }
@@ -338,13 +342,13 @@ def test_formal_preflight_freezes_stock_facts_to_train_window_and_preserves_circ
 ) -> None:
     request = _request()
     inputs = _preflight_inputs()
-    observed: dict[str, object] = {}
+    observed: dict[str, object] = {"sources": []}
     _approve_preflight_template(monkeypatch, request)
     monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
 
     def load_inputs(train_request, *, db_prefix, c010_formal=False):
-        observed["source"] = dict(train_request["source"])
+        observed["sources"].append(dict(train_request["source"]))
         observed["db_prefix"] = db_prefix
         observed["c010_formal"] = c010_formal
         return inputs
@@ -358,16 +362,90 @@ def test_formal_preflight_freezes_stock_facts_to_train_window_and_preserves_circ
 
     report = subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
 
-    assert observed["source"]["source_start"] == "2022-01-01"
-    assert observed["source"]["source_end"] == "2024-06-30"
-    assert observed["source"]["circ_mv_history_start"] == "2020-07-30"
+    assert observed["sources"][0]["source_start"] == "2022-01-01"
+    assert observed["sources"][0]["source_end"] == "2024-06-30"
+    assert observed["sources"][0]["circ_mv_history_start"] == "2020-07-30"
+    assert observed["sources"][1]["source_start"] == "2022-01-01"
+    assert observed["sources"][1]["source_end"] == "2025-04-30"
+    assert observed["sources"][1]["circ_mv_history_start"] == "2020-07-30"
     assert observed["db_prefix"] == "TDX_DB_"
     assert observed["c010_formal"] is True
     assert report["request_candidate"]["source"]["source_start"] == "2022-01-01"
     assert report["request_candidate"]["source"]["source_end"] == "2024-06-30"
     assert report["request_candidate"]["source"]["circ_mv_history_start"] == "2020-07-30"
+    assert report["request_candidate"]["semantic_source"] == observed["sources"][1]
+    assert report["validation_start"] == "2024-07-01"
+    assert report["validation_end"] == "2025-03-31"
     assert request["source"]["source_start"] == "2020-07-30"
     assert "circ_mv_history_start" not in request["source"]
+
+
+def test_formal_preflight_freezes_missing_approved_validation_window(monkeypatch) -> None:
+    request = _request()
+    for family in request["families"]:
+        family.pop("validation_start")
+        family.pop("validation_end")
+    inputs = _preflight_inputs()
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_load_l1_source_inputs",
+        lambda train_request, *, db_prefix, c010_formal=False: inputs,
+    )
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda values, req: _coverage_preflight(policy_sha256=values["feature_domain_policy_sha256"]),
+    )
+
+    report = subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
+
+    assert report["validation_start"] == "2024-07-01"
+    assert report["validation_end"] == "2025-03-31"
+    assert {
+        (family["validation_start"], family["validation_end"]) for family in report["request_candidate"]["families"]
+    } == {("2024-07-01", "2025-03-31")}
+    assert all("validation_start" not in family for family in request["families"])
+
+
+def test_formal_preflight_rejects_unapproved_validation_window_before_source_load(monkeypatch) -> None:
+    request = _request()
+    request["families"][0]["validation_start"] = "2024-07-02"
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    source_load_called = False
+
+    def unexpected_source_load(*args, **kwargs):
+        nonlocal source_load_called
+        source_load_called = True
+        raise AssertionError("source load must not start for an unapproved validation window")
+
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", unexpected_source_load)
+
+    with pytest.raises(StateModelSetError, match="formal B3 validation window mismatch"):
+        subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
+    assert source_load_called is False
+
+
+def test_formal_preflight_rejects_source_that_does_not_cover_semantic_watermark(monkeypatch) -> None:
+    request = _request()
+    request["source"]["source_end"] = "2025-03-31"
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    source_load_called = False
+
+    def unexpected_source_load(*args, **kwargs):
+        nonlocal source_load_called
+        source_load_called = True
+        raise AssertionError("source load must not expand an immutable source window")
+
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", unexpected_source_load)
+
+    with pytest.raises(StateModelSetError, match="semantic window escapes the immutable source window"):
+        subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
+    assert source_load_called is False
 
 
 def test_preflight_blocks_insufficient_train_coverage_without_request_candidate(monkeypatch) -> None:
@@ -677,6 +755,8 @@ def test_formal_parent_persists_typed_child_failure_receipt(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
     monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_require_formal_semantic_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_load_verified_formal_semantic_inputs", lambda request, db_prefix: {})
 
     with pytest.raises(StateModelSetError, match="801010.SI train-only observation coverage is insufficient: 10"):
         subject.run_b3_repeated(args, _request())
@@ -688,6 +768,112 @@ def test_formal_parent_persists_typed_child_failure_receipt(monkeypatch, tmp_pat
     assert failure["fit_grid_completed"] is False
     assert failure["selection_performed"] is False
     assert failure["ready_artifact_write_performed"] is False
+
+
+def test_formal_parent_rejects_missing_validation_window_before_fresh_process(monkeypatch, tmp_path) -> None:
+    request = _request()
+    for family in request["families"]:
+        family.pop("validation_start")
+        family.pop("validation_end")
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_preparation_output=str(tmp_path / "formal-receipt.json"),
+    )
+    subprocess_called = False
+
+    def unexpected_subprocess(*args, **kwargs):
+        nonlocal subprocess_called
+        subprocess_called = True
+        raise AssertionError("fresh process must not start without the approved validation window")
+
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda value: None)
+    monkeypatch.setattr(subject.subprocess, "run", unexpected_subprocess)
+
+    with pytest.raises(StateModelSetError, match="formal B3 validation window is missing"):
+        subject.run_b3_repeated(args, request)
+    assert subprocess_called is False
+
+
+def test_formal_parent_rejects_missing_semantic_identity_before_fresh_process(monkeypatch, tmp_path) -> None:
+    request = _request()
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_preparation_output=str(tmp_path / "formal-receipt.json"),
+    )
+    subprocess_called = False
+
+    def unexpected_subprocess(*args, **kwargs):
+        nonlocal subprocess_called
+        subprocess_called = True
+        raise AssertionError("fresh process must not start without frozen semantic identity")
+
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda value: None)
+    monkeypatch.setattr(subject.subprocess, "run", unexpected_subprocess)
+
+    with pytest.raises(StateModelSetError, match="formal B3 semantic source identity is missing"):
+        subject.run_b3_repeated(args, request)
+    assert subprocess_called is False
+
+
+def test_formal_semantic_identity_rejects_source_window_drift() -> None:
+    request = _request()
+    request["semantic_source"] = subject._b3_semantic_source_request(request)["source"]
+    request.update(
+        {
+            "semantic_dataset_manifest_hash": "1" * 64,
+            "semantic_mapping_manifest_hash": "2" * 64,
+            "semantic_calendar_manifest_hash": "3" * 64,
+            "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+        }
+    )
+    subject._require_formal_semantic_identity(request)
+
+    request["semantic_source"]["source_end"] = "2025-03-31"
+    with pytest.raises(StateModelSetError, match="formal B3 semantic source identity mismatch"):
+        subject._require_formal_semantic_identity(request)
+
+
+def test_formal_parent_rejects_semantic_hash_drift_before_fresh_process(monkeypatch, tmp_path) -> None:
+    request = _request()
+    request["semantic_source"] = subject._b3_semantic_source_request(request)["source"]
+    request.update(
+        {
+            "semantic_dataset_manifest_hash": "1" * 64,
+            "semantic_mapping_manifest_hash": "2" * 64,
+            "semantic_calendar_manifest_hash": "3" * 64,
+            "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+        }
+    )
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_preparation_output=str(tmp_path / "formal-receipt.json"),
+    )
+    subprocess_called = False
+
+    def unexpected_subprocess(*args, **kwargs):
+        nonlocal subprocess_called
+        subprocess_called = True
+        raise AssertionError("fresh process must not start after semantic hash drift")
+
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda *args, **kwargs: _preflight_inputs())
+    monkeypatch.setattr(subject.subprocess, "run", unexpected_subprocess)
+
+    with pytest.raises(StateModelSetError, match="semantic input drifted"):
+        subject.run_b3_repeated(args, request)
+    assert subprocess_called is False
 
 
 def test_child_failure_receipt_bounds_untrusted_error_text(monkeypatch, tmp_path) -> None:
