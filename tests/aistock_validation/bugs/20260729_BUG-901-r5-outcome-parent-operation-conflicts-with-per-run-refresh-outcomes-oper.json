@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-901",
-  "closed_at": null,
+  "closed_at": "2026-07-29T03:37:43Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -49,8 +49,8 @@
   },
   "first_seen_at": "2026-07-29T02:12:34.952590Z",
   "fix_branch": "bug/BUG-901-r5-outcome-parent-operation-conflicts-with-per-r-20260729",
-  "fix_commit": "a63ecd5c5c168766876d12dc3d35955350c7ffd5",
-  "fixed_at": null,
+  "fix_commit": "6db7c30f746b0f0ca38708e17c8ee36739b45c01",
+  "fixed_at": "2026-07-29T03:41:27.518134Z",
   "github_issue_number": 2850,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2850",
   "last_seen_at": "2026-07-29T02:12:34.952590Z",
@@ -58,8 +58,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2853",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending_explicit_authorization",
+  "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -70,7 +71,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -79,6 +80,43 @@
     "fingerprint": "1edc88c8e17431ea305e94bf",
     "source_event_id": "FE-20260729-1edc88c8e174"
   },
+  "validation_evidence": [
+    "nox -s l0 -> passed 0 findings",
+    "nox -s validation_module_registry_l0 -> passed 8 tests ownership 14 mapped 0 unmapped 0 ambiguous",
+    "nox -s advisory_historical_range_backend -> passed 298 tests 4 skipped"
+  ],
+  "validation_receipts": [
+    {
+      "command": "nox -s l0",
+      "commit": "0eefddb66a0f04c768426115f3b00790419e7b99",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "1d7325520e29cc58",
+      "result": "passed 0 findings",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "nox -s validation_module_registry_l0",
+      "commit": "0eefddb66a0f04c768426115f3b00790419e7b99",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "604a102f02234bd7",
+      "result": "passed 8 tests ownership 14 mapped 0 unmapped 0 ambiguous",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "nox -s advisory_historical_range_backend",
+      "commit": "0eefddb66a0f04c768426115f3b00790419e7b99",
+      "evidence_kind": "nox",
+      "plan": "advisory_historical_range_backend",
+      "receipt_id": "8ca10a0438ec46d5",
+      "result": "passed 298 tests 4 skipped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -120,38 +158,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_receipts": [
-    {
-      "command": "nox -s l0",
-      "commit": "0eefddb66a0f04c768426115f3b00790419e7b99",
-      "evidence_kind": "nox",
-      "plan": "l0",
-      "receipt_id": "1d7325520e29cc58",
-      "result": "passed 0 findings",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    },
-    {
-      "command": "nox -s validation_module_registry_l0",
-      "commit": "0eefddb66a0f04c768426115f3b00790419e7b99",
-      "evidence_kind": "nox",
-      "plan": "validation_module_registry_l0",
-      "receipt_id": "604a102f02234bd7",
-      "result": "passed 8 tests ownership 14 mapped 0 unmapped 0 ambiguous",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    },
-    {
-      "command": "nox -s advisory_historical_range_backend",
-      "commit": "0eefddb66a0f04c768426115f3b00790419e7b99",
-      "evidence_kind": "nox",
-      "plan": "advisory_historical_range_backend",
-      "receipt_id": "8ca10a0438ec46d5",
-      "result": "passed 298 tests 4 skipped",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    }
-  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
