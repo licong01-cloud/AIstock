@@ -1,6 +1,7 @@
 {
   "actual": "Latest main 62ff655e changes the code-intelligence freshness step in .github/workflows/nightly.yml to PowerShell, but backend/tests/test_validation_catalog_integrity.py still requires the Bash token '|| true'. The exact test fails on clean main and blocks every PR whose CI classifier selects validation_catalog_integrity.",
   "allowed_write_scope": [
+    "backend/tests/test_validation_catalog_integrity.py",
     "tests/aistock_validation/bugs/20260729_BUG-918-validation-catalog-test-requires-bash-syntax-after-nightly-powershell-mi.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,10 +21,16 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260729-1eb446bc3040",
       "timestamp": "2026-07-29T18:50:02.297568Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "Added the exact stale catalog contract test after reproducing the failure unchanged on clean main 62ff655e.",
+      "timestamp": "2026-07-29T19:00:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The catalog test must verify best-effort freshness semantics for the workflow's declared shell without requiring Bash-only syntax from a PowerShell step.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,15 +59,15 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest -q backend/tests/test_validation_catalog_integrity.py::test_nightly_codegraph_freshness_is_not_skipped_by_weekly_ua_guard -p no:cacheprovider",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_catalog_integrity"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "validation"
   ],
@@ -175,5 +182,5 @@
       "target_cost_percent_of_legacy": "45-60%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
