@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/tests/ingestion/test_repair_minute_via_minute_api.py",
     "scripts/repair_minute_via_minute_api.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260723_BUG-842-minute-go-ingestion-restart-leaves-partial-day-and-can-false-green-readi.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -52,6 +53,12 @@
       "actor": "codex",
       "note": "After explicit user authorization, production aistock job 31d8de6c-6693-4a36-b516-5b6b3fc0faab / run 02cfbdf5-d164-4aa5-9c34-deb969fee00d upserted 2026-07-23 from 818160 rows and 3409 symbols to 1326961 rows and 5530 source-data symbols. Source parity, audit, job, and run succeeded; fetch failures, OHLCV nulls, illegal-session rows, non-1m rows, non-tdx rows, directory-outside rows, and source-count mismatches were all zero. The protected 2026-07-22 fingerprint remained exactly 1326961 rows with all price, volume, and amount aggregates unchanged. No DELETE, TRUNCATE, DDL, or service control ran.",
       "timestamp": "2026-07-23T15:44:07Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Register the minute repair script and its focused test in file_ownership.yaml after PR #2880 CI classified both paths as unmapped_code_blocked.",
+      "timestamp": "2026-07-29T11:01:41.844476Z"
     }
   ],
   "evidence_uris": [],
@@ -61,6 +68,7 @@
     "changed_files": [
       "backend/tests/ingestion/test_repair_minute_via_minute_api.py",
       "scripts/repair_minute_via_minute_api.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
       "tests/aistock_validation/bugs/20260723_BUG-842-minute-go-ingestion-restart-leaves-partial-day-and-can-false-green-readi.json"
     ],
     "ownership": {
