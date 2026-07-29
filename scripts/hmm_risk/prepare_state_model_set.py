@@ -754,14 +754,15 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
 
     producer_commit = _formal_producer_commit()
     _require_approved_b3_identities(request_template)
-    inputs = _load_l1_source_inputs(request_template, db_prefix=db_prefix, c010_formal=True)
+    train_request = _c009_train_source_request(request_template)
+    inputs = _load_l1_source_inputs(train_request, db_prefix=db_prefix, c010_formal=True)
     dataset_hash = canonical_sha256(inputs["dataset_manifest"])
     mapping_hash = canonical_sha256(inputs["mapping_manifest"])
     l2_stock_fact_hash = canonical_sha256(inputs["l2_stock_fact_manifest"])
-    policy_manifest = _c010_policy_manifest(inputs, request_template, producer_commit=producer_commit)
+    policy_manifest = _c010_policy_manifest(inputs, train_request, producer_commit=producer_commit)
     policy_sha256 = str(policy_manifest["receipt_sha256"])
     inputs["feature_domain_policy_sha256"] = policy_sha256
-    train_coverage = _b3_train_coverage_preflight(inputs, request_template)
+    train_coverage = _b3_train_coverage_preflight(inputs, train_request)
     _require_canonical_receipt(train_coverage, label="C-010 formal train coverage")
     if (
         train_coverage.get("feature_domain_policy_sha256") != policy_sha256
@@ -769,7 +770,7 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
     ):
         raise StateModelSetError("C-010 formal train coverage policy identity is invalid")
     train_coverage_valid = train_coverage["train_coverage_valid"] is True
-    train_start, train_end = _request_train_window(request_template)
+    train_start, train_end = _request_train_window(train_request)
     train_trading_dates = tuple(
         value for value in inputs.get("trading_dates") or () if train_start <= value <= train_end
     )
@@ -777,7 +778,7 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
         raise StateModelSetError(
             f"C-010 frozen train calendar must contain 601 trading dates, got {len(train_trading_dates)}"
         )
-    request_candidate = deepcopy(request_template)
+    request_candidate = deepcopy(train_request)
     request_candidate.update(
         {
             "producer_commit": producer_commit,
