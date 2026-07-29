@@ -1,6 +1,14 @@
 {
   "actual": "Code-path review after BUG-901 shows the R5 build-dataset-bridge parent command claims a BUILD_DATASET_BRIDGE operation for the batch and then DatasetBridgeService.build_until_stable_boundary creates and claims another BUILD_DATASET_BRIDGE operation for the same batch. The existing uq_advisory_historical_range_operation_running_type therefore deterministically rejects the internal operation exactly like the observed Outcome failure. Repair must distinguish batch-command and run/internal operation identities while preserving same-layer single-active enforcement, durable receipts, CAS/fencing, exact retry, and non-empty bridge semantics; do not remove or weaken the unique invariant.",
   "allowed_write_scope": [
+    "backend/db/migrations/add_advisory_historical_range_internal_operation_types_20260729.sql",
+    "backend/db/migrations/add_advisory_historical_range_internal_operation_types_20260729.rollback.sql",
+    "backend/services/advisory_historical_range/models.py",
+    "backend/services/advisory_historical_range/outcome_service.py",
+    "backend/services/advisory_historical_range/dataset_bridge.py",
+    "backend/services/advisory_historical_range/repository.py",
+    "backend/tests/advisory_historical_range/test_r5_internal_operation_types.py",
+    "tests/aistock_validation/bugs/20260729_BUG-901-r5-outcome-parent-operation-conflicts-with-per-run-refresh-outcomes-oper.json",
     "tests/aistock_validation/bugs/20260729_BUG-902-r5-bridge-parent-operation-conflicts-with-internal-build-dataset-bridge.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +31,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The R5 batch command and internal dataset bridge use distinct durable operation types and identities, so both layers can hold independent leases while same-layer single-active enforcement, CAS/fencing, exact retry, receipt validation, and non-empty bridge semantics remain intact.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -50,11 +58,13 @@
     "Do not restart production runtime services without explicit approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending_explicit_authorization",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "advisory_historical_range_backend",
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -162,5 +172,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "validation_passed_pending_pr"
 }

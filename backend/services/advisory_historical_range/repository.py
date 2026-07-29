@@ -5290,7 +5290,10 @@ class PostgresHistoricalRangeRepository:
                 expected_kind=expected_kind,
                 resolved_request_hash=resolved_request_hash,
             )
-            if operation_type is HistoricalRangeOperationType.REFRESH_OUTCOMES:
+            if operation_type in {
+                HistoricalRangeOperationType.REFRESH_OUTCOMES,
+                HistoricalRangeOperationType.REFRESH_OUTCOMES_RUN,
+            }:
                 receipt = HistoricalRangeOutcomeRefreshReceiptV1.model_validate(envelope.payload)
                 if (
                     receipt.operation_id != attempt.operation_id
@@ -5326,7 +5329,9 @@ class PostgresHistoricalRangeRepository:
                             ),
                         ),
                     )
-            elif operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE:
+            elif operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE or (
+                operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN
+            ):
                 receipt = HistoricalRangeDatasetBridgeReceiptV1.model_validate(envelope.payload)
                 expected_status = {
                     HistoricalRangeBridgeResultStatus.SEALED: (HistoricalRangeOperationStatus.COMPLETED.value),
@@ -5405,9 +5410,15 @@ class PostgresHistoricalRangeRepository:
     def _operation_receipt_kind(operation_type: HistoricalRangeOperationType) -> HistoricalRangeArtifactKind:
         if operation_type in {HistoricalRangeOperationType.RESUME, HistoricalRangeOperationType.CANCEL}:
             return HistoricalRangeArtifactKind.RANGE_RECEIPT
-        if operation_type is HistoricalRangeOperationType.REFRESH_OUTCOMES:
+        if operation_type in {
+            HistoricalRangeOperationType.REFRESH_OUTCOMES,
+            HistoricalRangeOperationType.REFRESH_OUTCOMES_RUN,
+        }:
             return HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT
-        if operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE:
+        if operation_type in {
+            HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
+            HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN,
+        }:
             return HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT
         if operation_type is HistoricalRangeOperationType.CREATE:
             return HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN
