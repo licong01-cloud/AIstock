@@ -54,8 +54,10 @@ rules:
     priority: 125
     include:
       - backend/migrations/qe_long_trend_evaluation_control_phase2_*.sql
+      - backend/migrations/qe_long_trend_task_profile_phase4_*.sql
       - backend/services/quantevolver/long_trend_*.py
       - backend/services/quantevolver/templates/long_trend_postprocess_adapter.py
+      - backend/tests/unified_engine/test_experiment_config.py
       - backend/tests/unified_engine/test_qe_long_trend_*.py
       - docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_*.md
     primary_module: qe.long_trend_evaluation
