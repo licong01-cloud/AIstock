@@ -50,7 +50,7 @@
   "first_seen_at": "2026-07-29T02:12:34.952590Z",
   "fix_branch": "bug/BUG-901-r5-outcome-parent-operation-conflicts-with-per-r-20260729",
   "fix_commit": "6db7c30f746b0f0ca38708e17c8ee36739b45c01",
-  "fixed_at": "2026-07-29T03:41:27.518134Z",
+  "fixed_at": "2026-07-29T04:32:29.647856Z",
   "github_issue_number": 2850,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2850",
   "last_seen_at": "2026-07-29T02:12:34.952590Z",
@@ -60,7 +60,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2853",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -81,9 +81,8 @@
     "source_event_id": "FE-20260729-1edc88c8e174"
   },
   "validation_evidence": [
-    "nox -s l0 -> passed 0 findings",
-    "nox -s validation_module_registry_l0 -> passed 8 tests ownership 14 mapped 0 unmapped 0 ambiguous",
-    "nox -s advisory_historical_range_backend -> passed 298 tests 4 skipped"
+    "production migration apply and idempotent reapply -> passed",
+    "production catalog readback and row-count invariance -> passed"
   ],
   "validation_receipts": [
     {
