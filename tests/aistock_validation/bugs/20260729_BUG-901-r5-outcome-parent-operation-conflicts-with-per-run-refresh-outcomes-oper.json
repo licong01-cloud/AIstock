@@ -1,0 +1,209 @@
+{
+  "actual": "After a real 15-day dual-Program batch completed 30/30 days, POST refresh-outcomes created parent operation ahrop_6fb7a472a4c94d9be366c5673aaac2fe. The background command claims that parent as RUNNING, then each per-run OutcomeService sub-operation tries to transition another REFRESH_OUTCOMES row for the same batch to RUNNING and violates uq_advisory_historical_range_operation_running_type. Operation fails at OUTCOME_SUB_OPERATIONS with UniqueViolation and writes zero outcomes. Repair must preserve one active-operation invariant, durable parent visibility, per-run idempotency/CAS, error visibility, and independent single/native-multi outcome processing without direct SQL or status rewriting.",
+  "allowed_write_scope": [
+    "backend/db/migrations/add_advisory_historical_range_internal_operation_types_20260729.sql",
+    "backend/db/migrations/add_advisory_historical_range_internal_operation_types_20260729.rollback.sql",
+    "backend/services/advisory_historical_range/models.py",
+    "backend/services/advisory_historical_range/outcome_service.py",
+    "backend/services/advisory_historical_range/dataset_bridge.py",
+    "backend/services/advisory_historical_range/repository.py",
+    "backend/tests/advisory_historical_range/test_r5_internal_operation_types.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260729_BUG-901-r5-outcome-parent-operation-conflicts-with-per-run-refresh-outcomes-oper.json",
+    "tests/aistock_validation/bugs/20260729_BUG-902-r5-bridge-parent-operation-conflicts-with-internal-build-dataset-bridge.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-901",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-29T02:12:34.952590Z",
+  "description": "After a real 15-day dual-Program batch completed 30/30 days, POST refresh-outcomes created parent operation ahrop_6fb7a472a4c94d9be366c5673aaac2fe. The background command claims that parent as RUNNING, then each per-run OutcomeService sub-operation tries to transition another REFRESH_OUTCOMES row for the same batch to RUNNING and violates uq_advisory_historical_range_operation_running_type. Operation fails at OUTCOME_SUB_OPERATIONS with UniqueViolation and writes zero outcomes. Repair must preserve one active-operation invariant, durable parent visibility, per-run idempotency/CAS, error visibility, and independent single/native-multi outcome processing without direct SQL or status rewriting.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260729-1edc88c8e174",
+      "timestamp": "2026-07-29T02:12:34.952586Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The R5 batch command and each per-run outcome refresh use distinct durable operation types and identities, so both layers can hold independent leases while same-layer single-active enforcement, CAS/fencing, exact retry, receipt validation, and visible failure semantics remain intact.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-07-29T02:12:34.952590Z",
+  "fix_branch": "bug/BUG-901-r5-outcome-parent-operation-conflicts-with-per-r-20260729",
+  "fix_commit": "a63ecd5c5c168766876d12dc3d35955350c7ffd5",
+  "fixed_at": null,
+  "github_issue_number": 2850,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2850",
+  "last_seen_at": "2026-07-29T02:12:34.952590Z",
+  "module": "advisory_historical_range",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "pending_explicit_authorization",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "advisory_historical_range_backend",
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_historical_range"
+  ],
+  "title": "R5 outcome parent operation conflicts with per-run REFRESH_OUTCOMES operations",
+  "trigger_condition": {
+    "fingerprint": "1edc88c8e17431ea305e94bf",
+    "source_event_id": "FE-20260729-1edc88c8e174"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "validation_receipts": [
+    {
+      "command": "nox -s l0",
+      "commit": "0eefddb66a0f04c768426115f3b00790419e7b99",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "1d7325520e29cc58",
+      "result": "passed 0 findings",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "nox -s validation_module_registry_l0",
+      "commit": "0eefddb66a0f04c768426115f3b00790419e7b99",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "604a102f02234bd7",
+      "result": "passed 8 tests ownership 14 mapped 0 unmapped 0 ambiguous",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "nox -s advisory_historical_range_backend",
+      "commit": "0eefddb66a0f04c768426115f3b00790419e7b99",
+      "evidence_kind": "nox",
+      "plan": "advisory_historical_range_backend",
+      "receipt_id": "8ca10a0438ec46d5",
+      "result": "passed 298 tests 4 skipped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "ready_for_pr"
+}
