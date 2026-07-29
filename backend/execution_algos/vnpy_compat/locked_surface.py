@@ -42,6 +42,18 @@ _PINNED_SOURCE_PATHS = frozenset(
         "vnpy_core/vnpy/trader/constant.py",
     }
 )
+# K4 owns these artifacts under the shared pinned-source root.  K1 deliberately
+# does not validate their bytes or schema; it only delegates their exact paths
+# so that K4 can apply its independent manifest authority.  Every other extra
+# path remains a loud K1 compatibility failure.
+_K4_DELEGATED_SOURCE_PATHS = frozenset(
+    {
+        "facade_source_manifest.json",
+        "vnpy_algotrading/algos/iceberg_algo.py",
+        "vnpy_algotrading/algos/stop_algo.py",
+        "vnpy_core/vnpy/trader/utility.py",
+    }
+)
 
 
 def _validate_relative_path(value: str, *, field_name: str) -> str:
@@ -280,7 +292,7 @@ def _read_sources(
         _SOURCE_MANIFEST,
         *(authority.license_file.path for authority in manifest.upstream_sources),
     }
-    expected_paths = set(declared) | allowed_artifacts
+    expected_paths = set(declared) | allowed_artifacts | _K4_DELEGATED_SOURCE_PATHS
     for extra in sorted(actual - expected_paths):
         failures.append(
             _failure(

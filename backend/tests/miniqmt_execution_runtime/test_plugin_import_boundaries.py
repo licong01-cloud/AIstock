@@ -59,6 +59,26 @@ def test_real_k1_a_and_k1_c_modules_pass_ast_and_isolated_import() -> None:
             "backend.execution_algos.vnpy_compat.receipts",
             REPO_ROOT / "backend/execution_algos/vnpy_compat/receipts.py",
         ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_contracts",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_contracts.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_projection",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_projection.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_adapter",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_adapter.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_characterization",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_characterization.py",
+        ),
     )
 
     receipt = validate_plugin_import_boundaries_v1(repo_root=REPO_ROOT, targets=targets)
