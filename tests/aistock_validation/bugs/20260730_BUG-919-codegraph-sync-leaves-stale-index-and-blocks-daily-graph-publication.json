@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-919",
-  "closed_at": null,
+  "closed_at": "2026-07-29T19:52:01Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -91,8 +91,8 @@
   },
   "first_seen_at": "2026-07-29T19:34:25.818629Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fae10ca6449f5445b64c619c89cef0b329f0a498",
+  "fixed_at": "2026-07-29T19:52:20.374829Z",
   "github_issue_number": 2913,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2913",
   "last_seen_at": "2026-07-29T19:34:25.818629Z",
@@ -100,6 +100,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2915",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -111,7 +112,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -120,6 +121,16 @@
     "fingerprint": "b928d4903e3bbe6624b5667c",
     "source_event_id": "FE-20260730-b928d4903e3b"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -p no:cacheprovider -> 81 passed",
+    "python -m ruff check scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m py_compile scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --module validation --changed-file scripts/code_intelligence_adapter.py --changed-file backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "git diff --check origin/main...HEAD -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
