@@ -24,7 +24,7 @@ on:
         type: boolean
         default: false
       run_code_intelligence:
-        description: 'Build CodeGraph / Understand Anything warning-only artifacts.'
+        description: 'Refresh and publish CodeGraph / Understand Anything state.'
         type: boolean
         default: true
       llm_triage_mode:
@@ -53,6 +53,7 @@ env:
   AISTOCK_WORKTREE_ROOT: F:/Dev/AIstock_worktrees
   AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: F:/Dev/AIstock
   AISTOCK_CODE_INTELLIGENCE_STATE_ROOT: F:/Dev/AIstock_code_intelligence_state
+  AISTOCK_UA_DAILY_MAX_BUDGET_USD: ${{ vars.AISTOCK_UA_DAILY_MAX_BUDGET_USD || '2' }}
   AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env
 
 permissions:
@@ -324,13 +325,25 @@ jobs:
           }
 
       - name: Upload Nightly L3 session results
+        id: upload_nightly_l3
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: nightly-l3-results-${{ github.run_id }}
           path: tmp/validation/nightly_l3/
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Retry Nightly L3 session results upload
+        if: always() && steps.upload_nightly_l3.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-l3-results-${{ github.run_id }}
+          path: tmp/validation/nightly_l3/
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
 
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
@@ -373,7 +386,6 @@ jobs:
     name: Code intelligence daily graph refresh and summary
     needs: runner-preflight
     if: github.event_name == 'schedule' || inputs.run_code_intelligence
-    continue-on-error: true
     concurrency:
       group: code-intelligence-refresh-main
       cancel-in-progress: false
@@ -411,33 +423,45 @@ jobs:
 
       - name: Reconcile CodeGraph and Understand Anything
         id: graph_refresh
-        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/code_intelligence_adapter.py refresh-plan `
             --trigger nightly `
             --output "$outDir/graph-refresh-plan.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Graph refresh planning failed."
+          }
           conda run -n AIstock python scripts/code_intelligence_adapter.py codegraph-sync `
             --output-dir $outDir `
+            --require-publish-ready `
             --output "$outDir/codegraph-sync.stdout.json"
-          $codegraph = Get-Content "$outDir/codegraph-sync.stdout.json" -Raw | ConvertFrom-Json
-          if ($codegraph.publish_ready) {
-            conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
-              --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
-              --direction export `
-              --provider codegraph
+          if ($LASTEXITCODE -ne 0) {
+            throw "CodeGraph sync did not produce publish-ready state."
+          }
+          conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
+            --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+            --direction export `
+            --provider codegraph `
+            --output "$outDir/codegraph-state-export.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "CodeGraph state export failed."
           }
           conda run -n AIstock python scripts/code_intelligence_adapter.py ua-refresh `
             --output-dir $outDir `
-            --max-budget-usd 2 `
+            --max-budget-usd "${env:AISTOCK_UA_DAILY_MAX_BUDGET_USD}" `
+            --require-publish-ready `
             --output "$outDir/understand-anything-refresh.stdout.json"
-          $ua = Get-Content "$outDir/understand-anything-refresh.stdout.json" -Raw | ConvertFrom-Json
-          if ($ua.publish_ready) {
-            conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
-              --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
-              --direction export `
-              --provider understand_anything
+          if ($LASTEXITCODE -ne 0) {
+            throw "Understand Anything refresh did not produce publish-ready state."
+          }
+          conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
+            --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+            --direction export `
+            --provider understand_anything `
+            --output "$outDir/understand-anything-state-export.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Understand Anything state export failed."
           }
 
       - name: Report daily graph refresh status
@@ -482,11 +506,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/code_intelligence_adapter.py freshness `
             --output-dir $outDir `
+            --max-age-hours 24 `
             --output "$outDir/codegraph-freshness.stdout.json"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "CodeGraph freshness command exited with $LASTEXITCODE; continuing."
-            $global:LASTEXITCODE = 0
-            # PowerShell equivalent of bash non-blocking suffix: || true
+            throw "CodeGraph freshness evidence generation failed."
           }
           if (Test-Path -LiteralPath "$outDir/codegraph-freshness.md") {
             Get-Content -LiteralPath "$outDir/codegraph-freshness.md"

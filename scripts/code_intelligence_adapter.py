@@ -1192,13 +1192,16 @@ def refresh_understand_anything(
     ua_plan = plan["understand_anything"]
     action = str(ua_plan.get("action") or "skip")
     if action == "skip":
+        verified = advance_understand_anything_metadata(root=root, commit=plan.get("current_commit"))
         integrity = _ua_state_integrity(root, expected_commit=plan.get("current_commit"))
-        payload = {"schema_version": "aistock_understand_anything_refresh_v1", "workflow_gate": "ready" if integrity["valid"] else "warning", "warning_only": True, "action": action, "publish_ready": bool(integrity["valid"]), "plan": ua_plan, "integrity": integrity}
+        publish_ready = bool(verified.get("advanced") and integrity["valid"])
+        payload = {"schema_version": "aistock_understand_anything_refresh_v1", "generated_at": _utc_now(), "workflow_gate": "ready" if publish_ready else "failed", "warning_only": False, "action": "verify_current", "publish_ready": publish_ready, "plan": ua_plan, "metadata": verified, "integrity": integrity}
         _write_json(output_dir / "understand-anything-refresh.json", payload)
         return payload
     if action == "metadata_advance":
         advanced = advance_understand_anything_metadata(root=root, commit=plan.get("current_commit"))
-        payload = {"schema_version": "aistock_understand_anything_refresh_v1", "workflow_gate": advanced.get("workflow_gate"), "warning_only": True, "action": action, "publish_ready": bool(advanced.get("advanced")), "plan": ua_plan, "metadata": advanced}
+        publish_ready = bool(advanced.get("advanced"))
+        payload = {"schema_version": "aistock_understand_anything_refresh_v1", "generated_at": _utc_now(), "workflow_gate": "ready" if publish_ready else "failed", "warning_only": False, "action": action, "publish_ready": publish_ready, "plan": ua_plan, "metadata": advanced}
         _write_json(output_dir / "understand-anything-refresh.json", payload)
         return payload
 
@@ -1247,8 +1250,8 @@ def refresh_understand_anything(
     payload = {
         "schema_version": "aistock_understand_anything_refresh_v1",
         "generated_at": _utc_now(),
-        "workflow_gate": "ready" if publish_ready else "warning",
-        "warning_only": True,
+        "workflow_gate": "ready" if publish_ready else "failed",
+        "warning_only": False,
         "action": action,
         "max_budget_usd": max_budget_usd,
         "publish_ready": publish_ready,
@@ -1469,7 +1472,7 @@ def build_codegraph_freshness_artifact(
     *,
     root: Path | None = None,
     output_dir: Path | None = None,
-    max_age_hours: float = 36.0,
+    max_age_hours: float = 24.0,
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
@@ -1514,22 +1517,9 @@ def build_codegraph_freshness_artifact(
     warnings.extend(str(item) for item in status.get("graph_source_warnings") or [])
     age_seconds = age.get("age_seconds")
     if isinstance(age_seconds, (int, float)) and age_seconds > max_age_hours * 3600:
-        status_reports_fresh = (
-            status.get("available")
-            and status.get("index_exists")
-            and not skip_external
-            and (status.get("status_check") or {}).get("ok")
-            and (status.get("index_summary") or {}).get("up_to_date")
-        )
-        if status_reports_fresh:
-            notes.append(
-                f"CodeGraph index mtime exceeds {max_age_hours:g} hours, "
-                "but codegraph status reports the index is up to date."
-            )
-        else:
-            freshness = "stale"
-            freshness_basis = "mtime"
-            warnings.append(f"CodeGraph index age exceeds {max_age_hours:g} hours.")
+        freshness = "stale"
+        freshness_basis = "mtime"
+        warnings.append(f"CodeGraph index age exceeds {max_age_hours:g} hours.")
     file_coverage = _codegraph_index_file_coverage(root=root, status=status, skip_external=skip_external)
     if file_coverage.get("missing_files") or file_coverage.get("errors"):
         if freshness == "fresh":
@@ -1764,6 +1754,8 @@ def _ua_manifest_freshness(ua_manifest: dict[str, Any]) -> tuple[str, dict[str, 
             freshness = str(item.get("freshness") or "").strip()
             if freshness in {"fresh", "base_current", "stale"}:
                 counts[freshness] += 1
+            elif freshness == "stale_ancestor":
+                counts["stale"] += 1
             elif freshness in {"missing", "unknown"}:
                 counts["missing"] += 1
     if summary_refs and counts["fresh"] == len(summary_refs):
@@ -2634,7 +2626,7 @@ def understand_anything_status(
         if str(graph_commit) == str(current_git_commit):
             freshness = "fresh"
         elif _git_commit_is_ancestor(requested_root, graph_commit, current_git_commit):
-            freshness = "base_current"
+            freshness = "stale_ancestor"
         else:
             freshness = "stale"
     elif graph_path.exists():
@@ -2642,11 +2634,9 @@ def understand_anything_status(
     else:
         freshness = "missing"
     warnings: list[str] = []
-    if freshness == "stale":
+    if freshness in {"stale", "stale_ancestor"}:
         warnings.append("Understand Anything graph commit differs from the requested worktree commit; use it as warning-only context.")
     notes: list[str] = []
-    if freshness == "base_current":
-        notes.append("Understand Anything graph matches an ancestor of the current worktree; use it for base-code context plus targeted reads of changed files.")
     latest_manifest = _latest_understand_anything_summary_manifest(root)
     summary_manifest_freshness = None
     if latest_manifest and isinstance(latest_manifest, dict):
@@ -2660,7 +2650,7 @@ def understand_anything_status(
             summary_manifest_freshness = "fresh"
         elif ref_freshness:
             summary_manifest_freshness = ",".join(sorted(ref_freshness))
-        elif refs and freshness in {"fresh", "base_current", "stale", "missing"}:
+        elif refs and freshness in {"fresh", "stale_ancestor", "stale", "missing"}:
             summary_manifest_freshness = freshness
     if graph_path.exists() and graph:
         manifest = {
@@ -2792,7 +2782,7 @@ def build_understand_anything_summary(
         "graph_analyzed_at": graph_analyzed_at,
         "freshness": freshness,
         "module": module,
-        "status": "ok" if graph_path.exists() and not warnings else "fallback",
+        "status": "ok" if graph_path.exists() and freshness == "fresh" and not warnings else "degraded",
         "graph_path": _repo_rel(graph_path, graph_root),
         "graph_root": str(graph_root),
         "graph_root_source": "canonical_worktree_root" if graph_root != requested_root else "current_worktree",
@@ -2840,7 +2830,7 @@ def build_understand_anything_summary_manifest(
         "generated_at": _utc_now(),
         "graph_provider": "understand_anything",
         "workflow_gate": "warning"
-        if any(item.get("warnings") or item.get("freshness") in {"missing", "stale"} for item in summaries)
+        if any(item.get("warnings") or item.get("freshness") in {"missing", "stale", "stale_ancestor"} for item in summaries)
         else "ready",
         "modules": module_list,
         "summary_refs": [
@@ -2857,7 +2847,7 @@ def build_understand_anything_summary_manifest(
         ],
         "fresh_summary_count": len([item for item in summaries if item.get("freshness") == "fresh"]),
         "base_current_summary_count": len([item for item in summaries if item.get("freshness") == "base_current"]),
-        "stale_summary_count": len([item for item in summaries if item.get("freshness") == "stale"]),
+        "stale_summary_count": len([item for item in summaries if item.get("freshness") in {"stale", "stale_ancestor"}]),
         "missing_summary_count": len([item for item in summaries if item.get("freshness") in {"missing", "unknown"}]),
         "blocking_for_issue_workflow": False,
         "approval_required_for_long_term_memory": True,
@@ -3683,7 +3673,7 @@ def build_client_verification(
             "current_git_commit": ua.get("current_git_commit"),
             "summary_ref": (ua_summary or {}).get("summary_ref"),
             "nodes_used": (ua_summary or {}).get("nodes_used"),
-            "stale_but_usable": ua.get("freshness") in {"base_current", "stale"},
+            "stale_but_usable": ua.get("freshness") in {"base_current", "stale_ancestor", "stale"},
         },
         "clients": clients,
         "artifacts": {
@@ -3958,7 +3948,7 @@ def cmd_codegraph_sync(args: argparse.Namespace) -> int:
         output=args.output,
         output_format=args.output_format,
     )
-    return 0
+    return 0 if payload.get("publish_ready") or not args.require_publish_ready else 1
 
 
 def cmd_ua_refresh(args: argparse.Namespace) -> int:
@@ -3979,7 +3969,7 @@ def cmd_ua_refresh(args: argparse.Namespace) -> int:
         output=args.output,
         output_format=args.output_format,
     )
-    return 0
+    return 0 if payload.get("publish_ready") or not args.require_publish_ready else 1
 
 
 def cmd_run_manifest(args: argparse.Namespace) -> int:
@@ -4274,7 +4264,7 @@ def build_parser() -> argparse.ArgumentParser:
     freshness = sub.add_parser("freshness", help="Build a warning-only CodeGraph freshness artifact.")
     freshness.add_argument("--root")
     freshness.add_argument("--output-dir")
-    freshness.add_argument("--max-age-hours", type=float, default=36.0)
+    freshness.add_argument("--max-age-hours", type=float, default=24.0)
     freshness.add_argument("--skip-external", action="store_true")
     freshness.add_argument("--output")
     freshness.add_argument(
@@ -4292,7 +4282,7 @@ def build_parser() -> argparse.ArgumentParser:
     latest_freshness.add_argument("--root")
     latest_freshness.add_argument("--refresh-if-stale", action="store_true")
     latest_freshness.add_argument("--output-dir")
-    latest_freshness.add_argument("--max-age-hours", type=float, default=36.0)
+    latest_freshness.add_argument("--max-age-hours", type=float, default=24.0)
     latest_freshness.add_argument("--skip-external", action="store_true")
     latest_freshness.add_argument("--output")
     latest_freshness.add_argument(
@@ -4326,11 +4316,12 @@ def build_parser() -> argparse.ArgumentParser:
     graph_state.add_argument("--output-format", choices=("compact", "full-json"), default="compact")
     graph_state.set_defaults(func=cmd_graph_state)
 
-    codegraph_sync = sub.add_parser("codegraph-sync", help="Run warning-only incremental CodeGraph sync and verify freshness.")
+    codegraph_sync = sub.add_parser("codegraph-sync", help="Run incremental CodeGraph sync and verify publish readiness.")
     codegraph_sync.add_argument("--root")
     codegraph_sync.add_argument("--output-dir")
     codegraph_sync.add_argument("--output")
     codegraph_sync.add_argument("--output-format", choices=("compact", "full-json"), default="compact")
+    codegraph_sync.add_argument("--require-publish-ready", action="store_true")
     codegraph_sync.set_defaults(func=cmd_codegraph_sync)
 
     ua_refresh = sub.add_parser(
@@ -4342,6 +4333,7 @@ def build_parser() -> argparse.ArgumentParser:
     ua_refresh.add_argument("--max-budget-usd", type=float, default=2.0)
     ua_refresh.add_argument("--output")
     ua_refresh.add_argument("--output-format", choices=("compact", "full-json"), default="compact")
+    ua_refresh.add_argument("--require-publish-ready", action="store_true")
     ua_refresh.set_defaults(func=cmd_ua_refresh)
 
     run_manifest = sub.add_parser(

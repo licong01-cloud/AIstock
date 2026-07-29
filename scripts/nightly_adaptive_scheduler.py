@@ -33,6 +33,7 @@ STATUS_FAILURE_MODULES = {
     "code_intelligence": ["validation.runner"],
 }
 BASELINE_NIGHTLY_PLAN_KEYS = ("l0",)
+CHANGE_FILE_ONLY_PLAN_KEYS = frozenset({"l0"})
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go", ".sql", ".sh", ".ps1")
 
 
@@ -89,12 +90,15 @@ def build_nightly_execution_plan(
         raise ValueError("unmapped executable code in Nightly change window: " + ", ".join(unmatched_code))
 
     plans = issue_flow._plans_by_key()
-    plan_keys = list(BASELINE_NIGHTLY_PLAN_KEYS)
+    plan_keys = [] if full_run else list(BASELINE_NIGHTLY_PLAN_KEYS)
     if full_run:
         plan_keys.extend(
             key
             for key, plan in plans.items()
-            if plan.get("enabled", True) and plan.get("runner_enabled") and plan.get("nox_session")
+            if key not in CHANGE_FILE_ONLY_PLAN_KEYS
+            and plan.get("enabled", True)
+            and plan.get("runner_enabled")
+            and plan.get("nox_session")
         )
     else:
         plan_keys.extend(selection.get("required_plans") or [])
@@ -117,6 +121,7 @@ def build_nightly_execution_plan(
         "changed_files": normalized,
         "changed_files_count": len(normalized),
         "full_run": full_run,
+        "excluded_change_file_only_plans": sorted(CHANGE_FILE_ONLY_PLAN_KEYS) if full_run else [],
         "selected_plan_keys": selected_plan_keys,
         "selected_sessions": selected_sessions,
         "impacted_modules": selection.get("impacted_modules") or [],
