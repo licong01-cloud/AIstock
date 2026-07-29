@@ -410,6 +410,7 @@ def _bridge_runtime(status, *, operation_status="QUEUED", lease_expired=False):
     operation = {
         "operation_id": "ahrop_parent",
         "batch_id": "ahrb_1",
+        "request_payload_sha256": "a" * 64,
         "status": operation_status,
         "row_version": 1,
         "attempt_no": 0,

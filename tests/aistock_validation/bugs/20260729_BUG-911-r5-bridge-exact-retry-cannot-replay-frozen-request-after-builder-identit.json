@@ -1,6 +1,10 @@
 {
-  "actual": "Production historical-range parent bridge operation remains QUEUED after its child reached terminal FAILED. After BUG-908 rotates bridge builder identity, the API rebuilds the domain request before reading the existing parent operation, producing a different request hash and preventing the formal parent recovery path. The existing child DATASET_BRIDGE artifact contains the complete frozen original request, so exact retry must recover and validate that authoritative request without fabricating hashes, creating a new operation, copying artifacts, or changing database state directly.",
+  "actual": "The production R5 bridge parent operation remains QUEUED after its child reached terminal FAILED. A post-restart exact retry rebuilds the domain request with the current bridge builder identity before reading the existing parent operation, rotating the request hash from f579275c... to 1f05fade... and returning an artifact-root 422 before the parent recovery path can run. The terminal child DATASET_BRIDGE artifact contains the complete frozen f579275c... request, but the command service did not consume it. The BUG-908 parent receipt validator also compared grouped upstream refs against the envelope's canonically sorted refs and would reject the same valid 66-member lineage set solely because of ordering.",
   "allowed_write_scope": [
+    "backend/services/advisory_historical_range/service.py",
+    "backend/services/advisory_historical_range/dataset_bridge.py",
+    "backend/tests/advisory_historical_range/test_r5_background_lifecycle.py",
+    "backend/tests/advisory_historical_range/test_r5_command_service.py",
     "tests/aistock_validation/bugs/20260729_BUG-911-r5-bridge-exact-retry-cannot-replay-frozen-request-after-builder-identit.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,8 +26,14 @@
       "timestamp": "2026-07-29T14:12:32.813380Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "postgresql://app/advisory_historical_range_operation/ahrop_db1f7525cc28b739b1eb013ce73280ec",
+    "postgresql://app/advisory_historical_range_operation/ahrop_272760defce0e34427961c62280cae19",
+    "artifact://dataset-bridge-receipts/27296110672db653f1f68a7e00be8ae3ca7cc0771585955daab2f5beb5dd5ea9.json",
+    "artifact://dataset-bridges/a5ec9902f1ab33b42813e383816563458c8aad14af89e74c961a7357b97c7c12.json",
+    "test://backend/tests/advisory_historical_range/test_r5_command_service.py"
+  ],
+  "expected": "An exact retry must first resolve the existing deterministic parent operation. When current code identity differs, it must load and fully validate the frozen request from the authoritative parent or terminal child receipt, preserve the original request hash and business scope, schedule the worker with that frozen domain request, and close the parent from the child result. Missing, tampered, mismatched, or semantically different evidence must remain explicitly visible and must not create a new operation or fall back to the current builder identity.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +62,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "POST /api/v1/advisory/historical-range-batches/ahrb_dccde5770463663ecbde96fbe304cd26/build-dataset-bridge with idempotency key r5-postrestart-prod-bridge-20260729-bug902-v1 and the original two range_run_ids after the bridge builder source identity rotates",
   "required_verification": [
     "l0"
   ],
