@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-905",
-  "closed_at": null,
+  "closed_at": "2026-07-29T06:07:44Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -113,8 +113,8 @@
   },
   "first_seen_at": "2026-07-29T05:14:41.330171Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "afc78705861a41f6c47a6a24cf9e5d397c99b013",
+  "fixed_at": "2026-07-29T06:15:02.982953Z",
   "github_issue_number": 2864,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2864",
   "last_seen_at": "2026-07-29T05:14:41.330171Z",
@@ -122,8 +122,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2868",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Run R5 build_dataset_bridge for completed batch ahrb_dccde5770463663ecbde96fbe304cd26 with a parent/RUN shared idempotency key",
   "required_verification": [
@@ -133,7 +134,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -142,6 +143,10 @@
     "fingerprint": "eacbbae842da556d96faea77",
     "source_event_id": "FE-20260729-eacbbae842da"
   },
+  "validation_evidence": [
+    "DEV migration apply and idempotent reapply, catalog readback, parent/RUN rollback smoke -> passed with 0 residue",
+    "production migration apply and idempotent reapply, catalog readback and row-count invariance -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
