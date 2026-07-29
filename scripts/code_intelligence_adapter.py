@@ -414,7 +414,7 @@ def _codegraph_bootstrap_command() -> str:
 def _codegraph_reindex_command(graph_root: Path | str | None = None) -> str:
     command = _codegraph_command() or "codegraph"
     target = str(graph_root or REPO_ROOT)
-    return f"{command} index {target}"
+    return f"{command} index --force {target}"
 
 
 def _catalog_codegraph_critical_files(root: Path) -> list[str]:
@@ -1124,24 +1124,38 @@ def sync_codegraph_index(*, root: Path | None = None, output_dir: Path | None = 
         result = {"ok": False, "returncode": None, "stdout": "", "stderr": "CodeGraph CLI is unavailable"}
     else:
         result = _run_command([command, action, str(root)], cwd=root, timeout=900)
+    sync_result = result
+    recovery_reason = None
     configured_root = os.environ.pop(GRAPH_SOURCE_ROOT_ENV, None)
     try:
         freshness = build_codegraph_freshness_artifact(root=root, output_dir=output_dir) if result.get("ok") else None
+        # Imported indexes can report a successful incremental sync without advancing stale state.
+        if command and action == "sync" and result.get("ok") and (freshness or {}).get("freshness") != "fresh":
+            recovery_reason = "incremental_sync_not_publish_ready"
+            result = _run_command([command, "index", "--force", str(root)], cwd=root, timeout=900)
+            freshness = build_codegraph_freshness_artifact(root=root, output_dir=output_dir) if result.get("ok") else freshness
     finally:
         if configured_root is not None:
             os.environ[GRAPH_SOURCE_ROOT_ENV] = configured_root
     gate = "ready" if result.get("ok") and (freshness or {}).get("freshness") == "fresh" else "warning"
+    effective_action = "sync_then_reindex" if recovery_reason else action
     payload = {
         "schema_version": "aistock_codegraph_sync_v1",
         "generated_at": _utc_now(),
         "workflow_gate": gate,
         "warning_only": True,
-        "action": action,
+        "action": effective_action,
         "root": str(root),
-        "command_result": _compact_command_result(result, success_summary=f"codegraph {action} completed"),
+        "command_result": _compact_command_result(result, success_summary=f"codegraph {effective_action} completed"),
         "freshness": freshness,
         "publish_ready": gate == "ready",
     }
+    if recovery_reason:
+        payload["recovery_reason"] = recovery_reason
+        payload["sync_command_result"] = _compact_command_result(
+            sync_result,
+            success_summary="codegraph sync completed without publish-ready freshness",
+        )
     _write_json(output_dir / "codegraph-sync.json", payload)
     return payload
 
