@@ -22,10 +22,13 @@ from .executor import HistoricalRangeBatchExecutionService
 from .artifact_store import HistoricalRangeArtifactStore
 from .models import (
     OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
+    REASON_DATABASE_CAPACITY_EXHAUSTED,
+    REASON_DATABASE_UNAVAILABLE,
     HistoricalRangeArtifactKind,
     ExistingProgramSpecV1,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeBackgroundDispatchFailureV1,
+    HistoricalRangeBridgeResultStatus,
     HistoricalRangeDatasetBridgeRequestV1,
     HistoricalRangeDatasetBridgeReceiptV1,
     HistoricalRangeOperationAttemptV1,
@@ -204,9 +207,11 @@ class ResponseBoundHistoricalRangeDispatcher:
                     HistoricalRangeBuildBridgeRequest.model_validate(payload["command_payload"]),
                 )
                 stage = "CLAIM_AND_EXECUTION"
-                runtime.bridge.build_until_stable_boundary(
+                self._run_bridge_request(
+                    runtime=runtime,
                     request=request,
-                    resolved_request_hash=runtime.query.resolved_request_hash(batch_id),
+                    operation_id=operation_id,
+                    batch_id=batch_id,
                     worker_id=worker_id,
                 )
             else:
@@ -268,6 +273,214 @@ class ResponseBoundHistoricalRangeDispatcher:
                 operation_id,
                 stage,
             )
+
+    def _run_bridge_request(
+        self,
+        *,
+        runtime: HistoricalRangeRuntime,
+        request: HistoricalRangeDatasetBridgeRequestV1,
+        operation_id: str,
+        batch_id: str,
+        worker_id: str,
+    ) -> None:
+        operation = runtime.query.get_operation_internal(operation_id)
+        if operation["status"] in {
+            HistoricalRangeOperationStatus.COMPLETED.value,
+            HistoricalRangeOperationStatus.FAILED.value,
+        }:
+            return
+        if operation["status"] == HistoricalRangeOperationStatus.RUNNING.value and not operation.get("lease_expired"):
+            return
+        resolved_request_hash = runtime.query.resolved_request_hash(batch_id)
+        claimed = self._claim_bridge_parent(
+            runtime=runtime,
+            operation=operation,
+            request=request,
+            resolved_request_hash=resolved_request_hash,
+            worker_id=worker_id,
+        )
+        try:
+            child_receipt, child_receipt_ref = runtime.bridge.build_until_stable_boundary(
+                request=request,
+                resolved_request_hash=resolved_request_hash,
+                worker_id=worker_id,
+            )
+            parent_receipt, parent_receipt_ref = runtime.bridge.publish_parent_receipt(
+                operation_id=operation_id,
+                child_receipt=child_receipt,
+                child_receipt_ref=child_receipt_ref,
+                resolved_request_hash=resolved_request_hash,
+            )
+            target_status = _bridge_parent_operation_status(parent_receipt.result_status)
+            error_json = (
+                None
+                if target_status is HistoricalRangeOperationStatus.COMPLETED
+                else {
+                    "reason_codes": list(parent_receipt.reason_codes),
+                    "stage": "DATASET_BRIDGE_SUB_OPERATION",
+                    "error_type": "DomainSubOperationFailure",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - the parent owns the durable failure boundary.
+            LOGGER.exception(
+                "historical-range bridge sub-operation failed operation_id=%s batch_id=%s",
+                operation_id,
+                batch_id,
+            )
+            reason_code = str(getattr(exc, "reason_code", None) or "ADVISORY_HR_DATASET_BRIDGE_PARENT_FAILED")
+            retryable = bool(getattr(exc, "retryable", False)) or reason_code in {
+                REASON_DATABASE_CAPACITY_EXHAUSTED,
+                REASON_DATABASE_UNAVAILABLE,
+            }
+            parent_receipt, parent_receipt_ref = runtime.bridge.publish_failed_parent_receipt(
+                operation_id=operation_id,
+                request=request,
+                resolved_request_hash=resolved_request_hash,
+                reason_code=reason_code,
+                result_status=(
+                    HistoricalRangeBridgeResultStatus.RETRYABLE_FAILED
+                    if retryable
+                    else HistoricalRangeBridgeResultStatus.FAILED
+                ),
+            )
+            target_status = (
+                HistoricalRangeOperationStatus.RETRYABLE_FAILED if retryable else HistoricalRangeOperationStatus.FAILED
+            )
+            error_json = {
+                "reason_codes": [reason_code],
+                "stage": "DATASET_BRIDGE_SUB_OPERATION",
+                "error_type": type(exc).__name__,
+            }
+        self._finish_bridge_parent(
+            runtime=runtime,
+            operation=claimed,
+            request=request,
+            receipt=parent_receipt,
+            receipt_ref=parent_receipt_ref,
+            target_status=target_status,
+            error_json=error_json,
+        )
+
+    @staticmethod
+    def _claim_bridge_parent(
+        *,
+        runtime: HistoricalRangeRuntime,
+        operation: Mapping[str, Any],
+        request: HistoricalRangeDatasetBridgeRequestV1,
+        resolved_request_hash: str,
+        worker_id: str,
+    ) -> dict[str, Any]:
+        expired_attempt = None
+        if operation["status"] == HistoricalRangeOperationStatus.RUNNING.value:
+            expired_receipt, expired_ref = runtime.bridge.publish_failed_parent_receipt(
+                operation_id=str(operation["operation_id"]),
+                request=request,
+                resolved_request_hash=resolved_request_hash,
+                reason_code="ADVISORY_HR_OPERATION_LEASE_EXPIRED",
+                result_status=HistoricalRangeBridgeResultStatus.RETRYABLE_FAILED,
+            )
+            expired_at = datetime.now(UTC)
+            expired_attempt = HistoricalRangeOperationAttemptV1(
+                attempt_id=derive_prefixed_id(
+                    "ahroba",
+                    {
+                        "operation_id": operation["operation_id"],
+                        "attempt_no": operation["attempt_no"],
+                        "fencing_token": operation["fencing_token"],
+                    },
+                ),
+                operation_id=str(operation["operation_id"]),
+                attempt_no=int(operation["attempt_no"]),
+                worker_id=str(operation["worker_id"]),
+                lease_token=str(operation["lease_token"]),
+                fencing_token=int(operation["fencing_token"]),
+                status=HistoricalRangeOperationStatus.RETRYABLE_FAILED.value,
+                input_cursor_json=operation.get("stable_keyset_cursor_json"),
+                result_cursor_json={"phase": "LEASE_EXPIRED"},
+                input_hash=str(request.request_hash),
+                result_hash=expired_ref.semantic_content_hash,
+                attempt_receipt_ref=expired_ref,
+                reason_codes=expired_receipt.reason_codes,
+                error_json={
+                    "reason_codes": list(expired_receipt.reason_codes),
+                    "stage": "DATASET_BRIDGE_SUB_OPERATION",
+                    "error_type": "LeaseExpired",
+                },
+                started_at=operation.get("started_at") or expired_at,
+                finished_at=expired_at,
+            )
+        return runtime.repository.transition_operation(
+            operation_id=str(operation["operation_id"]),
+            expected_row_version=int(operation["row_version"]),
+            target_status=HistoricalRangeOperationStatus.RUNNING,
+            attempt_no=int(operation.get("attempt_no") or 0) + 1,
+            worker_id=worker_id,
+            lease_token=uuid4().hex,
+            lease_expires_at=datetime.now(UTC) + timedelta(minutes=30),
+            fencing_token=int(operation.get("fencing_token") or 0) + 1,
+            started_at=datetime.now(UTC),
+            expired_attempt=expired_attempt,
+        )
+
+    @staticmethod
+    def _finish_bridge_parent(
+        *,
+        runtime: HistoricalRangeRuntime,
+        operation: Mapping[str, Any],
+        request: HistoricalRangeDatasetBridgeRequestV1,
+        receipt: HistoricalRangeDatasetBridgeReceiptV1,
+        receipt_ref: HistoricalRangeArtifactRefV1,
+        target_status: HistoricalRangeOperationStatus,
+        error_json: dict[str, Any] | None,
+    ) -> None:
+        finished_at = datetime.now(UTC)
+        cursor = {
+            "phase": target_status.value,
+            "dataset_build_id": receipt.dataset_build_id,
+            "sealed_snapshot_id": receipt.sealed_snapshot_id,
+        }
+        attempt = HistoricalRangeOperationAttemptV1(
+            attempt_id=derive_prefixed_id(
+                "ahroba",
+                {
+                    "operation_id": receipt.operation_id,
+                    "attempt_no": operation["attempt_no"],
+                    "fencing_token": operation["fencing_token"],
+                },
+            ),
+            operation_id=receipt.operation_id,
+            attempt_no=int(operation["attempt_no"]),
+            worker_id=str(operation["worker_id"]),
+            lease_token=str(operation["lease_token"]),
+            fencing_token=int(operation["fencing_token"]),
+            status=target_status.value,
+            input_cursor_json=operation.get("stable_keyset_cursor_json"),
+            result_cursor_json=cursor,
+            input_hash=str(request.request_hash),
+            result_hash=receipt_ref.semantic_content_hash,
+            attempt_receipt_ref=receipt_ref,
+            reason_codes=receipt.reason_codes,
+            error_json=error_json,
+            started_at=operation.get("started_at") or finished_at,
+            finished_at=finished_at,
+        )
+        terminal = target_status in {
+            HistoricalRangeOperationStatus.COMPLETED,
+            HistoricalRangeOperationStatus.FAILED,
+        }
+        runtime.repository.transition_operation(
+            operation_id=receipt.operation_id,
+            expected_row_version=int(operation["row_version"]),
+            target_status=target_status,
+            attempt_no=int(operation["attempt_no"]),
+            fencing_token=int(operation["fencing_token"]),
+            stable_keyset_cursor_json=cursor,
+            result_status=receipt.result_status.value if terminal else None,
+            result_ref=receipt_ref if terminal else None,
+            error_json=error_json,
+            finished_at=finished_at if terminal else None,
+            attempt=attempt,
+        )
 
     def _run_outcome_plan(
         self,
@@ -951,6 +1164,21 @@ def _persist_domain_operation(
         )
     )
     return runtime.query.get_operation(str(operation["operation_id"])), exact_retry
+
+
+def _bridge_parent_operation_status(
+    result_status: HistoricalRangeBridgeResultStatus,
+) -> HistoricalRangeOperationStatus:
+    if result_status in {
+        HistoricalRangeBridgeResultStatus.SEALED,
+        HistoricalRangeBridgeResultStatus.VALID_EMPTY,
+    }:
+        return HistoricalRangeOperationStatus.COMPLETED
+    if result_status is HistoricalRangeBridgeResultStatus.RETRYABLE_FAILED:
+        return HistoricalRangeOperationStatus.RETRYABLE_FAILED
+    if result_status is HistoricalRangeBridgeResultStatus.FAILED:
+        return HistoricalRangeOperationStatus.FAILED
+    raise ValueError(f"unsupported bridge result status: {result_status.value}")
 
 
 def _operation_dispatchable(operation: Mapping[str, Any]) -> bool:
