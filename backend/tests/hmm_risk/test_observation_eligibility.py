@@ -47,6 +47,7 @@ def test_train_only_eligibility_excludes_structural_absence_without_changing_sto
     result = build_train_only_observation_eligibility(
         absences,
         expected_opportunity_dates_by_symbol={
+            "000001.SZ": tuple(start + timedelta(days=index) for index in range(20)),
             "689009.SH": tuple(start + timedelta(days=index) for index in range(10)),
             "603595.SH": tuple(start + timedelta(days=index) for index in range(100)),
         },
@@ -60,6 +61,11 @@ def test_train_only_eligibility_excludes_structural_absence_without_changing_sto
     assert evidence["selection_universe_changed"] is False
     assert evidence["runtime_prediction_eligibility_changed"] is False
     assert evidence["diagnostic_only"] is True
+    assert evidence["entry_count"] == 3
+    by_symbol = {entry["canonical_ts_code"]: entry for entry in evidence["entries"]}
+    assert by_symbol["000001.SZ"]["provider_absence_count"] == 0
+    assert by_symbol["000001.SZ"]["availability_ratio"] == 1.0
+    assert by_symbol["000001.SZ"]["moneyflow_contributor_eligible"] is True
     assert evidence["entries"][0]["expected_opportunity_contract"] == ("hmm_risk_c010_expected_opportunity_dates_v1")
     assert len(evidence["entries"][0]["expected_opportunity_date_sha256"]) == 64
     assert evidence["receipt_sha256"] == result.evidence()["receipt_sha256"]
@@ -68,12 +74,38 @@ def test_train_only_eligibility_excludes_structural_absence_without_changing_sto
 def test_train_only_eligibility_rejects_missing_or_inconsistent_denominator() -> None:
     row = _absence("689009.SH", date(2022, 1, 4))
 
-    with pytest.raises(StateModelSetError, match="expected opportunity count is invalid"):
+    with pytest.raises(StateModelSetError, match="full-universe expected opportunity ledger is empty"):
         build_train_only_observation_eligibility(
             [row],
             expected_opportunity_dates_by_symbol={},
             train_start=date(2022, 1, 1),
             train_end=date(2024, 6, 30),
+        )
+
+
+def test_train_only_eligibility_uses_exact_integer_ninety_percent_boundary_and_formal_receipt() -> None:
+    start = date(2022, 1, 1)
+    dates = tuple(start + timedelta(days=index) for index in range(10))
+    result = build_train_only_observation_eligibility(
+        [_absence("000001.SZ", dates[0]), _absence("000002.SZ", dates[0]), _absence("000002.SZ", dates[1])],
+        expected_opportunity_dates_by_symbol={"000001.SZ": dates, "000002.SZ": dates},
+        train_start=start,
+        train_end=date(2024, 6, 30),
+    )
+
+    by_symbol = result.moneyflow_contributor_eligibility
+    assert by_symbol == {"000001.SZ": True, "000002.SZ": False}
+    formal = result.evidence(formal_policy=True)
+    assert formal["diagnostic_only"] is False
+    assert formal["formal_policy_activated"] is True
+    assert formal["availability_integer_contract"] == "10*(expected-missing) >= 9*expected"
+    with pytest.raises(StateModelSetError, match="hmm_risk_c010_policy_identity_mismatch"):
+        build_train_only_observation_eligibility(
+            [],
+            expected_opportunity_dates_by_symbol={"000001.SZ": dates},
+            train_start=start,
+            train_end=date(2024, 6, 30),
+            minimum_availability_ratio=0.95,
         )
 
 
@@ -176,7 +208,10 @@ def test_direct_feature_domain_loader_keeps_excluded_stock_in_price_and_sector_i
     start = date(2022, 1, 1)
     eligibility = build_train_only_observation_eligibility(
         [_absence("689009.SH", start + timedelta(days=index)) for index in range(9)],
-        expected_opportunity_dates_by_symbol={"689009.SH": tuple(start + timedelta(days=index) for index in range(10))},
+        expected_opportunity_dates_by_symbol={
+            "000001.SZ": tuple(start + timedelta(days=index) for index in range(10)),
+            "689009.SH": tuple(start + timedelta(days=index) for index in range(10)),
+        },
         train_start=start,
         train_end=date(2024, 6, 30),
     )
@@ -204,3 +239,61 @@ def test_direct_feature_domain_loader_keeps_excluded_stock_in_price_and_sector_i
     assert evidence["impacted_l1_codes"] == ["L1-A"]
     assert evidence["impacted_l2_codes"] == ["L2-A"]
     assert evidence["formal_policy_activated"] is False
+    assert evidence["l1_aggregate_count"] == len(evidence["l1_domain_receipts"])
+    l1_receipt = evidence["l1_domain_receipts"][0]
+    assert l1_receipt["price_expected_symbols"] == ["000001.SZ", "689009.SH"]
+    assert l1_receipt["price_complete_symbols"] == ["000001.SZ", "689009.SH"]
+    assert l1_receipt["moneyflow_expected_symbols"] == ["000001.SZ"]
+    assert l1_receipt["moneyflow_complete_symbols"] == ["000001.SZ"]
+    assert l1_receipt["moneyflow_domain_status"] == "available"
+    assert l1_receipt["entry_sha256"] == canonical_sha256(
+        {key: value for key, value in l1_receipt.items() if key != "entry_sha256"}
+    )
+
+
+def test_direct_feature_domain_loader_rejects_train_symbol_missing_from_full_universe_ledger() -> None:
+    eligibility = build_train_only_observation_eligibility(
+        [],
+        expected_opportunity_dates_by_symbol={"000001.SZ": (date(2024, 1, 2),)},
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+    )
+
+    class Reader:
+        @staticmethod
+        def iter_missing_price_rows():
+            return iter(())
+
+        @staticmethod
+        def iter_stock_fact_rows():
+            return iter([_stock_fact_row("000002.SZ", moneyflow_available=True)])
+
+    with pytest.raises(StateModelSetError, match="hmm_risk_c010_contributor_receipt_mismatch"):
+        load_feature_domain_direct_aggregates(Reader(), eligibility, formal_policy=True)
+
+
+def test_direct_feature_domain_loader_keeps_post_train_symbol_with_unavailable_moneyflow_status() -> None:
+    eligibility = build_train_only_observation_eligibility(
+        [],
+        expected_opportunity_dates_by_symbol={"000001.SZ": (date(2024, 1, 2),)},
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+    )
+    row = _stock_fact_row("000002.SZ", moneyflow_available=True)
+    row["trade_date"] = date(2024, 7, 1)
+
+    class Reader:
+        @staticmethod
+        def iter_missing_price_rows():
+            return iter(())
+
+        @staticmethod
+        def iter_stock_fact_rows():
+            return iter([row])
+
+    l1, _, evidence = load_feature_domain_direct_aggregates(Reader(), eligibility, formal_policy=True)
+    assert l1[0].moneyflow_domain_status == "structurally_unavailable"
+    assert l1[0].missing_evidence[-1]["reason_code"] == "hmm_risk_c010_train_eligibility_unavailable"
+    assert evidence["train_eligibility_unavailable_symbols"] == ["000002.SZ"]
+    assert evidence["impacted_l2_codes"] == ["L2-A"]
+    assert evidence["formal_policy_activated"] is True

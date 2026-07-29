@@ -46,6 +46,7 @@ from backend.services.hmm_risk.state_model_set import (
     canonical_sha256,
     causal_forward_posteriors,
 )
+from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
 
 
 class B3TrainingStageError(StateModelSetError):
@@ -136,7 +137,12 @@ class B3TrainOnlySeries:
             or manifest.get("train_observation_sha256") != canonical_sha256(train.tolist())
         ):
             raise StateModelSetError(f"{self.sector_code} train-only frozen input manifest is invalid")
-        for field in ("dataset_manifest_hash", "mapping_manifest_hash", "calendar_manifest_hash"):
+        for field in (
+            "dataset_manifest_hash",
+            "mapping_manifest_hash",
+            "calendar_manifest_hash",
+            "feature_domain_policy_sha256",
+        ):
             _require_hex_identity(str(manifest.get(field) or ""), length=64, label=field)
 
 
@@ -809,6 +815,7 @@ def _validate_ready_layer(
     mapping_manifest_hash: str,
     calendar_manifest_hash: str,
     l2_stock_fact_manifest_hash: str,
+    feature_domain_policy_sha256: str,
 ) -> None:
     if artifact.get("schema_version") != "hmm_risk_b3_selected_level_artifact_v1":
         raise StateModelSetError(f"B3 READY selected artifact schema is invalid for {family}/{level}")
@@ -829,6 +836,7 @@ def _validate_ready_layer(
         or evidence.get("family") != family
         or evidence.get("level") != level
         or evidence.get("selected_seed") != selected_seed
+        or evidence.get("feature_domain_policy_sha256") != feature_domain_policy_sha256
         or selected_seed not in RESTART_SCHEDULE
         or artifact.get("selection_receipt_sha256") != selection.get("receipt_sha256")
     ):
@@ -1019,6 +1027,7 @@ def _validate_ready_layer(
             or occupancy_evidence.get("dataset_manifest_hash") != dataset_manifest_hash
             or occupancy_evidence.get("mapping_manifest_hash") != mapping_manifest_hash
             or occupancy_evidence.get("calendar_manifest_hash") != calendar_manifest_hash
+            or occupancy_evidence.get("feature_domain_policy_sha256") != feature_domain_policy_sha256
         ):
             raise StateModelSetError(f"B3 READY train input lineage is invalid for {family}/{level}/{code}")
         assignment = semantic.get("assignment")
@@ -1059,6 +1068,7 @@ def _validate_ready_layer(
                 or receipt_evidence.get("mapping_manifest_hash") != mapping_manifest_hash
                 or receipt_evidence.get("calendar_manifest_hash") != calendar_manifest_hash
                 or receipt_evidence.get("l2_stock_fact_manifest_hash") != l2_stock_fact_manifest_hash
+                or receipt_evidence.get("feature_domain_policy_sha256") != feature_domain_policy_sha256
             ):
                 raise StateModelSetError(f"B3 READY frozen input lineage is invalid for {family}/{level}/{code}")
         codes.add(code)
@@ -1077,6 +1087,8 @@ def write_b3_ready_model_set(
     mapping_manifest_hash: str,
     calendar_manifest_hash: str,
     l2_stock_fact_manifest_hash: str,
+    feature_domain_policy_sha256: str,
+    feature_domain_policy_manifest: Mapping[str, Any],
     producer_commit: str,
 ) -> Path:
     """Write a complete four-level READY set; blocked or partial inputs write nothing."""
@@ -1088,6 +1100,23 @@ def write_b3_ready_model_set(
     _require_hex_identity(mapping_manifest_hash, length=64, label="mapping manifest hash")
     _require_hex_identity(calendar_manifest_hash, length=64, label="calendar manifest hash")
     _require_hex_identity(l2_stock_fact_manifest_hash, length=64, label="L2 stock-fact manifest hash")
+    _require_hex_identity(feature_domain_policy_sha256, length=64, label="feature-domain policy hash")
+    policy_source_identities = {
+        "dataset_manifest_hash": dataset_manifest_hash,
+        "mapping_manifest_hash": mapping_manifest_hash,
+        "calendar_manifest_hash": calendar_manifest_hash,
+        "l2_stock_fact_manifest_hash": l2_stock_fact_manifest_hash,
+    }
+    if any(
+        feature_domain_policy_manifest.get(field) != expected for field, expected in policy_source_identities.items()
+    ):
+        raise StateModelSetError("B3 READY feature-domain policy source identity is invalid")
+    try:
+        validated_policy = validate_c010_policy_manifest(feature_domain_policy_manifest)
+    except StateModelSetError as exc:
+        raise StateModelSetError(f"B3 READY feature-domain policy manifest is invalid: {exc}") from exc
+    if validated_policy.get("receipt_sha256") != feature_domain_policy_sha256:
+        raise StateModelSetError("B3 READY feature-domain policy manifest identity is invalid")
     _require_hex_identity(producer_commit, length=40, label="producer commit")
     layers: dict[str, Any] = {}
     payloads: dict[str, bytes] = {}
@@ -1105,6 +1134,7 @@ def write_b3_ready_model_set(
             mapping_manifest_hash=mapping_manifest_hash,
             calendar_manifest_hash=calendar_manifest_hash,
             l2_stock_fact_manifest_hash=l2_stock_fact_manifest_hash,
+            feature_domain_policy_sha256=feature_domain_policy_sha256,
         )
         payload = canonical_json_bytes(artifact)
         payload_sha = canonical_sha256(artifact)
@@ -1129,6 +1159,8 @@ def write_b3_ready_model_set(
         "mapping_manifest_hash": mapping_manifest_hash,
         "calendar_manifest_hash": calendar_manifest_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_manifest_hash,
+        "feature_domain_policy_sha256": feature_domain_policy_sha256,
+        "feature_domain_policy_manifest": validated_policy,
         "contracts": {
             "d3": D3_CONTRACT_VERSION,
             "l2_retrain": L2_RETRAIN_VERSION,
