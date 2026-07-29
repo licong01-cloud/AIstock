@@ -8,6 +8,7 @@
     "backend/services/advisory_historical_range/dataset_bridge.py",
     "backend/services/advisory_historical_range/repository.py",
     "backend/tests/advisory_historical_range/test_r5_internal_operation_types.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260729_BUG-901-r5-outcome-parent-operation-conflicts-with-per-run-refresh-outcomes-oper.json",
     "tests/aistock_validation/bugs/20260729_BUG-902-r5-bridge-parent-operation-conflicts-with-internal-build-dataset-bridge.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
