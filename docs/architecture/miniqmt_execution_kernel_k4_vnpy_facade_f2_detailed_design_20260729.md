@@ -2,7 +2,7 @@
 
 > Feature tier：`F2`。文档状态：`design_ready_for_implementation`。
 >
-> 设计交付：PR #2861，`source_merge=pending_user_authorization`。
+> 设计交付：PR #2861，merge `8250b64ff3c2deb04eb3594f1ae3fba3acd1e6ce`，`source_merge=merged_pr_2861`。
 >
 > 2026-07-29 正式修订复核：K4/父蓝图/统一蓝图 F2 validator 分别为 `10/10`、`48/48`、`90/90`，均 `warnings=0`；DESIGN-COMPLIANCE-001逐项通过。该结果仅表示K4 shadow设计可实施，不表示K4代码、K5/K6、产品command authority或runtime activation已完成。
 >
@@ -880,7 +880,7 @@ K4 implementation固定最多两个 source PR，不扩大到 K5/K6：
 K4 source merge后仍不部署/激活产品 route。Rollback只回退 K4 code-owned façade/conformance/characterization文件到最后一个 schema-compatible main；不删除 K1/K2/K3 durable facts，不重写算法状态或 broker facts。
 
 ```text
-source_merge=pending_user_authorization
+source_merge=merged_pr_2861
 close_sync=not_applicable_feature
 production_ddl_gate=noop
 production_dml_gate=noop
