@@ -331,37 +331,38 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
             return event
 
     def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
-        existing = self._evidence_receipts.get(candidate.event_id)
-        if existing is not None:
-            event = existing.event
-            if not _evidence_event_matches_candidate(event, candidate):
-                raise QuoteEvidenceIdempotencyConflict(f"quote evidence event id conflicts: {candidate.event_id}")
-            return existing
-        runtime = self._runtimes.get(candidate.runtime_id)
-        if runtime is None:
-            raise ValueError(f"quote evidence runtime does not exist: {candidate.runtime_id}")
-        sequence = int(runtime.last_event_sequence or 0) + 1
-        event = MiniQMTExecutionEvent(
-            event_id=candidate.event_id,
-            runtime_id=candidate.runtime_id,
-            sequence=sequence,
-            event_type=candidate.event_type,
-            event_time=candidate.event_time,
-            source="quote_ingress",
-            payload=dict(candidate.payload),
-        )
-        self._events.setdefault(event.runtime_id, []).append(event)
-        self._runtimes[event.runtime_id] = runtime.model_copy(
-            update={"last_event_sequence": event.sequence, "updated_at": event.event_time}
-        )
-        receipt = DurableEvidenceReceipt(
-            event=event,
-            persisted_at_utc=datetime.now(UTC),
-            durable_ack=True,
-            readback_verified=True,
-        )
-        self._evidence_receipts[candidate.event_id] = receipt
-        return receipt
+        with self._snapshot_lock:
+            existing = self._evidence_receipts.get(candidate.event_id)
+            if existing is not None:
+                event = existing.event
+                if not _evidence_event_matches_candidate(event, candidate):
+                    raise QuoteEvidenceIdempotencyConflict(f"quote evidence event id conflicts: {candidate.event_id}")
+                return existing
+            runtime = self._runtimes.get(candidate.runtime_id)
+            if runtime is None:
+                raise ValueError(f"quote evidence runtime does not exist: {candidate.runtime_id}")
+            sequence = int(runtime.last_event_sequence or 0) + 1
+            event = MiniQMTExecutionEvent(
+                event_id=candidate.event_id,
+                runtime_id=candidate.runtime_id,
+                sequence=sequence,
+                event_type=candidate.event_type,
+                event_time=candidate.event_time,
+                source="quote_ingress",
+                payload=dict(candidate.payload),
+            )
+            self._events.setdefault(event.runtime_id, []).append(event)
+            self._runtimes[event.runtime_id] = runtime.model_copy(
+                update={"last_event_sequence": event.sequence, "updated_at": event.event_time}
+            )
+            receipt = DurableEvidenceReceipt(
+                event=event,
+                persisted_at_utc=datetime.now(UTC),
+                durable_ack=True,
+                readback_verified=True,
+            )
+            self._evidence_receipts[candidate.event_id] = receipt
+            return receipt
 
     def list_events(self, runtime_id: str, *, include_archived: bool = False) -> list[MiniQMTExecutionEvent]:
         return list(self._events.get(runtime_id, ()))
@@ -1950,85 +1951,92 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
         self._prune_and_compact_if_needed(reason="load")
 
     def upsert_runtime(self, runtime: MiniQMTExecutionRuntimeRecord) -> MiniQMTExecutionRuntimeRecord:
-        stored = super().upsert_runtime(runtime)
-        self._append_operation("upsert_runtime", stored.model_dump(mode="json"))
-        self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_runtime")
-        return stored
+        with self._snapshot_lock:
+            stored = super().upsert_runtime(runtime)
+            self._append_operation("upsert_runtime", stored.model_dump(mode="json"))
+            self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_runtime")
+            return stored
 
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
-        stored = super().append_event(event)
-        self._append_operation("append_event", stored.model_dump(mode="json"))
-        self._after_incremental_write(runtime_id=stored.runtime_id, reason="append_event")
-        return stored
+        with self._snapshot_lock:
+            stored = super().append_event(event)
+            self._append_operation("append_event", stored.model_dump(mode="json"))
+            self._after_incremental_write(runtime_id=stored.runtime_id, reason="append_event")
+            return stored
 
     def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
-        existing = self._evidence_receipts.get(candidate.event_id)
-        receipt = super().append_evidence_event_idempotent(candidate)
-        if existing is not None:
+        with self._snapshot_lock:
+            existing = self._evidence_receipts.get(candidate.event_id)
+            receipt = super().append_evidence_event_idempotent(candidate)
+            if existing is not None:
+                return receipt
+            self._append_operation(
+                "append_evidence_event",
+                {
+                    "event": receipt.event.model_dump(mode="json"),
+                    "persisted_at_utc": receipt.persisted_at_utc.isoformat(),
+                    "durable_ack": receipt.durable_ack,
+                    "readback_verified": receipt.readback_verified,
+                },
+            )
+            self._after_incremental_write(runtime_id=receipt.event.runtime_id, reason="append_evidence_event")
             return receipt
-        self._append_operation(
-            "append_evidence_event",
-            {
-                "event": receipt.event.model_dump(mode="json"),
-                "persisted_at_utc": receipt.persisted_at_utc.isoformat(),
-                "durable_ack": receipt.durable_ack,
-                "readback_verified": receipt.readback_verified,
-            },
-        )
-        self._after_incremental_write(runtime_id=receipt.event.runtime_id, reason="append_evidence_event")
-        return receipt
 
     def upsert_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance:
-        stored = super().upsert_algo_instance(instance)
-        self._append_operation("upsert_algo_instance", stored.model_dump(mode="json"))
-        self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_algo_instance")
-        return stored
+        with self._snapshot_lock:
+            stored = super().upsert_algo_instance(instance)
+            self._append_operation("upsert_algo_instance", stored.model_dump(mode="json"))
+            self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_algo_instance")
+            return stored
 
     def upsert_child_order(self, order: MiniQMTChildOrder) -> MiniQMTChildOrder:
-        stored = super().upsert_child_order(order)
-        self._append_operation("upsert_child_order", stored.model_dump(mode="json"))
-        self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_child_order")
-        return stored
+        with self._snapshot_lock:
+            stored = super().upsert_child_order(order)
+            self._append_operation("upsert_child_order", stored.model_dump(mode="json"))
+            self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_child_order")
+            return stored
 
     def reset_store_for_tmp_rebuild(self, *, reason: str = "manual_tmp_store_reset") -> dict[str, Any]:
         """Archive current tmp state and start a clean bounded runtime store."""
 
-        archived = self._archive_existing_store(reason=reason)
-        self._runtimes = {}
-        self._events = {}
-        self._evidence_receipts = {}
-        self._algo_instances = {}
-        self._child_orders = {}
-        self._writes_since_compaction = 0
-        self._write_snapshot(reason=reason)
-        self._last_maintenance = {
-            "schema_version": "miniqmt_runtime_store_maintenance_v1",
-            "action": "reset_store_for_tmp_rebuild",
-            "reason": reason,
-            "archived": archived,
-            "store_path": str(self._path),
-            "oplog_path": str(self._oplog_path),
-            "completed_at": datetime.now(UTC).isoformat(),
-        }
-        return dict(self._last_maintenance)
+        with self._snapshot_lock:
+            archived = self._archive_existing_store(reason=reason)
+            self._runtimes = {}
+            self._events = {}
+            self._evidence_receipts = {}
+            self._algo_instances = {}
+            self._child_orders = {}
+            self._writes_since_compaction = 0
+            self._write_snapshot(reason=reason)
+            self._last_maintenance = {
+                "schema_version": "miniqmt_runtime_store_maintenance_v1",
+                "action": "reset_store_for_tmp_rebuild",
+                "reason": reason,
+                "archived": archived,
+                "store_path": str(self._path),
+                "oplog_path": str(self._oplog_path),
+                "completed_at": datetime.now(UTC).isoformat(),
+            }
+            return dict(self._last_maintenance)
 
     def maintenance_status(self) -> dict[str, Any]:
-        return {
-            "schema_version": "miniqmt_runtime_store_maintenance_status_v1",
-            "store_path": str(self._path),
-            "oplog_path": str(self._oplog_path),
-            "snapshot_exists": self._path.exists(),
-            "oplog_exists": self._oplog_path.exists(),
-            "snapshot_bytes": self._path.stat().st_size if self._path.exists() else 0,
-            "oplog_bytes": self._oplog_path.stat().st_size if self._oplog_path.exists() else 0,
-            "runtime_count": len(self._runtimes),
-            "event_count": sum(len(events) for events in self._events.values()),
-            "algo_instance_count": len(self._algo_instances),
-            "child_order_count": len(self._child_orders),
-            "writes_since_compaction": self._writes_since_compaction,
-            "last_maintenance": self._last_maintenance,
-            "write_mode": "incremental_jsonl_with_bounded_compaction",
-        }
+        with self._snapshot_lock:
+            return {
+                "schema_version": "miniqmt_runtime_store_maintenance_status_v1",
+                "store_path": str(self._path),
+                "oplog_path": str(self._oplog_path),
+                "snapshot_exists": self._path.exists(),
+                "oplog_exists": self._oplog_path.exists(),
+                "snapshot_bytes": self._path.stat().st_size if self._path.exists() else 0,
+                "oplog_bytes": self._oplog_path.stat().st_size if self._oplog_path.exists() else 0,
+                "runtime_count": len(self._runtimes),
+                "event_count": sum(len(events) for events in self._events.values()),
+                "algo_instance_count": len(self._algo_instances),
+                "child_order_count": len(self._child_orders),
+                "writes_since_compaction": self._writes_since_compaction,
+                "last_maintenance": self._last_maintenance,
+                "write_mode": "incremental_jsonl_with_bounded_compaction",
+            }
 
     def _append_operation(self, operation: str, item: dict[str, Any]) -> None:
         self._oplog_path.parent.mkdir(parents=True, exist_ok=True)

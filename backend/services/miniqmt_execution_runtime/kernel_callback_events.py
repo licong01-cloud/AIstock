@@ -111,6 +111,31 @@ def _normalized_status_from_payload(payload: Mapping[str, Any]) -> NormalizedOrd
     return normalized[0]
 
 
+def normalize_qmt_order_callback_observation_v1(
+    raw_payload: Mapping[str, Any],
+) -> tuple[NormalizedOrderStatusV1, int | None]:
+    """Read the one authoritative QMT ORDER status/cumulative observation."""
+
+    payload = _mapping(raw_payload)
+    status = _normalized_status_from_payload(payload)
+    cumulative = _one_alias(payload, _CUMULATIVE_ALIASES, field_name="cumulative quantity")
+    if cumulative is not None and (type(cumulative) is not int or cumulative < 0):
+        raise TypeError("ORDER cumulative quantity must be a nonnegative strict integer")
+    return status, cumulative
+
+
+def resolve_qmt_trade_identity_alias_v1(raw_payload: Mapping[str, Any]) -> str | None:
+    """Read one exact raw broker trade identity without manufacturing a fallback."""
+
+    payload = _mapping(raw_payload)
+    raw_trade_id = _one_alias(payload, _TRADE_ID_ALIASES, field_name="broker trade identity")
+    if raw_trade_id is not None and (
+        type(raw_trade_id) is not str or not raw_trade_id or raw_trade_id.strip() != raw_trade_id
+    ):
+        raise ValueError("TRADE broker identity must be one exact non-empty string alias")
+    return raw_trade_id
+
+
 def build_kernel_order_event_payload_v1(
     *,
     raw_payload: Mapping[str, Any],
@@ -128,10 +153,7 @@ def build_kernel_order_event_payload_v1(
     requested_quantity: int,
 ) -> KernelOrderEventPayloadV1:
     payload = _mapping(raw_payload)
-    status = _normalized_status_from_payload(payload)
-    cumulative = _one_alias(payload, _CUMULATIVE_ALIASES, field_name="cumulative quantity")
-    if cumulative is not None and (type(cumulative) is not int or cumulative < 0):
-        raise TypeError("ORDER cumulative quantity must be a nonnegative strict integer")
+    status, cumulative = normalize_qmt_order_callback_observation_v1(payload)
     if type(requested_quantity) is not int or requested_quantity <= 0:
         raise TypeError("requested_quantity must be a positive strict integer")
     if cumulative is not None and cumulative > requested_quantity:
@@ -183,7 +205,7 @@ def build_kernel_trade_event_payload_v1(
     persisted_qmt_strategy_trade: TradeLedgerRecord | None = None,
 ) -> KernelTradeEventPayloadV1:
     payload = _mapping(raw_payload)
-    raw_trade_id = _one_alias(payload, _TRADE_ID_ALIASES, field_name="broker trade identity")
+    raw_trade_id = resolve_qmt_trade_identity_alias_v1(payload)
     qmt_trade_id: str | None = None
     if persisted_qmt_strategy_trade is not None:
         if not isinstance(persisted_qmt_strategy_trade, TradeLedgerRecord):
@@ -477,6 +499,8 @@ __all__ = [
     "build_kernel_order_event_payload_v1",
     "build_kernel_order_reconcile_event_payload_v1",
     "build_kernel_trade_event_payload_v1",
+    "normalize_qmt_order_callback_observation_v1",
     "normalize_qmt_order_status_v1",
+    "resolve_qmt_trade_identity_alias_v1",
     "strict_readback_kernel_event_payload_v1",
 ]

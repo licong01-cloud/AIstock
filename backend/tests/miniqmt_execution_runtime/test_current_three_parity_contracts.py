@@ -25,6 +25,7 @@ from backend.services.miniqmt_execution_runtime.kernel_current_three_shadow_runn
     build_current_three_parity_input_from_shadow_v1,
     run_current_three_committed_parity_v1,
 )
+import backend.services.miniqmt_execution_runtime.kernel_current_three_shadow_runner as shadow_runner_module
 from backend.services.miniqmt_execution_runtime.kernel_current_three_contracts import CurrentThreeContractError
 import pytest
 from backend.services.miniqmt_execution_runtime.kernel_current_three_inventory import (
@@ -94,6 +95,91 @@ def _trace(*, price: str):
         terminal_outcome=None,
     )
     return build_current_three_parity_trace_v1(algo_code="SNIPER_MINIQMT", side=SideV1.BUY, ordered_steps=(step,))
+
+
+def _committed_sniper_repo(*, order_status, include_cumulative: bool = True):
+    repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    repo.upsert_runtime(_runtime())
+    repo.upsert_algo_instance(
+        _shadow_algo().model_copy(
+            update={
+                "metadata": {
+                    "config": {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
+                    "legacy_state": {"status": "RUNNING"},
+                    "limit_price_decimal": "10",
+                    "pricetick_decimal": "0.01",
+                    "min_volume": 100,
+                    "volume_increment": 100,
+                }
+            }
+        )
+    )
+    repo.upsert_child_order(_child())
+    session = {
+        "session_phase": "CONTINUOUS_AM",
+        "session_epoch": "session_shadow_am",
+        "exchange_trade_date": "2026-07-29",
+    }
+    events = (
+        _events()[0].model_copy(update={"payload": {**_events()[0].payload, **session, "generation": 1}}),
+        MiniQMTExecutionEvent(
+            event_id="child_submitted_1",
+            runtime_id="runtime_shadow",
+            sequence=2,
+            event_type=MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+            event_time=NOW,
+            source="gateway",
+            payload={
+                "algo_instance_id": "legacy_algo_1",
+                "parent_intent_id": "parent_1",
+                "strategy_slot_id": "slot_1",
+                "child_order_id": "legacy_child_1",
+                "broker_order_id": "broker_1",
+                "accepted": True,
+                "broker_called": True,
+            },
+        ),
+        MiniQMTExecutionEvent(
+            event_id="order_1",
+            runtime_id="runtime_shadow",
+            sequence=3,
+            event_type=MiniQMTExecutionEventType.ORDER_EVENT,
+            event_time=NOW,
+            source="gateway",
+            payload={
+                **session,
+                "child_order_id": "legacy_child_1",
+                "broker_order_id": "broker_1",
+                "status": order_status,
+                "quantity": 100,
+                "price": 10,
+                **({"traded_volume": 0} if include_cumulative else {}),
+            },
+        ),
+    )
+    for event in events:
+        repo.append_event(event)
+    return repo
+
+
+def _child_submitted_event(*, sequence: int) -> MiniQMTExecutionEvent:
+    return MiniQMTExecutionEvent(
+        event_id=f"child_submitted_{sequence}",
+        runtime_id="runtime_shadow",
+        sequence=sequence,
+        event_type=MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+        event_time=NOW,
+        source="gateway",
+        payload={
+            "algo_instance_id": "legacy_algo_1",
+            "parent_intent_id": "parent_1",
+            "strategy_slot_id": "slot_1",
+            "child_order_id": "legacy_child_1",
+            "broker_order_id": "broker_1",
+            "accepted": True,
+            "broker_called": True,
+        },
+    )
 
 
 def test_parity_input_and_receipt_strict_readback() -> None:
@@ -225,11 +311,126 @@ def test_shadow_command_association_is_exact_one_to_one() -> None:
         read=read,
         parity_input=parity_input,
         commands_by_step=((command,),),
+        legacy_child_order_ids_by_step=(("legacy_child_1",),),
     )
 
     assert len(associations) == 1
     assert associations[0].legacy_child_order_id == "legacy_child_1"
     assert associations[0].legacy_broker_order_id == "broker_1"
+
+
+def test_shadow_command_association_rejects_child_from_a_different_step() -> None:
+    repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    repo.upsert_runtime(_runtime())
+    repo.upsert_algo_instance(_shadow_algo())
+    repo.upsert_child_order(_child())
+    for event in _events():
+        repo.append_event(event)
+    read = repo.read_current_three_shadow_snapshot("runtime_shadow")
+    refs = (
+        _event_ref(),
+        build_parity_event_ref_v1(
+            step_ordinal=1,
+            event_id="event_tick_2",
+            event_type="TICK",
+            event_source="gateway",
+            event_payload_sha256="7" * 64,
+            logical_time_utc="2026-07-29T01:31:00Z",
+            market_data_projection_id="market_2",
+            market_data_projection_sha256="8" * 64,
+        ),
+    )
+    parity_input = build_current_three_parity_input_v1(
+        algo_code="SNIPER_MINIQMT",
+        runtime_id="shadow_kernel_runtime",
+        parent_intent_id="parent_1",
+        strategy_slot_id="slot_1",
+        symbol="600000.SH",
+        side=SideV1.BUY,
+        target_quantity=100,
+        limit_price_decimal="10",
+        pricetick_decimal="0.01",
+        min_volume=100,
+        volume_increment=100,
+        plugin_config={"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"},
+        legacy_policy_projection_receipt_sha256="3" * 64,
+        ordered_event_refs=refs,
+    )
+    command = BrokerCommandV2.create(
+        command_type=BrokerCommandTypeV2.SUBMIT_LIMIT,
+        runtime_id="shadow_kernel_runtime",
+        algo_instance_id="kernel_algo_1",
+        parent_intent_id="parent_1",
+        transition_id="transition_1",
+        ordinal=0,
+        local_vt_orderid=None,
+        symbol="600000.SH",
+        side=SideV1.BUY,
+        order_type=OrderTypeV1.LIMIT,
+        price_decimal="10",
+        quantity=100,
+        owned_broker_order_id=None,
+        reason_code="sniper_ask_crossed_limit",
+        metadata={"market_data_lineage": {"market_data_id": "market_2"}},
+    )
+
+    with pytest.raises(CurrentThreeContractError) as exc_info:
+        associate_current_three_shadow_commands_v1(
+            read=read,
+            parity_input=parity_input,
+            commands_by_step=((), (command,)),
+            legacy_child_order_ids_by_step=(("legacy_child_1",), ()),
+        )
+
+    assert exc_info.value.reason_code == "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID"
+
+
+@pytest.mark.parametrize("status", [48, "ACCEPTED", "PART_TRADED"])
+def test_committed_parity_uses_the_shared_order_status_authority(status) -> None:
+    repo = _committed_sniper_repo(order_status=status)
+
+    receipt = run_current_three_committed_parity_v1(
+        repo.read_current_three_shadow_snapshot("runtime_shadow"), legacy_algo_instance_id="legacy_algo_1"
+    )
+
+    assert receipt.status is CurrentThreeParityStatusV1.PASSED
+
+
+def test_committed_parity_preserves_missing_order_cumulative_as_null(monkeypatch) -> None:
+    repo = _committed_sniper_repo(order_status="SUBMITTED", include_cumulative=False)
+    observed_cumulative = []
+    real_factory = shadow_runner_module.create_vnpy_style_core
+
+    def _capturing_factory(*args, **kwargs):
+        core = real_factory(*args, **kwargs)
+        real_update_order = core.update_order
+
+        def _capture(order):
+            observed_cumulative.append(order.traded)
+            return real_update_order(order)
+
+        core.update_order = _capture
+        return core
+
+    monkeypatch.setattr(shadow_runner_module, "create_vnpy_style_core", _capturing_factory)
+
+    receipt = run_current_three_committed_parity_v1(
+        repo.read_current_three_shadow_snapshot("runtime_shadow"), legacy_algo_instance_id="legacy_algo_1"
+    )
+
+    assert receipt.status is CurrentThreeParityStatusV1.PASSED
+    assert observed_cumulative == [None]
+
+
+def test_committed_parity_wraps_unknown_order_status_as_typed_k3_failure() -> None:
+    repo = _committed_sniper_repo(order_status=999)
+
+    with pytest.raises(CurrentThreeContractError) as exc_info:
+        run_current_three_committed_parity_v1(
+            repo.read_current_three_shadow_snapshot("runtime_shadow"), legacy_algo_instance_id="legacy_algo_1"
+        )
+
+    assert exc_info.value.reason_code == "MINIQMT_K3_ORDER_EVENT_PAYLOAD_INVALID"
 
 
 def test_committed_sniper_tick_drives_same_legacy_and_kernel_input_without_broker() -> None:
@@ -261,6 +462,7 @@ def test_committed_sniper_tick_drives_same_legacy_and_kernel_input_without_broke
         }
     )
     repo.append_event(tick)
+    repo.append_event(_child_submitted_event(sequence=2))
     read = repo.read_current_three_shadow_snapshot("runtime_shadow")
 
     receipt = run_current_three_committed_parity_v1(read, legacy_algo_instance_id="legacy_algo_1")
@@ -300,6 +502,7 @@ def test_committed_best_limit_uses_same_deterministic_draw_context() -> None:
     repo.upsert_algo_instance(algo)
     repo.upsert_child_order(child)
     repo.append_event(tick)
+    repo.append_event(_child_submitted_event(sequence=2))
 
     receipt = run_current_three_committed_parity_v1(
         repo.read_current_three_shadow_snapshot("runtime_shadow"), legacy_algo_instance_id="legacy_algo_1"
@@ -362,6 +565,7 @@ def test_committed_twap_tick_and_active_second_timers_preserve_slice_semantics()
     repo.append_event(tick)
     for timer in timers:
         repo.append_event(timer)
+    repo.append_event(_child_submitted_event(sequence=4))
 
     receipt = run_current_three_committed_parity_v1(
         repo.read_current_three_shadow_snapshot("runtime_shadow"), legacy_algo_instance_id="legacy_algo_1"
@@ -395,21 +599,23 @@ def test_visible_repeated_cancel_is_transport_suppressed_only_while_first_cancel
     }
     events = (
         _events()[0].model_copy(update={"payload": {**common_tick, "generation": 1}}),
+        _child_submitted_event(sequence=2),
         _events()[1].model_copy(
             update={
+                "sequence": 3,
                 "payload": {
                     **_events()[1].payload,
                     "session_phase": "CONTINUOUS_AM",
                     "session_epoch": "session_shadow_am",
                     "exchange_trade_date": "2026-07-29",
-                }
+                },
             }
         ),
         _events()[0].model_copy(
-            update={"event_id": "tick_cancel_1", "sequence": 3, "payload": {**common_tick, "generation": 2}}
+            update={"event_id": "tick_cancel_1", "sequence": 4, "payload": {**common_tick, "generation": 2}}
         ),
         _events()[0].model_copy(
-            update={"event_id": "tick_cancel_2", "sequence": 4, "payload": {**common_tick, "generation": 3}}
+            update={"event_id": "tick_cancel_2", "sequence": 5, "payload": {**common_tick, "generation": 3}}
         ),
     )
     for event in events:
@@ -458,6 +664,7 @@ def test_dependent_buy_inventory_is_visible_but_never_consumed_as_algo_local_par
     repo.upsert_algo_instance(algo)
     repo.upsert_child_order(_child())
     repo.append_event(tick)
+    repo.append_event(_child_submitted_event(sequence=2))
     read = repo.read_current_three_shadow_snapshot("runtime_shadow")
 
     _, dependent = build_current_three_legacy_inventory_set_v1(read)
@@ -517,11 +724,12 @@ def test_committed_order_trade_and_eod_callbacks_preserve_full_lifecycle_parity(
     }
     events = (
         _events()[0].model_copy(update={"payload": {**_events()[0].payload, **session, "generation": 1}}),
-        _events()[1].model_copy(update={"payload": {**_events()[1].payload, **session}}),
+        _child_submitted_event(sequence=2),
+        _events()[1].model_copy(update={"sequence": 3, "payload": {**_events()[1].payload, **session}}),
         MiniQMTExecutionEvent(
             event_id="trade_1",
             runtime_id="runtime_shadow",
-            sequence=3,
+            sequence=4,
             event_type=MiniQMTExecutionEventType.TRADE_EVENT,
             event_time=NOW,
             source="gateway",
@@ -529,7 +737,7 @@ def test_committed_order_trade_and_eod_callbacks_preserve_full_lifecycle_parity(
                 **session,
                 "child_order_id": "legacy_child_1",
                 "broker_order_id": "broker_1",
-                "trade_id": "trade_1",
+                "deal_id": "trade_1",
                 "quantity": 100,
                 "price": 10,
             },
@@ -537,7 +745,7 @@ def test_committed_order_trade_and_eod_callbacks_preserve_full_lifecycle_parity(
         MiniQMTExecutionEvent(
             event_id="order_filled_1",
             runtime_id="runtime_shadow",
-            sequence=4,
+            sequence=5,
             event_type=MiniQMTExecutionEventType.ORDER_EVENT,
             event_time=NOW,
             source="gateway",
@@ -554,7 +762,7 @@ def test_committed_order_trade_and_eod_callbacks_preserve_full_lifecycle_parity(
         MiniQMTExecutionEvent(
             event_id="runtime_stopped_1",
             runtime_id="runtime_shadow",
-            sequence=5,
+            sequence=6,
             event_type=MiniQMTExecutionEventType.RUNTIME_STOPPED,
             event_time=NOW,
             source="runtime",

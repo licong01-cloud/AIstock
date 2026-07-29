@@ -343,6 +343,7 @@ def associate_current_three_shadow_commands_v1(
     read: CurrentThreeShadowRepositoryReadV1,
     parity_input: CurrentThreeParityInputV1,
     commands_by_step: Sequence[Sequence[BrokerCommandV2]],
+    legacy_child_order_ids_by_step: Sequence[Sequence[str]],
 ) -> tuple[CurrentThreeShadowCommandAssociationV1, ...]:
     """Join committed legacy children to K3 submit commands by exact business facts."""
 
@@ -366,6 +367,16 @@ def associate_current_three_shadow_commands_v1(
             },
         )
     legacy_algo_id = legacy_algos[0].algo_instance_id
+    if len(legacy_child_order_ids_by_step) != len(commands_by_step):
+        raise CurrentThreeContractError(
+            "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+            "legacy child lineage and command steps have different cardinality",
+            context={
+                "stage": "K3_SHADOW_ASSOCIATION",
+                "command_step_count": len(commands_by_step),
+                "legacy_child_step_count": len(legacy_child_order_ids_by_step),
+            },
+        )
     used_children: set[str] = set()
     associations: list[CurrentThreeShadowCommandAssociationV1] = []
 
@@ -386,37 +397,61 @@ def associate_current_three_shadow_commands_v1(
             )
         return first
 
+    child_by_id = {item.child_order_id: item for item in read.children}
     for step_ordinal, commands in enumerate(commands_by_step):
-        for effect_ordinal, command in enumerate(commands):
-            if command.command_type is not BrokerCommandTypeV2.SUBMIT_LIMIT:
-                continue
-            matches = []
-            for child in read.children:
-                reason = child_reason(child)
-                if (
-                    child.algo_instance_id == legacy_algo_id
-                    and child.parent_intent_id == parity_input.parent_intent_id
-                    and child.symbol == command.symbol
-                    and child.side.value == command.side.value
-                    and Decimal(str(child.price)) == Decimal(command.price_decimal)
-                    and child.quantity == command.quantity
-                    and reason == command.reason_code
-                ):
-                    matches.append(child)
-            if len(matches) != 1:
+        submit_commands = tuple(
+            (effect_ordinal, command)
+            for effect_ordinal, command in enumerate(commands)
+            if command.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT
+        )
+        step_child_ids = tuple(legacy_child_order_ids_by_step[step_ordinal])
+        if len(step_child_ids) != len(submit_commands):
+            raise CurrentThreeContractError(
+                "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+                "legacy child lineage and submit effects differ at one exact step",
+                context={
+                    "stage": "K3_SHADOW_ASSOCIATION",
+                    "parity_input_sha256": parity_input.input_sha256,
+                    "step_ordinal": step_ordinal,
+                    "legacy_child_count": len(step_child_ids),
+                    "kernel_submit_count": len(submit_commands),
+                },
+            )
+        for (effect_ordinal, command), child_id in zip(submit_commands, step_child_ids, strict=True):
+            child = child_by_id.get(child_id)
+            reason = child_reason(child) if child is not None else None
+            broker_matches = (
+                [item for item in read.children if item.broker_order_id == child.broker_order_id]
+                if child is not None and child.broker_order_id is not None
+                else []
+            )
+            if (
+                child is None
+                or child.algo_instance_id != legacy_algo_id
+                or child.parent_intent_id != parity_input.parent_intent_id
+                or child.strategy_slot_id != parity_input.strategy_slot_id
+                or child.symbol != command.symbol
+                or child.side.value != command.side.value
+                or Decimal(str(child.price)) != Decimal(command.price_decimal)
+                or child.quantity != command.quantity
+                or reason != command.reason_code
+                or len(broker_matches) != 1
+                or broker_matches[0].child_order_id != child.child_order_id
+            ):
                 raise CurrentThreeContractError(
                     "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
-                    "shadow submit command does not have one exact committed legacy child",
+                    "shadow submit command does not close to its same-step committed legacy child",
                     context={
                         "stage": "K3_SHADOW_ASSOCIATION",
                         "parity_input_sha256": parity_input.input_sha256,
                         "step_ordinal": step_ordinal,
                         "business_effect_ordinal": effect_ordinal,
                         "command_id": command.command_id,
-                        "match_count": len(matches),
+                        "legacy_child_order_id": child_id,
+                        "child_present": child is not None,
+                        "broker_match_count": len(broker_matches),
                     },
                 )
-            child = matches[0]
             if child.child_order_id in used_children or child.broker_order_id is None:
                 raise CurrentThreeContractError(
                     "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",

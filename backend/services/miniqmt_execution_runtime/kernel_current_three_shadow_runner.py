@@ -23,7 +23,11 @@ from backend.execution_algos.vnpy_style.plugin_manifests import (
 from backend.execution_algos.vnpy_style.registry import create_vnpy_style_core
 
 from .deterministic_context import best_limit_quantity_v1
-from .kernel_callback_events import build_kernel_order_event_payload_v1, build_kernel_trade_event_payload_v1
+from .kernel_callback_events import (
+    build_kernel_order_event_payload_v1,
+    build_kernel_trade_event_payload_v1,
+    strict_readback_kernel_event_payload_v1,
+)
 from .kernel_current_three_contracts import (
     CurrentThreeContractError,
     CurrentThreeParityInputV1,
@@ -37,7 +41,10 @@ from .kernel_current_three_parity import (
     build_current_three_parity_trace_v1,
     build_parity_event_ref_v1,
 )
-from .kernel_current_three_shadow_source import CurrentThreeShadowRepositoryReadV1
+from .kernel_current_three_shadow_source import (
+    CurrentThreeShadowRepositoryReadV1,
+    resolve_current_three_event_owner_v1,
+)
 from .models import MiniQMTExecutionEvent, MiniQMTExecutionEventType
 from .plugin_canonical import canonical_decimal_string_v1, hash_hex_v1, thaw_json_v1
 from .plugin_canonical import canonical_utc_datetime_v1
@@ -51,6 +58,7 @@ from .plugin_contracts import (
     EventTypeV2,
     ExecutionProjectionRefV1,
     ExecutionProjectionSetV1,
+    KernelOrderEventPayloadV1,
     KernelProjectionTypeV1,
     RuntimeEventEnvelopeV2,
     SessionPhaseV1,
@@ -138,17 +146,7 @@ def _decimal_contract(metadata: dict[str, Any], field: str) -> str:
 
 
 def _event_owner(read: CurrentThreeShadowRepositoryReadV1, event: MiniQMTExecutionEvent) -> str | None:
-    candidates: set[str] = set()
-    direct = event.payload.get("algo_instance_id")
-    if type(direct) is str and direct:
-        candidates.add(direct)
-    child_id = event.payload.get("child_order_id")
-    if type(child_id) is str:
-        candidates.update(item.algo_instance_id for item in read.children if item.child_order_id == child_id)
-    broker_id = event.payload.get("broker_order_id")
-    if type(broker_id) is str:
-        candidates.update(item.algo_instance_id for item in read.children if item.broker_order_id == broker_id)
-    return next(iter(candidates)) if len(candidates) == 1 else None
+    return resolve_current_three_event_owner_v1(event=event, algos=read.algos, children=read.children)
 
 
 def _selected_events(read: CurrentThreeShadowRepositoryReadV1, algo: Any) -> tuple[MiniQMTExecutionEvent, ...]:
@@ -169,6 +167,63 @@ def _selected_events(read: CurrentThreeShadowRepositoryReadV1, algo: Any) -> tup
         elif event.event_type is MiniQMTExecutionEventType.RUNTIME_STOPPED:
             selected.append(event)
     return tuple(selected)
+
+
+def _legacy_submitted_child_ids_by_step_v1(
+    read: CurrentThreeShadowRepositoryReadV1,
+    *,
+    algo: Any,
+    selected_events: tuple[MiniQMTExecutionEvent, ...],
+) -> tuple[tuple[str, ...], ...]:
+    """Bind committed child-submit lineage to the exact preceding parity step."""
+
+    selected_sequences = tuple(item.sequence for item in selected_events)
+    if tuple(sorted(selected_sequences)) != selected_sequences or len(set(selected_sequences)) != len(
+        selected_sequences
+    ):
+        raise _fail(
+            "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+            "selected parity event sequence is not strict and unique",
+            algo_instance_id=algo.algo_instance_id,
+        )
+    by_step: list[list[str]] = [[] for _ in selected_events]
+    seen_children: set[str] = set()
+    submitted = sorted(
+        (item for item in read.events if item.event_type is MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED),
+        key=lambda item: (item.sequence, item.event_id),
+    )
+    for event in submitted:
+        owner = resolve_current_three_event_owner_v1(event=event, algos=read.algos, children=read.children)
+        if owner != algo.algo_instance_id:
+            continue
+        preceding = [index for index, sequence in enumerate(selected_sequences) if sequence < event.sequence]
+        if not preceding:
+            raise _fail(
+                "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+                "legacy child submission has no preceding parity step",
+                event_id=event.event_id,
+                child_order_id=event.payload.get("child_order_id"),
+            )
+        step_ordinal = preceding[-1]
+        next_sequence = selected_sequences[step_ordinal + 1] if step_ordinal + 1 < len(selected_sequences) else None
+        if next_sequence is not None and event.sequence >= next_sequence:
+            raise _fail(
+                "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+                "legacy child submission cannot be placed inside one parity step",
+                event_id=event.event_id,
+                child_order_id=event.payload.get("child_order_id"),
+            )
+        child_id = event.payload["child_order_id"]
+        if child_id in seen_children:
+            raise _fail(
+                "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+                "legacy child submission lineage is duplicated",
+                event_id=event.event_id,
+                child_order_id=child_id,
+            )
+        seen_children.add(child_id)
+        by_step[step_ordinal].append(child_id)
+    return tuple(tuple(items) for items in by_step)
 
 
 def build_current_three_parity_input_from_shadow_v1(
@@ -444,25 +499,43 @@ def build_current_three_shadow_event_v1(
         "side": parity_input.side,
     }
     if raw.event_type is MiniQMTExecutionEventType.ORDER_EVENT:
-        payload = build_kernel_order_event_payload_v1(
-            raw_payload=raw.payload,
-            order_event_id=raw.event_id,
-            requested_quantity=association.quantity,
-            **common,
-        )
+        try:
+            payload = build_kernel_order_event_payload_v1(
+                raw_payload=raw.payload,
+                order_event_id=raw.event_id,
+                requested_quantity=association.quantity,
+                **common,
+            )
+        except (TypeError, ValueError) as exc:
+            raise _fail(
+                "MINIQMT_K3_ORDER_EVENT_PAYLOAD_INVALID",
+                "committed ORDER callback does not satisfy the unique callback authority",
+                event_id=raw.event_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            ) from exc
         event_type = EventTypeV2.ORDER
         schema = "miniqmt_order_event_v1"
         source_identity = {"order_event_id": raw.event_id}
     elif raw.event_type is MiniQMTExecutionEventType.TRADE_EVENT:
-        payload = build_kernel_trade_event_payload_v1(
-            raw_payload=raw.payload,
-            trade_quantity=raw.payload["quantity"],
-            trade_price_decimal=str(raw.payload["price"]),
-            **common,
-        )
+        try:
+            payload = build_kernel_trade_event_payload_v1(
+                raw_payload=raw.payload,
+                trade_quantity=raw.payload["quantity"],
+                trade_price_decimal=str(raw.payload["price"]),
+                **common,
+            )
+        except (TypeError, ValueError) as exc:
+            raise _fail(
+                "MINIQMT_K3_TRADE_EVENT_PAYLOAD_INVALID",
+                "committed TRADE callback does not satisfy the unique callback authority",
+                event_id=raw.event_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            ) from exc
         event_type = EventTypeV2.TRADE
         schema = "miniqmt_trade_fact_v1"
-        source_identity = {"trade_id": raw.payload["trade_id"]}
+        source_identity = {"trade_id": payload.trade_id}
     else:
         raise _fail(
             "MINIQMT_K3_EVENT_PAYLOAD_INVALID",
@@ -648,6 +721,12 @@ def run_current_three_committed_parity_v1(
     parity_input, raw_events = build_current_three_parity_input_from_shadow_v1(
         read, legacy_algo_instance_id=legacy_algo_instance_id
     )
+    legacy_algo = next(item for item in read.algos if item.algo_instance_id == legacy_algo_instance_id)
+    legacy_child_order_ids_by_step = _legacy_submitted_child_ids_by_step_v1(
+        read,
+        algo=legacy_algo,
+        selected_events=raw_events,
+    )
     plugin, manifest, kernel_state = _plugin_start(parity_input)
     current_context: dict[str, DeterministicExecutionContextV1 | None] = {"value": None}
     legacy_draw_ordinal = {"value": 0}
@@ -752,15 +831,22 @@ def run_current_three_committed_parity_v1(
                     "ORDER callback lacks its preceding legacy submit identity",
                     event_id=raw.event_id,
                 )
-            status = str(raw.payload["status"])
-            active = status in {"OPEN", "SUBMITTED", "PENDING", "ACTIVE", "PARTIALLY_FILLED"}
+            order_payload = strict_readback_kernel_event_payload_v1(kernel_event)
+            if not isinstance(order_payload, KernelOrderEventPayloadV1):
+                raise _fail(
+                    "MINIQMT_K3_ORDER_EVENT_PAYLOAD_INVALID",
+                    "ORDER event did not read back as the strict ORDER carrier",
+                    event_id=raw.event_id,
+                )
+            status = order_payload.normalized_order_status.value
+            active = not order_payload.terminal
             if not active:
                 legacy_closed_children.add(raw.payload["child_order_id"])
             legacy_actions = legacy.update_order(
                 VnpyOrderUpdate(
                     vt_orderid=legacy_vt,
                     active=active,
-                    traded=int(raw.payload.get("traded_volume", 0)),
+                    traded=order_payload.observed_cumulative_filled_quantity,
                     price=float(raw.payload["price"]),
                     raw_status=status,
                     updated_at=raw.event_time,
@@ -795,6 +881,8 @@ def run_current_three_committed_parity_v1(
                 read=read,
                 parity_input=parity_input,
                 commands_by_step=tuple(() for _ in range(ordinal)) + (commands,),
+                legacy_child_order_ids_by_step=tuple(() for _ in range(ordinal))
+                + (legacy_child_order_ids_by_step[ordinal],),
             )
             submit_actions = [item for item in legacy_actions if item.action_type is VnpyActionType.SUBMIT]
             if len(current_associations) != len(submit_actions):
@@ -1021,7 +1109,10 @@ def run_current_three_committed_parity_v1(
     # Re-run the full association closure so one legacy child cannot be reused by
     # commands emitted at different steps.
     associate_current_three_shadow_commands_v1(
-        read=read, parity_input=parity_input, commands_by_step=tuple(commands_by_step)
+        read=read,
+        parity_input=parity_input,
+        commands_by_step=tuple(commands_by_step),
+        legacy_child_order_ids_by_step=legacy_child_order_ids_by_step,
     )
     legacy_trace = build_current_three_parity_trace_v1(
         algo_code=parity_input.algo_code, side=parity_input.side, ordered_steps=tuple(legacy_steps)

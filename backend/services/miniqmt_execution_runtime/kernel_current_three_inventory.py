@@ -24,7 +24,11 @@ from .kernel_current_three_contracts import (
     bounded_failures_v1,
     legacy_evidence_set_sha256_v1,
 )
-from .kernel_current_three_shadow_source import CurrentThreeShadowRepositoryReadV1, _canonical_legacy_fact
+from .kernel_current_three_shadow_source import (
+    CurrentThreeShadowRepositoryReadV1,
+    _canonical_legacy_fact,
+    resolve_current_three_event_owner_v1,
+)
 from .models import MiniQMTAlgoInstanceStatus, MiniQMTChildOrderStatus, MiniQMTExecutionEventType
 from .plugin_canonical import canonical_decimal_string_v1, hash_hex_v1, thaw_json_v1
 from .plugin_contracts import SideV1
@@ -77,21 +81,7 @@ def _raw_config(metadata: dict[str, Any], failures: list[CurrentThreeFailureV1])
 
 
 def _event_owner_id(read: CurrentThreeShadowRepositoryReadV1, event: Any) -> str | None:
-    payload = event.payload
-    candidates: set[str] = set()
-    direct = payload.get("algo_instance_id")
-    if type(direct) is str and direct:
-        candidates.add(direct)
-    child_id = payload.get("child_order_id")
-    if type(child_id) is str and child_id:
-        candidates.update(item.algo_instance_id for item in read.children if item.child_order_id == child_id)
-    broker_id = payload.get("broker_order_id")
-    if type(broker_id) is str and broker_id:
-        candidates.update(item.algo_instance_id for item in read.children if item.broker_order_id == broker_id)
-    parent_id = payload.get("parent_intent_id")
-    if type(parent_id) is str and parent_id:
-        candidates.update(item.algo_instance_id for item in read.algos if item.parent_intent_id == parent_id)
-    return next(iter(candidates)) if len(candidates) == 1 else None
+    return resolve_current_three_event_owner_v1(event=event, algos=read.algos, children=read.children)
 
 
 def _event_refs_for_algo(

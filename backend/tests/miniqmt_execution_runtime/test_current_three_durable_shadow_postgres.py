@@ -15,7 +15,9 @@ from backend.services.miniqmt_execution_runtime.kernel_current_three_shadow_orch
 from backend.services.miniqmt_execution_runtime.kernel_current_three_shadow_runner import (
     build_current_three_parity_input_from_shadow_v1,
     build_current_three_shadow_event_v1,
+    run_current_three_committed_parity_v1,
 )
+from backend.services.miniqmt_execution_runtime.kernel_current_three_contracts import CurrentThreeParityStatusV1
 from backend.services.miniqmt_execution_runtime.kernel_delivery import (
     KernelDeliveryWorkerV1,
     KernelPluginInvocationError,
@@ -72,7 +74,7 @@ def test_durable_shadow_uses_real_k2_repository_and_never_creates_dispatch_attem
             cur.execute(_legacy_ddl(legacy_schema))
             cur.execute(
                 f"""INSERT INTO {legacy_schema}.execution_runtime VALUES (
-                    'runtime_dev','account_dev','2026-07-29','SIM','RUNNING','CONNECTED','OPEN','hash',1,
+                    'runtime_dev','account_dev','2026-07-29','SIM','RUNNING','CONNECTED','OPEN','hash',2,
                     '{{"repository_commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'::jsonb,
                     NULL,'2026-07-29T01:29:00Z','2026-07-29T01:30:00Z')"""
             )
@@ -99,6 +101,13 @@ def test_durable_shadow_uses_real_k2_repository_and_never_creates_dispatch_attem
                        "market_data_projection_sha256":"1111111111111111111111111111111111111111111111111111111111111111",
                        "exchange_trade_date":"2026-07-29","session_epoch":"session_shadow_am",
                        "session_phase":"CONTINUOUS_AM"}}'::jsonb,NULL)"""
+            )
+            cur.execute(
+                f"""INSERT INTO {legacy_schema}.execution_runtime_event VALUES (
+                    'child_submitted_dev','runtime_dev',2,'CHILD_ORDER_SUBMITTED','2026-07-29T01:30:00Z','gateway',
+                    '{{"algo_instance_id":"legacy_algo_dev","parent_intent_id":"parent_dev",
+                       "strategy_slot_id":"slot_dev","child_order_id":"legacy_child_dev",
+                       "broker_order_id":"broker_dev","accepted":true,"broker_called":true}}'::jsonb,NULL)"""
             )
             cur.execute(_base_fixture_sql(kernel_schema))
             _apply_isolated_kernel_schema(cur, kernel_schema)
@@ -147,6 +156,8 @@ def test_durable_shadow_uses_real_k2_repository_and_never_creates_dispatch_attem
         parity_input, raw_events = build_current_three_parity_input_from_shadow_v1(
             read, legacy_algo_instance_id="legacy_algo_dev"
         )
+        parity_receipt = run_current_three_committed_parity_v1(read, legacy_algo_instance_id="legacy_algo_dev")
+        assert parity_receipt.status is CurrentThreeParityStatusV1.PASSED
         gateway = _gateway()
         request = build_current_three_shadow_creation_request_v1(
             read=read,

@@ -9,6 +9,10 @@ from decimal import Decimal
 import math
 from typing import Any
 
+from .kernel_callback_events import (
+    normalize_qmt_order_callback_observation_v1,
+    resolve_qmt_trade_identity_alias_v1,
+)
 from .kernel_current_three_contracts import (
     CurrentThreeContractError,
     CurrentThreeShadowEventRefV1,
@@ -182,10 +186,10 @@ def _require_event_payload(event: MiniQMTExecutionEvent) -> None:
     elif event.event_type is MiniQMTExecutionEventType.TIMER:
         required = ("timer_name", "timer_occurrence_id", "schedule_epoch", "monotonic_ns")
     elif event.event_type is MiniQMTExecutionEventType.ORDER_EVENT:
-        required = ("child_order_id", "broker_order_id", "status", "quantity", "price")
+        required = ("child_order_id", "broker_order_id", "quantity", "price")
         reason = "MINIQMT_K3_ORDER_EVENT_PAYLOAD_INVALID"
     elif event.event_type is MiniQMTExecutionEventType.TRADE_EVENT:
-        required = ("child_order_id", "broker_order_id", "trade_id", "quantity", "price")
+        required = ("child_order_id", "broker_order_id", "quantity", "price")
         reason = "MINIQMT_K3_TRADE_EVENT_PAYLOAD_INVALID"
     elif event.event_type is MiniQMTExecutionEventType.RUNTIME_STOPPED:
         required = ("reason",)
@@ -199,6 +203,98 @@ def _require_event_payload(event: MiniQMTExecutionEvent) -> None:
             event_type=event.event_type.value,
             missing_fields=missing,
         )
+    if event.event_type in {MiniQMTExecutionEventType.ORDER_EVENT, MiniQMTExecutionEventType.TRADE_EVENT}:
+        quantity = payload.get("quantity")
+        try:
+            if type(quantity) is not int or quantity <= 0:
+                raise TypeError("quantity must be a positive strict integer")
+            price = Decimal(str(payload.get("price")))
+            if not price.is_finite() or price <= 0:
+                raise ValueError("callback price must be positive and finite")
+            if event.event_type is MiniQMTExecutionEventType.ORDER_EVENT:
+                _, cumulative = normalize_qmt_order_callback_observation_v1(payload)
+                if cumulative is not None and cumulative > quantity:
+                    raise ValueError("ORDER cumulative quantity exceeds callback quantity")
+            elif resolve_qmt_trade_identity_alias_v1(payload) is None:
+                raise ValueError("TRADE requires a raw broker trade identity alias")
+        except (TypeError, ValueError) as exc:
+            raise _fail(
+                reason,
+                "shadow callback payload does not satisfy the unique callback authority",
+                runtime_id=event.runtime_id,
+                event_id=event.event_id,
+                event_type=event.event_type.value,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            ) from exc
+
+
+def resolve_current_three_event_owner_v1(
+    *,
+    event: MiniQMTExecutionEvent,
+    algos: Sequence[MiniQMTExecutionAlgoInstance],
+    children: Sequence[MiniQMTChildOrder],
+) -> str:
+    """Resolve one callback/child-lineage event through exact child and broker facts."""
+
+    payload = event.payload
+    child_id = payload.get("child_order_id")
+    broker_id = payload.get("broker_order_id")
+    child_matches = [item for item in children if item.child_order_id == child_id]
+    broker_matches = [item for item in children if item.broker_order_id == broker_id]
+    if len(child_matches) != 1 or len(broker_matches) != 1 or child_matches[0] != broker_matches[0]:
+        raise _fail(
+            "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+            "callback event does not close to one exact child and broker owner",
+            event_id=event.event_id,
+            event_type=event.event_type.value,
+            child_order_id=child_id,
+            broker_order_id=broker_id,
+            child_match_count=len(child_matches),
+            broker_match_count=len(broker_matches),
+        )
+    child = child_matches[0]
+    algo_matches = [item for item in algos if item.algo_instance_id == child.algo_instance_id]
+    if len(algo_matches) != 1:
+        raise _fail(
+            "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+            "callback child does not close to one exact algo owner",
+            event_id=event.event_id,
+            child_order_id=child.child_order_id,
+            algo_instance_id=child.algo_instance_id,
+            algo_match_count=len(algo_matches),
+        )
+    algo = algo_matches[0]
+    expected = {
+        "algo_instance_id": algo.algo_instance_id,
+        "parent_intent_id": algo.parent_intent_id,
+        "strategy_slot_id": algo.strategy_slot_id,
+    }
+    if child.parent_intent_id != algo.parent_intent_id or child.strategy_slot_id != algo.strategy_slot_id:
+        raise _fail(
+            "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+            "callback child owner crosses its algo parent or strategy slot",
+            event_id=event.event_id,
+            child_order_id=child.child_order_id,
+            expected_parent_intent_id=algo.parent_intent_id,
+            actual_parent_intent_id=child.parent_intent_id,
+            expected_strategy_slot_id=algo.strategy_slot_id,
+            actual_strategy_slot_id=child.strategy_slot_id,
+        )
+    conflicts = {
+        field: {"expected": value, "actual": payload[field]}
+        for field, value in expected.items()
+        if field in payload and (type(payload[field]) is not str or payload[field] != value)
+    }
+    if conflicts:
+        raise _fail(
+            "MINIQMT_K3_SHADOW_ASSOCIATION_INVALID",
+            "callback event owner aliases cross the exact child owner",
+            event_id=event.event_id,
+            child_order_id=child.child_order_id,
+            conflicts=conflicts,
+        )
+    return algo.algo_instance_id
 
 
 def build_current_three_shadow_source_snapshot_v1(
@@ -263,6 +359,9 @@ def build_current_three_shadow_source_snapshot_v1(
             runtime_id=runtime_id,
             orphan_child_order_ids=orphan_children[:64],
         )
+    for event in ordered_events:
+        if event.event_type in {MiniQMTExecutionEventType.ORDER_EVENT, MiniQMTExecutionEventType.TRADE_EVENT}:
+            resolve_current_three_event_owner_v1(event=event, algos=ordered_algos, children=ordered_children)
 
     event_refs = tuple(_event_ref(item) for item in ordered_events)
     child_refs = tuple(
@@ -353,4 +452,5 @@ __all__ = [
     "CurrentThreeShadowRepositoryReadV1",
     "build_current_three_shadow_repository_read_v1",
     "build_current_three_shadow_source_snapshot_v1",
+    "resolve_current_three_event_owner_v1",
 ]
