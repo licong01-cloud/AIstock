@@ -1179,12 +1179,19 @@ class HistoricalRangeDatasetBridgeApplicationService:
         child_bridge_envelope = self._artifact_store.load(child_receipt.bridge_artifact_ref)
         child_bridge = HistoricalRangeDatasetBridgeArtifactV1.model_validate(child_bridge_envelope.payload)
         expected_bridge_upstream = tuple(
-            (
-                *child_bridge.request.successful_day_refs,
-                *child_bridge.request.candidate_refs,
-                *child_bridge.request.outcome_refs,
-                *child_bridge.request.summary_refs,
-                *child_bridge.request.policy_bundle_refs,
+            sorted(
+                (
+                    *child_bridge.request.successful_day_refs,
+                    *child_bridge.request.candidate_refs,
+                    *child_bridge.request.outcome_refs,
+                    *child_bridge.request.summary_refs,
+                    *child_bridge.request.policy_bundle_refs,
+                ),
+                key=lambda item: (
+                    item.artifact_kind.value,
+                    item.semantic_content_hash,
+                    item.relative_path,
+                ),
             )
         )
         if (

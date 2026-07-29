@@ -17,7 +17,10 @@ from .api_models import (
     HistoricalRangeRefreshOutcomesRequest,
 )
 from .canonical import canonical_json_sha256
-from .dataset_bridge import HistoricalRangeDatasetBridgeApplicationService
+from .dataset_bridge import (
+    HistoricalRangeDatasetBridgeApplicationService,
+    HistoricalRangeDatasetBridgeArtifactV1,
+)
 from .executor import HistoricalRangeBatchExecutionService
 from .artifact_store import HistoricalRangeArtifactStore
 from .models import (
@@ -43,7 +46,10 @@ from .models import (
 )
 from .outcome_service import HistoricalRangeOutcomeApplicationService
 from .planning_service import HistoricalRangePlanningService
-from .query_repository import PostgresHistoricalRangeQueryRepository
+from .query_repository import (
+    HistoricalRangeNotFoundError,
+    PostgresHistoricalRangeQueryRepository,
+)
 from .repository import PostgresHistoricalRangeRepository
 from .runtime_factories import HistoricalRangeOutcomeCommandPlan
 
@@ -202,10 +208,20 @@ class ResponseBoundHistoricalRangeDispatcher:
                     worker_id=worker_id,
                 )
             elif command == "BUILD_DATASET_BRIDGE":
-                request = runtime.bridge_requests.build(
-                    batch_id,
-                    HistoricalRangeBuildBridgeRequest.model_validate(payload["command_payload"]),
+                api_request = HistoricalRangeBuildBridgeRequest.model_validate(
+                    payload["command_payload"]
                 )
+                if payload.get("domain_request_payload") is None:
+                    request = runtime.bridge_requests.build(batch_id, api_request)
+                else:
+                    request = HistoricalRangeDatasetBridgeRequestV1.model_validate(
+                        payload["domain_request_payload"]
+                    )
+                    _validate_bridge_api_scope(
+                        batch_id=batch_id,
+                        api_request=api_request,
+                        domain_request=request,
+                    )
                 stage = "CLAIM_AND_EXECUTION"
                 self._run_bridge_request(
                     runtime=runtime,
@@ -284,6 +300,13 @@ class ResponseBoundHistoricalRangeDispatcher:
         worker_id: str,
     ) -> None:
         operation = runtime.query.get_operation_internal(operation_id)
+        if str(operation.get("request_payload_sha256")) != str(request.request_hash):
+            raise HistoricalRangeServiceError(
+                "ADVISORY_HR_BRIDGE_REPLAY_IDENTITY_CONFLICT",
+                "bridge worker request differs from the durable parent operation identity",
+                http_status=409,
+                context={"operation_id": operation_id},
+            )
         if operation["status"] in {
             HistoricalRangeOperationStatus.COMPLETED.value,
             HistoricalRangeOperationStatus.FAILED.value,
@@ -1082,7 +1105,24 @@ class HistoricalRangeApplicationService:
     ) -> dict[str, Any]:
         runtime = self._mutation_runtime_factory()
         batch = runtime.query.get_batch(batch_id)
-        domain_request = runtime.bridge_requests.build(batch_id, request)
+        operation_id = _domain_operation_id(
+            batch_id=batch_id,
+            operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
+            operation_idempotency_key=request.operation_idempotency_key,
+        )
+        try:
+            existing_operation = runtime.query.get_operation_internal(operation_id)
+        except HistoricalRangeNotFoundError:
+            existing_operation = None
+        if existing_operation is None:
+            domain_request = runtime.bridge_requests.build(batch_id, request)
+        else:
+            domain_request = _bridge_request_for_exact_retry(
+                runtime=runtime,
+                batch_id=batch_id,
+                api_request=request,
+                parent_operation=existing_operation,
+            )
         operation, exact_retry = _persist_domain_operation(
             runtime=runtime,
             batch_id=batch_id,
@@ -1100,6 +1140,7 @@ class HistoricalRangeApplicationService:
                     "batch_id": batch_id,
                     "operation_id": operation["operation_id"],
                     "command_payload": request.model_dump(mode="json"),
+                    "domain_request_payload": domain_request.model_dump(mode="json"),
                 },
             )
         return _mutation_response(batch=batch, operation=operation, exact_retry=exact_retry, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))
@@ -1148,10 +1189,11 @@ def _persist_domain_operation(
     operation_idempotency_key: str, request_hash: str, expected_row_version: int,
     executor_identity: bool = False,
 ) -> tuple[dict[str, Any], bool]:
-    identity_key = "operation_idempotency_key" if executor_identity else "idempotency_key"
-    operation_id = derive_prefixed_id(
-        "ahrop",
-        {"batch_id": batch_id, "operation_type": operation_type.value, identity_key: operation_idempotency_key},
+    operation_id = _domain_operation_id(
+        batch_id=batch_id,
+        operation_type=operation_type,
+        operation_idempotency_key=operation_idempotency_key,
+        executor_identity=executor_identity,
     )
     operation, exact_retry = runtime.repository.get_or_create_operation(
         HistoricalRangeOperationRequestV1(
@@ -1164,6 +1206,238 @@ def _persist_domain_operation(
         )
     )
     return runtime.query.get_operation(str(operation["operation_id"])), exact_retry
+
+
+def _domain_operation_id(
+    *,
+    batch_id: str,
+    operation_type: HistoricalRangeOperationType,
+    operation_idempotency_key: str,
+    executor_identity: bool = False,
+) -> str:
+    identity_key = "operation_idempotency_key" if executor_identity else "idempotency_key"
+    return derive_prefixed_id(
+        "ahrop",
+        {
+            "batch_id": batch_id,
+            "operation_type": operation_type.value,
+            identity_key: operation_idempotency_key,
+        },
+    )
+
+
+def _bridge_request_for_exact_retry(
+    *,
+    runtime: HistoricalRangeRuntime,
+    batch_id: str,
+    api_request: HistoricalRangeBuildBridgeRequest,
+    parent_operation: Mapping[str, Any],
+) -> HistoricalRangeDatasetBridgeRequestV1:
+    _validate_bridge_parent_operation(
+        batch_id=batch_id,
+        api_request=api_request,
+        operation=parent_operation,
+    )
+    evidence_operation = _bridge_replay_evidence_operation(
+        runtime=runtime,
+        batch_id=batch_id,
+        api_request=api_request,
+        parent_operation=parent_operation,
+    )
+    if evidence_operation is None:
+        current = runtime.bridge_requests.build(batch_id, api_request)
+        if str(current.request_hash) != str(parent_operation["request_payload_sha256"]):
+            raise HistoricalRangeServiceError(
+                "ADVISORY_HR_BRIDGE_REPLAY_EVIDENCE_UNAVAILABLE",
+                "bridge exact retry requires frozen evidence after request identity rotation",
+                http_status=409,
+                context={"operation_id": parent_operation["operation_id"]},
+            )
+        return current
+    frozen = _load_frozen_bridge_request(
+        runtime=runtime,
+        parent_operation=parent_operation,
+        evidence_operation=evidence_operation,
+    )
+    _validate_bridge_api_scope(
+        batch_id=batch_id,
+        api_request=api_request,
+        domain_request=frozen,
+    )
+    return frozen
+
+
+def _validate_bridge_parent_operation(
+    *,
+    batch_id: str,
+    api_request: HistoricalRangeBuildBridgeRequest,
+    operation: Mapping[str, Any],
+) -> None:
+    expected = {
+        "batch_id": batch_id,
+        "operation_type": HistoricalRangeOperationType.BUILD_DATASET_BRIDGE.value,
+        "operation_idempotency_key": api_request.operation_idempotency_key,
+        "expected_row_version": api_request.expected_row_version,
+    }
+    if any(operation.get(key) != value for key, value in expected.items()):
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_IDENTITY_CONFLICT",
+            "bridge exact retry differs from the durable parent operation",
+            http_status=409,
+            context={"operation_id": operation.get("operation_id")},
+        )
+
+
+def _bridge_replay_evidence_operation(
+    *,
+    runtime: HistoricalRangeRuntime,
+    batch_id: str,
+    api_request: HistoricalRangeBuildBridgeRequest,
+    parent_operation: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    if parent_operation.get("result_ref") is not None:
+        return parent_operation
+    child_id = _domain_operation_id(
+        batch_id=batch_id,
+        operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN,
+        operation_idempotency_key=api_request.operation_idempotency_key,
+    )
+    try:
+        child = runtime.query.get_operation_internal(child_id)
+    except HistoricalRangeNotFoundError:
+        return None
+    expected = {
+        "batch_id": batch_id,
+        "operation_type": HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN.value,
+        "operation_idempotency_key": api_request.operation_idempotency_key,
+        "expected_row_version": api_request.expected_row_version,
+        "request_payload_sha256": parent_operation.get("request_payload_sha256"),
+    }
+    if any(child.get(key) != value for key, value in expected.items()):
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_IDENTITY_CONFLICT",
+            "bridge child operation differs from its durable parent identity",
+            http_status=409,
+            context={"operation_id": parent_operation.get("operation_id"), "child_operation_id": child_id},
+        )
+    if child.get("status") not in {
+        HistoricalRangeOperationStatus.COMPLETED.value,
+        HistoricalRangeOperationStatus.FAILED.value,
+    }:
+        return None
+    if child.get("result_ref") is None:
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_EVIDENCE_INVALID",
+            "terminal bridge child operation is missing its result receipt",
+            http_status=409,
+            context={"child_operation_id": child_id},
+        )
+    return child
+
+
+def _load_frozen_bridge_request(
+    *,
+    runtime: HistoricalRangeRuntime,
+    parent_operation: Mapping[str, Any],
+    evidence_operation: Mapping[str, Any],
+) -> HistoricalRangeDatasetBridgeRequestV1:
+    if runtime.artifact_store is None:
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_EVIDENCE_UNAVAILABLE",
+            "bridge exact retry requires the configured historical artifact store",
+            http_status=503,
+            retryable=True,
+            context={"operation_id": parent_operation.get("operation_id")},
+        )
+    try:
+        receipt_ref = HistoricalRangeArtifactRefV1.model_validate(evidence_operation["result_ref"])
+        if receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT:
+            raise ValueError("bridge replay result ref is not a DATASET_BRIDGE_RECEIPT")
+        if evidence_operation.get("result_hash") != receipt_ref.semantic_content_hash:
+            raise ValueError("bridge replay result hash differs from its receipt ref")
+        receipt_envelope = runtime.artifact_store.load(receipt_ref)
+        receipt = HistoricalRangeDatasetBridgeReceiptV1.model_validate(receipt_envelope.payload)
+        bridge_envelope = runtime.artifact_store.load(receipt.bridge_artifact_ref)
+        bridge = HistoricalRangeDatasetBridgeArtifactV1.model_validate(bridge_envelope.payload)
+        frozen = bridge.request
+        expected_hash = str(parent_operation["request_payload_sha256"])
+        expected_upstream = tuple(
+            sorted(
+                (
+                    *frozen.successful_day_refs,
+                    *frozen.candidate_refs,
+                    *frozen.outcome_refs,
+                    *frozen.summary_refs,
+                    *frozen.policy_bundle_refs,
+                ),
+                key=lambda item: (
+                    item.artifact_kind.value,
+                    item.semantic_content_hash,
+                    item.relative_path,
+                ),
+            )
+        )
+        if (
+            evidence_operation.get("request_payload_sha256") != expected_hash
+            or receipt.operation_id != evidence_operation.get("operation_id")
+            or receipt.request_hash != expected_hash
+            or receipt_envelope.upstream_refs != (receipt.bridge_artifact_ref,)
+            or bridge.operation_id != evidence_operation.get("operation_id")
+            or bridge.request_hash != expected_hash
+            or str(frozen.request_hash) != expected_hash
+            or bridge_envelope.upstream_refs != expected_upstream
+            or frozen.artifact_root_identity_hash
+            != runtime.artifact_store.root_identity_hash
+        ):
+            raise ValueError("bridge replay artifacts do not close the durable request identity")
+    except HistoricalRangeServiceError:
+        raise
+    except Exception as exc:
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_EVIDENCE_INVALID",
+            "bridge exact retry evidence is missing, unreadable, or inconsistent",
+            http_status=422,
+            context={
+                "operation_id": parent_operation.get("operation_id"),
+                "evidence_operation_id": evidence_operation.get("operation_id"),
+                "error_type": type(exc).__name__,
+            },
+        ) from exc
+    return frozen
+
+
+def _validate_bridge_api_scope(
+    *,
+    batch_id: str,
+    api_request: HistoricalRangeBuildBridgeRequest,
+    domain_request: HistoricalRangeDatasetBridgeRequestV1,
+) -> None:
+    expected = {
+        "batch_id": batch_id,
+        "operation_idempotency_key": api_request.operation_idempotency_key,
+        "expected_batch_row_version": api_request.expected_row_version,
+        "requested_horizons": tuple(api_request.requested_horizons),
+        "requested_maturity_statuses": tuple(api_request.requested_maturity_statuses),
+    }
+    actual = {
+        "batch_id": domain_request.batch_id,
+        "operation_idempotency_key": domain_request.operation_idempotency_key,
+        "expected_batch_row_version": domain_request.expected_batch_row_version,
+        "requested_horizons": domain_request.requested_horizons,
+        "requested_maturity_statuses": tuple(
+            item.value for item in domain_request.requested_maturity_statuses
+        ),
+    }
+    explicit_runs_conflict = bool(api_request.range_run_ids) and domain_request.range_run_ids != tuple(
+        api_request.range_run_ids
+    )
+    if actual != expected or explicit_runs_conflict:
+        raise HistoricalRangeServiceError(
+            "ADVISORY_HR_BRIDGE_REPLAY_SCOPE_CONFLICT",
+            "bridge exact retry request differs from the frozen business scope",
+            http_status=409,
+            context={"batch_id": batch_id},
+        )
 
 
 def _bridge_parent_operation_status(
