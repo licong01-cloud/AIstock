@@ -432,6 +432,17 @@ def test_qe_archive_analytics_view_tools_use_compact_paths(archive_mcp):
     _swap(archive_mcp, archive_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1/qe-archive", env_name="test", transport=_mock_transport(handler)))
 
     archive_mcp.qe_archive_query_analytics_view_status()
+    archive_mcp.qe_archive_query_long_trend_quality(
+        task_id="task_1",
+        loop_index=2,
+        label_horizon=60,
+        horizon=120,
+        family_status="COMPUTED_WITH_LIMITATIONS",
+        entry_execution_status="delayed_fill",
+        exit_execution_status="delayed_exit",
+        limit=5,
+        cursor="cursor_1",
+    )
     archive_mcp.qe_archive_query_run_leaderboard(model_type="LSTM", min_icir=0.5, limit=6, order_by="icir")
     archive_mcp.qe_archive_query_topk_quality(run_id="run_1", k=20, limit=6)
     archive_mcp.qe_archive_query_seed_robustness(min_seed_count=3, stable_only=True, limit=7)
@@ -443,37 +454,72 @@ def test_qe_archive_analytics_view_tools_use_compact_paths(archive_mcp):
 
     assert captured[0] == ("/api/v1/qe-archive/analytics/views", {})
     assert captured[1] == (
+        "/api/v1/qe-archive/analytics/long-trend-quality",
+        {
+            "task_id": "task_1",
+            "loop_index": "2",
+            "label_horizon": "60",
+            "horizon": "120",
+            "family_status": "COMPUTED_WITH_LIMITATIONS",
+            "entry_execution_status": "delayed_fill",
+            "exit_execution_status": "delayed_exit",
+            "limit": "5",
+            "cursor": "cursor_1",
+        },
+    )
+    assert captured[2] == (
         "/api/v1/qe-archive/analytics/run-leaderboard",
         {"model_type": "LSTM", "min_icir": "0.5", "limit": "6", "order_by": "icir"},
     )
-    assert captured[2] == (
+    assert captured[3] == (
         "/api/v1/qe-archive/analytics/topk-quality",
         {"run_id": "run_1", "k": "20", "limit": "6"},
     )
-    assert captured[3] == (
+    assert captured[4] == (
         "/api/v1/qe-archive/analytics/seed-robustness",
         {"min_seed_count": "3", "stable_only": "true", "limit": "7", "order_by": "cagr_mean"},
     )
-    assert captured[4] == (
+    assert captured[5] == (
         "/api/v1/qe-archive/analytics/factor-performance",
         {"factor_name": "alpha_001", "min_runs": "2", "limit": "8", "order_by": "best_cagr"},
     )
-    assert captured[5] == (
+    assert captured[6] == (
         "/api/v1/qe-archive/analytics/model-hyperparam-seed-perf",
         {"model_type": "XGBoost", "hyperparam_hash": "abc", "limit": "9", "order_by": "cagr"},
     )
-    assert captured[6] == (
+    assert captured[7] == (
         "/api/v1/qe-archive/analytics/overfit-flags",
         {"suspicious_only": "true", "limit": "10"},
     )
-    assert captured[7] == (
+    assert captured[8] == (
         "/api/v1/qe-archive/analytics/promotion-candidates",
         {"min_seed_count": "5", "limit": "11", "order_by": "ir_mean"},
     )
-    assert captured[8] == (
+    assert captured[9] == (
         "/api/v1/qe-archive/analytics/evolution-lineage",
         {"task_id": "task_1", "limit": "12"},
     )
+
+
+def test_qe_archive_long_trend_quality_rejects_unbounded_limit_before_http(archive_mcp):
+    called = False
+
+    def handler(request: httpx.Request):
+        nonlocal called
+        called = True
+        return {"status": "success", "data": []}
+
+    _swap(
+        archive_mcp,
+        archive_mcp.LoopbackApiClient(
+            base_url="http://127.0.0.1/api/v1/qe-archive",
+            env_name="test",
+            transport=_mock_transport(handler),
+        ),
+    )
+    with pytest.raises(ValueError, match="limit must be between 1 and 100"):
+        archive_mcp.qe_archive_query_long_trend_quality(limit=101)
+    assert called is False
 
 
 def test_qe_archive_mcp_uses_compact_default_limits(archive_mcp):

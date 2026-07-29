@@ -35,7 +35,7 @@ def test_legacy_qe_inventory_migrated_to_gateway_modules() -> None:
     qe_experiment = _tool_names_from_standalone_script("scripts/aistock_qe_experiment_mcp_server.py")
     qe_archive = _tool_names_from_standalone_script("scripts/aistock_qe_archive_mcp_server.py")
     assert len(qe_experiment) == 27
-    assert len(qe_archive) == 29
+    assert len(qe_archive) == 31
     assert qe_experiment < set(MODULE_TOOL_NAMES["qe_experiment"])
     assert set(MODULE_TOOL_NAMES["qe_experiment"]) - qe_experiment == {
         "qe_template_create_and_run_confirmed",
@@ -44,6 +44,7 @@ def test_legacy_qe_inventory_migrated_to_gateway_modules() -> None:
         "qe_single_experiment_update_config_confirmed",
         "qe_custom_evo_create_pending",
         "qe_custom_evo_update_config_confirmed",
+        "qe_experiment_validate_config",
     }
     assert qe_archive < set(MODULE_TOOL_NAMES["qe_archive"])
     assert set(MODULE_TOOL_NAMES["qe_archive"]) - qe_archive == {
@@ -51,7 +52,22 @@ def test_legacy_qe_inventory_migrated_to_gateway_modules() -> None:
         "multi_alpha_combine_preview",
         "multi_alpha_combine_backtest_run_confirmed",
         "multi_alpha_combine_backtest_result_get",
+        "multi_alpha_combine_backtest_archive_detail_get",
+        "multi_alpha_combine_backtest_attempt_cancel",
+        "multi_alpha_combine_backtest_cancel",
+        "multi_alpha_combine_backtest_child_attempts_list",
+        "multi_alpha_combine_backtest_child_get",
+        "multi_alpha_combine_backtest_child_recovery_execute",
+        "multi_alpha_combine_backtest_children_list",
+        "multi_alpha_combine_backtest_command_get",
+        "multi_alpha_combine_backtest_commands_list",
+        "multi_alpha_combine_backtest_controls_get",
         "multi_alpha_combine_backtest_list",
+        "multi_alpha_combine_backtest_pause",
+        "multi_alpha_combine_backtest_reconcile",
+        "multi_alpha_combine_backtest_recovery_preview",
+        "multi_alpha_combine_backtest_resume",
+        "multi_alpha_combine_backtest_stop",
         "prediction_store_get_pointer",
         "prediction_store_pull_pred",
         "prediction_store_pull_label",
