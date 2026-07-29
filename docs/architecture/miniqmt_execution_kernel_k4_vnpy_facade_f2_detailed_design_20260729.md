@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K4 vn.py Compatibility Façade F2 详细设计
 
-> Feature tier：`F2`。文档状态：`design_ready_for_implementation`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；K4-A=`implemented_verified`、K4-B=`not_started`。
 >
 > 设计交付：PR #2861，merge `8250b64ff3c2deb04eb3594f1ae3fba3acd1e6ce`，`source_merge=merged_pr_2861`。
 >
@@ -10,7 +10,7 @@
 >
 > 模拟盘唯一上位蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
 >
-> 已合入前置：K1、K2、K3 overall 均为 `implemented_verified + merged`。K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 合入，状态同步已通过 PR #2858 / merge `70ec6aaec28aa20755d73ecfe1a027f8ea94dbad` 合入。K4/K6 当前均为 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1、K2、K3 overall 均为 `implemented_verified + merged`。K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 合入，状态同步已通过 PR #2858 / merge `70ec6aaec28aa20755d73ecfe1a027f8ea94dbad` 合入。K4-A pure façade/adapter、contracts和source authority已实现并完成本地定向验证，source merge仍待本PR；K4-B/K6=`not_started`，产品 runtime 未切换。
 >
 > 本文只细化父蓝图已经批准的 K4：initialize/transition-scoped `VnpyAlgoEngineFacadeV1`、通用façade-backed adapter和existing K2 optional invocation、精确 method/DTO/enum/state/effect 映射、每个已注册算法的 façade conformance receipt，以及 current-three + Iceberg/Stop source-compatible characterization。本文不增加算法、策略、产品 route、runtime owner、OMS、Gateway、数据库表、人工门禁或审批。
 
@@ -866,6 +866,14 @@ K4 implementation固定最多两个 source PR，不扩大到 K5/K6：
 - writer/readback、failure/truncation、fresh-process determinism；
 - actual live callable/signature/source binding positive/negative；不修改K2 creation/delivery/repository，不调用broker。
 
+K4-A implementation receipt（2026-07-29）：
+
+- 五个pure核心文件、K1 delegated-path closure、repo-owned Iceberg/Stop/utility bytes和`facade_source_manifest.json`已实现；source manifest hash=`e0284a6d0e92938626d5a00bd16a325a31ccba35d0158847025af97b0ece51ea`；
+- current-three三个K1 requirement的per-plugin characterization hash保持各自独立；K4 shared requirement只绑定三者共同的`source_lock/method_signature/object_field` component和有序plugin requirement hashes，domain=`miniqmt_vnpy_facade_shared_k1_requirement_v1`，shared surface domain=`miniqmt_vnpy_facade_shared_k1_surface_v1`；不得把任一plugin-specific K1 surface冒充共享façade authority；
+- live façade contract hash=`ec763c54670d54868a619f9b37976944dc5a9d42798a62af11f1934239080fa1`，implementation/method/DTO/state/terminal/isolated sets分别为`14c22d1a.../0d1ca17a.../e4a6ddb1.../9824f5ef.../8a224095.../f885e38c...`；writer/readback均重建同一pinned/live authority；
+- direct + import-boundary矩阵=`118 passed`；K4 direct coverage矩阵=`49 passed`，五核心line/branch分别为`93/70`、`97/95`、`90/76`、`87/78`、`85/71`；classifier=`targeted_ci_required`、`unmapped_code_files=[]`，仅选择MiniQMT/Paper；MiniQMT=`1038 passed,29 skipped`，Paper=`1050 passed,2 skipped,2 xfailed`；
+- K4-A仍是pure/shadow-only。它没有修改K2 creation/delivery/repository、current-three factory/binding或产品route；K4-B optional invocation、read-only repository seam、current-three parity以及Iceberg/Stop完整characterization仍为`not_started`，不得把K4-A receipt解释为K4 overall完成或runtime activation。
+
 ### K4-B — existing K2 optional invocation and shadow integration
 
 - existing K1/K2/K3 public seam integration，包括creation/delivery initialization/transition optional invocation、authority input、existing repository bounded read-only query，以及§5.4.1单/多command shadow边界；
@@ -880,7 +888,8 @@ K4 implementation固定最多两个 source PR，不扩大到 K5/K6：
 K4 source merge后仍不部署/激活产品 route。Rollback只回退 K4 code-owned façade/conformance/characterization文件到最后一个 schema-compatible main；不删除 K1/K2/K3 durable facts，不重写算法状态或 broker facts。
 
 ```text
-source_merge=merged_pr_2861
+design_source_merge=merged_pr_2861
+k4a_source_merge=pending_pr
 close_sync=not_applicable_feature
 production_ddl_gate=noop
 production_dml_gate=noop
@@ -892,6 +901,9 @@ broker_gate=noop
 service_restart=noop
 runtime_activation=noop
 product_runtime=not_switched
+K4_overall=implementation_in_progress
+K4-A=implemented_verified_pending_source_merge
+K4-B=not_started
 K5=not_started
 K6=not_started
 ```
@@ -918,15 +930,15 @@ K6=not_started
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | `F-081` | §0–§2；父蓝图§2、§5、§8、K4/K5/K6；K1/K2/K3 detailed designs | `backend/tests/miniqmt_execution_runtime/test_vnpy_k4_scope_boundaries.py`核对K4不修改信号、资产、方向、数量、B0、OMS、Gateway、current-three binding与产品route | design_ready | none |
-| `F-082` | §3；existing K1-C source manifest/receipt；planned façade source manifest | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_characterization.py` exact five-source positive/negative与source bytes hash/readback | design_ready | none |
-| `F-083` | §4–§5；planned `facade_contracts.py/facade.py/facade_adapter.py`与K2 optional seam | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_kernel_invocation.py` initialization/transition authority、pure-plugin unchanged、adapter required-input、create/freeze/ordinal/retry/restart/post-freeze及single-command exact/multi-command V1 refusal matrix | design_ready | none |
-| `F-084` | §5.4.1、§6；K1 detailed §9.1；pinned engine/template signatures | `backend/tests/miniqmt_execution_runtime/test_vnpy_algo_engine_facade.py` six-method + template/callback positive/negative；not-running/missing/rounded-zero `None/""`同时有typed diagnostic；OMS reject可见且K4/K5 V1作为product activation proof被拒绝 | design_ready | none |
-| `F-085` | §6.3–§8；planned `facade_projection.py`和existing K2 read-only query | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_projection.py` DTO/enum/field/owner/lineage/unsupported/missing/synthetic quote；DEV TIMER immutable cutoff/later-TICK matrix | design_ready | none |
-| `F-086` | §5.4.1、§5.6、§9–§10；existing state/command/transition/materializer | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_state_adapter.py` constructor-once/restore/extract/state schema/active mapping/two-phase terminal；`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_k2_shadow_integration.py`单command identity/materialization、多command complete trace + typed refusal、dispatch attempt=0、broker_called=false | design_ready | none |
-| `F-087` | §4.1、§11；planned `facade_contracts.py` + explicit derived-set seam | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_conformance_receipts.py` live binding/source/isolated-module/runtime+command disposition writer-readback、V1禁止product authority值且product-use fail loud、hash-correct authority drift、failure 255/256/500、zero partial set | design_ready | none |
+| `F-082` | §3；existing K1-C source manifest/receipt；K4 façade source manifest | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_contracts.py`与`test_vnpy_facade_characterization.py`闭合六source、exact delegated paths、bytes/hash/readback | implementation_in_progress_k4a_verified | none |
+| `F-083` | §4–§5；`facade_contracts.py/facade.py/facade_adapter.py`与K2 optional seam | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade.py`、`test_vnpy_facade_adapter.py`、`test_vnpy_facade_lifecycle.py`闭合strict input、collector ordinal/freeze、constructor-once/retry和direct SPI bypass | implementation_in_progress_k4a_verified | none |
+| `F-084` | §5.4.1、§6；K1 detailed §9.1；pinned engine/template signatures | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade.py`与`test_vnpy_facade_adapter.py`闭合six-method、callback router、missing/rounded-zero diagnostic与typed errors | implementation_in_progress_k4a_verified | none |
+| `F-085` | §6.3–§8；`facade_projection.py`和existing K2 read-only query | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_projection.py`闭合DTO/enum/round_to/source/readback | implementation_in_progress_k4a_verified | none |
+| `F-086` | §5.4.1、§5.6、§9–§10；existing state/command/transition/materializer | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_adapter.py`与`test_vnpy_facade_lifecycle.py`闭合constructor-once、restore、callback fact、active-child CLEAN terminal与retry | implementation_in_progress_k4a_verified | none |
+| `F-087` | §4.1、§11；`facade_contracts.py` + explicit derived-set seam | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_contracts.py`与`test_vnpy_facade_characterization.py`闭合live binding、source、DTO/state/terminal/isolated set、failure truncation及writer/readback | implementation_in_progress_k4a_verified | none |
 | `F-088` | §3.2、§6.3、§10、§12；K3 parity；planned characterization builder | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_characterization.py` current-three INITIALIZE/TRANSITION parity与Iceberg TIMER durable TICK/Stop source-isolated zero registration/DB/broker | design_ready | none |
 | `F-089` | §13–§17 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_failure_restart.py` malformed/error-renderer、same-ID conflict、multi-slot ownership、fresh-process、low-cardinality diagnostics | design_ready | none |
-| `F-090` | §18–§20 | direct + DEV PostgreSQL read-only matrix；`python -m nox -s miniqmt_execution_runtime_l2`；`python -m nox -s paper_v2_backend`；core line>=80%/branch>=70%；classifier `unmapped_code_files=[]`；三份F2 validator与DESIGN-COMPLIANCE | design_ready | none |
+| `F-090` | §18–§20 | `python -m pytest -q backend/tests/miniqmt_execution_runtime/test_vnpy_facade_*.py`核心coverage=`49 passed`；`python -m nox -s miniqmt_execution_runtime_l2`=`1038/29`、`paper_v2_backend`=`1050/2/2`；classifier无unmapped | implementation_in_progress_k4a_verified | none |
 
 ## 23. DESIGN-COMPLIANCE-001 / 正式设计复核
 
