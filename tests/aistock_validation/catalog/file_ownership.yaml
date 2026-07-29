@@ -64,6 +64,7 @@ rules:
       - backend/db/migrations/fix_advisory_historical_range_r3_executor_contract_20260722.sql
       - backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_*.sql
       - backend/db/migrations/add_advisory_historical_range_internal_operation_types_*.sql
+      - backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_*.sql
       - backend/services/advisory_phase1/capture_foundation.py
       - backend/services/advisory_phase1/dataset_build.py
       - backend/services/advisory_phase1/dataset_build_postgres.py

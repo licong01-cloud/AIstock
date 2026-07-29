@@ -6,6 +6,7 @@
     "backend/tests/advisory_historical_range/test_postgres_contracts.py",
     "backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_20260729.sql",
     "backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_20260729.rollback.sql",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260729_BUG-905-r5-bridge-operation-lookup-ignores-operation-type.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -46,8 +47,7 @@
       "backend/services/advisory_historical_range/repository.py",
       "backend/tests/advisory_historical_range/test_repository.py",
       "backend/tests/advisory_historical_range/test_postgres_contracts.py",
-      "backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_20260729.sql",
-      "backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_20260729.rollback.sql"
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "ownership": {
       "changed_files": [
@@ -94,7 +94,10 @@
       "suggested_scope": [
         "backend/services/advisory_historical_range/repository.py",
         "backend/tests/advisory_historical_range/test_repository.py",
-        "backend/tests/advisory_historical_range/test_postgres_contracts.py"
+        "backend/tests/advisory_historical_range/test_postgres_contracts.py",
+        "backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_20260729.sql",
+        "backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_20260729.rollback.sql",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "unmatched_files": []
     },
@@ -102,7 +105,10 @@
     "scope_files": [
       "backend/services/advisory_historical_range/repository.py",
       "backend/tests/advisory_historical_range/test_repository.py",
-      "backend/tests/advisory_historical_range/test_postgres_contracts.py"
+      "backend/tests/advisory_historical_range/test_postgres_contracts.py",
+      "backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_20260729.sql",
+      "backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_20260729.rollback.sql",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-07-29T05:14:41.330171Z",
