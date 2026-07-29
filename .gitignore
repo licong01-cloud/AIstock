@@ -4,6 +4,7 @@ rdagent_assets/
 __pycache__/
 *.py[cod]
 *.pyo
+.coverage
 
 # Virtualenv
 .venv/

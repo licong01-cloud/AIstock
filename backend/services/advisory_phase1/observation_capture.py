@@ -1,4 +1,4 @@
-"""Fixture-only immutable observation capture from a durable Phase 1 trace."""
+"""Immutable formal-fixture and range-retrospective observation capture."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
 from backend.services.advisory_phase1.capture_foundation import (
     CapturePlan,
+    RetrospectiveObservationCapturePlan,
     TraceCaptureGap,
 )
 from backend.services.advisory_phase1.phase1g_source_replay import (
@@ -191,6 +192,352 @@ class Phase1GObservationRowBundle(_ObservationContract):
             )
         object.__setattr__(self, "bundle_content_hash", digest)
         return self
+
+
+def retrospective_observation_payload(
+    *,
+    plan: RetrospectiveObservationCapturePlan,
+    candidate_fact: Mapping[str, Any],
+    stage_evidence_bundle_hash: str,
+) -> dict[str, Any]:
+    """Canonical economic payload shared by owner preflight and selector input."""
+
+    return canonicalize(
+        {
+            "schema_version": "advisory_signal_observation_version_v1",
+            "canonical_signal_id": plan.canonical_signal_id,
+            "canonical_signal_scope_hash": plan.canonical_signal_scope_hash,
+            "stage_payload_hash": plan.stage_payload_hash,
+            "stage_evidence_bundle_hash": stage_evidence_bundle_hash,
+            "candidate_semantics": {
+                key: value
+                for key, value in candidate_fact.items()
+                if key not in {"candidate_id", "day_run_id", "candidate_content_hash"}
+            },
+        }
+    )
+
+
+def _normalized_score_decimal(score: Any) -> str:
+    """Canonical decimal form shared with the NUMERIC readback comparison.
+
+    Candidate facts carry scores as JSON strings that may keep trailing zeros
+    (for example ``5.089064296700``).  PostgreSQL NUMERIC readback is compared
+    in normalized form, so the payload must be constructed in the exact same
+    representation or the readback contract fails closed.
+    """
+
+    try:
+        value = Decimal(str(score))
+    except InvalidOperation as exc:
+        raise ValueError("retrospective candidate score is not a decimal") from exc
+    if not value.is_finite():
+        raise ValueError("retrospective candidate score is not a finite decimal")
+    return format(value.normalize(), "f")
+
+
+def materialize_retrospective_observation_row_bundle(
+    *,
+    plan: RetrospectiveObservationCapturePlan,
+    stage_payload: Mapping[str, Any],
+    candidate_fact: Mapping[str, Any],
+    created_by_capture_batch_id: str,
+) -> Phase1GObservationRowBundle:
+    """Project one exact R3 candidate into the existing Phase 1 row families."""
+
+    if str(candidate_fact.get("symbol") or "").upper() != plan.symbol:
+        raise ValueError("retrospective candidate symbol differs from capture plan")
+    if not created_by_capture_batch_id:
+        raise ValueError("retrospective observation requires a creator capture batch")
+    required_stages = (
+        "alpha_raw",
+        "hmm_adjusted",
+        "risk_policy_adjusted",
+        "selection_effective",
+    )
+    if tuple(sorted(stage_payload)) != tuple(sorted(required_stages)):
+        raise ValueError("retrospective observation requires the four exact R3 stages")
+
+    header = canonicalize(
+        {
+            "canonical_signal_id": plan.canonical_signal_id,
+            "signal_schema_version": "advisory_canonical_signal_v1",
+            "stable_signal_semantics_hash": plan.stable_signal_semantics_hash,
+            "canonical_signal_scope_hash": plan.canonical_signal_scope_hash,
+            "decision_as_of_trade_date": plan.decision_as_of_trade_date,
+            "selection_as_of_trade_date": plan.selection_as_of_trade_date,
+            "target_trade_date": plan.target_trade_date,
+            "decision_cutoff_ts": plan.decision_cutoff_ts,
+            "package_id": plan.lineage.package_id,
+            "manifest_sha256": plan.lineage.manifest_sha256,
+            "alpha_mode": plan.alpha_mode,
+            "selection_runtime_semantics_hash": plan.selection_runtime_semantics_hash,
+            "package_effective_config_hash": plan.package_effective_config_hash,
+            "calendar_version": plan.calendar_version,
+            "calendar_hash": plan.calendar_hash,
+        }
+    )
+    stage_specs = {
+        "alpha_raw": ("alpha_raw_rank", "alpha_raw_score"),
+        "hmm_adjusted": ("hmm_adjusted_rank", "hmm_adjusted_score"),
+        "risk_policy_adjusted": (
+            "risk_policy_adjusted_rank",
+            "risk_policy_adjusted_score",
+        ),
+        "selection_effective": (
+            "selection_effective_rank",
+            "selection_effective_score",
+        ),
+    }
+    semantic_stages: list[dict[str, Any]] = []
+    semantic_candidates: list[dict[str, Any]] = []
+    for stage_name in required_stages:
+        receipt = stage_payload[stage_name]
+        if not isinstance(receipt, Mapping) or receipt.get("stage") != stage_name:
+            raise ValueError(f"retrospective {stage_name} stage receipt is invalid")
+        rank_field, score_field = stage_specs[stage_name]
+        rank = candidate_fact.get(rank_field)
+        score = candidate_fact.get(score_field)
+        status = str(receipt.get("status") or "")
+        if status not in {"COMPLETE", "NOT_APPLICABLE"}:
+            raise ValueError(f"retrospective {stage_name} stage is not successful")
+        included = rank is not None and score is not None
+        not_applicable = status == "NOT_APPLICABLE"
+        membership_status = (
+            "INCLUDED"
+            if included
+            else "EXCLUDED"
+            if not not_applicable
+            else None
+        )
+        candidate_row: dict[str, Any] | None = None
+        reasons = tuple(sorted(str(item) for item in receipt.get("reason_codes") or ()))
+        if membership_status is not None:
+            candidate_row = {
+                "symbol": plan.symbol,
+                "membership_status": membership_status,
+                "rank": int(rank) if included else None,
+                "score_decimal": (
+                    _normalized_score_decimal(score) if included else None
+                ),
+                "input_rank": int(rank) if included else None,
+                "input_score_decimal": (
+                    _normalized_score_decimal(score) if included else None
+                ),
+                "exclusion_reason_code": (
+                    None
+                    if included
+                    else reasons[0]
+                    if reasons
+                    else "R3_STAGE_EXCLUDED"
+                ),
+                "component_capability": "NOT_APPLICABLE",
+                "component_evidence_schema_version": None,
+                "component_evidence": None,
+                "component_evidence_hash": None,
+                "component_reason_codes": reasons,
+            }
+            candidate_row["candidate_content_hash"] = canonical_json_sha256(
+                candidate_row
+            )
+            semantic_candidates.append({"stage": stage_name, **candidate_row})
+        stage_row = {
+            "stage": stage_name,
+            "capability_status": "NOT_APPLICABLE" if not_applicable else "FULL",
+            "input_count": 0 if not_applicable else 1,
+            "output_count": 1 if included else 0,
+            "excluded_count": 1 if membership_status == "EXCLUDED" else 0,
+            "observed_max_rank": int(rank) if included else None,
+            "source_artifact_id": plan.lineage.candidate_artifact_ref.relative_path,
+            "source_artifact_hash": plan.lineage.candidate_artifact_ref.semantic_content_hash,
+            "semantic_hash": canonical_json_sha256(canonicalize(dict(receipt))),
+            "score_direction": "DESCENDING_SCORE_ASCENDING_SYMBOL_V1",
+            "tie_break_policy_id": "selection_candidate_rank_v1",
+            "tie_break_policy_hash": canonical_json_sha256(
+                {"policy": "selection_candidate_rank_v1"}
+            ),
+            "reason_codes": reasons,
+        }
+        stage_row["content_hash"] = canonical_json_sha256(
+            {
+                **stage_row,
+                "candidate_content_hash": (
+                    candidate_row["candidate_content_hash"]
+                    if candidate_row is not None
+                    else None
+                ),
+            }
+        )
+        semantic_stages.append(stage_row)
+    advisory_reason = "ADVISORY_MODEL_SHADOW_ONLY"
+    advisory_stage = {
+        "stage": "advisory_model",
+        "capability_status": "NOT_APPLICABLE",
+        "input_count": 0,
+        "output_count": 0,
+        "excluded_count": 0,
+        "observed_max_rank": None,
+        "source_artifact_id": None,
+        "source_artifact_hash": None,
+        "semantic_hash": canonical_json_sha256({"state": advisory_reason}),
+        "score_direction": "NOT_APPLICABLE",
+        "tie_break_policy_id": "not_applicable",
+        "tie_break_policy_hash": canonical_json_sha256({"state": "NOT_APPLICABLE"}),
+        "reason_codes": (advisory_reason,),
+    }
+    advisory_stage["content_hash"] = canonical_json_sha256(advisory_stage)
+    semantic_stages.append(advisory_stage)
+    stage_bundle_hash = canonical_json_sha256(
+        [item["content_hash"] for item in semantic_stages]
+    )
+    economic_payload = retrospective_observation_payload(
+        plan=plan,
+        candidate_fact=candidate_fact,
+        stage_evidence_bundle_hash=stage_bundle_hash,
+    )
+    observation_content_hash = canonical_json_sha256(economic_payload)
+    observation_version_id = f"osv_{observation_content_hash[:20]}"
+    observation_version = {
+        "observation_version_id": observation_version_id,
+        "canonical_signal_id": plan.canonical_signal_id,
+        "observation_schema_version": "advisory_signal_observation_version_v1",
+        "observation_revision_no": 1,
+        "supersedes_observation_version_id": None,
+        "signal_source_revision_set_id": plan.signal_source_revision_set_id,
+        "signal_source_revision_set_hash": plan.signal_source_revision_set_hash,
+        "phase0a_signal_context_hash": None,
+        "range_signal_context_hash": plan.range_signal_context_hash,
+        "evidence_bundle_hash": plan.evidence_bundle_hash,
+        "stage_evidence_bundle_hash": stage_bundle_hash,
+        "selection_evidence_id": None,
+        "selection_evidence_hash": None,
+        "selection_run_id": None,
+        "selection_run_content_hash": None,
+        "selection_score_artifact_id": None,
+        "selection_score_artifact_hash": None,
+        "runtime_profile_version_id": plan.runtime_profile_version_id,
+        "runtime_profile_version_hash": plan.runtime_profile_version_hash,
+        "hmm_snapshot_id": plan.hmm_snapshot_id,
+        "hmm_snapshot_hash": plan.hmm_snapshot_hash,
+        "hmm_snapshot_status": plan.hmm_snapshot_status,
+        "risk_policy_hash": plan.risk_policy_hash,
+        "universe_policy_hash": plan.universe_policy_hash,
+        "symbol_normalization_policy_hash": plan.symbol_normalization_policy_hash,
+        "valid_no_candidate": False,
+        "observation_status": "COMPLETE",
+        "evidence_available_at": plan.evidence_available_at,
+        "observation_content_hash": observation_content_hash,
+        "reason_codes": (),
+        "created_by_capture_batch_id": created_by_capture_batch_id,
+        "lineage_identity_type": "HISTORICAL_RANGE",
+        "range_run_id": plan.lineage.range_run_id,
+        "range_day_run_id": plan.lineage.range_day_run_id,
+        "candidate_artifact_ref": plan.lineage.candidate_artifact_ref.model_dump(mode="json"),
+        "candidate_artifact_hash": plan.lineage.candidate_artifact_ref.semantic_content_hash,
+    }
+    lineage_for_hash = canonicalize(
+        {
+            "canonical_signal_id": plan.canonical_signal_id,
+            "observation_version_id": observation_version_id,
+            "lineage": plan.lineage.model_dump(mode="json"),
+            "range_lineage_scope_id": plan.range_scope.range_lineage_scope_id,
+            "range_lineage_scope_hash": plan.range_scope.range_lineage_scope_hash,
+            "range_signal_context_hash": plan.range_signal_context_hash,
+            "selector_policy_hash": plan.selector_policy_hash,
+        }
+    )
+    lineage_content_hash = canonical_json_sha256(lineage_for_hash)
+    lineage_id = f"oslr_{lineage_content_hash[:20]}"
+    lineage_identity = {
+        "lineage_id": lineage_id,
+        "decision_as_of_trade_date": plan.decision_as_of_trade_date,
+        "observation_version_id": observation_version_id,
+        "phase0a_audit_id": None,
+        "admission_scope_id": None,
+        "program_id": None,
+        "binding_version_id": None,
+        "lineage_source_type": "HISTORICAL_RANGE_RESEARCH",
+        "source_run_id": plan.lineage.range_day_run_id,
+        "historical_range_request_ref": plan.lineage.historical_range_request_ref.model_dump(mode="json"),
+        "historical_range_request_hash": plan.lineage.historical_range_request_ref.semantic_content_hash,
+        "historical_range_frozen_program_ref": plan.lineage.historical_range_frozen_program_ref.model_dump(mode="json"),
+        "historical_range_frozen_program_hash": plan.lineage.historical_range_frozen_program_ref.semantic_content_hash,
+        "range_run_id": plan.lineage.range_run_id,
+        "range_day_run_id": plan.lineage.range_day_run_id,
+        "candidate_artifact_ref": plan.lineage.candidate_artifact_ref.model_dump(mode="json"),
+        "candidate_artifact_hash": plan.lineage.candidate_artifact_ref.semantic_content_hash,
+        "range_lineage_identity_hash": plan.lineage.range_lineage_identity_hash,
+        "lineage_content_hash": lineage_content_hash,
+    }
+    lineage_payload = {
+        "decision_as_of_trade_date": plan.decision_as_of_trade_date,
+        "lineage_id": lineage_id,
+        "canonical_signal_id": plan.canonical_signal_id,
+        "phase0a_audit_manifest_hash": None,
+        "handoff_readiness_hash": None,
+        "admission_scope_hash": None,
+        "audit_target_id": plan.lineage.range_run_id,
+        "target_scope_hash": plan.range_scope.range_lineage_scope_hash,
+        "capability": "RESEARCH_AUDIT",
+        "stable_signal_semantics_hash": plan.stable_signal_semantics_hash,
+        "canonical_signal_scope_hash": plan.canonical_signal_scope_hash,
+        "phase0a_signal_context_hash": None,
+        "range_signal_context_hash": plan.range_signal_context_hash,
+        "oos_interval_id": plan.lineage.oos_interval_id,
+        "oos_interval_hash": plan.lineage.oos_interval_hash,
+        "evidence_scope": "RETROSPECTIVE_RESEARCH_ONLY",
+        "signal_evidence_level": "RETROSPECTIVE_RESEARCH_ONLY",
+        "effective_cutoff_date": plan.decision_as_of_trade_date,
+        "review_run_id": None,
+        "list_version_id": None,
+    }
+    stage_rows: list[dict[str, Any]] = []
+    stage_ids: dict[str, str] = {}
+    for stage in semantic_stages:
+        stage_name = str(stage["stage"])
+        stage_id = f"ase_{canonical_json_sha256({'observation_version_id': observation_version_id, 'stage': stage_name})[:20]}"
+        stage_ids[stage_name] = stage_id
+        stage_rows.append(
+            {"stage_evidence_id": stage_id, "observation_version_id": observation_version_id, **stage}
+        )
+    identities: list[dict[str, Any]] = []
+    payloads: list[dict[str, Any]] = []
+    for candidate in semantic_candidates:
+        row = dict(candidate)
+        stage_name = str(row.pop("stage"))
+        symbol = str(row.pop("symbol"))
+        component_evidence = row.pop("component_evidence")
+        identities.append(
+            {
+                "stage_evidence_id": stage_ids[stage_name],
+                "symbol": symbol,
+                "decision_as_of_trade_date": plan.decision_as_of_trade_date,
+            }
+        )
+        payloads.append(
+            {
+                "decision_as_of_trade_date": plan.decision_as_of_trade_date,
+                "stage_evidence_id": stage_ids[stage_name],
+                "symbol": symbol,
+                "component_evidence_json": component_evidence,
+                **row,
+            }
+        )
+    ordered = sorted(
+        zip(identities, payloads, strict=True),
+        key=lambda pair: (pair[0]["stage_evidence_id"], pair[0]["symbol"]),
+    )
+    return Phase1GObservationRowBundle(
+        semantic_observation_key=observation_content_hash,
+        canonical_signal_header=header,
+        observation_version=observation_version,
+        lineage_identity=lineage_identity,
+        lineage_payload=lineage_payload,
+        stage_evidence_rows=tuple(stage_rows),
+        candidate_identity_rows=tuple(item[0] for item in ordered),
+        candidate_payload_rows=tuple(item[1] for item in ordered),
+        bundle_row_count=4 + len(stage_rows) + 2 * len(ordered),
+    )
 
 
 @dataclass(frozen=True)

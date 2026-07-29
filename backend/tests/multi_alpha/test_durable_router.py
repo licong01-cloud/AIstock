@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from backend.routers.multi_alpha import (
+    CombineBacktestRunRequest,
     DurableControlRequest,
     DurableRecoveryExecuteRequest,
     _durable_event_stream,
@@ -18,6 +19,41 @@ from backend.routers.multi_alpha import (
     submit_multi_alpha_durable_control,
 )
 from backend.routers import multi_alpha as multi_alpha_router
+
+
+def test_combine_request_exposes_explicit_prediction_task_selection() -> None:
+    request = CombineBacktestRunRequest.model_validate(
+        {
+            "roster": [
+                {"leg_id": "leg_a", "seed_run_ids": ["qe_a"]},
+                {"leg_id": "leg_b", "seed_run_ids": ["qe_b"]},
+            ],
+            "oos_start": "2024-07-01",
+            "oos_end": "2026-06-29",
+            "prediction_task_selection": {
+                "include_baseline": True,
+                "include_loo": False,
+            },
+        }
+    )
+
+    assert request.prediction_task_selection == {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+    with pytest.raises(ValidationError):
+        CombineBacktestRunRequest.model_validate(
+            {
+                "roster": [
+                    {"leg_id": "leg_a", "seed_run_ids": ["qe_a"]},
+                    {"leg_id": "leg_b", "seed_run_ids": ["qe_b"]},
+                ],
+                "oos_start": "2024-07-01",
+                "oos_end": "2026-06-29",
+                "prediction_task_selection": {"include_loo": "false"},
+            }
+        )
 
 
 def test_unknown_durable_control_exception_maps_to_http_500() -> None:

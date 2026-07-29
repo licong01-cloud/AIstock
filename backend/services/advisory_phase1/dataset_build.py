@@ -21,6 +21,10 @@ from backend.services.advisory_phase0a.policy import canonical_json_sha256, cano
 
 
 DATASET_BUILD_REQUEST_SCHEMA_VERSION = "advisory_phase1c3_fixture_dataset_build_request_v1"
+RETROSPECTIVE_DATASET_BUILD_REQUEST_SCHEMA_VERSION = "advisory_phase1_retrospective_dataset_build_request_v1"
+SNAPSHOT_UNIVERSE_POLICY_SET_SCHEMA_VERSION = (
+    "advisory_phase1r_snapshot_universe_policy_set_v1"
+)
 BATCH_C_FILESET_VERIFICATION_CONTRACT = "PHASE1C3_BATCH_C_FILESET_FOUNDATION_V1"
 BATCH_D_FULL_PARQUET_VERIFICATION_CONTRACT = "PHASE1C3_BATCH_D_FULL_PARQUET_V1"
 
@@ -40,6 +44,53 @@ class DatasetBuildError(RuntimeError):
     def __init__(self, reason_code: str, detail: str) -> None:
         self.reason_code = reason_code
         super().__init__(f"{reason_code}: {detail}")
+
+
+class SnapshotUniversePolicySetError(ValueError):
+    """The frozen day-bound universe policy binding set is invalid."""
+
+
+def build_snapshot_universe_policy_set_hash(
+    members: Iterable[tuple[date, str]],
+) -> str:
+    """Composite hash of the frozen day-bound universe policy binding set.
+
+    Every selected observation keeps its own per-decision-day universe policy
+    hash as the row-level authority; the snapshot-level field stores one
+    deterministic composite over the (decision date, universe policy hash)
+    bindings.  The retrospective path always uses this domain-tagged
+    algorithm - there is no single-value passthrough for one-day ranges - so
+    the snapshot field has exactly one meaning.  Same-day conflicting
+    bindings, malformed member hashes, and empty sets fail closed.
+    """
+    bindings: dict[date, str] = {}
+    for decision_date, universe_policy_hash in members:
+        member_hash = _sha256(
+            str(universe_policy_hash), field_name="universe_policy_hash"
+        )
+        existing = bindings.get(decision_date)
+        if existing is not None and existing != member_hash:
+            raise SnapshotUniversePolicySetError(
+                "conflicting universe policy bindings for "
+                f"{decision_date.isoformat()}"
+            )
+        bindings[decision_date] = member_hash
+    if not bindings:
+        raise SnapshotUniversePolicySetError(
+            "snapshot universe policy binding set cannot be empty"
+        )
+    return canonical_json_sha256(
+        {
+            "schema_version": SNAPSHOT_UNIVERSE_POLICY_SET_SCHEMA_VERSION,
+            "members": [
+                {
+                    "decision_as_of_trade_date": day.isoformat(),
+                    "universe_policy_hash": value,
+                }
+                for day, value in sorted(bindings.items())
+            ],
+        }
+    )
 
 
 def _sha256(value: str, *, field_name: str) -> str:
@@ -134,6 +185,39 @@ class CaptureSetMember(BaseModel):
         if self.date_end < self.date_start:
             raise ValueError("capture member date range is invalid")
         return self
+
+
+class RetrospectiveCaptureSetMember(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    capture_batch_id: str = Field(min_length=1, max_length=160)
+    capture_request_hash: str = Field(min_length=64, max_length=64)
+    capture_receipt_hash: str = Field(min_length=64, max_length=64)
+    membership_hash: str = Field(min_length=64, max_length=64)
+    capture_purpose: str = Field(pattern="^(OBSERVATION_CAPTURE_V1|LABEL_CAPTURE_V1)$")
+    range_lineage_scope_id: str = Field(min_length=1, max_length=160)
+    range_lineage_scope_hash: str = Field(min_length=64, max_length=64)
+    source_revision_set_id: str = Field(min_length=1, max_length=160)
+    source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    date_start: date
+    date_end: date
+
+    @field_validator(
+        "capture_request_hash", "capture_receipt_hash", "membership_hash",
+        "range_lineage_scope_hash", "source_revision_set_hash",
+    )
+    @classmethod
+    def _hash(cls, value: str, info) -> str:  # type: ignore[no-untyped-def]
+        return _sha256(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _date_range(self) -> "RetrospectiveCaptureSetMember":
+        if self.date_end < self.date_start:
+            raise ValueError("retrospective capture member date range is invalid")
+        return self
+
+    def canonical_identity(self) -> dict[str, str]:
+        return self.model_dump(mode="json")
 
 
 class FrozenIdentity(BaseModel):
@@ -316,6 +400,177 @@ class FixtureDatasetBuildRequest(BaseModel):
         return self
 
 
+class RetrospectiveDatasetBuildRequest(BaseModel):
+    """Range-native build request; it cannot carry synthetic Phase 0A scope."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: str = RETROSPECTIVE_DATASET_BUILD_REQUEST_SCHEMA_VERSION
+    lineage_identity_type: str = "HISTORICAL_RANGE"
+    execution_origin: str = "HISTORICAL_RANGE_RESEARCH"
+    research_scope: str = "RETROSPECTIVE_RESEARCH_ONLY"
+    evidence_scope: str = "RETROSPECTIVE_RESEARCH_ONLY"
+    handoff_readiness_hash: None = None
+    admission_scope_set_hash: None = None
+    range_lineage_scopes: tuple[FrozenIdentity, ...] = Field(min_length=1)
+    range_lineage_scope_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    captures: tuple[RetrospectiveCaptureSetMember, ...] = Field(min_length=2)
+    capture_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    date_start: date
+    date_end: date
+    selected_observation_mappings: tuple[FrozenIdentity, ...] = Field(min_length=1)
+    selected_observation_mapping_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selected_label_mappings: tuple[FrozenIdentity, ...] = Field(min_length=1)
+    selected_label_mapping_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    label_policy_bundle_id: str = Field(min_length=1, max_length=160)
+    label_policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    historical_range_policy_bundle_ref: dict[str, object]
+    label_targets: tuple[LabelTargetIdentity, ...] = Field(min_length=1)
+    universe_policy_hash: str = Field(min_length=64, max_length=64)
+    benchmark_policy_hash: str = Field(min_length=64, max_length=64)
+    cost_policy_hash: str = Field(min_length=64, max_length=64)
+    calendar_hash: str = Field(min_length=64, max_length=64)
+    symbol_normalization_policy_hash: str = Field(min_length=64, max_length=64)
+    query_registry_version: str = Field(min_length=1, max_length=160)
+    query_registry_hash: str = Field(min_length=64, max_length=64)
+    snapshot_source_revision_set_id: str = Field(min_length=1, max_length=160)
+    snapshot_source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    required_composite_capabilities: tuple[CompositeCapabilityRequirement, ...] = Field(min_length=1)
+    composite_capability_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    builder_version: str = Field(min_length=1, max_length=160)
+    code_commit: str = Field(min_length=1, max_length=160)
+    writer_version: str = Field(min_length=1, max_length=160)
+    snapshot_schema_version: str = Field(min_length=1, max_length=160)
+    schema_fingerprint: str = Field(min_length=64, max_length=64)
+    partition_policy_id: str = Field(min_length=1, max_length=160)
+    partition_policy_hash: str = Field(min_length=64, max_length=64)
+    policy_compatibility_hash: str = Field(min_length=64, max_length=64)
+    compression_config: dict[str, object]
+    compression_config_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    requested_source_cutoff: date
+    label_as_of_ts: datetime
+    selector_policy_hash: str = Field(min_length=64, max_length=64)
+    selected_range_day_outcome_set_hash: str = Field(min_length=64, max_length=64)
+    policy_component_set_hash: str = Field(min_length=64, max_length=64)
+    base_snapshot: BaseSnapshotIdentity | None = None
+    build_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "range_lineage_scope_set_hash", "capture_set_hash", "selected_observation_mapping_set_hash",
+        "selected_label_mapping_set_hash", "label_policy_bundle_hash", "universe_policy_hash",
+        "benchmark_policy_hash", "cost_policy_hash", "calendar_hash", "symbol_normalization_policy_hash",
+        "query_registry_hash", "snapshot_source_revision_set_hash", "composite_capability_hash",
+        "schema_fingerprint", "partition_policy_hash", "policy_compatibility_hash",
+        "compression_config_hash", "selector_policy_hash", "selected_range_day_outcome_set_hash",
+        "policy_component_set_hash", "build_request_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
+        return _sha256(value, field_name=info.field_name) if value is not None else None
+
+    @field_validator("label_as_of_ts")
+    @classmethod
+    def _timestamp(cls, value: datetime) -> datetime:
+        return _aware(value, field_name="label_as_of_ts")
+
+    def canonical_payload(self) -> dict[str, object]:
+        return canonicalize(
+            self.model_dump(
+                mode="python",
+                exclude={
+                    "range_lineage_scope_set_hash", "capture_set_hash",
+                    "selected_observation_mapping_set_hash", "selected_label_mapping_set_hash",
+                    "composite_capability_hash", "compression_config_hash", "build_request_hash",
+                },
+            )
+        )
+
+    @model_validator(mode="after")
+    def _frozen(self) -> "RetrospectiveDatasetBuildRequest":
+        if (
+            self.schema_version != RETROSPECTIVE_DATASET_BUILD_REQUEST_SCHEMA_VERSION
+            or self.lineage_identity_type != "HISTORICAL_RANGE"
+            or self.execution_origin != "HISTORICAL_RANGE_RESEARCH"
+            or self.research_scope != "RETROSPECTIVE_RESEARCH_ONLY"
+            or self.evidence_scope != "RETROSPECTIVE_RESEARCH_ONLY"
+        ):
+            raise ValueError("retrospective dataset build origin/scope contract is invalid")
+        if (
+            self.historical_range_policy_bundle_ref.get("artifact_kind") != "REQUEST"
+            or self.historical_range_policy_bundle_ref.get("payload_sha256") != self.label_policy_bundle_hash
+            or not str(self.historical_range_policy_bundle_ref.get("relative_path") or "").startswith("requests/")
+        ):
+            raise ValueError("retrospective policy bundle requires an exact range-native artifact ref")
+        if self.date_end < self.date_start:
+            raise ValueError("retrospective dataset build date range is invalid")
+        for field_name, values in (
+            ("range_lineage_scopes", self.range_lineage_scopes),
+            ("selected_observation_mappings", self.selected_observation_mappings),
+            ("selected_label_mappings", self.selected_label_mappings),
+        ):
+            ordered = tuple(sorted(values, key=lambda item: item.identity_id))
+            if values != ordered or len(values) != len({item.identity_id for item in values}):
+                raise ValueError(f"{field_name} must be sorted by unique identity id")
+        captures = tuple(sorted(self.captures, key=lambda item: item.capture_batch_id))
+        if captures != self.captures or len(captures) != len({item.capture_batch_id for item in captures}):
+            raise ValueError("retrospective captures must be sorted and unique")
+        if {item.capture_purpose for item in captures} != {"OBSERVATION_CAPTURE_V1", "LABEL_CAPTURE_V1"}:
+            raise ValueError("retrospective build requires observation and label captures")
+        if any(item.date_start < self.date_start or item.date_end > self.date_end for item in captures):
+            raise ValueError("retrospective capture lies outside build date range")
+        if {(item.range_lineage_scope_id, item.range_lineage_scope_hash) for item in captures} != {
+            (item.identity_id, item.identity_hash) for item in self.range_lineage_scopes
+        }:
+            raise ValueError("capture range lineage scopes differ from frozen build scopes")
+        targets = tuple(sorted(self.label_targets, key=lambda item: (item.horizon_trading_days, item.projection)))
+        if targets != self.label_targets or any(item.horizon_trading_days < 1 for item in targets):
+            raise ValueError("retrospective labels require sorted positive fixed horizons")
+        capabilities = tuple(sorted(self.required_composite_capabilities, key=lambda item: item.component))
+        if (
+            capabilities != self.required_composite_capabilities
+            or len({(item.component, item.capability) for item in capabilities}) != len(capabilities)
+            or any(
+                item.capability not in {"RESEARCH_AUDIT", "INTERNAL_BOOTSTRAP"}
+                for item in capabilities
+            )
+        ):
+            raise ValueError("retrospective capability requirements must be sorted")
+        identities = (
+            ("range_lineage_scope_set_hash", [item.model_dump(mode="json") for item in self.range_lineage_scopes]),
+            ("selected_observation_mapping_set_hash", [item.model_dump(mode="json") for item in self.selected_observation_mappings]),
+            ("selected_label_mapping_set_hash", [item.model_dump(mode="json") for item in self.selected_label_mappings]),
+            ("composite_capability_hash", [item.model_dump(mode="json") for item in capabilities]),
+            ("compression_config_hash", self.compression_config),
+        )
+        for field_name, payload in identities:
+            digest = canonical_json_sha256(payload)
+            supplied = getattr(self, field_name)
+            if supplied is not None and supplied != digest:
+                raise ValueError(f"{field_name} does not match frozen request")
+            object.__setattr__(self, field_name, digest)
+        capture_hash = canonical_json_sha256([item.canonical_identity() for item in captures])
+        if self.capture_set_hash is not None and self.capture_set_hash != capture_hash:
+            raise ValueError("capture_set_hash does not match retrospective captures")
+        object.__setattr__(self, "capture_set_hash", capture_hash)
+        request_hash = canonical_json_sha256(self.canonical_payload())
+        if self.build_request_hash is not None and self.build_request_hash != request_hash:
+            raise ValueError("build_request_hash does not match retrospective request")
+        object.__setattr__(self, "build_request_hash", request_hash)
+        return self
+
+
+DatasetBuildRequest = FixtureDatasetBuildRequest | RetrospectiveDatasetBuildRequest
+
+
+def validate_dataset_build_request(request: DatasetBuildRequest) -> DatasetBuildRequest:
+    payload = request.model_dump(mode="python")
+    if isinstance(request, FixtureDatasetBuildRequest):
+        return FixtureDatasetBuildRequest.model_validate(payload)
+    if isinstance(request, RetrospectiveDatasetBuildRequest):
+        return RetrospectiveDatasetBuildRequest.model_validate(payload)
+    raise TypeError(f"unsupported dataset build request type: {type(request)!r}")
+
+
 class DatasetAttemptFile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -400,7 +655,7 @@ class DatasetBuild(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     build_id: str = Field(min_length=1, max_length=160)
-    request: FixtureDatasetBuildRequest
+    request: DatasetBuildRequest
     logical_build_key_sha256: str = Field(min_length=64, max_length=64)
     build_generation: int = Field(ge=1)
     predecessor_build_id: str | None = Field(default=None, min_length=1, max_length=160)
@@ -623,8 +878,22 @@ class SealedDatasetSnapshot(BaseModel):
     snapshot_source_revision_set_hash: str = Field(min_length=64, max_length=64)
     capture_set_hash: str = Field(min_length=64, max_length=64)
     base_snapshot: BaseSnapshotIdentity | None = None
-    handoff_readiness_hash: str = Field(min_length=64, max_length=64)
-    admission_scope_set_hash: str = Field(min_length=64, max_length=64)
+    lineage_identity_type: str = "PHASE0A"
+    execution_origin: str = "ADVISORY_RUN"
+    research_scope: str = "HISTORICAL_RESEARCH_ONLY"
+    evidence_scope: str = "RETROSPECTIVE_RESEARCH_ONLY"
+    handoff_readiness_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    admission_scope_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    range_lineage_scope_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selector_policy_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selected_range_day_outcome_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    policy_lineage_type: str = "PHASE1_LABEL_POLICY"
+    historical_range_policy_bundle_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    policy_component_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selected_observation_mapping_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selected_label_mapping_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    source_revision_closure_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    maturity_coverage_hash: str | None = Field(default=None, min_length=64, max_length=64)
     query_registry_hash: str = Field(min_length=64, max_length=64)
     builder_version: str = Field(min_length=1, max_length=160)
     code_commit: str = Field(min_length=1, max_length=160)
@@ -644,7 +913,10 @@ class SealedDatasetSnapshot(BaseModel):
 
     @field_validator(
         "seal_receipt_hash", "manifest_core_sha256", "manifest_sha256", "promotion_receipt_hash", "snapshot_source_revision_set_hash",
-        "capture_set_hash", "handoff_readiness_hash", "admission_scope_set_hash", "query_registry_hash",
+        "capture_set_hash", "handoff_readiness_hash", "admission_scope_set_hash", "range_lineage_scope_set_hash",
+        "selector_policy_hash", "selected_range_day_outcome_set_hash", "historical_range_policy_bundle_hash",
+        "policy_component_set_hash", "selected_observation_mapping_set_hash", "selected_label_mapping_set_hash",
+        "source_revision_closure_hash", "maturity_coverage_hash", "query_registry_hash",
         "policy_compatibility_hash",
         "partition_policy_hash", "dataset_capability_manifest_hash", "schema_fingerprint", "snapshot_content_hash",
     )
@@ -674,7 +946,56 @@ class SealedDatasetSnapshot(BaseModel):
                 raise ValueError("snapshot blob ref does not match final file identity")
         if canonical_json_sha256(self.dataset_capability_manifest) != self.dataset_capability_manifest_hash:
             raise ValueError("snapshot capability manifest hash is invalid")
-        if self.manifest_core_sha256 != canonical_json_sha256({
+        if self.lineage_identity_type == "PHASE0A":
+            if (
+                self.execution_origin != "ADVISORY_RUN"
+                or self.research_scope != "HISTORICAL_RESEARCH_ONLY"
+                or self.handoff_readiness_hash is None
+                or self.admission_scope_set_hash is None
+                or any(
+                    value is not None
+                    for value in (
+                        self.range_lineage_scope_set_hash,
+                        self.selector_policy_hash,
+                        self.selected_range_day_outcome_set_hash,
+                        self.historical_range_policy_bundle_hash,
+                        self.policy_component_set_hash,
+                        self.selected_observation_mapping_set_hash,
+                        self.selected_label_mapping_set_hash,
+                        self.source_revision_closure_hash,
+                        self.maturity_coverage_hash,
+                    )
+                )
+                or self.policy_lineage_type != "PHASE1_LABEL_POLICY"
+            ):
+                raise ValueError("formal snapshot lineage identity is invalid")
+        elif self.lineage_identity_type == "HISTORICAL_RANGE":
+            required_range = (
+                self.range_lineage_scope_set_hash,
+                self.selector_policy_hash,
+                self.selected_range_day_outcome_set_hash,
+                self.historical_range_policy_bundle_hash,
+                self.policy_component_set_hash,
+                self.selected_observation_mapping_set_hash,
+                self.selected_label_mapping_set_hash,
+                self.source_revision_closure_hash,
+                self.maturity_coverage_hash,
+            )
+            if (
+                self.execution_origin != "HISTORICAL_RANGE_RESEARCH"
+                or self.research_scope != "RETROSPECTIVE_RESEARCH_ONLY"
+                or self.evidence_scope != "RETROSPECTIVE_RESEARCH_ONLY"
+                or self.handoff_readiness_hash is not None
+                or self.admission_scope_set_hash is not None
+                or any(value is None for value in required_range)
+                or self.policy_lineage_type != "HISTORICAL_RANGE_OUTCOME_POLICY"
+                or {item.selector_policy_hash for item in self.observations} != {self.selector_policy_hash}
+                or {item.selector_policy_hash for item in self.labels} != {self.selector_policy_hash}
+            ):
+                raise ValueError("retrospective snapshot lineage identity is invalid")
+        else:
+            raise ValueError("snapshot lineage identity type is invalid")
+        manifest_payload = {
             "files": [item.model_dump(mode="json") for item in sorted(self.files, key=lambda item: item.logical_path)],
             "observations": [item.model_dump(mode="json") for item in sorted(self.observations, key=lambda item: item.canonical_signal_id)],
             "labels": [item.model_dump(mode="json") for item in sorted(self.labels, key=lambda item: item.label_key_hash)],
@@ -691,7 +1012,29 @@ class SealedDatasetSnapshot(BaseModel):
             "writer_version": self.writer_version,
             "partition_policy_hash": self.partition_policy_hash,
             "policy_compatibility_hash": self.policy_compatibility_hash,
-        }):
+        }
+        if self.lineage_identity_type == "HISTORICAL_RANGE":
+            manifest_payload.update(
+                {
+                    "lineage_identity_type": self.lineage_identity_type,
+                    "execution_origin": self.execution_origin,
+                    "research_scope": self.research_scope,
+                    "evidence_scope": self.evidence_scope,
+                    "range_lineage_scope_set_hash": self.range_lineage_scope_set_hash,
+                    "selector_policy_hash": self.selector_policy_hash,
+                    "selected_range_day_outcome_set_hash": self.selected_range_day_outcome_set_hash,
+                    "policy_lineage_type": self.policy_lineage_type,
+                    "historical_range_policy_bundle_hash": self.historical_range_policy_bundle_hash,
+                    "policy_component_set_hash": self.policy_component_set_hash,
+                    "selected_observation_mapping_set_hash": self.selected_observation_mapping_set_hash,
+                    "selected_label_mapping_set_hash": self.selected_label_mapping_set_hash,
+                    "observation_count": len(self.observations),
+                    "label_count": len(self.labels),
+                    "source_revision_closure_hash": self.source_revision_closure_hash,
+                    "maturity_coverage_hash": self.maturity_coverage_hash,
+                }
+            )
+        if self.manifest_core_sha256 != canonical_json_sha256(manifest_payload):
             raise ValueError("manifest core hash is invalid")
         if self.snapshot_content_hash is not None and self.snapshot_content_hash != self.manifest_core_sha256:
             raise ValueError("snapshot content hash must equal manifest core hash")
@@ -776,7 +1119,7 @@ class InMemorySnapshotInvalidationRepository:
         return snapshot_id in self._by_snapshot_id
 
 
-def logical_build_key(request: FixtureDatasetBuildRequest) -> str:
+def logical_build_key(request: DatasetBuildRequest) -> str:
     return canonical_json_sha256(
         {
             "build_request_hash": request.build_request_hash,
@@ -895,7 +1238,7 @@ def _verify_promoted_cas(*, store: object, manifest: object, receipt: object) ->
 class DatasetBuildRepository(Protocol):
     def create_or_get(
         self,
-        request: FixtureDatasetBuildRequest,
+        request: DatasetBuildRequest,
         *,
         actor: str,
         rebuild_predecessor_build_id: str | None = None,
@@ -927,13 +1270,13 @@ class InMemoryDatasetBuildRepository:
 
     def create_or_get(
         self,
-        request: FixtureDatasetBuildRequest,
+        request: DatasetBuildRequest,
         *,
         actor: str,
         rebuild_predecessor_build_id: str | None = None,
         expected_termination_receipt_hash: str | None = None,
     ) -> DatasetBuild:
-        request = FixtureDatasetBuildRequest.model_validate(request.model_dump(mode="python"))
+        request = validate_dataset_build_request(request)
         if request.base_snapshot is not None:
             if self._base_snapshot_validator is None:
                 raise DatasetBuildError(REASON_BASE_SNAPSHOT_INVALID, "base snapshot requires an explicit invalidation/admission oracle")
@@ -1170,7 +1513,16 @@ class InMemoryDatasetBuildRepository:
             raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "full verification receipt does not match frozen materialization")
         materialized_files = tuple(self._files.get(str(build.materialized_attempt_id), {}).values())
         try:
-            reconstructed = FullParquetVerifier().verify_files(
+            reconstructed = FullParquetVerifier(
+                lineage_identity_type=(
+                    "HISTORICAL_RANGE"
+                    if isinstance(
+                        build.request,
+                        RetrospectiveDatasetBuildRequest,
+                    )
+                    else "PHASE0A"
+                )
+            ).verify_files(
                 build=build,
                 files=written_files_from_attempt(materialized_files),
                 capability_manifest=capability_manifest_for_build(build),
@@ -1312,7 +1664,11 @@ class InMemoryDatasetBuildRepository:
         recovery = DatasetBuildAttempt(
             attempt_id=f"advbuildatt_{canonical_json_sha256({'build_id': build.build_id, 'attempt_no': attempt_no, 'operation': AttemptOperation.RECOVER.value})[:24]}",
             build_id=build.build_id, attempt_no=attempt_no, operation=AttemptOperation.RECOVER,
-            state=AttemptState.SUCCEEDED, lease_owner_id=actor, lease_token="recovery-receipt",
+            state=AttemptState.SUCCEEDED,
+            lease_owner_id=actor,
+            lease_token=canonical_json_sha256(
+                {"expired_attempt_id": expired_attempt_id, "actor": actor}
+            ),
             fencing_token=build.current_fencing_token, expected_build_row_version=build.row_version,
             expected_checkpoint=build.checkpoint, acquired_at=now, expires_at=now + timedelta(seconds=1),
             heartbeat_at=now, predecessor_attempt_id=expired_attempt_id,
@@ -1394,7 +1750,7 @@ class InMemoryDatasetBuildRepository:
         snapshot = self._snapshots.get(snapshot_id)
         return snapshot.files if snapshot is not None else ()
 
-    def assert_base_snapshot_reusable(self, request: FixtureDatasetBuildRequest) -> None:
+    def assert_base_snapshot_reusable(self, request: DatasetBuildRequest) -> None:
         base = request.base_snapshot
         if base is None:
             return

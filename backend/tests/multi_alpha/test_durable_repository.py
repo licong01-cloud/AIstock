@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterator
 
 import pytest
@@ -10,17 +11,21 @@ import pytest
 from backend.services.multi_alpha.durable_models import (
     DurableAttemptSpec,
     DurableChildSpec,
+    DurableCommandSpec,
     DurableContractError,
     DurableRunSpec,
     DurableTaskSpec,
     OwnershipToken,
     artifact_manifest_hash_for,
+    control_command_payload,
+    command_target_key_for,
     durable_run_request_payload,
     implicit_task_group_key,
     make_attempt_id,
     make_child_id,
     make_remote_task_id,
     request_hash_for,
+    sha256_identity,
     submission_intent_hash_for,
 )
 from backend.services.multi_alpha.durable_repository import (
@@ -58,6 +63,11 @@ class ScriptedCursor:
         step = self.steps.pop(0)
         normalized = " ".join(query.split())
         assert step.contains in normalized
+        if isinstance(params, (list, tuple)):
+            assert normalized.count("%s") == len(params), (
+                f"SQL placeholder count {normalized.count('%s')} differs from "
+                f"bound parameter count {len(params)}: {normalized}"
+            )
         self.executions.append((normalized, params))
         self.current = step
         if step.error is not None:
@@ -122,6 +132,103 @@ def _run_request() -> dict[str, Any]:
     )
 
 
+@pytest.mark.parametrize(
+    ("action", "source_status", "expected_status"),
+    [
+        ("pause", "preparing", "pause_requested"),
+        ("cancel", "preparing", "cancel_requested"),
+        ("cancel", "pause_requested", "cancel_requested"),
+    ],
+)
+def test_command_acceptance_atomically_publishes_parent_control_state(
+    action: str,
+    source_status: str,
+    expected_status: str,
+) -> None:
+    run_id = "macb_control_linearization"
+    command_id = f"macmd_{action}_linearization"
+    target_key = command_target_key_for(
+        action=action,
+        run_id=run_id,
+        child_id=None,
+        attempt_id=None,
+    )
+    payload_hash = sha256_identity(
+        control_command_payload(
+            action=action,
+            run_id=run_id,
+            child_id=None,
+            attempt_id=None,
+            request={},
+            scope=None,
+        )
+    )
+    run = {
+        "id": run_id,
+        "status": source_status,
+        "row_version": 7,
+        "fencing_token": 3,
+        "progress_json": {"completed_children": 0},
+    }
+    command = {
+        "command_id": command_id,
+        "run_id": run_id,
+        "child_id": None,
+        "attempt_id": None,
+        "action": action,
+        "target_key": target_key,
+        "idempotency_key": f"{action}-linearization",
+        "payload_hash": payload_hash,
+        "status": "accepted",
+        "row_version": 1,
+    }
+    controlled_run = {
+        **run,
+        "status": expected_status,
+        "phase": expected_status,
+        "row_version": 8,
+        "fencing_token": 4,
+    }
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT id, status, phase, progress_json", one=run),
+            Step(contains="WHERE run_id = %s AND idempotency_key = %s", one=None),
+            Step(contains="AND status IN ('accepted', 'applying', 'reconciling')", one=None),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_command", one=command),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event",
+                one={"event_id": 1},
+            ),
+            Step(contains="UPDATE strategy_pkg.multi_alpha_combine_backtest_run", one=controlled_run),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event",
+                one={"event_id": 2},
+            ),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    created = repository.create_or_get_command(
+        DurableCommandSpec(
+            command_id=command_id,
+            run_id=run_id,
+            action=action,
+            target_key=target_key,
+            idempotency_key=f"{action}-linearization",
+            payload_hash=payload_hash,
+            request={},
+            requested_by="test-worker",
+        )
+    )
+
+    assert created["command_id"] == command_id
+    assert provider.commits == 1
+    update_sql, update_params = provider.cursor.executions[5]
+    assert "owner_id = NULL" in update_sql
+    assert "fencing_token = fencing_token + 1" in update_sql
+    assert update_params[0] == expected_status
+
+
 def test_list_attempts_for_run_uses_one_run_scoped_join_query() -> None:
     provider = ScriptedProvider([
         Step(
@@ -135,6 +242,192 @@ def test_list_attempts_for_run_uses_one_run_scoped_join_query() -> None:
 
     assert rows == [{"attempt_id": "attempt_1", "child_id": "child_1"}]
     assert provider.cursor.executions[0][1] == ("macb_run",)
+
+
+def test_materialize_successor_recovery_binds_identity_evidence_and_reason() -> None:
+    source_run_id = "macb_recovery_source"
+    successor_run_id = "macb_recovery_successor"
+    source_child_id = make_child_id(source_run_id, "baseline:leg_a")
+    successor_child_id = make_child_id(successor_run_id, "baseline:leg_a")
+    source_attempt_id = make_attempt_id(source_child_id, 1)
+    successor_attempt_id = make_attempt_id(successor_child_id, 1)
+    scope = {
+        "source_run_id": source_run_id,
+        "target_child_id": source_child_id,
+        "retry_mode": "backtest_only",
+    }
+    scope_hash = artifact_manifest_hash_for(scope)
+    execution_identity = {"schema_version": "multi_alpha_execution_identity_v1"}
+    execution_identity_hash = artifact_manifest_hash_for(execution_identity)
+    execution_identity_evidence = {"complete": True, "missing": []}
+    request_payload = durable_run_request_payload(
+        roster_hash="roster",
+        roster=[{"leg_id": "leg_a"}],
+        oos_start="2026-01-01",
+        oos_end="2026-06-29",
+        normalize_method="rank",
+        walk_forward={"enabled": True},
+        backtest_config={"topk": 25},
+        baseline_leg_id="leg_a",
+        retry_of_run_id=source_run_id,
+        node_parallelism={"rdagent-node1": 4},
+        recovery_kind="child_targeted",
+        recovery_scope=scope,
+        recovery_scope_hash=scope_hash,
+        execution_identity=execution_identity,
+        execution_identity_hash=execution_identity_hash,
+        execution_identity_evidence=execution_identity_evidence,
+    )
+    run_spec = DurableRunSpec(
+        run_id=successor_run_id,
+        task_id="mact_recovery_test",
+        request_hash=request_hash_for(request_payload),
+        roster_hash="roster",
+        roster=[{"leg_id": "leg_a"}],
+        oos_start="2026-01-01",
+        oos_end="2026-06-29",
+        normalize_method="rank",
+        walk_forward={"enabled": True},
+        backtest_config={"topk": 25},
+        baseline_leg_id="leg_a",
+        retry_of_run_id=source_run_id,
+        node_parallelism={"rdagent-node1": 4},
+        recovery_kind="child_targeted",
+        recovery_scope=scope,
+        recovery_scope_hash=scope_hash,
+        execution_identity=execution_identity,
+        execution_identity_hash=execution_identity_hash,
+        execution_identity_evidence=execution_identity_evidence,
+    )
+    source_lineage = {"source_attempt_id": source_attempt_id}
+    input_manifest = {"run_id": successor_run_id, "child_id": successor_child_id}
+    child_spec = DurableChildSpec(
+        child_id=successor_child_id,
+        run_id=successor_run_id,
+        child_key="baseline:leg_a",
+        child_kind="baseline",
+        ordinal=0,
+        input_manifest=input_manifest,
+        input_manifest_hash=artifact_manifest_hash_for(input_manifest),
+        source_child_id=source_child_id,
+        source_lineage=source_lineage,
+        source_lineage_hash=artifact_manifest_hash_for(source_lineage),
+    )
+    qe_task_id = "macb_remote_successor"
+    qe_loop_id = "Loop1"
+    attempt_spec = DurableAttemptSpec(
+        attempt_id=successor_attempt_id,
+        run_id=successor_run_id,
+        child_id=successor_child_id,
+        attempt_no=1,
+        retry_mode="backtest_only",
+        source_attempt_id=source_attempt_id,
+        node_id="rdagent-node1",
+        qe_task_id=qe_task_id,
+        qe_loop_id=qe_loop_id,
+        submission_intent_hash=submission_intent_hash_for(
+            child_id=successor_child_id,
+            attempt_no=1,
+            retry_mode="backtest_only",
+            retry_of_attempt_id=None,
+            source_attempt_id=source_attempt_id,
+            execution_kind="remote_execution",
+            node_id="rdagent-node1",
+            qe_task_id=qe_task_id,
+            qe_loop_id=qe_loop_id,
+        ),
+        status="queued",
+        phase="queued",
+    )
+    staging_manifest = {
+        "schema_version": "multi_alpha_recovery_staging_manifest_v1",
+        "command_id": "macmd_recovery_test",
+        "source_run_id": source_run_id,
+        "successor_run_id": successor_run_id,
+    }
+    staging_hash = artifact_manifest_hash_for(staging_manifest)
+    command = {
+        "command_id": "macmd_recovery_test",
+        "action": "child_retry",
+        "run_id": source_run_id,
+        "status": "reconciling",
+        "scope_hash": scope_hash,
+        "staging_manifest_json": staging_manifest,
+        "staging_manifest_hash": staging_hash,
+        "response_json": {},
+        "owner_id": "worker_1",
+        "fencing_token": 1,
+        "row_version": 2,
+        "lease_valid": True,
+    }
+    updated_command = {
+        **command,
+        "status": "succeeded",
+        "row_version": 3,
+        "child_id": source_child_id,
+        "attempt_id": None,
+    }
+    provider = ScriptedProvider(
+        [
+            Step(contains="FROM strategy_pkg.multi_alpha_combine_backtest_command", one=command),
+            Step(
+                contains="FROM strategy_pkg.multi_alpha_combine_backtest_run",
+                one={"id": source_run_id, "status": "failed"},
+            ),
+            Step(contains="FROM strategy_pkg.multi_alpha_combine_backtest_run", one=None),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_run",
+                one={"id": successor_run_id, "status": "running"},
+            ),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 1}),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_child",
+                one={"child_id": successor_child_id},
+            ),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 2}),
+            Step(
+                contains="FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                one=None,
+            ),
+            Step(
+                contains="FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt",
+                one={"attempt_id": source_attempt_id},
+            ),
+            Step(
+                contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                one={"attempt_id": successor_attempt_id},
+            ),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 3}),
+            Step(
+                contains="UPDATE strategy_pkg.multi_alpha_combine_backtest_command",
+                one=updated_command,
+            ),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 4}),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    result = repository.materialize_successor_recovery(
+        command_id=command["command_id"],
+        token=OwnershipToken(owner_id="worker_1", fencing_token=1, row_version=2),
+        recovery_specs=SimpleNamespace(
+            run_spec=run_spec,
+            child_specs=(child_spec,),
+            attempt_specs=(attempt_spec,),
+        ),
+        staging_manifest=staging_manifest,
+    )
+
+    assert result == updated_command
+    run_insert_sql, run_insert_params = provider.cursor.executions[3]
+    assert "execution_identity_evidence_json" in run_insert_sql
+    assert "reason" in run_insert_sql
+    assert run_insert_sql.count("%s") == len(run_insert_params) == 21
+    assert run_insert_params[19].adapted == execution_identity_evidence
+    assert run_insert_params[20].adapted["phase"] == "recovery_children_published"
+    assert provider.commits == 1
+    assert provider.rollbacks == 0
+    assert not provider.cursor.steps
 
 
 def test_task_group_collision_reuses_existing_task_and_ignores_scenario_defaults() -> None:
@@ -450,7 +743,7 @@ def test_same_run_identity_with_different_request_hash_fails_loudly() -> None:
     assert provider.rollbacks == 1
 
 
-def test_p0_1b_insert_shapes_remain_available_before_additive_p0_2_ddl() -> None:
+def test_legacy_optional_insert_shapes_keep_required_attempt_run_id() -> None:
     request_payload = _run_request()
     run_spec = DurableRunSpec(
         run_id="macb_test",
@@ -523,6 +816,9 @@ def test_p0_1b_insert_shapes_remain_available_before_additive_p0_2_ddl() -> None
     attempt_repository = MultiAlphaDurableRepository(connection_provider=attempt_provider)
     attempt_repository.create_attempt(attempt_spec)
     attempt_sql = attempt_provider.cursor.executions[2][0]
+    attempt_params = attempt_provider.cursor.executions[2][1]
+    assert "attempt_id, run_id, child_id" in " ".join(attempt_sql.split())
+    assert attempt_params[:3] == [attempt_spec.attempt_id, "macb_test", child_id]
     assert "source_attempt_id" not in attempt_sql
     assert "execution_kind" not in attempt_sql
     assert "result_manifest_hash" not in attempt_sql

@@ -51,10 +51,22 @@ evidence_available_at, observation_content_hash, reason_codes,
 created_by_capture_batch_id
 """
 
+_RETROSPECTIVE_VERSION_COLUMNS = _VERSION_COLUMNS + "," + """
+lineage_identity_type, range_signal_context_hash, range_run_id,
+range_day_run_id, candidate_artifact_ref, candidate_artifact_hash
+"""
+
 _LINEAGE_IDENTITY_COLUMNS = """
 lineage_id, decision_as_of_trade_date, observation_version_id, phase0a_audit_id,
 admission_scope_id, program_id, binding_version_id, lineage_source_type,
 source_run_id, lineage_content_hash
+"""
+
+_RETROSPECTIVE_LINEAGE_IDENTITY_COLUMNS = _LINEAGE_IDENTITY_COLUMNS + "," + """
+historical_range_request_ref, historical_range_request_hash,
+historical_range_frozen_program_ref, historical_range_frozen_program_hash,
+range_run_id, range_day_run_id, candidate_artifact_ref,
+candidate_artifact_hash, range_lineage_identity_hash
 """
 
 _LINEAGE_PAYLOAD_COLUMNS = """
@@ -65,6 +77,10 @@ canonical_signal_scope_hash, phase0a_signal_context_hash, oos_interval_id,
 oos_interval_hash, evidence_scope, signal_evidence_level, effective_cutoff_date,
 review_run_id, list_version_id
 """
+
+_RETROSPECTIVE_LINEAGE_PAYLOAD_COLUMNS = (
+    _LINEAGE_PAYLOAD_COLUMNS + ", range_signal_context_hash"
+)
 
 _STAGE_COLUMNS = """
 stage_evidence_id, observation_version_id, stage, capability_status, input_count,
@@ -240,9 +256,13 @@ class PostgresObservationCaptureRepository:
                 "canonical signal header has conflicting content",
             )
         version = dict(row_bundle.observation_version)
+        retrospective = version.get("lineage_identity_type") == "HISTORICAL_RANGE"
+        version_columns = (
+            _RETROSPECTIVE_VERSION_COLUMNS if retrospective else _VERSION_COLUMNS
+        )
         cur.execute(
             f"""
-            SELECT {_VERSION_COLUMNS}
+            SELECT {version_columns}
             FROM app.advisory_signal_observation_version
             WHERE observation_version_id = %s
             FOR UPDATE
@@ -276,10 +296,21 @@ class PostgresObservationCaptureRepository:
                         or None
                     },
                 ) from exc
+        elif retrospective:
+            cls._insert_or_compare_lineage(
+                cur,
+                dict(row_bundle.lineage_identity),
+                dict(row_bundle.lineage_payload),
+            )
         persisted = cls.read_observation_bundle_exact_in_transaction(
             cur,
             observation_version_id=str(version["observation_version_id"]),
             semantic_observation_key=row_bundle.semantic_observation_key,
+            lineage_id=(
+                str(row_bundle.lineage_identity["lineage_id"])
+                if retrospective
+                else None
+            ),
         )
         persisted_payload = _bundle_payload(persisted)
         requested_payload = _bundle_payload(row_bundle)
@@ -307,10 +338,15 @@ class PostgresObservationCaptureRepository:
         observation_version_id: str,
         semantic_observation_key: str,
         lock: bool = True,
+        lineage_id: str | None = None,
     ) -> Phase1GObservationRowBundle:
         lock_clause = "FOR KEY SHARE" if lock else ""
+        retrospective = lineage_id is not None
+        version_columns = (
+            _RETROSPECTIVE_VERSION_COLUMNS if retrospective else _VERSION_COLUMNS
+        )
         cur.execute(
-            f"SELECT {_VERSION_COLUMNS} FROM app.advisory_signal_observation_version WHERE observation_version_id = %s {lock_clause}",
+            f"SELECT {version_columns} FROM app.advisory_signal_observation_version WHERE observation_version_id = %s {lock_clause}",
             (observation_version_id,),
         )
         version_row = cur.fetchone()
@@ -318,19 +354,33 @@ class PostgresObservationCaptureRepository:
             raise SourceLedgerError(
                 REASON_G3_OBSERVATION_CONFLICT, "observation version does not exist"
             )
-        version = _normalized_row(version_row)
+        version = _normalized_version_row(version_row)
         header = cls.read_header_exact_in_transaction(
             cur, str(version["canonical_signal_id"]), lock=lock
         )
+        lineage_predicate = (
+            "observation_version_id = %s AND lineage_id = %s"
+            if lineage_id is not None
+            else "observation_version_id = %s"
+        )
+        lineage_params: tuple[Any, ...] = (
+            (observation_version_id, lineage_id)
+            if lineage_id is not None
+            else (observation_version_id,)
+        )
         cur.execute(
             f"""
-            SELECT {_LINEAGE_IDENTITY_COLUMNS}
+            SELECT {
+                _RETROSPECTIVE_LINEAGE_IDENTITY_COLUMNS
+                if retrospective
+                else _LINEAGE_IDENTITY_COLUMNS
+            }
             FROM app.advisory_signal_observation_lineage_identity
-            WHERE observation_version_id = %s
+            WHERE {lineage_predicate}
             ORDER BY lineage_id
             {lock_clause}
             """,
-            (observation_version_id,),
+            lineage_params,
         )
         lineage_rows = list(cur.fetchall())
         if len(lineage_rows) != 1:
@@ -338,10 +388,14 @@ class PostgresObservationCaptureRepository:
                 REASON_G3_CHILD_ROW_CONFLICT,
                 "observation version requires one lineage identity",
             )
-        lineage_identity = _normalized_row(lineage_rows[0])
+        lineage_identity = _normalized_lineage_identity_row(lineage_rows[0])
         cur.execute(
             f"""
-            SELECT {_LINEAGE_PAYLOAD_COLUMNS}
+            SELECT {
+                _RETROSPECTIVE_LINEAGE_PAYLOAD_COLUMNS
+                if retrospective
+                else _LINEAGE_PAYLOAD_COLUMNS
+            }
             FROM app.advisory_signal_observation_lineage_payload
             WHERE lineage_id = %s AND decision_as_of_trade_date = %s
             {lock_clause}
@@ -356,7 +410,7 @@ class PostgresObservationCaptureRepository:
             raise SourceLedgerError(
                 REASON_G3_CHILD_ROW_CONFLICT, "lineage payload is missing"
             )
-        lineage_payload = _normalized_row(lineage_payload_row)
+        lineage_payload = _normalized_lineage_payload_row(lineage_payload_row)
         cur.execute(
             f"""
             SELECT {_STAGE_COLUMNS}
@@ -474,18 +528,25 @@ class PostgresObservationCaptureRepository:
             """,
             tuple(row[column.strip()] for column in _column_names(_HEADER_COLUMNS)),
         )
-        if canonicalize(_normalized_row(cur.fetchone())) != canonicalize(dict(row)):
-            raise SourceLedgerError(
-                REASON_G3_OBSERVATION_CONFLICT,
-                "canonical signal header readback failed",
-            )
+        _assert_row_equal(
+            cur.fetchone(), row, reason="canonical signal header readback failed"
+        )
 
     @staticmethod
     def _insert_version(cur: Any, row: Mapping[str, Any]) -> None:
-        columns = _column_names(_VERSION_COLUMNS)
+        column_sql = (
+            _RETROSPECTIVE_VERSION_COLUMNS
+            if row.get("lineage_identity_type") == "HISTORICAL_RANGE"
+            else _VERSION_COLUMNS
+        )
+        columns = _column_names(column_sql)
         cur.execute(
-            f"INSERT INTO app.advisory_signal_observation_version ({_VERSION_COLUMNS}) VALUES ({_placeholders(columns)}) RETURNING {_VERSION_COLUMNS}",
-            _params(row, columns, json_columns={"reason_codes"}),
+            f"INSERT INTO app.advisory_signal_observation_version ({column_sql}) VALUES ({_placeholders(columns)}) RETURNING {column_sql}",
+            _params(
+                row,
+                columns,
+                json_columns={"reason_codes", "candidate_artifact_ref"},
+            ),
         )
         _assert_row_equal(
             cur.fetchone(), row, reason="observation version readback failed"
@@ -495,21 +556,86 @@ class PostgresObservationCaptureRepository:
     def _insert_lineage(
         cur: Any, identity: Mapping[str, Any], payload: Mapping[str, Any]
     ) -> None:
-        identity_columns = _column_names(_LINEAGE_IDENTITY_COLUMNS)
+        retrospective = identity.get("lineage_source_type") == "HISTORICAL_RANGE_RESEARCH"
+        identity_sql = (
+            _RETROSPECTIVE_LINEAGE_IDENTITY_COLUMNS
+            if retrospective
+            else _LINEAGE_IDENTITY_COLUMNS
+        )
+        identity_columns = _column_names(identity_sql)
         cur.execute(
-            f"INSERT INTO app.advisory_signal_observation_lineage_identity ({_LINEAGE_IDENTITY_COLUMNS}) VALUES ({_placeholders(identity_columns)}) RETURNING {_LINEAGE_IDENTITY_COLUMNS}",
-            _params(identity, identity_columns),
+            f"INSERT INTO app.advisory_signal_observation_lineage_identity ({identity_sql}) VALUES ({_placeholders(identity_columns)}) RETURNING {identity_sql}",
+            _params(
+                identity,
+                identity_columns,
+                json_columns={
+                    "historical_range_request_ref",
+                    "historical_range_frozen_program_ref",
+                    "candidate_artifact_ref",
+                },
+            ),
         )
         _assert_row_equal(
             cur.fetchone(), identity, reason="lineage identity readback failed"
         )
-        payload_columns = _column_names(_LINEAGE_PAYLOAD_COLUMNS)
+        payload_sql = (
+            _RETROSPECTIVE_LINEAGE_PAYLOAD_COLUMNS
+            if retrospective
+            else _LINEAGE_PAYLOAD_COLUMNS
+        )
+        payload_columns = _column_names(payload_sql)
         cur.execute(
-            f"INSERT INTO app.advisory_signal_observation_lineage_payload ({_LINEAGE_PAYLOAD_COLUMNS}) VALUES ({_placeholders(payload_columns)}) RETURNING {_LINEAGE_PAYLOAD_COLUMNS}",
+            f"INSERT INTO app.advisory_signal_observation_lineage_payload ({payload_sql}) VALUES ({_placeholders(payload_columns)}) RETURNING {payload_sql}",
             _params(payload, payload_columns),
         )
         _assert_row_equal(
             cur.fetchone(), payload, reason="lineage payload readback failed"
+        )
+
+    @classmethod
+    def _insert_or_compare_lineage(
+        cls,
+        cur: Any,
+        identity: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> None:
+        cur.execute(
+            f"""
+            SELECT {_RETROSPECTIVE_LINEAGE_IDENTITY_COLUMNS}
+              FROM app.advisory_signal_observation_lineage_identity
+             WHERE lineage_id = %s
+             FOR KEY SHARE
+            """,
+            (identity["lineage_id"],),
+        )
+        existing = cur.fetchone()
+        if existing is None:
+            cls._insert_lineage(cur, identity, payload)
+            return
+        _assert_row_equal(
+            _normalized_lineage_identity_row(existing),
+            identity,
+            reason="retrospective lineage exact retry differs",
+        )
+        cur.execute(
+            f"""
+            SELECT {_RETROSPECTIVE_LINEAGE_PAYLOAD_COLUMNS}
+              FROM app.advisory_signal_observation_lineage_payload
+             WHERE lineage_id = %s AND decision_as_of_trade_date = %s
+             FOR KEY SHARE
+            """,
+            (identity["lineage_id"], identity["decision_as_of_trade_date"]),
+        )
+        existing_payload = cur.fetchone()
+        if existing_payload is None:
+            raise SourceLedgerError(
+                REASON_G3_CHILD_ROW_CONFLICT,
+                "retrospective lineage payload is missing",
+            )
+        _assert_row_equal(
+            _normalized_lineage_payload_row(existing_payload),
+            payload,
+            reason="retrospective lineage payload exact retry differs",
         )
 
     @staticmethod
@@ -586,11 +712,51 @@ def _normalized_row(row: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _normalized_version_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = _normalized_row(row)
+    if normalized.get("lineage_identity_type") != "HISTORICAL_RANGE":
+        for key in (
+            "lineage_identity_type",
+            "range_signal_context_hash",
+            "range_run_id",
+            "range_day_run_id",
+            "candidate_artifact_ref",
+            "candidate_artifact_hash",
+        ):
+            normalized.pop(key, None)
+    return normalized
+
+
+def _normalized_lineage_identity_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = _normalized_row(row)
+    if normalized.get("lineage_source_type") != "HISTORICAL_RANGE_RESEARCH":
+        for key in (
+            "historical_range_request_ref",
+            "historical_range_request_hash",
+            "historical_range_frozen_program_ref",
+            "historical_range_frozen_program_hash",
+            "range_run_id",
+            "range_day_run_id",
+            "candidate_artifact_ref",
+            "candidate_artifact_hash",
+            "range_lineage_identity_hash",
+        ):
+            normalized.pop(key, None)
+    return normalized
+
+
+def _normalized_lineage_payload_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = _normalized_row(row)
+    if normalized.get("range_signal_context_hash") is None:
+        normalized.pop("range_signal_context_hash", None)
+    return normalized
+
+
 def _assert_row_equal(
     row: Mapping[str, Any], expected: Mapping[str, Any], *, reason: str
 ) -> None:
     actual_payload = canonicalize(_normalized_row(row))
-    expected_payload = canonicalize(dict(expected))
+    expected_payload = canonicalize(_normalized_row(expected))
     if actual_payload != expected_payload:
         mismatched_fields = tuple(
             sorted(

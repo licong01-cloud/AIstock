@@ -1013,6 +1013,43 @@ def qe_long_trend_phase2_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_long_trend_phase3_platform(session: nox.Session) -> None:
+    """Run F-014 Phase 3 persistence, snapshot, API, MCP, and Phase 2 compatibility contracts."""
+    _run_pytest(
+        session,
+        "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py",
+        "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase3_api.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py",
+        "backend/tests/mcp/test_qe_archive_module.py",
+        "backend/tests/test_qe_archive_schema.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
+    """Run QE-only sector-risk artifact, strategy, persistence, and evaluation contracts."""
+    _run_pytest(
+        session,
+        "backend/tests/quantevolver/test_sector_risk_overlay.py",
+        "backend/tests/quantevolver/test_qe_sector_risk_overlay_runtime.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_artifacts.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py",
+        "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+        "backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py",
+        "tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path backend regression tests only."""
     _run_pytest(
@@ -3033,6 +3070,46 @@ def hmm_evolution_backend(session: nox.Session) -> None:
         "not integration",
         "--cov=backend.services.hmm_evolution",
         "--cov=backend.db.init_hmm_evolution_schema",
+        "--cov-branch",
+        f"--cov-report=xml:{coverage_xml}",
+        "--cov-report=term-missing",
+        "--cov-fail-under=70",
+        "--durations=10",
+        f"--junitxml={junit_xml}",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env({"COVERAGE_FILE": str(coverage_data)}),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def hmm_risk_backend(session: nox.Session) -> None:
+    """Run the isolated HMM Risk schema and state-model-set contracts."""
+    evidence_dir = ROOT / "tmp" / "validation" / "hmm_risk"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    coverage_xml = evidence_dir / "coverage.xml"
+    coverage_data = evidence_dir / ".coverage"
+    junit_xml = evidence_dir / "junit.xml"
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/services/hmm_risk",
+        "backend/db/init_hmm_risk_schema.py",
+        "scripts/hmm_risk",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "-m",
+        "pytest",
+        "backend/tests/hmm_risk",
+        "-m",
+        "not integration",
+        "--cov=backend.services.hmm_risk",
+        "--cov=backend.db.init_hmm_risk_schema",
         "--cov-branch",
         f"--cov-report=xml:{coverage_xml}",
         "--cov-report=term-missing",

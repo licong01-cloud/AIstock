@@ -63,7 +63,7 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
             with open(gate_file, "r", encoding="utf-8") as f:
                 self._risk_gate_config = json.load(f)
             if self._risk_gate_config.get("artifact_type") != "hmm_risk_gate_v1":
-                raise RuntimeError(f"Invalid risk gate artifact type")
+                raise RuntimeError("Invalid risk gate artifact type")
             logger.info("Loaded HMM risk gate: %d sectors", self._risk_gate_config.get("sector_count", 0))
 
         daily_gates = self._risk_gate_config.get("daily_gates", {})
@@ -117,6 +117,25 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
             )
             return False
         return True
+
+    def _adjust_target_weight_map(self, weight_map, trade_start_time):
+        """Extension hook; default keeps legacy ScoreWeighted V2 weights unchanged."""
+        return dict(weight_map)
+
+    def _build_additional_rebalance_orders(
+        self,
+        *,
+        weight_map,
+        current_holdings,
+        existing_sell_ids,
+        planned_buy_orders,
+        total_account_value,
+        trade_step,
+        trade_start_time,
+        trade_end_time,
+    ):
+        """Extension hook for explicit overlays; default emits no extra orders."""
+        return []
 
     def generate_trade_decision(self, execute_result=None):
         trade_step = self.trade_calendar.get_trade_step()
@@ -238,6 +257,7 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
         for i, sid in enumerate(scored_final_holdings):
             if i < len(weights):
                 weight_map[sid] = float(weights[i])
+        weight_map = self._adjust_target_weight_map(weight_map, trade_start_time)
 
         # 7. 生成卖出订单（含幽灵持仓）
         sell_orders = []
@@ -316,6 +336,25 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
                 )
 
         self._diag_stats["buys"] = len(buy_orders)
+
+        additional_orders = self._build_additional_rebalance_orders(
+            weight_map=weight_map,
+            current_holdings=current_holdings,
+            existing_sell_ids={str(order.stock_id) for order in sell_orders},
+            planned_buy_orders=buy_orders,
+            total_account_value=total_account_value,
+            trade_step=trade_step,
+            trade_start_time=trade_start_time,
+            trade_end_time=trade_end_time,
+        )
+        if additional_orders:
+            sell_orders.extend(
+                order for order in additional_orders if order.direction == OrderDir.SELL
+            )
+            buy_orders.extend(
+                order for order in additional_orders if order.direction == OrderDir.BUY
+            )
+        self._diag_stats["overlay_orders"] = len(additional_orders)
 
         # 备选股（供 inner_strategy TAIL_SUBSTITUTE 使用）
         # 修复：提供完整的高排名候选列表，不限制在 topk 之外

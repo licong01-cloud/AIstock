@@ -280,7 +280,7 @@ jobs:
             pyyaml 'orjson' \
             pytest 'pytest-cov' 'pytest-asyncio' 'pytest-mock' \
             mcp 'mcp[cli]' \
-            pandas numpy scipy 'scikit-learn' pyarrow \
+            pandas numpy scipy 'scikit-learn' hmmlearn==0.3.3 pyarrow \
             'python-dateutil' pytz \
             'tenacity' 'cachetools' \
             'aiosqlite'

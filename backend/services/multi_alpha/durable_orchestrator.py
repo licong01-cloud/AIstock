@@ -63,6 +63,15 @@ RETRYABLE_RESULT_COLLECTION_REASON_CODES = frozenset(
         "qe_workspace_result_transport_unavailable",
     }
 )
+RETRYABLE_TERMINAL_RESERVATION_REASON_CODES = frozenset(
+    {
+        "qe_execution_reservation_owner_mismatch",
+        "qe_execution_reservation_stale_owner",
+        "qe_execution_reservation_stale_row_version",
+        "qe_execution_reservation_lease_expired",
+        "qe_execution_reservation_cas_failed",
+    }
+)
 
 
 class DurableOrchestratorError(RuntimeError):
@@ -694,7 +703,7 @@ class DurableMultiAlphaOrchestrator:
                     )
                 attempt_id = make_attempt_id(str(child["child_id"]), 1)
                 try:
-                    materialization, token = await self._run_sync_with_run_heartbeat(
+                    materialization, token, operation_error = await self._run_sync_with_run_heartbeat(
                         run_id=run_id,
                         token=token,
                         operation=lambda: self._adapter.materialize_child_input(
@@ -703,6 +712,8 @@ class DurableMultiAlphaOrchestrator:
                             attempt_id=attempt_id,
                         ),
                     )
+                    if operation_error is not None:
+                        raise operation_error
                 except DurableChildNotComputable as exc:
                     await asyncio.to_thread(
                         self._terminalize_unexecutable_child,
@@ -732,11 +743,13 @@ class DurableMultiAlphaOrchestrator:
                     )
                     return True
                 try:
-                    artifacts, token = await self._run_sync_with_run_heartbeat(
+                    artifacts, token, operation_error = await self._run_sync_with_run_heartbeat(
                         run_id=run_id,
                         token=token,
                         operation=lambda: self._adapter.publish_artifacts(materialization),
                     )
+                    if operation_error is not None:
+                        raise operation_error
                 except Exception as exc:
                     await asyncio.to_thread(
                         self._terminalize_unexecutable_child,
@@ -1340,12 +1353,25 @@ class DurableMultiAlphaOrchestrator:
             )
             return
         if normalized == "completed":
-            await asyncio.to_thread(
-                self._adapter.record_remote_terminal,
-                intent=intent,
-                owner_id=self._owner_id,
-                remote_status="completed",
-            )
+            try:
+                await asyncio.to_thread(
+                    self._adapter.record_remote_terminal,
+                    intent=intent,
+                    owner_id=self._owner_id,
+                    remote_status="completed",
+                )
+            except Exception as exc:
+                error = _exception_payload(exc)
+                if error["reason_code"] not in RETRYABLE_TERMINAL_RESERVATION_REASON_CODES:
+                    raise
+                await self._keep_attempt_reconciling(
+                    attempt_id=attempt_id,
+                    token=token,
+                    child=child,
+                    phase="terminal_reservation_reconciliation_pending",
+                    error=exc,
+                )
+                return
             current = _required(
                 "attempt",
                 attempt_id,
@@ -2062,7 +2088,7 @@ class DurableMultiAlphaOrchestrator:
         run_id: str,
         token: OwnershipToken,
         operation: Any,
-    ) -> tuple[Any, OwnershipToken]:
+    ) -> tuple[Any | None, OwnershipToken, Exception | None]:
         task = asyncio.create_task(asyncio.to_thread(operation))
         current_token = token
         while True:
@@ -2071,7 +2097,15 @@ class DurableMultiAlphaOrchestrator:
                 timeout=self._config.heartbeat_seconds,
             )
             if task in done:
-                return task.result(), current_token
+                try:
+                    return task.result(), current_token, None
+                except Exception as exc:
+                    # The operation may fail after one or more successful run
+                    # heartbeats.  Return the original exception together with
+                    # the renewed ownership token so the planner can preserve
+                    # exact business-error classification without reusing a
+                    # stale CAS row version on the next child.
+                    return None, current_token, exc
             try:
                 row = await asyncio.to_thread(
                     self._repository.heartbeat_run,

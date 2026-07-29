@@ -58,6 +58,28 @@ def test_catalog_references_current_human_readable_standard() -> None:
         assert control_ref in standard_text
 
 
+def test_rdagent_release_identity_control_is_fail_closed() -> None:
+    scanner = _load_module()
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    controls = {item["control_id"]: item for item in catalog["manual_review_controls"]}
+    control = controls["RDAGENT-RELEASE-IDENTITY-001"]
+
+    assert control["failure_policy"] == "block_release_deploy_restart_and_verified_claims"
+    assert {
+        "merged_commit_in_target_branch",
+        "clean_source_checkout",
+        "repository_merge_tree_manifest_match",
+        "immutable_release_path",
+        "repo_external_rdagent_state_root",
+        "deployment_receipt",
+        "atomic_current_pointer",
+        "separate_source_deploy_restart_runtime_states",
+        "rollback_target",
+        "no_source_overlay",
+    } <= set(control["required_evidence"])
+
+
 def test_scanner_detects_silent_fallback_in_runtime_code(tmp_path: Path) -> None:
     scanner = _load_module()
     runtime_file = tmp_path / "backend" / "services" / "example.py"

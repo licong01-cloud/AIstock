@@ -4,7 +4,7 @@
 > 文档类型：F2 实施级详细设计
 > 父设计：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`
 > 上游交付：R1 contracts/schema/repository、R2 candidate adapter、R3 ordered day executor/list lifecycle
-> 当前状态：`reviewed_design_ready`
+> 当前状态：`implemented_merged_pr_2792_production_e2e_accepted`；源码由 PR `#2792` 合入，交付事实以 `docs/architecture/advisory_phase1r_r4_source_delivery_acceptance_20260723.md` 为准
 > 研究边界：`HISTORICAL_RANGE_RESEARCH`、`RETROSPECTIVE_RESEARCH_ONLY`、`execution_prohibited=true`
 
 ## 1. Background

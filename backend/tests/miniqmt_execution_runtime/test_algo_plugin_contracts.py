@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from backend.execution_algos.vnpy_style.plugin_manifests import current_three_manifests_v2
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     FrozenJsonArrayV1,
     FrozenJsonMemberV1,
@@ -23,6 +24,12 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     require_sha256_v1,
     thaw_json_v1,
 )
+from backend.services.miniqmt_execution_runtime.kernel_callback_events import (
+    build_kernel_command_outcome_event_payload_v1,
+    build_kernel_order_event_payload_v1,
+    build_kernel_order_reconcile_event_payload_v1,
+    build_kernel_trade_event_payload_v1,
+)
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AbsenceDispositionV1,
     AlgoEventDeliveryV1,
@@ -36,7 +43,6 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     DeterministicExecutionContextV1,
     DiagnosticObservationV1,
     DiagnosticSeverityV1,
-    EnumValueRequirementV1,
     EventSourceV2,
     EventTypeV2,
     ExecutionAlgoPluginManifestV2,
@@ -46,7 +52,6 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     MarketDataRequirementV1,
     MiniQMTPluginContractError,
     MiniQMTPluginReasonCode,
-    ObjectFieldRequirementV1,
     OrderTypeV1,
     PluginProviderV2,
     RuntimeEventEnvelopeV2,
@@ -55,7 +60,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     SourceAttributionV1,
     TimerMutationTypeV1,
     TimerMutationV1,
-    VnpyCompatibilityRequirementV1,
+    VnpyCompatibilityRequirementV2,
 )
 
 
@@ -521,31 +526,11 @@ def _source_attribution() -> SourceAttributionV1:
     )
 
 
-def _compatibility_requirement() -> VnpyCompatibilityRequirementV1:
-    source_files = (FileHashV1(path="vnpy_algotrading/template.py", sha256="2" * 64),)
-    object_fields = (ObjectFieldRequirementV1(object_name="TickData", fields=("datetime", "vt_symbol")),)
-    enum_values = (EnumValueRequirementV1(enum_name="Direction", values=("LONG", "SHORT")),)
-    payload = {
-        "schema_version": "vnpy_compatibility_requirement_v1",
-        "mode": "DERIVED_SOURCE_EXACT_CHARACTERIZATION",
-        "upstream_repo": "vnpy/vnpy_algotrading",
-        "upstream_commit": "4" * 40,
-        "source_files_and_hashes": [item.model_dump(mode="json") for item in source_files],
-        "required_method_signatures": ["get_tick(algo)->TickData|None", "send_order(algo,...)->str"],
-        "required_object_fields": [item.model_dump(mode="json") for item in object_fields],
-        "required_enum_values": [item.model_dump(mode="json") for item in enum_values],
-        "characterization_sha256": "5" * 64,
-    }
-    model_payload = {
-        **payload,
-        "source_files_and_hashes": source_files,
-        "required_method_signatures": tuple(payload["required_method_signatures"]),
-        "required_object_fields": object_fields,
-        "required_enum_values": enum_values,
-    }
-    return VnpyCompatibilityRequirementV1(
-        **model_payload,
-        requirement_sha256=hash_hex_v1("miniqmt_vnpy_compatibility_requirement_v1", payload),
+def _compatibility_requirement() -> VnpyCompatibilityRequirementV2:
+    return next(
+        manifest.compatibility_requirement
+        for manifest in current_three_manifests_v2()
+        if manifest.algo_code == "SNIPER_MINIQMT"
     )
 
 
@@ -568,7 +553,7 @@ def _manifest(config_schema: dict[str, object] | None = None) -> ExecutionAlgoPl
     requirement = _market_requirement()
     attribution = _source_attribution()
     compatibility = _compatibility_requirement()
-    facade_fields = (ObjectFieldRequirementV1(object_name="TickData", fields=("datetime", "vt_symbol")),)
+    facade_fields = compatibility.required_object_fields
     payload: dict[str, object] = {
         "schema_version": "execution_algo_plugin_manifest_v2",
         "plugin_id": "aistock.vnpy.sniper",
@@ -804,6 +789,14 @@ def test_gateway_capability_catalog_is_a_hashed_technical_fact_not_a_gate() -> N
             None,
         ),
         (
+            EventTypeV2.COMMAND_OUTCOME,
+            EventSourceV2.MINIQMT_EXECUTION_KERNEL,
+            "miniqmt_command_outcome_v1",
+            {"receipt_id": "outcome_receipt_a", "receipt_sha256": "e" * 64},
+            "600000.SH",
+            None,
+        ),
+        (
             EventTypeV2.TICK,
             EventSourceV2.B0_QUOTE_V2,
             "miniqmt_market_data_view_v2",
@@ -864,7 +857,7 @@ def test_gateway_capability_catalog_is_a_hashed_technical_fact_not_a_gate() -> N
             EventSourceV2.QMT_OMS_RECONCILIATION,
             "miniqmt_reconciliation_receipt_v1",
             {"receipt_id": "receipt_a", "receipt_sha256": "d" * 64},
-            None,
+            "600000.SH",
             None,
         ),
         (
@@ -885,6 +878,64 @@ def test_all_runtime_event_composite_rows_are_explicit_and_roundtrip(
     symbol: str | None,
     monotonic_ns: int | None,
 ) -> None:
+    payload: dict[str, object] = {"row": event_type.value}
+    common = {
+        "runtime_id": "runtime_a",
+        "algo_instance_id": "mqalgo_a",
+        "parent_intent_id": "intent_a",
+        "strategy_slot_id": "slot_a",
+        "mapping_id": "mapping_a",
+        "command_id": "command_a",
+        "local_vt_orderid": "local_order_a",
+        "broker_order_id": "broker_order_a",
+    }
+    if event_type is EventTypeV2.ORDER:
+        payload = build_kernel_order_event_payload_v1(
+            raw_payload={"order_status": 48},
+            order_event_id="order_evt_a",
+            symbol="600000.SH",
+            side="BUY",
+            requested_quantity=100,
+            **common,
+        ).model_dump(mode="json")
+    elif event_type is EventTypeV2.TRADE:
+        payload = build_kernel_trade_event_payload_v1(
+            raw_payload={"trade_id": "trade_a"},
+            symbol="600000.SH",
+            side="BUY",
+            trade_quantity=100,
+            trade_price_decimal="10",
+            **common,
+        ).model_dump(mode="json")
+    elif event_type is EventTypeV2.COMMAND_OUTCOME:
+        payload = build_kernel_command_outcome_event_payload_v1(
+            receipt_id="outcome_receipt_a",
+            receipt_sha256="e" * 64,
+            command_type="SUBMIT_LIMIT",
+            outcome="ACCEPTED",
+            outbox_status="ACKED",
+            outbox_row_version=2,
+            outcome_receipt_sha256="f" * 64,
+            outbox_terminal=True,
+            order_terminal=False,
+            **common,
+        ).model_dump(mode="json")
+    elif event_type is EventTypeV2.RECONCILE:
+        reconcile_common = {key: value for key, value in common.items() if key != "command_id"}
+        payload = build_kernel_order_reconcile_event_payload_v1(
+            ordered_trade_refs=(),
+            requested_quantity=100,
+            receipt_id="receipt_a",
+            receipt_sha256="d" * 64,
+            symbol="600000.SH",
+            side="BUY",
+            normalized_order_status="ACCEPTED",
+            authoritative_cumulative_filled_quantity=0,
+            authoritative_remaining_quantity=100,
+            callback_watermark="watermark_a",
+            snapshot_sha256="a" * 64,
+            **reconcile_common,
+        ).model_dump(mode="json")
     event = RuntimeEventEnvelopeV2.create(
         runtime_id="runtime_a",
         sequence=1,
@@ -894,7 +945,7 @@ def test_all_runtime_event_composite_rows_are_explicit_and_roundtrip(
         source=source,
         symbol=symbol,
         payload_schema_version=schema,
-        payload={"row": event_type.value},
+        payload=payload,
         source_identity=source_identity,
         correlation={},
     )

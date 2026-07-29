@@ -186,8 +186,12 @@ class _ArtifactClient:
 
     def ensure_artifact(self, path: Path, *, node_id: str) -> dict[str, Any]:
         self.paths.append(path)
+        if path.name not in {"combined_factors_df.parquet", "combined_prediction.pkl"}:
+            digest = _sha256(path)
+        else:
+            digest = ("a" if path.suffix == ".parquet" else "b") * 64
         return {
-            "sha256": ("a" if path.suffix == ".parquet" else "b") * 64,
+            "sha256": digest,
             "size": path.stat().st_size,
             "uploaded": False,
             "status": {
@@ -473,8 +477,191 @@ def test_materialize_and_atomic_publish_reuses_existing_combiner_and_runtime(tmp
     assert published.prediction_path.exists()
     assert (published.workspace / "conf.yaml").exists()
     assert published.artifact_manifest["schema_version"] == "multi_alpha_child_artifact_manifest_v1"
+    assert published.artifact_manifest["l2_artifact"]["path"] == "combined_factors_df.parquet"
     assert replay.artifact_manifest == published.artifact_manifest
     assert not list(published.workspace.parent.glob("*.tmp"))
+
+
+def test_backtest_only_recovery_preserves_l2_and_execution_identity_bindings(
+    tmp_path: Path,
+) -> None:
+    adapter, repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
+    execution_identity = build_execution_identity(
+        dataset={
+            "deployment_snapshot_id": "qe-dataset-20260720",
+            "dataset_manifest_sha256": "a" * 64,
+            "cutoff_trade_date": "2026-06-30",
+            "qlib_calendar_sha256": "b" * 64,
+            "qlib_instruments_sha256": "c" * 64,
+            "st_pit_snapshot_id": "st-pit-20260630",
+            "st_pit_manifest_sha256": "d" * 64,
+            "resolved_node_id": "wsl2-5080",
+            "resolved_data_root_uri": "/home/lc999/data/factor_data",
+        },
+        prediction_sources=[
+            {
+                "leg_id": "leg_a",
+                "seed_run_id": "a1",
+                "artifact_uri": "file:///predictions/a1.pkl",
+                "artifact_sha256": "e" * 64,
+            }
+        ],
+        runtime={
+            "qlib_runtime_template_sha256": "f" * 64,
+            "conda_environment_lock_sha256": "0" * 64,
+            "execution_environment_snapshot_id": "rdagent-gpu-20260720",
+            "execution_environment_manifest_sha256": "1" * 64,
+            "executor_code_commit": "abcdef012345",
+            "executor_file_set_sha256": "2" * 64,
+            "backtest_config_sha256": "3" * 64,
+        },
+        materializer={
+            "aistock_commit": "123456abcdef",
+            "planner_version": "multi_alpha_child_plan_v1",
+            "combiner_file_sha256": "4" * 64,
+            "panel_builder_file_sha256": "5" * 64,
+            "materializer_file_set_sha256": "6" * 64,
+        },
+        business_formula={
+            "formula_version": "durable_business_result_v1",
+            "assembler_file_sha256": "7" * 64,
+            "delta_formula_sha256": "8" * 64,
+        },
+    )
+    repository.child["input_manifest_json"] = {
+        **dict(repository.child["input_manifest_json"]),
+        "execution_identity": execution_identity.payload,
+        "execution_identity_hash": execution_identity.identity_hash,
+        "execution_identity_evidence": legacy_execution_identity_evidence(
+            execution_identity.payload
+        ),
+    }
+    repository.child["input_manifest_hash"] = artifact_manifest_hash_for(
+        repository.child["input_manifest_json"]
+    )
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    source = adapter.publish_artifacts(materialized)
+    successor_run_id = "macb_recovery_backtest_only"
+    successor_child_id = make_child_id(successor_run_id, "scheme:equal")
+    successor_attempt_id = make_attempt_id(successor_child_id, 1)
+
+    recovered = adapter.stage_backtest_only_recovery_artifacts(
+        source_run_id=RUN_ID,
+        source_child_id=CHILD_ID,
+        source_attempt_id=ATTEMPT_ID,
+        successor_run_id=successor_run_id,
+        successor_child_id=successor_child_id,
+        successor_attempt_id=successor_attempt_id,
+        successor_input_manifest_hash="9" * 64,
+        source_lineage_hash="a" * 64,
+    )
+
+    assert recovered.artifact_manifest["l2_artifact"] == {
+        "path": "combined_factors_df.parquet",
+        **recovered.artifact_manifest["files"]["combined_factors_df.parquet"],
+    }
+    assert recovered.artifact_manifest["execution_identity"] == execution_identity.payload
+    assert (
+        recovered.artifact_manifest["execution_identity_hash"]
+        == execution_identity.identity_hash
+    )
+    assert recovered.artifact_manifest["execution_identity_evidence"]["complete"] is True
+    assert recovered.artifact_manifest["recovery_source_lineage_hash"] == "a" * 64
+    assert recovered.artifact_manifest["manifest_hash"] == artifact_manifest_hash_for(
+        {
+            key: value
+            for key, value in recovered.artifact_manifest.items()
+            if key != "manifest_hash"
+        }
+    )
+    assert (recovered.workspace / "combined_factors_df.parquet").read_bytes() == (
+        source.workspace / "combined_factors_df.parquet"
+    ).read_bytes()
+
+
+def test_publish_rejects_missing_l2_artifact_before_artifact_manifest(tmp_path: Path) -> None:
+    adapter, _repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
+    (tmp_path / "runtime" / "combined_factors_df.parquet").unlink()
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+
+    with pytest.raises(DurableExecutionAdapterError) as caught:
+        adapter.publish_artifacts(materialized)
+
+    assert caught.value.reason_code == "multi_alpha_l2_artifact_missing"
+    assert not (materialized.workspace / "artifact_manifest.json").exists()
+
+
+def test_publish_copies_explicit_absolute_l2_source_into_immutable_workspace(tmp_path: Path) -> None:
+    adapter, repository, _coordinator, artifact_client, _used_nodes = _adapter(tmp_path)
+    runtime_l2 = tmp_path / "runtime" / "combined_factors_df.parquet"
+    runtime_l2.unlink()
+    external_l2 = tmp_path / "authoritative" / "g14-fp-h40.parquet"
+    external_l2.parent.mkdir()
+    external_l2.write_bytes(b"authoritative-l2")
+    repository.run["backtest_config_json"]["combined_factors_path"] = str(external_l2)
+    repository.run["backtest_config_json"]["_combine_request_v1"]["backtest_config"][
+        "combined_factors_path"
+    ] = str(external_l2)
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+
+    published = adapter.publish_artifacts(materialized)
+    external_l2.unlink()
+    published_l2 = published.workspace / "combined_factors_df.parquet"
+
+    assert published_l2.read_bytes() == b"authoritative-l2"
+    assert published.artifact_manifest["l2_artifact"] == {
+        "path": "combined_factors_df.parquet",
+        **published.artifact_manifest["files"]["combined_factors_df.parquet"],
+    }
+    assert adapter._published_l2_artifact_path(published) == published_l2
+    assert artifact_client.paths == []
+
+
+def test_publish_excludes_and_records_node_bound_qe_data_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _repository, _coordinator, _artifact_client, _used_nodes = _adapter(tmp_path)
+    external_data = tmp_path / "runtime" / "bak_basic.h5"
+    external_data.write_bytes(b"stand-in for an unreadable DrvFS data link")
+    monkeypatch.setattr(
+        "backend.services.multi_alpha.durable_execution_adapter.is_runtime_external_data_link",
+        lambda path: path.name == "bak_basic.h5",
+    )
+    monkeypatch.setattr(
+        "backend.services.multi_alpha.combine_backtest.is_runtime_external_data_link",
+        lambda path: path.name == "bak_basic.h5",
+    )
+
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    published = adapter.publish_artifacts(materialized)
+
+    expected_binding = {
+        "name": "bak_basic.h5",
+        "binding": "node_canonical_qe_data",
+        "published": False,
+    }
+    assert published.artifact_manifest["external_runtime_data_bindings"] == [expected_binding]
+    assert "bak_basic.h5" not in published.artifact_manifest["files"]
+    assert not (published.workspace / "bak_basic.h5").exists()
+    materialization = json.loads((published.workspace / "materialization.json").read_text(encoding="utf-8"))
+    assert materialization["external_runtime_data_bindings"] == [expected_binding]
 
 
 def test_builtin_rematerialize_recomputes_from_verified_frozen_prediction_sources(
@@ -672,7 +859,84 @@ def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(tmp
         "combined_prediction.pkl.b64" not in call["payload"].experiment_files
         for call in coordinator.calls + remote_coordinator.calls
     )
+    remote_payload = remote_coordinator.calls[0]["payload"]
+    assert remote_payload.task_id == remote_intent.qe_task_id
+    assert (
+        f"/home/node/workspaces/{remote_intent.qe_task_id}/Loop1"
+        in remote_payload.wsl_command
+    )
+    fallback_task_id = (
+        f"macb_remote_{remote_published.workspace.parent.name}_"
+        f"{remote_published.workspace.name}"
+    )
+    assert fallback_task_id not in remote_payload.wsl_command
     assert len(artifact_client.paths) + len(remote_artifact_client.paths) == 4
+
+
+def test_durable_submit_freezes_oversized_runtime_artifact_cas_binding(tmp_path: Path) -> None:
+    adapter, repository, coordinator, artifact_client, _used_nodes = _adapter(tmp_path)
+    repository.attempt["node_id"] = "rdagent-node1"
+    runtime_overlay = tmp_path / "runtime" / "qe_sector_risk_overlay.parquet"
+    runtime_overlay.write_bytes(b"r" * (8 * 1024 * 1024))
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    published = adapter.publish_artifacts(materialized)
+    nested_runtime = published.workspace / "aistock_models" / "model.py"
+    nested_runtime.parent.mkdir()
+    nested_runtime.write_text("VALUE = 1\n", encoding="utf-8")
+    (nested_runtime.parent / "__init__.py").write_bytes(b"")
+    intent = adapter.prepare_submission_intent(
+        run=repository.run,
+        child=repository.child,
+        attempt=repository.attempt,
+        node_id="rdagent-node1",
+    )
+    token = OwnershipToken(owner_id="worker_1", fencing_token=1, row_version=1)
+
+    outcome = asyncio.run(
+        adapter.submit(
+            artifacts=published,
+            intent=intent,
+            attempt_token=token,
+        )
+    )
+
+    published_overlay = published.workspace / runtime_overlay.name
+    expected_sha = _sha256(published_overlay)
+    assert outcome.state == "submitted"
+    assert artifact_client.paths == [
+        published.workspace / "combined_factors_df.parquet",
+        published.prediction_path,
+        nested_runtime,
+        published_overlay,
+    ]
+    payload = coordinator.calls[0]["payload"]
+    bindings = payload.config["runtime_artifact_bindings"]
+    overlay_binding = next(item for item in bindings if item["name"] == runtime_overlay.name)
+    assert overlay_binding["remote_path"] == f"/remote/artifacts/{expected_sha}"
+    assert f"{runtime_overlay.name}.b64" not in payload.experiment_files
+    assert "sha256sum --" in payload.wsl_command
+    assert f"/remote/artifacts/{expected_sha}" in payload.wsl_command
+    claimed_manifest = repository.claim_calls[0]["artifact_manifest"]
+    assert claimed_manifest["remote_runtime_artifact_bindings"] == bindings
+    runtime_manifest = claimed_manifest["remote_runtime_file_manifest"]
+    runtime_entries = {item["path"]: item for item in runtime_manifest["files"]}
+    assert runtime_entries[runtime_overlay.name]["sha256"] == expected_sha
+    assert runtime_entries[runtime_overlay.name]["transfer"] == "cas"
+    assert runtime_entries["aistock_models/model.py"]["transfer"] == "cas"
+    assert runtime_entries["aistock_models/__init__.py"]["transfer"] == "empty_file"
+    assert claimed_manifest["manifest_hash"] == artifact_manifest_hash_for(
+        {key: value for key, value in claimed_manifest.items() if key != "manifest_hash"}
+    )
+    assert "remote_runtime_artifact_bindings" not in published.artifact_manifest
+    repository.attempt["artifact_manifest_json"] = claimed_manifest
+    collected = asyncio.run(adapter.collect_result(intent=intent, artifacts=published))
+    assert collected.result_manifest["submission_artifact_manifest_hash"] == claimed_manifest["manifest_hash"]
+    assert collected.result_manifest["remote_runtime_file_manifest"] == runtime_manifest
+    assert collected.result_manifest["remote_runtime_artifact_bindings"] == bindings
 
 
 def test_submission_intent_is_deterministic_and_attempt_scoped(tmp_path: Path) -> None:

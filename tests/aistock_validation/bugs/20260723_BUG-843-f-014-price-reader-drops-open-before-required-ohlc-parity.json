@@ -1,0 +1,226 @@
+{
+  "actual": "The reader removes open before parity, so every real worker fails even when daily_pv.h5 contains open.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/long_trend_data_reader.py",
+    "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py",
+    "tests/aistock_validation/bugs/20260723_BUG-843-f-014-price-reader-drops-open-before-required-ohlc-parity.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-843",
+  "closed_at": "2026-07-23T09:43:27Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-23T09:33:09.375167Z",
+  "description": "The reader removes open before parity, so every real worker fails even when daily_pv.h5 contains open.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260723-30235e1f7d40",
+      "timestamp": "2026-07-23T09:33:09.375167Z"
+    }
+  ],
+  "evidence_uris": [
+    "qelt_8c198e8448682fc04847b1cfc29c2178ef30e44dddebe8718e0a17123f210726 / QELT_DAILY_PV_SCHEMA_INVALID"
+  ],
+  "expected": "Reader-normalized feature and outcome price frames contain qfq OHLC and volume, allowing exact same-snapshot parity; missing or invalid open remains a structured schema failure.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/long_trend_data_reader.py",
+      "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/long_trend_data_reader.py",
+        "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py"
+      ],
+      "impacted_modules": [
+        "qe.long_trend_evaluation",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/long_trend_data_reader.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase2"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase2"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/long_trend_data_reader.py",
+        "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/long_trend_data_reader.py",
+      "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py"
+    ]
+  },
+  "first_seen_at": "2026-07-23T09:33:09.375167Z",
+  "fix_branch": null,
+  "fix_commit": "779c4da36da26af8016f27103c5410b411b691c6",
+  "fixed_at": "2026-07-29T04:56:15.441555Z",
+  "github_issue_number": 2669,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2669",
+  "last_seen_at": "2026-07-23T09:33:09.375167Z",
+  "module": "qe.long_trend_evaluation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2670",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "pytest backend/tests/unified_engine/test_qe_long_trend_contract_reader.py -q",
+  "required_verification": [
+    "l0",
+    "qe_long_trend_phase2_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "qe.long_trend_evaluation"
+  ],
+  "title": "F-014 price reader drops open before required OHLC parity",
+  "trigger_condition": {
+    "fingerprint": "30235e1f7d405c3c3b8e1ba5",
+    "source_event_id": "FE-20260723-30235e1f7d40"
+  },
+  "validation_evidence": [
+    "PR #2670 merged; CI static gate and qe_long_trend_phase2_backend passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.long_trend_evaluation",
+        "qe_long_trend_phase2"
+      ],
+      "plans": [
+        "qe_long_trend_phase2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.long_trend_evaluation",
+          "qe_long_trend_phase2"
+        ],
+        "plans": [
+          "qe_long_trend_phase2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

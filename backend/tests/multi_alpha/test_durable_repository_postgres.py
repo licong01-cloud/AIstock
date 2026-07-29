@@ -169,7 +169,7 @@ def disposable_schema() -> Iterator[None]:
             )
             assert dict(zip([item.name for item in cur.description], cur.fetchone()))[
                 "preflight_status"
-            ] == "ready"
+            ] in {"ready", "already_applied"}
         yield
     finally:
         with conn.cursor() as cur:
@@ -809,6 +809,9 @@ def test_durable_submission_and_planner_are_idempotent_in_postgres() -> None:
         baseline_leg_id=run["baseline_leg_id"],
         retry_of_run_id=run["retry_of_run_id"],
         node_parallelism=run["node_parallelism_json"],
+        execution_identity=run["execution_identity_json"],
+        execution_identity_hash=run["execution_identity_hash"],
+        execution_identity_evidence=run["execution_identity_evidence_json"],
     )
     planner = DeterministicChildPlanner(repository)
     first_plan = planner.plan(run_spec=run_spec, request=request)
@@ -840,7 +843,7 @@ def test_p0_2_zero_child_pause_resume_cancel_lifecycle_in_postgres() -> None:
             roster_hash="p0_2_roster",
             roster=[{"leg_id": "L1"}],
             default_request={"normalize_method": "rank"},
-            source_kind="test",
+            source_kind="api",
         )
     )
     request = durable_run_request_payload(
@@ -939,6 +942,132 @@ def test_p0_2_zero_child_pause_resume_cancel_lifecycle_in_postgres() -> None:
     assert cancelled["status"] == "cancelled"
     closed_cancel = control.apply_one_local_command(owner_id="pg-control", lease_seconds=60)
     assert closed_cancel is not None and closed_cancel["status"] == "succeeded"
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_status"),
+    [("pause", "pause_requested"), ("cancel", "cancel_requested")],
+)
+def test_control_acceptance_invalidates_planner_and_blocks_dispatch_before_worker_application(
+    action: str,
+    expected_status: str,
+) -> None:
+    repository = MultiAlphaDurableRepository(connection_provider=_connection_provider)
+    task_id = f"mact_pg_{action}_linearization"
+    run_id = f"macb_pg_{action}_linearization"
+    node_id = f"pg-{action}-linearization"
+    roster = [{"leg_id": "L1"}]
+    repository.create_task(
+        DurableTaskSpec(
+            task_id=task_id,
+            task_name=f"PostgreSQL {action} acceptance linearization",
+            roster_hash=f"{action}_linearization_roster",
+            roster=roster,
+            default_request={"normalize_method": "rank"},
+            source_kind="api",
+        )
+    )
+    request = durable_run_request_payload(
+        roster_hash=f"{action}_linearization_roster",
+        roster=roster,
+        oos_start="2026-01-01",
+        oos_end="2026-06-29",
+        normalize_method="rank",
+        walk_forward={"enabled": True},
+        backtest_config={"node_id": node_id, "topk": 25},
+    )
+    repository.create_run(
+        DurableRunSpec(
+            run_id=run_id,
+            task_id=task_id,
+            request_hash=request_hash_for(request),
+            roster_hash=f"{action}_linearization_roster",
+            roster=roster,
+            oos_start="2026-01-01",
+            oos_end="2026-06-29",
+            normalize_method="rank",
+            walk_forward={"enabled": True},
+            backtest_config={"node_id": node_id, "topk": 25},
+        )
+    )
+    planner_owner = f"pg-{action}-planner"
+    with _connection_provider() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE strategy_pkg.multi_alpha_combine_backtest_run
+                SET status = 'preparing',
+                    phase = 'materializing',
+                    owner_id = %s,
+                    fencing_token = fencing_token + 1,
+                    row_version = row_version + 1,
+                    lease_expires_at = clock_timestamp() + INTERVAL '60 seconds',
+                    heartbeat_at = clock_timestamp(),
+                    updated_at = NOW()
+                WHERE id = %s AND status = 'queued'
+                RETURNING *
+                """,
+                (planner_owner, run_id),
+            )
+            preparing = cur.fetchone()
+    assert preparing is not None
+    planner_token = OwnershipToken(
+        owner_id=str(preparing["owner_id"]),
+        fencing_token=int(preparing["fencing_token"]),
+        row_version=int(preparing["row_version"]),
+    )
+    child_key = "scheme:equal"
+    child_id = make_child_id(run_id, child_key)
+    manifest = {"run_id": run_id, "child_key": child_key}
+    repository.create_child(
+        DurableChildSpec(
+            child_id=child_id,
+            run_id=run_id,
+            child_key=child_key,
+            child_kind="scheme",
+            weighting_scheme="equal",
+            ordinal=0,
+            input_manifest=manifest,
+            input_manifest_hash=artifact_manifest_hash_for(manifest),
+        )
+    )
+    repository.create_attempt(
+        DurableAttemptSpec(
+            attempt_id=make_attempt_id(child_id, 1),
+            child_id=child_id,
+            attempt_no=1,
+            retry_mode="initial",
+            node_id=node_id,
+        )
+    )
+
+    result = DurableMultiAlphaControlService(repository).submit(
+        run_id=run_id,
+        action=action,
+        idempotency_key=f"pg-{action}-linearization",
+        requested_by="postgres-test",
+    )
+
+    assert result.command["status"] == "accepted"
+    assert repository.get_run(run_id)["status"] == expected_status  # type: ignore[index]
+    assert repository.claim_next_attempt(
+        owner_id=f"pg-{action}-dispatcher",
+        lease_seconds=60,
+        claim_kind="dispatch",
+        node_id=node_id,
+    ) is None
+    with pytest.raises(MultiAlphaDurableRepositoryError) as stale:
+        repository.transition_run_with_event(
+            run_id,
+            token=planner_token,
+            expected_statuses=("preparing",),
+            next_status="running",
+            phase="publish_after_control",
+        )
+    assert stale.value.reason_code in {
+        "multi_alpha_stale_fencing_token",
+        "multi_alpha_state_conflict",
+    }
 
 
 def _schema_digest(cur: Any) -> str:

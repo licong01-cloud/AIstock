@@ -1053,7 +1053,13 @@ class QEWorkspaceSubmissionCoordinator:
         next_status, release_reason = self._reservation_state_for_remote(remote_status)
         if str(reservation.get("status") or "") in {"released", "failed", "cancelled"}:
             return reservation
-        if str(reservation.get("owner_id") or "") != normalized_owner_id:
+        owner_mismatch = str(reservation.get("owner_id") or "") != normalized_owner_id
+        exact_terminal_handoff = (
+            next_status in {"released", "failed", "cancelled"}
+            and bool(expected_reservation_id)
+            and reservation_id == expected_reservation_id
+        )
+        if owner_mismatch and not exact_terminal_handoff:
             claimed = self._repository.claim_reservation_for_source(
                 source_kind=source_kind,
                 source_execution_id=source_execution_id,

@@ -12,13 +12,21 @@ from backend.services.advisory_historical_range.executor import (
     _list_all_execution_runs,
 )
 from backend.services.advisory_historical_range.catalog_planner import HistoricalRangeSourceInputUnavailable
+from backend.services.advisory_historical_range.artifact_store import (
+    HistoricalRangeArtifactStore,
+)
 from backend.services.advisory_historical_range.models import (
+    OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
+    HistoricalRangeArtifactKind,
     HistoricalRangeContractError,
     HistoricalRangeCandidateFactV1,
     HistoricalRangeDayStatus,
     HistoricalRangeExecutionOperationV1,
     HistoricalRangeListItemFactV1,
     HistoricalRangeOperationStatus,
+    HistoricalRangeOperationAttemptV1,
+    HistoricalRangeOperationType,
+    HistoricalRangeOutcomeRefreshReceiptV1,
     HistoricalRangeRunExecutionReceiptV1,
     derive_prefixed_id,
 )
@@ -80,6 +88,120 @@ def test_repository_sql_closes_waiting_stage_and_operation_worker_lease_identity
     assert "lease_token = %s" in transition_operation_source
     assert "lease_expires_at = %s" in transition_operation_source
     assert "fencing_token = COALESCE(%s, fencing_token)" in transition_operation_source
+    assert (
+        "result_ref = CASE WHEN %s THEN NULL ELSE COALESCE(result_ref, %s) END"
+        in transition_operation_source
+    )
+
+
+def test_r4_due_and_summary_outcome_queries_bind_episode_scope_to_exact_subject_ref() -> None:
+    due_source = inspect.getsource(PostgresHistoricalRangeRepository.list_due_outcomes)
+    summary_source = inspect.getsource(PostgresHistoricalRangeRepository.list_outcomes_for_summary)
+    append_source = inspect.getsource(
+        PostgresHistoricalRangeRepository._validate_outcome_artifact
+    )
+    identity_source = inspect.getsource(
+        PostgresHistoricalRangeRepository._get_outcome_subject_identity
+    )
+
+    for source in (due_source, summary_source):
+        assert "outcome.outcome_json->'subject_ref'" in source
+        assert "day.day_receipt_ref = outcome.outcome_json->'subject_ref'" in source
+        assert "ORDER BY episode.decision_trade_date DESC" not in source
+    assert "PARTITION BY scoped.outcome_logical_id" in due_source
+    assert "WHERE ranked.version_rank = 1" in due_source
+    assert "PARTITION BY scoped.outcome_logical_id" in summary_source
+    assert "WHERE ranked.version_rank = 1" in summary_source
+    assert "subject_ref=outcome_artifact.subject_ref" in append_source
+    assert "AND {ref_sql} = %s" in identity_source
+    assert "ORDER BY subject.decision_trade_date DESC" not in identity_source
+    assert "LIMIT 1" not in identity_source
+
+
+def test_r4_operation_attempt_receipt_requires_typed_payload_and_exact_upstream(
+    tmp_path,
+) -> None:
+    resolved_hash = digest("resolved-request")
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    store = HistoricalRangeArtifactStore(root=artifact_root)
+    outcome_ref = store.publish_payload(
+        artifact_kind=HistoricalRangeArtifactKind.OUTCOME,
+        producer_contract_version="test_v1",
+        payload_schema_version="test_v1",
+        resolved_request_hash=resolved_hash,
+        range_run_id="run-1",
+        payload={"test": "outcome"},
+    ).ref
+    receipt = HistoricalRangeOutcomeRefreshReceiptV1(
+        operation_id="operation-1",
+        request_hash=digest("request-1"),
+        status="COMPLETED",
+        processed_count=1,
+        outcome_refs=(outcome_ref,),
+    )
+
+    def publish_receipt(*, upstream_refs):
+        return store.publish_payload(
+            artifact_kind=HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT,
+            producer_contract_version="test_v1",
+            payload_schema_version=OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
+            resolved_request_hash=resolved_hash,
+            payload=receipt.model_dump(mode="json"),
+            upstream_refs=upstream_refs,
+        ).ref
+
+    now = datetime.now(UTC)
+
+    def attempt(ref, *, input_hash):
+        return HistoricalRangeOperationAttemptV1(
+            attempt_id="attempt-1",
+            operation_id="operation-1",
+            attempt_no=1,
+            worker_id="worker-1",
+            lease_token="lease-1",
+            fencing_token=1,
+            status="COMPLETED",
+            input_cursor_json=None,
+            result_cursor_json=None,
+            input_hash=input_hash,
+            result_hash=ref.semantic_content_hash,
+            attempt_receipt_ref=ref,
+            started_at=now,
+            finished_at=now,
+        )
+
+    repository = PostgresHistoricalRangeRepository(
+        conn_factory=lambda: None,
+        artifact_store=store,
+    )
+    exact_ref = publish_receipt(upstream_refs=(outcome_ref,))
+    with pytest.raises(ValueError, match="differs from its durable attempt"):
+        repository._validate_operation_attempt_artifacts(
+            attempt=attempt(exact_ref, input_hash=digest("wrong-request")),
+            resolved_request_hash=resolved_hash,
+            operation_type=HistoricalRangeOperationType.REFRESH_OUTCOMES,
+        )
+
+    incomplete_ref = publish_receipt(upstream_refs=())
+    with pytest.raises(ValueError, match="upstream closure"):
+        repository._validate_operation_attempt_artifacts(
+            attempt=attempt(incomplete_ref, input_hash=digest("request-1")),
+            resolved_request_hash=resolved_hash,
+            operation_type=HistoricalRangeOperationType.REFRESH_OUTCOMES,
+        )
+
+    validation_source = inspect.getsource(
+        PostgresHistoricalRangeRepository._validate_operation_attempt_artifacts
+    )
+    summary_validation = validation_source[
+        validation_source.index("for summary_ref in receipt.summary_refs") :
+        validation_source.index(
+            "elif operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE"
+        )
+    ]
+    assert "*summary.covered_outcome_refs" in summary_validation
+    assert "summary.predecessor_summary_ref" in summary_validation
 
 
 def test_batch_aggregate_refresh_locks_batch_before_reading_child_counts() -> None:

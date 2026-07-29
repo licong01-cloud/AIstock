@@ -45,6 +45,18 @@ EXECUTION_OPERATION_ATTEMPT_RECEIPT_SCHEMA_VERSION = (
 LIST_SUMMARY_SCHEMA_VERSION_V2 = "advisory_historical_range_list_summary_v2"
 RULE_GUIDANCE_SCHEMA_VERSION_V2 = "advisory_historical_range_rule_guidance_v2"
 EPISODE_MARK_SCHEMA_VERSION_V2 = "advisory_historical_range_episode_mark_v2"
+OUTCOME_POLICY_BUNDLE_SCHEMA_VERSION = "advisory_historical_range_outcome_policy_bundle_v1"
+OUTCOME_REFRESH_REQUEST_SCHEMA_VERSION = "advisory_historical_range_outcome_refresh_request_v1"
+OUTCOME_WORK_ITEM_SCHEMA_VERSION = "advisory_historical_range_outcome_work_item_v1"
+OUTCOME_ARTIFACT_SCHEMA_VERSION_V2 = "advisory_historical_range_outcome_artifact_v2"
+SUMMARY_POLICY_SCHEMA_VERSION = "advisory_historical_range_summary_policy_v1"
+SUMMARY_ARTIFACT_SCHEMA_VERSION_V2 = "advisory_historical_range_summary_artifact_v2"
+OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION = "advisory_historical_range_outcome_refresh_receipt_v1"
+DATASET_BRIDGE_REQUEST_SCHEMA_VERSION = "advisory_historical_range_dataset_bridge_request_v1"
+DATASET_BRIDGE_RECEIPT_SCHEMA_VERSION = "advisory_historical_range_dataset_bridge_receipt_v1"
+BACKGROUND_DISPATCH_FAILURE_SCHEMA_VERSION = "advisory_historical_range_background_dispatch_failure_v1"
+PHASE0A_LINEAGE_IDENTITY_SCHEMA_VERSION = "advisory_phase1_phase0a_lineage_identity_v1"
+HISTORICAL_RANGE_LINEAGE_IDENTITY_SCHEMA_VERSION = "advisory_phase1_historical_range_lineage_identity_v1"
 
 HISTORICAL_RANGE_DATA_SOURCE = "DB_HISTORICAL"
 HISTORICAL_RANGE_ORIGIN = "HISTORICAL_RANGE_RESEARCH"
@@ -65,6 +77,20 @@ REASON_ARTIFACT_NOT_FOUND = "ADVISORY_HISTORICAL_RANGE_ARTIFACT_NOT_FOUND"
 REASON_ARTIFACT_COLLISION = "ADVISORY_HISTORICAL_RANGE_ARTIFACT_COLLISION"
 REASON_ARTIFACT_TAMPERED = "ADVISORY_HISTORICAL_RANGE_ARTIFACT_TAMPERED"
 REASON_SOURCE_REVISION_MISMATCH = "ADVISORY_HR_SOURCE_REVISION_MISMATCH"
+REASON_OUTCOME_NOT_DUE = "ADVISORY_HR_OUTCOME_NOT_DUE"
+REASON_OUTCOME_SOURCE_UNAVAILABLE = "ADVISORY_HR_OUTCOME_SOURCE_UNAVAILABLE"
+REASON_OUTCOME_SOURCE_REVISION_CONFLICT = "ADVISORY_HR_OUTCOME_SOURCE_REVISION_CONFLICT"
+REASON_OUTCOME_INPUT_CONFLICT = "ADVISORY_HR_OUTCOME_INPUT_CONFLICT"
+REASON_OUTCOME_CALCULATION_FAILED = "ADVISORY_HR_OUTCOME_CALCULATION_FAILED"
+REASON_OUTCOME_REVISION_INVALID = "ADVISORY_HR_OUTCOME_REVISION_INVALID"
+REASON_SUMMARY_OUTCOME_SET_CONFLICT = "ADVISORY_HR_SUMMARY_OUTCOME_SET_CONFLICT"
+REASON_SUMMARY_CALCULATION_FAILED = "ADVISORY_HR_SUMMARY_CALCULATION_FAILED"
+REASON_DATASET_BRIDGE_VALID_EMPTY = "ADVISORY_HR_DATASET_BRIDGE_VALID_EMPTY"
+REASON_DATASET_BRIDGE_LINEAGE_CONFLICT = "ADVISORY_HR_DATASET_BRIDGE_LINEAGE_CONFLICT"
+REASON_DATASET_BRIDGE_FORMAL_FALLBACK_FORBIDDEN = "ADVISORY_HR_DATASET_BRIDGE_FORMAL_FALLBACK_FORBIDDEN"
+REASON_DATASET_BRIDGE_FAILED = "ADVISORY_HR_DATASET_BRIDGE_FAILED"
+REASON_DATABASE_CAPACITY_EXHAUSTED = "ADVISORY_HR_DATABASE_CAPACITY_EXHAUSTED"
+REASON_DATABASE_UNAVAILABLE = "ADVISORY_HR_DATABASE_UNAVAILABLE"
 
 
 class HistoricalRangeContractError(RuntimeError):
@@ -252,7 +278,9 @@ class HistoricalRangeOperationType(str, Enum):
     RESUME = "RESUME"
     CANCEL = "CANCEL"
     REFRESH_OUTCOMES = "REFRESH_OUTCOMES"
+    REFRESH_OUTCOMES_RUN = "REFRESH_OUTCOMES_RUN"
     BUILD_DATASET_BRIDGE = "BUILD_DATASET_BRIDGE"
+    BUILD_DATASET_BRIDGE_RUN = "BUILD_DATASET_BRIDGE_RUN"
 
 
 class HistoricalRangeListAction(str, Enum):
@@ -274,6 +302,25 @@ class HistoricalRangeOutcomeProjection(str, Enum):
     EXECUTABLE = "EXECUTABLE"
 
 
+class HistoricalRangeEvaluationWindowType(str, Enum):
+    FIXED_HORIZON = "FIXED_HORIZON"
+    EPISODE_LIFECYCLE = "EPISODE_LIFECYCLE"
+
+
+class HistoricalRangeOutcomeRevisionReason(str, Enum):
+    INITIAL = "INITIAL"
+    MATURITY_ADVANCE = "MATURITY_ADVANCE"
+    SOURCE_CORRECTION = "SOURCE_CORRECTION"
+    CALCULATION_CORRECTION = "CALCULATION_CORRECTION"
+
+
+class HistoricalRangeBridgeResultStatus(str, Enum):
+    SEALED = "SEALED"
+    VALID_EMPTY = "VALID_EMPTY"
+    RETRYABLE_FAILED = "RETRYABLE_FAILED"
+    FAILED = "FAILED"
+
+
 class HistoricalRangeArtifactKind(str, Enum):
     SOURCE_REQUIREMENT_PLAN = "SOURCE_REQUIREMENT_PLAN"
     SOURCE_CATALOG_CHECKPOINT = "SOURCE_CATALOG_CHECKPOINT"
@@ -285,6 +332,8 @@ class HistoricalRangeArtifactKind(str, Enum):
     DECISION_MARK_SET = "DECISION_MARK_SET"
     DAY_RECEIPT = "DAY_RECEIPT"
     RANGE_RECEIPT = "RANGE_RECEIPT"
+    OUTCOME_REFRESH_RECEIPT = "OUTCOME_REFRESH_RECEIPT"
+    DATASET_BRIDGE_RECEIPT = "DATASET_BRIDGE_RECEIPT"
     OUTCOME = "OUTCOME"
     SUMMARY = "SUMMARY"
     DATASET_BRIDGE = "DATASET_BRIDGE"
@@ -1544,7 +1593,6 @@ class HistoricalRangeArtifactEnvelopeV1(_StrictContract):
             HistoricalRangeArtifactKind.FROZEN_PROGRAM,
             HistoricalRangeArtifactKind.OUTCOME,
             HistoricalRangeArtifactKind.SUMMARY,
-            HistoricalRangeArtifactKind.DATASET_BRIDGE,
         }
         day_kinds = {
             HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT,
@@ -1560,6 +1608,13 @@ class HistoricalRangeArtifactEnvelopeV1(_StrictContract):
         elif self.artifact_kind is HistoricalRangeArtifactKind.RANGE_RECEIPT:
             if self.day_run_id is not None:
                 raise ValueError("range receipt cannot carry day_run_id")
+        elif self.artifact_kind in {
+            HistoricalRangeArtifactKind.DATASET_BRIDGE,
+            HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT,
+            HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT,
+        }:
+            if self.day_run_id is not None:
+                raise ValueError("batch-derived artifact cannot carry day_run_id")
         elif self.artifact_kind in day_kinds and (self.range_run_id is None or self.day_run_id is None):
             raise ValueError("day artifact requires range_run_id and day_run_id")
         if self.artifact_kind is HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT and not source_refs:
@@ -1840,6 +1895,27 @@ class HistoricalRangeOperationRequestV1(_StrictContract):
         return self
 
 
+class HistoricalRangeBackgroundDispatchFailureV1(_StrictContract):
+    """Durable evidence for a background command that failed before domain claim."""
+
+    schema_version: Literal["advisory_historical_range_background_dispatch_failure_v1"] = (
+        BACKGROUND_DISPATCH_FAILURE_SCHEMA_VERSION
+    )
+    operation_id: str = Field(min_length=1, max_length=160)
+    batch_id: str = Field(min_length=1, max_length=160)
+    command: str = Field(min_length=1, max_length=80)
+    stage: Literal["RUNTIME_RECONSTRUCTION", "REQUEST_RECONSTRUCTION", "CLAIM_AND_EXECUTION"]
+    reason_code: str = Field(min_length=1, max_length=200)
+    error_type: str = Field(min_length=1, max_length=200)
+    retryable: Literal[True] = True
+    recorded_at: datetime
+
+    @field_validator("recorded_at")
+    @classmethod
+    def _recorded_at(cls, value: datetime) -> datetime:
+        return _aware_utc(value, field_name="recorded_at")
+
+
 class HistoricalRangePlanningArtifactBindingsV1(_StrictContract):
     requirement_plan_ref: HistoricalRangeArtifactRefV1
     artifact_root_identity_hash: str = Field(min_length=64, max_length=64)
@@ -1890,9 +1966,11 @@ class HistoricalRangeOperationAttemptV1(_StrictContract):
             HistoricalRangeArtifactKind.RANGE_RECEIPT,
             HistoricalRangeArtifactKind.SOURCE_REQUIREMENT_PLAN,
             HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+            HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT,
+            HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT,
         }:
             raise ValueError(
-                "operation attempt receipt must reference RANGE_RECEIPT, SOURCE_REQUIREMENT_PLAN, or SOURCE_CATALOG_CHECKPOINT"
+                "operation attempt receipt kind is not valid for a historical-range operation"
             )
         if self.status != "RUNNING" and self.attempt_receipt_ref is None:
             raise ValueError("non-running operation attempts require an immutable receipt")
@@ -2705,6 +2783,333 @@ class HistoricalRangeEpisodeSnapshotFactV1(_StrictContract):
         return self
 
 
+class HistoricalRangePolicyComponentV1(_StrictContract):
+    component_role: Literal[
+        "CALENDAR",
+        "MARKET_DATA",
+        "EXECUTION",
+        "COST",
+        "BENCHMARK",
+        "CASH_RETURN",
+        "TERMINAL",
+        "BARRIER",
+        "CORPORATE_ACTION",
+    ]
+    component_ref: str = Field(min_length=1, max_length=320)
+    component_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("component_hash")
+    @classmethod
+    def _hash(cls, value: str) -> str:
+        return require_sha256(value, field_name="component_hash")
+
+
+class HistoricalRangeOutcomePolicyBundleV1(_StrictContract):
+    """Range-native valuation policy with no Phase 0A admission identity."""
+
+    schema_version: Literal[OUTCOME_POLICY_BUNDLE_SCHEMA_VERSION] = OUTCOME_POLICY_BUNDLE_SCHEMA_VERSION
+    policy_bundle_id: str | None = Field(default=None, min_length=1, max_length=160)
+    policy_bundle_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    package_id: str = Field(min_length=1, max_length=160)
+    manifest_sha256: str = Field(min_length=64, max_length=64)
+    alpha_mode: Literal["single_alpha", "multi_alpha"]
+    style_family: str = Field(min_length=1, max_length=160)
+    style_resolution_reason: str = Field(min_length=1, max_length=160)
+    calendar_version: str = Field(min_length=1, max_length=160)
+    calendar_hash: str = Field(min_length=64, max_length=64)
+    components: tuple[HistoricalRangePolicyComponentV1, ...] = Field(min_length=9)
+    horizons: tuple[int, ...] = Field(min_length=1)
+    projections_by_horizon: dict[int, tuple[str, ...]]
+    candidate_reference_notional: Decimal = Field(gt=Decimal("0"))
+    benchmark_portfolio_notional: Decimal = Field(gt=Decimal("0"))
+    gap_1d_enabled: bool = False
+    research_scope: Literal["RETROSPECTIVE_RESEARCH_ONLY"] = "RETROSPECTIVE_RESEARCH_ONLY"
+    execution_prohibited: Literal[True] = True
+
+    @field_validator("manifest_sha256", "calendar_hash", "policy_bundle_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _identity(self) -> "HistoricalRangeOutcomePolicyBundleV1":
+        roles = tuple(item.component_role for item in self.components)
+        if roles != tuple(sorted(roles)) or len(set(roles)) != len(roles):
+            raise ValueError("policy components must be sorted by unique role")
+        required_roles = {
+            "CALENDAR", "MARKET_DATA", "EXECUTION", "COST", "BENCHMARK",
+            "CASH_RETURN", "TERMINAL", "BARRIER", "CORPORATE_ACTION",
+        }
+        if set(roles) != required_roles:
+            raise ValueError("range policy bundle requires the complete Phase 1 component set")
+        if self.horizons != tuple(sorted(set(self.horizons))) or any(item < 1 for item in self.horizons):
+            raise ValueError("policy horizons must be sorted, unique, and positive")
+        if set(self.projections_by_horizon) != set(self.horizons):
+            raise ValueError("projections_by_horizon must exactly cover horizons")
+        allowed = {
+            "RETURN_GROSS", "RETURN_NET_ABSOLUTE", "RETURN_NET_EXCESS",
+            "PATH_MFE", "PATH_MAE", "EXECUTABLE_MFE", "EXECUTABLE_MAE",
+        }
+        for horizon, projections in self.projections_by_horizon.items():
+            if not projections or len(set(projections)) != len(projections) or not set(projections) <= allowed:
+                raise ValueError(f"horizon {horizon} has invalid or duplicate projections")
+        payload = self.model_dump(mode="json", exclude={"policy_bundle_id", "policy_bundle_hash"})
+        digest = canonical_json_sha256(payload)
+        expected_id = f"ahrpb_{digest[:20]}"
+        if self.policy_bundle_hash is not None and self.policy_bundle_hash != digest:
+            raise ValueError("policy_bundle_hash does not match canonical range policy")
+        if self.policy_bundle_id is not None and self.policy_bundle_id != expected_id:
+            raise ValueError("policy_bundle_id does not match canonical range policy")
+        object.__setattr__(self, "policy_bundle_hash", digest)
+        object.__setattr__(self, "policy_bundle_id", expected_id)
+        return self
+
+
+class HistoricalRangeOutcomeRefreshRequestV1(_StrictContract):
+    schema_version: Literal[OUTCOME_REFRESH_REQUEST_SCHEMA_VERSION] = OUTCOME_REFRESH_REQUEST_SCHEMA_VERSION
+    batch_id: str = Field(min_length=1, max_length=160)
+    range_run_ids: tuple[str, ...] = ()
+    label_as_of_trade_date: date
+    policy_bundle_ref: HistoricalRangeArtifactRefV1
+    policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    requested_subject_types: tuple[HistoricalRangeOutcomeSubjectType, ...] = (
+        HistoricalRangeOutcomeSubjectType.CANDIDATE,
+        HistoricalRangeOutcomeSubjectType.EPISODE,
+        HistoricalRangeOutcomeSubjectType.LIST_VERSION,
+        HistoricalRangeOutcomeSubjectType.RANGE,
+    )
+    requested_outcome_logical_ids: tuple[str, ...] = ()
+    requested_projections: tuple[HistoricalRangeOutcomeProjection, ...] = (
+        HistoricalRangeOutcomeProjection.EXECUTABLE,
+        HistoricalRangeOutcomeProjection.RECOMMENDATION,
+    )
+    horizons: tuple[int, ...] = Field(min_length=1)
+    producer_code_hash: str = Field(min_length=64, max_length=64)
+    outcome_contract_version: str = Field(min_length=1, max_length=160)
+    correction_reason: HistoricalRangeOutcomeRevisionReason | None = None
+    correction_evidence_ref: HistoricalRangeArtifactRefV1 | None = None
+    operation_idempotency_key: str = Field(min_length=1, max_length=200)
+    expected_batch_row_version: int = Field(ge=1)
+    max_items_per_slice: int = Field(default=500, ge=1, le=10000)
+    max_parallel_runs: int = Field(default=2, ge=1, le=64)
+    lease_seconds: int = Field(default=300, ge=30, le=3600)
+    request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("policy_bundle_hash", "producer_code_hash", "request_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _request_identity(self) -> "HistoricalRangeOutcomeRefreshRequestV1":
+        if (
+            self.policy_bundle_ref.artifact_kind is not HistoricalRangeArtifactKind.REQUEST
+            or self.policy_bundle_ref.payload_sha256 != self.policy_bundle_hash
+        ):
+            raise ValueError("policy bundle ref/hash pair does not match")
+        if self.range_run_ids != tuple(sorted(set(self.range_run_ids))):
+            raise ValueError("range_run_ids must be sorted and unique")
+        if self.requested_subject_types != tuple(sorted(set(self.requested_subject_types), key=lambda item: item.value)):
+            raise ValueError("requested_subject_types must be sorted and unique")
+        if self.requested_outcome_logical_ids != tuple(sorted(set(self.requested_outcome_logical_ids))):
+            raise ValueError("requested_outcome_logical_ids must be sorted and unique")
+        if any(
+            not item.strip() or item != item.strip() or len(item) > 160
+            for item in self.requested_outcome_logical_ids
+        ):
+            raise ValueError("requested_outcome_logical_ids contain an invalid identity")
+        if self.requested_projections != tuple(sorted(set(self.requested_projections), key=lambda item: item.value)):
+            raise ValueError("requested_projections must be sorted and unique")
+        if self.horizons != tuple(sorted(set(self.horizons))) or any(item < 1 for item in self.horizons):
+            raise ValueError("refresh horizons must be sorted, unique, and positive")
+        if (self.correction_reason is None) != (self.correction_evidence_ref is None):
+            raise ValueError("outcome correction reason/evidence must be supplied together")
+        if self.correction_reason is not None and self.correction_reason not in {
+            HistoricalRangeOutcomeRevisionReason.SOURCE_CORRECTION,
+            HistoricalRangeOutcomeRevisionReason.CALCULATION_CORRECTION,
+        }:
+            raise ValueError("refresh correction reason must be SOURCE or CALCULATION correction")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"request_hash"}))
+        if self.request_hash is not None and self.request_hash != digest:
+            raise ValueError("request_hash does not match outcome refresh request")
+        object.__setattr__(self, "request_hash", digest)
+        return self
+
+
+class HistoricalRangeOutcomeWorkItemV1(_StrictContract):
+    schema_version: Literal[OUTCOME_WORK_ITEM_SCHEMA_VERSION] = OUTCOME_WORK_ITEM_SCHEMA_VERSION
+    range_run_id: str = Field(min_length=1, max_length=160)
+    subject_type: HistoricalRangeOutcomeSubjectType
+    subject_id: str = Field(min_length=1, max_length=160)
+    subject_ref: HistoricalRangeArtifactRefV1
+    policy_bundle_ref: HistoricalRangeArtifactRefV1
+    projection: HistoricalRangeOutcomeProjection
+    evaluation_window_type: HistoricalRangeEvaluationWindowType
+    horizon_trade_days: int = Field(ge=0)
+    policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    decision_trade_date: date
+    intended_entry_trade_date: date | None = None
+    earliest_sell_trade_date: date | None = None
+    exit_trade_date: date | None = None
+    label_as_of_trade_date: date
+    source_revision_refs: tuple[HistoricalRangeArtifactRefV1, ...] = Field(min_length=1)
+    source_artifact_ref_set_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    producer_code_hash: str = Field(min_length=64, max_length=64)
+    outcome_contract_version: str = Field(min_length=1, max_length=160)
+    revision_reason: HistoricalRangeOutcomeRevisionReason
+    predecessor_outcome_ref: HistoricalRangeArtifactRefV1 | None = None
+    revision_evidence_ref: HistoricalRangeArtifactRefV1 | None = None
+    outcome_logical_id: str | None = Field(default=None, min_length=1, max_length=160)
+    outcome_input_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "policy_bundle_hash", "source_artifact_ref_set_hash", "source_revision_set_hash",
+        "producer_code_hash", "outcome_input_hash"
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _window_and_identity(self) -> "HistoricalRangeOutcomeWorkItemV1":
+        if (
+            self.policy_bundle_ref.artifact_kind is not HistoricalRangeArtifactKind.REQUEST
+            or self.policy_bundle_ref.payload_sha256 != self.policy_bundle_hash
+        ):
+            raise ValueError("work item policy artifact ref/hash pair does not match")
+        if self.evaluation_window_type is HistoricalRangeEvaluationWindowType.EPISODE_LIFECYCLE:
+            if self.subject_type is not HistoricalRangeOutcomeSubjectType.EPISODE or self.horizon_trade_days != 0:
+                raise ValueError("episode lifecycle work requires EPISODE subject and horizon sentinel zero")
+        elif self.subject_type is HistoricalRangeOutcomeSubjectType.EPISODE or self.horizon_trade_days < 1:
+            raise ValueError("fixed-horizon work excludes EPISODE and requires a positive horizon")
+        refs = tuple(sorted(self.source_revision_refs, key=lambda item: item.semantic_content_hash))
+        if len(refs) != len({item.semantic_content_hash for item in refs}):
+            raise ValueError("source revision refs must be unique")
+        artifact_ref_set_hash = canonical_json_sha256(
+            [item.model_dump(mode="json") for item in refs]
+        )
+        if (
+            self.source_artifact_ref_set_hash is not None
+            and self.source_artifact_ref_set_hash != artifact_ref_set_hash
+        ):
+            raise ValueError("source_artifact_ref_set_hash does not match exact refs")
+        if self.revision_reason is HistoricalRangeOutcomeRevisionReason.INITIAL:
+            if self.predecessor_outcome_ref is not None or self.revision_evidence_ref is not None:
+                raise ValueError("initial outcome work cannot carry predecessor/correction evidence")
+        elif self.predecessor_outcome_ref is None:
+            raise ValueError("non-initial outcome work requires an exact predecessor")
+        if (
+            self.predecessor_outcome_ref is not None
+            and self.predecessor_outcome_ref.artifact_kind
+            is not HistoricalRangeArtifactKind.OUTCOME
+        ):
+            raise ValueError("outcome predecessor ref must reference OUTCOME")
+        if self.revision_reason in {
+            HistoricalRangeOutcomeRevisionReason.SOURCE_CORRECTION,
+            HistoricalRangeOutcomeRevisionReason.CALCULATION_CORRECTION,
+        } and self.revision_evidence_ref is None:
+            raise ValueError("correction work requires immutable revision evidence")
+        logical_id = derive_outcome_logical_id(
+            self.subject_type,
+            self.subject_id,
+            self.projection,
+            self.evaluation_window_type,
+            self.horizon_trade_days,
+            self.policy_bundle_hash,
+        )
+        payload = self.model_dump(
+            mode="json",
+            exclude={"outcome_logical_id", "outcome_input_hash"},
+        )
+        payload["source_revision_refs"] = [
+            item.model_dump(mode="json") for item in refs
+        ]
+        payload["source_artifact_ref_set_hash"] = artifact_ref_set_hash
+        input_hash = canonical_json_sha256(payload)
+        if self.outcome_logical_id is not None and self.outcome_logical_id != logical_id:
+            raise ValueError("outcome_logical_id does not match work identity")
+        if self.outcome_input_hash is not None and self.outcome_input_hash != input_hash:
+            raise ValueError("outcome_input_hash does not match canonical work item")
+        object.__setattr__(self, "source_revision_refs", refs)
+        object.__setattr__(self, "source_artifact_ref_set_hash", artifact_ref_set_hash)
+        object.__setattr__(self, "outcome_logical_id", logical_id)
+        object.__setattr__(self, "outcome_input_hash", input_hash)
+        return self
+
+
+class Phase0ALineageIdentity(_StrictContract):
+    lineage_type: Literal["PHASE0A"] = "PHASE0A"
+    schema_version: Literal[PHASE0A_LINEAGE_IDENTITY_SCHEMA_VERSION] = PHASE0A_LINEAGE_IDENTITY_SCHEMA_VERSION
+    phase0a_audit_id: str = Field(min_length=1, max_length=160)
+    phase0a_audit_hash: str = Field(min_length=64, max_length=64)
+    phase1_handoff_bundle_hash: str = Field(min_length=64, max_length=64)
+    handoff_readiness_hash: str = Field(min_length=64, max_length=64)
+    admission_scope_id: str = Field(min_length=1, max_length=160)
+    admission_scope_hash: str = Field(min_length=64, max_length=64)
+    formal_oos_interval_id: str = Field(min_length=1, max_length=160)
+    formal_oos_interval_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator(
+        "phase0a_audit_hash", "phase1_handoff_bundle_hash", "handoff_readiness_hash",
+        "admission_scope_hash", "formal_oos_interval_hash",
+    )
+    @classmethod
+    def _hash(cls, value: str, info: Any) -> str:
+        return require_sha256(value, field_name=info.field_name)
+
+
+class HistoricalRangeLineageIdentity(_StrictContract):
+    lineage_type: Literal["HISTORICAL_RANGE"] = "HISTORICAL_RANGE"
+    schema_version: Literal[HISTORICAL_RANGE_LINEAGE_IDENTITY_SCHEMA_VERSION] = (
+        HISTORICAL_RANGE_LINEAGE_IDENTITY_SCHEMA_VERSION
+    )
+    historical_range_request_ref: HistoricalRangeArtifactRefV1
+    historical_range_frozen_program_ref: HistoricalRangeArtifactRefV1
+    range_run_id: str = Field(min_length=1, max_length=160)
+    range_day_run_id: str = Field(min_length=1, max_length=160)
+    candidate_artifact_ref: HistoricalRangeArtifactRefV1
+    package_id: str = Field(min_length=1, max_length=160)
+    manifest_sha256: str = Field(min_length=64, max_length=64)
+    code_release_hash: str = Field(min_length=64, max_length=64)
+    signal_source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    oos_interval_id: Literal["RETROSPECTIVE_RANGE_NO_FORMAL_OOS_V1"] = (
+        "RETROSPECTIVE_RANGE_NO_FORMAL_OOS_V1"
+    )
+    oos_interval_hash: str = Field(min_length=64, max_length=64)
+    range_lineage_identity_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "manifest_sha256", "code_release_hash", "signal_source_revision_set_hash",
+        "oos_interval_hash", "range_lineage_identity_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _identity(self) -> "HistoricalRangeLineageIdentity":
+        if self.historical_range_request_ref.artifact_kind is not HistoricalRangeArtifactKind.REQUEST:
+            raise ValueError("range lineage request ref must be REQUEST")
+        if self.historical_range_frozen_program_ref.artifact_kind is not HistoricalRangeArtifactKind.FROZEN_PROGRAM:
+            raise ValueError("range lineage program ref must be FROZEN_PROGRAM")
+        if self.candidate_artifact_ref.artifact_kind is not HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT:
+            raise ValueError("range lineage candidate ref must be CANDIDATE_ARTIFACT")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"range_lineage_identity_hash"}))
+        if self.range_lineage_identity_hash is not None and self.range_lineage_identity_hash != digest:
+            raise ValueError("range_lineage_identity_hash does not match exact lineage")
+        object.__setattr__(self, "range_lineage_identity_hash", digest)
+        return self
+
+
+AdvisoryPhase1LineageIdentity: TypeAlias = Annotated[
+    Phase0ALineageIdentity | HistoricalRangeLineageIdentity,
+    Field(discriminator="lineage_type"),
+]
+
+
 class HistoricalRangeOutcomeFactV1(_StrictContract):
     outcome_version_id: str = Field(min_length=1, max_length=160)
     outcome_logical_id: str = Field(min_length=1, max_length=160)
@@ -2712,11 +3117,18 @@ class HistoricalRangeOutcomeFactV1(_StrictContract):
     subject_type: HistoricalRangeOutcomeSubjectType
     subject_id: str = Field(min_length=1, max_length=160)
     projection: HistoricalRangeOutcomeProjection
-    horizon_trade_days: int = Field(ge=1)
-    label_policy_hash: str = Field(min_length=64, max_length=64)
+    evaluation_window_type: HistoricalRangeEvaluationWindowType
+    horizon_trade_days: int = Field(ge=0)
+    historical_range_policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    outcome_input_hash: str = Field(min_length=64, max_length=64)
+    revision_reason: HistoricalRangeOutcomeRevisionReason
+    producer_code_hash: str = Field(min_length=64, max_length=64)
+    outcome_contract_version: str = Field(min_length=1, max_length=160)
     source_revision_set_hash: str = Field(min_length=64, max_length=64)
     predecessor_outcome_version_id: str | None = Field(default=None, min_length=1, max_length=160)
     predecessor_outcome_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    revision_evidence_ref: HistoricalRangeArtifactRefV1 | None = None
+    revision_evidence_hash: str | None = Field(default=None, min_length=64, max_length=64)
     maturity_status: HistoricalRangeOutcomeStatus
     label_as_of_trade_date: date | None = None
     next_refresh_trade_date: date | None = None
@@ -2731,9 +3143,12 @@ class HistoricalRangeOutcomeFactV1(_StrictContract):
     outcome_content_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
     @field_validator(
-        "label_policy_hash",
+        "historical_range_policy_bundle_hash",
+        "outcome_input_hash",
+        "producer_code_hash",
         "source_revision_set_hash",
         "predecessor_outcome_hash",
+        "revision_evidence_hash",
         "benchmark_hash",
         "cost_policy_hash",
         "corporate_action_hash",
@@ -2749,18 +3164,68 @@ class HistoricalRangeOutcomeFactV1(_StrictContract):
             self.subject_type,
             self.subject_id,
             self.projection,
+            self.evaluation_window_type,
             self.horizon_trade_days,
-            self.label_policy_hash,
+            self.historical_range_policy_bundle_hash,
         )
         if self.outcome_logical_id != expected:
             raise ValueError("outcome_logical_id does not match outcome identity")
         if self.outcome_version == 1:
-            if self.predecessor_outcome_version_id is not None or self.predecessor_outcome_hash is not None:
+            if (
+                self.predecessor_outcome_version_id is not None
+                or self.predecessor_outcome_hash is not None
+                or self.revision_reason is not HistoricalRangeOutcomeRevisionReason.INITIAL
+            ):
                 raise ValueError("first outcome version cannot have a predecessor")
-        elif self.predecessor_outcome_version_id is None or self.predecessor_outcome_hash is None:
-            raise ValueError("later outcome versions require predecessor identity/hash")
+        elif (
+            self.predecessor_outcome_version_id is None
+            or self.predecessor_outcome_hash is None
+            or self.revision_reason is HistoricalRangeOutcomeRevisionReason.INITIAL
+        ):
+            raise ValueError("later outcome versions require predecessor identity/hash and revision reason")
+        if self.evaluation_window_type is HistoricalRangeEvaluationWindowType.EPISODE_LIFECYCLE:
+            if self.subject_type is not HistoricalRangeOutcomeSubjectType.EPISODE or self.horizon_trade_days != 0:
+                raise ValueError("episode outcome requires EPISODE subject and horizon sentinel zero")
+        elif self.subject_type is HistoricalRangeOutcomeSubjectType.EPISODE or self.horizon_trade_days < 1:
+            raise ValueError("fixed-horizon outcome excludes EPISODE and requires positive horizon")
+        correction = self.revision_reason in {
+            HistoricalRangeOutcomeRevisionReason.SOURCE_CORRECTION,
+            HistoricalRangeOutcomeRevisionReason.CALCULATION_CORRECTION,
+        }
+        if correction != (self.revision_evidence_ref is not None):
+            raise ValueError("correction outcomes require exact revision evidence only")
+        if (self.revision_evidence_ref is None) != (self.revision_evidence_hash is None):
+            raise ValueError("revision evidence ref/hash must be supplied together")
+        if (
+            self.revision_evidence_ref is not None
+            and self.revision_evidence_hash != self.revision_evidence_ref.semantic_content_hash
+        ):
+            raise ValueError("revision evidence ref/hash pair differs")
         if self.outcome_artifact_ref.artifact_kind is not HistoricalRangeArtifactKind.OUTCOME:
             raise ValueError("outcome_artifact_ref must reference OUTCOME")
+        artifact = HistoricalRangeOutcomeArtifactV2.model_validate(self.outcome_json)
+        if (
+            artifact.outcome_logical_id != self.outcome_logical_id
+            or artifact.outcome_version_id != self.outcome_version_id
+            or artifact.outcome_input_hash != self.outcome_input_hash
+            or artifact.projection_group is not self.projection
+            or artifact.evaluation_window_type is not self.evaluation_window_type
+            or artifact.horizon_trade_days != self.horizon_trade_days
+            or artifact.policy_bundle_hash
+            != self.historical_range_policy_bundle_hash
+            or artifact.label_as_of_trade_date != self.label_as_of_trade_date
+            or artifact.source_revision_set_hash != self.source_revision_set_hash
+            or artifact.maturity_status is not self.maturity_status
+            or artifact.next_refresh_trade_date != self.next_refresh_trade_date
+            or artifact.producer_code_hash != self.producer_code_hash
+            or (artifact.predecessor_outcome_ref is None)
+            != (self.predecessor_outcome_version_id is None)
+            or (
+                self.revision_evidence_ref is not None
+                and self.revision_evidence_ref not in artifact.direct_upstream_refs
+            )
+        ):
+            raise ValueError("outcome fact columns differ from the embedded V2 artifact")
         digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"outcome_content_hash"}))
         if self.outcome_content_hash is not None and self.outcome_content_hash != digest:
             raise ValueError("outcome_content_hash does not match outcome facts")
@@ -2773,6 +3238,13 @@ class HistoricalRangeSummaryFactV1(_StrictContract):
     range_run_id: str = Field(min_length=1, max_length=160)
     summary_version: int = Field(ge=1)
     covered_outcome_set_hash: str = Field(min_length=64, max_length=64)
+    summary_policy_hash: str = Field(min_length=64, max_length=64)
+    summary_input_hash: str = Field(min_length=64, max_length=64)
+    recall_denominator_set_hash: str = Field(min_length=64, max_length=64)
+    recall_denominator_evidence_json: dict[str, Any]
+    producer_code_hash: str = Field(min_length=64, max_length=64)
+    maturity_coverage_json: dict[str, Any]
+    maturity_coverage_hash: str = Field(min_length=64, max_length=64)
     predecessor_summary_id: str | None = Field(default=None, min_length=1, max_length=160)
     predecessor_summary_hash: str | None = Field(default=None, min_length=64, max_length=64)
     summary_artifact_ref: HistoricalRangeArtifactRefV1
@@ -2781,6 +3253,11 @@ class HistoricalRangeSummaryFactV1(_StrictContract):
 
     @field_validator(
         "covered_outcome_set_hash",
+        "summary_policy_hash",
+        "summary_input_hash",
+        "recall_denominator_set_hash",
+        "producer_code_hash",
+        "maturity_coverage_hash",
         "predecessor_summary_hash",
         "summary_content_hash",
     )
@@ -2793,14 +3270,469 @@ class HistoricalRangeSummaryFactV1(_StrictContract):
         if self.summary_artifact_ref.artifact_kind is not HistoricalRangeArtifactKind.SUMMARY:
             raise ValueError("summary_artifact_ref must reference SUMMARY")
         if self.summary_version == 1:
-            if self.predecessor_summary_id is not None or self.predecessor_summary_hash is not None:
+            if (
+                self.predecessor_summary_id is not None
+                or self.predecessor_summary_hash is not None
+            ):
                 raise ValueError("first summary version cannot have a predecessor")
-        elif self.predecessor_summary_id is None or self.predecessor_summary_hash is None:
+        elif (
+            self.predecessor_summary_id is None
+            or self.predecessor_summary_hash is None
+        ):
             raise ValueError("later summary versions require predecessor identity/hash")
+        if canonical_json_sha256(self.maturity_coverage_json) != self.maturity_coverage_hash:
+            raise ValueError("maturity_coverage_hash does not match coverage payload")
+        expected_input_hash = canonical_json_sha256(
+            {
+                "covered_outcome_set_hash": self.covered_outcome_set_hash,
+                "summary_policy_hash": self.summary_policy_hash,
+                "recall_denominator_set_hash": self.recall_denominator_set_hash,
+                "producer_code_hash": self.producer_code_hash,
+            }
+        )
+        if self.summary_input_hash != expected_input_hash:
+            raise ValueError("summary_input_hash does not close outcome set, policy, and code")
+        artifact = HistoricalRangeSummaryArtifactV2.model_validate(self.summary_json)
+        if (
+            artifact.range_run_id != self.range_run_id
+            or artifact.summary_input_hash != self.summary_input_hash
+            or artifact.summary_policy_hash != self.summary_policy_hash
+            or artifact.recall_denominator_set_hash
+            != self.recall_denominator_set_hash
+            or artifact.recall_denominator_evidence
+            != self.recall_denominator_evidence_json
+            or artifact.covered_outcome_set_hash != self.covered_outcome_set_hash
+            or artifact.producer_code_hash != self.producer_code_hash
+            or artifact.maturity_coverage != self.maturity_coverage_json
+            or artifact.maturity_coverage_hash != self.maturity_coverage_hash
+        ):
+            raise ValueError("summary fact columns differ from the embedded V2 artifact")
         digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"summary_content_hash"}))
         if self.summary_content_hash is not None and self.summary_content_hash != digest:
             raise ValueError("summary_content_hash does not match summary facts")
         object.__setattr__(self, "summary_content_hash", digest)
+        return self
+
+
+class HistoricalRangeOutcomeArtifactV2(_StrictContract):
+    schema_version: Literal[OUTCOME_ARTIFACT_SCHEMA_VERSION_V2] = OUTCOME_ARTIFACT_SCHEMA_VERSION_V2
+    outcome_logical_id: str = Field(min_length=1, max_length=160)
+    outcome_version_id: str = Field(min_length=1, max_length=160)
+    outcome_input_hash: str = Field(min_length=64, max_length=64)
+    subject_ref: HistoricalRangeArtifactRefV1
+    direct_upstream_refs: tuple[HistoricalRangeArtifactRefV1, ...] = Field(min_length=1)
+    projection_group: HistoricalRangeOutcomeProjection
+    evaluation_window_type: HistoricalRangeEvaluationWindowType
+    horizon_trade_days: int = Field(ge=0)
+    policy_bundle_ref: HistoricalRangeArtifactRefV1
+    policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    label_as_of_trade_date: date
+    source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    maturity_status: HistoricalRangeOutcomeStatus
+    next_refresh_trade_date: date | None = None
+    reason_codes: tuple[str, ...] = ()
+    calculation_results: tuple[dict[str, Any], ...] = ()
+    calculation_result_set_hash: str = Field(min_length=64, max_length=64)
+    predecessor_outcome_ref: HistoricalRangeArtifactRefV1 | None = None
+    producer_code_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator(
+        "outcome_input_hash", "policy_bundle_hash", "source_revision_set_hash",
+        "calculation_result_set_hash", "producer_code_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str, info: Any) -> str:
+        return require_sha256(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _closure(self) -> "HistoricalRangeOutcomeArtifactV2":
+        refs = tuple(sorted(self.direct_upstream_refs, key=lambda item: item.semantic_content_hash))
+        if len(refs) != len({item.semantic_content_hash for item in refs}) or self.subject_ref not in refs:
+            raise ValueError("outcome artifact requires unique exact upstream refs including subject")
+        if (
+            self.policy_bundle_ref.artifact_kind
+            is not HistoricalRangeArtifactKind.REQUEST
+            or self.policy_bundle_ref.payload_sha256 != self.policy_bundle_hash
+            or self.policy_bundle_ref not in refs
+        ):
+            raise ValueError(
+                "outcome artifact requires the exact frozen policy bundle upstream"
+            )
+        if self.predecessor_outcome_ref is not None and (
+            self.predecessor_outcome_ref.artifact_kind
+            is not HistoricalRangeArtifactKind.OUTCOME
+            or self.predecessor_outcome_ref not in refs
+        ):
+            raise ValueError("outcome artifact predecessor must be an exact upstream OUTCOME ref")
+        if canonical_json_sha256(list(self.calculation_results)) != self.calculation_result_set_hash:
+            raise ValueError("calculation_result_set_hash does not match typed results")
+        reasons = tuple(sorted(_nonblank(item, field_name="reason_code") for item in self.reason_codes))
+        if len(reasons) != len(set(reasons)):
+            raise ValueError("outcome artifact reason codes must be unique")
+        if self.maturity_status is HistoricalRangeOutcomeStatus.FAILED and (self.calculation_results or not reasons):
+            raise ValueError("FAILED outcome artifact requires reasons and no fabricated calculation result")
+        if self.maturity_status is not HistoricalRangeOutcomeStatus.FAILED and not self.calculation_results:
+            raise ValueError("non-failed outcome artifact requires calculation results")
+        object.__setattr__(self, "direct_upstream_refs", refs)
+        object.__setattr__(self, "reason_codes", reasons)
+        return self
+
+
+class HistoricalRangeSummaryPolicyV1(_StrictContract):
+    schema_version: Literal[SUMMARY_POLICY_SCHEMA_VERSION] = SUMMARY_POLICY_SCHEMA_VERSION
+    subject_types: tuple[HistoricalRangeOutcomeSubjectType, ...]
+    projection_groups: tuple[HistoricalRangeOutcomeProjection, ...]
+    evaluation_window_types: tuple[HistoricalRangeEvaluationWindowType, ...]
+    horizons: tuple[int, ...]
+    outcome_policy_bundle_hash: str = Field(min_length=64, max_length=64)
+    latest_eligible_resolution: Literal["MAX_VERSION_AS_OF_EXACT_LOGICAL_KEY_V1"] = (
+        "MAX_VERSION_AS_OF_EXACT_LOGICAL_KEY_V1"
+    )
+    incomplete_denominator_policy: Literal["ALL_ELIGIBLE_STATUS_COUNTS_V1"] = "ALL_ELIGIBLE_STATUS_COUNTS_V1"
+    equal_weight_policy: Literal["DECISION_DAY_LIST_THEN_RANGE_EQUAL_WEIGHT_V1"] = (
+        "DECISION_DAY_LIST_THEN_RANGE_EQUAL_WEIGHT_V1"
+    )
+    turnover_policy: Literal["HALF_ABSOLUTE_WEIGHT_DELTA_ADJACENT_SUCCESS_V1"] = (
+        "HALF_ABSOLUTE_WEIGHT_DELTA_ADJACENT_SUCCESS_V1"
+    )
+    drawdown_policy: Literal["COMPOUNDED_COHORT_RUNNING_MAX_V1"] = "COMPOUNDED_COHORT_RUNNING_MAX_V1"
+    industry_policy: Literal["DECISION_T_FROZEN_HHI_UNKNOWN_BUCKET_V1"] = (
+        "DECISION_T_FROZEN_HHI_UNKNOWN_BUCKET_V1"
+    )
+    recall_policy: Literal["PIT_ELIGIBLE_POSITIVE_TOPK_V1"] = "PIT_ELIGIBLE_POSITIVE_TOPK_V1"
+    recall_k_values: tuple[int, ...] = (5,)
+    regime_policy: Literal["DECISION_T_FROZEN_REGIME_V1"] = "DECISION_T_FROZEN_REGIME_V1"
+    decimal_quantization: str = Field(default="0.000000000001", pattern=r"^0\.0+1$")
+    missing_value_policy: Literal["TYPED_UNAVAILABLE_NEVER_ZERO_V1"] = "TYPED_UNAVAILABLE_NEVER_ZERO_V1"
+    summary_policy_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("outcome_policy_bundle_hash", "summary_policy_hash")
+    @classmethod
+    def _hash(cls, value: str | None, info: Any) -> str | None:
+        return (
+            require_sha256(value, field_name=info.field_name)
+            if value is not None
+            else None
+        )
+
+    @model_validator(mode="after")
+    def _identity(self) -> "HistoricalRangeSummaryPolicyV1":
+        for field_name, values, key in (
+            ("subject_types", self.subject_types, lambda item: item.value),
+            ("projection_groups", self.projection_groups, lambda item: item.value),
+            ("evaluation_window_types", self.evaluation_window_types, lambda item: item.value),
+        ):
+            if not values or values != tuple(sorted(set(values), key=key)):
+                raise ValueError(f"{field_name} must be sorted, unique, and non-empty")
+        if self.horizons != tuple(sorted(set(self.horizons))) or any(item < 0 for item in self.horizons):
+            raise ValueError("summary horizons must be sorted, unique, and non-negative")
+        if self.recall_k_values != tuple(sorted(set(self.recall_k_values))) or any(
+            item < 1 for item in self.recall_k_values
+        ):
+            raise ValueError("recall_k_values must be sorted, unique, and positive")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"summary_policy_hash"}))
+        if self.summary_policy_hash is not None and self.summary_policy_hash != digest:
+            raise ValueError("summary_policy_hash does not match frozen policy")
+        object.__setattr__(self, "summary_policy_hash", digest)
+        return self
+
+
+class HistoricalRangeSummaryArtifactV2(_StrictContract):
+    schema_version: Literal[SUMMARY_ARTIFACT_SCHEMA_VERSION_V2] = SUMMARY_ARTIFACT_SCHEMA_VERSION_V2
+    range_run_id: str = Field(min_length=1, max_length=160)
+    summary_input_hash: str = Field(min_length=64, max_length=64)
+    summary_policy_hash: str = Field(min_length=64, max_length=64)
+    covered_outcome_refs: tuple[HistoricalRangeArtifactRefV1, ...]
+    covered_outcome_set_hash: str = Field(min_length=64, max_length=64)
+    recall_denominator_evidence: dict[str, Any]
+    recall_denominator_set_hash: str = Field(min_length=64, max_length=64)
+    maturity_coverage: dict[str, Any]
+    maturity_coverage_hash: str = Field(min_length=64, max_length=64)
+    metrics: tuple[dict[str, Any], ...]
+    metrics_hash: str = Field(min_length=64, max_length=64)
+    unavailable_metrics: tuple[dict[str, Any], ...] = ()
+    predecessor_summary_ref: HistoricalRangeArtifactRefV1 | None = None
+    producer_code_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator(
+        "summary_input_hash", "summary_policy_hash", "covered_outcome_set_hash",
+        "recall_denominator_set_hash",
+        "maturity_coverage_hash", "metrics_hash", "producer_code_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str, info: Any) -> str:
+        return require_sha256(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def _closure(self) -> "HistoricalRangeSummaryArtifactV2":
+        refs = tuple(sorted(self.covered_outcome_refs, key=lambda item: item.semantic_content_hash))
+        if len(refs) != len({item.semantic_content_hash for item in refs}):
+            raise ValueError("covered outcome refs must be unique")
+        if canonical_json_sha256([item.model_dump(mode="json") for item in refs]) != self.covered_outcome_set_hash:
+            raise ValueError("covered_outcome_set_hash does not match exact refs")
+        recall_evidence_payload = dict(self.recall_denominator_evidence)
+        declared_recall_hash = recall_evidence_payload.pop(
+            "denominator_set_hash", None
+        )
+        if (
+            declared_recall_hash != self.recall_denominator_set_hash
+            or canonical_json_sha256(recall_evidence_payload)
+            != self.recall_denominator_set_hash
+        ):
+            raise ValueError(
+                "recall_denominator_set_hash does not match typed evidence"
+            )
+        if canonical_json_sha256(self.maturity_coverage) != self.maturity_coverage_hash:
+            raise ValueError("maturity_coverage_hash does not match coverage")
+        if canonical_json_sha256(list(self.metrics)) != self.metrics_hash:
+            raise ValueError("metrics_hash does not match summary metrics")
+        if (
+            self.predecessor_summary_ref is not None
+            and self.predecessor_summary_ref.artifact_kind
+            is not HistoricalRangeArtifactKind.SUMMARY
+        ):
+            raise ValueError("summary predecessor ref must be SUMMARY")
+        expected_input = canonical_json_sha256(
+            {
+                "covered_outcome_set_hash": self.covered_outcome_set_hash,
+                "summary_policy_hash": self.summary_policy_hash,
+                "recall_denominator_set_hash": self.recall_denominator_set_hash,
+                "producer_code_hash": self.producer_code_hash,
+            }
+        )
+        if self.summary_input_hash != expected_input:
+            raise ValueError(
+                "summary_input_hash does not close outcome, Recall, policy, and code"
+            )
+        object.__setattr__(self, "covered_outcome_refs", refs)
+        return self
+
+
+class HistoricalRangeOutcomeRefreshReceiptV1(_StrictContract):
+    schema_version: Literal[OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION] = OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION
+    operation_id: str = Field(min_length=1, max_length=160)
+    request_hash: str = Field(min_length=64, max_length=64)
+    status: Literal["COMPLETED", "WAITING_INPUT", "RETRYABLE_FAILED", "FAILED"]
+    stable_keyset_cursor: dict[str, Any] | None = None
+    processed_count: int = Field(ge=0)
+    outcome_refs: tuple[HistoricalRangeArtifactRefV1, ...] = ()
+    summary_refs: tuple[HistoricalRangeArtifactRefV1, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("request_hash", "receipt_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _identity(self) -> "HistoricalRangeOutcomeRefreshReceiptV1":
+        if any(item.artifact_kind is not HistoricalRangeArtifactKind.OUTCOME for item in self.outcome_refs):
+            raise ValueError("outcome refresh receipt can reference only OUTCOME artifacts")
+        if any(item.artifact_kind is not HistoricalRangeArtifactKind.SUMMARY for item in self.summary_refs):
+            raise ValueError("outcome refresh receipt can reference only SUMMARY artifacts")
+        for field_name, refs in (
+            ("outcome_refs", self.outcome_refs),
+            ("summary_refs", self.summary_refs),
+        ):
+            identities = tuple(
+                (
+                    item.artifact_kind.value,
+                    item.semantic_content_hash,
+                    item.relative_path,
+                )
+                for item in refs
+            )
+            if identities != tuple(sorted(set(identities))):
+                raise ValueError(f"refresh {field_name} must be sorted and duplicate-free")
+        if self.processed_count != len(self.outcome_refs):
+            raise ValueError("refresh processed_count must equal unique outcome refs")
+        if self.status == "COMPLETED" and self.stable_keyset_cursor is not None:
+            raise ValueError("completed refresh receipt cannot retain a cursor")
+        if self.status != "COMPLETED" and not self.reason_codes:
+            raise ValueError("non-completed refresh receipt requires reason codes")
+        reasons = tuple(sorted(_nonblank(item, field_name="reason_code") for item in self.reason_codes))
+        if self.reason_codes != reasons or len(reasons) != len(set(reasons)):
+            raise ValueError("refresh reason codes must be sorted and duplicate-free")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"receipt_hash"}))
+        if self.receipt_hash is not None and self.receipt_hash != digest:
+            raise ValueError("receipt_hash does not match outcome refresh receipt")
+        object.__setattr__(self, "receipt_hash", digest)
+        return self
+
+
+class HistoricalRangeDatasetBridgeRequestV1(_StrictContract):
+    schema_version: Literal[DATASET_BRIDGE_REQUEST_SCHEMA_VERSION] = DATASET_BRIDGE_REQUEST_SCHEMA_VERSION
+    batch_id: str = Field(min_length=1, max_length=160)
+    range_run_ids: tuple[str, ...] = Field(min_length=1)
+    successful_day_refs: tuple[HistoricalRangeArtifactRefV1, ...]
+    candidate_refs: tuple[HistoricalRangeArtifactRefV1, ...]
+    outcome_refs: tuple[HistoricalRangeArtifactRefV1, ...]
+    summary_refs: tuple[HistoricalRangeArtifactRefV1, ...] = ()
+    requested_horizons: tuple[int, ...] = Field(min_length=1)
+    requested_maturity_statuses: tuple[HistoricalRangeOutcomeStatus, ...] = Field(
+        min_length=1
+    )
+    evidence_scope: Literal["RETROSPECTIVE_RESEARCH_ONLY"] = "RETROSPECTIVE_RESEARCH_ONLY"
+    lineage_source_type: Literal["HISTORICAL_RANGE_RESEARCH"] = "HISTORICAL_RANGE_RESEARCH"
+    execution_origin: Literal["HISTORICAL_RANGE_RESEARCH"] = "HISTORICAL_RANGE_RESEARCH"
+    research_scope: Literal["RETROSPECTIVE_RESEARCH_ONLY"] = "RETROSPECTIVE_RESEARCH_ONLY"
+    policy_bundle_refs: tuple[HistoricalRangeArtifactRefV1, ...] = Field(min_length=1)
+    policy_component_hashes: dict[str, dict[str, str]] = Field(min_length=1)
+    canonical_signal_dedup_policy_hash: str = Field(min_length=64, max_length=64)
+    retrospective_selector_policy_hash: str = Field(min_length=64, max_length=64)
+    dataset_schema_hash: str = Field(min_length=64, max_length=64)
+    builder_hash: str = Field(min_length=64, max_length=64)
+    writer_hash: str = Field(min_length=64, max_length=64)
+    partition_policy_hash: str = Field(min_length=64, max_length=64)
+    compression_config_hash: str = Field(min_length=64, max_length=64)
+    artifact_root_identity_hash: str = Field(min_length=64, max_length=64)
+    operation_idempotency_key: str = Field(min_length=1, max_length=200)
+    expected_batch_row_version: int = Field(ge=1)
+    lease_seconds: int = Field(default=300, ge=1, le=86_400)
+    request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "canonical_signal_dedup_policy_hash", "retrospective_selector_policy_hash", "dataset_schema_hash",
+        "builder_hash", "writer_hash", "partition_policy_hash", "compression_config_hash",
+        "artifact_root_identity_hash", "request_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _identity(self) -> "HistoricalRangeDatasetBridgeRequestV1":
+        if self.range_run_ids != tuple(sorted(set(self.range_run_ids))):
+            raise ValueError("bridge range_run_ids must be sorted and unique")
+        for field_name, refs, kind in (
+            ("successful_day_refs", self.successful_day_refs, HistoricalRangeArtifactKind.DAY_RECEIPT),
+            ("candidate_refs", self.candidate_refs, HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT),
+            ("outcome_refs", self.outcome_refs, HistoricalRangeArtifactKind.OUTCOME),
+            ("summary_refs", self.summary_refs, HistoricalRangeArtifactKind.SUMMARY),
+            ("policy_bundle_refs", self.policy_bundle_refs, HistoricalRangeArtifactKind.REQUEST),
+        ):
+            if any(item.artifact_kind is not kind for item in refs):
+                raise ValueError(f"{field_name} contains an invalid artifact kind")
+            identities = tuple(
+                (
+                    item.artifact_kind.value,
+                    item.semantic_content_hash,
+                    item.relative_path,
+                )
+                for item in refs
+            )
+            if identities != tuple(sorted(set(identities))):
+                raise ValueError(f"{field_name} must be sorted and duplicate-free")
+        policy_ref_hashes = {item.payload_sha256 for item in self.policy_bundle_refs}
+        if len(policy_ref_hashes) != len(self.policy_bundle_refs):
+            raise ValueError("bridge policy bundle payload hashes must be unique")
+        if set(self.policy_component_hashes) != policy_ref_hashes:
+            raise ValueError(
+                "bridge policy component hashes must exactly cover policy refs"
+            )
+        required_component_roles = {
+            "CALENDAR",
+            "MARKET_DATA",
+            "EXECUTION",
+            "COST",
+            "BENCHMARK",
+            "CASH_RETURN",
+            "TERMINAL",
+            "BARRIER",
+            "CORPORATE_ACTION",
+        }
+        for policy_hash, components in self.policy_component_hashes.items():
+            require_sha256(policy_hash, field_name="policy_component_hashes key")
+            if set(components) != required_component_roles:
+                raise ValueError(
+                    "bridge policy component set must contain every Phase 1 role"
+                )
+            for role, component_hash in components.items():
+                require_sha256(
+                    component_hash,
+                    field_name=f"policy_component_hashes[{role}]",
+                )
+        if self.requested_horizons != tuple(sorted(set(self.requested_horizons))) or any(
+            item < 1 for item in self.requested_horizons
+        ):
+            raise ValueError("bridge horizons must be sorted, unique, and positive")
+        maturity_values = tuple(item.value for item in self.requested_maturity_statuses)
+        allowed_maturity = {
+            HistoricalRangeOutcomeStatus.COMPLETE.value,
+            HistoricalRangeOutcomeStatus.TERMINAL.value,
+        }
+        if (
+            maturity_values != tuple(sorted(set(maturity_values)))
+            or not set(maturity_values) <= allowed_maturity
+        ):
+            raise ValueError(
+                "bridge maturity statuses must be sorted, unique, and label-eligible"
+            )
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"request_hash"}))
+        if self.request_hash is not None and self.request_hash != digest:
+            raise ValueError("request_hash does not match dataset bridge request")
+        object.__setattr__(self, "request_hash", digest)
+        return self
+
+
+class HistoricalRangeDatasetBridgeReceiptV1(_StrictContract):
+    schema_version: Literal[DATASET_BRIDGE_RECEIPT_SCHEMA_VERSION] = DATASET_BRIDGE_RECEIPT_SCHEMA_VERSION
+    operation_id: str = Field(min_length=1, max_length=160)
+    request_hash: str = Field(min_length=64, max_length=64)
+    result_status: HistoricalRangeBridgeResultStatus
+    observation_count: int = Field(ge=0)
+    label_count: int = Field(ge=0)
+    canonical_signal_count: int = Field(ge=0)
+    range_lineage_count: int = Field(ge=0)
+    retrospective_selector_policy_hash: str = Field(min_length=64, max_length=64)
+    dataset_build_id: str | None = Field(default=None, min_length=1, max_length=160)
+    sealed_snapshot_id: str | None = Field(default=None, min_length=1, max_length=160)
+    bridge_artifact_ref: HistoricalRangeArtifactRefV1
+    reason_codes: tuple[str, ...] = ()
+    receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("request_hash", "retrospective_selector_policy_hash", "receipt_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return require_sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _closure(self) -> "HistoricalRangeDatasetBridgeReceiptV1":
+        if self.bridge_artifact_ref.artifact_kind is not HistoricalRangeArtifactKind.DATASET_BRIDGE:
+            raise ValueError("bridge receipt must reference DATASET_BRIDGE artifact")
+        nonempty = self.observation_count > 0
+        if self.result_status is HistoricalRangeBridgeResultStatus.VALID_EMPTY:
+            if (
+                nonempty
+                or self.label_count
+                or self.canonical_signal_count
+                or self.range_lineage_count
+                or self.dataset_build_id is not None
+                or self.sealed_snapshot_id is not None
+            ):
+                raise ValueError("VALID_EMPTY cannot create capture, build, label, or snapshot facts")
+            if REASON_DATASET_BRIDGE_VALID_EMPTY not in self.reason_codes:
+                raise ValueError("VALID_EMPTY receipt requires its stable reason code")
+        elif self.result_status is HistoricalRangeBridgeResultStatus.SEALED:
+            if not nonempty or self.label_count < 1 or self.dataset_build_id is None or self.sealed_snapshot_id is None:
+                raise ValueError("SEALED bridge requires non-empty observations, labels, build, and snapshot")
+        else:
+            if (
+                nonempty
+                or self.label_count
+                or self.canonical_signal_count
+                or self.range_lineage_count
+                or self.dataset_build_id is not None
+                or self.sealed_snapshot_id is not None
+            ):
+                raise ValueError("failed bridge receipt cannot claim materialized facts")
+            if not self.reason_codes:
+                raise ValueError("failed bridge receipt requires reason codes")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"receipt_hash"}))
+        if self.receipt_hash is not None and self.receipt_hash != digest:
+            raise ValueError("receipt_hash does not match dataset bridge receipt")
+        object.__setattr__(self, "receipt_hash", digest)
         return self
 
 
@@ -3519,7 +4451,9 @@ OUTCOME_TRANSITIONS: dict[HistoricalRangeOutcomeStatus, frozenset[HistoricalRang
 }
 
 OPERATION_TRANSITIONS: dict[HistoricalRangeOperationStatus, frozenset[HistoricalRangeOperationStatus]] = {
-    HistoricalRangeOperationStatus.QUEUED: frozenset({HistoricalRangeOperationStatus.RUNNING}),
+    HistoricalRangeOperationStatus.QUEUED: frozenset(
+        {HistoricalRangeOperationStatus.RUNNING, HistoricalRangeOperationStatus.RETRYABLE_FAILED}
+    ),
     HistoricalRangeOperationStatus.RUNNING: frozenset(
         {
             HistoricalRangeOperationStatus.COMPLETED,
@@ -3613,19 +4547,27 @@ def derive_outcome_logical_id(
     subject_type: HistoricalRangeOutcomeSubjectType,
     subject_id: str,
     projection: HistoricalRangeOutcomeProjection,
+    evaluation_window_type: HistoricalRangeEvaluationWindowType,
     horizon_trade_days: int,
-    label_policy_hash: str,
+    historical_range_policy_bundle_hash: str,
 ) -> str:
-    if horizon_trade_days < 1:
-        raise ValueError("horizon_trade_days must be positive")
+    if evaluation_window_type is HistoricalRangeEvaluationWindowType.EPISODE_LIFECYCLE:
+        if subject_type is not HistoricalRangeOutcomeSubjectType.EPISODE or horizon_trade_days != 0:
+            raise ValueError("episode lifecycle identity requires EPISODE and horizon sentinel zero")
+    elif subject_type is HistoricalRangeOutcomeSubjectType.EPISODE or horizon_trade_days < 1:
+        raise ValueError("fixed-horizon identity excludes EPISODE and requires positive horizon")
     return derive_prefixed_id(
         "ahro",
         {
             "subject_type": subject_type.value,
             "subject_id": _nonblank(subject_id, field_name="subject_id"),
             "projection": projection.value,
+            "evaluation_window_type": evaluation_window_type.value,
             "horizon_trade_days": horizon_trade_days,
-            "label_policy_hash": require_sha256(label_policy_hash, field_name="label_policy_hash"),
+            "historical_range_policy_bundle_hash": require_sha256(
+                historical_range_policy_bundle_hash,
+                field_name="historical_range_policy_bundle_hash",
+            ),
         },
     )
 

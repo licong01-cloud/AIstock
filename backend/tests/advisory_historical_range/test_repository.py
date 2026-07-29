@@ -14,6 +14,8 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactKind,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeContractError,
+    HistoricalRangeOperationRequestV1,
+    HistoricalRangeOperationType,
     HistoricalRangePlanningArtifactBindingsV1,
     HistoricalRangeRequirementPurpose,
     HistoricalRangeSourceRequirementPlanV1,
@@ -110,6 +112,103 @@ class _FakeConnection:
 
     def cursor(self, **_kwargs: Any) -> _FakeCursor:
         return self._cursor
+
+
+class _OperationLookupCursor:
+    def __init__(self) -> None:
+        self.operations: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._one: dict[str, Any] | None = None
+        self.rowcount = 0
+
+    def __enter__(self) -> "_OperationLookupCursor":
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+    def execute(self, query: str, params: tuple[Any, ...] | None = None) -> None:
+        normalized = " ".join(query.split())
+        params = params or ()
+        self._one = None
+        self.rowcount = 0
+        if normalized.startswith("SELECT * FROM app.advisory_historical_range_operation"):
+            assert "operation_type = %s" in normalized
+            assert len(params) == 3
+            key = (str(params[0]), str(params[1]), str(params[2]))
+            row = self.operations.get(key)
+            self._one = dict(row) if row is not None else None
+            return
+        if normalized.startswith("INSERT INTO app.advisory_historical_range_operation"):
+            key = (str(params[1]), str(params[2]), str(params[3]))
+            if key not in self.operations:
+                self.operations[key] = {
+                    "operation_id": params[0],
+                    "batch_id": params[1],
+                    "operation_type": params[2],
+                    "operation_idempotency_key": params[3],
+                    "request_payload_sha256": params[4],
+                    "planning_identity_hash": params[5],
+                    "expected_row_version": params[6],
+                }
+                self.rowcount = 1
+            return
+        raise AssertionError(f"unexpected SQL in operation lookup test: {normalized}")
+
+    def fetchone(self) -> dict[str, Any] | None:
+        return self._one
+
+
+class _OperationLookupConnection:
+    def __init__(self, cursor: _OperationLookupCursor) -> None:
+        self._cursor = cursor
+
+    def __enter__(self) -> "_OperationLookupConnection":
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+    def cursor(self, **_kwargs: Any) -> _OperationLookupCursor:
+        return self._cursor
+
+
+def test_operation_lookup_scopes_shared_idempotency_key_by_operation_type(
+    tmp_path: Path,
+) -> None:
+    cursor = _OperationLookupCursor()
+    repository = PostgresHistoricalRangeRepository(
+        conn_factory=lambda: _OperationLookupConnection(cursor),
+        artifact_store=HistoricalRangeArtifactStore(root=tmp_path / "operations"),
+    )
+    parent = HistoricalRangeOperationRequestV1(
+        operation_id="operation-parent",
+        batch_id="batch-shared-key",
+        operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
+        operation_idempotency_key="shared-key",
+        request_payload_sha256=digest("parent-payload"),
+        expected_row_version=7,
+    )
+    child = HistoricalRangeOperationRequestV1(
+        operation_id="operation-child",
+        batch_id=parent.batch_id,
+        operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN,
+        operation_idempotency_key=parent.operation_idempotency_key,
+        request_payload_sha256=digest("child-payload"),
+        expected_row_version=7,
+    )
+
+    parent_row, parent_retry = repository.get_or_create_operation(parent)
+    child_row, child_retry = repository.get_or_create_operation(child)
+    retried_parent, exact_parent_retry = repository.get_or_create_operation(parent)
+    retried_child, exact_child_retry = repository.get_or_create_operation(child)
+
+    assert parent_retry is False
+    assert child_retry is False
+    assert exact_parent_retry is True
+    assert exact_child_retry is True
+    assert parent_row["operation_id"] == retried_parent["operation_id"] == parent.operation_id
+    assert child_row["operation_id"] == retried_child["operation_id"] == child.operation_id
+    assert len(cursor.operations) == 2
 
 
 class _CreateDatabase:

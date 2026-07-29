@@ -1,5 +1,44 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: qe_long_trend_evaluation_phase3
+    priority: 126
+    include:
+      - backend/migrations/qe_long_trend_evaluation_result_phase3_*.sql
+      - backend/db/init_qe_archive_schema.py
+      - backend/services/qe_archive/long_trend_*.py
+      - backend/services/quantevolver/long_trend_api_service.py
+      - backend/services/quantevolver/long_trend_snapshot_resolver.py
+      - backend/tests/qe_archive/test_qe_long_trend_phase3_*.py
+      - backend/tests/test_qe_archive_schema.py
+      - backend/tests/unified_engine/test_qe_long_trend_phase3_*.py
+      - backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py
+      - docs/architecture/qe_long_trend_evaluation_f2_design_*.md
+    primary_module: qe.long_trend_evaluation
+    impact_modules: [qe.core, qe.archive, platform.mcp_gateway]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: F-014 Phase 3 compact persistence, allowlisted snapshot resolution, and bounded QE-only API/MCP form one cross-module feature delivery.
+  - rule_id: qe_sector_risk_overlay
+    priority: 124
+    include:
+      - backend/services/quantevolver/sector_risk_overlay*.py
+      - backend/services/quantevolver/config_composer.py
+      - backend/tests/quantevolver/test_*sector_risk_overlay*.py
+      - backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py
+      - backend/tests/unified_engine/test_score_weighted_capacity_registration.py
+      - backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py
+      - scripts/build_qe_sector_risk_overlay.py
+      - scripts/qe_sector_risk_overlay*.py
+      - scripts/qrun_limit.py
+      - scripts/qrun_limit_minute.py
+      - scripts/score_weighted_strategy_v2.py
+      - tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py
+      - docs/architecture/qe_sector_risk_overlay_f2_design_*.md
+    primary_module: qe.sector_risk_overlay
+    impact_modules: [qe.core, qe.auto_evolution, qe.enhanced_metrics, qe.data_completeness, qe.long_trend_evaluation]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The risk artifact, strategy wrapper, runtime packaging, Recorder evidence, multi-alpha policy arms, and F-014 aligned metrics form one QE-only research module.
   - rule_id: qe_long_trend_evaluation_phase2
     priority: 125
     include:
@@ -16,11 +55,41 @@ rules:
   - rule_id: advisory_historical_range_foundation
     priority: 121
     include:
+      - backend/routers/advisory.py
       - backend/services/advisory_historical_range/**
       - backend/tests/advisory_historical_range/**
       - backend/db/migrations/add_advisory_historical_range_phase1r_20260719.sql
+      - backend/db/migrations/add_advisory_historical_range_r4_outcome_bridge_20260723.sql
       - backend/db/migrations/fix_advisory_historical_range_batch_queued_aggregate_20260721.sql
       - backend/db/migrations/fix_advisory_historical_range_r3_executor_contract_20260722.sql
+      - backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_*.sql
+      - backend/db/migrations/add_advisory_historical_range_internal_operation_types_*.sql
+      - backend/db/migrations/scope_advisory_historical_range_operation_idempotency_by_type_*.sql
+      - backend/services/advisory_phase1/capture_foundation.py
+      - backend/services/advisory_phase1/dataset_build.py
+      - backend/services/advisory_phase1/dataset_build_postgres.py
+      - backend/services/advisory_phase1/dataset_store.py
+      - backend/services/advisory_phase1/label_builder.py
+      - backend/services/advisory_phase1/label_builder_postgres.py
+      - backend/services/advisory_phase1/label_capture.py
+      - backend/services/advisory_phase1/observation_capture.py
+      - backend/services/advisory_phase1/observation_capture_postgres.py
+      - backend/services/advisory_phase1/observation_selector.py
+      - backend/services/advisory_phase1/outcome_engine.py
+      - backend/services/advisory_phase1/release_schema_contract.py
+      - backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v4.json
+      - backend/services/advisory_phase1/retrospective_contracts.py
+      - backend/services/advisory_phase1/retrospective_selector.py
+      - backend/services/advisory_phase1/retrospective_selector_postgres.py
+      - backend/services/advisory_phase1/snapshot_writer.py
+      - backend/services/advisory_phase1/stage_trace.py
+      - backend/tests/advisory_phase1/test_phase1c3_batch_d_integrity.py
+      - backend/tests/advisory_phase1/test_phase1c3_batch_d_writer.py
+      - backend/tests/advisory_phase1/test_r4_dataset_build_postgres.py
+      - backend/tests/advisory_phase1/test_r4_snapshot_manifest.py
+      - backend/tests/advisory_phase1/test_release_schema.py
+      - backend/tests/advisory_phase1/test_release_schema_import_boundary.py
+      - backend/tests/advisory_phase1/test_retrospective_selector.py
       - backend/services/advisory_list_transition.py
       - backend/services/advisory_program.py
       - backend/tests/test_advisory_program_transition_parity.py
@@ -197,6 +266,7 @@ rules:
       - backend/tests/scripts/test_ci_changed_files.py
       - scripts/ci_change_classifier.py
       - backend/tests/scripts/test_ci_change_classifier.py
+      - scripts/validate_changed_requirements.py
       - .pre-commit-config.yaml
       - .semgrep.yml
       - .semgrep/**
@@ -226,6 +296,8 @@ rules:
       - backend/mcp/modules/qe_archive.py
       - backend/mcp/tool_manifest.py
       - backend/tests/mcp/test_qe_archive_module.py
+      - backend/tests/test_aistock_qe_mcp_servers.py
+      - scripts/aistock_qe_archive_mcp_server.py
     primary_module: qe.data_completeness
     impact_modules: [qe.archive, platform.mcp_gateway]
     layer: mcp_gateway
@@ -243,6 +315,7 @@ rules:
       - backend/tests/scripts/test_aistock_feature_workflow.py
       - backend/tests/scripts/test_issue_flow.py
       - backend/tests/scripts/test_issue_flow_pr_quality.py
+      - backend/tests/scripts/test_validate_changed_requirements.py
       - backend/tests/test_noxfile_validation_env.py
       - backend/tests/scripts/test_ci_failure_issue_summary.py
       - backend/tests/scripts/test_nightly_discovery_*.py
@@ -383,6 +456,25 @@ rules:
     layer: backend_test
     risk_level: critical
     ownership_reason: MiniQMT runtime tests must select the canonical event-loop and sustained tick-driver regression plan instead of the generic backend-test fallback.
+  - rule_id: miniqmt_current_three_shadow_inventory_cli
+    priority: 96
+    include:
+      - scripts/miniqmt_current_three_inventory.py
+      - backend/tests/scripts/test_miniqmt_current_three_inventory.py
+    primary_module: miniqmt_execution_runtime
+    impact_modules: []
+    layer: script
+    risk_level: critical
+    ownership_reason: The K3 current-three inventory CLI is a read-only MiniQMT shadow evidence entrypoint and must select the canonical MiniQMT runtime plan.
+  - rule_id: miniqmt_execution_kernel_migrations
+    priority: 96
+    include:
+      - backend/migrations/miniqmt_execution_kernel_*.sql
+    primary_module: miniqmt_execution_runtime
+    impact_modules: [paper_v2]
+    layer: database
+    risk_level: critical
+    ownership_reason: Execution Kernel migrations define the durable event, delivery, transition, command, mapping, timer, and worker-fence authority consumed by the canonical MiniQMT runtime.
   - rule_id: miniqmt_phase_one_quote_ingress
     priority: 96
     include:
@@ -509,6 +601,32 @@ rules:
     layer: platform_configuration
     risk_level: high
     ownership_reason: The compatibility ConfigManager is the durable configuration API boundary and must preserve registered MiniQMT quote-ingress keys during UI saves.
+  - rule_id: hmm_risk_services
+    priority: 100
+    include:
+      - backend/services/hmm_risk/**
+      - backend/db/init_hmm_risk_schema.py
+      - backend/routers/hmm_risk.py
+      - backend/tests/hmm_risk/**
+      - frontend/src/app/hmm-risk/**
+      - frontend/src/components/hmm-risk/**
+      - frontend/src/lib/hmm-risk/**
+      - frontend/tests/hmm-risk/**
+      - scripts/hmm_risk/**
+    primary_module: hmm.risk
+    impact_modules: []
+    layer: research_data_pipeline
+    risk_level: high
+    ownership_reason: HMM Risk is an advisory-only isolated domain with direct L1/L2 model-set preparation, exact schema contracts, and dedicated backend/UI validation plans.
+  - rule_id: python_backend_dependency_manifest
+    priority: 80
+    include:
+      - requirements.txt
+    primary_module: platform.config
+    impact_modules: []
+    layer: backend_dependency_manifest
+    risk_level: high
+    ownership_reason: The pinned Python dependency manifest controls reproducible backend runtime package identity and production dependency aftercare.
   - rule_id: hmm_evolution_services
     priority: 90
     include:

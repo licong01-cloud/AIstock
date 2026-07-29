@@ -4,7 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from backend.services.multi_alpha.combine_backtest import CombineBacktestRequest
-from backend.services.multi_alpha.durable_identity import DurableExecutionIdentityResolver
+from backend.services.multi_alpha.durable_identity import (
+    DurableExecutionIdentityResolver,
+    _sha256_tree,
+)
 from backend.services.multi_alpha.durable_models import (
     DurableRunSpec,
     durable_run_request_payload,
@@ -163,6 +166,53 @@ def test_execution_identity_is_content_addressed_and_child_plan_carries_it(tmp_p
     assert specs
     assert specs[0].input_manifest["execution_identity_hash"] == resolution.identity.identity_hash
     assert specs[0].input_manifest["execution_identity_evidence"]["complete"] is True
+
+
+def test_runtime_identity_does_not_dereference_node_bound_qe_data_links(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    for run_id in ("qe_a_L1", "qe_b_L1"):
+        (tmp_path / f"{run_id}.pkl").write_bytes(f"prediction:{run_id}".encode("utf-8"))
+    request = _request(tmp_path)
+    external_data = Path(str(request.backtest_config["runtime_template_dir"])) / "bak_basic.h5"
+    external_data.write_bytes(b"stand-in for an unreadable DrvFS data link")
+    monkeypatch.setattr(
+        "backend.services.multi_alpha.durable_identity.is_runtime_external_data_link",
+        lambda path: path == external_data,
+    )
+    resolver = DurableExecutionIdentityResolver(
+        model_store=_ModelStore(tmp_path),  # type: ignore[arg-type]
+        environment_loader=lambda _node_id: _environment(),
+        dataset_loader=lambda _node_id, _root: _dataset(complete=True),
+        node_info_resolver=lambda _node_id: SimpleNamespace(qlib_data_path="/home/lc999/data/factor_data"),
+        source_root=REPO_ROOT,
+    )
+
+    resolution = resolver.resolve(request=request, node_id="wsl2-5080")
+
+    assert resolution.complete is True
+    assert resolution.identity is not None
+    assert len(resolution.identity.payload["runtime"]["qlib_runtime_template_sha256"]) == 64
+
+
+def test_runtime_template_identity_excludes_python_cache_but_tracks_source(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    package = runtime / "aistock_models"
+    package.mkdir(parents=True)
+    source = package / "model.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    before = _sha256_tree(runtime)
+
+    cache = package / "__pycache__"
+    cache.mkdir()
+    (cache / "model.cpython-310.pyc").write_bytes(b"environment-specific-cache")
+    (package / "legacy.pyo").write_bytes(b"optimized-cache")
+
+    assert _sha256_tree(runtime) == before
+
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    assert _sha256_tree(runtime) != before
 
 
 def test_missing_dataset_manifest_is_visible_evidence_not_a_research_rejection(tmp_path: Path) -> None:

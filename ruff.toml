@@ -6,6 +6,7 @@ exclude = [
   "frontend",
   "node_modules",
   "tmp",
+  "backend/execution_algos/vnpy_compat/pinned_source",
 ]
 
 [lint]

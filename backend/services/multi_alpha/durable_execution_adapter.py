@@ -14,6 +14,7 @@ import pandas as pd
 from backend.services.model_store import ModelStoreService
 from backend.services.multi_alpha.combine_backtest import (
     REQUEST_SNAPSHOT_KEY,
+    RUNTIME_EXTERNAL_DATA_LINK_NAMES,
     CombineBacktestRequest,
     MultiAlphaCombineBacktestError,
     apply_pred_backtest_overrides,
@@ -21,6 +22,7 @@ from backend.services.multi_alpha.combine_backtest import (
     combine_legs,
     is_rank_fusion_scheme,
     ingest_enhanced_metrics,
+    is_runtime_external_data_link,
     json_mapping,
     maybe_upload_combined_prediction,
     parse_request,
@@ -46,10 +48,11 @@ from backend.services.multi_alpha.durable_repository import MultiAlphaDurableRep
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError
 from backend.services.multi_alpha.remote_dispatch import (
     WorkspaceArtifactSyncClient,
+    _build_remote_runtime_file_manifest,
     _remote_paths,
     _remote_small_files,
+    _sync_remote_runtime_artifacts,
     _remote_wsl_command,
-    _resolve_l2_artifact_path,
     get_compute_node_info,
 )
 from backend.services.quantevolver.qe_active_execution_capacity import (
@@ -71,6 +74,43 @@ ARTIFACT_MANIFEST_SCHEMA = "multi_alpha_child_artifact_manifest_v1"
 RESULT_MANIFEST_SCHEMA = "multi_alpha_child_result_manifest_v1"
 
 
+def _runtime_external_data_bindings(backtest_config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Describe QE data links excluded from the portable child artifact set.
+
+    Completed Windows/DrvFS QE workspaces expose the canonical H5 bundle as
+    Linux links.  Durable remote execution binds the selected node's own QE
+    dataset and must not dereference or upload those workstation-local links.
+    Listing directory entry names is safe on Windows even when stat/open is
+    not, so the exclusion remains explicit in both materialization metadata
+    and the immutable artifact manifest.
+    """
+
+    raw_root = str(backtest_config.get("runtime_template_dir") or "").strip()
+    if not raw_root:
+        return []
+    root = Path(raw_root)
+    try:
+        present_names = {
+            entry.name
+            for entry in root.iterdir()
+            if is_runtime_external_data_link(entry)
+        }
+    except OSError as exc:
+        raise DurableExecutionAdapterError(
+            "durable runtime template entries cannot be enumerated",
+            reason_code="multi_alpha_runtime_template_scan_failed",
+            context={"path": str(root), "error_type": type(exc).__name__, "message": str(exc)},
+        ) from exc
+    return [
+        {
+            "name": name,
+            "binding": "node_canonical_qe_data",
+            "published": False,
+        }
+        for name in sorted(RUNTIME_EXTERNAL_DATA_LINK_NAMES & present_names)
+    ]
+
+
 class DurableExecutionAdapterError(RuntimeError):
     def __init__(
         self,
@@ -82,6 +122,18 @@ class DurableExecutionAdapterError(RuntimeError):
         super().__init__(message)
         self.reason_code = reason_code
         self.context = dict(context or {})
+
+
+def _remote_loop_index_from_intent(qe_loop_id: str) -> int:
+    normalized = str(qe_loop_id or "").strip()
+    suffix = normalized[4:] if normalized.startswith("Loop") else ""
+    if not suffix.isdigit() or int(suffix) < 1:
+        raise DurableExecutionAdapterError(
+            "durable submission intent has an invalid QE loop identity",
+            reason_code="multi_alpha_remote_loop_identity_invalid",
+            context={"qe_loop_id": qe_loop_id},
+        )
+    return int(suffix)
 
 
 class DurableChildNotComputable(DurableExecutionAdapterError):
@@ -447,12 +499,21 @@ class QEWorkspacePredBacktestAdapter:
             prediction_path = staging / "combined_prediction.pkl"
             write_qlib_prediction(materialization.prediction_frame, prediction_path)
             backtest_config = runtime_backtest_config(materialization.request)
+            external_data_bindings = _runtime_external_data_bindings(backtest_config)
+            durable_backtest_config = {
+                **backtest_config,
+                "_exclude_runtime_external_data_links": True,
+            }
             prepare_pred_backtest_workspace(
                 workspace=staging,
-                backtest_config=backtest_config,
+                backtest_config=durable_backtest_config,
             )
             apply_pred_backtest_overrides(
                 workspace=staging,
+                backtest_config=backtest_config,
+            )
+            l2_artifact_path = self._stage_required_l2_artifact(
+                staging=staging,
                 backtest_config=backtest_config,
             )
             materialization_payload = {
@@ -467,9 +528,14 @@ class QEWorkspacePredBacktestAdapter:
                 "weights": dict(materialization.weights),
                 "per_window_weights": [dict(item) for item in materialization.per_window_weights],
                 "input_manifest_hash": materialization.child["input_manifest_hash"],
+                "external_runtime_data_bindings": external_data_bindings,
             }
             self._atomic_write_json(staging / "materialization.json", materialization_payload)
             files = self._publish_staging_tree(staging=staging, workspace=workspace)
+            l2_artifact = {
+                "path": l2_artifact_path,
+                **dict(files[l2_artifact_path]),
+            }
             manifest = {
                 "schema_version": ARTIFACT_MANIFEST_SCHEMA,
                 "run_id": materialization.run["id"],
@@ -477,7 +543,9 @@ class QEWorkspacePredBacktestAdapter:
                 "attempt_id": materialization.attempt["attempt_id"],
                 "input_manifest_hash": materialization.child["input_manifest_hash"],
                 "prediction_file": "combined_prediction.pkl",
+                "l2_artifact": l2_artifact,
                 "files": files,
+                "external_runtime_data_bindings": external_data_bindings,
                 "execution_identity": input_manifest.get("execution_identity"),
                 "execution_identity_hash": input_manifest.get("execution_identity_hash"),
                 "execution_identity_evidence": input_manifest.get("execution_identity_evidence"),
@@ -612,6 +680,41 @@ class QEWorkspacePredBacktestAdapter:
                     )
                 self._atomic_copy_file(source_path, staging / relative)
             files = self._publish_staging_tree(staging=staging, workspace=workspace)
+            source_l2_artifact = source.artifact_manifest.get("l2_artifact")
+            if not isinstance(source_l2_artifact, Mapping):
+                raise DurableExecutionAdapterError(
+                    "source artifact manifest has no L2 artifact binding",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"source_attempt_id": source_attempt_id},
+                )
+            l2_relative_name = str(source_l2_artifact.get("path") or "")
+            copied_l2_metadata = files.get(l2_relative_name)
+            if not isinstance(copied_l2_metadata, Mapping):
+                raise DurableExecutionAdapterError(
+                    "copied recovery artifacts have no bound L2 file",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={
+                        "source_attempt_id": source_attempt_id,
+                        "l2_artifact_path": l2_relative_name,
+                    },
+                )
+            raw_external_bindings = source.artifact_manifest.get(
+                "external_runtime_data_bindings"
+            )
+            if raw_external_bindings is None:
+                external_runtime_data_bindings: list[dict[str, Any]] = []
+            elif isinstance(raw_external_bindings, list) and all(
+                isinstance(item, Mapping) for item in raw_external_bindings
+            ):
+                external_runtime_data_bindings = [
+                    dict(item) for item in raw_external_bindings
+                ]
+            else:
+                raise DurableExecutionAdapterError(
+                    "source artifact manifest has invalid external runtime data bindings",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"source_attempt_id": source_attempt_id},
+                )
             manifest = {
                 "schema_version": ARTIFACT_MANIFEST_SCHEMA,
                 "run_id": successor_run_id,
@@ -619,7 +722,19 @@ class QEWorkspacePredBacktestAdapter:
                 "attempt_id": successor_attempt_id,
                 "input_manifest_hash": successor_input_manifest_hash,
                 "prediction_file": "combined_prediction.pkl",
+                "l2_artifact": {
+                    "path": l2_relative_name,
+                    **dict(copied_l2_metadata),
+                },
                 "files": files,
+                "external_runtime_data_bindings": external_runtime_data_bindings,
+                "execution_identity": source.artifact_manifest.get("execution_identity"),
+                "execution_identity_hash": source.artifact_manifest.get(
+                    "execution_identity_hash"
+                ),
+                "execution_identity_evidence": source.artifact_manifest.get(
+                    "execution_identity_evidence"
+                ),
                 "recovery_source": {
                     "source_run_id": source_run_id,
                     "source_child_id": source_child_id,
@@ -1147,10 +1262,7 @@ class QEWorkspacePredBacktestAdapter:
             if self._artifact_client_factory is not None
             else WorkspaceArtifactSyncClient.for_node(intent.node_id)
         )
-        l2_path = _resolve_l2_artifact_path(
-            workspace=artifacts.workspace,
-            backtest_config=request.backtest_config,
-        )
+        l2_path = self._published_l2_artifact_path(artifacts)
         l2_manifest = artifact_client.ensure_artifact(l2_path, node_id=intent.node_id)
         prediction_manifest = artifact_client.ensure_artifact(
             artifacts.prediction_path,
@@ -1163,15 +1275,48 @@ class QEWorkspacePredBacktestAdapter:
             artifact_manifest=l2_manifest,
             prediction_artifact_sha256=str(prediction_manifest["sha256"]),
         )
+        runtime_file_manifest = _build_remote_runtime_file_manifest(
+            workspace=artifacts.workspace,
+        )
+        runtime_artifact_bindings = _sync_remote_runtime_artifacts(
+            workspace=artifacts.workspace,
+            node=node,
+            node_id=intent.node_id,
+            artifact_client=artifact_client,
+            remote_paths=remote_paths,
+            runtime_file_manifest=runtime_file_manifest,
+        )
+        submission_artifact_manifest = dict(artifacts.artifact_manifest)
+        submission_artifact_manifest.pop("manifest_hash", None)
+        submission_artifact_manifest["remote_runtime_file_manifest"] = dict(
+            runtime_file_manifest
+        )
+        if runtime_artifact_bindings:
+            submission_artifact_manifest["remote_runtime_artifact_bindings"] = [
+                dict(item) for item in runtime_artifact_bindings
+            ]
+        submission_artifact_manifest["manifest_hash"] = artifact_manifest_hash_for(
+            submission_artifact_manifest
+        )
+        remote_loop_index = _remote_loop_index_from_intent(intent.qe_loop_id)
+        submission_backtest_config = {
+            **dict(request.backtest_config),
+            "remote_task_id": intent.qe_task_id,
+            "remote_loop_index": remote_loop_index,
+        }
         wsl_command = _remote_wsl_command(
             workspace=artifacts.workspace,
             remote_paths=remote_paths,
-            backtest_config=request.backtest_config,
+            backtest_config=submission_backtest_config,
+            runtime_artifact_bindings=runtime_artifact_bindings,
+            runtime_file_manifest=runtime_file_manifest,
         )
         experiment_files = _remote_small_files(
             workspace=artifacts.workspace,
             pred_pkl=artifacts.prediction_path,
             include_prediction=False,
+            cas_bound_names={str(item["name"]) for item in runtime_artifact_bindings},
+            runtime_file_manifest=runtime_file_manifest,
         )
 
         def claim_source(cur: Any) -> Mapping[str, Any] | None:
@@ -1183,7 +1328,7 @@ class QEWorkspacePredBacktestAdapter:
                 qe_task_id=intent.qe_task_id,
                 qe_loop_id=intent.qe_loop_id,
                 submission_intent_hash=intent.submission_intent_hash,
-                artifact_manifest=artifacts.artifact_manifest,
+                artifact_manifest=submission_artifact_manifest,
             )
 
         def record_waiting(
@@ -1217,15 +1362,17 @@ class QEWorkspacePredBacktestAdapter:
         )
         payload = QEWorkspaceSubmissionPayload(
             task_id=intent.qe_task_id,
-            loop_index=1,
+            loop_index=remote_loop_index,
             config={
                 "source": "multi_alpha_durable_pred_backtest_v1",
                 "run_id": intent.run_id,
                 "child_id": intent.child_id,
                 "attempt_id": intent.attempt_id,
-                "artifact_manifest": dict(artifacts.artifact_manifest),
+                "artifact_manifest": submission_artifact_manifest,
                 "l2_artifact_manifest": dict(l2_manifest),
                 "prediction_artifact_manifest": dict(prediction_manifest),
+                "runtime_artifact_bindings": runtime_artifact_bindings,
+                "runtime_file_manifest": runtime_file_manifest,
                 "remote_paths": remote_paths,
             },
             experiment_files=experiment_files,
@@ -1463,6 +1610,50 @@ class QEWorkspacePredBacktestAdapter:
             "prediction_store_manifest": prediction_store_manifest,
             "completed_after_deadline": bool(deadline_evidence),
         }
+        attempt = self._required_row(
+            "attempt",
+            intent.attempt_id,
+            self._repository.get_attempt(intent.attempt_id),
+        )
+        submitted_artifact_manifest = attempt.get("artifact_manifest_json")
+        if isinstance(submitted_artifact_manifest, Mapping) and submitted_artifact_manifest:
+            submitted_manifest = dict(submitted_artifact_manifest)
+            submitted_manifest_hash = submitted_manifest.get("manifest_hash")
+            submitted_without_hash = {
+                key: value
+                for key, value in submitted_manifest.items()
+                if key != "manifest_hash"
+            }
+            if submitted_manifest_hash != artifact_manifest_hash_for(submitted_without_hash):
+                raise DurableExecutionAdapterError(
+                    "persisted submission artifact manifest hash is invalid",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"attempt_id": intent.attempt_id},
+                )
+            runtime_bindings = submitted_manifest.get("remote_runtime_artifact_bindings")
+            runtime_file_manifest = submitted_manifest.get("remote_runtime_file_manifest")
+            if runtime_file_manifest is not None:
+                if not isinstance(runtime_file_manifest, Mapping):
+                    raise DurableExecutionAdapterError(
+                        "persisted runtime file manifest is invalid",
+                        reason_code="multi_alpha_artifact_manifest_invalid",
+                        context={"attempt_id": intent.attempt_id},
+                    )
+                result_manifest["submission_artifact_manifest_hash"] = submitted_manifest_hash
+                result_manifest["remote_runtime_file_manifest"] = dict(runtime_file_manifest)
+            if runtime_bindings is not None:
+                if not isinstance(runtime_bindings, list) or not all(
+                    isinstance(item, Mapping) for item in runtime_bindings
+                ):
+                    raise DurableExecutionAdapterError(
+                        "persisted runtime artifact bindings are invalid",
+                        reason_code="multi_alpha_artifact_manifest_invalid",
+                        context={"attempt_id": intent.attempt_id},
+                    )
+                result_manifest["submission_artifact_manifest_hash"] = submitted_manifest_hash
+                result_manifest["remote_runtime_artifact_bindings"] = [
+                    dict(item) for item in runtime_bindings
+                ]
         if deadline_evidence:
             result_manifest["execution_deadline"] = deadline_evidence
         result_manifest["manifest_hash"] = artifact_manifest_hash_for(result_manifest)
@@ -1598,6 +1789,91 @@ class QEWorkspacePredBacktestAdapter:
             )
         return files
 
+    def _stage_required_l2_artifact(
+        self,
+        *,
+        staging: Path,
+        backtest_config: Mapping[str, Any],
+    ) -> str:
+        """Place the exact L2 parquet inside the immutable child workspace.
+
+        Relative paths are resolved after the runtime template is copied.  An
+        explicit absolute source is copied into the canonical workspace name
+        so dispatch never depends on mutable workstation-local bytes.
+        """
+
+        raw = backtest_config.get("combined_factors_path") or backtest_config.get(
+            "l2_artifact_path"
+        )
+        if raw is None:
+            relative = Path("combined_factors_df.parquet")
+            source = staging / relative
+        else:
+            configured = Path(str(raw))
+            if configured.is_absolute():
+                relative = Path("combined_factors_df.parquet")
+                source = configured
+            else:
+                relative = configured
+                source = staging / relative
+        if (
+            not relative.parts
+            or relative.is_absolute()
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise DurableExecutionAdapterError(
+                "configured L2 artifact path is not a safe workspace-relative path",
+                reason_code="multi_alpha_l2_artifact_path_invalid",
+                context={"configured_path": str(raw), "workspace": str(staging)},
+            )
+        if source.is_symlink() or not source.is_file():
+            raise DurableExecutionAdapterError(
+                "durable materialization requires a readable regular L2 factors parquet",
+                reason_code="multi_alpha_l2_artifact_missing",
+                context={
+                    "configured_path": str(raw) if raw is not None else None,
+                    "resolved_source": str(source),
+                    "workspace": str(staging),
+                },
+            )
+        destination = staging / relative
+        if source != destination:
+            if destination.exists():
+                source_digest = self._sha256_file(source)
+                destination_digest = self._sha256_file(destination)
+                if source_digest != destination_digest:
+                    raise DurableExecutionAdapterError(
+                        "configured L2 artifact conflicts with runtime template bytes",
+                        reason_code="multi_alpha_l2_artifact_conflict",
+                        context={"source": str(source), "destination": str(destination)},
+                    )
+            else:
+                self._atomic_copy_file(source, destination)
+        self._sha256_file(destination)
+        return relative.as_posix()
+
+    def _published_l2_artifact_path(
+        self,
+        artifacts: DurablePublishedArtifacts,
+    ) -> Path:
+        binding = artifacts.artifact_manifest.get("l2_artifact")
+        if not isinstance(binding, Mapping):
+            raise DurableExecutionAdapterError(
+                "durable artifact manifest has no L2 artifact binding",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
+        relative = Path(str(binding.get("path") or ""))
+        if (
+            not relative.parts
+            or relative.is_absolute()
+            or any(part in {"", ".", ".."} for part in relative.parts)
+        ):
+            raise DurableExecutionAdapterError(
+                "durable artifact manifest L2 path is invalid",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
+        return artifacts.workspace / relative
+
     def _verify_published_manifest(
         self,
         manifest: Mapping[str, Any],
@@ -1665,6 +1941,22 @@ class QEWorkspacePredBacktestAdapter:
                 "durable artifact manifest has no file inventory",
                 reason_code="multi_alpha_artifact_manifest_invalid",
             )
+        l2_artifact = manifest.get("l2_artifact")
+        if not isinstance(l2_artifact, Mapping):
+            raise DurableExecutionAdapterError(
+                "durable artifact manifest has no L2 artifact binding",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
+        l2_relative_name = str(l2_artifact.get("path") or "")
+        l2_file_metadata = files.get(l2_relative_name)
+        if not isinstance(l2_file_metadata, Mapping) or dict(l2_artifact) != {
+            "path": l2_relative_name,
+            **dict(l2_file_metadata),
+        }:
+            raise DurableExecutionAdapterError(
+                "durable artifact manifest L2 binding does not match its file inventory",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
         for relative_name, metadata in files.items():
             if not isinstance(metadata, Mapping):
                 raise DurableExecutionAdapterError(
@@ -1712,6 +2004,34 @@ class QEWorkspacePredBacktestAdapter:
                     reason_code="multi_alpha_artifact_hash_mismatch",
                     context={"path": str(path)},
                 )
+        external_bindings = manifest.get("external_runtime_data_bindings", [])
+        if not isinstance(external_bindings, list):
+            raise DurableExecutionAdapterError(
+                "durable artifact external runtime data bindings are invalid",
+                reason_code="multi_alpha_artifact_manifest_invalid",
+            )
+        observed_binding_names: set[str] = set()
+        for binding in external_bindings:
+            if not isinstance(binding, Mapping):
+                raise DurableExecutionAdapterError(
+                    "durable artifact external runtime data binding is not an object",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                )
+            name = str(binding.get("name") or "")
+            if (
+                name not in RUNTIME_EXTERNAL_DATA_LINK_NAMES
+                or Path(name).name != name
+                or binding.get("binding") != "node_canonical_qe_data"
+                or binding.get("published") is not False
+                or name in observed_binding_names
+                or name in files
+            ):
+                raise DurableExecutionAdapterError(
+                    "durable artifact external runtime data binding is inconsistent",
+                    reason_code="multi_alpha_artifact_manifest_invalid",
+                    context={"binding": dict(binding)},
+                )
+            observed_binding_names.add(name)
 
     @staticmethod
     def _sha256_file(path: Path) -> tuple[str, int]:

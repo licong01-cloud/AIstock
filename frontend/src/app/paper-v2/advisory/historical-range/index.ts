@@ -1,0 +1,1 @@
+export { HistoricalRangeResearchView } from "./HistoricalRangeResearchView";

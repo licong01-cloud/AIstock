@@ -8,7 +8,7 @@ from typing import Any, Callable, Mapping, Sequence
 from psycopg2.extras import Json, RealDictCursor
 
 from backend.db.pg_pool import get_conn
-from backend.services.quantevolver.long_trend_evaluation_contract import QELongTrendReason
+from backend.services.quantevolver.long_trend_evaluation_contract import QELongTrendReason, canonical_sha256
 
 TABLE_NAME = "qe_archive.run_evaluation"
 TERMINAL_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
@@ -675,12 +675,15 @@ class QELongTrendEvaluationControlRepository:
 
     @staticmethod
     def _require_same_identity(existing: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
-        mismatches = {
-            key: {"expected": value, "actual": existing.get(key)}
-            for key, value in expected.items()
-            if existing.get(key) != value
-            and not (key == "run_id" and value is None and existing.get(key) is not None)
-        }
+        mismatches: dict[str, dict[str, Any]] = {}
+        for key, value in expected.items():
+            actual = existing.get(key)
+            if key == "request_json" and isinstance(value, Mapping) and isinstance(actual, Mapping):
+                same_value = canonical_sha256(value) == canonical_sha256(actual)
+            else:
+                same_value = actual == value
+            if not same_value and not (key == "run_id" and value is None and actual is not None):
+                mismatches[key] = {"expected": value, "actual": actual}
         if mismatches:
             raise QELongTrendControlRepositoryError(
                 f"evaluation identity already exists with different immutable content: {mismatches}"

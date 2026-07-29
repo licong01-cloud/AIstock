@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import fields
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
@@ -11,9 +13,13 @@ from fastapi.testclient import TestClient
 
 from backend.routers import multi_alpha as multi_alpha_router
 from backend.services.multi_alpha.combine_backtest import (
+    CombineBacktestRequest,
     MultiAlphaCombineBacktestError,
     MultiAlphaCombineBacktestService,
+    _replace_request,
+    parse_request,
 )
+from backend.services.multi_alpha.durable_plan import DeterministicChildPlanner
 from backend.services.multi_alpha.durable_repository import (
     MultiAlphaDurableRepository,
     MultiAlphaDurableRepositoryError,
@@ -269,6 +275,133 @@ def test_task_identity_allows_distinct_run_scenarios_and_keeps_original_defaults
     assert task["default_request_json"]["topk"] == 25
     assert task["default_request_json"]["backtest_config"]["initial_cash"] == 10_000_000
     assert repository.runs[second["run_id"]]["backtest_config_json"]["topk"] == 50
+
+
+def test_submission_freezes_explicit_prediction_task_selection_in_request_identity() -> None:
+    repository = FakeDurableRepository()
+    service = _service(repository)
+    payload = _payload()
+    payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+    result = service.submit(payload)
+    persisted = repository.runs[result["run_id"]]["backtest_config_json"]
+
+    assert persisted["_combine_request_v1"]["prediction_task_selection"] == {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+
+def test_run_async_override_preserves_explicit_prediction_task_selection() -> None:
+    repository = FakeDurableRepository()
+    service = _service(repository)
+    payload = _payload()
+    payload["run_async"] = False
+    payload["wait_timeout_seconds"] = 1
+    payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+    result = service.submit(payload, run_async_override=True)
+    persisted = repository.runs[result["run_id"]]["backtest_config_json"]
+
+    assert result["status"] == "queued"
+    assert persisted["_combine_request_v1"]["prediction_task_selection"] == {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+
+
+def test_run_async_override_conserves_every_request_field_except_override() -> None:
+    repository = FakeDurableRepository()
+    payload = _payload()
+    payload["run_async"] = False
+    payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+    original = parse_request(payload)
+
+    result = _service(repository).submit(payload, run_async_override=True)
+    snapshot = repository.runs[result["run_id"]]["backtest_config_json"]["_combine_request_v1"]
+    restored = parse_request(snapshot)
+
+    for field in fields(CombineBacktestRequest):
+        expected = True if field.name == "run_async" else getattr(original, field.name)
+        assert getattr(restored, field.name) == expected, field.name
+
+
+def test_general_request_replace_conserves_new_and_existing_fields() -> None:
+    payload = _payload()
+    payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+    original = parse_request(payload)
+
+    updated = _replace_request(original, topk=50)
+
+    for field in fields(CombineBacktestRequest):
+        expected = 50 if field.name == "topk" else getattr(original, field.name)
+        assert getattr(updated, field.name) == expected, field.name
+
+
+def test_exact_retry_preserves_selection_through_persistence_and_child_planning() -> None:
+    durable_repository = FakeDurableRepository()
+    durable_service = _service(durable_repository)
+    source_payload = _payload()
+    source_payload["weighting_schemes"] = ["equal"]
+    source_payload["prediction_task_selection"] = {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+    source = durable_service.submit(source_payload)
+    source_row = deepcopy(durable_repository.runs[source["run_id"]])
+    source_row["status"] = "failed"
+
+    class SourceRunRepository:
+        @staticmethod
+        def get_run(run_id: str) -> dict[str, Any] | None:
+            if run_id != source["run_id"]:
+                return None
+            return {"run": deepcopy(source_row), "scheme_results": [], "loo_results": []}
+
+    facade = MultiAlphaCombineBacktestService(
+        repository=SourceRunRepository(),
+        durable_submission_service=durable_service,
+    )
+    retried = facade.retry_run(source["run_id"])
+    persisted = durable_repository.runs[retried["run_id"]]
+    request = parse_request(persisted["backtest_config_json"]["_combine_request_v1"])
+    run_spec = SimpleNamespace(
+        run_id=persisted["id"],
+        request_hash=persisted["request_hash"],
+        roster_hash=persisted["roster_hash"],
+        oos_start=persisted["oos_start"],
+        oos_end=persisted["oos_end"],
+        normalize_method=persisted["normalize_method"],
+        walk_forward=persisted["walk_forward_json"],
+        backtest_config=persisted["backtest_config_json"],
+        execution_identity=persisted["execution_identity_json"],
+        execution_identity_hash=persisted["execution_identity_hash"],
+        execution_identity_evidence=persisted["execution_identity_evidence_json"],
+    )
+
+    children = DeterministicChildPlanner.build_child_specs(
+        run_spec=run_spec,
+        request=request,
+    )
+
+    assert retried["retry_source"] == "exact_snapshot"
+    assert request.prediction_task_selection == {
+        "include_baseline": True,
+        "include_loo": False,
+    }
+    assert [child.child_key for child in children] == ["baseline:leg_a", "scheme:equal"]
 
 
 def test_same_payload_at_same_clock_creates_distinct_run_records() -> None:

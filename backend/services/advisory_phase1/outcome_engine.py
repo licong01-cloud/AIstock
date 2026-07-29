@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_EVEN, localcontext
 from enum import Enum
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -142,6 +142,28 @@ class OutcomeOwner(BaseModel):
             if self.universe_layer is None:
                 raise ValueError("universe owner requires its frozen universe layer")
         return self
+
+
+class HistoricalRangeSubjectOwner(BaseModel):
+    """Range-native lifecycle owner, never eligible for a Phase 1 label."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_type: Literal["HISTORICAL_RANGE_SUBJECT"] = "HISTORICAL_RANGE_SUBJECT"
+    owner_key: str = Field(min_length=1, max_length=200)
+    range_run_id: str = Field(min_length=1, max_length=160)
+    subject_type: Literal["EPISODE"] = "EPISODE"
+    subject_ref_hash: str = Field(min_length=64, max_length=64)
+    evaluation_window_type: Literal["EPISODE_LIFECYCLE"] = "EPISODE_LIFECYCLE"
+    horizon_trading_days: Literal[0] = 0
+    symbol: str = Field(min_length=1, max_length=32)
+    decision_as_of_trade_date: date
+    evidence_scope: Literal["RETROSPECTIVE_RESEARCH_ONLY"] = "RETROSPECTIVE_RESEARCH_ONLY"
+
+    @field_validator("subject_ref_hash")
+    @classmethod
+    def _subject_ref_hash(cls, value: str) -> str:
+        return _require_sha256(value, field_name="subject_ref_hash")
 
 
 class MissingSourceReceipt(BaseModel):
@@ -644,7 +666,7 @@ class CalculationEvidenceBundle(BaseModel):
 class OutcomeCalculationResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    owner: OutcomeOwner
+    owner: OutcomeOwner | HistoricalRangeSubjectOwner
     projection: Projection
     horizon_trading_days: int
     decision_trade_date: date
@@ -766,21 +788,96 @@ class _KnownUnavailable(_MissingInput):
         self.entry_status = entry_status
 
 
-class OutcomeEngine:
-    """Single frozen-input implementation shared by candidate and universe owners."""
+class PositionPathValuationCore:
+    """Shared frozen-input valuation implementation for formal and range windows."""
 
-    def calculate(self, request: OutcomeCalculationRequest) -> OutcomeCalculationResult:
+    def right_censored_before_entry(
+        self,
+        request: OutcomeCalculationRequest,
+        *,
+        timeline: tuple[date, date, date, date],
+        reason_code: str,
+    ) -> OutcomeCalculationResult:
+        """Close an observation window that ended before a position could exist."""
+
+        request = request.__class__.model_validate(request.model_dump(mode="python"))
+        decision_date, entry_date, sell_date, _exit_date = timeline
+        terminal = request.terminal
+        if (
+            terminal.disposition is not TerminalDisposition.RIGHT_CENSORED
+            or terminal.event_trade_date is None
+            or terminal.event_closed_at is None
+            or terminal.event_trade_date >= entry_date
+        ):
+            raise OutcomeContractError(
+                REASON_CALENDAR_INVALID,
+                "pre-entry censor requires exact right-censor evidence before intended entry",
+            )
+        return self._result(
+            request,
+            decision_date=decision_date,
+            entry_date=entry_date,
+            sell_date=sell_date,
+            exit_date=terminal.event_trade_date,
+            scheduled=terminal.event_closed_at,
+            maturity=MaturityStatus.RIGHT_CENSORED,
+            event_status=OutcomeEventStatus.NONE,
+            entry_status=EntryStatus.UNAVAILABLE,
+            projection_value=(
+                Decimal("0") if request.projection is Projection.SURVIVAL else None
+            ),
+            projection_event_code="RIGHT_CENSORED",
+            source_closed_at=terminal.event_closed_at,
+            event_closed_at=terminal.event_closed_at,
+            observed_holding_days=0,
+            reason_codes=(terminal.censor_reason_code or "RIGHT_CENSORED", reason_code),
+        )
+
+    def calculate(
+        self,
+        request: OutcomeCalculationRequest,
+        *,
+        timeline_override: tuple[date, date, date, date] | None = None,
+        require_entry_executable: bool = True,
+        entry_mark_trade_date: date | None = None,
+    ) -> OutcomeCalculationResult:
         try:
-            request = OutcomeCalculationRequest.model_validate(request.model_dump(mode="python"))
+            # Formal requests retain their original validator/canonical bytes.  R4
+            # supplies a range-native request with the same frozen-value surface;
+            # validate it through its own strict model without importing R4 here.
+            request = request.__class__.model_validate(request.model_dump(mode="python"))
         except ValueError as error:
             raise OutcomeContractError(REASON_POLICY_INVALID, f"frozen request failed canonical revalidation: {error}") from error
-        try:
-            decision_date, entry_date, sell_date, exit_date = request.policies.calendar.timeline(
-                decision_date=request.owner.decision_as_of_trade_date,
-                horizon_trading_days=max(request.horizon_trading_days, 1),
-            )
-        except ValueError as error:
-            raise OutcomeContractError(REASON_CALENDAR_INVALID, str(error)) from error
+        if timeline_override is None:
+            try:
+                decision_date, entry_date, sell_date, exit_date = request.policies.calendar.timeline(
+                    decision_date=request.owner.decision_as_of_trade_date,
+                    horizon_trading_days=max(request.horizon_trading_days, 1),
+                )
+            except ValueError as error:
+                raise OutcomeContractError(REASON_CALENDAR_INVALID, str(error)) from error
+        else:
+            decision_date, entry_date, sell_date, exit_date = timeline_override
+            if decision_date != request.owner.decision_as_of_trade_date:
+                raise OutcomeContractError(
+                    REASON_CALENDAR_INVALID,
+                    "explicit valuation timeline must preserve the owner decision date",
+                )
+            try:
+                ordered = request.policies.calendar.trading_dates
+                positions = tuple(ordered.index(value) for value in timeline_override)
+            except ValueError as error:
+                raise OutcomeContractError(
+                    REASON_CALENDAR_INVALID,
+                    "explicit valuation timeline is absent from the frozen calendar",
+                ) from error
+            if tuple(sorted(positions)) != positions or not (
+                positions[0] < positions[1] < positions[2] <= positions[3]
+            ):
+                raise OutcomeContractError(
+                    REASON_CALENDAR_INVALID,
+                    "explicit valuation timeline must preserve T < E < S <= X",
+                )
         if request.projection is Projection.GAP_1D:
             exit_date_for_projection: date | None = None
             scheduled = self._timestamp(entry_date, request.policies.execution.entry_time)
@@ -812,7 +909,12 @@ class OutcomeEngine:
             )
 
         try:
-            entry_bar = self._entry_bar(request, entry_date)
+            entry_bar = self._entry_bar(
+                request,
+                entry_date,
+                require_executable=require_entry_executable,
+                mark_trade_date=entry_mark_trade_date,
+            )
             if request.projection is Projection.GAP_1D:
                 self._require_action_sources(request, decision_date, entry_date)
                 return self._gap_result(request, decision_date, entry_date, sell_date, scheduled, entry_bar)
@@ -878,13 +980,40 @@ class OutcomeEngine:
     def _timestamp(self, trade_date: date, at: time) -> datetime:
         return datetime.combine(trade_date, at, tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc)
 
-    def _entry_bar(self, request: OutcomeCalculationRequest, entry_date: date) -> DailyPriceBar:
+    def _entry_bar(
+        self,
+        request: OutcomeCalculationRequest,
+        entry_date: date,
+        *,
+        require_executable: bool = True,
+        mark_trade_date: date | None = None,
+    ) -> DailyPriceBar:
         bar = request.price_path.bar_for(entry_date)
+        if mark_trade_date is not None:
+            mark = request.price_path.bar_for(mark_trade_date)
+            if mark is None or mark.close_li is None or mark.adj_factor is None:
+                raise _MissingInput("DECISION_MARK", REASON_ENTRY_UNAVAILABLE)
+            # Keep the execution date at E while valuing the recommendation at
+            # the exact frozen T close/adjustment mark.
+            bar = DailyPriceBar(
+                trade_date=entry_date,
+                open_li=mark.close_li,
+                high_li=mark.close_li,
+                low_li=mark.close_li,
+                close_li=mark.close_li,
+                adj_factor=mark.adj_factor,
+                entry_executable=True,
+                sell_executable=mark.sell_executable,
+                source_available_at=mark.source_available_at,
+                price_source=mark.price_source,
+                adjustment_source=mark.adjustment_source,
+                tradability_source=mark.tradability_source,
+            )
         if bar is None or bar.open_li is None or bar.adj_factor is None:
             raise _MissingInput("ENTRY_QUOTE", REASON_ENTRY_UNAVAILABLE)
         if bar.source_available_at > request.label_as_of_ts:
             raise _MissingInput("ENTRY_QUOTE", REASON_SOURCE_INCOMPLETE)
-        if not bar.entry_executable:
+        if require_executable and not bar.entry_executable:
             raise _KnownUnavailable(
                 "ENTRY_EXECUTION",
                 REASON_ENTRY_UNAVAILABLE,
@@ -1945,7 +2074,7 @@ class OutcomeEngine:
         evidence = CalculationEvidenceBundle(
             evidence_payload={
                 "owner": request.owner.model_dump(mode="python"),
-                "policy_bundle_hash": request.policies.bundle.label_policy_bundle_hash,
+                "policy_bundle_hash": _outcome_policy_bundle_hash(request.policies.bundle),
                 "label_source_revision_set_id": request.label_source_revision_set.source_revision_set_id,
                 "label_source_revision_set_hash": request.label_source_revision_set.source_revision_set_hash,
                 "price_path": request.price_path.model_dump(mode="python"),
@@ -1961,3 +2090,27 @@ class OutcomeEngine:
             projection_payload_hash=projection_hash,
             calculation_evidence=evidence,
         )
+
+
+def _outcome_policy_bundle_hash(bundle: BaseModel) -> str:
+    """Read formal or range-native policy identity without changing formal payloads."""
+
+    value = getattr(bundle, "label_policy_bundle_hash", None)
+    if value is None:
+        value = getattr(bundle, "policy_bundle_hash", None)
+    if not isinstance(value, str):
+        raise OutcomeContractError(
+            REASON_POLICY_INVALID,
+            "valuation policy bundle is missing its immutable hash",
+        )
+    return _require_sha256(value, field_name="policy_bundle_hash")
+
+
+class OutcomeEngine:
+    """Formal Phase 1 facade preserving the original fixed-horizon contract."""
+
+    def __init__(self, *, valuation_core: PositionPathValuationCore | None = None) -> None:
+        self._valuation_core = valuation_core or PositionPathValuationCore()
+
+    def calculate(self, request: OutcomeCalculationRequest) -> OutcomeCalculationResult:
+        return self._valuation_core.calculate(request)

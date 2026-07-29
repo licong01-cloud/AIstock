@@ -3,19 +3,21 @@
 - 文档类型：F2 阶段从属实现级详细设计
 - 父级权威：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
 - 模块：QuantEvolver / Multi-Alpha combine-backtest / QE Workspace / PostgreSQL durable orchestration / QE UI / QE MCP
-- 日期：2026-07-21
-- 状态：`SOURCE_IMPLEMENTED_VERIFIED_DDL_RUNTIME_NOT_APPLIED`
-- 当前事实：P0-1B 源码与 QE Workspace receipt 配套已合入，reservation DDL 已在生产应用并验证；P0-2 源码已在隔离 worktree 完整实现并完成源码级验证，P0-2 DDL、服务重启、真实 QE canary 和生产激活均未执行
+- 日期：2026-07-21；实施状态复核：2026-07-29
+- 状态：`SOURCE_MERGED_PRODUCTION_DDL_RUNTIME_VERIFIED`
+- 当前事实：P0-2 AIstock PR #2580 与 RD-Agent companion PR #6 已合入；P0-2 additive DDL 已在 DEV/生产应用并通过 preflight/readback；此前已完成真实 QE-only canary 与运行态验收。2026-07-29 用户再次重启 backend 后，`8001` OpenAPI 仍加载 control/recovery/child/attempt/event/log 路由，最新 Multi-Alpha run 为 `succeeded/completed`
 - 唯一运行边界：QE-only；不得读写或调用 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 运行链或其他非 QE 模块
 - 科研约束：本设计不增加研究门禁、人工审批、准入、晋级、PASS/KILL/GO/STOP 或指标淘汰逻辑；缺失数据和制品只形成可见证据与获取建议，不淘汰研究方向
 - 运行约束：本设计和后续实现不得自行启动、停止或重启 AIstock 后端；生产 DDL、依赖安装和运行激活均是独立授权事项
 
-## 0. Source Implementation Record / 源码实施记录（2026-07-21）
+## 0. Source And Runtime Implementation Record / 源码与运行态实施记录（2026-07-29）
 
 - 已实现：P0-2 command/cancel-delivery ledger、lease/fencing/CAS、pause/resume/cancel/reconcile/stop alias、精确 attempt cancel、terminal child successor recovery、三种 retry mode 的严格分流、RD-Agent typed kill receipt、实际环境与数据集身份回传、Archive v2 recovery readback、HTTP/MCP/UI 控制闭环。
-- 兼容性修复：P0-2 DDL 尚未部署时，既有 P0-1B durable submission 保持原始 SQL/child manifest 形态继续运行；返回明确 `multi_alpha_p0_2_schema_unavailable` 基础设施证据，不把该事实解释为研究方向淘汰或隐藏性 fallback。P0-2 control/recovery entrypoint 自身仍会显式报告其所需 schema 未就绪。
+- 兼容性修复：P0-2 DDL 未部署时，既有 P0-1B durable submission 保持原始 SQL/child manifest 形态继续运行；返回明确 `multi_alpha_p0_2_schema_unavailable` 基础设施证据，不把该事实解释为研究方向淘汰或隐藏性 fallback。当前部署已越过该兼容阶段，control/recovery entrypoint 仍保留 fail-loud schema readiness 合同。
 - 已验证：AIstock 核心与 MCP 定向矩阵 `236 passed, 9 skipped`，附加 Archive/Feature-workflow/Strategy-package/Results-only 回归矩阵 `56 passed, 1 deselected`，RD-Agent typed receipt/identity tests `34 passed`；AIstock changed-file Ruff、RD-Agent 新增模块与 submission receipt 全量 Ruff、`qe_evolution_api.py` 新增行 Ruff 审计、两个仓库 Python compile、MCP manifest validation、F2 workflow validation、验收矩阵引用检查和变更前端文件 TypeScript compiler API 检查均通过。RD-Agent 既有 `qe_evolution_api.py` 全文件仍含与本功能无关的历史 Ruff 债务，本交付不将新增行审计表述成旧文件全量清零。`9 skipped` 为未配置显式测试 DSN 的可选 PostgreSQL 集成测试；新增的 zero-child PostgreSQL 生命周期用例已实现但未执行，没有创建测试库、没有执行 DDL、没有导出数据库。新增 Playwright 控制闭环用例已被现有 Playwright 配置成功发现（2 条场景），但本轮未启动前后端服务、未执行浏览器 E2E，因此不将源码发现表述为 Playwright 运行通过。
-- 未执行且不在本次授权范围：DEV/生产 DDL、服务重启/部署、真实 WSL/远端 QE canary、真实 Archive v2 回填。它们是运行/基础设施状态，不改变源码交付或研究方向。
+- 后续合入修复：BUG-850/851/856/857/858/859/860/864/865/867/872/878/881/882/883/887/889 已继续收紧 attempt/run identity、external dataset/workspace binding、reference/derived result ancestry、exact child plan、command/cancel transaction、heartbeat token 与 reservation terminal release；这些修复是 P0-2 合同闭环，不创建第二套恢复平台。
+- 2026-07-29 运行态只读复核：用户重启后的 backend 于 12:44 +08:00 监听 `8001`，OpenAPI 有 47 条 Multi-Alpha 路径；最新 run `macb_453ca2d0c5b21b40_20240701_20260629_20260728T021052319863Z_00cf02ce` 为 `succeeded/completed`。该 run 的 execution identity evidence 仍明确缺少 dataset manifest/root 与 runtime lock/executor commit，故运行成功不等于 provenance 完整。
+- 本次 BUG-904 仅更新文档；未执行 DDL、服务启停、实验、Archive 回填或数据库写入。
 
 ---
 
@@ -396,6 +398,28 @@ queued/preparing/running
 - `paused` 不释放已终态结果，也不重建 artifact/remote identity。
 - 在途 attempt 仍 active 时状态保持 `pause_requested`，UI 显示 `remaining_active`。
 - drain 后若仍存在未执行 child，run 进入 `paused`；若全部计划 child 已权威终态，则直接执行正常 parent finalization 和 Archive，command 以 `pause_raced_with_completion` 收口，不能留下“已完成但 paused”的僵尸 run。
+
+#### 7.1.1 Control acceptance linearization clarification (BUG-882)
+
+Run-level `pause` / `cancel` acceptance and the corresponding parent status
+transition are one database transaction.  A successful API response therefore
+means the parent is already `pause_requested` / `cancel_requested`; it does not
+wait for `apply_one_local_command()` to expose that intent.  The transition
+clears the current planner lease and increments its fencing token so an
+in-flight materializer may finish private staging work but cannot publish a
+child, create/claim a dispatchable attempt, or issue a new remote POST.
+
+The control worker remains responsible for pause drain, queued-attempt
+cancellation, typed remote-cancel delivery, reconciliation, and terminal
+finalization.  This clarification changes only the acceptance-to-worker race;
+it does not infer a remote terminal state and does not alter any research
+result or direction.
+
+Resume preserves the existing durable-plan decision: both `pause_requested`
+and `paused` may return to `preparing` when planning is incomplete or to
+`running` when the child plan already exists.  The PostgreSQL lifecycle test
+covers `pause -> paused -> preparing -> cancel_requested -> cancelled` without
+requiring a fabricated child or remote result.
 
 ### 7.2 Cancel
 
@@ -999,44 +1023,43 @@ RD-Agent owning-service contract 另行验证：现有三组两参数 `kill_loop
 - 不新增 user approval、promotion、PASS/KILL/GO/STOP 状态；
 - 不新增设计合入或进入编码的人工确认状态；生产 DDL、依赖、服务启停等外部副作用仍遵守既有独立授权边界。
 
-### 20.5 2026-07-21 源码实施复核
+### 20.5 2026-07-29 实施复核
 
 - **完整性**：已实施控制命令账本、执行身份与证据、仅子级重试、typed kill receipt、Archive v2 读回、API/MCP/UI 闭环与 RD-Agent owning-service 合约；没有以单一 API、内存状态或假回执替代这些边界。
 - **显式错误语义**：P0-2 schema、远端身份、数据集清单、制品或恢复输入不可用时均返回结构化 evidence 和可操作建议；不会静默回退、伪造成功、改变 retry mode 或把技术证据缺口写成研究结果。
 - **兼容性**：P0-1B 提交在 P0-2 additive DDL 尚未应用时保持原有 SQL 形状和可用性，并附带 `multi_alpha_p0_2_schema_unavailable` 基础设施证据；P0-2 控制/恢复入口则明确说明其自身 schema 前置条件。该区分不是研究审批或方向淘汰。
 - **边界**：未修改 Alpha 公式、标签、回测、LOO、baseline、训练、指标计算或研究方向；未新增 PASS/KILL/GO/STOP、人工审批、数据缺失淘汰规则或自动降级。
-- **验证收据**：源码级目标测试、静态检查、TypeScript、MCP manifest 和 F2 validator 的结果记录在第 0 节；真实 DEV DDL、服务重启、运行态 canary 与生产激活均未执行，须由相应独立授权后再验证。
+- **验证收据**：源码级目标测试、静态检查、TypeScript、MCP manifest 和 F2 validator 的结果记录在第 0 节；DEV/生产 DDL、运行态 canary 与生产激活均已在后续受控步骤完成。2026-07-29 仅做当前 runtime 的 GET/OpenAPI 复核，没有重复执行任何生产副作用。
 
 ## 21. Rollout / Rollback / Production Gates / 发布回滚与生产门禁
 
-### 21.1 本设计与源码工作分离
+### 21.1 当前文档同步与既有生产事实分离
 
-- 原始设计 PR 仅包含文档；本实施 worktree 已包含按本设计完成的 P0-2 源码与测试更新；两者都不执行生产副作用。
+- 原始设计、源码 PR、DDL、服务重启和 canary 已按独立阶段完成；本次 BUG-904 仅同步其状态，不重放任何既有生产步骤。
 - `production_ddl_gate=noop`；
 - `production_backend_dependency_gate=noop`；
 - `production_frontend_dependency_gate=noop`；
-- 不改数据库、不改 runtime、不重启服务、不启动实验。
+- 本次不改数据库、不改 runtime、不重启服务、不启动实验。
 
-### 21.2 后续代码 PR
+### 21.2 后续维护顺序
 
-1. 先在 DEV PostgreSQL 验证 additive migration/preflight/rollback；不额外导出数据库；
-2. 完成 source + targeted/expanded validation 后提交 PR；
-3. 合入不等于生产 DDL/依赖/运行激活；
-4. 只有用户分别授权后，才应用生产 DDL、安装依赖或重启运行；源码/文档研发与 PR 合入不新增确认门；
-5. rollback 优先停用 P0-2 API/UI/MCP/control consumption，保留 command/recovery 证据；不得删除已产生的 run/child/attempt/result/Archive。
+1. 继续以现有 durable repository/orchestrator/recovery 为唯一实现入口；
+2. 对 provenance 缺口补齐 dataset manifest/root 与 runtime lock/executor commit，不以 run success 隐藏缺失证据；
+3. 新源码合入仍不等于新的 DDL、依赖或 runtime 激活；
+4. rollback 优先停用 P0-2 API/UI/MCP/control consumption，保留 command/recovery 证据；不得删除已产生的 run/child/attempt/result/Archive。
 
 ### 21.3 当前状态
 
 - P0-1B source：merged；
 - P0-1B reservation DDL：production applied and verified；
 - P0-1B runtime：此前已完成启动 smoke；实时进程状态不是本设计的持久权威，操作前必须现场核查。本次修订于 2026-07-21 14:27 只读观察到 `0.0.0.0:8001` 正在监听，但未启停服务；
-- P0-2 design：`SOURCE_IMPLEMENTED_VERIFIED_DDL_RUNTIME_NOT_APPLIED`；
-- P0-2 source：本 worktree 已实施并完成源码级验证；尚未提交、合入或同步 main；
-- P0-2 DEV/production DDL：未执行；
-- P0-2 runtime/restart/actual QE canary：未执行。
+- P0-2 design/source：`SOURCE_MERGED_PRODUCTION_DDL_RUNTIME_VERIFIED`；AIstock PR #2580 / RD-Agent PR #6 已合入；
+- P0-2 DEV/production DDL：已应用并验证；
+- P0-2 runtime/restart/actual QE canary：此前已完成；2026-07-29 用户重启后再次只读确认路由加载与成功 run readback；
+- P0-2 provenance gap：最新成功 run 的 execution identity evidence 仍不完整，缺项保持显式，待独立后续任务补齐。
 
 ## 22. 退出条件与下一步
 
-本阶段完成条件是：本文通过 F2 文档 validator、父蓝图同步、语义 diff 审核并形成可审查 PR。文档与源码研发不设置额外人工确认门；PR 合入、后续编码按用户已授权范围和 AIstock 正常流程推进，生产 DDL、依赖安装和服务启停仍分别授权。
+BUG-904 的完成条件是：本文与父蓝图、项目摘要同步当前已合入/已激活事实，同时保留 provenance 缺口；通过 F2 文档 validator、语义 diff 审核并形成可审查 PR。后续新的生产 DDL、依赖安装和服务启停仍分别授权。
 
 研发过程中出现缺失数据、缺失制品、远端 unknown 或部分失败时，继续记录、补取、交叉验证和恢复，不得据此删除研究方向或私增审批门禁。

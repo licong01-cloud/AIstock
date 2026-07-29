@@ -27,7 +27,11 @@ from backend.services.advisory_phase1.dataset_build import (
     DatasetSnapshotFile,
     DatasetSnapshotInvalidation,
     SealedDatasetSnapshot,
+    DATASET_BUILD_REQUEST_SCHEMA_VERSION,
     FixtureDatasetBuildRequest,
+    DatasetBuildRequest,
+    RetrospectiveDatasetBuildRequest,
+    RETROSPECTIVE_DATASET_BUILD_REQUEST_SCHEMA_VERSION,
     REASON_ATTEMPT_FENCING_STALE,
     REASON_ATTEMPT_FILE_CONFLICT,
     REASON_ATTEMPT_LEASE_EXPIRED,
@@ -42,6 +46,7 @@ from backend.services.advisory_phase1.dataset_build import (
     build_id_for,
     file_set_hash,
     logical_build_key,
+    validate_dataset_build_request,
     _attempt_file_identities,
     _snapshot_file_identities,
     _verify_promoted_cas,
@@ -85,13 +90,13 @@ class PostgresDatasetBuildRepository:
 
     def create_or_get(
         self,
-        request: FixtureDatasetBuildRequest,
+        request: DatasetBuildRequest,
         *,
         actor: str,
         rebuild_predecessor_build_id: str | None = None,
         expected_termination_receipt_hash: str | None = None,
     ) -> DatasetBuild:
-        request = FixtureDatasetBuildRequest.model_validate(request.model_dump(mode="python"))
+        request = validate_dataset_build_request(request)
         key = logical_build_key(request)
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -135,12 +140,17 @@ class PostgresDatasetBuildRepository:
                             build_id, logical_build_key_sha256, build_generation, predecessor_build_id, build_request_hash,
                             build_request_payload_jsonb, snapshot_source_revision_set_hash, capture_set_hash,
                             handoff_readiness_hash, admission_scope_set_hash, query_registry_hash,
+                            lineage_identity_type, range_lineage_scope_set_hash, selector_policy_hash,
+                            execution_origin, research_scope, evidence_scope,
+                            historical_range_policy_bundle_ref, historical_range_policy_bundle_hash,
+                            selected_range_day_outcome_set_hash, policy_component_set_hash,
                             date_start, date_end, base_snapshot_id, base_snapshot_content_hash, base_manifest_sha256, base_policy_compatibility_hash,
                             builder_version, code_commit, writer_version, partition_policy_hash, compression_config_hash,
                             lifecycle_status, checkpoint, current_fencing_token, row_version
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             'ACTIVE', 'REQUESTED', 1, 1
                         ) RETURNING *
                         """,
@@ -149,6 +159,22 @@ class PostgresDatasetBuildRepository:
                             psycopg2.extras.Json(canonicalize(request.model_dump(mode="json"))),
                             request.snapshot_source_revision_set_hash, request.capture_set_hash,
                             request.handoff_readiness_hash, request.admission_scope_set_hash, request.query_registry_hash,
+                            getattr(request, "lineage_identity_type", "PHASE0A"),
+                            getattr(request, "range_lineage_scope_set_hash", None),
+                            getattr(request, "selector_policy_hash", None),
+                            getattr(request, "execution_origin", "ADVISORY_RUN"),
+                            getattr(request, "research_scope", "HISTORICAL_RESEARCH_ONLY"),
+                            getattr(request, "evidence_scope", "RETROSPECTIVE_RESEARCH_ONLY"),
+                            psycopg2.extras.Json(request.historical_range_policy_bundle_ref)
+                            if isinstance(request, RetrospectiveDatasetBuildRequest)
+                            else None,
+                            request.label_policy_bundle_hash if isinstance(request, RetrospectiveDatasetBuildRequest) else None,
+                            request.selected_range_day_outcome_set_hash
+                            if isinstance(request, RetrospectiveDatasetBuildRequest)
+                            else None,
+                            request.policy_component_set_hash
+                            if isinstance(request, RetrospectiveDatasetBuildRequest)
+                            else None,
                             request.date_start, request.date_end,
                             request.base_snapshot.snapshot_id if request.base_snapshot else None,
                             request.base_snapshot.snapshot_content_hash if request.base_snapshot else None,
@@ -439,7 +465,16 @@ class PostgresDatasetBuildRepository:
             raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "Batch D build has no materialized attempt")
         preflight_files = self.files_for_attempt(preflight_build.materialized_attempt_id)
         try:
-            reconstructed = FullParquetVerifier().verify_files(
+            reconstructed = FullParquetVerifier(
+                lineage_identity_type=(
+                    "HISTORICAL_RANGE"
+                    if isinstance(
+                        preflight_build.request,
+                        RetrospectiveDatasetBuildRequest,
+                    )
+                    else "PHASE0A"
+                )
+            ).verify_files(
                 build=preflight_build,
                 files=written_files_from_attempt(preflight_files),
                 capability_manifest=capability_manifest_for_build(preflight_build),
@@ -822,7 +857,7 @@ class PostgresDatasetBuildRepository:
                 cur.execute("SELECT 1 FROM app.advisory_dataset_snapshot_invalidation WHERE snapshot_id = %s", (snapshot_id,))
                 return cur.fetchone() is not None
 
-    def assert_base_snapshot_reusable(self, request: FixtureDatasetBuildRequest) -> None:
+    def assert_base_snapshot_reusable(self, request: DatasetBuildRequest) -> None:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 self._require_base_snapshot_admission(cur, request)
@@ -866,34 +901,63 @@ class PostgresDatasetBuildRepository:
                     if int(cur.fetchone()["size_bytes"]) != file.blob.size_bytes:
                         raise DatasetBuildError(REASON_BUILD_REQUEST_CONFLICT, "snapshot blob identity has conflicting size")
                 try:
-                    cur.execute(
-                        """
-                        INSERT INTO app.advisory_dataset_snapshot (
-                            snapshot_id, snapshot_content_hash, snapshot_state, manifest_core_sha256, manifest_sha256,
-                            promotion_receipt_uri, promotion_receipt_hash, build_id, snapshot_schema_version,
-                            snapshot_source_revision_set_hash, capture_set_hash, base_snapshot_id,
-                            base_snapshot_content_hash, base_manifest_sha256, base_policy_compatibility_hash, handoff_readiness_hash,
-                            admission_scope_set_hash, query_registry_hash, builder_version, code_commit, writer_version,
-                            partition_policy_hash, policy_compatibility_hash, dataset_capability_manifest, dataset_capability_manifest_hash,
-                            schema_fingerprint, file_count, row_count, total_bytes, label_maturity_event_summary
-                        ) VALUES (%s, %s, 'SEALED', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            snapshot.snapshot_id, snapshot.snapshot_content_hash, snapshot.manifest_core_sha256,
-                            snapshot.manifest_sha256, snapshot.promotion_receipt_uri, snapshot.promotion_receipt_hash,
-                            snapshot.build_id, snapshot.snapshot_schema_version, snapshot.snapshot_source_revision_set_hash,
-                            snapshot.capture_set_hash, snapshot.base_snapshot.snapshot_id if snapshot.base_snapshot else None,
-                            snapshot.base_snapshot.snapshot_content_hash if snapshot.base_snapshot else None,
-                            snapshot.base_snapshot.manifest_sha256 if snapshot.base_snapshot else None,
-                            snapshot.base_snapshot.policy_compatibility_hash if snapshot.base_snapshot else None,
-                            snapshot.handoff_readiness_hash, snapshot.admission_scope_set_hash, snapshot.query_registry_hash,
-                            snapshot.builder_version, snapshot.code_commit, snapshot.writer_version, snapshot.partition_policy_hash,
-                            snapshot.policy_compatibility_hash,
-                            psycopg2.extras.Json(snapshot.dataset_capability_manifest), snapshot.dataset_capability_manifest_hash,
-                            snapshot.schema_fingerprint, len(snapshot.files), sum(item.row_count for item in snapshot.files),
-                            sum(item.size_bytes for item in snapshot.files), psycopg2.extras.Json(snapshot.label_maturity_event_summary),
-                        ),
+                    common_values = (
+                        snapshot.snapshot_id, snapshot.snapshot_content_hash, "SEALED", snapshot.manifest_core_sha256,
+                        snapshot.manifest_sha256, snapshot.promotion_receipt_uri, snapshot.promotion_receipt_hash,
+                        snapshot.build_id, snapshot.snapshot_schema_version, snapshot.snapshot_source_revision_set_hash,
+                        snapshot.capture_set_hash, snapshot.base_snapshot.snapshot_id if snapshot.base_snapshot else None,
+                        snapshot.base_snapshot.snapshot_content_hash if snapshot.base_snapshot else None,
+                        snapshot.base_snapshot.manifest_sha256 if snapshot.base_snapshot else None,
+                        snapshot.base_snapshot.policy_compatibility_hash if snapshot.base_snapshot else None,
+                        snapshot.handoff_readiness_hash, snapshot.admission_scope_set_hash, snapshot.query_registry_hash,
+                        snapshot.builder_version, snapshot.code_commit, snapshot.writer_version,
+                        snapshot.partition_policy_hash, snapshot.policy_compatibility_hash,
+                        psycopg2.extras.Json(snapshot.dataset_capability_manifest),
+                        snapshot.dataset_capability_manifest_hash, snapshot.schema_fingerprint,
+                        len(snapshot.files), sum(item.row_count for item in snapshot.files),
+                        sum(item.size_bytes for item in snapshot.files),
+                        psycopg2.extras.Json(snapshot.label_maturity_event_summary),
                     )
+                    common_columns = """
+                        snapshot_id, snapshot_content_hash, snapshot_state, manifest_core_sha256, manifest_sha256,
+                        promotion_receipt_uri, promotion_receipt_hash, build_id, snapshot_schema_version,
+                        snapshot_source_revision_set_hash, capture_set_hash, base_snapshot_id,
+                        base_snapshot_content_hash, base_manifest_sha256, base_policy_compatibility_hash,
+                        handoff_readiness_hash, admission_scope_set_hash, query_registry_hash, builder_version,
+                        code_commit, writer_version, partition_policy_hash, policy_compatibility_hash,
+                        dataset_capability_manifest, dataset_capability_manifest_hash, schema_fingerprint,
+                        file_count, row_count, total_bytes, label_maturity_event_summary
+                    """
+                    if snapshot.lineage_identity_type == "HISTORICAL_RANGE":
+                        range_columns = """
+                            lineage_identity_type, execution_origin, research_scope, evidence_scope,
+                            range_lineage_scope_set_hash, selector_policy_hash,
+                            selected_range_day_outcome_set_hash, policy_lineage_type,
+                            historical_range_policy_bundle_hash, policy_component_set_hash,
+                            selected_observation_mapping_set_hash, selected_label_mapping_set_hash,
+                            source_revision_closure_hash, maturity_coverage_hash
+                        """
+                        range_values = (
+                            snapshot.lineage_identity_type, snapshot.execution_origin,
+                            snapshot.research_scope, snapshot.evidence_scope,
+                            snapshot.range_lineage_scope_set_hash, snapshot.selector_policy_hash,
+                            snapshot.selected_range_day_outcome_set_hash, snapshot.policy_lineage_type,
+                            snapshot.historical_range_policy_bundle_hash, snapshot.policy_component_set_hash,
+                            snapshot.selected_observation_mapping_set_hash,
+                            snapshot.selected_label_mapping_set_hash, snapshot.source_revision_closure_hash,
+                            snapshot.maturity_coverage_hash,
+                        )
+                        cur.execute(
+                            f"INSERT INTO app.advisory_dataset_snapshot ({common_columns}, {range_columns}) "
+                            f"VALUES ({', '.join(['%s'] * len(common_values + range_values))})",
+                            common_values + range_values,
+                        )
+                    else:
+                        cur.execute(
+                            f"INSERT INTO app.advisory_dataset_snapshot ({common_columns}) "
+                            f"VALUES ({', '.join(['%s'] * len(common_values))})",
+                            common_values,
+                        )
                     self._insert_snapshot_membership(cur, snapshot)
                 except psycopg2.IntegrityError as error:
                     self._raise_integrity(error, "seal dataset snapshot")
@@ -962,8 +1026,18 @@ class PostgresDatasetBuildRepository:
 
     @staticmethod
     def _assert_snapshot_exact_retry(cur: Any, snapshot: SealedDatasetSnapshot) -> None:
+        range_header_columns = (
+            """, lineage_identity_type, execution_origin, research_scope, evidence_scope,
+                   range_lineage_scope_set_hash, selector_policy_hash,
+                   selected_range_day_outcome_set_hash, policy_lineage_type,
+                   historical_range_policy_bundle_hash, policy_component_set_hash,
+                   selected_observation_mapping_set_hash, selected_label_mapping_set_hash,
+                   source_revision_closure_hash, maturity_coverage_hash"""
+            if snapshot.lineage_identity_type == "HISTORICAL_RANGE"
+            else ""
+        )
         cur.execute(
-            """
+            f"""
             SELECT snapshot_id, snapshot_content_hash, snapshot_state, manifest_core_sha256, manifest_sha256,
                    promotion_receipt_uri, promotion_receipt_hash, build_id, snapshot_schema_version,
                    snapshot_source_revision_set_hash, capture_set_hash, base_snapshot_id,
@@ -972,6 +1046,7 @@ class PostgresDatasetBuildRepository:
                    code_commit, writer_version, partition_policy_hash, policy_compatibility_hash,
                    dataset_capability_manifest, dataset_capability_manifest_hash, schema_fingerprint,
                    file_count, row_count, total_bytes, label_maturity_event_summary
+                   {range_header_columns}
               FROM app.advisory_dataset_snapshot WHERE snapshot_id = %s
             """,
             (snapshot.snapshot_id,),
@@ -1009,6 +1084,25 @@ class PostgresDatasetBuildRepository:
             "total_bytes": sum(item.size_bytes for item in snapshot.files),
             "label_maturity_event_summary": snapshot.label_maturity_event_summary,
         }
+        if snapshot.lineage_identity_type == "HISTORICAL_RANGE":
+            expected_header.update(
+                {
+                    "lineage_identity_type": snapshot.lineage_identity_type,
+                    "execution_origin": snapshot.execution_origin,
+                    "research_scope": snapshot.research_scope,
+                    "evidence_scope": snapshot.evidence_scope,
+                    "range_lineage_scope_set_hash": snapshot.range_lineage_scope_set_hash,
+                    "selector_policy_hash": snapshot.selector_policy_hash,
+                    "selected_range_day_outcome_set_hash": snapshot.selected_range_day_outcome_set_hash,
+                    "policy_lineage_type": snapshot.policy_lineage_type,
+                    "historical_range_policy_bundle_hash": snapshot.historical_range_policy_bundle_hash,
+                    "policy_component_set_hash": snapshot.policy_component_set_hash,
+                    "selected_observation_mapping_set_hash": snapshot.selected_observation_mapping_set_hash,
+                    "selected_label_mapping_set_hash": snapshot.selected_label_mapping_set_hash,
+                    "source_revision_closure_hash": snapshot.source_revision_closure_hash,
+                    "maturity_coverage_hash": snapshot.maturity_coverage_hash,
+                }
+            )
         queries = {
             "files": "SELECT logical_path, logical_role, partition_key_hash, ordinal, content_uri, sha256, size_bytes, row_count, schema_fingerprint, partition_content_hash, store_backend_hash, blob_sha256 FROM app.advisory_dataset_snapshot_file WHERE snapshot_id = %s ORDER BY logical_path",
             "observations": "SELECT canonical_signal_id, observation_version_id, evidence_scope, oos_interval_id, selector_policy_hash FROM app.advisory_dataset_snapshot_observation WHERE snapshot_id = %s ORDER BY canonical_signal_id",
@@ -1055,8 +1149,14 @@ class PostgresDatasetBuildRepository:
             raise DatasetBuildError(REASON_BUILD_TRANSITION_INVALID, "build row version/checkpoint/lifecycle is stale")
 
     @staticmethod
-    def _require_capture_admission(cur: Any, request: FixtureDatasetBuildRequest) -> None:
+    def _require_capture_admission(cur: Any, request: DatasetBuildRequest) -> None:
         """Revalidate every frozen capture descriptor against authority rows."""
+
+        if isinstance(request, RetrospectiveDatasetBuildRequest):
+            PostgresDatasetBuildRepository._require_retrospective_capture_admission(
+                cur, request
+            )
+            return
 
         expected_scopes = {(item.identity_id, item.identity_hash) for item in request.admission_scopes}
         observed_scopes: set[tuple[str, str]] = set()
@@ -1162,10 +1262,251 @@ class PostgresDatasetBuildRepository:
             raise DatasetBuildError(REASON_BUILD_REQUEST_CONFLICT, "capture label targets do not match frozen build request")
 
     @staticmethod
-    def _require_base_snapshot_admission(cur: Any, request: FixtureDatasetBuildRequest) -> None:
+    def _require_retrospective_capture_admission(
+        cur: Any, request: RetrospectiveDatasetBuildRequest
+    ) -> None:
+        expected_scopes = {
+            (item.identity_id, item.identity_hash)
+            for item in request.range_lineage_scopes
+        }
+        observed_scopes: set[tuple[str, str]] = set()
+        observed_observation_mappings: set[tuple[str, str]] = set()
+        observed_label_mappings: set[tuple[str, str]] = set()
+        observed_label_targets: set[tuple[int, str]] = set()
+        for member in request.captures:
+            cur.execute(
+                """
+                SELECT capture_request_hash, request_payload_jsonb, capture_status,
+                       membership_hash, capture_receipt_hash, capture_purpose,
+                       lineage_identity_type, range_lineage_scope_id,
+                       range_lineage_scope_hash, execution_origin, research_scope,
+                       evidence_scope, selector_policy_hash,
+                       historical_range_policy_bundle_ref,
+                       historical_range_policy_bundle_hash
+                  FROM app.advisory_capture_batch
+                 WHERE capture_batch_id = %s
+                 FOR KEY SHARE
+                """,
+                (member.capture_batch_id,),
+            )
+            row = cur.fetchone()
+            if row is None or str(row["capture_status"]) != "COMPLETE":
+                raise DatasetBuildError(
+                    REASON_BUILD_REQUEST_CONFLICT,
+                    "retrospective build capture is absent or not COMPLETE",
+                )
+            expected = {
+                "capture_request_hash": member.capture_request_hash,
+                "capture_receipt_hash": member.capture_receipt_hash,
+                "membership_hash": member.membership_hash,
+                "capture_purpose": member.capture_purpose,
+                "lineage_identity_type": "HISTORICAL_RANGE",
+                "range_lineage_scope_id": member.range_lineage_scope_id,
+                "range_lineage_scope_hash": member.range_lineage_scope_hash,
+                "execution_origin": "HISTORICAL_RANGE_RESEARCH",
+                "research_scope": "RETROSPECTIVE_RESEARCH_ONLY",
+                "evidence_scope": "RETROSPECTIVE_RESEARCH_ONLY",
+                "selector_policy_hash": request.selector_policy_hash,
+            }
+            for column, value in expected.items():
+                if str(row[column] or "") != value:
+                    raise DatasetBuildError(
+                        REASON_BUILD_REQUEST_CONFLICT,
+                        f"retrospective build capture {column} does not match authority",
+                    )
+            observed_scopes.add(
+                (member.range_lineage_scope_id, member.range_lineage_scope_hash)
+            )
+            cur.execute(
+                """
+                SELECT evidence_role, evidence_id, evidence_content_hash
+                  FROM app.advisory_capture_batch_evidence_membership
+                 WHERE capture_batch_id = %s
+                 ORDER BY evidence_role, evidence_id
+                 FOR KEY SHARE
+                """,
+                (member.capture_batch_id,),
+            )
+            for membership in cur.fetchall():
+                identity = (
+                    str(membership["evidence_id"]),
+                    str(membership["evidence_content_hash"]),
+                )
+                if membership["evidence_role"] == "SELECTED_LABEL_MAPPING":
+                    observed_label_mappings.add(identity)
+
+            payload = canonicalize(dict(row["request_payload_jsonb"]))
+            if member.capture_purpose == "OBSERVATION_CAPTURE_V1":
+                plans = payload.get("plans")
+                if not isinstance(plans, list) or not plans:
+                    raise DatasetBuildError(
+                        REASON_BUILD_REQUEST_CONFLICT,
+                        "retrospective observation capture has no frozen plans",
+                    )
+                dates = {
+                    str(item.get("decision_as_of_trade_date"))
+                    for item in plans
+                    if isinstance(item, dict)
+                }
+                source_pairs = {
+                    (
+                        str(item.get("signal_source_revision_set_id")),
+                        str(item.get("signal_source_revision_set_hash")),
+                    )
+                    for item in plans
+                    if isinstance(item, dict)
+                }
+                if any(
+                    not isinstance(item.get("range_scope"), dict)
+                    or str(item["range_scope"].get("range_lineage_scope_id"))
+                    != member.range_lineage_scope_id
+                    or str(item["range_scope"].get("range_lineage_scope_hash"))
+                    != member.range_lineage_scope_hash
+                    or str(item.get("selector_policy_hash"))
+                    != request.selector_policy_hash
+                    for item in plans
+                    if isinstance(item, dict)
+                ):
+                    raise DatasetBuildError(
+                        REASON_BUILD_REQUEST_CONFLICT,
+                        "retrospective observation capture lineage is incompatible",
+                    )
+                if (
+                    canonicalize(
+                        dict(row["historical_range_policy_bundle_ref"] or {})
+                    )
+                    != canonicalize(request.historical_range_policy_bundle_ref)
+                    or str(row["historical_range_policy_bundle_hash"] or "")
+                    != request.label_policy_bundle_hash
+                ):
+                    raise DatasetBuildError(
+                        REASON_BUILD_REQUEST_CONFLICT,
+                        "retrospective observation capture policy identity is incompatible",
+                    )
+            else:
+                planned_labels = payload.get("planned_labels")
+                selected_mappings = payload.get("selected_observation_mappings")
+                if not isinstance(planned_labels, list) or not planned_labels:
+                    raise DatasetBuildError(
+                        REASON_BUILD_REQUEST_CONFLICT,
+                        "retrospective label capture planned labels are malformed",
+                    )
+                if not isinstance(selected_mappings, list) or not selected_mappings:
+                    raise DatasetBuildError(
+                        REASON_BUILD_REQUEST_CONFLICT,
+                        "retrospective label capture selected mappings are malformed",
+                    )
+                observed_observation_mappings.update(
+                    (
+                        str(item["selected_mapping_id"]),
+                        str(item["selected_mapping_hash"]),
+                    )
+                    for item in selected_mappings
+                    if isinstance(item, dict)
+                    and "selected_mapping_id" in item
+                    and "selected_mapping_hash" in item
+                )
+                dates = {
+                    str(item.get("decision_as_of_trade_date"))
+                    for item in planned_labels
+                    if isinstance(item, dict)
+                }
+                source_pairs = {
+                    (
+                        str(payload.get("label_source_revision_set_id")),
+                        str(payload.get("label_source_revision_set_hash")),
+                    )
+                }
+                if (
+                    str(payload.get("label_policy_bundle_id"))
+                    != request.label_policy_bundle_id
+                    or str(payload.get("label_policy_bundle_hash"))
+                    != request.label_policy_bundle_hash
+                    or not _same_aware_timestamp(
+                        payload.get("label_as_of_ts"), request.label_as_of_ts
+                    )
+                    or canonicalize(
+                        dict(row["historical_range_policy_bundle_ref"] or {})
+                    )
+                    != canonicalize(request.historical_range_policy_bundle_ref)
+                    or str(row["historical_range_policy_bundle_hash"] or "")
+                    != request.label_policy_bundle_hash
+                ):
+                    raise DatasetBuildError(
+                        REASON_BUILD_REQUEST_CONFLICT,
+                        "retrospective label capture policy or as-of identity is incompatible",
+                    )
+                observed_label_targets.update(
+                    (
+                        int(item["horizon_trading_days"]),
+                        str(item["projection"]),
+                    )
+                    for item in planned_labels
+                    if isinstance(item, dict)
+                )
+            expected_dates = {
+                item.isoformat() for item in (member.date_start, member.date_end)
+            }
+            if (
+                not dates
+                or min(dates) != min(expected_dates)
+                or max(dates) != max(expected_dates)
+            ):
+                raise DatasetBuildError(
+                    REASON_BUILD_REQUEST_CONFLICT,
+                    "retrospective capture date range does not match frozen request",
+                )
+            if source_pairs != {
+                (member.source_revision_set_id, member.source_revision_set_hash)
+            }:
+                raise DatasetBuildError(
+                    REASON_BUILD_REQUEST_CONFLICT,
+                    "retrospective capture source revision set does not match authority",
+                )
+
+        if observed_scopes != expected_scopes:
+            raise DatasetBuildError(
+                REASON_BUILD_REQUEST_CONFLICT,
+                "retrospective capture scope set does not match frozen build request",
+            )
+        expected_observations = {
+            (item.identity_id, item.identity_hash)
+            for item in request.selected_observation_mappings
+        }
+        expected_labels = {
+            (item.identity_id, item.identity_hash)
+            for item in request.selected_label_mappings
+        }
+        if (
+            observed_observation_mappings != expected_observations
+            or observed_label_mappings != expected_labels
+        ):
+            raise DatasetBuildError(
+                REASON_BUILD_REQUEST_CONFLICT,
+                "retrospective selected mappings do not match frozen build request",
+            )
+        expected_targets = {
+            (item.horizon_trading_days, item.projection)
+            for item in request.label_targets
+        }
+        if observed_label_targets != expected_targets:
+            raise DatasetBuildError(
+                REASON_BUILD_REQUEST_CONFLICT,
+                "retrospective label targets do not match frozen build request",
+            )
+
+    @staticmethod
+    def _require_base_snapshot_admission(
+        cur: Any, request: DatasetBuildRequest
+    ) -> None:
         base = request.base_snapshot
         if base is None:
             return
+        expected_lineage_type = (
+            "HISTORICAL_RANGE"
+            if isinstance(request, RetrospectiveDatasetBuildRequest)
+            else "PHASE0A"
+        )
         current_snapshot_id = base.snapshot_id
         visited: set[str] = set()
         row: Any | None = None
@@ -1177,19 +1518,48 @@ class PostgresDatasetBuildRepository:
                 "SELECT pg_advisory_xact_lock_shared(hashtext(%s))",
                 (f"advisory_snapshot:{current_snapshot_id}",),
             )
-            cur.execute(
-                """
-                SELECT s.snapshot_id, s.snapshot_content_hash, s.manifest_sha256, s.policy_compatibility_hash,
-                       s.base_snapshot_id
-                  FROM app.advisory_dataset_snapshot s
-                 WHERE s.snapshot_id = %s AND s.snapshot_state = 'SEALED'
-                 FOR KEY SHARE
-                """,
-                (current_snapshot_id,),
-            )
+            if isinstance(request, RetrospectiveDatasetBuildRequest):
+                cur.execute(
+                    """
+                    SELECT s.snapshot_id, s.snapshot_content_hash, s.manifest_sha256,
+                           s.policy_compatibility_hash, s.base_snapshot_id,
+                           s.lineage_identity_type, s.range_lineage_scope_set_hash,
+                           s.selector_policy_hash, s.selected_range_day_outcome_set_hash,
+                           s.historical_range_policy_bundle_hash, s.policy_component_set_hash
+                      FROM app.advisory_dataset_snapshot s
+                     WHERE s.snapshot_id = %s AND s.snapshot_state = 'SEALED'
+                     FOR KEY SHARE
+                    """,
+                    (current_snapshot_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT s.snapshot_id, s.snapshot_content_hash, s.manifest_sha256,
+                           s.policy_compatibility_hash, s.base_snapshot_id,
+                           'PHASE0A'::text AS lineage_identity_type
+                      FROM app.advisory_dataset_snapshot s
+                     WHERE s.snapshot_id = %s AND s.snapshot_state = 'SEALED'
+                     FOR KEY SHARE
+                    """,
+                    (current_snapshot_id,),
+                )
             candidate = cur.fetchone()
             if candidate is None:
                 raise DatasetBuildError(REASON_BUILD_REQUEST_CONFLICT, "base snapshot chain is incomplete or not sealed")
+            if str(candidate["lineage_identity_type"]) != expected_lineage_type:
+                raise DatasetBuildError(
+                    REASON_BUILD_REQUEST_CONFLICT,
+                    "base snapshot lineage type differs from build request",
+                )
+            if isinstance(request, RetrospectiveDatasetBuildRequest) and (
+                str(candidate["selector_policy_hash"] or "")
+                != request.selector_policy_hash
+            ):
+                raise DatasetBuildError(
+                    REASON_BUILD_REQUEST_CONFLICT,
+                    "retrospective base snapshot selector differs from build request",
+                )
             if row is None:
                 row = candidate
             cur.execute("SELECT 1 FROM app.advisory_dataset_snapshot_invalidation WHERE snapshot_id = %s", (current_snapshot_id,))
@@ -1248,7 +1618,61 @@ class PostgresDatasetBuildRepository:
 
     @staticmethod
     def _build_from_row(row: Mapping[str, Any]) -> DatasetBuild:
-        request = FixtureDatasetBuildRequest.model_validate(canonicalize(dict(row["build_request_payload_jsonb"])))
+        request_payload = canonicalize(dict(row["build_request_payload_jsonb"]))
+        schema_version = request_payload.get("schema_version")
+        if schema_version == RETROSPECTIVE_DATASET_BUILD_REQUEST_SCHEMA_VERSION:
+            request: DatasetBuildRequest = RetrospectiveDatasetBuildRequest.model_validate(
+                request_payload
+            )
+            persisted_identity = {
+                "lineage_identity_type": str(row.get("lineage_identity_type") or ""),
+                "range_lineage_scope_set_hash": str(
+                    row.get("range_lineage_scope_set_hash") or ""
+                ),
+                "selector_policy_hash": str(row.get("selector_policy_hash") or ""),
+                "execution_origin": str(row.get("execution_origin") or ""),
+                "research_scope": str(row.get("research_scope") or ""),
+                "evidence_scope": str(row.get("evidence_scope") or ""),
+                "historical_range_policy_bundle_hash": str(
+                    row.get("historical_range_policy_bundle_hash") or ""
+                ),
+                "selected_range_day_outcome_set_hash": str(
+                    row.get("selected_range_day_outcome_set_hash") or ""
+                ),
+                "policy_component_set_hash": str(
+                    row.get("policy_component_set_hash") or ""
+                ),
+            }
+            expected_identity = {
+                "lineage_identity_type": request.lineage_identity_type,
+                "range_lineage_scope_set_hash": request.range_lineage_scope_set_hash,
+                "selector_policy_hash": request.selector_policy_hash,
+                "execution_origin": request.execution_origin,
+                "research_scope": request.research_scope,
+                "evidence_scope": request.evidence_scope,
+                "historical_range_policy_bundle_hash": request.label_policy_bundle_hash,
+                "selected_range_day_outcome_set_hash": request.selected_range_day_outcome_set_hash,
+                "policy_component_set_hash": request.policy_component_set_hash,
+            }
+            if persisted_identity != expected_identity or canonicalize(
+                dict(row.get("historical_range_policy_bundle_ref") or {})
+            ) != canonicalize(request.historical_range_policy_bundle_ref):
+                raise DatasetBuildError(
+                    REASON_BUILD_REQUEST_CONFLICT,
+                    "retrospective build row identity differs from canonical request",
+                )
+        elif schema_version == DATASET_BUILD_REQUEST_SCHEMA_VERSION:
+            request = FixtureDatasetBuildRequest.model_validate(request_payload)
+            if str(row.get("lineage_identity_type") or "PHASE0A") != "PHASE0A":
+                raise DatasetBuildError(
+                    REASON_BUILD_REQUEST_CONFLICT,
+                    "formal build row carries retrospective lineage",
+                )
+        else:
+            raise DatasetBuildError(
+                REASON_BUILD_REQUEST_CONFLICT,
+                "dataset build row has an unsupported request schema",
+            )
         return DatasetBuild(
             build_id=str(row["build_id"]), request=request, logical_build_key_sha256=str(row["logical_build_key_sha256"]),
             build_generation=int(row["build_generation"]),

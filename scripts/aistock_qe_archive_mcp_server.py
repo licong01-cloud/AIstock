@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 if __package__ in {None, ""}:
     repo_root = str(Path(__file__).resolve().parents[1])
@@ -299,6 +299,68 @@ def qe_archive_query_analytics_view_status() -> dict[str, Any]:
     """Return availability and row counts for the compact QE analytics views."""
 
     return _client().get("/analytics/views")
+
+
+@mcp.tool()
+def qe_archive_query_long_trend_quality(
+    evaluation_id: str | None = None,
+    run_id: str | None = None,
+    task_id: str | None = None,
+    loop_index: int | None = None,
+    model_type: str | None = None,
+    label_horizon: Literal[20, 40, 60, 120, 180] | None = None,
+    evaluation_asof: str | None = None,
+    outcome_dataset_snapshot_id: str | None = None,
+    horizon: Literal[20, 40, 60, 120, 180] | None = None,
+    sector_code: str | None = None,
+    family_status: Literal[
+        "COMPUTED", "COMPUTED_WITH_LIMITATIONS", "NOT_COMPUTABLE", "NOT_VERIFIABLE"
+    ]
+    | None = None,
+    entry_execution_status: Literal[
+        "filled_t1",
+        "partial_fill_t1",
+        "delayed_fill",
+        "never_filled",
+        "not_attempted_by_strategy",
+        "not_verifiable",
+    ]
+    | None = None,
+    exit_execution_status: Literal[
+        "filled_on_exit_signal_day",
+        "delayed_exit",
+        "never_exited",
+        "not_attempted_by_strategy",
+        "not_verifiable",
+    ]
+    | None = None,
+    limit: int = 20,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """Read bounded compact F-014 quality rows without inline Parquet."""
+
+    if limit < 1 or limit > 100:
+        raise ValueError("limit must be between 1 and 100")
+    return _client().get(
+        "/analytics/long-trend-quality",
+        params={
+            "evaluation_id": evaluation_id,
+            "run_id": run_id,
+            "task_id": task_id,
+            "loop_index": loop_index,
+            "model_type": model_type,
+            "label_horizon": label_horizon,
+            "evaluation_asof": evaluation_asof,
+            "outcome_dataset_snapshot_id": outcome_dataset_snapshot_id,
+            "horizon": horizon,
+            "sector_code": sector_code,
+            "family_status": family_status,
+            "entry_execution_status": entry_execution_status,
+            "exit_execution_status": exit_execution_status,
+            "limit": limit,
+            "cursor": cursor,
+        },
+    )
 
 
 @mcp.tool()

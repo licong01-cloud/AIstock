@@ -434,13 +434,14 @@ def test_authority_column_schema_parity_accepts_exact_and_rejects_drift() -> Non
         def fetchall(self):  # type: ignore[no-untyped-def]
             return self.current
 
-    PostgresSnapshotSourceReader._validate_authority_columns(Cursor([first, outcomes, sources]))
+    reader = PostgresSnapshotSourceReader(conn_factory=lambda: None, evidence_reader=None)
+    reader._validate_authority_columns(Cursor([first, outcomes, sources]))
     drift = list(first) + [("advisory_signal_observation", "unexpected")]
     with pytest.raises(SnapshotWriterError, match="authority columns differ"):
-        PostgresSnapshotSourceReader._validate_authority_columns(Cursor([drift]))
+        reader._validate_authority_columns(Cursor([drift]))
     bad_outcomes = list(outcomes) + [("unexpected",)]
     with pytest.raises(SnapshotWriterError, match="outcome_label"):
-        PostgresSnapshotSourceReader._validate_authority_columns(Cursor([first, bad_outcomes]))
+        reader._validate_authority_columns(Cursor([first, bad_outcomes]))
 
 
 def test_server_cursor_query_and_source_failure_paths_close_spools(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -707,7 +708,7 @@ def test_expired_materialize_attempt_recovers_and_reaches_sealed(tmp_path) -> No
         expected_build_row_version=build.row_version,
         expected_checkpoint=build.checkpoint,
         lease_owner_id="dead-worker",
-        lease_token="dead-lease",
+        lease_token=hashlib.sha256(b"dead-lease").hexdigest(),
         lease_seconds=1,
         operation_request_hash="1" * 64,
     )

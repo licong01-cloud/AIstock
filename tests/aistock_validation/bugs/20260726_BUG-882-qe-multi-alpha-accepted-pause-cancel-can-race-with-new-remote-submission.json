@@ -1,0 +1,266 @@
+{
+  "actual": "create_or_get_command inserts an accepted command/event only; parent status stays preparing/running, so claim_attempt_submission_in_transaction and planner status checks still permit submission until apply_one_local_command runs.",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/durable_repository.py",
+    "backend/tests/multi_alpha/test_durable_repository.py",
+    "backend/tests/multi_alpha/test_durable_repository_postgres.py",
+    "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+    "tests/aistock_validation/bugs/20260726_BUG-882-qe-multi-alpha-accepted-pause-cancel-can-race-with-new-remote-submission.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-882",
+  "closed_at": "2026-07-27T01:34:48Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-26T21:58:26.817591Z",
+  "description": "create_or_get_command inserts an accepted command/event only; parent status stays preparing/running, so claim_attempt_submission_in_transaction and planner status checks still permit submission until apply_one_local_command runs.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260726-f5a98ab5dd74",
+      "timestamp": "2026-07-26T21:58:26.817588Z"
+    }
+  ],
+  "evidence_uris": [
+    "cancel_command=macmd_eade84fd0dde417248f6ea2be632a5f2e6f560dc18f8e946d249aaea860d8e33; accepted_at~2026-07-27T05:10:23+08:00; remote_submission_started~2026-07-27T05:11:42+08:00"
+  ],
+  "expected": "Accepting a run-level pause or cancel command atomically makes the control intent visible to planner/materialization/dispatch; no new child publish, attempt claim, or remote POST may begin after acceptance.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_repository_postgres.py",
+      "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/multi_alpha/durable_repository.py",
+        "backend/tests/multi_alpha/test_durable_repository.py",
+        "backend/tests/multi_alpha/test_durable_repository_postgres.py",
+        "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/durable_repository.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_repository.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_repository_postgres.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/durable_repository.py",
+        "backend/tests/multi_alpha/test_durable_repository.py",
+        "backend/tests/multi_alpha/test_durable_repository_postgres.py",
+        "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_repository_postgres.py",
+      "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md"
+    ]
+  },
+  "first_seen_at": "2026-07-26T21:58:26.817591Z",
+  "fix_branch": null,
+  "fix_commit": "ed924d85490cbe3e23442f5ce3044bb28ada1c0e",
+  "fixed_at": "2026-07-27T01:37:48.857958Z",
+  "github_issue_number": 2784,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2784",
+  "last_seen_at": "2026-07-26T21:58:26.817591Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2786",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Submit cancel while planner materialization is active; delay apply_one_local_command; observe whether a later attempt can enter submitting or issue a remote POST.",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "QE multi-alpha accepted pause/cancel can race with new remote submission",
+  "trigger_condition": {
+    "fingerprint": "f5a98ab5dd745d991ca48840",
+    "source_event_id": "FE-20260726-f5a98ab5dd74"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/multi_alpha/test_durable_control.py backend/tests/multi_alpha/test_durable_repository.py backend/tests/multi_alpha/test_durable_execution_adapter.py -q -> 51 passed",
+    "python -m pytest backend/tests/multi_alpha/test_durable_repository_postgres.py -q on disposable PostgreSQL 16 -> 8 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "multi_alpha",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "multi_alpha",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

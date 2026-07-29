@@ -520,6 +520,116 @@ def test_remote_acceptance_survives_local_receipt_transition_failure() -> None:
     assert [item["next_status"] for item in repository.transitions] == ["submitting"]
 
 
+def test_exact_terminal_receipt_releases_reservation_owned_by_capacity_reconciler() -> None:
+    reservation_id = "qer_" + "d" * 64
+    reservation = {
+        "reservation_id": reservation_id,
+        "status": "running",
+        "remote_status": "running",
+        "owner_id": "qe_submit_capacity_reconciler",
+        "fencing_token": 9,
+        "row_version": 17,
+    }
+
+    class TerminalHandoffRepository(FakeReservationRepository):
+        def get_reservation_for_source(self, **_kwargs: Any) -> dict[str, Any]:
+            return dict(reservation)
+
+        def claim_reservation_for_source(self, **_kwargs: Any) -> None:
+            pytest.fail("an exact terminal receipt must not wait for the reconciler lease")
+
+    repository = TerminalHandoffRepository(owner_id="qe_submit_capacity_reconciler")
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    released = coordinator.record_authoritative_remote_status_for_source(
+        source_kind="multi_alpha_durable_attempt",
+        source_execution_id="macba_terminal_handoff",
+        remote_status="completed",
+        owner_id="macb-worker:host:1:worker",
+        expected_reservation_id=reservation_id,
+    )
+
+    assert released["status"] == "released"
+    assert repository.claim_source_calls == []
+    transition = repository.transitions[-1]
+    assert transition["token"].owner_id == "qe_submit_capacity_reconciler"
+    assert transition["token"].fencing_token == 9
+    assert transition["token"].row_version == 17
+    assert transition["release_reason_code"] == "qe_workspace_remote_completed"
+
+
+def test_nonterminal_status_cannot_bypass_active_reservation_owner() -> None:
+    reservation_id = "qer_" + "e" * 64
+    reservation = {
+        "reservation_id": reservation_id,
+        "status": "running",
+        "remote_status": "running",
+        "owner_id": "qe_submit_capacity_reconciler",
+        "fencing_token": 4,
+        "row_version": 8,
+    }
+
+    class ActiveOwnerRepository(FakeReservationRepository):
+        def get_reservation_for_source(self, **_kwargs: Any) -> dict[str, Any]:
+            return dict(reservation)
+
+        def claim_reservation_for_source(self, **kwargs: Any) -> None:
+            self.claim_source_calls.append(dict(kwargs))
+            return None
+
+    repository = ActiveOwnerRepository(owner_id="qe_submit_capacity_reconciler")
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    with pytest.raises(
+        QEWorkspaceSubmissionCoordinatorError,
+        match="could not claim the QE execution reservation",
+    ) as exc_info:
+        coordinator.record_authoritative_remote_status_for_source(
+            source_kind="multi_alpha_durable_attempt",
+            source_execution_id="macba_nonterminal_owner",
+            remote_status="running",
+            owner_id="macb-worker:host:1:worker",
+            expected_reservation_id=reservation_id,
+        )
+
+    assert exc_info.value.reason_code == "qe_execution_reservation_owner_mismatch"
+    assert len(repository.claim_source_calls) == 1
+    assert repository.transitions == []
+
+
+def test_terminal_status_without_exact_reservation_id_cannot_bypass_owner() -> None:
+    reservation = {
+        "reservation_id": "qer_" + "f" * 64,
+        "status": "running",
+        "remote_status": "running",
+        "owner_id": "qe_submit_capacity_reconciler",
+        "fencing_token": 2,
+        "row_version": 3,
+    }
+
+    class MissingIdentityRepository(FakeReservationRepository):
+        def get_reservation_for_source(self, **_kwargs: Any) -> dict[str, Any]:
+            return dict(reservation)
+
+        def claim_reservation_for_source(self, **kwargs: Any) -> None:
+            self.claim_source_calls.append(dict(kwargs))
+            return None
+
+    repository = MissingIdentityRepository(owner_id="qe_submit_capacity_reconciler")
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    with pytest.raises(QEWorkspaceSubmissionCoordinatorError) as exc_info:
+        coordinator.record_authoritative_remote_status_for_source(
+            source_kind="multi_alpha_durable_attempt",
+            source_execution_id="macba_terminal_without_identity",
+            remote_status="completed",
+            owner_id="macb-worker:host:1:worker",
+        )
+
+    assert exc_info.value.reason_code == "qe_execution_reservation_owner_mismatch"
+    assert repository.transitions == []
+
+
 def test_reconciler_releases_terminal_receipt_and_keeps_capacity_auditable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -291,6 +291,363 @@ export type WatchlistBulkAddResponse = {
   moved?: number;
 };
 
+export type HistoricalRangeRecord = Record<string, unknown>;
+export type HistoricalRangePage = { limit: number; next_cursor: string | null; has_more: boolean };
+export type HistoricalRangeEnvelope<T extends HistoricalRangeRecord> = {
+  ok: true;
+  data: T;
+  page?: HistoricalRangePage;
+};
+export type HistoricalRangeOptions = {
+  existing_programs: Array<{
+    program_id: string;
+    name: string;
+    version: number;
+    active_binding_version_id: string;
+    package_id: string | null;
+    target_count: number;
+    review_policy_summary: JsonObject;
+  }>;
+  admitted_packages: Array<{
+    package_id: string;
+    name: string;
+    alpha_mode: "single_alpha" | "multi_alpha";
+    component_count: number;
+    manifest_sha256: string;
+    package_version: string;
+  }>;
+  outcome_catalog: {
+    catalog_version: string;
+    catalog_content_hash: string;
+    default_horizons: number[];
+    long_trend_horizons: number[];
+    allowed_maturity_statuses: string[];
+  };
+};
+export type HistoricalRangeProgramSpec =
+  | { source_kind: "EXISTING_PROGRAM"; program_id: string; expected_program_version: number; expected_binding_version_id: string }
+  | {
+      source_kind: "RESEARCH_PROGRAM_SPEC";
+      program_name: string;
+      package_id: string;
+      target_count: number;
+      review_policy: JsonObject;
+      runtime_config: JsonObject;
+      entry_price_basis: string;
+      exit_price_basis: string;
+      style_profile_ref: string | null;
+      style_profile_hash: string | null;
+    };
+export type HistoricalRangeCreatePayload = { program_specs: HistoricalRangeProgramSpec[]; start_trade_date: string; end_trade_date: string };
+export type HistoricalRangeCommandPayload = { operation_idempotency_key: string; expected_row_version: number };
+export type HistoricalRangeMutationData = {
+  batch: HistoricalRangeRecord;
+  operation: HistoricalRangeRecord;
+  operation_id: string;
+  exact_retry: boolean;
+  dispatch_state: string;
+  links: Record<string, string>;
+};
+
+export class AdvisoryApiError extends Error {
+  readonly http_status: number | null;
+  readonly error_code: string;
+  readonly reason_code: string | null;
+  readonly retryable: boolean;
+  readonly context: JsonObject;
+  readonly correlation_id: string | null;
+
+  constructor(input: {
+    message: string;
+    http_status?: number | null;
+    error_code: string;
+    reason_code?: string | null;
+    retryable?: boolean;
+    context?: JsonObject;
+    correlation_id?: string | null;
+  }) {
+    super(input.message);
+    this.name = "AdvisoryApiError";
+    this.http_status = input.http_status ?? null;
+    this.error_code = input.error_code;
+    this.reason_code = input.reason_code ?? null;
+    this.retryable = input.retryable ?? false;
+    this.context = input.context ?? {};
+    this.correlation_id = input.correlation_id ?? null;
+  }
+}
+
+const HISTORICAL_RANGE_API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+
+async function historicalRangeFetch<T extends HistoricalRangeRecord>(path: string, init?: RequestInit): Promise<HistoricalRangeEnvelope<T>> {
+  let response: Response;
+  try {
+    response = await fetch(`${HISTORICAL_RANGE_API_BASE}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    });
+  } catch (cause) {
+    throw new AdvisoryApiError({
+      error_code: "ADVISORY_API_NETWORK_ERROR",
+      message: cause instanceof Error ? cause.message : "历史验证 API 网络连接失败",
+    });
+  }
+  const correlationHeader = response.headers.get("x-correlation-id");
+  const text = await response.text();
+  let payload: unknown;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    throw new AdvisoryApiError({
+      error_code: "ADVISORY_API_INVALID_RESPONSE",
+      message: `历史验证 API 返回了无法解析的响应（HTTP ${response.status}）`,
+      http_status: response.status,
+      correlation_id: correlationHeader,
+    });
+  }
+  if (!response.ok) {
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? (payload as { detail?: unknown }).detail
+      : null;
+    if (detail && typeof detail === "object") {
+      const typed = detail as JsonObject;
+      throw new AdvisoryApiError({
+        error_code: String(typed.error_code || "ADVISORY_HISTORICAL_RANGE_ERROR"),
+        reason_code: typed.reason_code ? String(typed.reason_code) : null,
+        message: String(typed.message || `HTTP ${response.status}`),
+        retryable: typed.retryable === true,
+        context: typed.context && typeof typed.context === "object" ? typed.context as JsonObject : {},
+        correlation_id: typed.correlation_id ? String(typed.correlation_id) : correlationHeader,
+        http_status: response.status,
+      });
+    }
+    throw new AdvisoryApiError({
+      error_code: "ADVISORY_API_INVALID_RESPONSE",
+      message: `历史验证 API 错误响应不符合结构化合同（HTTP ${response.status}）`,
+      http_status: response.status,
+      correlation_id: correlationHeader,
+    });
+  }
+  if (!payload || typeof payload !== "object" || (payload as JsonObject).ok !== true || typeof (payload as JsonObject).data !== "object") {
+    throw new AdvisoryApiError({
+      error_code: "ADVISORY_API_CONTRACT_ERROR",
+      message: `历史验证 API 成功响应不符合合同（HTTP ${response.status}）`,
+      http_status: response.status,
+      correlation_id: correlationHeader,
+    });
+  }
+  return payload as HistoricalRangeEnvelope<T>;
+}
+
+function requireHistoricalRangePage(envelope: HistoricalRangeEnvelope<HistoricalRangeRecord>, path: string): HistoricalRangePage {
+  const page = envelope.page;
+  if (!page || typeof page !== "object"
+    || !Number.isInteger(page.limit) || page.limit < 1 || page.limit > 500
+    || typeof page.has_more !== "boolean"
+    || !(page.next_cursor === null || typeof page.next_cursor === "string")
+    || (page.has_more && (!page.next_cursor || page.next_cursor.length === 0))
+    || (!page.has_more && page.next_cursor !== null)) {
+    throw new AdvisoryApiError({
+      error_code: "ADVISORY_API_CONTRACT_ERROR",
+      message: `历史验证 API 分页合同无效：${path}`,
+    });
+  }
+  return page;
+}
+
+function historicalRangeContractError(path: string): AdvisoryApiError {
+  return new AdvisoryApiError({
+    error_code: "ADVISORY_API_CONTRACT_ERROR",
+    message: `历史验证 API 数据合同无效：${path}`,
+  });
+}
+
+function requireHistoricalRangeRecord(value: unknown, path: string): HistoricalRangeRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw historicalRangeContractError(path);
+  }
+  return value as HistoricalRangeRecord;
+}
+
+type HistoricalRangeFieldKind = "string" | "number" | "boolean" | "object";
+
+function requireHistoricalRangeFields(
+  record: HistoricalRangeRecord,
+  path: string,
+  fields: Record<string, HistoricalRangeFieldKind>,
+): HistoricalRangeRecord {
+  for (const [field, kind] of Object.entries(fields)) {
+    const value = record[field];
+    let valid = false;
+    if (kind === "object") valid = !!value && typeof value === "object" && !Array.isArray(value);
+    else if (kind === "string") valid = typeof value === "string" && value.length > 0;
+    else if (kind === "number") valid = typeof value === "number" && Number.isFinite(value);
+    else if (kind === "boolean") valid = typeof value === "boolean";
+    if (!valid) throw historicalRangeContractError(`${path}.${field}`);
+  }
+  return record;
+}
+
+function requireHistoricalRangeRows(
+  value: unknown,
+  path: string,
+  fields: Record<string, HistoricalRangeFieldKind> = {},
+): HistoricalRangeRecord[] {
+  if (!Array.isArray(value)) throw historicalRangeContractError(path);
+  return value.map((item, index) => requireHistoricalRangeFields(
+    requireHistoricalRangeRecord(item, `${path}[${index}]`),
+    `${path}[${index}]`,
+    fields,
+  ));
+}
+
+function requireHistoricalRangeOptions(value: unknown): HistoricalRangeOptions {
+  const data = requireHistoricalRangeRecord(value, "options");
+  const existing = requireHistoricalRangeRows(data.existing_programs, "options.existing_programs", {
+    program_id: "string", name: "string", version: "number", active_binding_version_id: "string",
+    target_count: "number", review_policy_summary: "object",
+  });
+  const packages = requireHistoricalRangeRows(data.admitted_packages, "options.admitted_packages", {
+    package_id: "string", name: "string", alpha_mode: "string", component_count: "number",
+    manifest_sha256: "string", package_version: "string",
+  });
+  const catalog = requireHistoricalRangeRecord(data.outcome_catalog, "options.outcome_catalog");
+  for (const [field, raw] of [
+    ["default_horizons", catalog.default_horizons],
+    ["long_trend_horizons", catalog.long_trend_horizons],
+  ] as const) {
+    if (!Array.isArray(raw) || raw.some((item) => !Number.isInteger(item) || Number(item) < 1)) {
+      throw historicalRangeContractError(`options.outcome_catalog.${field}`);
+    }
+  }
+  if (!Array.isArray(catalog.allowed_maturity_statuses)
+    || catalog.allowed_maturity_statuses.some((item) => !["COMPLETE", "CENSORED", "TERMINAL"].includes(String(item)))) {
+    throw historicalRangeContractError("options.outcome_catalog.allowed_maturity_statuses");
+  }
+  if (typeof catalog.catalog_version !== "string" || !catalog.catalog_version
+    || typeof catalog.catalog_content_hash !== "string" || !/^[0-9a-f]{64}$/.test(catalog.catalog_content_hash)
+    || existing.some((item) => !Number.isInteger(item.version) || Number(item.version) < 1
+      || !Number.isInteger(item.target_count) || Number(item.target_count) < 1)
+    || packages.some((item) => !["single_alpha", "multi_alpha"].includes(String(item.alpha_mode))
+      || !Number.isInteger(item.component_count)
+      || (item.alpha_mode === "single_alpha" && item.component_count !== 1)
+      || (item.alpha_mode === "multi_alpha" && Number(item.component_count) < 2)
+      || !/^[0-9a-f]{64}$/.test(String(item.manifest_sha256)))) {
+    throw historicalRangeContractError("options.identity");
+  }
+  return {
+    existing_programs: existing as HistoricalRangeOptions["existing_programs"],
+    admitted_packages: packages as HistoricalRangeOptions["admitted_packages"],
+    outcome_catalog: catalog as HistoricalRangeOptions["outcome_catalog"],
+  };
+}
+
+function requireHistoricalRangeMutation(value: unknown, path: string): HistoricalRangeMutationData {
+  const data = requireHistoricalRangeRecord(value, path);
+  const operationId = data.operation_id;
+  if (typeof operationId !== "string" || !operationId
+    || typeof data.exact_retry !== "boolean"
+    || typeof data.dispatch_state !== "string" || !data.dispatch_state) {
+    throw historicalRangeContractError(path);
+  }
+  const links = requireHistoricalRangeRecord(data.links, `${path}.links`);
+  if (typeof links.operation !== "string" || !links.operation
+    || Object.values(links).some((item) => typeof item !== "string" || !item)) {
+    throw historicalRangeContractError(`${path}.links`);
+  }
+  const operation = requireHistoricalRangeFields(
+    requireHistoricalRangeRecord(data.operation, `${path}.operation`),
+    `${path}.operation`,
+    { operation_id: "string", operation_type: "string", status: "string", row_version: "number" },
+  );
+  if (operation.operation_id !== operationId) {
+    throw historicalRangeContractError(`${path}.operation.operation_id`);
+  }
+  return {
+    batch: requireHistoricalRangeFields(
+      requireHistoricalRangeRecord(data.batch, `${path}.batch`),
+      `${path}.batch`,
+      { batch_id: "string", status: "string", row_version: "number" },
+    ),
+    operation,
+    operation_id: operationId,
+    exact_retry: data.exact_retry,
+    dispatch_state: data.dispatch_state,
+    links: links as Record<string, string>,
+  };
+}
+
+function r5Body(payload: unknown, headers?: HeadersInit): RequestInit {
+  return { method: "POST", body: JSON.stringify(payload), headers };
+}
+
+export const historicalRangeApi = {
+  async options(signal?: AbortSignal): Promise<HistoricalRangeOptions> {
+    return requireHistoricalRangeOptions((await historicalRangeFetch<HistoricalRangeRecord>("/advisory/historical-range-options", { signal })).data);
+  },
+  async batches(cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ batches: HistoricalRangeRecord[] }>(`/advisory/historical-range-batches${query}`, { signal });
+    return { rows: requireHistoricalRangeRows(envelope.data.batches, "batches", { batch_id: "string", status: "string", row_version: "number" }), page: requireHistoricalRangePage(envelope, "batches") };
+  },
+  async create(payload: HistoricalRangeCreatePayload, idempotencyKey: string): Promise<HistoricalRangeMutationData> {
+    return requireHistoricalRangeMutation((await historicalRangeFetch<HistoricalRangeRecord>(
+      "/advisory/historical-range-batches",
+      r5Body(payload, { "Idempotency-Key": idempotencyKey }),
+    )).data, "create");
+  },
+  async batch(batchId: string, signal?: AbortSignal): Promise<HistoricalRangeRecord> {
+    return requireHistoricalRangeFields(requireHistoricalRangeRecord((await historicalRangeFetch<HistoricalRangeRecord>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}`, { signal })).data.batch, "batch"), "batch", { batch_id: "string", status: "string", row_version: "number" });
+  },
+  async runs(batchId: string, cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ runs: HistoricalRangeRecord[] }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/runs${query}`, { signal });
+    return { rows: requireHistoricalRangeRows(envelope.data.runs, "runs", { range_run_id: "string", research_program_id: "string", status: "string", row_version: "number" }), page: requireHistoricalRangePage(envelope, "runs") };
+  },
+  async operations(batchId: string, cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ operations: HistoricalRangeRecord[] }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/operations${query}`, { signal });
+    return { rows: requireHistoricalRangeRows(envelope.data.operations, "operations", { operation_id: "string", operation_type: "string", status: "string", row_version: "number" }), page: requireHistoricalRangePage(envelope, "operations") };
+  },
+  async operation(operationId: string, signal?: AbortSignal): Promise<HistoricalRangeRecord> {
+    return requireHistoricalRangeFields(requireHistoricalRangeRecord((await historicalRangeFetch<HistoricalRangeRecord>(`/advisory/historical-range-operations/${encodeURIComponent(operationId)}`, { signal })).data.operation, "operation"), "operation", { operation_id: "string", operation_type: "string", status: "string", row_version: "number" });
+  },
+  async days(rangeRunId: string, cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ days: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/days${query}`, { signal });
+    return { rows: requireHistoricalRangeRows(envelope.data.days, "days", { day_run_id: "string", decision_trade_date: "string", status: "string", ordinal: "number" }), page: requireHistoricalRangePage(envelope, "days") };
+  },
+  async day(rangeRunId: string, tradeDate: string, cursor?: string | null, signal?: AbortSignal): Promise<{ day: HistoricalRangeRecord; rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?candidate_cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ day: HistoricalRangeRecord; candidates: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/days/${encodeURIComponent(tradeDate)}${query}`, { signal });
+    return { day: requireHistoricalRangeFields(requireHistoricalRangeRecord(envelope.data.day, "day"), "day", { day_run_id: "string", decision_trade_date: "string", status: "string", ordinal: "number" }), rows: requireHistoricalRangeRows(envelope.data.candidates, "candidates", { candidate_id: "string", symbol: "string" }), page: requireHistoricalRangePage(envelope, "candidates") };
+  },
+  async list(rangeRunId: string, tradeDate: string, cursor?: string | null, signal?: AbortSignal): Promise<{ list: HistoricalRangeRecord; rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?item_cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ list: HistoricalRangeRecord; items: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/lists/${encodeURIComponent(tradeDate)}${query}`, { signal });
+    return { list: requireHistoricalRangeFields(requireHistoricalRangeRecord(envelope.data.list, "list"), "list", { list_version_id: "string", range_run_id: "string" }), rows: requireHistoricalRangeRows(envelope.data.items, "list-items", { list_version_id: "string", symbol: "string", action: "string" }), page: requireHistoricalRangePage(envelope, "list-items") };
+  },
+  async outcomes(rangeRunId: string, cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ outcomes: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/outcomes${query}`, { signal });
+    return { rows: requireHistoricalRangeRows(envelope.data.outcomes, "outcomes", { outcome_version_id: "string", subject_type: "string", subject_id: "string", horizon_trade_days: "number", maturity_status: "string" }), page: requireHistoricalRangePage(envelope, "outcomes") };
+  },
+  async summaries(rangeRunId: string, cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const envelope = await historicalRangeFetch<{ summaries: HistoricalRangeRecord[] }>(`/advisory/historical-range-runs/${encodeURIComponent(rangeRunId)}/summaries${query}`, { signal });
+    return { rows: requireHistoricalRangeRows(envelope.data.summaries, "summaries", { summary_id: "string", summary_version: "number" }), page: requireHistoricalRangePage(envelope, "summaries") };
+  },
+  async command(batchId: string, action: "resume" | "cancel", payload: HistoricalRangeCommandPayload): Promise<HistoricalRangeMutationData> {
+    return requireHistoricalRangeMutation((await historicalRangeFetch<HistoricalRangeRecord>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/${action}`, r5Body(payload))).data, action);
+  },
+  async refreshOutcomes(batchId: string, payload: HistoricalRangeCommandPayload & { label_as_of_trade_date: string; range_run_ids: string[]; horizons: number[] }): Promise<HistoricalRangeMutationData> {
+    return requireHistoricalRangeMutation((await historicalRangeFetch<HistoricalRangeRecord>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/refresh-outcomes`, r5Body(payload))).data, "refresh-outcomes");
+  },
+  async buildBridge(batchId: string, payload: HistoricalRangeCommandPayload & { range_run_ids: string[]; requested_horizons: number[]; requested_maturity_statuses: Array<"COMPLETE" | "CENSORED" | "TERMINAL"> }): Promise<HistoricalRangeMutationData> {
+    return requireHistoricalRangeMutation((await historicalRangeFetch<HistoricalRangeRecord>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/build-dataset-bridge`, r5Body(payload))).data, "build-dataset-bridge");
+  },
+};
+
 function body(payload: unknown, method = "POST"): RequestInit {
   return { method, body: globalThis.JSON["stringify"](payload) };
 }

@@ -226,6 +226,56 @@ def test_sector_data_materialization_files_select_only_local_data_plan(tmp_path:
     assert payload["unmapped_code_files"] == []
 
 
+def test_advisory_snapshot_blob_ref_migrations_select_historical_range_plan(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_20260727.sql",
+            "backend/db/migrations/fix_advisory_dataset_snapshot_blob_ref_unique_scope_20260727.rollback.sql",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_plan_keys"] == ["l0", "advisory_historical_range_backend"]
+    assert payload["backend_sessions"] == ["advisory_historical_range_backend"]
+    assert payload["catalog_impacted_modules"] == ["advisory.historical_range", "tests.backend"]
+    assert payload["unmapped_code_files"] == []
+
+
+def test_advisory_r4_shared_phase1_contracts_select_historical_range_plan(
+    tmp_path: Path,
+) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/db/migrations/add_advisory_historical_range_r4_outcome_bridge_20260723.sql",
+            "backend/services/advisory_phase1/capture_foundation.py",
+            "backend/services/advisory_phase1/dataset_build.py",
+            "backend/services/advisory_phase1/label_builder_postgres.py",
+            "backend/services/advisory_phase1/observation_capture_postgres.py",
+            "backend/services/advisory_phase1/outcome_engine.py",
+            "backend/services/advisory_phase1/release_schema_contract.py",
+            "backend/services/advisory_phase1/retrospective_selector.py",
+            "backend/services/advisory_phase1/snapshot_writer.py",
+            "backend/tests/advisory_phase1/test_phase1c3_batch_d_writer.py",
+            "backend/tests/advisory_phase1/test_r4_dataset_build_postgres.py",
+            "backend/tests/advisory_phase1/test_release_schema.py",
+            "backend/tests/advisory_phase1/test_retrospective_selector.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_plan_keys"] == ["l0", "advisory_historical_range_backend"]
+    assert payload["backend_sessions"] == ["advisory_historical_range_backend"]
+    assert payload["catalog_impacted_modules"] == [
+        "advisory.historical_range",
+        "tests.backend",
+    ]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_minute_execution_changes_select_focused_paper_v2_session(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
@@ -415,8 +465,10 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
             ".github/requirements/pr-quality.txt",
             ".github/requirements/semgrep.txt",
             "scripts/ci_change_classifier.py",
+            "scripts/validate_changed_requirements.py",
             "scripts/aistock_validation_catalog_integrity.py",
             "backend/tests/scripts/test_ci_change_classifier.py",
+            "backend/tests/scripts/test_validate_changed_requirements.py",
             "backend/tests/test_validation_catalog_integrity.py",
             "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
             "docs/codex_project_memory.md",
@@ -429,6 +481,7 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["workflow_validation_required"] is True
     assert payload["prompt_evaluation_required"] is False
     assert payload["unmapped_code_files"] == []
+    assert "backend/tests/scripts/test_validate_changed_requirements.py" in payload["workflow_test_targets"]
 
 
 def test_docs_fast_update_skips_code_validation(tmp_path: Path) -> None:
@@ -785,6 +838,18 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "scripts/llm_provider_adapter.py --json prompt-evaluation" in prompt_eval_run_steps
     assert "prompt-evaluation" in jobs["failure-bug-register"]["needs"]
     assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
+
+
+def test_github_backend_dependency_surface_installs_pinned_hmmlearn() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["backend-tests"]["steps"]
+    install = next(
+        step for step in steps if step.get("name") == "Install backend deps via venv (no conda on hosted runners)"
+    )
+
+    assert "hmmlearn==0.3.3" in str(install["run"])
 
 
 def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:

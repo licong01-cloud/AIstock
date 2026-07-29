@@ -167,8 +167,41 @@ def test_qe_archive_schema_keeps_daily_invalid_runs_filterable_and_score_compone
 
 
 def test_qe_archive_schema_version_is_explicit() -> None:
-    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v4_20260713"
+    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v5_20260728"
     assert "qe_archive.schema_version" in _ddl_text()
+
+
+def test_qe_long_trend_phase3_schema_is_additive_commented_and_guarded() -> None:
+    ddl = _ddl_text()
+    forward = Path("backend/migrations/qe_long_trend_evaluation_result_phase3_20260728.sql").read_text(
+        encoding="utf-8"
+    )
+    preflight = Path(
+        "backend/migrations/qe_long_trend_evaluation_result_phase3_20260728.preflight.sql"
+    ).read_text(encoding="utf-8")
+    rollback = Path(
+        "backend/migrations/qe_long_trend_evaluation_result_phase3_20260728.rollback.sql"
+    ).read_text(encoding="utf-8")
+
+    for table in ("run_evaluation", "run_evaluation_metric", "run_evaluation_artifact"):
+        assert f"CREATE TABLE IF NOT EXISTS qe_archive.{table}" in ddl
+    for table in ("run_evaluation_metric", "run_evaluation_artifact"):
+        assert f"CREATE TABLE IF NOT EXISTS qe_archive.{table}" in forward
+        assert f"COMMENT ON TABLE qe_archive.{table}" in forward
+        assert f"DROP TABLE IF EXISTS qe_archive.{table}" in rollback
+    assert "QELT Phase 2 control table qe_archive.run_evaluation is missing" in preflight
+    assert "QE archive schema version table qe_archive.schema_version is missing" in preflight
+    assert "existing run_evaluation_metric constraints are incomplete" in preflight
+    assert "existing run_evaluation_artifact defaults differ" in preflight
+    assert "guarded rollback refused" in rollback
+    assert rollback.index("BEGIN;") < rollback.index("DO $$")
+    assert "LOCK TABLE qe_archive.run_evaluation_metric IN ACCESS EXCLUSIVE MODE" in rollback
+    assert "LOCK TABLE qe_archive.run_evaluation_artifact IN ACCESS EXCLUSIVE MODE" in rollback
+    assert "dimension_json JSONB NOT NULL" in forward
+    assert "qelt_metric_dimension_v2" in forward
+    assert "qe_archive_v5_20260728" in forward
+    assert "qe_archive_v5_20260728" in rollback
+    assert "UNIQUE (evaluation_id, artifact_type)" in forward
 
 
 def test_qe_resource_phase_migration_has_forward_rollback_and_comments() -> None:

@@ -1513,6 +1513,8 @@ class QELongTrendEvaluationEngine:
                         "trading_day_count": portfolio_summary["trading_day_count"],
                         "cost_coverage": portfolio_summary["cost_coverage"],
                         "turnover_coverage": portfolio_summary["turnover_coverage"],
+                        "cost_diagnostic_quality": portfolio_summary["cost_diagnostic_quality"],
+                        "turnover_diagnostic_quality": portfolio_summary["turnover_diagnostic_quality"],
                     },
                     limitations=("portfolio return is authoritative but cost or turnover diagnostics are incomplete",)
                     if diagnostics_limited
@@ -2266,6 +2268,7 @@ def _family_data_action(
     *,
     required_fields: tuple[str, ...],
     source_candidates: tuple[str, ...] = ("qe_recorder", "qe_archive", "qe_only_cas"),
+    time_range: Mapping[str, Any] | None = None,
     historical_backfill: bool = True,
     **extra: Any,
 ) -> dict[str, Any]:
@@ -2274,7 +2277,11 @@ def _family_data_action(
         recoverable_family=family,
         source_candidates=source_candidates,
         required_fields=required_fields,
-        time_range={"start": "run_signal_start", "end": "evaluation_asof"},
+        time_range=(
+            time_range
+            if time_range is not None
+            else {"start": "run_signal_start", "end": "evaluation_asof"}
+        ),
         historical_backfill=historical_backfill,
         **extra,
     )
@@ -3138,9 +3145,15 @@ def _episode_record(
             extended_close_path_max = None
             flags.append("extended_path_incomplete")
         if episode_mfe is not None and episode_close_return is not None:
-            episode_capture_ratio = episode_close_return / max(episode_mfe, 1e-12)
+            if np.isfinite(episode_mfe) and episode_mfe > 1e-12:
+                episode_capture_ratio = episode_close_return / episode_mfe
+            else:
+                flags.append("episode_capture_denominator_non_positive")
         if extended_mfe is not None and episode_close_return is not None:
-            extended_capture_ratio = episode_close_return / max(extended_mfe, 1e-12)
+            if np.isfinite(extended_mfe) and extended_mfe > 1e-12:
+                extended_capture_ratio = episode_close_return / extended_mfe
+            else:
+                flags.append("extended_capture_denominator_non_positive")
         highest_at_exit = _stage_from_return(episode_close_path_max)
         full_180_mature = entry_position + max_horizon < len(calendar) and extended_path_coverage == 1.0
         highest_180 = _stage_from_return(extended_close_path_max) if full_180_mature else None
@@ -3713,12 +3726,25 @@ def compute_portfolio_metrics(report: pd.DataFrame) -> list[dict[str, Any]]:
     cost_coverage = float(frame["cost"].notna().mean()) if "cost" in frame else 0.0
     turnover_column = "turnover" if "turnover" in frame else ("total_turnover" if "total_turnover" in frame else None)
     turnover_coverage = float(frame[turnover_column].notna().mean()) if turnover_column is not None else 0.0
-    complete_diagnostics = cost_coverage == 1.0 and turnover_coverage == 1.0
     observed_cost_sum = float(frame["cost"].dropna().sum()) if "cost" in frame else None
     observed_turnover_mean = (
         float(frame[turnover_column].dropna().mean())
         if turnover_column is not None and frame[turnover_column].notna().any()
         else None
+    )
+
+    def _diagnostic_quality(column: str | None, coverage: float) -> str:
+        if column is None or coverage == 0.0:
+            return "missing"
+        if coverage < 1.0:
+            return "partial"
+        values = frame[column].dropna().to_numpy(dtype="float64")
+        return "zero_only" if bool(np.all(values == 0.0)) else "observed"
+
+    cost_diagnostic_quality = _diagnostic_quality("cost" if "cost" in frame else None, cost_coverage)
+    turnover_diagnostic_quality = _diagnostic_quality(turnover_column, turnover_coverage)
+    complete_diagnostics = (
+        cost_diagnostic_quality == "observed" and turnover_diagnostic_quality == "observed"
     )
     return [
         {
@@ -3738,9 +3764,13 @@ def compute_portfolio_metrics(report: pd.DataFrame) -> list[dict[str, Any]]:
                 "max_drawdown": float(drawdown.min()),
                 "cost_coverage": cost_coverage,
                 "turnover_coverage": turnover_coverage,
-                "total_cost": observed_cost_sum if cost_coverage == 1.0 else None,
+                "cost_diagnostic_quality": cost_diagnostic_quality,
+                "turnover_diagnostic_quality": turnover_diagnostic_quality,
+                "total_cost": observed_cost_sum if cost_diagnostic_quality == "observed" else None,
                 "observed_cost_sum": observed_cost_sum,
-                "average_turnover": (observed_turnover_mean if turnover_coverage == 1.0 else None),
+                "average_turnover": (
+                    observed_turnover_mean if turnover_diagnostic_quality == "observed" else None
+                ),
                 "observed_average_turnover": observed_turnover_mean,
             },
             "quality_flag": "ok" if complete_diagnostics else "computed_with_limitations",

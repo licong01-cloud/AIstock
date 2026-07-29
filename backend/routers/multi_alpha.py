@@ -8,7 +8,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from backend.services.multi_alpha import (
     MultiAlphaCombineBacktestError,
@@ -67,6 +67,7 @@ class CombineBacktestRunRequest(BaseModel):
     walk_forward: dict[str, Any] = Field(default_factory=lambda: {"enabled": True, "window": 60, "min_periods": 2})
     rank_fusion: dict[str, Any] = Field(default_factory=dict)
     backtest_config: dict[str, Any] = Field(default_factory=dict)
+    prediction_task_selection: dict[str, StrictBool] | None = None
     baseline_leg_id: str | None = None
     topk: int = Field(default=20, ge=1, le=500)
     min_date_coverage: float = Field(default=0.8, gt=0, le=1)

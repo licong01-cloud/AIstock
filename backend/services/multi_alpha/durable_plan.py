@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from backend.services.multi_alpha.combine_backtest import CombineBacktestRequest, request_snapshot_for
+from backend.services.multi_alpha.combine_backtest import (
+    CombineBacktestRequest,
+    request_snapshot_for,
+    resolved_prediction_task_selection,
+)
 from backend.services.multi_alpha.durable_models import (
     DurableAttemptSpec,
     DurableChildSpec,
@@ -105,6 +109,10 @@ class DeterministicChildPlanner:
             "backtest_config_hash": artifact_manifest_hash_for(dict(run_spec.backtest_config)),
             "prediction_source_refs": prediction_source_refs,
         }
+        if request.prediction_task_selection is not None:
+            common_manifest["prediction_task_selection"] = dict(
+                request.prediction_task_selection
+            )
         # Preserve the P0-1B child-manifest byte shape when the additive P0-2
         # persistence schema is not deployed.  Once P0-2 is available, even
         # an incomplete identity is an explicit persisted evidence payload.
@@ -130,8 +138,9 @@ class DeterministicChildPlanner:
             )
         specs: list[DurableChildSpec] = []
         ordinal = 0
+        task_selection = resolved_prediction_task_selection(request)
 
-        if request.baseline_leg_id:
+        if request.baseline_leg_id and task_selection["include_baseline"]:
             specs.append(
                 _child_spec(
                     run_spec=run_spec,
@@ -157,7 +166,7 @@ class DeterministicChildPlanner:
                 )
             )
             ordinal += 1
-            if len(roster) <= 2:
+            if len(roster) <= 2 or not task_selection["include_loo"]:
                 continue
             for dropped_leg_id in leg_ids:
                 specs.append(
