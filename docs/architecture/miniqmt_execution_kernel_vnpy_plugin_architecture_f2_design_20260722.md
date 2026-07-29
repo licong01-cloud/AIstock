@@ -6,7 +6,7 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A、K2-A-M1、K2-B、K2-C和K2-D均已`implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入，`source_merge=merged_pr_2804`。K3-A 已通过 PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b` 完成`implemented_verified + merged`；K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 完成`implemented_verified + merged`，`source_merge=merged_pr_2848`，K3 overall=`implemented_verified + merged`；K4/K6为`not_started`，现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2-A、K2-A-M1、K2-B、K2-C和K2-D均已`implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入，`source_merge=merged_pr_2804`。K3-A 已通过 PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b` 完成`implemented_verified + merged`；K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 完成`implemented_verified + merged`，`source_merge=merged_pr_2848`，K3 overall=`implemented_verified + merged`；K4详细设计=`design_ready_for_implementation`、implementation=`not_started`，K6=`not_started`，现有产品runtime未切换，production/runtime gates均为`noop`。
 >
 > K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B、K2-C和K2-D均为`implemented_verified + merged`，K2 overall=`implemented_verified + merged`。K2-D direct outbox/diagnostics/ops=`111 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；required CI run `30269640126` 全绿。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
@@ -16,7 +16,7 @@
 
 ## 0. Executive Decision / 核心决策
 
-K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is `implementation_verified`: K2-A, K2-A-M1, K2-B, K2-C and K2-D are `implemented_verified + merged`; K2-D is closed by PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29`, so K2 overall is `implemented_verified + merged`. K3-A is `implemented_verified + merged` through PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b`; K3-B is `implemented_verified + merged` through PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918`, so K3 overall is `implemented_verified + merged`. K4/K6 remain `not_started`; product runtime is not switched and production gates remain `noop`.
+K1-C remains `implemented_verified + merged` through PR #2685 / merge `e4faeb53663cb4d19eb4e07d833953725a40fdc1`; K1 overall is unchanged. K2 detailed design is `implementation_verified`: K2-A, K2-A-M1, K2-B, K2-C and K2-D are `implemented_verified + merged`; K2-D is closed by PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29`, so K2 overall is `implemented_verified + merged`. K3-A is `implemented_verified + merged` through PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b`; K3-B is `implemented_verified + merged` through PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918`, so K3 overall is `implemented_verified + merged`. K4 detailed design is `design_ready_for_implementation` while K4 implementation and K6 remain `not_started`; product runtime is not switched and production gates remain `noop`.
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -806,6 +806,8 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - object/event/order mapping；
 - current three + Iceberg/Stop source-compatible characterization tests；
 - 不引入第二 runtime；
+- 实施级合同：[`miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md`](miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md)，状态=`design_ready_for_implementation`、`source_merge=pending_design_pr`、implementation=`not_started`；
+- K4只生成transition-scoped façade与exact conformance evidence；current-three factory/binding不变，Iceberg/Stop只做characterization且不注册，K5/K6边界不变；
 - 预计 1–2 PR，9–14 人日。
 
 ### K5：Iceberg/Stop 扩展性验收
@@ -1011,6 +1013,16 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-078` | committed legacy repository facts驱动production-shape K2 public seam shadow orchestration，无algo branch/direct broker/第二runtime/route/fallback，且不把cross-parent coordination塞入plugin |
 | `F-079` | typed failure、diagnostics/metrics/retention、concurrency/retry/rollback和无人工门禁完整 |
 | `F-080` | K3 direct/parity/restart/integration/DEV repository shadow测试、visible cancel suppression、coverage/routing、K6 prerequisite和生产状态分离可执行 |
+| `F-081` | K4 current facts、K1/K2/K3/K5/K6边界、信号/执行隔离与唯一runtime/OMS/Gateway/route事实完整 |
+| `F-082` | K1-C authority复用与五算法+`round_to` helper source manifest exact，Iceberg/Stop只表征不注册、utility只AST提取不执行 |
+| `F-083` | transition-scoped façade/input/collector生命周期、ordinal/freeze/retry/restart合同可直接实施 |
+| `F-084` | 六个AlgoEngine方法、template helper与四个callback的return/error/diagnostic/zero-command语义精确 |
+| `F-085` | Tick/Order/Trade/Contract DTO、enum与event routing逐字段映射，missing/unsupported无合成/fallback |
+| `F-086` | façade effect复用existing K1/K2 command/transition/mapping/child/outbox identity，完整链可重建且zero direct broker |
+| `F-087` | conformance failure/receipt/set exact schema/hash/truncation/writer/readback/zero-partial publication完整 |
+| `F-088` | current-three复用K3 parity，Iceberg/Stop source-isolated characterization-only，K5边界与确定性输入完整 |
+| `F-089` | typed error、concurrency/retry/restart、diagnostics/cardinality/retention、无人工门禁与无previous/latest fallback完整 |
+| `F-090` | K4 direct/negative/integration/fresh-process/coverage/routing/F2/rollout/rollback/生产状态分离可执行 |
 
 ## 18. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1054,6 +1066,16 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-078` | K3 detailed design §3–§3.4、§10.1.1、§13 committed legacy snapshot→strict event adapter→K2 public seams | `backend/tests/miniqmt_execution_runtime/test_current_three_shadow_source.py`证明in-memory/file snapshot锁闭合普通/evidence写入与JSONL durable append及orphan/ambiguous/cross-parent/cross-slot callback typed fail；`backend/tests/miniqmt_execution_runtime/test_current_three_parity_contracts.py`证明`CHILD_ORDER_SUBMITTED` same-step/effect authority；两个DEV PostgreSQL测试验证真实source、committed parity与K2 durable shadow，zero dispatch attempt | implemented_verified_k3b | none |
 | `F-079` | K3 detailed design §11–§12、§15 failure/diagnostics/rollback | `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_restart.py`、`backend/tests/miniqmt_execution_runtime/test_current_three_parity_contracts.py`、`backend/tests/miniqmt_execution_runtime/test_current_three_durable_shadow_postgres.py` | implemented_verified_k3 | none |
 | `F-080` | K3 detailed design §10.2、§14–§16 visible transport suppression、validation/routing/gates/K6 prerequisite | review-fix direct=`116 passed,2 skipped`；`python -m nox -s miniqmt_execution_runtime_l2`=`988 passed,29 skipped`；`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；DEV=`2 passed`；变更K3-B核心模块line≥91%/branch≥77%；classifier选择MiniQMT/Paper且`unmapped_code_files=[]` | implemented_verified_k3 | none |
+| `F-081` | K4 detailed design §0–§2 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k4_scope_boundaries.py` | design_ready_k4 | none |
+| `F-082` | K4 detailed design §3 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_characterization.py` exact five-source matrix | design_ready_k4 | none |
+| `F-083` | K4 detailed design §4–§5 | `backend/tests/miniqmt_execution_runtime/test_vnpy_algo_engine_facade.py` create/freeze/ordinal/retry/restart matrix | design_ready_k4 | none |
+| `F-084` | K4 detailed design §6 | `backend/tests/miniqmt_execution_runtime/test_vnpy_algo_engine_facade.py` six methods/template/callback/missing diagnostics | design_ready_k4 | none |
+| `F-085` | K4 detailed design §7–§8 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_projection.py` DTO/enum/event/lineage matrix | design_ready_k4 | none |
+| `F-086` | K4 detailed design §5.3、§9 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_k2_shadow_integration.py` existing command/mapping identity与zero broker | design_ready_k4 | none |
+| `F-087` | K4 detailed design §11 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_conformance_receipts.py` writer/readback/truncation/authority drift/zero partial set | design_ready_k4 | none |
+| `F-088` | K4 detailed design §3.2、§12 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_characterization.py` current-three parity + Iceberg/Stop characterization-only | design_ready_k4 | none |
+| `F-089` | K4 detailed design §13–§17 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_failure_restart.py` error/retry/restart/diagnostics | design_ready_k4 | none |
+| `F-090` | K4 detailed design §18–§20 | `python -m nox -s miniqmt_execution_runtime_l2`；`python -m nox -s paper_v2_backend`；K4 core line>=80%/branch>=70%；三份F2 validators | design_ready_k4 | none |
 
 ## 19. DESIGN-COMPLIANCE-001 / 设计复核
 
@@ -1064,7 +1086,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | no business semantic drift | pass | per-algo predecessor和exact event owner不变；TWAP raw/effective due authority分离保持exchange-active语义；重复cancel suppression可见且仅限同target/reason pending transport，negative outcome后的新cancel不得被吞；signal/target/方向数量/B0/OMS/Gateway不变 |
 | no unauthorized gates | pass | route-independent plugin catalog 与 per-plugin/per-route capability receipt 分离；单 route/plugin unsupported 不阻止其它 plugin；当前暂缺/非法 observation 按既有自动语义处理并在 EOD 终结；不新增 RBAC、审批、acknowledge、confirm-run、人工恢复或永久 enable flag |
 | no parallel product route | pass | 在现有 `MiniQMTExecutionRuntime` 内原地抽取 kernel/SPI，完整 vn.py runtime、legacy compiler/raw route 均不恢复 |
-| production state separation | pass | K2 overall 已通过 K2-D PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 闭合为`implemented_verified + merged`；K3详细设计=`design_ready_for_implementation`、PR #2816 / merge `d4a7fb2c8d4fcb191d75addd3fbc0faef2632b8e`、`source_merge=merged_pr_2816`，K3/K4 implementation均`not_started`；DDL/DML/config/binding/broker/restart/runtime activation全部为`noop` |
+| production state separation | pass | K2 overall=`implemented_verified + merged`；K3 overall通过PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918`闭合为`implemented_verified + merged`；K4详细设计=`design_ready_for_implementation`、`source_merge=pending_design_pr`且implementation=`not_started`；K5/K6未开始，DDL/DML/config/binding/broker/restart/runtime activation全部为`noop` |
 
 ## 20. Definition of Done / 完成定义
 
