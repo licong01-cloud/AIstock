@@ -1,6 +1,8 @@
 {
   "actual": "When kline_minute_raw Go ingestion is interrupted by backend/TDX restart, per-symbol commits leave a partial current day while the durable job loses its live owner. The Go task registry is in-memory, restart reconciliation waits for the generic lease, and the next incremental run derives its range from global MAX(trade_time), so any partial row for today can be classified already-up-to-date and written as successful readiness without per-symbol 240/241-bar validation. Required fix: detect partial-day completeness, provide a today-only upsert repair path, prohibit DELETE/TRUNCATE and historical writes, validate in the existing DEV database first, and stop before production DML pending explicit authorization.",
   "allowed_write_scope": [
+    "backend/tests/ingestion/test_repair_minute_via_minute_api.py",
+    "scripts/repair_minute_via_minute_api.py",
     "tests/aistock_validation/bugs/20260723_BUG-842-minute-go-ingestion-restart-leaves-partial-day-and-can-false-green-readi.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,13 +22,47 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260723-f01cc28fd708",
       "timestamp": "2026-07-23T09:14:33.533616Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add the existing minute repair utility and its focused tests for today-only upsert repair, DEV validation, and no-delete/no-truncate safety.",
+      "timestamp": "2026-07-23T09:29:00Z"
+    },
+    {
+      "action": "dev_validation_failed_source_shape",
+      "actor": "codex",
+      "note": "DEV job 9a903d59-a166-4c8a-8831-e67c61ba2463 wrote 1320001 today-only upsert rows but correctly failed on 14 source-empty fetches and four source-shape gaps; history guard stayed null/0 and no destructive SQL ran.",
+      "timestamp": "2026-07-23T11:09:22Z"
+    },
+    {
+      "action": "dev_validation_failed_catalog_filter",
+      "actor": "codex",
+      "note": "DEV job 4075336b-6fc8-4d67-b116-f1355caeca76 reached source parity except one directory filter mismatch for 302132.SZ; it correctly failed with zero fetch failures, zero history change, and zero directory-outside tolerance.",
+      "timestamp": "2026-07-23T11:09:22Z"
+    },
+    {
+      "action": "dev_validation_success",
+      "actor": "codex",
+      "note": "DEV job 17e49982-6614-405c-987c-449f1a3d2007 / run 434bbcbd-7768-40f7-b14d-ac8d0361f674 succeeded for 2026-07-23: 5557 current TDX A-share codes, 5530 source-data codes, 27 explicit empty sources, 1326961 rows, source parity true, directory-outside rows 0, fetch failures 0, history guard unchanged null/0.",
+      "timestamp": "2026-07-23T11:09:22Z"
+    },
+    {
+      "action": "production_dml_validation_success",
+      "actor": "codex",
+      "note": "After explicit user authorization, production aistock job 31d8de6c-6693-4a36-b516-5b6b3fc0faab / run 02cfbdf5-d164-4aa5-9c34-deb969fee00d upserted 2026-07-23 from 818160 rows and 3409 symbols to 1326961 rows and 5530 source-data symbols. Source parity, audit, job, and run succeeded; fetch failures, OHLCV nulls, illegal-session rows, non-1m rows, non-tdx rows, directory-outside rows, and source-count mismatches were all zero. The protected 2026-07-22 fingerprint remained exactly 1326961 rows with all price, volume, and amount aggregates unchanged. No DELETE, TRUNCATE, DDL, or service control ran.",
+      "timestamp": "2026-07-23T15:44:07Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The current Asia/Shanghai trading date must be repairable by a full current-TDX A-share minute-source upsert only. Every source row must be normalized to the target date and written with ON CONFLICT DO UPDATE; explicit empty source responses and source-native noncanonical session shapes remain auditable. The repair must fail closed on fetch errors, row-count parity mismatches, directory-outside rows, history changes, or any destructive SQL.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/tests/ingestion/test_repair_minute_via_minute_api.py",
+      "scripts/repair_minute_via_minute_api.py",
+      "tests/aistock_validation/bugs/20260723_BUG-842-minute-go-ingestion-restart-leaves-partial-day-and-can-false-green-readi.json"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -52,9 +88,10 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/repair_minute_via_minute_api.py --target-db dev --env-file F:\\Dev\\AIstock\\.env --date 2026-07-23 --workers 8 --batch-size 200 --apply",
   "required_verification": [
     "l0",
+    "validation_module_registry_l0",
     "data_sync_autonomy_backend"
   ],
   "risk_area": "bug",
@@ -173,5 +210,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_scope_ready"
 }
