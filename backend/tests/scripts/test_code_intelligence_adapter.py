@@ -332,6 +332,35 @@ def test_codegraph_sync_uses_incremental_sync_for_existing_index(tmp_path: Path,
     assert payload["publish_ready"] is True
 
 
+def test_codegraph_sync_force_reindexes_when_incremental_sync_stays_stale(tmp_path: Path, monkeypatch) -> None:
+    index = tmp_path / ".codegraph" / "codegraph.db"
+    index.parent.mkdir()
+    index.write_text("index", encoding="utf-8")
+    commands: list[list[str]] = []
+    freshness_results = iter(
+        [
+            {"freshness": "stale", "workflow_gate": "warning"},
+            {"freshness": "fresh", "workflow_gate": "ready"},
+        ]
+    )
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, **kwargs: commands.append(args) or {"ok": True, "returncode": 0, "stdout": "ok", "stderr": ""},
+    )
+    monkeypatch.setattr(adapter, "build_codegraph_freshness_artifact", lambda **kwargs: next(freshness_results))
+
+    payload = adapter.sync_codegraph_index(root=tmp_path)
+
+    root = str(tmp_path.resolve())
+    assert commands == [["codegraph", "sync", root], ["codegraph", "index", "--force", root]]
+    assert payload["action"] == "sync_then_reindex"
+    assert payload["recovery_reason"] == "incremental_sync_not_publish_ready"
+    assert payload["freshness"]["freshness"] == "fresh"
+    assert payload["publish_ready"] is True
+
+
 def test_codegraph_sync_bootstraps_missing_index_and_preserves_failed_state(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
