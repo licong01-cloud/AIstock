@@ -1,6 +1,7 @@
 {
   "actual": "The internal child reaches FAILED while the parent remains QUEUED indefinitely and has no result receipt.",
   "allowed_write_scope": [
+    "backend/services/advisory_historical_range/dataset_bridge.py",
     "backend/services/advisory_historical_range/service.py",
     "backend/tests/advisory_historical_range/test_r5_command_service.py",
     "backend/tests/advisory_historical_range/test_r5_background_lifecycle.py",
@@ -32,12 +33,14 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "backend/services/advisory_historical_range/dataset_bridge.py",
       "backend/services/advisory_historical_range/service.py",
       "backend/tests/advisory_historical_range/test_r5_command_service.py",
       "backend/tests/advisory_historical_range/test_r5_background_lifecycle.py"
     ],
     "ownership": {
       "changed_files": [
+        "backend/services/advisory_historical_range/dataset_bridge.py",
         "backend/services/advisory_historical_range/service.py",
         "backend/tests/advisory_historical_range/test_r5_command_service.py",
         "backend/tests/advisory_historical_range/test_r5_background_lifecycle.py"
@@ -47,6 +50,15 @@
         "tests.backend"
       ],
       "matched_rules": [
+        {
+          "file": "backend/services/advisory_historical_range/dataset_bridge.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
         {
           "file": "backend/services/advisory_historical_range/service.py",
           "impact_modules": [
@@ -79,6 +91,7 @@
         "high"
       ],
       "suggested_scope": [
+        "backend/services/advisory_historical_range/dataset_bridge.py",
         "backend/services/advisory_historical_range/service.py",
         "backend/tests/advisory_historical_range/test_r5_command_service.py",
         "backend/tests/advisory_historical_range/test_r5_background_lifecycle.py"
@@ -87,6 +100,7 @@
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/advisory_historical_range/dataset_bridge.py",
       "backend/services/advisory_historical_range/service.py",
       "backend/tests/advisory_historical_range/test_r5_command_service.py",
       "backend/tests/advisory_historical_range/test_r5_background_lifecycle.py"
