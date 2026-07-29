@@ -4,7 +4,12 @@
     "noxfile.py",
     "tests/aistock_validation/catalog/test_plans.yaml",
     "backend/tests/research_pipeline/test_service.py",
+    "backend/tests/research_pipeline/test_hmm_realtime_ingestion.py",
     "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "tests/mcp/test_gateway_profiles.py",
+    "tests/mcp/test_mcp_gateway_cli.py",
+    "tests/mcp/test_mcp_inventory_diff.py",
+    "backend/mcp/modules/qe_experiment.py",
     "backend/tests/research_assistant/test_service.py",
     "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py",
     "frontend/tests/strategy-package-governance/governance.spec.ts",
@@ -22,6 +27,12 @@
   "created_at": "2026-07-29T16:28:34.785003Z",
   "description": "strategy_package_governance_ui reports no tests; research_pipeline_backend asserts an obsolete hook count; MCP/RA/MiniQMT sessions report contract or isolation failures and Paper v2 is skipped.",
   "events": [
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Latest-origin reproduction moved the Research Pipeline failure to test_hmm_realtime_ingestion.py and confirmed MCP count/import-boundary failures in tests/mcp plus backend/mcp/modules/qe_experiment.py. RA and MiniQMT direct fix-point tests already pass and remain unchanged.",
+      "timestamp": "2026-07-29T16:41:56.1977144Z"
+    },
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
