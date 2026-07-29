@@ -92,6 +92,16 @@ class QELongTrendSnapshotResolver:
             )
         return tuple(normalized)
 
+    def primary_factor_data_root(self, node_id: str) -> str:
+        """Return the node-owned primary factor root for normal QE execution.
+
+        Extra registered roots are historical lookup candidates only.  A
+        normal-loop profile must bind to the compute node's configured
+        ``factor_data_dir`` and may never choose a caller supplied path.
+        """
+
+        return self._node_factor_data_root(str(node_id or "").strip())
+
     async def resolve_requested_snapshot(
         self,
         *,

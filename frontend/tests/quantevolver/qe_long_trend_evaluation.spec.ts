@@ -93,6 +93,39 @@ test("completed QE Loop restores long-trend DB state and posts the single idempo
     });
   });
 
+  await page.route(new RegExp(`/api/v1/quantevolver/evolution/tasks/${taskId}/loops/1/long-trend-input-preview(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schema_version: "qe_long_trend_input_preview_v1",
+        task_id: taskId,
+        loop_index: 1,
+        run_id: "qear_run_fixture",
+        node_id: "wsl",
+        profile: { profile_id: "qe_long_trend_v1", profile_sha256: "p".repeat(64), horizons: [20, 40, 60, 120, 180], barriers: [0.3, 0.5, 0.7], calendar_slices: ["all_oos", "last_252_signal_days", "last_126_signal_days"] },
+        requested_outcome_dataset_snapshot_id: snapshotId,
+        backtest_freq: "1day",
+        dataset_inputs: [
+          { input_name: "feature_dataset_identity", category: "dataset_identity", available: true },
+          { input_name: "outcome_dataset_identity", category: "dataset_identity", available: true },
+        ],
+        artifact_inputs: [
+          { input_name: "prediction", category: "recorder_artifact", available: true },
+          { input_name: "positions", category: "recorder_artifact", available: false, reason_code: "QELT_POSITION_ARTIFACT_MISSING" },
+          { input_name: "portfolio_report", category: "recorder_artifact", available: true },
+          { input_name: "indicator_object", category: "recorder_artifact", available: false, reason_code: "QELT_INDICATOR_OBJECT_MISSING" },
+        ],
+        ready_for_node: true,
+        technical_readiness_only: true,
+        research_gate: false,
+        data_action_plan: [{ action: "archive_missing_qe_recorder_artifact", input_name: "positions", reason_code: "QELT_POSITION_ARTIFACT_MISSING" }],
+        warnings: [],
+        side_effects: { training_started: false, backtest_started: false, evaluation_created: false, control_row_created: false, worker_submitted: false, cas_written: false, database_written: false },
+      }),
+    });
+  });
+
   await page.route(new RegExp(`/api/v1/quantevolver/evolution/long-trend-evaluations/${evaluationId}(?:\\?.*)?$`), async (route) => {
     await route.fulfill({
       status: 200,
@@ -193,10 +226,76 @@ test("completed QE Loop restores long-trend DB state and posts the single idempo
   await expect(page.getByTestId("qe-long-trend-panel")).toContainText("reconciled_trade 80");
   await expect(page.getByTestId("qe-long-trend-horizon-table").getByText("0.1234")).toBeVisible();
 
+  await page.getByTestId("qe-long-trend-preview").click();
+  await expect(page.getByTestId("qe-long-trend-input-preview")).toContainText("技术提交就绪：是");
+  await expect(page.getByTestId("qe-long-trend-preview-positions")).toContainText("QELT_POSITION_ARTIFACT_MISSING");
+  await expect(page.getByTestId("qe-long-trend-create")).toBeEnabled();
+
   await page.getByTestId("qe-long-trend-create").click();
   await expect.poll(() => posts.length).toBe(1);
   expect(posts[0]).toEqual({ profile_id: "qe_long_trend_v1", outcome_dataset_snapshot_id: snapshotId });
   await expect(page.getByTestId("qe-long-trend-message")).toContainText("节点提交 未发生/无需");
+});
+
+test("new QE task sends only the immutable registered long-trend profile", async ({ page }) => {
+  const createPayloads: Record<string, unknown>[] = [];
+  page.on("dialog", async (dialog) => { await dialog.accept(); });
+
+  await page.route(/\/api\/v1\/.*/, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/quantevolver/evolution/source-experiments")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "success", data: [{ experiment_id: "exp-profile-1", experiment_name: "Profile source", status: "completed", factor_count: 2 }] }),
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/quantevolver/evolution/source-tasks")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", data: [] }) });
+      return;
+    }
+    if (url.pathname.endsWith("/quantevolver/evolution/tasks") && request.method() === "POST") {
+      createPayloads.push(await request.postDataJSON());
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", task_id: "exp-profile-1" }) });
+      return;
+    }
+    if (url.pathname.endsWith("/quantevolver/evolution/tasks")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", data: [] }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", data: [] }) });
+  });
+
+  await page.goto("/quantevolver/evolution");
+  await page.getByTestId("qe-create-task-open").click();
+  await page.getByTestId("qe-create-task-name").fill("profile task");
+  await page.getByTestId("qe-create-task-base-experiment").selectOption("exp-profile-1");
+  await page.getByTestId("qe-create-task-target").fill("verify immutable profile");
+  await page.getByTestId("qe-create-task-guidance").fill("keep the normal QE research flow");
+
+  await page.getByTestId("qe-create-task-submit").click();
+  await expect.poll(() => createPayloads.length).toBe(1);
+  expect(createPayloads[0]).not.toHaveProperty("long_trend_profile_id");
+  expect(createPayloads[0]).not.toHaveProperty("long_trend_enabled");
+
+  await page.getByTestId("qe-create-task-open").click();
+  await page.getByTestId("qe-create-task-name").fill("profile task enabled");
+  await page.getByTestId("qe-create-task-base-experiment").selectOption("exp-profile-1");
+  await page.getByTestId("qe-create-task-target").fill("verify immutable profile enabled");
+  await page.getByTestId("qe-create-task-guidance").fill("keep the normal QE research flow");
+  await page.getByTestId("qe-long-trend-task-profile-toggle").check();
+
+  await expect(page.getByTestId("qe-long-trend-task-profile")).toContainText("20/40/60/120/180D");
+  await expect(page.getByTestId("qe-long-trend-task-profile")).toContainText("页面不提供参数覆盖");
+  await page.getByTestId("qe-create-task-submit").click();
+
+  await expect.poll(() => createPayloads.length).toBe(2);
+  expect(createPayloads[1].long_trend_profile_id).toBe("qe_long_trend_v1");
+  expect(createPayloads[1]).not.toHaveProperty("long_trend_enabled");
+  expect(createPayloads[1]).not.toHaveProperty("long_trend_horizons");
+  expect(createPayloads[1]).not.toHaveProperty("long_trend_barriers");
 });
 
 test("QE Archive comparison requires one outcome vintage and returns run/model/seed/factor evidence", async ({ page }) => {
