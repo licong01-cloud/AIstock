@@ -472,12 +472,19 @@ def test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scop
     assert "--output \"$outDir/codegraph-state-export.json\"" in push_workflow
     assert "steps.codegraph.outputs.publish_ready" not in push_workflow
     assert "refresh-plan `\n            --trigger main_push" in push_workflow
-    assert "github.event_name != 'push'" in push_workflow
+    assert "run_paid_ua_refresh:" in push_workflow
+    assert "if: github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh" in push_workflow
+    assert 'AISTOCK_RUN_PAID_UA_REFRESH' in push_workflow
+    assert 'if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true")' in push_workflow
     assert "scripts/code_intelligence_adapter.py ua-refresh" in push_workflow
     assert "code-intelligence-refresh-main" in nightly
     assert "name: Code intelligence daily graph refresh and summary" in nightly
     assert "scripts/code_intelligence_adapter.py codegraph-sync" in nightly
     assert "scripts/code_intelligence_adapter.py ua-refresh" in nightly
+    assert "run_paid_ua_refresh:" in nightly
+    assert 'AISTOCK_RUN_PAID_UA_REFRESH' in nightly
+    assert 'if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true")' in nightly
+    assert "Paid Understand Anything refresh skipped" in nightly
     assert nightly.count("--require-publish-ready") >= 2
     assert "AISTOCK_UA_DAILY_MAX_BUDGET_USD" in push_workflow
     assert "ua_max_budget_usd:" in push_workflow
