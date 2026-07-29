@@ -840,7 +840,7 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
 
 
-def test_github_backend_dependency_surface_installs_pinned_hmmlearn() -> None:
+def test_github_backend_dependency_surface_installs_pinned_runtime_dependencies() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
@@ -850,6 +850,7 @@ def test_github_backend_dependency_surface_installs_pinned_hmmlearn() -> None:
     )
 
     assert "hmmlearn==0.3.3" in str(install["run"])
+    assert "mcp[cli]==1.25.0" in str(install["run"])
 
 
 def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
