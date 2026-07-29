@@ -1,6 +1,8 @@
 {
-  "actual": "C-010 formal preflight emits candidate_ready when both approved families omit validation_start/validation_end. Both fresh-process grids then complete all 5184 fits, and the parent fails only when D6 builds validation series with validation_start must be ISO YYYY-MM-DD. Preflight must freeze or validate the approved immutable validation window before the first fit, preserve train-only D5 isolation, and fail closed without model/READY writes.",
+  "actual": "C-010 formal preflight emits candidate_ready when both approved families omit validation_start/validation_end and does not freeze an independent train-plus-validation semantic source identity. Both fresh-process grids then complete all 5184 fits, and the parent fails only when D6 builds validation series with validation_start must be ISO YYYY-MM-DD. A dates-only fix would fail next because BUG-907 correctly freezes the fit source to the train window, which contains no D6 validation observations.",
   "allowed_write_scope": [
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "tests/aistock_validation/bugs/20260729_BUG-909-b3-formal-preflight-accepts-missing-d6-validation-window-until-after-518.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,8 +24,12 @@
       "timestamp": "2026-07-29T10:25:37.463964Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_34086fab/c010_formal_preflight.json#sha256=163deb848b420888bd0e2a2679545abdbb9a53acdca4732d1f993a257c96b3e4",
+    "F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_34086fab/c010_formal_request_candidate.json#sha256=7a5e4cef0b342c0543ace9a7332cbcbb25c6582ccc68c21db6603e26a1f8ad7d",
+    "formal-run://20260729/fresh-process-1-and-2-completed-parent-failed-validation-start"
+  ],
+  "expected": "Formal preflight must freeze the approved 2024-07-01..2025-03-31 validation window and an immutable train-plus-validation semantic source/manifest identity. Explicit window drift must fail before source loading; missing or drifted semantic identity must fail before the first child fit. Fresh children remain train-only, D5 remains validation-blind, and only the parent may reload the frozen semantic source for D6. No failure may write model/READY, database, or runtime state.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
