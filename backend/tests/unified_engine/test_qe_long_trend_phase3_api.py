@@ -295,6 +295,11 @@ def test_create_or_update_resolves_both_snapshots_and_submits_ready_request(
         def get(_evaluation_id):
             return {"status": "queued", "run_id": "run-1"}
 
+    class _ResultRepository:
+        @staticmethod
+        def find_materializable_candidates(**_kwargs):
+            return ()
+
     class _Phase2:
         control_repository = _Control()
 
@@ -317,7 +322,7 @@ def test_create_or_update_resolves_both_snapshots_and_submits_ready_request(
     phase2 = _Phase2()
     service = QELongTrendAPIService(
         snapshot_resolver=_Resolver(),  # type: ignore[arg-type]
-        result_repository=object(),  # type: ignore[arg-type]
+        result_repository=_ResultRepository(),  # type: ignore[arg-type]
         artifact_store=object(),  # type: ignore[arg-type]
         phase2_service=phase2,  # type: ignore[arg-type]
     )
@@ -377,6 +382,11 @@ def test_terminal_existing_evaluation_materializes_without_resubmitting(
         def get(_evaluation_id):
             return {"status": "partial", "artifact_manifest_sha256": "a" * 64, "run_id": "run-1"}
 
+    class _ResultRepository:
+        @staticmethod
+        def find_materializable_candidates(**_kwargs):
+            return ()
+
     class _Phase2:
         control_repository = _Control()
 
@@ -393,7 +403,7 @@ def test_terminal_existing_evaluation_materializes_without_resubmitting(
 
     service = QELongTrendAPIService(
         snapshot_resolver=_Resolver(),  # type: ignore[arg-type]
-        result_repository=object(),  # type: ignore[arg-type]
+        result_repository=_ResultRepository(),  # type: ignore[arg-type]
         artifact_store=object(),  # type: ignore[arg-type]
         phase2_service=_Phase2(),  # type: ignore[arg-type]
     )
@@ -421,6 +431,104 @@ def test_terminal_existing_evaluation_materializes_without_resubmitting(
     )
 
     assert result["platform_delivery_status"] == {"db": "published"}
+
+
+def test_existing_terminal_cas_materializes_before_snapshot_resolution() -> None:
+    evaluation_id = "qelt_" + "c" * 64
+
+    class _ResultRepository:
+        @staticmethod
+        def find_materializable_candidates(**kwargs):
+            assert kwargs == {
+                "run_id": "run-1",
+                "task_id": "task-1",
+                "loop_index": 4,
+                "profile_id": "qe_long_trend_v1",
+                "outcome_dataset_snapshot_id": "outcome-1",
+            }
+            return ({"evaluation_id": evaluation_id},)
+
+    class _Resolver:
+        async def resolve_requested_snapshot(self, **_kwargs):
+            raise AssertionError("existing CAS replay must not resolve snapshots")
+
+    service = QELongTrendAPIService(
+        snapshot_resolver=_Resolver(),  # type: ignore[arg-type]
+        result_repository=_ResultRepository(),  # type: ignore[arg-type]
+        artifact_store=object(),  # type: ignore[arg-type]
+        phase2_service=object(),  # type: ignore[arg-type]
+    )
+    service._load_loop_context = lambda **_kwargs: {  # type: ignore[method-assign]
+        "node_id": "wsl",
+        "run_id": "run-1",
+    }
+    service._materialize_existing = lambda actual_id: SimpleNamespace(  # type: ignore[method-assign]
+        control_row={
+            "evaluation_id": actual_id,
+            "status": "partial",
+            "run_id": "run-1",
+            "family_status_json": {"signal_path": {"status": "COMPUTED"}},
+            "platform_delivery_status_json": {"cas": "published", "db": "published"},
+            "data_action_plan_json": [{"action": "restore_execution_evidence"}],
+            "reason_code": None,
+        }
+    )
+
+    result = asyncio.run(
+        service.create_or_update(
+            task_id="task-1",
+            loop_index=4,
+            request=LongTrendCreateRequest("qe_long_trend_v1", "outcome-1"),
+        )
+    )
+
+    assert result == {
+        "evaluation_id": evaluation_id,
+        "status": "partial",
+        "run_id": "run-1",
+        "task_id": "task-1",
+        "loop_index": 4,
+        "ready_for_node": False,
+        "family_status": {"signal_path": {"status": "COMPUTED"}},
+        "platform_delivery_status": {"cas": "published", "db": "published"},
+        "data_action_plan": [{"action": "restore_execution_evidence"}],
+        "reason_code": None,
+    }
+
+
+def test_multiple_terminal_cas_candidates_fail_without_materializing() -> None:
+    class _ResultRepository:
+        @staticmethod
+        def find_materializable_candidates(**_kwargs):
+            return (
+                {"evaluation_id": "qelt_" + "a" * 64},
+                {"evaluation_id": "qelt_" + "b" * 64},
+            )
+
+    service = QELongTrendAPIService(
+        result_repository=_ResultRepository(),  # type: ignore[arg-type]
+        artifact_store=object(),  # type: ignore[arg-type]
+        phase2_service=object(),  # type: ignore[arg-type]
+    )
+    service._load_loop_context = lambda **_kwargs: {  # type: ignore[method-assign]
+        "node_id": "wsl",
+        "run_id": "run-1",
+    }
+    service._materialize_existing = lambda _evaluation_id: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        AssertionError("ambiguous candidates must not materialize")
+    )
+
+    with pytest.raises(QELongTrendAPIServiceError) as exc_info:
+        asyncio.run(
+            service.create_or_update(
+                task_id="task-1",
+                loop_index=4,
+                request=LongTrendCreateRequest("qe_long_trend_v1", "outcome-1"),
+            )
+        )
+
+    assert exc_info.value.reason_code == "QELT_CONTROL_STATE_CONFLICT"
+    assert exc_info.value.context["matches"] == ["qelt_" + "a" * 64, "qelt_" + "b" * 64]
 
 
 def test_api_config_extractors_are_strict() -> None:

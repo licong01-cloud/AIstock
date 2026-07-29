@@ -469,6 +469,48 @@ def test_quality_query_rejects_unknown_dimensions_before_database_access() -> No
         )
 
 
+def test_materializable_candidate_lookup_is_exact_bounded_and_cas_published() -> None:
+    schema_columns = _phase3_schema_columns()
+    expected = {
+        "evaluation_id": EVALUATION_ID,
+        "run_id": "run-1",
+        "parent_task_id": "task-1",
+        "parent_loop_index": 4,
+        "profile_id": "qe_long_trend_v1",
+        "outcome_dataset_snapshot_id": "outcome-1",
+        "status": "partial",
+    }
+
+    def handler(sql, params):  # type: ignore[no-untyped-def]
+        if "FROM qe_archive.schema_version" in sql:
+            return (1,)
+        if "SELECT to_regclass" in sql:
+            return (params[0],)
+        if "information_schema.columns" in sql:
+            return schema_columns[params[1]]
+        if "platform_delivery_status_json->>'cas' = 'published'" in sql:
+            assert params == ("run-1", "task-1", 4, "qe_long_trend_v1", "outcome-1")
+            assert "evaluation_type = 'long_trend'" in sql
+            assert "worker_terminal_sha256 IS NOT NULL" in sql
+            assert "artifact_manifest_sha256 IS NOT NULL" in sql
+            assert "LIMIT 2" in sql
+            return [expected]
+        raise AssertionError(sql)
+
+    repository = QELongTrendEvaluationResultRepository(
+        connection_provider=lambda: _ScriptedConnection(handler)
+    )
+    candidates = repository.find_materializable_candidates(
+        run_id="run-1",
+        task_id="task-1",
+        loop_index=4,
+        profile_id="qe_long_trend_v1",
+        outcome_dataset_snapshot_id="outcome-1",
+    )
+
+    assert candidates == (expected,)
+
+
 def test_repository_get_list_and_quality_queries_are_bounded_and_keyset_stable() -> None:
     now = datetime(2026, 7, 28, tzinfo=timezone.utc)
     metric_rows = [

@@ -1,31 +1,29 @@
 {
-  "actual": "After backend restart, Phase 3 HTTP routes and production schema are healthy, but the registered backend tool qe_archive_query_long_trend_quality is absent from backend/mcp/tool_manifest.py and the standalone QE Archive MCP wrapper. Gateway search returns zero results, so clients cannot discover or invoke the delivered read-only MCP contract. Fix must synchronize all authoritative MCP surfaces, add direct manifest/wrapper tests, preserve bounded read-only behavior, and introduce no fallback or research gate.",
+  "actual": "Production Phase 3 canary POST for R8B Loop4 found an existing terminal CAS-published evaluation but create_or_update resolved missing archived feature identity first and created a new awaiting_data control row. The API must reuse a unique existing terminal CAS evaluation for the same authoritative QE run/task/Loop/profile/outcome before requiring new snapshot resolution; zero candidates retain current resolution flow, and multiple candidates fail explicitly without guessing. No evidence deletion, retraining, fallback, or research gate.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260728_BUG-899-f-014-phase-3-long-trend-mcp-tool-is-absent-from-gateway-manifest.json",
+    "tests/aistock_validation/bugs/20260728_BUG-900-f-014-phase-3-rematerialization-creates-awaiting-data-duplicate-instead.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "backend/mcp/tool_manifest.py",
-    "scripts/aistock_qe_archive_mcp_server.py",
-    "tests/mcp/test_mcp_tool_manifest.py",
-    "tests/mcp/test_mcp_inventory_diff.py",
-    "backend/tests/test_aistock_qe_mcp_servers.py",
-    "tests/aistock_validation/catalog/file_ownership.yaml"
+    "backend/services/qe_archive/long_trend_repository.py",
+    "backend/services/quantevolver/long_trend_api_service.py",
+    "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py",
+    "backend/tests/unified_engine/test_qe_long_trend_phase3_api.py"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-899",
-  "closed_at": "2026-07-29T01:58:57Z",
+  "bug_id": "BUG-900",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-28T17:59:52.535151Z",
-  "description": "After backend restart, Phase 3 HTTP routes and production schema are healthy, but the registered backend tool qe_archive_query_long_trend_quality is absent from backend/mcp/tool_manifest.py and the standalone QE Archive MCP wrapper. Gateway search returns zero results, so clients cannot discover or invoke the delivered read-only MCP contract. Fix must synchronize all authoritative MCP surfaces, add direct manifest/wrapper tests, preserve bounded read-only behavior, and introduce no fallback or research gate.",
+  "created_at": "2026-07-28T18:28:56.793437Z",
+  "description": "Production Phase 3 canary POST for R8B Loop4 found an existing terminal CAS-published evaluation but create_or_update resolved missing archived feature identity first and created a new awaiting_data control row. The API must reuse a unique existing terminal CAS evaluation for the same authoritative QE run/task/Loop/profile/outcome before requiring new snapshot resolution; zero candidates retain current resolution flow, and multiple candidates fail explicitly without guessing. No evidence deletion, retraining, fallback, or research gate.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260728-55a165a6ca6c",
-      "timestamp": "2026-07-28T17:59:52.535148Z"
+      "note": "Promoted from IC-20260728-b5ad8719fb44",
+      "timestamp": "2026-07-28T18:28:56.793431Z"
     }
   ],
   "evidence_uris": [],
@@ -44,18 +42,17 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
-  "first_seen_at": "2026-07-28T17:59:52.535151Z",
+  "first_seen_at": "2026-07-28T18:28:56.793437Z",
   "fix_branch": null,
-  "fix_commit": "b3966126eb0229d949e7368416858a3de626cc64",
-  "fixed_at": "2026-07-29T01:59:48.237474Z",
-  "github_issue_number": 2844,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2844",
-  "last_seen_at": "2026-07-28T17:59:52.535151Z",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2846,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2846",
+  "last_seen_at": "2026-07-28T18:28:56.793437Z",
   "module": "qe_archive",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2845",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -67,19 +64,15 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "open",
   "suspected_modules": [
     "qe_archive"
   ],
-  "title": "F-014 Phase 3 long-trend MCP tool is absent from gateway manifest",
+  "title": "F-014 Phase 3 rematerialization creates awaiting-data duplicate instead of reusing published CAS",
   "trigger_condition": {
-    "fingerprint": "55a165a6ca6c9cec271d3cc6",
-    "source_event_id": "FE-20260728-55a165a6ca6c"
+    "fingerprint": "b5ad8719fb44e9de95b82034",
+    "source_event_id": "FE-20260728-b5ad8719fb44"
   },
-  "validation_evidence": [
-    "python -m nox -s l0 -> passed",
-    "python -m nox -s validation_module_registry_l0 -> passed (8 tests)"
-  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

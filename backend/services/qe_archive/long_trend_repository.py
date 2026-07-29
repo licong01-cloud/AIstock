@@ -690,6 +690,52 @@ class QELongTrendEvaluationResultRepository:
             next_cursor = _encode_cursor(last["created_at"], last["evaluation_id"])
         return {"items": items, "next_cursor": next_cursor, "limit": bounded}
 
+    def find_materializable_candidates(
+        self,
+        *,
+        run_id: str,
+        task_id: str,
+        loop_index: int,
+        profile_id: str,
+        outcome_dataset_snapshot_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return at most two exact terminal CAS candidates for conflict detection."""
+
+        self.ensure_schema_ready()
+        with self._connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT evaluation_id, run_id, parent_task_id, parent_loop_index,
+                           profile_id, feature_dataset_snapshot_id,
+                           outcome_dataset_snapshot_id, status,
+                           worker_terminal_sha256, artifact_manifest_sha256,
+                           platform_delivery_status_json
+                    FROM {CONTROL_TABLE}
+                    WHERE run_id = %s
+                      AND parent_task_id = %s
+                      AND parent_loop_index = %s
+                      AND evaluation_type = 'long_trend'
+                      AND profile_id = %s
+                      AND outcome_dataset_snapshot_id = %s
+                      AND status IN ('succeeded', 'partial', 'failed', 'cancelled')
+                      AND worker_terminal_sha256 IS NOT NULL
+                      AND artifact_manifest_sha256 IS NOT NULL
+                      AND platform_delivery_status_json->>'cas' = 'published'
+                    ORDER BY evaluation_id
+                    LIMIT 2
+                    """,
+                    (
+                        run_id,
+                        task_id,
+                        int(loop_index),
+                        profile_id,
+                        outcome_dataset_snapshot_id,
+                    ),
+                )
+                rows = tuple(dict(row) for row in cur.fetchall())
+        return rows
+
     def query_quality(
         self,
         *,
