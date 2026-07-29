@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-921",
-  "closed_at": null,
+  "closed_at": "2026-07-29T22:49:52Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -108,8 +108,8 @@
   },
   "first_seen_at": "2026-07-29T22:23:30.758662Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "552f24f865974cc834d7c18c4e740c929f8b7e33",
+  "fixed_at": "2026-07-29T22:50:19.284947Z",
   "github_issue_number": 2920,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2920",
   "last_seen_at": "2026-07-29T22:23:30.758662Z",
@@ -117,6 +117,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2921",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -128,7 +129,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -137,6 +138,16 @@
     "fingerprint": "63b04860a6153cfae54f01f6",
     "source_event_id": "FE-20260730-63b04860a615"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py::test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scoped -q -p no:cacheprovider -> 1 passed",
+    "python -m py_compile backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-921 --module validation --changed-file .github/workflows/code-intelligence-refresh.yml --changed-file .github/workflows/nightly.yml --changed-file backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership scan passed",
+    "python -m nox -s validation_workflow_automation -> 332 passed and workflow smokes passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
