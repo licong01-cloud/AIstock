@@ -2,6 +2,8 @@
 
 > Feature tier：`F2`。文档状态：`design_ready_for_implementation`。
 >
+> 设计交付：PR #2861，`source_merge=pending_user_authorization`。
+>
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
 > 模拟盘唯一上位蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
@@ -609,7 +611,7 @@ K4 implementation固定最多两个 source PR，不扩大到 K5/K6：
 K4 source merge后仍不部署/激活产品 route。Rollback只回退 K4 code-owned façade/conformance/characterization文件到最后一个 schema-compatible main；不删除 K1/K2/K3 durable facts，不重写算法状态或 broker facts。
 
 ```text
-source_merge=pending_design_pr
+source_merge=pending_user_authorization
 close_sync=not_applicable_feature
 production_ddl_gate=noop
 production_dml_gate=noop

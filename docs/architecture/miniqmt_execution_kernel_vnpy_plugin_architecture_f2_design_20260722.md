@@ -806,7 +806,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - object/event/order mapping；
 - current three + Iceberg/Stop source-compatible characterization tests；
 - 不引入第二 runtime；
-- 实施级合同：[`miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md`](miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md)，状态=`design_ready_for_implementation`、`source_merge=pending_design_pr`、implementation=`not_started`；
+- 实施级合同：[`miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md`](miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md)，PR #2861，状态=`design_ready_for_implementation`、`source_merge=pending_user_authorization`、implementation=`not_started`；
 - K4只生成transition-scoped façade与exact conformance evidence；current-three factory/binding不变，Iceberg/Stop只做characterization且不注册，K5/K6边界不变；
 - 预计 1–2 PR，9–14 人日。
 
@@ -1086,7 +1086,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | no business semantic drift | pass | per-algo predecessor和exact event owner不变；TWAP raw/effective due authority分离保持exchange-active语义；重复cancel suppression可见且仅限同target/reason pending transport，negative outcome后的新cancel不得被吞；signal/target/方向数量/B0/OMS/Gateway不变 |
 | no unauthorized gates | pass | route-independent plugin catalog 与 per-plugin/per-route capability receipt 分离；单 route/plugin unsupported 不阻止其它 plugin；当前暂缺/非法 observation 按既有自动语义处理并在 EOD 终结；不新增 RBAC、审批、acknowledge、confirm-run、人工恢复或永久 enable flag |
 | no parallel product route | pass | 在现有 `MiniQMTExecutionRuntime` 内原地抽取 kernel/SPI，完整 vn.py runtime、legacy compiler/raw route 均不恢复 |
-| production state separation | pass | K2 overall=`implemented_verified + merged`；K3 overall通过PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918`闭合为`implemented_verified + merged`；K4详细设计=`design_ready_for_implementation`、`source_merge=pending_design_pr`且implementation=`not_started`；K5/K6未开始，DDL/DML/config/binding/broker/restart/runtime activation全部为`noop` |
+| production state separation | pass | K2 overall=`implemented_verified + merged`；K3 overall通过PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918`闭合为`implemented_verified + merged`；K4详细设计PR #2861=`design_ready_for_implementation`、`source_merge=pending_user_authorization`且implementation=`not_started`；K5/K6未开始，DDL/DML/config/binding/broker/restart/runtime activation全部为`noop` |
 
 ## 20. Definition of Done / 完成定义
 
