@@ -841,6 +841,24 @@ def test_formal_semantic_identity_rejects_source_window_drift() -> None:
         subject._require_formal_semantic_identity(request)
 
 
+def test_formal_semantic_identity_accepts_train_only_candidate_source() -> None:
+    request = _request()
+    request["semantic_source"] = subject._b3_semantic_source_request(request)["source"]
+    request["source"]["source_start"] = "2022-01-01"
+    request["source"]["source_end"] = "2024-06-30"
+    request["source"]["circ_mv_history_start"] = "2020-07-30"
+    request.update(
+        {
+            "semantic_dataset_manifest_hash": "1" * 64,
+            "semantic_mapping_manifest_hash": "2" * 64,
+            "semantic_calendar_manifest_hash": "3" * 64,
+            "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+        }
+    )
+
+    subject._require_formal_semantic_identity(request)
+
+
 def test_formal_parent_rejects_semantic_hash_drift_before_fresh_process(monkeypatch, tmp_path) -> None:
     request = _request()
     request["semantic_source"] = subject._b3_semantic_source_request(request)["source"]
