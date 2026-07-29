@@ -1,16 +1,18 @@
 # MiniQMT 统一执行内核 K4 vn.py Compatibility Façade F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_in_progress`；K4-A=`implemented_verified_contract_slice + merged`、K4-B=`not_started`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；K4-A=`implemented_verified_contract_slice + merged`、K4-B=`design_ready_pending_implementation`。
 >
 > 设计交付：PR #2861，merge `8250b64ff3c2deb04eb3594f1ae3fba3acd1e6ce`，`source_merge=merged_pr_2861`。
 >
 > 2026-07-29 正式修订复核：K4/父蓝图/统一蓝图 F2 validator 分别为 `10/10`、`48/48`、`90/90`，均 `warnings=0`；DESIGN-COMPLIANCE-001逐项通过。该结果仅表示K4 shadow设计可实施，不表示K4代码、K5/K6、产品command authority或runtime activation已完成。
 >
+> 2026-07-30 K4-B实施前补充复核：按真实K4-A/K2/K3接口补齐V2 executable authority、CLAIMED transition identity、same-transaction repository read、五算法actual trace与运行/生产边界；K4-B=`design_ready_pending_implementation`。本次只更新设计，不表示V2代码或PASSED receipt已存在。
+>
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
 > 模拟盘唯一上位蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
 >
-> 已合入前置：K1、K2、K3 overall 均为 `implemented_verified + merged`。K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 合入，状态同步已通过 PR #2858 / merge `70ec6aaec28aa20755d73ecfe1a027f8ea94dbad` 合入。K4-A pure façade/adapter、strict contracts、six-source identity、observation-only characterization writer与fail-closed publication boundary已通过 PR #2883 / merge `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda` 合入；K4-B exact pinned-source executor、positive characterization/conformance、optional K2 invocation与read-only repository seam均=`not_started`，产品 runtime 未切换。
+> 已合入前置：K1、K2、K3 overall 均为 `implemented_verified + merged`。K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 合入，状态同步已通过 PR #2858 / merge `70ec6aaec28aa20755d73ecfe1a027f8ea94dbad` 合入。K4-A pure façade/adapter、strict contracts、six-source identity、observation-only characterization writer与fail-closed publication boundary已通过 PR #2883 / merge `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda` 合入；K4-B exact pinned-source executor、positive characterization/conformance、optional K2 invocation与read-only repository seam已完成实施级详细设计但代码尚未开始，产品 runtime 未切换。
 >
 > 本文只细化父蓝图已经批准的 K4：initialize/transition-scoped `VnpyAlgoEngineFacadeV1`、通用façade-backed adapter和existing K2 optional invocation、精确 method/DTO/enum/state/effect 映射、每个已注册算法的 façade conformance receipt，以及 current-three + Iceberg/Stop source-compatible characterization。本文不增加算法、策略、产品 route、runtime owner、OMS、Gateway、数据库表、人工门禁或审批。
 
@@ -23,10 +25,12 @@ K4 在 K1-C 双 upstream V2 authority、K1-B plugin catalog/route receipt、K2 d
 1. `VnpyAlgoEngineFacadeV1` 只在单次 `initialize/transition` 内存在；它读取 immutable K2/K3 输入并只向 transition-local collector 追加 existing K1/K2 effects。
 2. façade 不直接调用 Gateway、broker、repository、HTTP、DB、wall clock、global random、UUID、EventEngine 或 OMS；K2 继续拥有事务、dispatch、callback、reconcile、timer、fencing 和 retry。
 3. K1-C `VnpyCompatibilityRequirementV2/VnpyCompatibilityReceiptV2/LockedSurfaceV2` 继续是 method/DTO/enum/pinned-source 唯一 authority；K4 不复制、不降级、不改写 K1 V2 receipt。
-4. K4 增加 `VnpyFacadeConformanceReceiptV1`，只证明“当前 AIstock façade 实现 + exact K1 receipt + exact manifest + exact characterization”闭合。它不替代 K1 receipt，也不创建第二个 plugin catalog。
+4. K4-A增加observation-only `VnpyFacadeConformanceReceiptV1`记录尚不可执行的闭合失败；K4-B增加source-authoritative `VnpyFacadeConformanceReceiptV2`证明“当前 AIstock façade 实现 + exact K1 receipt + exact manifest + exact characterization”闭合。两者都不替代K1 receipt，也不创建第二plugin catalog；只有V2可成为K4-B positive authority。
 5. current-three 继续使用 K3 已合入的 exact pure plugin/factory/binding；K4 不替换其 factory，不创建平行 current-three route。K4 只对三个现有注册 plugin 生成 conformance receipt，并复用 K3 parity trace 作为行为证据。
 6. Iceberg/Stop 在 K4 只进入 pinned source-compatible characterization；不创建 manifest、factory、plugin、creation binding、algo instance 或 broker command。K5 才拥有它们的插件新增与运行验收。
 7. K4 完成后仍为 shadow-only；K6 继续独占 dependent-BUY durable coordinator、旧 helper 退役、route cutover、生产迁移和真实 SIM 验收。
+8. K4-A 已合入的 V1 characterization/conformance/input carriers 永久保持 observation-only/fail-closed；K4-B 不改变其历史语义，而是增加 exact full-input/full-trace V2 authority。任何 V1 receipt、caller supplied result 或 hash-correct copy 都不能升级为 K4-B PASSED。
+9. K4-B 只交付 shadow source execution 与 existing K2 optional seam；不会注册 Iceberg/Stop、不会切换 current-three factory、不会创建产品 command authority，也不会执行 broker/DDL/DML/runtime activation。
 
 ### 0.1 Background / 背景
 
@@ -45,7 +49,7 @@ K1 已冻结 plugin/manifest、双 upstream method/DTO/enum/source authority和i
   - `put_algo_event(algo,data)->None`
 - 保持 pinned `AlgoTemplate.update_tick/update_timer/update_order/update_trade` 的参数、调用顺序、return/error 行为。
 - 对 `TickData/OrderData/TradeData/ContractData` 和 `Direction/Offset/OrderType/AlgoStatus` 建立 exact manifest-driven projection；构造 `ContractData/OrderData` 所必需的 selected `Exchange/Status` member只作为K4 DTO mapping，从K1已固定的exact `constant.py` bytes AST提取并进入mapping hash，不扩展plugin可请求的K1 enum capability。
-- 生成 current-three 每个已注册 plugin 的 `VnpyFacadeConformanceReceiptV1`，并形成单一 `VnpyFacadeConformanceSetV1` derived view。
+- K4-A保留每个current-three plugin的V1 observation receipt；K4-B生成每个已注册plugin的exact PASSED `VnpyFacadeConformanceReceiptV2`并形成单一`VnpyFacadeConformanceSetV2` derived view，V1不得升级或混用。
 - 对同一 pinned `vnpy_algotrading` commit 的 Sniper、BestLimit、TWAP、Iceberg、Stop 建立 source-compatible characterization evidence。
 - current-three characterization 复用 K3 `CurrentThreeParityTraceV1`；Iceberg/Stop 只生成 characterization-only receipt，不注册或执行产品 plugin。
 - 定义直接测试、negative matrix、fresh-process/restart determinism、coverage、changed-files routing、DESIGN-COMPLIANCE-001 和生产状态分离。
@@ -88,14 +92,17 @@ K4 输入只能来自已经冻结的 execution plan、algo instance、K2 event/d
 - `backend/execution_algos/vnpy_compat/facade.py`：transition-scoped `VnpyAlgoEngineFacadeV1` 和 collector adapter。
 - `backend/execution_algos/vnpy_compat/facade_adapter.py`：通用 `VnpyFacadeBackedPluginAdapterV1`，拥有 initialize/restore/callback/state-extract/freeze 的唯一 source-compatible host seam；K4 不在 catalog 注册该 adapter。
 - `backend/execution_algos/vnpy_compat/facade_characterization.py`：repo-owned pinned source characterization builder/readback。
+- `backend/execution_algos/vnpy_compat/facade_source_execution.py`：单进程pure pinned-source loader/trace executor；不得import subprocess/multiprocessing/socket/repository，也不得拥有process lifecycle。
 - `backend/execution_algos/vnpy_compat/pinned_source/facade_source_manifest.json`：五个算法及 `round_to` helper 的 exact source identity。
+- `backend/execution_algos/vnpy_compat/pinned_source/facade_characterization_vectors_v2.json`：五算法full executable input/expected trace artifact；不含产品binding或broker事实。
 - `backend/execution_algos/vnpy_compat/pinned_source/vnpy_algotrading/algos/iceberg_algo.py` 与 `stop_algo.py`：同一 pinned commit 的只读 source authority。
 - `backend/execution_algos/vnpy_compat/pinned_source/vnpy_core/vnpy/trader/utility.py`：只供 AST 提取 pinned `round_to`；禁止 import/execute 整个 utility module。
 - `backend/services/miniqmt_execution_runtime/plugin_registry.py`：只增加从 existing `PluginCatalogSnapshotV1`（由 `build_plugin_catalog_v2` 生成）派生 conformance set 的显式 seam；不改变现有 catalog schema/hash/publication。
+- `backend/services/miniqmt_execution_runtime/vnpy_facade_characterization_runner.py`：K4-B离线fresh-process orchestration与malformed/timeout evidence owner；不由product runtime/package import自动启动，不访问DB/Gateway/broker。
 - `backend/services/miniqmt_execution_runtime/kernel_creation.py` 与 `kernel_delivery.py`：增加显式、可选、capability-based 的 façade invocation seam；只有 exact `VnpyFacadeBackedPluginAdapterV1` + exact PASSED conformance receipt 才进入该 seam，现有 pure `ExecutionAlgoPluginV2` 调用签名、current-three binding 和产品 routing 保持不变。
-- `backend/services/miniqmt_execution_runtime/kernel_repository_k2b.py`：只增加对 existing durable runtime-event/ALGO_START facts 的 bounded read-only authority query，供 TIMER market-data lineage和creation authority重建；不增加表、列、writer、锁或第二 repository owner。
+- `backend/services/miniqmt_execution_runtime/kernel_repository_event_delivery.py`与`kernel_repository_k2b.py`：只增加对existing durable runtime-event/delivery/ALGO_START/TICK facts的bounded same-cursor read-only authority query，供TIMER lineage和creation authority重建；不增加表、列、writer、lock order或第二repository owner。
 
-禁止创建第二个 repository、dispatcher、scheduler、route evaluator、plugin registry、Gateway adapter 或 runtime controller。
+禁止创建第二个 repository、dispatcher、scheduler、route evaluator、plugin registry、Gateway adapter 或 runtime controller。execution-algos目录继续通过现有import-boundary验证；fresh process只能由上列services runner显式拥有，防止为了characterization放宽插件/算法模块的side-effect边界。
 
 ## 3. Pinned Source Authority / 固定源码权威
 
@@ -164,7 +171,7 @@ PluginCatalogSnapshotV1 + K1 VnpyCompatibilityReceiptV2
                  + K2 delivery/event/projection/state/mapping facts
                                       |
                                       v
-                    VnpyFacadeConformanceSetV1 readback
+          sealed VnpyFacadeConformanceAuthorityV2 readback
                                       |
                                       v
         K2 optional invocation -> VnpyFacadeBackedPluginAdapterV1
@@ -256,6 +263,10 @@ authority_input_sha256
 
 `authority_input_sha256 = hash_hex_v1("miniqmt_vnpy_facade_authority_input_v1", exact preceding full canonical payloads)`。writer/readback固定按以下顺序执行：strict-readback catalog；从 catalog 解析 exact descriptor/manifest/K1 receipt；strict-readback gateway catalog；调用 `route_receipt.validate_against_authority_v1(catalog_snapshot,gateway_catalog)`；从 conformance set按 plugin key解析唯一 receipt并使用§11相同authority重建。任一 status 非 PASSED、missing/extra/duplicate、hash-correct authority drift或plugin/route/catalog/gateway identity冲突均 typed fail，不能用“上游已验证”作为不可复核布尔标志。runtime adapter invocation还必须要求conformance receipt的`runtime_binding_disposition=FACADE_BACKED_ADAPTER`；`PURE_PLUGIN_SHADOW_CONFORMANCE`只计K4证据，不能调用adapter seam。K4/K5 shadow root还必须要求`command_authority_disposition=SHADOW_ONLY_K2_V1`；当前V1 receipt不能表示产品command authority，未来K6产品root必须拒绝以任何K4/K5 V1 receipt作为activation proof。
 
+该 V1 input只保留K4-A structural/lifecycle负例，不得作为K4-B positive invocation。K4-B增加`VnpyFacadeConformanceAuthorityValidationReceiptV2`与sealed process-local `VnpyFacadeConformanceAuthorityV2`：validation receipt exact fields为`schema_version,conformance_set_v2_sha256,source_executor_binding_sha256,ordered_source_execution_set_sha256s,validation_input_sha256,status=PASSED|FAILED,ordered_failures,receipt_sha256`，domain为`miniqmt_vnpy_facade_conformance_authority_validation_receipt_v2`；authority object只能由§11 `validate_vnpy_facade_conformance_set_against_authority_v2`创建，保存strict V2 set/receipt/binding和validation receipt，不可由caller mapping、bool或裸hash构造。
+
+`VnpyFacadeAuthorityInputV2` exact fields为V1 catalog/gateway/plugin/manifest/K1/route字段加`facade_conformance_receipt_v2,facade_conformance_set_v2,conformance_authority_validation_receipt_v2,source_executor_binding_sha256,source_execution_set_sha256,authority_input_sha256`，schema/domain均为`miniqmt_vnpy_facade_authority_input_v2`。创建时必须从sealed authority object解析唯一plugin receipt并复核live catalog/gateway/route、descriptor/process factory、adapter/algorithm binding；不能直接接受上述receipt参数。source execution与五算法rebuild在construction root创建sealed authority时完成，不得在K2数据库事务内启动subprocess；每次invocation仍strict-readback全部carrier和live callable binding，发现process binding漂移立即typed fail并使本次effect为零。
+
 ### 5.2 Initialization input
 
 `VnpyFacadeInitializationInputV1` exact fields：
@@ -271,6 +282,8 @@ input_sha256
 ```
 
 `input_sha256 = hash_hex_v1("miniqmt_vnpy_facade_initialization_input_v1", exact preceding full canonical payloads)`。`start_event`必须是 exact `ALGO_START`；event/delivery/context/runtime/algo/plugin/config/plan/release/policy、contract/account/capability projection和logical time必须逐项闭合。adapter只在该路径执行 pinned algorithm constructor一次，然后执行 pinned `start()` 一次；constructor/start产生的 `put_event/write_log` 按调用顺序进入同一 initialization collector。initial retry从相同 input重建并产生 byte-identical state/effects，不能再次提交不同 command。
+
+K4-B positive seam使用`VnpyFacadeInitializationInputV2`：除`authority_input`必须是V2外字段和业务语义与V1一致，schema/domain升级为`miniqmt_vnpy_facade_initialization_input_v2`。`transition_id`必须由existing `algo_transition_id_v1(delivery_id,event_id,runtime_id,algo_instance_id,transition_sequence=1)`重建，不能由caller、UUID或尚不存在的transition row提供。V1 input不自动升级为V2。
 
 ### 5.3 Transition input
 
@@ -294,9 +307,37 @@ input_sha256
 
 `input_sha256 = hash_hex_v1("miniqmt_vnpy_facade_transition_input_v1", exact preceding full canonical payloads)`。writer/readback必须先分别 strict-validate existing carriers，再验证 runtime/algo/plugin/event/delivery/sequence/route、`read_only_services.execution_projection_set`、deterministic context和lifecycle projection closure。active mappings按 `local_vt_orderid` 排序且parent/runtime/algo/symbol/side必须一致；mapping集合必须与lifecycle projection active local-id集合完全相等。使用 `AlgoReadOnlyServicesV1` 而不是只有refs的 `ExecutionProjectionSetV1`，因此 `get_tick/get_contract` 消费的是hash-closed immutable payload，不允许从ref猜值。
 
+K4-A V1 transition carrier存在一个已确认的前置/完成事实混淆：它从`delivery.transition_id`取得collector identity并要求该值非null，但existing K2 `apply_claimed_delivery_atomic`是在调用plugin之后才物化transition；真实callback执行时locked delivery必须是`CLAIMED + transition_id=null`。K4-B禁止通过提前写transition row、伪造非null field或放松K2事务解决该冲突，固定新增`VnpyFacadeTransitionInputV2`：
+
+```text
+schema_version=miniqmt_vnpy_facade_transition_input_v2
+runtime_event, claimed_delivery, algo_instance, manifest
+authority_input: VnpyFacadeAuthorityInputV2
+before_state, read_only_services, command_lifecycle_projection
+ordered_active_mappings, deterministic_context
+transition_id, transition_sequence, input_sha256
+```
+
+`claimed_delivery`必须为exact `AlgoDeliveryPersistenceV1`，status=`CLAIMED`、`transition_id/failure_receipt_id/skip_receipt_id/closed_at_utc`均null，lease owner/worker/incarnation/epoch/fence/expiry和row_version与当前`apply_claimed_delivery_atomic` locked CAS参数逐项相等。`transition_id`必须等于existing `algo_transition_id_v1(...)`对该delivery/event/runtime/algo/sequence的结果；materializer随后必须生成同一identity。其它V1 owner/state/mapping/service closure全部保留并切换到V2 hash domain。adapter/collector/facade从input的`transition_id`读取identity，绝不能再从pre-call delivery完成字段读取。retry持有same delivery+fence时重建byte-identical input；new lease epoch仍保持相同transition identity但由K2 CAS拒绝stale writer。
+
 ### 5.4 Single K2 invocation seam
 
 K4交付通用 `VnpyFacadeBackedPluginAdapterV1`，它实现existing `ExecutionAlgoPluginV2`并额外提供 exact `initialize_with_facade(input)` 与 `transition_with_facade(input)`。K4-B只在existing `invoke_plugin_initialize_v1/invoke_plugin_transition_v1` 增加一个显式 optional façade input：
+
+```python
+invoke_plugin_initialize_v1(
+    *, plugin, expected_manifest, start_context,
+    facade_input: VnpyFacadeInitializationInputV2 | None = None,
+) -> AlgoInitializationV1
+
+invoke_plugin_transition_v1(
+    *, plugin, expected_manifest, state_codec, state, event,
+    services, deterministic_context,
+    facade_input: VnpyFacadeTransitionInputV2 | None = None,
+) -> AlgoTransitionV1
+```
+
+`VnpyFacadeBackedPluginAdapterV1`新增`initialize_with_facade_v2/transition_with_facade_v2`并只接受上述V2 carrier；K4-A既有V1方法与V1 tests继续保留但不能发布positive receipt。两个existing invoke函数仍是唯一SPI入口，返回值继续走原`AlgoInitializationV1/AlgoTransitionV1`完整closure validation；V2 method不得绕过existing result validator或materializer。
 
 - ordinary pure plugin + `facade_input=None` 继续走现有调用，签名和结果验证不变；
 - exact `VnpyFacadeBackedPluginAdapterV1` 必须携带与§4.1 binding byte-identical的adapter identity、`FACADE_BACKED_ADAPTER` receipt，并且必须收到对应 initialization/transition input；
@@ -307,7 +348,9 @@ K4交付通用 `VnpyFacadeBackedPluginAdapterV1`，它实现existing `ExecutionA
 
 creation coordinator从其现有 exact catalog/gateway/route/start facts构建initialization input；delivery worker在同一locked read范围内从durable ALGO_START event、catalog runtime、configured strict gateway catalog、locked algo/delivery/state/mapping/lifecycle facts构建transition input。该seam不创建第二 runtime、repository、dispatcher或route。
 
-construction root必须显式向existing `KernelAlgoCreationCoordinatorV1` 与 `KernelDeliveryWorkerV1` 注入同一strict `GatewayCapabilityCatalogV1`和optional `VnpyFacadeConformanceSetV1`；不得模块全局查找。conformance set为`None`时ordinary pure plugin照常运行；若resolved plugin为façade-backed adapter则缺set立即typed fail。set存在也不能切换ordinary plugin。K4 shadow harness显式注入；产品root直到K6仍不注入/不激活façade-backed binding。
+construction root必须显式向existing `KernelAlgoCreationCoordinatorV1` 与 `KernelDeliveryWorkerV1` 注入同一strict gateway/conformance authority；不得模块全局查找。authority为`None`时ordinary pure plugin照常运行；若resolved plugin为façade-backed adapter则缺authority立即typed fail。authority存在也不能切换ordinary plugin。K4 shadow harness显式注入；产品root直到K6仍不注入/不激活façade-backed binding。
+
+K4-B把该optional依赖的实际类型收口为sealed `VnpyFacadeConformanceAuthorityV2 | None`，不再向runtime注入裸V1/V2 set。`KernelAlgoCreationCoordinatorV1.__init__`保持现有三个必填参数并只增加keyword-only optional authority；`KernelDeliveryWorkerV1.__init__`增加同一optional authority及仅在其非null时必填的strict gateway catalog。ordinary product construction继续传`None`，因此函数调用、factory、current-three行为和对象graph不改变；测试/未来K5 shadow root显式传同一authority object。禁止环境变量、配置bool、algo-code allowlist、global singleton、manual acknowledge或“set存在即切换全部plugin”。
 
 K4 当前 product catalog 中不存在 `FACADE_BACKED_ADAPTER` descriptor：current-three必须保持K3 pure binding，Iceberg/Stop由K5拥有。K4 direct/integration test可以使用由同一production manifest/receipt/adapter constructors构建、全量strict-readback的test-only closed candidate来覆盖optional invocation，但该candidate不得写入code-owned current catalog、creation binding或durable DB，也不能单独作为K4完成证据。K4完成证据必须同时包含真实current-three catalog的`PURE_PLUGIN_SHADOW_CONFORMANCE`、真实pinned Iceberg/Stop characterization及optional seam的production-constructor正反测试；第一个真实registered shadow adapter由K5交付并复用同一seam。文档和receipt必须把`test_only_candidate=true`留在测试证据上下文且不进入产品hash/status。
 
@@ -320,7 +363,7 @@ K4 的 exact 交付边界固定为：
 - source-isolated characterization 与 pure collector 必须完整保留同一次 callback 的全部 ordered commands，包括 `cancel_all()` 多命令；ordinal、identity、state/effect trace均参与 receipt，不能只测第一条；
 - K2 broker-neutral shadow materialization 只对 existing V1 projection set 能精确证明的单 command transition执行，并且 authority 必须来自同一 committed legacy fact/characterization vector的 exact route/OMS/risk/kill receipt；这些 receipt 只证明 shadow parity，`dispatch_attempt=0`、`broker_called=false`；
 - 若 initialization/transition 产生多 command，K4 shadow seam仍返回完整 `AlgoTransitionV1` 供 pure conformance 比较，但不得调用 existing materializer并不得发布“product compatible” receipt；必须产生 `MINIQMT_VNPY_FACADE_MULTI_COMMAND_PRODUCT_AUTHORITY_UNAVAILABLE` 的 typed shadow observation，且该 observation不能删减或改写原 command set；
-- K4/K5 的 `VnpyFacadeConformanceReceiptV1` 必须将 `command_authority_disposition` 固定为`NOT_APPLICABLE_PURE_PLUGIN|SHADOW_ONLY_K2_V1`；它只证明 façade/source/state/effect compatibility，不等于产品 command-authority receipt，也不能作为 runtime activation 条件的替代证据；
+- K4/K5 的 `VnpyFacadeConformanceReceiptV1/V2` 必须将 `command_authority_disposition` 固定为`NOT_APPLICABLE_PURE_PLUGIN|SHADOW_ONLY_K2_V1`；V1永不PASSED，V2也只证明 façade/source/state/effect compatibility，不等于产品 command-authority receipt，不能作为 runtime activation 条件的替代证据；
 - K6 在产品 cutover 前必须以独立 F2 详细设计关闭 generic per-command authority aggregate、writer/readback、transition projection hash、materializer、同步reject返回语义和restart/reconcile链；不得通过双跑algorithm callback、回写第一次probe state或先返回local id再把OMS reject伪装成成功。K6 可以一次性扩展 generic kernel seam，但不得按 algo code 分支；该F2必须定义独立versioned product command-authority receipt和activation readback，不能只给K4 V1增加enum/hash。K4/K5 不预先发明该 carrier、DB schema或产品 writer。
 
 这是现有 K2 V1 carrier 的技术事实边界，不是人工审批、enable flag或永久 stop gate。K4 implementation可以在该边界内完整完成；产品 façade-backed route 仍由 K6 独占，未完成 K6 时不得宣称可运行产品命令。
@@ -331,10 +374,13 @@ Exact constructor：
 
 ```python
 VnpyAlgoEngineFacadeV1.create(
-    invocation_input: VnpyFacadeInitializationInputV1 | VnpyFacadeTransitionInputV1,
+    invocation_input: VnpyFacadeInitializationInputV1 | VnpyFacadeTransitionInputV1 |
+                      VnpyFacadeInitializationInputV2 | VnpyFacadeTransitionInputV2,
     effect_collector: VnpyFacadeEffectCollectorV1,
 ) -> VnpyAlgoEngineFacadeV1
 ```
+
+V1分支仅保留K4-A observation/lifecycle证据；K4-B positive adapter调用必须走V2。V2 transition collector owner必须等于`invocation_input.transition_id`，不得读取`claimed_delivery.transition_id`。
 
 `create()` 必须验证：
 
@@ -394,11 +440,11 @@ missing contract 或 pinned `round_to` 产生zero时，按 upstream返回 `""`�
 
 ### 6.3 `get_tick`
 
-只从 `VnpyFacadeTransitionInputV1.read_only_services.market_data_projection` 构造 §7 `TickData` view，且projection ref/payload/hash必须闭合。对 current-three及K5计划算法，quote authority只能是native `B0_QUOTE_V2` continuous L1；不得从minute、process cache、ordinary quote、另一侧盘口、last price或auction合成continuous fields。
+K4-B positive path只从 `VnpyFacadeTransitionInputV2.read_only_services.market_data_projection` 构造 §7 `TickData` view，且projection ref/payload/hash必须闭合；V1仅保留K4-A observation tests。对 current-three及K5计划算法，quote authority只能是native `B0_QUOTE_V2` continuous L1；不得从minute、process cache、ordinary quote、另一侧盘口、last price或auction合成continuous fields。
 
 - `TICK` delivery：market projection必须与当前 `RuntimeEventEnvelopeV2` strict TICK payload、source event、generation、control/assignment和B0 lineage byte-identical；
 - `TIMER` delivery：existing K2 read-only query从同一 `algo_instance_id` 的已持久化、`APPLIED` prior delivery反查最新eligible TICK；必须同时满足 `delivery.algo_delivery_sequence < timer_delivery.algo_delivery_sequence`、`event.sequence < timer_event.sequence`、same runtime/algo/symbol/session epoch与native B0 source。projection ref的 `source_event_id/payload_sha256/logical_at_utc` 必须指向该exact event，并增加 `ConsumedLineageRefV1(MARKET_DATA)`；
-- query固定使用existing `uq_miniqmt_k2_delivery_sequence(algo_instance_id,algo_delivery_sequence)`和event owner key，`ORDER BY delivery.algo_delivery_sequence DESC,event.sequence DESC,event.event_id DESC LIMIT 1`。timer delivery/event sequence构成immutable双cutoff，因此retry/restart不因随后quote到达而改变；latest prior candidate若cross-session/cross-symbol、stale-at-timer-logical-time、non-APPLIED或非B0则直接按unavailable处理，不继续向更旧事件回退；duplicate owner、future sequence或carrier/readback drift均typed fail；
+- query固定使用existing `uq_miniqmt_k2_delivery_sequence(algo_instance_id,algo_delivery_sequence)`和event owner key，`ORDER BY delivery.algo_delivery_sequence DESC,event.sequence DESC,event.event_id DESC LIMIT 1`。timer delivery/event sequence构成immutable双cutoff，因此retry/restart不因随后quote到达而改变；latest prior candidate若cross-session/cross-phase/cross-symbol、B0 payload自身eligibility/freshness非READY、non-APPLIED或非B0则直接按unavailable处理，不继续向更旧事件回退；不使用wall-clock重新计算TTL。duplicate owner、future sequence或carrier/readback drift均typed fail；
 - 其它callback只有manifest明确声明需要current market projection且input builder提供上述exact lineage时才可读取，否则按missing处理。
 
 没有当前合法 view 时返回 `None`，并追加 `MINIQMT_VNPY_FACADE_TICK_UNAVAILABLE` diagnostic，包含 runtime/algo/event/delivery/symbol、required fields、missing fields、market-data lineage 和 reason。不得读取 process cache fallback。
@@ -514,7 +560,7 @@ writer从pinned algorithm/template AST的constructor assignments、`default_sett
 
 `VnpyFacadeTerminalMappingV1` exact fields为 `schema_version,algo_code,algo_status_member,trigger_event_type,traded_relation=FULL|RESIDUAL|ANY,required_active_child_closure,terminal_outcome_or_none,reason_code,mapping_sha256`；按 `(algo_code,algo_status_member,trigger_event_type,traded_relation,required_active_child_closure)` 排序且唯一，set domain为`miniqmt_vnpy_facade_terminal_mapping_set_v1`。它必须同时满足pinned helper behavior和existing K2 terminal/active-child authority，不能由adapter临时推断。
 
-`VnpyFacadeAlgorithmBindingV1` exact fields为 `schema_version,algo_code,source_identity_sha256,class_ref,constructor_signature_sha256,constructor_body_sha256,state_mapping_set_sha256,terminal_mapping_set_sha256,characterization_receipt_sha256,adapter_contract_sha256,binding_sha256`；constructor hashes从exact algorithm source AST重算，binding domain为 `miniqmt_vnpy_facade_algorithm_binding_v1`。K4为五个算法生成binding evidence；current-three只用于shadow conformance，Iceberg/Stop为`CHARACTERIZATION_ONLY_K5`，均不进入现有catalog。K5未来process factory返回的adapter必须携带byte-identical binding；manifest继续使用existing top-level schema并通过`compatibility_requirement/behavior_characterization_sha256/state_schema/implementation_ref`与该binding闭合，不能新增字段或自行发明另一套restore规则。
+`VnpyFacadeAlgorithmBindingV1` exact fields为 `schema_version,algo_code,source_identity_sha256,class_ref,constructor_signature_sha256,constructor_body_sha256,state_mapping_set_sha256,terminal_mapping_set_sha256,characterization_receipt_sha256,adapter_contract_sha256,binding_sha256`；constructor hashes从exact algorithm source AST重算，binding domain为 `miniqmt_vnpy_facade_algorithm_binding_v1`。V1仅为K4-A structural evidence且不能进入positive conformance；K4-B以§11定义的V2 binding额外绑定source execution authority。K4为五个算法生成binding evidence；current-three只用于shadow conformance，Iceberg/Stop为`CHARACTERIZATION_ONLY_K5`，均不进入现有catalog。K5未来process factory返回的adapter必须携带byte-identical V2 binding；manifest继续使用existing top-level schema并通过`compatibility_requirement/behavior_characterization_sha256/state_schema/implementation_ref`与该binding闭合，不能新增字段或自行发明另一套restore规则。
 
 ### 10.2 Durable state envelope and lifecycle
 
@@ -637,9 +683,33 @@ receipt_set_sha256
 
 每个`VnpyFacadeConformanceBuildItemV1` exact fields为 `schema_version,plugin_key,registration_descriptor_full_payload,pinned_compatibility_receipt_sha256,algorithm_characterization_receipt_sha256,algorithm_binding_sha256,runtime_binding_disposition,command_authority_disposition,build_item_sha256`，按plugin key排序且唯一；item domain为`miniqmt_vnpy_facade_conformance_build_item_v1`。`build_input_sha256 = hash_hex_v1("miniqmt_vnpy_facade_conformance_build_input_v1", {plugin_catalog_sha256,facade_contract_sha256,dto_mapping_set_sha256,state_mapping_set_sha256,terminal_mapping_set_sha256,isolated_module_binding_set_sha256,facade_source_manifest_sha256,ordered full build item payloads})`；`receipt_set_sha256 = hash_hex_v1("miniqmt_vnpy_facade_conformance_set_v1", exact preceding fields)`。任何字段都不得省略或用count代替full identities。
 
-对 existing catalog 中每个 `required_facade_methods` 非空的 registered descriptor恰好一个 receipt，按 plugin key 排序；missing/extra/duplicate/key drift全部失败且不发布 partial set。current-three K4 completion要求三项均 PASSED。Iceberg/Stop未注册，因此不进入该 set。
+V1 structural set仍要求对existing catalog中每个`required_facade_methods`非空的registered descriptor恰好一个receipt并按plugin key排序，但K4-A不能发布该set。current-three K4 completion改由下述V2 set要求三项均PASSED；missing/extra/duplicate/key drift全部失败且不发布partial set。Iceberg/Stop未注册，因此不进入任一set。
 
 该 set 是 existing catalog 的 derived conformance view，不是第二 plugin catalog：不能增加/删除/重排 descriptor，不能决定 route，不持久化 DB，也不能作为当前产品 runtime 的人工 run gate。K4/K5 shadow façade-backed seam只能显式消费exact PASS + `FACADE_BACKED_ADAPTER + SHADOW_ONLY_K2_V1` receipt；current-three `PURE_PLUGIN_SHADOW_CONFORMANCE + NOT_APPLICABLE_PURE_PLUGIN`不得进入seam，当前K3 binding不改变。产品root必须等待K6独立F2定义并生成新的versioned product command-authority receipt；所有K4/K5 V1 receipt均必须被product activation seam拒绝，不能只改hash或沿用shadow status。
+
+K4-B positive publication不复用上述V1 set。它固定增加 `VnpyFacadeAlgorithmBindingV2`、`VnpyFacadeConformanceReceiptV2`、`VnpyFacadeConformanceBuildItemV2` 与 `VnpyFacadeConformanceSetV2`：各自以对应 `..._v2` schema/domain覆盖V1全部业务身份，并额外绑定 `source_executor_binding_sha256/source_execution_set_sha256/algorithm_characterization_receipt_v2_sha256`。V2 algorithm binding的class/constructor/state/terminal/adapter fields与V1逐字段一致，但`characterization_receipt_sha256`必须指向exact PASSED V2 receipt；禁止V1/V2 hash alias。V2 conformance receipt的K1、catalog、manifest、K4 live binding、source manifest、V2 characterization和algorithm binding必须由同一builder现场重建；V2 set仍只包含existing catalog中三个current-three descriptors，Iceberg/Stop不进入set。
+
+K4-B writer/readback唯一入口固定为：
+
+```python
+build_vnpy_facade_algorithm_bindings_v2(
+    *, characterization_authority_v2,
+    facade_contract, source_manifest
+) -> tuple[VnpyFacadeAlgorithmBindingV2, ...]
+
+build_vnpy_facade_conformance_set_v2(
+    *, catalog_runtime, gateway_catalog, facade_contract, source_manifest,
+    characterization_authority_v2, algorithm_bindings_v2
+) -> VnpyFacadeConformanceSetV2
+
+validate_vnpy_facade_conformance_set_against_authority_v2(
+    *, conformance_set, catalog_runtime, gateway_catalog,
+    facade_contract, source_manifest, requirements, ordered_vectors,
+    expected_trace_authorities
+) -> VnpyFacadeConformanceSetV2
+```
+
+最后一个入口必须重新执行§12 V2 source authority，再重建receipt/binding/build-item/set并做完整payload equality；只重算supplied hash、只验count/keys或信任此前PASSED均不合格。任一算法失败时 `partial_set=None`，不得保留previous V1/V2 set。current-three的`runtime_binding_disposition`仍固定为`PURE_PLUGIN_SHADOW_CONFORMANCE`，所以V2 set本身不会把它们切到façade adapter；K5未来注册的adapter由K5自己的catalog/conformance rebuild产生，不在K4-B伪造。
 
 ## 12. Source-Compatible Characterization / 源码兼容性表征
 
@@ -663,7 +733,90 @@ receipt_sha256
 
 `factory_probe_config_sha256 = hash_hex_v1("miniqmt_vnpy_facade_factory_probe_config_v1", canonical_factory_probe_config)`；该config必须通过exact manifest config schema（characterization-only算法则通过§12.1 requirement关联的planned strict schema）且不得包含默认补值。`vector_set_sha256 = hash_hex_v1("miniqmt_vnpy_facade_characterization_vector_set_v1", ordered full vector payloads)`；receipt domain为 `miniqmt_vnpy_facade_algorithm_characterization_receipt_v1`。
 
-K4-A只提供严格 observation comparison writer：`executed_vector_results` 是非权威观察输入，即使逐字段等于 expected，也必须生成 `FAILED + MINIQMT_VNPY_FACADE_CHARACTERIZATION_EXECUTION_UNAVAILABLE`；它不能生成 algorithm binding 或 conformance set。只有 K4-B 在同一 writer 内部执行§12.1 exact pinned-source harness、并由 readback 重新执行同一 authority 后，才允许生成 PASSED receipt、algorithm binding和conformance set。禁止把 caller mapping、test fixture、hash-correct carrier或 expected→actual 回填升级为 source execution authority。
+K4-A只提供严格 V1 observation comparison writer：`executed_vector_results` 是非权威观察输入，即使逐字段等于 expected，也必须生成 `FAILED + MINIQMT_VNPY_FACADE_CHARACTERIZATION_EXECUTION_UNAVAILABLE`；它不能生成 algorithm binding 或 conformance set。K4-B必须通过独立V2 writer在内部执行§12.1 exact pinned-source harness，并由V2 readback重新执行同一authority后，才允许生成PASSED V2 receipt、V2 algorithm binding和V2 conformance set。禁止把caller mapping、test fixture、hash-correct carrier或expected→actual回填升级为source execution authority。
+
+上述 V1 carrier 的语义在 K4-B 后也不改变。K4-B 不得给 `build_vnpy_facade_characterization_receipt_v1(...,executed_vector_results=...)` 增加任何 PASSED 分支，也不得原地改变 `VnpyFacadeAlgorithmCharacterizationReceiptV1`、`VnpyFacadeConformanceReceiptV1/SetV1` 或 `VnpyFacadeAuthorityInputV1` 的 hash domain。V1 永久表示 K4-A observation/fail-closed 证据；K4-B source-authoritative 路径固定使用下列 V2/V1-versioned 新 carriers，V1/V2 不做自动转换：
+
+```text
+VnpyFacadeSourceExecutorBindingV1
+  schema_version=miniqmt_vnpy_facade_source_executor_binding_v1
+  executor_ref, executor_signature_sha256, executor_source_sha256
+  facade_source_manifest_sha256, facade_contract_sha256
+  implementation_binding_set_sha256, isolated_module_binding_set_sha256
+  dto_mapping_set_sha256, state_mapping_set_sha256, terminal_mapping_set_sha256
+  supported_algo_codes, binding_sha256
+
+VnpyFacadeCharacterizationVectorV2
+  schema_version=miniqmt_vnpy_facade_characterization_vector_v2
+  vector_id, scenario_id, step_ordinal, predecessor_vector_id_or_INIT
+  algo_code, side, invocation_phase=INITIALIZE|TRANSITION
+  canonical_config, deterministic_context
+  start_context_or_null, runtime_event_or_null, read_only_services_or_null
+  before_state_or_null, ordered_active_mappings
+  explicit_deterministic_inputs
+  expected_trace_authority_ref
+  expected_ordered_facade_calls, expected_ordered_effects
+  expected_after_state, expected_terminal_outcome
+  vector_sha256
+
+VnpyFacadeExecutedVectorResultV1
+  schema_version=miniqmt_vnpy_facade_executed_vector_result_v1
+  vector_id, vector_sha256, scenario_id, step_ordinal
+  source_executor_binding_sha256, source_identity_sha256
+  invocation_status=COMPLETED|FAILED
+  actual_ordered_facade_calls, actual_ordered_effects
+  actual_after_state_or_null, actual_terminal_outcome
+  consumed_deterministic_inputs, ordered_execution_failures
+  result_sha256
+
+VnpyFacadeSourceExecutionSetV1
+  schema_version=miniqmt_vnpy_facade_source_execution_set_v1
+  algo_code, characterization_requirement_sha256
+  source_executor_binding_sha256, facade_source_manifest_sha256
+  facade_contract_sha256, vector_set_sha256
+  ordered_results, ordered_failures, status=PASSED|FAILED
+  execution_set_sha256
+
+VnpyFacadeAlgorithmCharacterizationReceiptV2
+  schema_version=miniqmt_vnpy_facade_algorithm_characterization_receipt_v2
+  <V1 identity/config/contract/mapping/source fields except status/failures/hash>
+  source_executor_binding_sha256, source_execution_set_sha256
+  ordered_vector_ids, vector_set_sha256
+  status=PASSED|FAILED, ordered_failures, receipt_sha256
+```
+
+上述`expected/actual_ordered_facade_calls`与`expected/actual_ordered_effects`不是开放dict。`VnpyFacadeTraceCallV1` exact fields为`schema_version,ordinal,method_name,normalized_arguments,return_disposition=VALUE|NONE|EMPTY_STRING|RAISED,normalized_return_or_null,ordered_diagnostic_reason_codes,call_sha256`；ordinal从0连续，method_name只允许§6六方法与§6.7 exact template helper/callback，arguments/return必须按§4 method contract的structured parameter/return schema逐字段验证。`VnpyFacadeTraceEffectV1` exact fields为`schema_version,ordinal,effect_kind=BROKER_COMMAND|TIMER_MUTATION|DIAGNOSTIC,carrier_schema_version,carrier_full_payload,carrier_identity,carrier_sha256,effect_sha256`；full payload必须strict readback为existing `BrokerCommandV2/TimerMutationV1/DiagnosticObservationV1`，ordinal与collector ordinal相等。call/effect domains分别为`miniqmt_vnpy_facade_trace_call_v1`与`miniqmt_vnpy_facade_trace_effect_v1`。unknown key/type、仅给hash不带carrier、carrier hash-correct但identity/owner漂移或用diagnostic替代command均失败。expected/actual after state必须是full strict `VnpyFacadeStateEnvelopeV1`，terminal必须是existing `TerminalOutcomeV1 | None`；禁止bool equality、count-only或JSON shape-only comparison。
+
+`VnpyFacadeSourceExecutorBindingV1.binding_sha256`、V2 vector、executed result、execution set与V2 receipt分别使用 domains `miniqmt_vnpy_facade_source_executor_binding_v1`、`miniqmt_vnpy_facade_characterization_vector_v2`、`miniqmt_vnpy_facade_executed_vector_result_v1`、`miniqmt_vnpy_facade_source_execution_set_v1` 和 `miniqmt_vnpy_facade_algorithm_characterization_receipt_v2`，均覆盖除自身 hash 外的 exact preceding full canonical payload。`supported_algo_codes`固定为排序且唯一的五算法集合；executor binding writer/readback必须从 live callable ref/signature、canonical-LF implementation source、K4-A live implementation binding和exact source manifest重建，不能接受caller-supplied binding hash。
+
+V2 vector 是可执行输入而不是仅有 hash 的说明：INITIALIZE 必须携带 exact `VnpyFacadeCharacterizationStartContextV2` 且 transition-only fields 为 null；TRANSITION 必须携带 exact `RuntimeEventEnvelopeV2/AlgoReadOnlyServicesV1/VnpyFacadeStateEnvelopeV1/ordered_active_mappings` 且 start context 为 null。`scenario_id + step_ordinal`从0连续；首项 predecessor=`INIT`，后续项必须引用同scenario前一项vector id，并要求 `before_state == predecessor actual_after_state == expected predecessor after_state`。跨scenario、跳步、hash-only state、缺full event/projection、从actual输出反写expected均直接 FAILED。expected trace authority ref exact fields为 `authority_kind=K3_COMMITTED_PARITY|K4_PINNED_CHARACTERIZATION,authority_identity_sha256,source_snapshot_sha256_or_null,parity_input_sha256_or_null,parity_receipt_sha256_or_null,ref_sha256`：current-three 三项必须引用同一次 strict K3 source snapshot/input/PASSED receipt；Iceberg/Stop固定为K4 code-owned pinned vector artifact且K3字段为null。该ref只证明expected来源，不能替代source execution。
+
+`VnpyFacadeCharacterizationManifestViewV1` exact fields为`schema_version,algo_code,registration_disposition,real_plugin_key_or_null,real_manifest_sha256_or_null,required_facade_methods,required_object_fields,required_enum_members,order_types,market_data_capabilities,state_schema_sha256,characterization_requirement_sha256,view_sha256`；current-three逐字段派生自real K1 manifest且real identity必填，Iceberg/Stop逐字段派生自§12 requirement且real identity必须null。`VnpyFacadeCharacterizationStartContextV2` exact fields为`schema_version,vector_id,runtime_id,algo_instance_id,parent_intent_id,strategy_slot_id,symbol,side,limit_price_decimal,parent_quantity,contract_projection,deterministic_context,manifest_view,canonical_config,context_sha256`，所有identity由vector/scenario deterministic hash生成，不用UUID。两者分别使用`miniqmt_vnpy_facade_characterization_manifest_view_v1`和`miniqmt_vnpy_facade_characterization_start_context_v2` domain。
+
+Iceberg/Stop source execution不得为满足现有`AlgoStartContextV1/AlgoStateSnapshotV2`类型而创建假的`ExecutionAlgoPluginManifestV2`。K4-B新增source-only `_create_characterization_v2(manifest_view,characterization_context,trace_collector)`，复用同一`VnpyAlgoEngineFacadeV1`六方法、DTO projection、round_to和existing effect constructors，但只freeze为上述trace/state-envelope carrier，不创建`AlgoInitializationV1/AlgoTransitionV1`、catalog descriptor、plugin factory或durable state。`VnpyFacadeTraceCollectorV2`是process-local single-use collector，只持有deterministic context、parent/vector identity、next ordinal、ordered strict call/effect和frozen flag；append仍调用existing command/diagnostic constructors，`freeze_result_v1`只能生成一项`VnpyFacadeExecutedVectorResultV1`，freeze后调用typed fail。current-three也走同一source executor view；只有K2 optional invocation才使用real manifest与V2 runtime inputs。该source-only seam按exact class/type分派，不能duck-type到产品SPI或形成第二algorithm implementation。
+
+`VnpyFacadeExecutedVectorResultV1`完整保存actual call/effect/state/terminal与已消费deterministic input，而非只保存相等布尔值。任何source exception也必须生成一项`FAILED` result并保留已发生的partial ordered trace及bounded JSON-safe exception evidence；exception renderer失败不得覆盖primary failure。execution set按 `(scenario_id,step_ordinal,vector_id)`稳定排序且每个required vector恰好一项result；missing/extra/duplicate、FAILED result、actual/expected任一逐字段差异、draw少用/多用或scenario predecessor drift均使set FAILED。PASSED set必须无failure、所有result为COMPLETED并逐字段等于expected。failure仍复用§11.1的255+marker规则；不得 first-error shortcut。
+
+K4-B public authority固定为：
+
+```python
+run_vnpy_facade_source_execution_sets_v1(
+    *, source_manifest, facade_contract, requirements,
+    ordered_vectors, expected_trace_authorities
+) -> VnpyFacadeCharacterizationAuthorityV2
+
+build_vnpy_facade_characterization_authority_v2(
+    *, source_manifest, facade_contract, requirements,
+    ordered_vectors, expected_trace_authorities
+) -> VnpyFacadeCharacterizationAuthorityV2
+
+validate_vnpy_facade_characterization_authority_v2(
+    *, receipts, source_manifest, facade_contract, requirements,
+    ordered_vectors, expected_trace_authorities
+) -> VnpyFacadeCharacterizationAuthorityV2
+```
+
+`VnpyFacadeCharacterizationAuthorityV2`是sealed process-local object，exact持有source executor binding、五个source execution sets、五个V2 receipts与一个authority hash；只能由上列services runner/build/readback创建，不提供mapping/model_validate公共构造，也不跨process持久化。三个入口都不接受 `executed_vector_results/status/failures/receipt_sha256`。writer通过services runner创建fresh spawned interpreter执行repo-owned pinned algorithm/template/base methods；readback必须在新的fresh interpreter重新执行全部五算法并与supplied receipt逐字段比较。worker输入只允许repo-relative file identity与canonical JSON，禁止absolute worktree path、installed/latest package、network、wall clock、PID、UUID、global random或previous receipt。spawn/timeout/malformed carrier/worker exit均产生typed aggregate FAILED和zero binding/conformance publication，不能切换到in-process helper或expected→actual fallback。该隔离用于确定性和副作用所有权，不新增网络安全产品、RBAC或人工门禁。
 
 `VnpyFacadeCharacterizationRequirementV1` exact fields为 `schema_version,algo_code,registration_disposition,source_identity_sha256,config_schema_version,config_schema,config_schema_sha256,config_validation_contract_sha256,ordered_required_methods,ordered_required_object_fields,ordered_required_enum_members,ordered_event_types,ordered_market_data_capabilities,state_mapping_set_sha256,requirement_sha256`，config schema使用existing strict local-only JSON Schema authority，额外跨字段/rounding规则以`miniqmt_vnpy_facade_config_validation_contract_v1` hash固定，requirement hash domain为 `miniqmt_vnpy_facade_characterization_requirement_v1`。current-three requirement必须与existing manifest/K1 receipt/config schema及live config-validator behavior逐字段相等；Iceberg/Stop requirement由exact algorithm/template AST访问集和pinned `default_setting`生成并固定为`CHARACTERIZATION_ONLY_K5`，其object/enum facts仍从K1 pinned core bytes/LockedSurface验证，不接受手写字段类型、隐式default或installed package。Stop的`last_price/limit_up/limit_down`和Iceberg TIMER L1 fields必须显式进入该requirement。K5未来manifest的config schema、compatibility requirement和behavior characterization以及process config-validator必须逐字段引用/实现该K4 requirement/receipt后才能由K1 generator生成正式compatibility receipt；K4 requirement本身不能注册plugin或替代K1 receipt。
 
@@ -703,6 +856,10 @@ Sniper/BestLimit/TWAP 必须：
 
 不创建或调用第二 current-three plugin factory。
 
+K4-B增加唯一repo-owned vector artifact `backend/execution_algos/vnpy_compat/pinned_source/facade_characterization_vectors_v2.json`，schema固定为`miniqmt_vnpy_facade_characterization_vector_artifact_v2`，字段为`schema_version,k3_source_commit_sha,k3_contract_binding_sha256,ordered_vectors,vector_set_sha256,artifact_sha256`；`k3_source_commit_sha`固定指向生成expected trace所使用的已合入K3 source commit，而不是会随merge变化的K4当前HEAD。canonical-LF file hash与semantic artifact hash分别进入source executor binding。它不是expected-only fixture：三个current-three scenario必须由现有K3 production constructors在DEV disposable PostgreSQL的committed-fact path生成`CurrentThreeShadowSourceSnapshotV1/CurrentThreeParityInputV1/CurrentThreeParityReceiptV1`，并把exact full input与expected kernel trace写入vector artifact；K4-B readback再使用当前code-owned K3 factory、state codec、parity constructors从artifact full input重新运行kernel trace，逐字段等于artifact expected后才允许source executor比较。K3 manifest/factory/process binding、source snapshot、parity input/receipt任一漂移都使current-three characterization FAILED；不得只信artifact hash，也不得读取生产数据库或第二factory。
+
+current-three每个algo至少包含一条INITIALIZE scenario和覆盖其全部manifest event subscriptions、BUY/SELL、active-order callback、terminal/retry边界的TRANSITION scenario；TWAP必须覆盖AM→午休零计时→PM恢复、无catch-up burst与EOD residual，BestLimit必须覆盖exact deterministic u53 draw，Sniper必须覆盖price/cancel ownership。transport duplicate observation保持K3既有语义，只能从expected与actual两侧同源消除，不能用来忽略business effect/state差异。
+
 ### 12.3 Iceberg/Stop characterization-only boundary
 
 K4 必须使用 §3 repo-owned exact source bytes和 source-isolated harness验证：
@@ -713,6 +870,8 @@ K4 必须使用 §3 repo-owned exact source bytes和 source-isolated harness验�
 - source访问的 façade method/DTO/enum 必须全部属于父蓝图已批准 surface；unsupported surface直接 FAILED；
 - harness broker_called=false，不创建 K2 algo、delivery、mapping、outbox或 DB row；
 - characterization PASSED 只说明 K4 façade surface足够，不表示 K5 plugin已实现、注册、可运行或产品启用。
+
+Iceberg/Stop vectors与current-three共用同一V2 artifact但`expected_trace_authority_ref.authority_kind=K4_PINNED_CHARACTERIZATION`；其expected full inputs/effects由本设计的exact scenario matrix和pinned AST access set生成，readback必须验证vector覆盖全部required method/object/enum/event/config分支，不能由actual trace反向生成。Iceberg至少覆盖：display_volume rounded-zero、interval 0/1/>1、TIMER missing/READY tick、visible slice、owned cancel、ORDER/TRADE cumulative、finish/cancel_all、午休/PM same-phase cutoff和restart。Stop至少覆盖：BUY/SELL trigger/not-trigger、price_add signed、last/limit-up/limit-down边界、single trigger幂等、ORDER/TRADE terminal及restart。每个required branch必须同时有positive与malformed/authority-drift negative；没有完整矩阵不得发布PASSED。
 
 ## 13. Error Semantics / 错误语义
 
@@ -734,12 +893,21 @@ K4 必须使用 §3 repo-owned exact source bytes和 source-isolated harness验�
 - `MINIQMT_VNPY_FACADE_EFFECT_CONFLICT`
 - `MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED`
 - `MINIQMT_VNPY_FACADE_CHARACTERIZATION_EXECUTION_UNAVAILABLE`
+- `MINIQMT_VNPY_FACADE_V1_AUTHORITY_NOT_EXECUTABLE`
+- `MINIQMT_VNPY_FACADE_SOURCE_EXECUTOR_INVALID`
+- `MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED`
+- `MINIQMT_VNPY_FACADE_EXECUTION_RESULT_INVALID`
 - `MINIQMT_VNPY_FACADE_CONFORMANCE_RECEIPT_INVALID`
+- `MINIQMT_VNPY_FACADE_CONFORMANCE_AUTHORITY_INVALID`
+- `MINIQMT_VNPY_FACADE_CLAIMED_DELIVERY_INVALID`
+- `MINIQMT_VNPY_FACADE_REPOSITORY_READ_INVALID`
 - `MINIQMT_VNPY_FACADE_FAILURES_TRUNCATED`
 
 Typed exception context 至少包含适用的 plugin/runtime/algo/event/delivery/transition/method/field/expected/actual/source/receipt identity。错误 evidence 必须 JSON-safe、repo-relative、稳定排序且有界。不得 `except Exception: pass`、固定 PASSED、空 ACK、空 diagnostic、默认值成功或 error-to-log-only。
 
 runtime invocation中的K4 typed error必须继承existing `KernelPluginInvocationError`（或由唯一无损adapter保留reason/message/context/broker_called/exception chain），使existing invoke/materializer不把它覆盖成generic plugin failure；code-owned conformance/characterization build failure使用独立aggregate error且`partial_set=None`。renderer自身失败不能覆盖primary reason。
+
+V1 positive invocation、V1/V2 receipt混用、caller supplied execution result或未由sealed V2 authority创建的runtime input固定分类为`MINIQMT_VNPY_FACADE_V1_AUTHORITY_NOT_EXECUTABLE|...CONFORMANCE_AUTHORITY_INVALID`，不能误报成static capability unsupported。spawn timeout/exit、malformed child carrier、source exception、actual trace mismatch分别保留source executor/execution result reason与vector/scenario/step identity；外层不得catch-all重写成generic conformance failure。repository zero TICK是正常unavailable diagnostic；ALGO_START缺失、owner/cutoff/carrier冲突、claimed delivery完成字段提前出现则是typed corruption failure，二者不得合并。
 
 missing tick/contract 的 upstream-compatible `None` 和 not-running/missing-contract/rounded-zero order 的 `""` 不是静默失败：必须同时生成各自 exact typed diagnostic；其它 corruption/ownership/capability/state/binding failure 必须抛出 typed error。
 
@@ -753,6 +921,9 @@ missing tick/contract 的 upstream-compatible `None` 和 not-running/missing-con
 - TIMER market-data lookup使用immutable timer event sequence cutoff；later TICK、process cache和retry时当前quote不能改变selected source event。source event缺失或不再strict-readable时fail loud，不选择次新event。
 - characterization fresh-process输出必须与本进程 byte-identical；absolute worktree path不得进入 hash。
 - failure不回退 previous conformance set、旧 receipt、legacy helper或 current product route。
+- source executor按algo_code稳定顺序一次只运行一个fresh spawned worker；每个worker最多120秒、最多接收该algo artifact中的exact required vector数，不接受caller扩容或无限队列。timeout/abnormal exit产生完整typed FAILED并继续收集其余algo的有界failure，最终zero publication；该资源边界不改变任何交易业务状态，也不是人工审批。
+- source execution scenario内部严格串行；不同scenario从INIT重新构造，不能共享algorithm/façade/collector/module/global random状态。worker返回后父进程先验证carrier/schema/hash/count，再比较expected；malformed或超限输出在反序列化后、业务比较前fail loud。
+- sealed conformance authority在process内immutable；fork/spawn/restart后必须重新执行V2 validator，不能跨process pickle/live-cache复用。K2 transition事务只消费已验证authority和full V2 input，不等待source executor，避免在DB lock内启动subprocess。
 
 ## 15. Repository, Migration and Transactions / Repository 与迁移
 
@@ -761,15 +932,39 @@ K4不新增durable DB schema、DDL/DML、repository owner或writer。所有交�
 ```python
 read_facade_algo_start_event_v1(
     *, runtime_id: str, algo_instance_id: str
-) -> RuntimeEventEnvelopeV2
+) -> VnpyFacadeRepositoryEventReadV1
 
 read_facade_latest_prior_tick_v1(
     *, runtime_id: str, algo_instance_id: str,
-    timer_delivery_sequence: int, timer_event_sequence: int
-) -> RuntimeEventEnvelopeV2 | None
+    timer_delivery_sequence: int, timer_event_sequence: int,
+    exchange_trade_date: str, session_epoch: str, session_phase: str
+) -> VnpyFacadeRepositoryEventReadV1 | None
 ```
 
-ALGO_START seam通过`execution_algo_event_delivery`的`algo_instance_id + algo_delivery_sequence=1`唯一键连接`execution_runtime_event(runtime_id,event_id)`，要求delivery/event均为exact owner且event type为`ALGO_START`。TIMER seam使用§6.3 exact join/order/limit，不直接按JSON symbol全表扫描。两者必须在existing delivery locked-read transaction中执行，返回strict `RuntimeEventEnvelopeV2`后由独立连接readback同一event/delivery owner；zero/multiple/corrupt ALGO_START typed fail，TICK zero按explicit unavailable，duplicate/corrupt typed fail。不得截断集合、读取process cache或新增未索引全表扫描。
+`VnpyFacadeRepositoryEventReadV1` exact fields为`schema_version,read_kind=ALGO_START|LATEST_PRIOR_TICK,runtime_id,algo_instance_id,cutoff_delivery_sequence_or_null,cutoff_event_sequence_or_null,event,delivery,read_sha256`；hash domain为`miniqmt_vnpy_facade_repository_event_read_v1`。`VnpyFacadeRepositoryReadSetV1` exact fields为`schema_version,request_sha256,algo_start_read,latest_prior_tick_read_or_null,read_set_sha256`，绑定本次runtime/algo/current event+delivery双cutoff、trade date/session epoch/phase及两个full read payload。两者均strict immutable，且不得解释为第二份event事实。
+
+ALGO_START seam通过`execution_algo_event_delivery`的`algo_instance_id + algo_delivery_sequence=1`唯一键连接`execution_runtime_event(runtime_id,event_id)`，要求delivery/event均为exact owner、delivery为APPLIED且event type/source/schema为`ALGO_START/MINIQMT_EXECUTION_KERNEL/miniqmt_algo_start_v1`。TIMER seam固定使用：
+
+```sql
+SELECT event.payload, delivery.carrier_json
+FROM qmt_strategy.execution_algo_event_delivery AS delivery
+JOIN qmt_strategy.execution_runtime_event AS event
+  ON event.runtime_id=delivery.runtime_id AND event.event_id=delivery.event_id
+WHERE delivery.runtime_id=:runtime_id
+  AND delivery.algo_instance_id=:algo_instance_id
+  AND delivery.status='APPLIED'
+  AND delivery.algo_delivery_sequence < :timer_delivery_sequence
+  AND event.sequence < :timer_event_sequence
+  AND event.event_contract_version='KERNEL_V2'
+  AND event.event_type='TICK' AND event.source='B0_QUOTE_V2'
+  AND event.payload_schema_version='miniqmt_market_data_view_v2'
+ORDER BY delivery.algo_delivery_sequence DESC,event.sequence DESC,event.event_id DESC
+LIMIT 1
+```
+
+该查询由existing `uq_miniqmt_k2_delivery_sequence`与event owner/index支持，不按JSON symbol全表扫描。选中后必须strict-readback full event/delivery，再验证event symbol、B0 market-data identity/hash、`exchange_trade_date/session_epoch/session_phase`与current timer deterministic context完全一致；latest candidate不合格时返回explicit unavailable且不得向更旧TICK fallback。这里不发明新的wall-clock TTL：freshness只消费B0 payload自身已冻结的eligibility/freshness事实与same phase；缺字段、非READY或phase漂移均unavailable。
+
+真实delivery路径不能通过另开连接在callback期间读取这两个事实。K4-B为existing `apply_claimed_delivery_atomic`增加keyword-only `facade_read_request: VnpyFacadeRepositoryReadRequestV1 | None=None`；repository在同一cursor、同一locked transaction中调用私有`_read_facade_*_with_cursor`并把`VnpyFacadeRepositoryReadSetV1 | None`作为bundle builder最后一个参数。ordinary plugin固定传None且忽略该参数；只有exact façade-backed adapter可传非null request。request owner/cutoff必须等于当前locked event/delivery/algo，否则在callback前typed fail。public两个read方法只用于独立readback/diagnostics/DEV测试，并使用相同pure projection authority；事务commit后以固定cutoff独立重读必须byte-identical。zero/multiple/corrupt ALGO_START typed fail，TICK zero按explicit unavailable，carrier/owner/hash conflict typed fail。不得截断集合、读取process cache、改变lock order或新增未索引全表扫描。
 
 K4 conformance/characterization receipts是 code-owned immutable build artifacts，由 fresh-process可重算；不写生产表，不触发 broker。新增read-only query必须用existing DEV PostgreSQL disposable data证明retry/restart selection稳定、later TICK不改变cutoff、cross-runtime/symbol/session排除且数据库零写入。
 
@@ -779,11 +974,16 @@ K4 conformance/characterization receipts是 code-owned immutable build artifacts
 
 K4 不新建 metrics backend、alert、operator acknowledge或审批流。只允许复用 existing K2 diagnostics：
 
-- code-owned conformance build status：registered count、PASSED/FAILED count、failure reason count；
-- characterization status：五个固定 algo 的 source/vector/receipt hash；固定低基数标签仅为 `algo_code,status,reason_code`；
-- runtime diagnostics只有 façade 真正被未来 façade-backed plugin调用时才记录 method/reason；current product runtime在 K4阶段不接线。
+- `miniqmt_vnpy_facade_source_execution_total{algo_code,status,reason_code}`：每个五算法V2 build attempt一次；
+- `miniqmt_vnpy_facade_conformance_build_total{status,reason_code}`：complete set build/rebuild一次；
+- `miniqmt_vnpy_facade_runtime_invocation_total{phase,outcome,reason_code}`：只有future façade-backed shadow invocation记录，K4 current product保持零；
+- `miniqmt_vnpy_facade_repository_read_total{read_kind,outcome}`：`ALGO_START|LATEST_PRIOR_TICK`与`FOUND|UNAVAILABLE|INVALID`；
+- `miniqmt_vnpy_facade_active_failure{stage,reason_code}`：当前process最后一次build/readback是否仍失败，成功full rebuild自动清零；
+- read-only diagnostics固定返回source manifest/executor/vector/execution-set/characterization/conformance hashes、五算法status、bounded failures、last failure和runtime invocation count；identity/symbol只在existing受限分页detail中出现。
 
-完整 failures 保留在 immutable receipt；metrics不包含 symbol、order id、runtime id等高基数标签。无人工 acknowledge；成功 rebuild 自动清除 active failure但保留 last failure receipt。
+完整 failures 保留在 immutable receipt；source/vector/conformance code-owned artifacts随Git历史保留，K2 runtime diagnostic observation沿用existing K2 retention，不新增DB retention/prune job。metrics label exact allowlist只有上列枚举，禁止 symbol、order id、runtime/algo/plugin id、event/delivery/transition id、source hash进入label。
+
+K4-B shadow构建失败使对应CI/direct build失败并且conformance set不发布；它不停止current product pure-plugin route。未来K5 shadow root若active failure持续一个完整build周期，复用existing K2 critical diagnostic channel发出`MINIQMT_VNPY_FACADE_CONFORMANCE_ACTIVE_FAILURE`；成功full rebuild自动清除active alert并保留last failure，不需要人工ack。repository read INVALID记录error并终止该delivery；TICK UNAVAILABLE只产生既定diagnostic并等待后续真实event。不得新增邮件/短信、RBAC、operator确认或手工恢复步骤。
 
 ## 17. Risks / 风险
 
@@ -816,8 +1016,14 @@ K4 不新建 metrics backend、alert、operator acknowledge或审批流。只允
 - `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_kernel_invocation.py`
 - `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_conformance_receipts.py`
 - `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_characterization.py`
+- `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py`
+- `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_conformance_authority_v2.py`
+- `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_repository_postgres.py`
+- `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py`
 
 覆盖strict schema/extra/type/identity/hash、recursive immutability、source set、method/implementation binding、DTO/enum/state mapping、initialization+six methods、callback routing、ordinal、freeze、bounded failure/truncation、writer/readback、fresh-process parity。
+
+K4-B必须先建立以下真实RED再实现：V1 caller observation即使expected==actual仍不能PASSED；V1 transition要求pre-call delivery.transition_id导致真实CLAIMED路径失败；V1 vector缺full event/projection/before-state不能执行；source executor/result/set/receipt V2不存在；latest-prior-TICK尚无同事务read seam；V1/V2 authority混用可构造structural carrier但不能获得sealed authority。GREEN必须通过public writer/readback/invoke/repository seam，不得只测private comparator、AST visitor或mock object。
 
 ### 18.2 Negative matrix
 
@@ -837,6 +1043,10 @@ K4 不新建 metrics backend、alert、operator acknowledge或审批流。只允
 - TIMER source TICK future/cross-runtime/cross-symbol/cross-session/stale/duplicate/corrupt，later TICK不得改变immutable cutoff选择；
 - failure >255、malformed failure context、renderer secondary failure；
 - receipt hash-correct但authority-inconsistent readback；
+- V1 observation/receipt/set/input被作为V2 executable authority；V2 vector缺full input、scenario ordinal/predecessor drift、actual回填expected、execution set missing/extra/duplicate；
+- source executor live ref/signature/source drift、spawn timeout/exit/malformed carrier、partial trace、result/set hash drift、V2 receipt缺execution-set binding；
+- 不得接受pre-call CLAIMED delivery携带transition_id/receipt/closed fact、lease owner/epoch/fence/row-version drift、input transition identity与`algo_transition_id_v1`不等或materializer生成不同identity；
+- conformance authority绕过sealed builder、V2 set混入V1 receipt、runtime直接注入裸set/hash、process restart复用旧sealed object；
 - absolute path、wall clock、global random、UUID、installed/latest/network fallback；
 - isolated module binding missing/extra/duplicate、BaseEngine指向stub/installed class、暴露MainEngine、加载完整utility、恢复global random、uniform draw ordinal/bounds漂移或复用预置`sys.modules`；
 - Iceberg/Stop被错误加入catalog/creation binding/K2 runtime的static negative test。
@@ -844,15 +1054,17 @@ K4 不新建 metrics backend、alert、operator acknowledge或审批流。只允
 ### 18.3 Integration and parity
 
 - current-three：reuse K3 committed parity vectors，证明 façade call/effect trace与existing K3 outcome一致；不调用第二 factory。
+- current-three vector artifact：DEV committed-fact generator→repo-owned full-input artifact→fresh K3 factory replay→pinned source executor四段逐项闭合；artifact/hash与live K3 trace任一方单独修改都必须FAILED。
 - K2 shadow seam：真实 creation/delivery invocation覆盖pure-plugin unchanged path；façade-backed optional path使用§5.4 production-constructor closed candidate且明确标记test-only、不进入catalog。单command使用真实`BrokerCommandV2/AlgoTransitionV1` constructors及exact existing projection authority验证command/mapping/materializer identity；多command完整保留collector trace并明确拒绝V1 materialization；全部`dispatch_attempt=0`、`broker_called=false`，不运行dispatcher。该fixture测试不能单独满足K4 completion。
-- DEV PostgreSQL：existing schema中验证ALGO_START/TIMER source TICK bounded read-only query、retry/restart cutoff与zero DB write；不执行migration。
+- DEV PostgreSQL：existing schema中验证ALGO_START/TIMER source TICK bounded read-only query、同cursor/locked transaction carrier、public independent readback、retry/restart cutoff、AM→PM phase排除、latest-invalid不向旧event fallback与zero DB write；对所有相关表比较transaction前后row count和row payload hash，不执行migration。
 - source-isolated Iceberg/Stop characterization：真实 repo-owned bytes，zero catalog publication、zero DB/broker effect。
 - restart/fresh-process：receipt/source/vector/mapping hash byte-identical。
 - standard package import：不自动注册算法、不加载legacy adapter、不启动runtime/EventEngine/OMS/Gateway。
+- import owner：`facade_source_execution.py`通过existing algorithm import-boundary且无process/network/file-write owner；services runner普通import不spawn，不被`backend.execution_algos.vnpy_compat` package eager import。
 
 ### 18.4 Coverage and routing
 
-- K4核心 `facade_contracts.py/facade_projection.py/facade.py/facade_adapter.py/facade_characterization.py` 各自 line `>=80%`、branch `>=70%`；touched kernel invocation/read-only query分支必须有直接正反测试。
+- K4核心 `facade_contracts.py/facade_projection.py/facade.py/facade_adapter.py/facade_characterization.py` 各自 line `>=80%`、branch `>=70%`；新增source executor/V2 authority模块同样各自达到该阈值。touched `kernel_creation.py/kernel_delivery.py/kernel_repository_event_delivery.py/kernel_repository_k2b.py` optional invocation/read-only query分支必须有直接正反测试。
 - changed files必须全部经 `file_ownership.yaml -> module_registry.yaml -> test_plans.yaml` 映射，`unmapped_code_files=[]`。
 - 预计只选择 `miniqmt_execution_runtime_l2` 和因 `backend/execution_algos/**` shared ownership而真实依赖的 `paper_v2_backend`；无 shared contract diff时不得额外运行其它模块。
 - F2 validators：本文、父执行内核蓝图、统一模拟盘蓝图全部通过且 warnings=0。
@@ -875,15 +1087,21 @@ K4-A implementation receipt（2026-07-30）：
 - current-three三个K1 requirement的per-plugin characterization hash保持各自独立；K4 shared requirement只绑定三者共同的`source_lock/method_signature/object_field` component和有序plugin requirement hashes，domain=`miniqmt_vnpy_facade_shared_k1_requirement_v1`，shared surface domain=`miniqmt_vnpy_facade_shared_k1_surface_v1`；不得把任一plugin-specific K1 surface冒充共享façade authority；
 - review-fix live façade contract hash=`59f9aed06e24aaefb1aebe753ddc493279bcd10cd2b4606bc71ec45af1040444`，implementation/method/DTO/state/terminal/isolated sets分别为`c861d972.../fa718f99.../e4a6ddb1.../9824f5ef.../8a224095.../600aab67...`；writer/readback均重建同一pinned/live authority；
 - K4 direct矩阵=`58 passed`；五核心line/branch分别为`92.04/79.09`、`86.67/76.87`、`83.33/71.43`、`92.45/71.08`、`97.45/94.64`；full PR classifier=`targeted_ci_required`、changed files=`21`、ownership=`21/21 mapped`、`unmapped_code_files=[]`，只选择MiniQMT/Paper；MiniQMT=`1047 passed,29 skipped`，Paper=`1050 passed,2 skipped,2 xfailed`；L0 blocking=`0`，module registry=`8 passed`、catalog=`14/14 mapped`；
-- K4-A仍是pure/shadow-only。它没有修改K2 creation/delivery/repository、current-three factory/binding或产品route；K4-A observation receipt均显式FAILED且不会发布algorithm binding/conformance set。K4-B exact pinned-source executor、optional invocation、read-only repository seam、current-three parity以及Iceberg/Stop完整characterization仍为`not_started`，不得把K4-A contract/FAILED receipt解释为K4 overall完成或runtime activation。
+- K4-A仍是pure/shadow-only。它没有修改K2 creation/delivery/repository、current-three factory/binding或产品route；K4-A observation receipt均显式FAILED且不会发布algorithm binding/conformance set。K4-B exact pinned-source executor、optional invocation、read-only repository seam、current-three parity以及Iceberg/Stop完整characterization代码仍未开始，但实施级设计已达到`design_ready_pending_implementation`；不得把K4-A contract/FAILED receipt或K4-B design-ready解释为K4 overall完成或runtime activation。
 - source HEAD=`117c96f9945d4ddd96a09d6ebfe741626a67c51f`已通过PR #2883，以普通merge commit `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda`进入main；source merge与K4-B/产品runtime状态继续分离。
 
 ### K4-B — existing K2 optional invocation and shadow integration
 
-- existing K1/K2/K3 public seam integration，包括creation/delivery initialization/transition optional invocation、authority input、existing repository bounded read-only query，以及§5.4.1单/多command shadow边界；
-- current-three conformance/parity、Iceberg/Stop characterization-only；
-- direct/L2/coverage/F2/DESIGN-COMPLIANCE；
-- 不修改 current-three binding，不切产品 route。
+- `facade_contracts.py`增加V2 full-input/full-trace/source-execution/characterization/conformance/authority/input strict carriers；V1 observation carriers和hash domain保持不变且永不PASSED；
+- 新增pure `facade_source_execution.py`从exact pinned modules执行单worker内五算法scenario；新增services-owned `vnpy_facade_characterization_runner.py`负责fresh process、timeout和malformed carrier；`facade_characterization.py`只编排requirements/vectors/V2 receipts/bindings/conformance，不能复制algorithm branch或拥有process lifecycle；
+- 新增唯一`facade_characterization_vectors_v2.json`及strict artifact writer/readback；current-three expected由existing K3 committed-fact production constructors生成并由live K3 factory重放，Iceberg/Stop保持characterization-only；
+- `facade_adapter.py/facade.py`增加V2 positive path并从V2 input读取precomputed transition identity；V1 path不被暗中升级；
+- `kernel_creation.py/kernel_delivery.py`只增加keyword-only optional sealed authority/input，ordinary pure path逐行语义不变；exact class/binding分派，不按algo code、`hasattr`或配置flag分支；
+- `kernel_repository_event_delivery.py/kernel_repository_k2b.py`增加同cursor read request/read set与两个public independent readback；不新增表/列/index/migration，不改变writer、lock order、CAS/fence或transaction ownership；
+- 单command仅做broker-neutral existing materializer shadow closure，多command完整保留trace并明确不materialize；所有测试`dispatch_attempt=0/broker_called=false`；
+- direct/DEV PostgreSQL/L2/Paper/coverage/F2/DESIGN-COMPLIANCE全部闭合后才能标记K4-B implemented；不修改 current-three binding，不注册Iceberg/Stop，不切产品 route。
+
+K4-B详细设计状态（2026-07-30）：`design_ready_pending_implementation`。正式设计复核已识别并关闭V1 source-execution payload不足、V1/V2 authority versioning、CLAIMED delivery pre-call transition identity、same-transaction repository read、K3 expected trace独立重放、bounded source worker、metrics/retention与测试矩阵缺口。该状态只表示可以开始代码实现，不表示任何V2 carrier/source executor/query已存在或任何receipt已PASSED。
 
 任一 PR 不得以“后续补齐”为由省略本切片的 writer/readback、negative、restart或failure evidence。
 
@@ -891,9 +1109,13 @@ K4-A implementation receipt（2026-07-30）：
 
 K4 source merge后仍不部署/激活产品 route。Rollback只回退 K4 code-owned façade/conformance/characterization文件到最后一个 schema-compatible main；不删除 K1/K2/K3 durable facts，不重写算法状态或 broker facts。
 
+K4-B使用additive Python V2 carriers/artifact/API，无数据库migration。rollback固定删除/回退V2 source executor、vector artifact、V2 exports、optional invocation/read request参数和对应测试，同时保留已合入V1 observation-only API及其永久FAILED语义；不得把V2 artifact转写成V1 PASSED或回填previous set。因为产品root不注入sealed V2 authority，source rollback不需要config/binding/DML、服务重启或订单补偿。若未来K5已依赖V2，必须先按K5/K6独立状态回退其shadow binding，不能在K4 rollback中删除未知使用者。
+
 ```text
 design_source_merge=merged_pr_2861
 k4a_source_merge=merged_pr_2883
+k4b_design_source_merge=pending_user_authorization
+k4b_code_source_merge=not_started
 close_sync=not_applicable_feature
 production_ddl_gate=noop
 production_dml_gate=noop
@@ -907,7 +1129,7 @@ runtime_activation=noop
 product_runtime=not_switched
 K4_overall=implementation_in_progress
 K4-A=implemented_verified_contract_slice_merged
-K4-B=not_started
+K4-B=design_ready_pending_implementation
 K5=not_started
 K6=not_started
 ```
@@ -934,26 +1156,29 @@ K6=not_started
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | `F-081` | §0–§2；父蓝图§2、§5、§8、K4/K5/K6；K1/K2/K3 detailed designs | `backend/tests/miniqmt_execution_runtime/test_vnpy_k4_scope_boundaries.py`核对K4不修改信号、资产、方向、数量、B0、OMS、Gateway、current-three binding与产品route | design_ready | none |
-| `F-082` | §3；existing K1-C source manifest/receipt；K4 façade source manifest | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_contracts.py`与`test_vnpy_facade_characterization.py`闭合六source、exact delegated paths、bytes/hash/readback | implementation_in_progress_k4a_verified | none |
-| `F-083` | §4–§5；`facade_contracts.py/facade.py/facade_adapter.py`与K2 optional seam | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade.py`、`test_vnpy_facade_adapter.py`、`test_vnpy_facade_lifecycle.py`闭合strict input、collector ordinal/freeze、constructor-once/retry和direct SPI bypass | implementation_in_progress_k4a_verified | none |
-| `F-084` | §5.4.1、§6；K1 detailed §9.1；pinned engine/template signatures | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade.py`与`test_vnpy_facade_adapter.py`闭合six-method、callback router、missing/rounded-zero diagnostic与typed errors | implementation_in_progress_k4a_verified | none |
-| `F-085` | §6.3–§8；`facade_projection.py`和existing K2 read-only query | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_projection.py`闭合DTO/enum/round_to/source/readback | implementation_in_progress_k4a_verified | none |
-| `F-086` | §5.4.1、§5.6、§9–§10；existing state/command/transition/materializer | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_adapter.py`与`test_vnpy_facade_lifecycle.py`闭合constructor-once、restore、callback fact、active-child CLEAN terminal与retry | implementation_in_progress_k4a_verified | none |
-| `F-087` | §4.1、§11；`facade_contracts.py` + explicit derived-set seam | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_contracts.py`与`test_vnpy_facade_characterization.py`闭合live binding、source、DTO/state/terminal/isolated carrier、failure truncation、observation writer/readback和zero-publication；K4-B positive authority在§19单独保持not_started | implementation_in_progress_k4a_contract_verified | none |
-| `F-088` | §3.2、§6.3、§10、§12；K3 parity；planned characterization builder | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_characterization.py` current-three INITIALIZE/TRANSITION parity与Iceberg TIMER durable TICK/Stop source-isolated zero registration/DB/broker | design_ready | none |
-| `F-089` | §13–§17 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_failure_restart.py` malformed/error-renderer、same-ID conflict、multi-slot ownership、fresh-process、low-cardinality diagnostics | design_ready | none |
-| `F-090` | §18–§20 | `python -m pytest -q backend/tests/miniqmt_execution_runtime/test_vnpy_facade_contracts.py backend/tests/miniqmt_execution_runtime/test_vnpy_facade_projection.py backend/tests/miniqmt_execution_runtime/test_vnpy_facade.py backend/tests/miniqmt_execution_runtime/test_vnpy_facade_adapter.py backend/tests/miniqmt_execution_runtime/test_vnpy_facade_characterization.py backend/tests/miniqmt_execution_runtime/test_vnpy_facade_lifecycle.py`；classifier-selected L2/Paper和coverage证据在本PR最终HEAD刷新 | implementation_in_progress_k4a_contract_verified | none |
+| `F-082` | §3、§12.1；existing K1-C source manifest/receipt；K4 façade source manifest与V2 executor binding | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py`计划闭合full-input source execution、fresh-process writer/readback | design_ready | none |
+| `F-083` | §4–§5；V2 authority/init/transition；`facade_contracts.py/facade.py/facade_adapter.py`与K2 optional seam | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_kernel_invocation.py`计划闭合CLAIMED delivery、precomputed transition identity、ordinary path unchanged和direct SPI bypass | design_ready | none |
+| `F-084` | §5.4.1、§6；K1 detailed §9.1；pinned engine/template signatures | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py`计划闭合six-method/callback/diagnostic actual trace matrix | design_ready | none |
+| `F-085` | §6.3–§8、§15；`facade_projection.py`与existing K2 read-only query | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_repository_postgres.py`计划闭合same-transaction ALGO_START/TIMER prior-TICK、phase/freshness与zero-write | design_ready | none |
+| `F-086` | §5.4.1、§5.6、§9–§10、§15；existing state/command/transition/materializer | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_kernel_invocation.py`计划闭合single/multi-command shadow、CLAIMED/materializer identity、callback/restart | design_ready | none |
+| `F-087` | §4.1、§5.1、§11–§12；V1 fail-closed + V2 source/characterization/conformance authority | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_conformance_authority_v2.py`计划闭合sealed authority、writer/readback、V1/V2隔离与zero-partial publication | design_ready | none |
+| `F-088` | §3.2、§6.3、§10、§12；K3 parity与唯一V2 vector artifact | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py`计划闭合current-three live K3 replay与Iceberg TIMER/Stop source-isolated zero registration/DB/broker | design_ready | none |
+| `F-089` | §13–§17 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_failure_restart.py`计划闭合malformed、timeout、same-ID、multi-slot、fresh-process和低基数diagnostics | design_ready | none |
+| `F-090` | §18–§20 | artifact: `docs/architecture/miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md`；本设计PR运行三份F2 validator与docs routing，未来代码PR按§18运行完整矩阵 | design_ready | none |
 
 ## 23. DESIGN-COMPLIANCE-001 / 正式设计复核
 
+2026-07-30 K4-B实施前正式复核最初发现六项合入阻断设计缺口：V1 vector只有hash而无full executable input；V1 receipt未绑定actual execution set；V1/V2 positive authority未版本隔离；transition input错误依赖pre-call delivery的未来`transition_id`；repository query无法在existing locked transaction内取得exact event+delivery；current-three expected trace与artifact缺少live K3独立重放。本文已在§5、§11、§12、§15、§18–§20前后一致修正，并同步resource bounds、failure分类、metrics/retention和验收矩阵。以下PASS仅表示K4-B设计达到可实施级，不能解释为代码完成。
+
 | control | result | evidence |
 | --- | --- | --- |
-| no simplified/subset/POC | pass | K4-A只宣称pure façade/adapter与strict contract slice；K4-B optional invocation、DEV read-only query、current-three parity、Iceberg/Stop exact execution均保持not_started。caller observation不能冒充真实source execution，adapter test candidate不能冒充registered plugin或K4 overall完成 |
-| no silent error | pass | upstream-compatible `None/""`的not-running/missing/rounded-zero原因分别有typed diagnostic；malformed market/mapping/callback/authority明确失败；K4-A source executor缺失生成有界FAILED并阻止binding/conformance publication，无固定PASSED、假ACK或exception swallowing |
+| no simplified/subset/POC | pass | K4-B定义full-input/full-actual-trace source executor、fresh readback、V2 authority、真实K2 transaction seam、DEV PostgreSQL与五算法矩阵；K4-A/K4-B状态分开，caller observation和test-only adapter candidate均不能冒充完成 |
+| no silent error | pass | V1永不PASSED；spawn/timeout/malformed carrier、source exception、actual drift、claimed delivery/repository corruption均typed fail且zero publication/effect；合法TICK unavailable仍有typed diagnostic，无固定PASSED、假ACK、catch-all覆盖或fallback |
 | no business semantic drift | pass | Iceberg TIMER读取durable sequence-cutoff B0 TICK并保持upstream callback；K4不修改current-three K3 factory/behavior、price/quantity/side/timer、A股规则、Selection/Target/B0/OMS/Gateway或产品route |
-| no unauthorized gates | pass | conformance是父蓝图已批准的代码完整性receipt，仅约束未来façade-backed binding；不是RBAC、审批、人工ack、package二次校验或日常run gate |
+| no unauthorized gates | pass | sealed conformance authority、capability、same-session/fence/strict readback都是局部确定性技术合同；不新增RBAC、审批、人工ack、package二次准入、配置enable flag、人工恢复或日常run gate |
 | no parallel runtime/route | pass | 无第二MainEngine/EventEngine/OMS/Gateway/repository/dispatcher；current-three无第二factory；K6仍独占cutover |
-| exact authority reuse | pass | catalog/gateway/route均现场重建；K1-C V2 source/method/object/surface receipt保持唯一；K4 selected Exchange/Status只绑定已pinned core bytes和DTO mapping，不声明新K1 capability；K4/K5 V1 shadow receipt不能替代K6未来独立product authority receipt |
+| exact authority reuse | pass | K1/K3/K4 source与catalog/gateway/route均现场重建；V1 fail-closed与V2 executable authority严格隔离；V2 receipt绑定full execution set且readback重新执行；K4/K5 shadow receipt不能替代K6 product authority |
+| transaction/restart correctness | pass | pre-call CLAIMED delivery保持transition_id null，V2单独以existing identity函数重建；repository event+delivery在existing cursor/lock/CAS内读取，fixed cutoff独立readback；subprocess不在DB transaction内启动，retry/restart byte-identical |
 | K5/K6 boundary | pass | K4交付通用adapter与shadow invocation但不注册Iceberg/Stop；K5只新增plugin/manifest/binding/tests且shadow验收无需改kernel；generic per-command product authority aggregate、dependent-BUY与route cutover均由K6独立F2拥有；无DDL/config/production binding/restart/runtime activation |
 | production state separation | pass | design/source/merge/DDL/dependency/config/binding/broker/restart/runtime分别记录；当前全部production/runtime gates为noop |
 
@@ -962,10 +1187,10 @@ K6=not_started
 K4 implementation只有同时满足以下条件才可标记 `implemented_verified`：
 
 1. `F-081..F-090` 全部具有真实 code/test receipt；
-2. current-three三个registered pure plugin均有exact PASSED `PURE_PLUGIN_SHADOW_CONFORMANCE + NOT_APPLICABLE_PURE_PLUGIN` receipt，live implementation binding writer/readback和set closure通过；K4不得宣称已有registered façade-backed adapter；
-3. Iceberg/Stop exact source characterization PASSED，包含constructor-once/state restore和Iceberg TIMER durable TICK lineage，但catalog/creation binding/K2 runtime仍为零；
-4. initialization/transition optional invocation、façade六方法、DTO/enum/state mapping、callback routing、ordinal/freeze/retry/restart全部通过production-constructor direct tests；test-only adapter candidate不进入catalog/DB且不作为单独完成证据；
-5. effect只通过existing K1/K2 constructors进入transition；单command shadow authority可独立重建，多command collector trace完整且V1 materialization明确拒绝；existing repository read-only query有DEV PostgreSQL zero-write证据；zero direct Gateway/broker；
+2. current-three三个registered pure plugin均有exact PASSED V2 `PURE_PLUGIN_SHADOW_CONFORMANCE + NOT_APPLICABLE_PURE_PLUGIN` receipt，full source-execution set、live implementation binding、fresh writer/readback和set closure通过；全部V1 receipt仍FAILED；K4不得宣称已有registered façade-backed adapter；
+3. Iceberg/Stop V2 exact source characterization PASSED，包含full actual trace、constructor-once/state restore和Iceberg TIMER durable TICK lineage，但catalog/creation binding/K2 runtime仍为零；
+4. V2 initialization/transition optional invocation、CLAIMED pre-call identity、façade六方法、DTO/enum/state mapping、callback routing、ordinal/freeze/retry/restart全部通过production-constructor direct tests；test-only adapter candidate不进入catalog/DB且不作为单独完成证据；
+5. effect只通过existing K1/K2 constructors进入transition；单command shadow authority可独立重建，多command collector trace完整且V1 materialization明确拒绝；existing repository same-transaction read set有DEV PostgreSQL zero-write与fixed-cutoff independent readback证据；zero direct Gateway/broker；
 6. current-three factory/binding和业务行为不变，K3 parity继续通过；
 7. malformed/corrupt/unsupported/ownership/capability/state/binding/authority/failure truncation全部fail loud且无fallback；
 8. core line/branch coverage、changed-file routing、F2 validators、DESIGN-COMPLIANCE-001和required CI通过；
