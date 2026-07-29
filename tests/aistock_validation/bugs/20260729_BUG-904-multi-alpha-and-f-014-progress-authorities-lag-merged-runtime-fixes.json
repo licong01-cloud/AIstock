@@ -1,0 +1,258 @@
+{
+  "actual": "Project memory still says P0-2 through P0-4 remain to implement; blueprint headers and acceptance matrices disagree; F-014 Phase 3 runtime/schema activation and pending materialization are not synchronized.",
+  "allowed_write_scope": [
+    "docs/codex_project_memory.md",
+    "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+    "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+    "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md",
+    "tests/aistock_validation/bugs/20260729_BUG-904-multi-alpha-and-f-014-progress-authorities-lag-merged-runtime-fixes.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-904",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-29T04:39:02.782415Z",
+  "description": "Project memory still says P0-2 through P0-4 remain to implement; blueprint headers and acceptance matrices disagree; F-014 Phase 3 runtime/schema activation and pending materialization are not synchronized.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260729-dbfa1454de57",
+      "timestamp": "2026-07-29T04:39:02.782415Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Project memory and blueprint acceptance/progress ledgers match current main and separate source merge, DDL, runtime activation, data materialization, open evidence gaps, and issue cleanup state.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "docs/codex_project_memory.md",
+      "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+      "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+      "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "docs/codex_project_memory.md",
+        "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+        "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+        "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md"
+      ],
+      "impacted_modules": [
+        "docs.standards",
+        "validation.guardrails",
+        "validation.module_quality",
+        "docs.architecture",
+        "qe.long_trend_evaluation",
+        "qe.core",
+        "qe.archive",
+        "platform.mcp_gateway"
+      ],
+      "matched_rules": [
+        {
+          "file": "docs/codex_project_memory.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md",
+          "impact_modules": [
+            "qe.core",
+            "qe.archive",
+            "platform.mcp_gateway"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase3"
+        }
+      ],
+      "risk_levels": [
+        "medium",
+        "low",
+        "high"
+      ],
+      "suggested_scope": [
+        "docs/codex_project_memory.md",
+        "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+        "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+        "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "docs/codex_project_memory.md",
+      "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+      "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+      "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md"
+    ]
+  },
+  "first_seen_at": "2026-07-29T04:39:02.782415Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2860,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2860",
+  "last_seen_at": "2026-07-29T04:39:02.782415Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_long_trend_phase2_backend",
+    "qe_long_trend_phase3_platform"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "Multi-alpha and F-014 progress authorities lag merged runtime fixes",
+  "trigger_condition": {
+    "fingerprint": "dbfa1454de57a11384348162",
+    "source_event_id": "FE-20260729-dbfa1454de57"
+  },
+  "verification_budget": {
+    "budget": "deep",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_long_trend_phase2",
+        "qe_long_trend_phase3_platform"
+      ],
+      "plans": [
+        "qe_long_trend_phase2_backend",
+        "qe_long_trend_phase3_platform"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "45-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "deep",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_long_trend_phase2",
+          "qe_long_trend_phase3_platform"
+        ],
+        "plans": [
+          "qe_long_trend_phase2_backend",
+          "qe_long_trend_phase3_platform"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "45-60%"
+    }
+  }
+}
