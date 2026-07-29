@@ -202,16 +202,21 @@ def _require_approved_b3_windows(request: dict[str, Any]) -> None:
                 )
 
 
-def _b3_semantic_source_request(request: dict[str, Any]) -> dict[str, Any]:
+def _require_b3_semantic_source_containment(request: dict[str, Any]) -> None:
     _require_approved_b3_windows(request)
-    semantic_request = deepcopy(request)
-    source = semantic_request["source"]
+    source = request["source"]
     source_start = _date(source.get("source_start"), "source_start")
     source_end = _date(source.get("source_end"), "source_end")
     semantic_start = _date(B3_APPROVED_WINDOWS["train_start"], "train_start")
     semantic_end = _date(B3_APPROVED_WINDOWS["common_data_watermark"], "common_data_watermark")
     if source_start > semantic_start or source_end < semantic_end:
         raise StateModelSetError("formal B3 semantic window escapes the immutable source window")
+
+
+def _b3_semantic_source_request(request: dict[str, Any]) -> dict[str, Any]:
+    _require_approved_b3_windows(request)
+    semantic_request = deepcopy(request)
+    source = semantic_request["source"]
     circ_mv_history_start = str(source.get("circ_mv_history_start") or source.get("source_start") or "")
     source["source_start"] = B3_APPROVED_WINDOWS["train_start"]
     source["source_end"] = B3_APPROVED_WINDOWS["common_data_watermark"]
@@ -872,6 +877,7 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
     _require_approved_b3_identities(request_template)
     approved_request = _freeze_approved_b3_windows(request_template)
     train_request = _c009_train_source_request(approved_request)
+    _require_b3_semantic_source_containment(approved_request)
     semantic_request = _b3_semantic_source_request(approved_request)
     inputs = _load_l1_source_inputs(train_request, db_prefix=db_prefix, c010_formal=True)
     semantic_inputs = _load_l1_source_inputs(semantic_request, db_prefix=db_prefix, c010_formal=True)
