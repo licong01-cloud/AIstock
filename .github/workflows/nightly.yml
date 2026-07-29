@@ -24,9 +24,18 @@ on:
         type: boolean
         default: false
       run_code_intelligence:
-        description: 'Refresh and publish CodeGraph / Understand Anything state.'
+        description: 'Refresh CodeGraph and assess Understand Anything state without paid semantic work.'
         type: boolean
         default: true
+      run_paid_ua_refresh:
+        description: 'Explicitly authorize the paid Understand Anything semantic refresh for this dispatch.'
+        type: boolean
+        default: false
+      ua_max_budget_usd:
+        description: 'One-run UA budget cap when paid refresh is explicitly authorized.'
+        required: false
+        default: 2
+        type: number
       llm_triage_mode:
         description: 'LLM guarded rollout mode for issue intake.'
         type: choice
@@ -53,7 +62,8 @@ env:
   AISTOCK_WORKTREE_ROOT: F:/Dev/AIstock_worktrees
   AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: F:/Dev/AIstock
   AISTOCK_CODE_INTELLIGENCE_STATE_ROOT: F:/Dev/AIstock_code_intelligence_state
-  AISTOCK_UA_DAILY_MAX_BUDGET_USD: ${{ vars.AISTOCK_UA_DAILY_MAX_BUDGET_USD || '2' }}
+  AISTOCK_RUN_PAID_UA_REFRESH: ${{ github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh || false }}
+  AISTOCK_UA_DAILY_MAX_BUDGET_USD: ${{ github.event_name == 'workflow_dispatch' && inputs.ua_max_budget_usd || vars.AISTOCK_UA_DAILY_MAX_BUDGET_USD || '2' }}
   AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env
 
 permissions:
@@ -447,21 +457,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "CodeGraph state export failed."
           }
-          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-refresh `
-            --output-dir $outDir `
-            --max-budget-usd "${env:AISTOCK_UA_DAILY_MAX_BUDGET_USD}" `
-            --require-publish-ready `
-            --output "$outDir/understand-anything-refresh.stdout.json"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Understand Anything refresh did not produce publish-ready state."
-          }
-          conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
-            --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
-            --direction export `
-            --provider understand_anything `
-            --output "$outDir/understand-anything-state-export.json"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Understand Anything state export failed."
+          if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true") {
+            conda run -n AIstock python scripts/code_intelligence_adapter.py ua-refresh `
+              --output-dir $outDir `
+              --max-budget-usd "${env:AISTOCK_UA_DAILY_MAX_BUDGET_USD}" `
+              --require-publish-ready `
+              --output "$outDir/understand-anything-refresh.stdout.json"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Understand Anything refresh did not produce publish-ready state."
+            }
+            conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
+              --state-root "${env:AISTOCK_CODE_INTELLIGENCE_STATE_ROOT}" `
+              --direction export `
+              --provider understand_anything `
+              --output "$outDir/understand-anything-state-export.json"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Understand Anything state export failed."
+            }
+          } else {
+            Write-Host "Paid Understand Anything refresh skipped; refresh-plan remains the visible assessment artifact."
           }
 
       - name: Report daily graph refresh status
@@ -469,11 +483,16 @@ jobs:
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           $rows = @()
-          foreach ($item in @(
+          $items = @(
             @{Provider="state-import"; Path="$outDir/graph-state-import.json"; RequiresPublish=$false},
-            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"; RequiresPublish=$true},
-            @{Provider="understand-anything"; Path="$outDir/understand-anything-refresh.stdout.json"; RequiresPublish=$true}
-          )) {
+            @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"; RequiresPublish=$true}
+          )
+          if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true") {
+            $items += @{Provider="understand-anything"; Path="$outDir/understand-anything-refresh.stdout.json"; RequiresPublish=$true}
+          } else {
+            $items += @{Provider="ua-assessment"; Path="$outDir/graph-refresh-plan.json"; RequiresPublish=$false}
+          }
+          foreach ($item in $items) {
             if (-not (Test-Path -LiteralPath $item.Path)) {
               Write-Host "::warning title=Daily graph refresh::$($item.Provider) did not produce an artifact"
               $rows += "| $($item.Provider) | warning | missing artifact |"

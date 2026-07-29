@@ -10,6 +10,11 @@ on:
       - 'tests/aistock_validation/bugs/**'
   workflow_dispatch:
     inputs:
+      run_paid_ua_refresh:
+        description: 'Explicitly authorize the paid Understand Anything semantic refresh for this dispatch.'
+        required: false
+        default: false
+        type: boolean
       ua_max_budget_usd:
         description: 'One-run UA budget cap for an explicitly dispatched repair/full rebuild.'
         required: false
@@ -28,6 +33,7 @@ env:
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
   AISTOCK_CODE_INTELLIGENCE_STATE_ROOT: F:/Dev/AIstock_code_intelligence_state
+  AISTOCK_RUN_PAID_UA_REFRESH: ${{ github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh || false }}
   AISTOCK_UA_DAILY_MAX_BUDGET_USD: ${{ github.event_name == 'workflow_dispatch' && inputs.ua_max_budget_usd || vars.AISTOCK_UA_DAILY_MAX_BUDGET_USD || '2' }}
 
 jobs:
@@ -82,7 +88,6 @@ jobs:
 
       - name: Assess Understand Anything work without LLM
         id: ua_assessment
-        if: github.event_name == 'push'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           python scripts/code_intelligence_adapter.py refresh-plan `
@@ -90,7 +95,7 @@ jobs:
             --output "$outDir/graph-refresh-plan.json"
 
       - name: Refresh and publish Understand Anything
-        if: github.event_name != 'push'
+        if: github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           python scripts/code_intelligence_adapter.py ua-refresh `
@@ -118,10 +123,10 @@ jobs:
             @{Provider="state-import"; Path="$outDir/graph-state-import.json"},
             @{Provider="codegraph"; Path="$outDir/codegraph-sync.stdout.json"}
           )
-          if ("${{ github.event_name }}" -eq "push") {
-            $items += @{Provider="ua-assessment"; Path="$outDir/graph-refresh-plan.json"}
-          } else {
+          if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true") {
             $items += @{Provider="understand-anything"; Path="$outDir/understand-anything-refresh.stdout.json"}
+          } else {
+            $items += @{Provider="ua-assessment"; Path="$outDir/graph-refresh-plan.json"}
           }
           $rows = @()
           foreach ($item in $items) {
