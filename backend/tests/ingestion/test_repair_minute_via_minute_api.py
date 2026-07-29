@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import datetime as dt
 import inspect
-from pathlib import Path
-
 import pytest
 
 from scripts import repair_minute_via_minute_api as repair
