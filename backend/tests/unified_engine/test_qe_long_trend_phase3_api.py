@@ -176,8 +176,8 @@ def test_archive_quality_endpoint_preserves_bounded_filters(monkeypatch: pytest.
         horizon=120,
         sector_code="801010",
         family_status=None,
-        entry_execution_status=None,
-        exit_execution_status=None,
+        entry_execution_status="filled_t1",
+        exit_execution_status="filled_on_exit_signal_day",
         limit=100,
         cursor=None,
     )
@@ -188,6 +188,8 @@ def test_archive_quality_endpoint_preserves_bounded_filters(monkeypatch: pytest.
     assert captured["label_horizon"] == 60
     assert captured["metric_key"] == "rank_ic"
     assert captured["horizon"] == 120
+    assert captured["entry_execution_status"] == "filled_t1"
+    assert captured["exit_execution_status"] == "filled_on_exit_signal_day"
 
 
 def test_archive_run_feature_snapshot_and_node_are_authoritative() -> None:

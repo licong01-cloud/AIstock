@@ -596,6 +596,7 @@ class QELongTrendEvaluationResultRepository:
                            qe_dataset_contract_id,
                            feature_dataset_snapshot_id, feature_dataset_manifest_sha256,
                            outcome_dataset_snapshot_id, outcome_dataset_manifest_sha256,
+                           request_json->>'evaluation_asof' AS evaluation_asof,
                            input_manifest_sha256, request_sha,
                            worker_terminal_sha256, artifact_manifest_sha256,
                            node_id, status, family_status_json, platform_delivery_status_json,
@@ -670,6 +671,7 @@ class QELongTrendEvaluationResultRepository:
                     f"""
                     SELECT evaluation_id, run_id, parent_task_id, parent_loop_index, profile_id,
                            feature_dataset_snapshot_id, outcome_dataset_snapshot_id, node_id,
+                           request_json->>'evaluation_asof' AS evaluation_asof,
                            status, family_status_json, platform_delivery_status_json,
                            data_action_plan_json, reason_code,
                            created_at, started_at, completed_at, updated_at
@@ -829,16 +831,20 @@ class QELongTrendEvaluationResultRepository:
             )
         if entry_execution_status:
             clauses.append(
-                "(m.dimension_json->>'entry_execution_status' = %s OR "
-                "(m.metric_key = 'entry_execution_summary' AND "
-                "COALESCE(m.value_json->'entry_status_counts', '{}'::jsonb) ? %s))"
+                f"EXISTS (SELECT 1 FROM {METRIC_TABLE} execution_metric "
+                "WHERE execution_metric.evaluation_id = e.evaluation_id AND "
+                "(execution_metric.dimension_json->>'entry_execution_status' = %s OR "
+                "(execution_metric.metric_key = 'entry_execution_summary' AND "
+                "COALESCE(execution_metric.value_json->'entry_status_counts', '{}'::jsonb) ? %s)))"
             )
             params.extend([entry_execution_status, entry_execution_status])
         if exit_execution_status:
             clauses.append(
-                "(m.dimension_json->>'exit_execution_status' = %s OR "
-                "(m.metric_key = 'entry_execution_summary' AND "
-                "COALESCE(m.value_json->'exit_status_counts', '{}'::jsonb) ? %s))"
+                f"EXISTS (SELECT 1 FROM {METRIC_TABLE} execution_metric "
+                "WHERE execution_metric.evaluation_id = e.evaluation_id AND "
+                "(execution_metric.dimension_json->>'exit_execution_status' = %s OR "
+                "(execution_metric.metric_key = 'entry_execution_summary' AND "
+                "COALESCE(execution_metric.value_json->'exit_status_counts', '{}'::jsonb) ? %s)))"
             )
             params.extend([exit_execution_status, exit_execution_status])
         if cursor:

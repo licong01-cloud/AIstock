@@ -17,6 +17,21 @@ const METRICS = [
   ["maturity", "成熟度"],
   ["sector_signal_path", "L2 板块路径"],
 ] as const;
+const ENTRY_EXECUTION_STATUSES = [
+  "filled_t1",
+  "partial_fill_t1",
+  "delayed_fill",
+  "never_filled",
+  "not_attempted_by_strategy",
+  "not_verifiable",
+] as const;
+const EXIT_EXECUTION_STATUSES = [
+  "filled_on_exit_signal_day",
+  "delayed_exit",
+  "never_exited",
+  "not_attempted_by_strategy",
+  "not_verifiable",
+] as const;
 
 function asObject(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -113,6 +128,8 @@ export default function LongTrendComparisonPanel() {
   const [barrier, setBarrier] = React.useState(0.5);
   const [sectorCode, setSectorCode] = React.useState("");
   const [familyStatus, setFamilyStatus] = React.useState("");
+  const [entryExecutionStatus, setEntryExecutionStatus] = React.useState<"" | (typeof ENTRY_EXECUTION_STATUSES)[number]>("");
+  const [exitExecutionStatus, setExitExecutionStatus] = React.useState<"" | (typeof EXIT_EXECUTION_STATUSES)[number]>("");
   const [rows, setRows] = React.useState<LongTrendQualityItem[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -136,8 +153,11 @@ export default function LongTrendComparisonPanel() {
         task_id: taskId.trim() || undefined,
         outcome_dataset_snapshot_id: snapshot,
         metric_key: metricKey,
-        sector_code: sectorCode.trim() || undefined,
+        horizon,
+        sector_code: metricKey === "sector_signal_path" ? sectorCode.trim() : undefined,
         family_status: familyStatus as "COMPUTED" | "COMPUTED_WITH_LIMITATIONS" | "NOT_COMPUTABLE" | "NOT_VERIFIABLE" || undefined,
+        entry_execution_status: entryExecutionStatus || undefined,
+        exit_execution_status: exitExecutionStatus || undefined,
       });
       setRows(selectComparisonRows(items, metricKey, barrier, horizon));
     } catch (queryError) {
@@ -146,7 +166,7 @@ export default function LongTrendComparisonPanel() {
     } finally {
       setLoading(false);
     }
-  }, [barrier, familyStatus, horizon, metricKey, sectorCode, snapshotId, taskId]);
+  }, [barrier, entryExecutionStatus, exitExecutionStatus, familyStatus, horizon, metricKey, sectorCode, snapshotId, taskId]);
 
   return (
     <section data-testid="qe-long-trend-archive-comparison" style={{ marginTop: 24, background: "#fff", border: "1px solid #dbeafe", borderRadius: 12, padding: 18, boxShadow: "0 1px 3px rgba(15,23,42,0.05)" }}>
@@ -164,7 +184,9 @@ export default function LongTrendComparisonPanel() {
         <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>指标<select data-testid="qe-long-trend-archive-metric" value={metricKey} onChange={(event) => setMetricKey(event.target.value as (typeof METRICS)[number][0])} style={fieldStyle}>{METRICS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>评价期限<select data-testid="qe-long-trend-archive-horizon" value={horizon} onChange={(event) => setHorizon(Number(event.target.value) as (typeof HORIZONS)[number])} style={fieldStyle}>{HORIZONS.map((value) => <option key={value} value={value}>{value}D</option>)}</select></label>
         <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Family evidence quality<select value={familyStatus} onChange={(event) => setFamilyStatus(event.target.value)} style={fieldStyle}><option value="">全部</option><option value="COMPUTED">COMPUTED</option><option value="COMPUTED_WITH_LIMITATIONS">COMPUTED_WITH_LIMITATIONS</option><option value="NOT_COMPUTABLE">NOT_COMPUTABLE</option><option value="NOT_VERIFIABLE">NOT_VERIFIABLE</option></select></label>
-        {metricKey === "barrier_capture" ? <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Barrier<select value={barrier} onChange={(event) => setBarrier(Number(event.target.value))} style={fieldStyle}><option value={0.3}>30%</option><option value={0.5}>50%</option><option value={0.7}>70%</option></select></label> : <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>L2 sector code{metricKey === "sector_signal_path" ? "（必填）" : "（可选）"}<input value={sectorCode} onChange={(event) => setSectorCode(event.target.value)} style={{ ...fieldStyle, fontFamily: "monospace" }} /></label>}
+        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Entry execution status<select data-testid="qe-long-trend-archive-entry-status" value={entryExecutionStatus} onChange={(event) => setEntryExecutionStatus(event.target.value as "" | (typeof ENTRY_EXECUTION_STATUSES)[number])} style={fieldStyle}><option value="">全部</option>{ENTRY_EXECUTION_STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Exit execution status<select data-testid="qe-long-trend-archive-exit-status" value={exitExecutionStatus} onChange={(event) => setExitExecutionStatus(event.target.value as "" | (typeof EXIT_EXECUTION_STATUSES)[number])} style={fieldStyle}><option value="">全部</option>{EXIT_EXECUTION_STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        {metricKey === "barrier_capture" ? <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Barrier<select value={barrier} onChange={(event) => setBarrier(Number(event.target.value))} style={fieldStyle}><option value={0.3}>30%</option><option value={0.5}>50%</option><option value={0.7}>70%</option></select></label> : metricKey === "sector_signal_path" ? <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>L2 sector code（必填）<input value={sectorCode} onChange={(event) => setSectorCode(event.target.value)} style={{ ...fieldStyle, fontFamily: "monospace" }} /></label> : <div style={{ fontSize: 11, color: "#64748b", alignSelf: "end", padding: 8 }}>L2 sector filter 仅在板块路径指标启用。</div>}
       </div>
 
       {error && <div data-testid="qe-long-trend-archive-error" style={{ marginTop: 12, padding: 10, borderRadius: 7, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontSize: 12 }}>{error}</div>}

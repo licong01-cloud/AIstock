@@ -3915,6 +3915,16 @@ def compute_execution_metrics(
         if not episodes.empty and "exit_execution_status" in episodes
         else {}
     )
+    entry_block_reason_counts = (
+        observations["entry_block_reason"].dropna().value_counts().to_dict()
+        if not observations.empty and "entry_block_reason" in observations
+        else {}
+    )
+    exit_block_reason_counts = (
+        episodes["exit_block_reason"].dropna().value_counts().to_dict()
+        if not episodes.empty and "exit_block_reason" in episodes
+        else {}
+    )
     entry_delay = (
         pd.to_numeric(observations["entry_delay_days"], errors="coerce")
         if "entry_delay_days" in observations
@@ -3937,6 +3947,12 @@ def compute_execution_metrics(
             "value_json": {
                 "entry_status_counts": {str(key): int(value) for key, value in entry_counts.items()},
                 "exit_status_counts": {str(key): int(value) for key, value in exit_counts.items()},
+                "entry_block_reason_counts": {
+                    str(key): int(value) for key, value in entry_block_reason_counts.items()
+                },
+                "exit_block_reason_counts": {
+                    str(key): int(value) for key, value in exit_block_reason_counts.items()
+                },
                 "entry_delay_days": _distribution(entry_delay),
                 "exit_delay_days": _distribution(exit_delay),
                 "direct_entry_block_reason_count": (

@@ -1033,7 +1033,7 @@ def qe_long_trend_phase3_platform(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def qe_long_trend_phase4_ui(session: nox.Session) -> None:
     """Run the F-014 DB-restored Loop action and same-vintage Archive UI contracts."""
-    frontend_port = session.posargs[0] if session.posargs else os.environ.get("FRONTEND_PORT", "3014")
+    frontend_port = session.posargs[0] if session.posargs else os.environ.get("FRONTEND_PORT", "3012")
     session.run(
         "python",
         "scripts/aistock_validate.py",

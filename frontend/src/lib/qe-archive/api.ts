@@ -413,9 +413,14 @@ export type PromotionCandidateItem = {
 export type LongTrendFamilyStatus = {
   status?: string | null;
   reason_code?: string | null;
+  reason_codes?: unknown[] | null;
   message?: string | null;
   coverage?: JsonObject | null;
   limitations?: unknown[] | null;
+  available_inputs?: unknown[] | null;
+  missing_inputs?: unknown[] | null;
+  data_actions?: unknown[] | null;
+  supporting_artifacts?: unknown[] | null;
   [key: string]: unknown;
 };
 
@@ -430,6 +435,7 @@ export type LongTrendEvaluation = {
   evaluator_version?: string | null;
   feature_dataset_snapshot_id?: string | null;
   outcome_dataset_snapshot_id?: string | null;
+  evaluation_asof?: string | null;
   node_id?: string | null;
   status?: string | null;
   family_status_json?: Record<string, LongTrendFamilyStatus | string | null> | null;
@@ -514,6 +520,8 @@ export type LongTrendQualityQuery = {
   horizon?: 20 | 40 | 60 | 120 | 180;
   sector_code?: string;
   family_status?: "COMPUTED" | "COMPUTED_WITH_LIMITATIONS" | "NOT_COMPUTABLE" | "NOT_VERIFIABLE";
+  entry_execution_status?: "filled_t1" | "partial_fill_t1" | "delayed_fill" | "never_filled" | "not_attempted_by_strategy" | "not_verifiable";
+  exit_execution_status?: "filled_on_exit_signal_day" | "delayed_exit" | "never_exited" | "not_attempted_by_strategy" | "not_verifiable";
 };
 
 function isObject(value: unknown): value is JsonObject {

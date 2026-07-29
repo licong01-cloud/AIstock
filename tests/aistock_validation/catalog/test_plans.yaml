@@ -111,7 +111,7 @@ plans:
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: []
-    allowed_frontend_ports: [3014]
+    allowed_frontend_ports: [3012]
     writes_database: false
     writes_artifacts: true
     writes_business_state: false

@@ -99,6 +99,39 @@ function dataActionLines(value: unknown): string[] {
   }).slice(0, 20);
 }
 
+function evidenceLines(value: unknown): string[] {
+  return dataActionLines(value).filter((line) => line !== "-").slice(0, 12);
+}
+
+function FamilyEvidenceCard({ family, value }: { family: string; value: unknown }) {
+  const record = asObject(value);
+  const reasons = evidenceLines(record.reason_codes ?? record.reason_code ?? record.message);
+  const coverage = evidenceLines(record.coverage);
+  const limitations = evidenceLines(record.limitations);
+  const missingInputs = evidenceLines(record.missing_inputs);
+  const actions = evidenceLines(record.data_actions);
+  const sections = [
+    ["reason", reasons],
+    ["coverage", coverage],
+    ["limitations", limitations],
+    ["missing inputs", missingInputs],
+    ["data actions", actions],
+  ] as const;
+  return (
+    <div data-testid={`qe-long-trend-family-${family}`} style={{ borderBottom: "1px solid #e2e8f0", padding: "8px 0" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
+        <span style={{ fontFamily: "monospace" }}>{family}</span>
+        <strong>{statusValue(value)}</strong>
+      </div>
+      {sections.map(([label, lines]) => lines.length > 0 && (
+        <div key={label} style={{ marginTop: 4, fontSize: 11, color: "#64748b" }}>
+          <strong>{label}：</strong>{lines.join("；")}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof QEArchiveApiError) return error.message;
   if (error instanceof Error) return error.message;
@@ -334,6 +367,7 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
               <div><strong>run</strong><div style={{ fontFamily: "monospace", wordBreak: "break-all" }}>{text(evaluation.run_id)}</div></div>
               <div><strong>feature snapshot</strong><div style={{ fontFamily: "monospace", wordBreak: "break-all" }}>{text(evaluation.feature_dataset_snapshot_id)}</div></div>
               <div><strong>outcome snapshot</strong><div style={{ fontFamily: "monospace", wordBreak: "break-all" }}>{text(evaluation.outcome_dataset_snapshot_id)}</div></div>
+              <div><strong>evaluation as-of</strong><div data-testid="qe-long-trend-evaluation-asof">{text(evaluation.evaluation_asof)}</div></div>
               <div><strong>更新时间</strong><div>{text(evaluation.updated_at)}</div></div>
               <div><strong>reason code</strong><div>{text(evaluation.reason_code)}</div></div>
             </div>
@@ -343,7 +377,7 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
             <div style={panelStyle}>
               <h4 style={{ margin: "0 0 10px", color: "#334155" }}>指标族状态</h4>
               <div style={{ display: "grid", gap: 7 }}>
-                {FAMILIES.map((family) => <div key={family} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}><span style={{ fontFamily: "monospace" }}>{family}</span><strong>{statusValue(familyStatus[family])}</strong></div>)}
+                {FAMILIES.map((family) => <FamilyEvidenceCard key={family} family={family} value={familyStatus[family]} />)}
               </div>
             </div>
             <div style={panelStyle}>
@@ -352,6 +386,21 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
                 {Object.entries(platformStatus).map(([key, value]) => <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}><span style={{ fontFamily: "monospace" }}>{key}</span><strong>{compactValue(value)}</strong></div>)}
               </div>
             </div>
+          </div>
+
+          <div data-testid="qe-long-trend-coverage-censoring" style={panelStyle}>
+            <h4 style={{ margin: "0 0 10px", color: "#334155" }}>成熟度、执行覆盖与删失说明</h4>
+            <div style={{ display: "grid", gap: 6, fontSize: 12 }}>
+              {HORIZONS.map((horizon) => {
+                const maturity = metricJson(findMetric(metrics, "maturity", { horizon, slice: "all_oos" }));
+                return <div key={horizon}><strong>{horizon}D：</strong><span style={{ fontFamily: "monospace" }}>{statusCounts(maturity)}</span></div>;
+              })}
+              <div><strong>order_fill coverage：</strong>{evidenceLines(asObject(familyStatus.order_fill).coverage).join("；") || "-"}</div>
+              <div><strong>execution_cause coverage：</strong>{evidenceLines(asObject(familyStatus.execution_cause).coverage).join("；") || "-"}</div>
+            </div>
+            <p style={{ margin: "10px 0 0", color: "#64748b", fontSize: 11, lineHeight: 1.6 }}>
+              仅 matured 样本进入固定期限收益、RankIC 与 barrier 分母；right_censored、path_incomplete、invalid_entry、instrument_exit_unresolved 等状态保持独立计数，不补 0、不伪装为未命中或亏损。
+            </p>
           </div>
 
           <div style={panelStyle}>
@@ -403,10 +452,13 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
               <div style={{ fontSize: 12, lineHeight: 1.8 }}>
                 <div>入场状态：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.entry_status_counts)}</span></div>
                 <div>退出状态：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.exit_status_counts)}</span></div>
+                <div>入场阻断原因：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.entry_block_reason_counts)}</span></div>
+                <div>退出阻断原因：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.exit_block_reason_counts)}</span></div>
                 <div>entry delay p50：{decimal(asObject(execution.entry_delay_days).p50, 1)} 天</div>
                 <div>exit delay p50：{decimal(asObject(execution.exit_delay_days).p50, 1)} 天</div>
                 <div>入场阻断损失：{percent(asObject(execution.missed_mfe_due_to_entry_block).mean)}</div>
                 <div>退出额外回撤：{percent(asObject(execution.blocked_exit_extra_drawdown).mean)}</div>
+                <div>退出额外持仓 p50：{decimal(asObject(execution.blocked_exit_extra_holding_days).p50, 1)} 天</div>
               </div>
             </div>
           </div>
