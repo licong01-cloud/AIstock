@@ -30,7 +30,68 @@ from backend.services.hmm_risk.b3_training import (
 from backend.services.hmm_risk import b3_training as training_subject
 from backend.services.hmm_risk.state_model_set import StateModelSetError, canonical_sha256
 from backend.services.hmm_risk.state_model_set import ALL_CORE_FEATURES, BASE_FEATURES
-from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
+from backend.services.hmm_risk.stock_fact_observation import (
+    C010_APPROVED_TRAIN_END,
+    C010_APPROVED_TRAIN_START,
+    C010_CROSS_SECTION_FEATURES,
+    C010_CROSS_SECTION_OPERATORS,
+    C010_FORMULA_DIFF_BY_FEATURE,
+    C010_MONEYFLOW_DENOMINATOR_BY_FEATURE,
+    validate_c010_policy_manifest,
+)
+
+
+APPROVED_TRAIN_EXCHANGE_HOLIDAYS = {
+    "2022-01-03",
+    "2022-01-31",
+    "2022-02-01",
+    "2022-02-02",
+    "2022-02-03",
+    "2022-02-04",
+    "2022-04-04",
+    "2022-04-05",
+    "2022-05-02",
+    "2022-05-03",
+    "2022-05-04",
+    "2022-06-03",
+    "2022-09-12",
+    "2022-10-03",
+    "2022-10-04",
+    "2022-10-05",
+    "2022-10-06",
+    "2022-10-07",
+    "2023-01-02",
+    "2023-01-23",
+    "2023-01-24",
+    "2023-01-25",
+    "2023-01-26",
+    "2023-01-27",
+    "2023-04-05",
+    "2023-05-01",
+    "2023-05-02",
+    "2023-05-03",
+    "2023-06-22",
+    "2023-06-23",
+    "2023-09-29",
+    "2023-10-02",
+    "2023-10-03",
+    "2023-10-04",
+    "2023-10-05",
+    "2023-10-06",
+    "2024-01-01",
+    "2024-02-09",
+    "2024-02-12",
+    "2024-02-13",
+    "2024-02-14",
+    "2024-02-15",
+    "2024-02-16",
+    "2024-04-04",
+    "2024-04-05",
+    "2024-05-01",
+    "2024-05-02",
+    "2024-05-03",
+    "2024-06-10",
+}
 
 
 def _train_manifest(
@@ -56,15 +117,19 @@ def _train_manifest(
 
 
 def _feature_domain_policy_manifest() -> dict:
-    trade_date = "2022-01-04"
+    trade_dates = [
+        value.date().isoformat()
+        for value in pd.bdate_range(C010_APPROVED_TRAIN_START, C010_APPROVED_TRAIN_END)
+        if value.date().isoformat() not in APPROVED_TRAIN_EXCHANGE_HOLIDAYS
+    ]
     l1_codes = [f"L1_{index:03d}" for index in range(31)]
     l2_codes = [f"L2_{index:03d}" for index in range(131)]
     ledger_entry = {
         "canonical_ts_code": "000001.SZ",
-        "expected_opportunity_count": 1,
+        "expected_opportunity_count": len(trade_dates),
         "expected_opportunity_contract": "hmm_risk_c010_expected_opportunity_dates_v1",
         "expected_opportunity_date_sha256": canonical_sha256(
-            [{"canonical_ts_code": "000001.SZ", "trade_date": trade_date}]
+            [{"canonical_ts_code": "000001.SZ", "trade_date": trade_date} for trade_date in trade_dates]
         ),
         "provider_absence_count": 0,
         "availability_ratio": 1.0,
@@ -74,8 +139,8 @@ def _feature_domain_policy_manifest() -> dict:
     ledger = [{**ledger_entry, "entry_sha256": canonical_sha256(ledger_entry)}]
     eligibility_body = {
         "schema_version": "hmm_risk_c010_train_observation_eligibility_v1",
-        "train_start": trade_date,
-        "train_end": trade_date,
+        "train_start": C010_APPROVED_TRAIN_START.isoformat(),
+        "train_end": C010_APPROVED_TRAIN_END.isoformat(),
         "minimum_availability_ratio": 0.9,
         "availability_integer_contract": "10*(expected-missing) >= 9*expected",
         "entry_count": 1,
@@ -89,7 +154,7 @@ def _feature_domain_policy_manifest() -> dict:
     }
     eligibility = {**eligibility_body, "receipt_sha256": canonical_sha256(eligibility_body)}
 
-    def domain_entry(level: str, code: str) -> dict:
+    def domain_entry(level: str, code: str, trade_date: str) -> dict:
         value = {
             "direct_sector_level": level,
             "sector_code": code,
@@ -120,8 +185,8 @@ def _feature_domain_policy_manifest() -> dict:
         }
         return {**value, "entry_sha256": canonical_sha256(value)}
 
-    l1_domain = [domain_entry("L1", code) for code in l1_codes]
-    l2_domain = [domain_entry("L2", code) for code in l2_codes]
+    l1_domain = [domain_entry("L1", code, trade_date) for trade_date in trade_dates for code in l1_codes]
+    l2_domain = [domain_entry("L2", code, trade_date) for trade_date in trade_dates for code in l2_codes]
     aggregate_body = {
         "schema_version": "hmm_risk_c010_feature_domain_aggregate_evidence_v1",
         "l1_aggregate_count": len(l1_domain),
@@ -138,39 +203,37 @@ def _feature_domain_policy_manifest() -> dict:
     }
     aggregate = {**aggregate_body, "receipt_sha256": canonical_sha256(aggregate_body)}
 
-    def mask_hash(codes: list[str]) -> str:
-        return canonical_sha256([{"sector_code": code, "active": True} for code in codes])
+    def mask_hash(codes: list[str], active_codes: list[str]) -> str:
+        active = set(active_codes)
+        return canonical_sha256([{"sector_code": code, "active": code in active} for code in codes])
 
     def cross_receipt(level: str, codes: list[str]) -> dict:
         entries = []
-        for feature in (
-            "volume_ratio",
-            "sf_range_vs_market_10d",
-            "sf_vol_vs_market_20d",
-            "sf_excess_breadth_5d",
-        ):
-            entry = {
-                "feature_name": feature,
-                "trade_date": trade_date,
-                "direct_sector_level": level,
-                "operator": f"test:{feature}",
-                "source_domain": "price",
-                "expected_sector_count": len(codes),
-                "expected_sector_sha256": canonical_sha256(codes),
-                "valid_sector_count": len(codes),
-                "valid_sector_codes": codes,
-                "valid_sector_sha256": canonical_sha256(codes),
-                "missing_sector_codes": [],
-                "missing_sector_sha256": canonical_sha256([]),
-                "feature_cross_section_coverage": 1.0,
-                "reference_value": 1.0,
-                "pre_mask_sha256": mask_hash(codes),
-                "post_mask_sha256": mask_hash(codes),
-                "post_mask_subset_of_pre_mask": True,
-                "status": "accepted",
-                "reason_code": None,
-            }
-            entries.append({**entry, "entry_sha256": canonical_sha256(entry)})
+        for feature in C010_CROSS_SECTION_FEATURES:
+            for date_index, trade_date in enumerate(trade_dates):
+                post_codes = [] if feature == "sf_range_vs_market_10d" and date_index < 4 else codes
+                entry = {
+                    "feature_name": feature,
+                    "trade_date": trade_date,
+                    "direct_sector_level": level,
+                    "operator": C010_CROSS_SECTION_OPERATORS[feature],
+                    "source_domain": "price",
+                    "expected_sector_count": len(codes),
+                    "expected_sector_sha256": canonical_sha256(codes),
+                    "valid_sector_count": len(codes),
+                    "valid_sector_codes": codes,
+                    "valid_sector_sha256": canonical_sha256(codes),
+                    "missing_sector_codes": [],
+                    "missing_sector_sha256": canonical_sha256([]),
+                    "feature_cross_section_coverage": 1.0,
+                    "reference_value": 1.0,
+                    "pre_mask_sha256": mask_hash(codes, codes),
+                    "post_mask_sha256": mask_hash(codes, post_codes),
+                    "post_mask_subset_of_pre_mask": True,
+                    "status": "accepted",
+                    "reason_code": None,
+                }
+                entries.append({**entry, "entry_sha256": canonical_sha256(entry)})
         value = {
             "schema_version": "hmm_risk_c010_feature_cross_section_receipt_set_v1",
             "formula_version": "hmm_risk_l1_sector_factor_formula_v2_c010",
@@ -187,19 +250,6 @@ def _feature_domain_policy_manifest() -> dict:
 
     l1_cross = cross_receipt("L1", l1_codes)
     l2_cross = cross_receipt("L2", l2_codes)
-    cross_features = (
-        "volume_ratio",
-        "sf_range_vs_market_10d",
-        "sf_vol_vs_market_20d",
-        "sf_excess_breadth_5d",
-    )
-    changed_features = (
-        *cross_features,
-        "net_mf_ratio",
-        "elg_net_mf_ratio",
-        "sf_mf_net_ratio_std_5d_neg",
-        "sf_small_net_ratio_5d",
-    )
 
     def feature_definition(level: str) -> dict:
         expected_count = 31 if level == "L1" else 131
@@ -220,8 +270,11 @@ def _feature_domain_policy_manifest() -> dict:
                 "sell_elg_amount_cny",
                 "net_mf_amount_cny",
             ],
-            "cross_section_operator_by_feature": {feature: f"test:{feature}" for feature in cross_features},
-            "formula_diff_by_feature": {feature: {"v1": "old", "v2": "new"} for feature in changed_features},
+            "moneyflow_denominator_by_feature": dict(C010_MONEYFLOW_DENOMINATOR_BY_FEATURE),
+            "cross_section_operator_by_feature": dict(C010_CROSS_SECTION_OPERATORS),
+            "formula_diff_by_feature": {
+                feature: dict(formula) for feature, formula in C010_FORMULA_DIFF_BY_FEATURE.items()
+            },
             "moneyflow_rolling_post_mask_required": True,
             "range_cross_section_rolling_post_mask_required": True,
         }
@@ -248,11 +301,11 @@ def _feature_domain_policy_manifest() -> dict:
         "schema_version": "hmm_risk_c010_feature_domain_policy_v1",
         "formula_version": "hmm_risk_l1_sector_factor_formula_v2_c010",
         "producer_commit": "c" * 40,
-        "train_start": trade_date,
-        "train_end": trade_date,
-        "receipt_trading_dates": [trade_date],
-        "receipt_trading_date_count": 1,
-        "receipt_trading_date_sha256": canonical_sha256([trade_date]),
+        "train_start": C010_APPROVED_TRAIN_START.isoformat(),
+        "train_end": C010_APPROVED_TRAIN_END.isoformat(),
+        "receipt_trading_dates": trade_dates,
+        "receipt_trading_date_count": len(trade_dates),
+        "receipt_trading_date_sha256": canonical_sha256(trade_dates),
         "contributor_min_availability": 0.9,
         "domain_min_count_coverage": 0.9,
         "domain_min_weight_coverage": 0.9,
@@ -307,6 +360,34 @@ def _rehash_policy(manifest: dict) -> dict:
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def _policy_with_rehashed_aggregate_entry(**changes: object) -> dict:
+    manifest = dict(TEST_POLICY_MANIFEST)
+    aggregate = dict(TEST_POLICY_MANIFEST["aggregate_receipt"])
+    entries = list(aggregate["l1_domain_receipts"])
+    entry = {**entries[0], **changes}
+    entry_body = {key: value for key, value in entry.items() if key != "entry_sha256"}
+    entries[0] = {**entry_body, "entry_sha256": canonical_sha256(entry_body)}
+    aggregate["l1_domain_receipts"] = entries
+    aggregate_body = {key: value for key, value in aggregate.items() if key != "receipt_sha256"}
+    manifest["aggregate_receipt"] = {**aggregate_body, "receipt_sha256": canonical_sha256(aggregate_body)}
+    manifest["aggregate_receipt_sha256"] = manifest["aggregate_receipt"]["receipt_sha256"]
+    return _rehash_policy(manifest)
+
+
+def _policy_with_rehashed_cross_section_entry(**changes: object) -> dict:
+    manifest = dict(TEST_POLICY_MANIFEST)
+    receipt = dict(TEST_POLICY_MANIFEST["l1_cross_section_receipt"])
+    entries = list(receipt["entries"])
+    entry = {**entries[0], **changes}
+    entry_body = {key: value for key, value in entry.items() if key != "entry_sha256"}
+    entries[0] = {**entry_body, "entry_sha256": canonical_sha256(entry_body)}
+    receipt["entries"] = entries
+    receipt_body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    manifest["l1_cross_section_receipt"] = {**receipt_body, "receipt_sha256": canonical_sha256(receipt_body)}
+    manifest["l1_cross_section_receipt_sha256"] = manifest["l1_cross_section_receipt"]["receipt_sha256"]
+    return _rehash_policy(manifest)
+
+
 def test_c010_policy_validator_rejects_minimal_self_hashed_manifest() -> None:
     entry = {"canonical_ts_code": "000001.SZ", "moneyflow_contributor_eligible": True}
     ledger = [{**entry, "entry_sha256": canonical_sha256(entry)}]
@@ -356,6 +437,68 @@ def test_c010_policy_validator_rejects_rehashed_incomplete_domain_cartesian_set(
     manifest = _rehash_policy(manifest)
     with pytest.raises(StateModelSetError, match="receipt set is incomplete"):
         validate_c010_policy_manifest(manifest)
+
+
+def test_c010_policy_validator_rejects_rehashed_one_day_train_contract() -> None:
+    manifest = dict(TEST_POLICY_MANIFEST)
+    manifest.update(
+        {
+            "train_start": "2022-01-04",
+            "train_end": "2022-01-04",
+            "receipt_trading_dates": ["2022-01-04"],
+            "receipt_trading_date_count": 1,
+            "receipt_trading_date_sha256": canonical_sha256(["2022-01-04"]),
+        }
+    )
+    with pytest.raises(StateModelSetError, match="fixed contract"):
+        validate_c010_policy_manifest(_rehash_policy(manifest))
+
+
+def test_c010_policy_validator_rejects_rehashed_moneyflow_contributor_outside_train_ledger() -> None:
+    symbol = ["999999.SZ"]
+    manifest = _policy_with_rehashed_aggregate_entry(
+        moneyflow_expected_symbols=symbol,
+        moneyflow_expected_symbol_sha256=canonical_sha256(symbol),
+        moneyflow_complete_symbols=symbol,
+        moneyflow_complete_symbol_sha256=canonical_sha256(symbol),
+    )
+    with pytest.raises(StateModelSetError, match="available domain receipt semantics"):
+        validate_c010_policy_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"operator": "bogus:future_aware_operator"},
+        {"reference_value": 0.0},
+        {"post_mask_sha256": canonical_sha256([])},
+    ),
+)
+def test_c010_policy_validator_rejects_rehashed_cross_section_business_semantic_drift(
+    changes: dict[str, object],
+) -> None:
+    with pytest.raises(StateModelSetError, match="cross-section (entry semantics|post-mask evidence)"):
+        validate_c010_policy_manifest(_policy_with_rehashed_cross_section_entry(**changes))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("moneyflow_denominator_by_feature", {"net_mf_ratio": "price_domain_l1_amount"}),
+        ("cross_section_operator_by_feature", {feature: "bogus" for feature in C010_CROSS_SECTION_FEATURES}),
+        ("formula_diff_by_feature", {feature: {"v1": "old", "v2": "new"} for feature in C010_CROSS_SECTION_FEATURES}),
+    ),
+)
+def test_c010_policy_validator_rejects_rehashed_feature_definition_value_drift(
+    field: str,
+    value: object,
+) -> None:
+    manifest = dict(TEST_POLICY_MANIFEST)
+    definition = {**TEST_POLICY_MANIFEST["l1_feature_definition"], field: value}
+    manifest["l1_feature_definition"] = definition
+    manifest["l1_feature_definition_sha256"] = canonical_sha256(definition)
+    with pytest.raises(StateModelSetError, match="feature definition is invalid"):
+        validate_c010_policy_manifest(_rehash_policy(manifest))
 
 
 def _model(*, family: str = "legacy_covfix", level: str = "L1", seed: int = 42, code: str = "S001") -> B3FittedModel:
@@ -828,7 +971,7 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
     pairs = {key: _selected_artifact(*key) for key in keys}
     artifacts = {key: pair[0] for key, pair in pairs.items()}
     selections = {key: pair[1] for key, pair in pairs.items()}
-    policy_manifest = _feature_domain_policy_manifest()
+    policy_manifest = TEST_POLICY_MANIFEST
     manifest_path = write_b3_ready_model_set(
         tmp_path,
         selected_artifacts=artifacts,
@@ -847,7 +990,6 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
     assert len(manifest["layers"]) == 4
     assert manifest["feature_domain_policy_sha256"] == policy_manifest["receipt_sha256"]
     assert manifest["feature_domain_policy_manifest"] == policy_manifest
-
     invalid_policy = json.loads(json.dumps(policy_manifest))
     invalid_entry = invalid_policy["contributor_ledger"][0]
     invalid_entry["moneyflow_contributor_eligible"] = "true"
@@ -887,6 +1029,26 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
         )
 
 
+def test_ready_writer_rejects_rehashed_policy_source_identity_drift(tmp_path) -> None:
+    keys = {(family, level) for family in ("legacy_covfix", "autocycle_all_core") for level in ("L1", "L2")}
+    pairs = {key: _selected_artifact(*key) for key in keys}
+    policy_manifest = _rehash_policy({**TEST_POLICY_MANIFEST, "calendar_manifest_hash": "9" * 64})
+
+    with pytest.raises(StateModelSetError, match="policy source identity"):
+        write_b3_ready_model_set(
+            tmp_path,
+            selected_artifacts={key: pair[0] for key, pair in pairs.items()},
+            selection_receipts={key: pair[1] for key, pair in pairs.items()},
+            dataset_manifest_hash="a" * 64,
+            mapping_manifest_hash="b" * 64,
+            calendar_manifest_hash="c" * 64,
+            l2_stock_fact_manifest_hash="d" * 64,
+            feature_domain_policy_sha256=policy_manifest["receipt_sha256"],
+            feature_domain_policy_manifest=policy_manifest,
+            producer_commit="c" * 40,
+        )
+
+
 def test_ready_writer_rejects_declared_count_without_durable_entries(tmp_path) -> None:
     keys = {(family, level) for family in ("legacy_covfix", "autocycle_all_core") for level in ("L1", "L2")}
     pairs = {key: _selected_artifact(*key) for key in keys}
@@ -897,7 +1059,7 @@ def test_ready_writer_rejects_declared_count_without_durable_entries(tmp_path) -
     target_body = {key: value for key, value in target.items() if key != "artifact_sha256"}
     target["artifact_sha256"] = canonical_sha256(target_body)
     artifacts[("legacy_covfix", "L1")] = target
-    policy_manifest = _feature_domain_policy_manifest()
+    policy_manifest = TEST_POLICY_MANIFEST
 
     with pytest.raises(StateModelSetError, match="selected entry count"):
         write_b3_ready_model_set(

@@ -29,12 +29,62 @@ C010_CROSS_SECTION_RECEIPT_VERSION = "hmm_risk_c010_feature_cross_section_receip
 C010_AGGREGATE_RECEIPT_VERSION = "hmm_risk_c010_feature_domain_aggregate_evidence_v1"
 C010_ELIGIBILITY_RECEIPT_VERSION = "hmm_risk_c010_train_observation_eligibility_v1"
 C010_EXPECTED_OPPORTUNITY_CONTRACT = "hmm_risk_c010_expected_opportunity_dates_v1"
+C010_APPROVED_TRAIN_START = date(2022, 1, 1)
+C010_APPROVED_TRAIN_END = date(2024, 6, 30)
+C010_APPROVED_TRAIN_TRADING_DATE_COUNT = 601
+C010_APPROVED_TRAIN_TRADING_DATE_SHA256 = "b48fb5e911295d1c16920178b6ea48285c5890455aeaa31ad03ef7e11841f715"
 C010_CROSS_SECTION_FEATURES = (
     "volume_ratio",
     "sf_range_vs_market_10d",
     "sf_vol_vs_market_20d",
     "sf_excess_breadth_5d",
 )
+C010_CROSS_SECTION_OPERATORS = {
+    "volume_ratio": "sector_volume/sum_valid_sector_volume",
+    "sf_range_vs_market_10d": "rolling_mean_10_min5(sector_range/median_valid_sector_range)",
+    "sf_vol_vs_market_20d": "sector_vol20/median_valid_sector_vol20",
+    "sf_excess_breadth_5d": "sector_breadth5-mean_valid_sector_breadth5",
+}
+C010_MONEYFLOW_DENOMINATOR_BY_FEATURE = {
+    "net_mf_ratio": "moneyflow_contributor_amount",
+    "elg_net_mf_ratio": "moneyflow_contributor_amount",
+    "sf_mf_net_ratio_std_5d_neg": "moneyflow_contributor_amount",
+    "sf_small_net_ratio_5d": "moneyflow_contributor_amount",
+}
+C010_FORMULA_DIFF_BY_FEATURE = {
+    "net_mf_ratio": {
+        "v1": "sector_net_mf_amount/price_domain_l1_amount",
+        "v2": "complete_moneyflow_net_mf_amount/moneyflow_contributor_amount",
+    },
+    "elg_net_mf_ratio": {
+        "v1": "sector_elg_net_mf_amount/price_domain_l1_amount",
+        "v2": "complete_moneyflow_elg_net_mf_amount/moneyflow_contributor_amount",
+    },
+    "sf_mf_net_ratio_std_5d_neg": {
+        "v1": "rolling_std_5_min5(net_mf_ratio_v1)_neg",
+        "v2": "rolling_std_5_min5(net_mf_ratio_v2)_neg_with_current_moneyflow_post_mask",
+    },
+    "sf_small_net_ratio_5d": {
+        "v1": "rolling_mean_5_min3(small_net_ratio_v1)",
+        "v2": "rolling_mean_5_min3(small_net_ratio_v2)_with_current_moneyflow_post_mask",
+    },
+    "volume_ratio": {
+        "v1": "sector_volume/sum_all_sector_volume",
+        "v2": C010_CROSS_SECTION_OPERATORS["volume_ratio"],
+    },
+    "sf_range_vs_market_10d": {
+        "v1": "exact_complete_global_mask_then_rolling_mean_10_min5",
+        "v2": C010_CROSS_SECTION_OPERATORS["sf_range_vs_market_10d"],
+    },
+    "sf_vol_vs_market_20d": {
+        "v1": "exact_complete_l1_return_surrogate_mask",
+        "v2": C010_CROSS_SECTION_OPERATORS["sf_vol_vs_market_20d"],
+    },
+    "sf_excess_breadth_5d": {
+        "v1": "exact_complete_l1_return_surrogate_mask",
+        "v2": C010_CROSS_SECTION_OPERATORS["sf_excess_breadth_5d"],
+    },
+}
 SOURCE_VERSION = "hmm_risk_l1_stock_fact_source_v1"
 MIN_COVERAGE = 0.90
 MIN_TRAINING_ROWS = 120
@@ -1131,6 +1181,7 @@ def _validate_c010_domain_receipt_set(
     *,
     dates: tuple[str, ...],
     level_codes: Mapping[str, tuple[str, ...]],
+    moneyflow_eligibility: Mapping[str, bool],
 ) -> None:
     value = _c010_require_canonical(receipt, identity_field="receipt_sha256", label="C-010 aggregate receipt")
     if (
@@ -1194,11 +1245,23 @@ def _validate_c010_domain_receipt_set(
                     label=f"C-010 {level} moneyflow complete symbols",
                     allow_empty=True,
                 )
+                moneyflow_excluded = _c010_require_ordered_strings(
+                    item.get("moneyflow_excluded_symbols"),
+                    label=f"C-010 {level} moneyflow excluded symbols",
+                    allow_empty=True,
+                )
+                expected_moneyflow = tuple(
+                    symbol for symbol in expected_symbols if moneyflow_eligibility.get(symbol) is True
+                )
+                expected_moneyflow_set = set(expected_moneyflow)
+                expected_excluded = tuple(symbol for symbol in expected_symbols if symbol not in expected_moneyflow_set)
                 if (
                     item.get("price_domain_status") != "available"
                     or item.get("price_domain_reason_code") is not None
                     or not expected_symbols
                     or not set(moneyflow_complete).issubset(moneyflow_expected)
+                    or moneyflow_expected != expected_moneyflow
+                    or moneyflow_excluded != expected_excluded
                     or item.get("moneyflow_expected_symbol_sha256") != canonical_sha256(list(moneyflow_expected))
                     or item.get("moneyflow_complete_symbol_sha256") != canonical_sha256(list(moneyflow_complete))
                     or moneyflow_status not in reason_by_status
@@ -1319,6 +1382,8 @@ def _validate_c010_cross_section_receipt(
         raise StateModelSetError(f"C-010 {level} cross-section receipt contract is invalid")
     expected_keys = {(feature, trade_date) for feature in C010_CROSS_SECTION_FEATURES for trade_date in dates}
     observed_keys: set[tuple[str, str]] = set()
+    entries_by_key: dict[tuple[str, str], Mapping[str, Any]] = {}
+    valid_code_sets_by_key: dict[tuple[str, str], set[str]] = {}
     reason_by_status = {
         "accepted": None,
         "coverage_insufficient": "hmm_risk_c010_feature_cross_section_coverage_insufficient",
@@ -1335,6 +1400,19 @@ def _validate_c010_cross_section_receipt(
             item.get("missing_sector_codes"), label=f"C-010 {level} missing sector codes", allow_empty=True
         )
         status = str(item.get("status") or "")
+        feature_name = key[0]
+        reference = item.get("reference_value")
+        if isinstance(reference, bool):
+            raise StateModelSetError(f"C-010 {level} cross-section reference is invalid")
+        try:
+            reference_value = float(reference) if reference is not None else None
+        except (TypeError, ValueError) as exc:
+            raise StateModelSetError(f"C-010 {level} cross-section reference is invalid") from exc
+        positive_reference_required = feature_name != "sf_excess_breadth_5d"
+        accepted_reference = reference_value is not None and math.isfinite(reference_value)
+        if accepted_reference:
+            accepted_reference = reference_value > 0 if positive_reference_required else 0 <= reference_value <= 1
+        invalid_reference = reference_value is not None and math.isfinite(reference_value) and not accepted_reference
         coverage = len(valid_codes) / expected_count
         pre_mask_codes = set(valid_codes) if status in {"accepted", "output_non_finite"} else set()
         expected_pre_mask_hash = _cross_section_mask_hash(codes, pre_mask_codes)
@@ -1343,7 +1421,7 @@ def _validate_c010_cross_section_receipt(
             or key in observed_keys
             or item.get("direct_sector_level") != level
             or item.get("source_domain") != "price"
-            or not str(item.get("operator") or "")
+            or item.get("operator") != C010_CROSS_SECTION_OPERATORS.get(feature_name)
             or item.get("expected_sector_count") != expected_count
             or item.get("expected_sector_sha256") != canonical_sha256(list(codes))
             or set(valid_codes).intersection(missing_codes)
@@ -1359,11 +1437,40 @@ def _validate_c010_cross_section_receipt(
             or item.get("reason_code") != reason_by_status[status]
             or (status == "coverage_insufficient") is not ((10 * len(valid_codes)) < (9 * expected_count))
             or (status in {"accepted", "reference_invalid", "output_non_finite"} and coverage < MIN_COVERAGE)
+            or (status == "coverage_insufficient" and reference is not None)
+            or (status == "reference_invalid" and not invalid_reference)
+            or (status in {"accepted", "output_non_finite"} and not accepted_reference)
         ):
             raise StateModelSetError(f"C-010 {level} cross-section entry semantics are invalid")
         observed_keys.add(key)
+        entries_by_key[key] = item
+        valid_code_sets_by_key[key] = set(valid_codes)
     if observed_keys != expected_keys:
         raise StateModelSetError(f"C-010 {level} cross-section receipt set is incomplete")
+    for feature_name in C010_CROSS_SECTION_FEATURES:
+        for date_index, trade_date in enumerate(dates):
+            item = entries_by_key[(feature_name, trade_date)]
+            status = str(item["status"])
+            if status == "accepted":
+                current_codes = valid_code_sets_by_key[(feature_name, trade_date)]
+                if feature_name == "sf_range_vs_market_10d":
+                    window_dates = dates[max(0, date_index - 9) : date_index + 1]
+                    expected_post_codes = {
+                        code
+                        for code in current_codes
+                        if sum(
+                            entries_by_key[(feature_name, prior_date)]["status"] == "accepted"
+                            and code in valid_code_sets_by_key[(feature_name, prior_date)]
+                            for prior_date in window_dates
+                        )
+                        >= 5
+                    }
+                else:
+                    expected_post_codes = current_codes
+            else:
+                expected_post_codes = set()
+            if item.get("post_mask_sha256") != _cross_section_mask_hash(codes, expected_post_codes):
+                raise StateModelSetError(f"C-010 {level} cross-section post-mask evidence is invalid")
     return codes
 
 
@@ -1429,6 +1536,9 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
         train_end = date.fromisoformat(str(value.get("train_end") or ""))
     except ValueError as exc:
         raise StateModelSetError("C-010 policy train window is invalid") from exc
+    train_trading_dates = tuple(
+        trade_date.isoformat() for trade_date in parsed_dates if train_start <= trade_date <= train_end
+    )
     producer_commit = str(value.get("producer_commit") or "")
     source_hash_fields = (
         "dataset_manifest_hash",
@@ -1460,8 +1570,10 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
         or value.get("pit_universe_changed") is not False
         or value.get("selection_universe_changed") is not False
         or value.get("runtime_prediction_eligibility_changed") is not False
-        or train_start > train_end
-        or not any(train_start <= trade_date <= train_end for trade_date in parsed_dates)
+        or train_start != C010_APPROVED_TRAIN_START
+        or train_end != C010_APPROVED_TRAIN_END
+        or len(train_trading_dates) != C010_APPROVED_TRAIN_TRADING_DATE_COUNT
+        or canonical_sha256(list(train_trading_dates)) != C010_APPROVED_TRAIN_TRADING_DATE_SHA256
     ):
         raise StateModelSetError("C-010 policy manifest fixed contract is invalid")
     if tuple(sorted(parsed_dates)) != parsed_dates or len(set(parsed_dates)) != len(parsed_dates):
@@ -1488,7 +1600,12 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
     ) or value.get("l2_cross_section_receipt_sha256") != value["l2_cross_section_receipt"].get("receipt_sha256"):
         raise StateModelSetError("C-010 policy cross-section receipt identity is invalid")
     _validate_c010_domain_receipt_set(
-        value.get("aggregate_receipt"), dates=dates, level_codes={"L1": l1_codes, "L2": l2_codes}
+        value.get("aggregate_receipt"),
+        dates=dates,
+        level_codes={"L1": l1_codes, "L2": l2_codes},
+        moneyflow_eligibility={
+            str(entry["canonical_ts_code"]): entry.get("moneyflow_contributor_eligible") is True for entry in ledger
+        },
     )
     if value.get("aggregate_receipt_sha256") != value["aggregate_receipt"].get("receipt_sha256"):
         raise StateModelSetError("C-010 policy aggregate receipt identity is invalid")
@@ -1508,16 +1625,9 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
             or tuple(definition.get("base_features") or ()) != BASE_FEATURES
             or tuple(definition.get("all_core_features") or ()) != ALL_CORE_FEATURES
             or tuple(definition.get("moneyflow_mandatory_fields") or ()) != MONEYFLOW_STOCK_FIELDS
-            or set(definition.get("cross_section_operator_by_feature") or ()) != set(C010_CROSS_SECTION_FEATURES)
-            or set(definition.get("formula_diff_by_feature") or ())
-            != set(C010_CROSS_SECTION_FEATURES).union(
-                {
-                    "net_mf_ratio",
-                    "elg_net_mf_ratio",
-                    "sf_mf_net_ratio_std_5d_neg",
-                    "sf_small_net_ratio_5d",
-                }
-            )
+            or definition.get("moneyflow_denominator_by_feature") != C010_MONEYFLOW_DENOMINATOR_BY_FEATURE
+            or definition.get("cross_section_operator_by_feature") != C010_CROSS_SECTION_OPERATORS
+            or definition.get("formula_diff_by_feature") != C010_FORMULA_DIFF_BY_FEATURE
             or definition.get("moneyflow_rolling_post_mask_required") is not True
             or definition.get("range_cross_section_rolling_post_mask_required") is not True
             or value.get(f"{level}_feature_definition_sha256") != canonical_sha256(dict(definition))
@@ -1598,12 +1708,7 @@ def build_c010_feature_domain_panel(
         "sf_vol_vs_market_20d": vol20,
         "sf_excess_breadth_5d": panel["breadth_5d"],
     }
-    operators = {
-        "volume_ratio": "sector_volume/sum_valid_sector_volume",
-        "sf_range_vs_market_10d": "rolling_mean_10_min5(sector_range/median_valid_sector_range)",
-        "sf_vol_vs_market_20d": "sector_vol20/median_valid_sector_vol20",
-        "sf_excess_breadth_5d": "sector_breadth5-mean_valid_sector_breadth5",
-    }
+    operators = dict(C010_CROSS_SECTION_OPERATORS)
     outputs = {name: pd.Series(np.nan, index=panel.index, dtype="float64") for name in inputs}
     pre_masks = {name: pd.Series(False, index=panel.index, dtype="bool") for name in inputs}
     entry_state: dict[tuple[str, pd.Timestamp], dict[str, Any]] = {}
@@ -1727,46 +1832,10 @@ def build_c010_feature_domain_panel(
             "cross_section_min_coverage": MIN_COVERAGE,
             "cross_section_min_valid_sector_count": 28 if expected_sector_count == 31 else 118,
             "moneyflow_mandatory_fields": list(MONEYFLOW_STOCK_FIELDS),
-            "moneyflow_denominator_by_feature": {
-                "net_mf_ratio": "moneyflow_contributor_amount",
-                "elg_net_mf_ratio": "moneyflow_contributor_amount",
-                "sf_mf_net_ratio_std_5d_neg": "moneyflow_contributor_amount",
-                "sf_small_net_ratio_5d": "moneyflow_contributor_amount",
-            },
+            "moneyflow_denominator_by_feature": dict(C010_MONEYFLOW_DENOMINATOR_BY_FEATURE),
             "cross_section_operator_by_feature": operators,
             "formula_diff_by_feature": {
-                "net_mf_ratio": {
-                    "v1": "sector_net_mf_amount/price_domain_l1_amount",
-                    "v2": "complete_moneyflow_net_mf_amount/moneyflow_contributor_amount",
-                },
-                "elg_net_mf_ratio": {
-                    "v1": "sector_elg_net_mf_amount/price_domain_l1_amount",
-                    "v2": "complete_moneyflow_elg_net_mf_amount/moneyflow_contributor_amount",
-                },
-                "sf_mf_net_ratio_std_5d_neg": {
-                    "v1": "rolling_std_5_min5(net_mf_ratio_v1)_neg",
-                    "v2": "rolling_std_5_min5(net_mf_ratio_v2)_neg_with_current_moneyflow_post_mask",
-                },
-                "sf_small_net_ratio_5d": {
-                    "v1": "rolling_mean_5_min3(small_net_ratio_v1)",
-                    "v2": "rolling_mean_5_min3(small_net_ratio_v2)_with_current_moneyflow_post_mask",
-                },
-                "volume_ratio": {
-                    "v1": "sector_volume/sum_all_sector_volume",
-                    "v2": operators["volume_ratio"],
-                },
-                "sf_range_vs_market_10d": {
-                    "v1": "exact_complete_global_mask_then_rolling_mean_10_min5",
-                    "v2": operators["sf_range_vs_market_10d"],
-                },
-                "sf_vol_vs_market_20d": {
-                    "v1": "exact_complete_l1_return_surrogate_mask",
-                    "v2": operators["sf_vol_vs_market_20d"],
-                },
-                "sf_excess_breadth_5d": {
-                    "v1": "exact_complete_l1_return_surrogate_mask",
-                    "v2": operators["sf_excess_breadth_5d"],
-                },
+                feature: dict(formula) for feature, formula in C010_FORMULA_DIFF_BY_FEATURE.items()
             },
             "moneyflow_rolling_post_mask_required": True,
             "range_cross_section_rolling_post_mask_required": True,
