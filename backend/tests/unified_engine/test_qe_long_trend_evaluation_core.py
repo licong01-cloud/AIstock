@@ -976,6 +976,7 @@ def test_execution_summary_preserves_entry_and_exit_block_reason_breakdown() -> 
     observations = pd.DataFrame(
         {
             "entry_execution_status": ["never_filled", "delayed_fill"],
+            "entry_execution_evidence_level": ["explicit_order_intent", "reconciled_trade"],
             "entry_block_reason": ["blocked_limit_up", "blocked_suspension"],
             "entry_delay_days": [np.nan, 2.0],
             "missed_mfe_due_to_entry_block": [0.2, 0.1],
@@ -985,6 +986,7 @@ def test_execution_summary_preserves_entry_and_exit_block_reason_breakdown() -> 
     episodes = pd.DataFrame(
         {
             "exit_execution_status": ["delayed_exit", "never_exited"],
+            "exit_execution_evidence_level": ["position_transition", "qlib_indicator_object"],
             "exit_block_reason": ["blocked_limit_down", "blocked_suspension"],
             "exit_delay_days": [1.0, np.nan],
             "blocked_exit_extra_drawdown": [0.03, 0.08],
@@ -1001,6 +1003,14 @@ def test_execution_summary_preserves_entry_and_exit_block_reason_breakdown() -> 
     assert metric["exit_block_reason_counts"] == {
         "blocked_limit_down": 1,
         "blocked_suspension": 1,
+    }
+    assert metric["entry_evidence_level_counts"] == {
+        "explicit_order_intent": 1,
+        "reconciled_trade": 1,
+    }
+    assert metric["exit_evidence_level_counts"] == {
+        "position_transition": 1,
+        "qlib_indicator_object": 1,
     }
 
 

@@ -3915,6 +3915,16 @@ def compute_execution_metrics(
         if not episodes.empty and "exit_execution_status" in episodes
         else {}
     )
+    entry_evidence_level_counts = (
+        observations["entry_execution_evidence_level"].value_counts(dropna=False).to_dict()
+        if not observations.empty and "entry_execution_evidence_level" in observations
+        else {}
+    )
+    exit_evidence_level_counts = (
+        episodes["exit_execution_evidence_level"].value_counts(dropna=False).to_dict()
+        if not episodes.empty and "exit_execution_evidence_level" in episodes
+        else {}
+    )
     entry_block_reason_counts = (
         observations["entry_block_reason"].dropna().value_counts().to_dict()
         if not observations.empty and "entry_block_reason" in observations
@@ -3947,6 +3957,12 @@ def compute_execution_metrics(
             "value_json": {
                 "entry_status_counts": {str(key): int(value) for key, value in entry_counts.items()},
                 "exit_status_counts": {str(key): int(value) for key, value in exit_counts.items()},
+                "entry_evidence_level_counts": {
+                    str(key): int(value) for key, value in entry_evidence_level_counts.items()
+                },
+                "exit_evidence_level_counts": {
+                    str(key): int(value) for key, value in exit_evidence_level_counts.items()
+                },
                 "entry_block_reason_counts": {
                     str(key): int(value) for key, value in entry_block_reason_counts.items()
                 },

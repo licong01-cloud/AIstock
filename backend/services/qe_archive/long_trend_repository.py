@@ -53,6 +53,30 @@ ALLOWED_ENTRY_EXECUTION_STATUSES = frozenset(
 ALLOWED_EXIT_EXECUTION_STATUSES = frozenset(
     {"filled_on_exit_signal_day", "delayed_exit", "never_exited", "not_attempted_by_strategy", "not_verifiable"}
 )
+ALLOWED_ENTRY_EXECUTION_EVIDENCE_LEVELS = frozenset(
+    {
+        "none",
+        "ambiguous_trade_match",
+        "reconciled_trade",
+        "indicator_and_trade_reconciled",
+        "qlib_indicator_object",
+        "explicit_order_intent",
+        "position_transition_only",
+    }
+)
+ALLOWED_EXIT_EXECUTION_EVIDENCE_LEVELS = frozenset(
+    {
+        "none",
+        "ambiguous_trade_match",
+        "exit_signal_only",
+        "reconciled_trade",
+        "position_transition",
+        "qlib_indicator_object",
+        "indicator_and_exit_reconciled",
+        "explicit_order_intent",
+        "position_transition_only",
+    }
+)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 ALLOWED_METRIC_SCOPES = frozenset(
@@ -780,6 +804,8 @@ class QELongTrendEvaluationResultRepository:
         family_status: str | None = None,
         entry_execution_status: str | None = None,
         exit_execution_status: str | None = None,
+        entry_execution_evidence_level: str | None = None,
+        exit_execution_evidence_level: str | None = None,
         limit: int = 20,
         cursor: str | None = None,
     ) -> dict[str, Any]:
@@ -792,6 +818,8 @@ class QELongTrendEvaluationResultRepository:
             family_status=family_status,
             entry_execution_status=entry_execution_status,
             exit_execution_status=exit_execution_status,
+            entry_execution_evidence_level=entry_execution_evidence_level,
+            exit_execution_evidence_level=exit_execution_evidence_level,
         )
         bounded = _bounded_limit(limit)
         clauses = ["1=1"]
@@ -847,6 +875,22 @@ class QELongTrendEvaluationResultRepository:
                 "COALESCE(execution_metric.value_json->'exit_status_counts', '{}'::jsonb) ? %s)))"
             )
             params.extend([exit_execution_status, exit_execution_status])
+        if entry_execution_evidence_level:
+            clauses.append(
+                f"EXISTS (SELECT 1 FROM {METRIC_TABLE} execution_metric "
+                "WHERE execution_metric.evaluation_id = e.evaluation_id AND "
+                "execution_metric.metric_key = 'entry_execution_summary' AND "
+                "COALESCE(execution_metric.value_json->'entry_evidence_level_counts', '{}'::jsonb) ? %s)"
+            )
+            params.append(entry_execution_evidence_level)
+        if exit_execution_evidence_level:
+            clauses.append(
+                f"EXISTS (SELECT 1 FROM {METRIC_TABLE} execution_metric "
+                "WHERE execution_metric.evaluation_id = e.evaluation_id AND "
+                "execution_metric.metric_key = 'entry_execution_summary' AND "
+                "COALESCE(execution_metric.value_json->'exit_evidence_level_counts', '{}'::jsonb) ? %s)"
+            )
+            params.append(exit_execution_evidence_level)
         if cursor:
             values = _decode_cursor(cursor, expected=4)
             try:
@@ -1336,6 +1380,8 @@ def _validate_query_filters(
     family_status: str | None,
     entry_execution_status: str | None,
     exit_execution_status: str | None,
+    entry_execution_evidence_level: str | None,
+    exit_execution_evidence_level: str | None,
 ) -> None:
     for field, value in (("label_horizon", label_horizon), ("horizon", horizon)):
         if value is not None:
@@ -1355,6 +1401,16 @@ def _validate_query_filters(
         ("family_status", family_status, ALLOWED_FAMILY_STATUSES),
         ("entry_execution_status", entry_execution_status, ALLOWED_ENTRY_EXECUTION_STATUSES),
         ("exit_execution_status", exit_execution_status, ALLOWED_EXIT_EXECUTION_STATUSES),
+        (
+            "entry_execution_evidence_level",
+            entry_execution_evidence_level,
+            ALLOWED_ENTRY_EXECUTION_EVIDENCE_LEVELS,
+        ),
+        (
+            "exit_execution_evidence_level",
+            exit_execution_evidence_level,
+            ALLOWED_EXIT_EXECUTION_EVIDENCE_LEVELS,
+        ),
     ):
         if value is not None and value not in allowed:
             raise QELongTrendResultQueryError(f"{field} is invalid: {value}")

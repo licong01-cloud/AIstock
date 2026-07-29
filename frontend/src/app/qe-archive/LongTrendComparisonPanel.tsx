@@ -32,6 +32,26 @@ const EXIT_EXECUTION_STATUSES = [
   "not_attempted_by_strategy",
   "not_verifiable",
 ] as const;
+const ENTRY_EVIDENCE_LEVELS = [
+  "none",
+  "ambiguous_trade_match",
+  "reconciled_trade",
+  "indicator_and_trade_reconciled",
+  "qlib_indicator_object",
+  "explicit_order_intent",
+  "position_transition_only",
+] as const;
+const EXIT_EVIDENCE_LEVELS = [
+  "none",
+  "ambiguous_trade_match",
+  "exit_signal_only",
+  "reconciled_trade",
+  "position_transition",
+  "qlib_indicator_object",
+  "indicator_and_exit_reconciled",
+  "explicit_order_intent",
+  "position_transition_only",
+] as const;
 
 function asObject(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -130,6 +150,8 @@ export default function LongTrendComparisonPanel() {
   const [familyStatus, setFamilyStatus] = React.useState("");
   const [entryExecutionStatus, setEntryExecutionStatus] = React.useState<"" | (typeof ENTRY_EXECUTION_STATUSES)[number]>("");
   const [exitExecutionStatus, setExitExecutionStatus] = React.useState<"" | (typeof EXIT_EXECUTION_STATUSES)[number]>("");
+  const [entryEvidenceLevel, setEntryEvidenceLevel] = React.useState<"" | (typeof ENTRY_EVIDENCE_LEVELS)[number]>("");
+  const [exitEvidenceLevel, setExitEvidenceLevel] = React.useState<"" | (typeof EXIT_EVIDENCE_LEVELS)[number]>("");
   const [rows, setRows] = React.useState<LongTrendQualityItem[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -158,6 +180,8 @@ export default function LongTrendComparisonPanel() {
         family_status: familyStatus as "COMPUTED" | "COMPUTED_WITH_LIMITATIONS" | "NOT_COMPUTABLE" | "NOT_VERIFIABLE" || undefined,
         entry_execution_status: entryExecutionStatus || undefined,
         exit_execution_status: exitExecutionStatus || undefined,
+        entry_execution_evidence_level: entryEvidenceLevel || undefined,
+        exit_execution_evidence_level: exitEvidenceLevel || undefined,
       });
       setRows(selectComparisonRows(items, metricKey, barrier, horizon));
     } catch (queryError) {
@@ -166,7 +190,7 @@ export default function LongTrendComparisonPanel() {
     } finally {
       setLoading(false);
     }
-  }, [barrier, entryExecutionStatus, exitExecutionStatus, familyStatus, horizon, metricKey, sectorCode, snapshotId, taskId]);
+  }, [barrier, entryEvidenceLevel, entryExecutionStatus, exitEvidenceLevel, exitExecutionStatus, familyStatus, horizon, metricKey, sectorCode, snapshotId, taskId]);
 
   return (
     <section data-testid="qe-long-trend-archive-comparison" style={{ marginTop: 24, background: "#fff", border: "1px solid #dbeafe", borderRadius: 12, padding: 18, boxShadow: "0 1px 3px rgba(15,23,42,0.05)" }}>
@@ -186,6 +210,8 @@ export default function LongTrendComparisonPanel() {
         <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Family evidence quality<select value={familyStatus} onChange={(event) => setFamilyStatus(event.target.value)} style={fieldStyle}><option value="">全部</option><option value="COMPUTED">COMPUTED</option><option value="COMPUTED_WITH_LIMITATIONS">COMPUTED_WITH_LIMITATIONS</option><option value="NOT_COMPUTABLE">NOT_COMPUTABLE</option><option value="NOT_VERIFIABLE">NOT_VERIFIABLE</option></select></label>
         <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Entry execution status<select data-testid="qe-long-trend-archive-entry-status" value={entryExecutionStatus} onChange={(event) => setEntryExecutionStatus(event.target.value as "" | (typeof ENTRY_EXECUTION_STATUSES)[number])} style={fieldStyle}><option value="">全部</option>{ENTRY_EXECUTION_STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
         <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Exit execution status<select data-testid="qe-long-trend-archive-exit-status" value={exitExecutionStatus} onChange={(event) => setExitExecutionStatus(event.target.value as "" | (typeof EXIT_EXECUTION_STATUSES)[number])} style={fieldStyle}><option value="">全部</option>{EXIT_EXECUTION_STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Entry evidence quality<select data-testid="qe-long-trend-archive-entry-evidence" value={entryEvidenceLevel} onChange={(event) => setEntryEvidenceLevel(event.target.value as "" | (typeof ENTRY_EVIDENCE_LEVELS)[number])} style={fieldStyle}><option value="">全部</option>{ENTRY_EVIDENCE_LEVELS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Exit evidence quality<select data-testid="qe-long-trend-archive-exit-evidence" value={exitEvidenceLevel} onChange={(event) => setExitEvidenceLevel(event.target.value as "" | (typeof EXIT_EVIDENCE_LEVELS)[number])} style={fieldStyle}><option value="">全部</option>{EXIT_EVIDENCE_LEVELS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
         {metricKey === "barrier_capture" ? <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Barrier<select value={barrier} onChange={(event) => setBarrier(Number(event.target.value))} style={fieldStyle}><option value={0.3}>30%</option><option value={0.5}>50%</option><option value={0.7}>70%</option></select></label> : metricKey === "sector_signal_path" ? <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>L2 sector code（必填）<input value={sectorCode} onChange={(event) => setSectorCode(event.target.value)} style={{ ...fieldStyle, fontFamily: "monospace" }} /></label> : <div style={{ fontSize: 11, color: "#64748b", alignSelf: "end", padding: 8 }}>L2 sector filter 仅在板块路径指标启用。</div>}
       </div>
 

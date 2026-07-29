@@ -159,6 +159,8 @@ test("completed QE Loop restores long-trend DB state and posts the single idempo
             value_json: {
               entry_status_counts: { filled_t1: 80, delayed_fill: 20 },
               exit_status_counts: { filled_on_exit_signal_day: 70, delayed_exit: 20, not_verifiable: 10 },
+              entry_evidence_level_counts: { reconciled_trade: 80, qlib_indicator_object: 20 },
+              exit_evidence_level_counts: { position_transition: 70, exit_signal_only: 30 },
               entry_block_reason_counts: { blocked_limit_up: 3 },
               exit_block_reason_counts: { blocked_limit_down: 4, blocked_suspension: 2 },
               entry_delay_days: { p50: 1 },
@@ -188,6 +190,7 @@ test("completed QE Loop restores long-trend DB state and posts the single idempo
   await expect(page.getByTestId("qe-long-trend-family-execution_cause")).toContainText("direct_cause_coverage: 0.25");
   await expect(page.getByTestId("qe-long-trend-coverage-censoring")).toContainText("right_censored 8");
   await expect(page.getByTestId("qe-long-trend-panel")).toContainText("blocked_limit_down 4");
+  await expect(page.getByTestId("qe-long-trend-panel")).toContainText("reconciled_trade 80");
   await expect(page.getByTestId("qe-long-trend-horizon-table").getByText("0.1234")).toBeVisible();
 
   await page.getByTestId("qe-long-trend-create").click();
@@ -253,6 +256,8 @@ test("QE Archive comparison requires one outcome vintage and returns run/model/s
   await page.getByTestId("qe-long-trend-archive-snapshot").fill(snapshotId);
   await page.getByTestId("qe-long-trend-archive-entry-status").selectOption("filled_t1");
   await page.getByTestId("qe-long-trend-archive-exit-status").selectOption("filled_on_exit_signal_day");
+  await page.getByTestId("qe-long-trend-archive-entry-evidence").selectOption("reconciled_trade");
+  await page.getByTestId("qe-long-trend-archive-exit-evidence").selectOption("position_transition");
   await page.getByTestId("qe-long-trend-archive-query").click();
 
   await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("LGBM");
@@ -265,6 +270,8 @@ test("QE Archive comparison requires one outcome vintage and returns run/model/s
   expect(query.get("horizon")).toBe("60");
   expect(query.get("entry_execution_status")).toBe("filled_t1");
   expect(query.get("exit_execution_status")).toBe("filled_on_exit_signal_day");
+  expect(query.get("entry_execution_evidence_level")).toBe("reconciled_trade");
+  expect(query.get("exit_execution_evidence_level")).toBe("position_transition");
   expect(query.get("limit")).toBe("100");
 });
 

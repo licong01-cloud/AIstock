@@ -144,6 +144,18 @@ def query_qe_archive_long_trend_quality(
         "not_attempted_by_strategy", "not_verifiable",
     ]
     | None = Query(None),
+    entry_execution_evidence_level: Literal[
+        "none", "ambiguous_trade_match", "reconciled_trade",
+        "indicator_and_trade_reconciled", "qlib_indicator_object",
+        "explicit_order_intent", "position_transition_only",
+    ]
+    | None = Query(None),
+    exit_execution_evidence_level: Literal[
+        "none", "ambiguous_trade_match", "exit_signal_only", "reconciled_trade",
+        "position_transition", "qlib_indicator_object", "indicator_and_exit_reconciled",
+        "explicit_order_intent", "position_transition_only",
+    ]
+    | None = Query(None),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None, max_length=4096),
 ):
@@ -163,6 +175,8 @@ def query_qe_archive_long_trend_quality(
             family_status=family_status,
             entry_execution_status=entry_execution_status,
             exit_execution_status=exit_execution_status,
+            entry_execution_evidence_level=entry_execution_evidence_level,
+            exit_execution_evidence_level=exit_execution_evidence_level,
             limit=limit,
             cursor=cursor,
         )

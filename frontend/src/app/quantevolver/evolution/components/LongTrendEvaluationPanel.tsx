@@ -452,6 +452,8 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
               <div style={{ fontSize: 12, lineHeight: 1.8 }}>
                 <div>入场状态：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.entry_status_counts)}</span></div>
                 <div>退出状态：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.exit_status_counts)}</span></div>
+                <div>入场证据质量：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.entry_evidence_level_counts)}</span></div>
+                <div>退出证据质量：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.exit_evidence_level_counts)}</span></div>
                 <div>入场阻断原因：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.entry_block_reason_counts)}</span></div>
                 <div>退出阻断原因：<span style={{ fontFamily: "monospace" }}>{statusCounts(execution.exit_block_reason_counts)}</span></div>
                 <div>entry delay p50：{decimal(asObject(execution.entry_delay_days).p50, 1)} 天</div>

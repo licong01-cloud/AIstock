@@ -522,6 +522,8 @@ export type LongTrendQualityQuery = {
   family_status?: "COMPUTED" | "COMPUTED_WITH_LIMITATIONS" | "NOT_COMPUTABLE" | "NOT_VERIFIABLE";
   entry_execution_status?: "filled_t1" | "partial_fill_t1" | "delayed_fill" | "never_filled" | "not_attempted_by_strategy" | "not_verifiable";
   exit_execution_status?: "filled_on_exit_signal_day" | "delayed_exit" | "never_exited" | "not_attempted_by_strategy" | "not_verifiable";
+  entry_execution_evidence_level?: "none" | "ambiguous_trade_match" | "reconciled_trade" | "indicator_and_trade_reconciled" | "qlib_indicator_object" | "explicit_order_intent" | "position_transition_only";
+  exit_execution_evidence_level?: "none" | "ambiguous_trade_match" | "exit_signal_only" | "reconciled_trade" | "position_transition" | "qlib_indicator_object" | "indicator_and_exit_reconciled" | "explicit_order_intent" | "position_transition_only";
 };
 
 function isObject(value: unknown): value is JsonObject {

@@ -459,6 +459,8 @@ def test_quality_query_rejects_unknown_dimensions_before_database_access() -> No
     with pytest.raises(QELongTrendResultQueryError):
         repository.query_quality(exit_execution_status="filled")
     with pytest.raises(QELongTrendResultQueryError):
+        repository.query_quality(entry_execution_evidence_level="guessed_from_daily_bar")
+    with pytest.raises(QELongTrendResultQueryError):
         repository.query_quality(metric_key="unregistered_metric")
     with pytest.raises(QELongTrendResultQueryError):
         repository.query_quality(
@@ -615,11 +617,18 @@ def test_repository_get_list_and_quality_queries_are_bounded_and_keyset_stable()
         family_status="COMPUTED",
         entry_execution_status="filled_t1",
         exit_execution_status="filled_on_exit_signal_day",
+        entry_execution_evidence_level="reconciled_trade",
+        exit_execution_evidence_level="position_transition",
         limit=1,
     )
     assert len(quality["items"]) == 1
     assert "evaluation_asof_sort" not in quality["items"][0]
     assert quality["next_cursor"] is not None
+    quality_query = next(
+        sql for sql, _params in connection.cursor_value.calls if "AS evaluation_asof_sort" in sql
+    )
+    assert "entry_evidence_level_counts" in quality_query
+    assert "exit_evidence_level_counts" in quality_query
 
     cursor = _encode_cursor(date(2026, 6, 30), EVALUATION_ID, "rank_ic", "a" * 64)
     repository.query_quality(limit=1, cursor=cursor)
