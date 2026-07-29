@@ -90,6 +90,10 @@ class HistoricalRangeOutcomeRequestFactory(Protocol):
 class HistoricalRangeBridgeRequestFactory(Protocol):
     def build(self, batch_id: str, request: HistoricalRangeBuildBridgeRequest) -> HistoricalRangeDatasetBridgeRequestV1: ...
 
+    def register_frozen_policy_refs(
+        self, request: HistoricalRangeDatasetBridgeRequestV1
+    ) -> None: ...
+
 
 @dataclass(frozen=True)
 class HistoricalRangeRuntime:
@@ -222,6 +226,7 @@ class ResponseBoundHistoricalRangeDispatcher:
                         api_request=api_request,
                         domain_request=request,
                     )
+                runtime.bridge_requests.register_frozen_policy_refs(request)
                 stage = "CLAIM_AND_EXECUTION"
                 self._run_bridge_request(
                     runtime=runtime,

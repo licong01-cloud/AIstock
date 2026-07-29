@@ -128,6 +128,15 @@ class HistoricalRangeR5PolicyRegistry:
         self._component_root = component_root
         self._provider = provider
 
+    def register_frozen_policy_refs(
+        self,
+        refs: Sequence[HistoricalRangeArtifactRefV1],
+    ) -> None:
+        """Rehydrate the explicit catalog from an already-frozen request."""
+
+        for ref in refs:
+            self._provider.register(str(ref.payload_sha256), ref)
+
     def resolve(
         self, *, batch_id: str, requested_run_ids: Sequence[str]
     ) -> tuple[tuple[str, HistoricalRangeOutcomePolicyResolutionV1], ...]:
@@ -274,6 +283,14 @@ class HistoricalRangeR5BridgeRequestFactory:
         self._policy_registry = policy_registry
         self._artifact_store = artifact_store
         self._identities = identities
+
+    def register_frozen_policy_refs(
+        self,
+        request: HistoricalRangeDatasetBridgeRequestV1,
+    ) -> None:
+        self._policy_registry.register_frozen_policy_refs(
+            request.policy_bundle_refs
+        )
 
     def build(
         self, batch_id: str, request: HistoricalRangeBuildBridgeRequest

@@ -509,6 +509,18 @@ class _BridgeParentApplication:
         return receipt, ref
 
 
+class _BridgeRequestFactory:
+    def __init__(self, request):
+        self.request = request
+        self.registered_requests = []
+
+    def build(self, *_args):
+        return self.request
+
+    def register_frozen_policy_refs(self, request):
+        self.registered_requests.append(request)
+
+
 def _bridge_runtime(status, *, operation_status="QUEUED", lease_expired=False):
     operation = {
         "operation_id": "ahrop_parent",
@@ -536,7 +548,7 @@ def _bridge_runtime(status, *, operation_status="QUEUED", lease_expired=False):
         query=query,
         repository=repository,
         bridge=bridge,
-        bridge_requests=SimpleNamespace(build=lambda *_args: request),
+        bridge_requests=_BridgeRequestFactory(request),
     )
     return runtime, repository, bridge
 

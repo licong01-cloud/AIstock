@@ -498,11 +498,18 @@ def test_bridge_exact_retry_rejects_scope_drift_instead_of_reusing_frozen_eviden
 
 def test_bridge_dispatcher_consumes_frozen_domain_payload_without_rebuilding_identity(tmp_path) -> None:
     runtime, _repository, frozen, _current = _frozen_replay_runtime(tmp_path)
+    registered = []
+
+    class FrozenReplayFactory:
+        def build(self, *_args):
+            raise AssertionError("bridge identity must not be rebuilt")
+
+        def register_frozen_policy_refs(self, request):
+            registered.append(request)
+
     runtime = replace(
         runtime,
-        bridge_requests=SimpleNamespace(
-            build=lambda *_args: (_ for _ in ()).throw(AssertionError("bridge identity must not be rebuilt"))
-        ),
+        bridge_requests=FrozenReplayFactory(),
     )
     dispatcher = ResponseBoundHistoricalRangeDispatcher(runtime_factory=lambda: runtime)
     captured = []
@@ -525,6 +532,7 @@ def test_bridge_dispatcher_consumes_frozen_domain_payload_without_rebuilding_ide
         },
     )
 
+    assert registered == [frozen]
     assert captured == [frozen]
 
 
