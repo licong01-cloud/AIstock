@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K4 vn.py Compatibility Façade F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_in_progress`；K4-A=`implemented_verified_contract_slice_pending_source_merge`、K4-B=`not_started`。
+> Feature tier：`F2`。文档状态：`implementation_in_progress`；K4-A=`implemented_verified_contract_slice + merged`、K4-B=`not_started`。
 >
 > 设计交付：PR #2861，merge `8250b64ff3c2deb04eb3594f1ae3fba3acd1e6ce`，`source_merge=merged_pr_2861`。
 >
@@ -10,7 +10,7 @@
 >
 > 模拟盘唯一上位蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
 >
-> 已合入前置：K1、K2、K3 overall 均为 `implemented_verified + merged`。K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 合入，状态同步已通过 PR #2858 / merge `70ec6aaec28aa20755d73ecfe1a027f8ea94dbad` 合入。K4-A pure façade/adapter、strict contracts、six-source identity、observation-only characterization writer与fail-closed publication boundary已实现并完成本地定向验证，source merge仍待本PR；K4-B exact pinned-source executor、positive characterization/conformance、optional K2 invocation与read-only repository seam均=`not_started`，产品 runtime 未切换。
+> 已合入前置：K1、K2、K3 overall 均为 `implemented_verified + merged`。K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 合入，状态同步已通过 PR #2858 / merge `70ec6aaec28aa20755d73ecfe1a027f8ea94dbad` 合入。K4-A pure façade/adapter、strict contracts、six-source identity、observation-only characterization writer与fail-closed publication boundary已通过 PR #2883 / merge `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda` 合入；K4-B exact pinned-source executor、positive characterization/conformance、optional K2 invocation与read-only repository seam均=`not_started`，产品 runtime 未切换。
 >
 > 本文只细化父蓝图已经批准的 K4：initialize/transition-scoped `VnpyAlgoEngineFacadeV1`、通用façade-backed adapter和existing K2 optional invocation、精确 method/DTO/enum/state/effect 映射、每个已注册算法的 façade conformance receipt，以及 current-three + Iceberg/Stop source-compatible characterization。本文不增加算法、策略、产品 route、runtime owner、OMS、Gateway、数据库表、人工门禁或审批。
 
@@ -869,13 +869,14 @@ K4 implementation固定最多两个 source PR，不扩大到 K5/K6：
 - observation-only characterization writer/readback、failure/truncation、fresh-process determinism；raw caller observation始终FAILED，algorithm binding/conformance publication在K4-B exact executor到位前fail loud且zero partial publication；
 - actual live callable/signature/source binding positive/negative；不修改K2 creation/delivery/repository，不调用broker。
 
-K4-A implementation receipt（2026-07-29）：
+K4-A implementation receipt（2026-07-30）：
 
 - 五个pure核心文件、K1 delegated-path closure、repo-owned Iceberg/Stop/utility bytes和`facade_source_manifest.json`已实现；source manifest hash=`e0284a6d0e92938626d5a00bd16a325a31ccba35d0158847025af97b0ece51ea`；
 - current-three三个K1 requirement的per-plugin characterization hash保持各自独立；K4 shared requirement只绑定三者共同的`source_lock/method_signature/object_field` component和有序plugin requirement hashes，domain=`miniqmt_vnpy_facade_shared_k1_requirement_v1`，shared surface domain=`miniqmt_vnpy_facade_shared_k1_surface_v1`；不得把任一plugin-specific K1 surface冒充共享façade authority；
 - review-fix live façade contract hash=`59f9aed06e24aaefb1aebe753ddc493279bcd10cd2b4606bc71ec45af1040444`，implementation/method/DTO/state/terminal/isolated sets分别为`c861d972.../fa718f99.../e4a6ddb1.../9824f5ef.../8a224095.../600aab67...`；writer/readback均重建同一pinned/live authority；
 - K4 direct矩阵=`58 passed`；五核心line/branch分别为`92.04/79.09`、`86.67/76.87`、`83.33/71.43`、`92.45/71.08`、`97.45/94.64`；full PR classifier=`targeted_ci_required`、changed files=`21`、ownership=`21/21 mapped`、`unmapped_code_files=[]`，只选择MiniQMT/Paper；MiniQMT=`1047 passed,29 skipped`，Paper=`1050 passed,2 skipped,2 xfailed`；L0 blocking=`0`，module registry=`8 passed`、catalog=`14/14 mapped`；
 - K4-A仍是pure/shadow-only。它没有修改K2 creation/delivery/repository、current-three factory/binding或产品route；K4-A observation receipt均显式FAILED且不会发布algorithm binding/conformance set。K4-B exact pinned-source executor、optional invocation、read-only repository seam、current-three parity以及Iceberg/Stop完整characterization仍为`not_started`，不得把K4-A contract/FAILED receipt解释为K4 overall完成或runtime activation。
+- source HEAD=`117c96f9945d4ddd96a09d6ebfe741626a67c51f`已通过PR #2883，以普通merge commit `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda`进入main；source merge与K4-B/产品runtime状态继续分离。
 
 ### K4-B — existing K2 optional invocation and shadow integration
 
@@ -892,7 +893,7 @@ K4 source merge后仍不部署/激活产品 route。Rollback只回退 K4 code-ow
 
 ```text
 design_source_merge=merged_pr_2861
-k4a_source_merge=pending_pr
+k4a_source_merge=merged_pr_2883
 close_sync=not_applicable_feature
 production_ddl_gate=noop
 production_dml_gate=noop
@@ -905,7 +906,7 @@ service_restart=noop
 runtime_activation=noop
 product_runtime=not_switched
 K4_overall=implementation_in_progress
-K4-A=implemented_verified_contract_slice_pending_source_merge
+K4-A=implemented_verified_contract_slice_merged
 K4-B=not_started
 K5=not_started
 K6=not_started
