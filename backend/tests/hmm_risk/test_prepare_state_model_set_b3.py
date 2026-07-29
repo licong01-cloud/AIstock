@@ -333,6 +333,43 @@ def test_preflight_freezes_current_identities_without_fit_selection_or_writes(mo
     assert request["producer_commit"] == old_producer
 
 
+def test_formal_preflight_freezes_stock_facts_to_train_window_and_preserves_circ_mv_history(
+    monkeypatch,
+) -> None:
+    request = _request()
+    inputs = _preflight_inputs()
+    observed: dict[str, object] = {}
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+
+    def load_inputs(train_request, *, db_prefix, c010_formal=False):
+        observed["source"] = dict(train_request["source"])
+        observed["db_prefix"] = db_prefix
+        observed["c010_formal"] = c010_formal
+        return inputs
+
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", load_inputs)
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda values, req: _coverage_preflight(policy_sha256=values["feature_domain_policy_sha256"]),
+    )
+
+    report = subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
+
+    assert observed["source"]["source_start"] == "2022-01-01"
+    assert observed["source"]["source_end"] == "2024-06-30"
+    assert observed["source"]["circ_mv_history_start"] == "2020-07-30"
+    assert observed["db_prefix"] == "TDX_DB_"
+    assert observed["c010_formal"] is True
+    assert report["request_candidate"]["source"]["source_start"] == "2022-01-01"
+    assert report["request_candidate"]["source"]["source_end"] == "2024-06-30"
+    assert report["request_candidate"]["source"]["circ_mv_history_start"] == "2020-07-30"
+    assert request["source"]["source_start"] == "2020-07-30"
+    assert "circ_mv_history_start" not in request["source"]
+
+
 def test_preflight_blocks_insufficient_train_coverage_without_request_candidate(monkeypatch) -> None:
     request = _request()
     inputs = _preflight_inputs()
