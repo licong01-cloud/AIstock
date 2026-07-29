@@ -459,6 +459,10 @@ def test_quality_query_rejects_unknown_dimensions_before_database_access() -> No
     with pytest.raises(QELongTrendResultQueryError):
         repository.query_quality(exit_execution_status="filled")
     with pytest.raises(QELongTrendResultQueryError):
+        repository.query_quality(entry_execution_evidence_level="guessed_from_daily_bar")
+    with pytest.raises(QELongTrendResultQueryError):
+        repository.query_quality(metric_key="unregistered_metric")
+    with pytest.raises(QELongTrendResultQueryError):
         repository.query_quality(
             cursor=_encode_cursor(
                 datetime(2026, 6, 30, tzinfo=timezone.utc),
@@ -524,8 +528,8 @@ def test_repository_get_list_and_quality_queries_are_bounded_and_keyset_stable()
         {"metric_key": "rank_ic", "dimension_key": "b" * 64},
     ]
     evaluation_rows = [
-        {"evaluation_id": EVALUATION_ID, "created_at": now},
-        {"evaluation_id": "qelt_" + "b" * 64, "created_at": now},
+        {"evaluation_id": EVALUATION_ID, "created_at": now, "evaluation_asof": "2026-06-30"},
+        {"evaluation_id": "qelt_" + "b" * 64, "created_at": now, "evaluation_asof": "2026-06-30"},
     ]
     quality_rows = [
         {
@@ -551,16 +555,22 @@ def test_repository_get_list_and_quality_queries_are_bounded_and_keyset_stable()
         if "information_schema.columns" in sql:
             return schema_columns[params[1]]
         if "FROM qe_archive.run_evaluation WHERE evaluation_id" in sql:
-            return {"evaluation_id": EVALUATION_ID, "status": "partial"}
+            return {"evaluation_id": EVALUATION_ID, "status": "partial", "evaluation_asof": "2026-06-30"}
         if "FROM qe_archive.run_evaluation_metric" in sql and "JOIN" not in sql:
             return metric_rows
         if "FROM qe_archive.run_evaluation_artifact" in sql:
             return [{"artifact_type": "artifact_manifest", "sha256": "c" * 64}]
         if "JOIN qe_archive.run_evaluation_metric" in sql:
             assert "ORDER BY evaluation_asof_sort DESC" in sql
+            assert "LEFT JOIN qe_archive.run_reproducibility_manifest" in sql
+            assert "r.factor_set_hash" in sql
+            assert "reproducibility.random_seed" in sql
+            if "rank_ic" in params:
+                assert "m.metric_key = %s" in sql
             if "filled_t1" in params:
                 assert "entry_status_counts" in sql
                 assert "exit_status_counts" in sql
+                assert "execution_metric.evaluation_id = e.evaluation_id" in sql
                 assert params.count("filled_t1") == 2
                 assert params.count("filled_on_exit_signal_day") == 2
             return quality_rows
@@ -572,6 +582,7 @@ def test_repository_get_list_and_quality_queries_are_bounded_and_keyset_stable()
     repository = QELongTrendEvaluationResultRepository(connection_provider=lambda: connection)
     detail = repository.get_evaluation(EVALUATION_ID, metric_limit=1)
     assert detail is not None
+    assert detail["evaluation"]["evaluation_asof"] == "2026-06-30"
     assert len(detail["metrics"]) == 1
     assert detail["metric_next_cursor"] is not None
     assert detail["artifacts"][0]["artifact_type"] == "artifact_manifest"
@@ -581,13 +592,14 @@ def test_repository_get_list_and_quality_queries_are_bounded_and_keyset_stable()
         if "FROM qe_archive.run_evaluation" in sql and "WHERE evaluation_id = %s" in sql
     )
     assert "SELECT *" not in control_query
-    assert "request_json" not in control_query
+    assert "request_json->>'evaluation_asof' AS evaluation_asof" in control_query
     assert "owner_id" not in control_query
     assert "lease_expires_at" not in control_query
     assert "FOR SHARE" in control_query
 
     listed = repository.list_evaluations(task_id="task-1", loop_index=3, limit=1)
     assert len(listed["items"]) == 1
+    assert listed["items"][0]["evaluation_asof"] == "2026-06-30"
     assert listed["next_cursor"] is not None
 
     quality = repository.query_quality(
@@ -599,16 +611,24 @@ def test_repository_get_list_and_quality_queries_are_bounded_and_keyset_stable()
         label_horizon=60,
         evaluation_asof=date(2026, 6, 30),
         outcome_dataset_snapshot_id="outcome-1",
+        metric_key="rank_ic",
         horizon=60,
         sector_code="801010",
         family_status="COMPUTED",
         entry_execution_status="filled_t1",
         exit_execution_status="filled_on_exit_signal_day",
+        entry_execution_evidence_level="reconciled_trade",
+        exit_execution_evidence_level="position_transition",
         limit=1,
     )
     assert len(quality["items"]) == 1
     assert "evaluation_asof_sort" not in quality["items"][0]
     assert quality["next_cursor"] is not None
+    quality_query = next(
+        sql for sql, _params in connection.cursor_value.calls if "AS evaluation_asof_sort" in sql
+    )
+    assert "entry_evidence_level_counts" in quality_query
+    assert "exit_evidence_level_counts" in quality_query
 
     cursor = _encode_cursor(date(2026, 6, 30), EVALUATION_ID, "rank_ic", "a" * 64)
     repository.query_quality(limit=1, cursor=cursor)

@@ -172,11 +172,14 @@ def test_archive_quality_endpoint_preserves_bounded_filters(monkeypatch: pytest.
         model_type="LGBM",
         label_horizon=60,
         evaluation_asof=None,
+        metric_key="rank_ic",
         horizon=120,
         sector_code="801010",
         family_status=None,
-        entry_execution_status=None,
-        exit_execution_status=None,
+        entry_execution_status="filled_t1",
+        exit_execution_status="filled_on_exit_signal_day",
+        entry_execution_evidence_level="reconciled_trade",
+        exit_execution_evidence_level="position_transition",
         limit=100,
         cursor=None,
     )
@@ -185,7 +188,12 @@ def test_archive_quality_endpoint_preserves_bounded_filters(monkeypatch: pytest.
     assert captured["outcome_dataset_snapshot_id"] == "snapshot-20260630"
     assert captured["model_type"] == "LGBM"
     assert captured["label_horizon"] == 60
+    assert captured["metric_key"] == "rank_ic"
     assert captured["horizon"] == 120
+    assert captured["entry_execution_status"] == "filled_t1"
+    assert captured["exit_execution_status"] == "filled_on_exit_signal_day"
+    assert captured["entry_execution_evidence_level"] == "reconciled_trade"
+    assert captured["exit_execution_evidence_level"] == "position_transition"
 
 
 def test_archive_run_feature_snapshot_and_node_are_authoritative() -> None:

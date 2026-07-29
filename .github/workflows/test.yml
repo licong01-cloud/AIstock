@@ -279,7 +279,7 @@ jobs:
             sqlalchemy alembic psycopg2-binary 'asyncpg' \
             pyyaml 'orjson' \
             pytest 'pytest-cov' 'pytest-asyncio' 'pytest-mock' \
-            mcp 'mcp[cli]' \
+            'mcp[cli]==1.25.0' \
             pandas numpy scipy 'scikit-learn' hmmlearn==0.3.3 pyarrow \
             'python-dateutil' pytz \
             'tenacity' 'cachetools' \

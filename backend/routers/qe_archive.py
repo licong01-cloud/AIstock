@@ -126,10 +126,11 @@ def query_qe_archive_long_trend_quality(
     task_id: str | None = Query(None, max_length=200),
     loop_index: int | None = Query(None, ge=1),
     model_type: str | None = Query(None, min_length=1, max_length=128),
-    label_horizon: Literal[20, 40, 60, 120, 180] | None = Query(None),
+    label_horizon: int | None = Query(None),
     evaluation_asof: date | None = Query(None),
     outcome_dataset_snapshot_id: str | None = Query(None, max_length=200),
-    horizon: Literal[20, 40, 60, 120, 180] | None = Query(None),
+    metric_key: str | None = Query(None, min_length=1, max_length=128),
+    horizon: int | None = Query(None),
     sector_code: str | None = Query(None, min_length=1, max_length=128),
     family_status: Literal["COMPUTED", "COMPUTED_WITH_LIMITATIONS", "NOT_COMPUTABLE", "NOT_VERIFIABLE"]
     | None = Query(None),
@@ -141,6 +142,18 @@ def query_qe_archive_long_trend_quality(
     exit_execution_status: Literal[
         "filled_on_exit_signal_day", "delayed_exit", "never_exited",
         "not_attempted_by_strategy", "not_verifiable",
+    ]
+    | None = Query(None),
+    entry_execution_evidence_level: Literal[
+        "none", "ambiguous_trade_match", "reconciled_trade",
+        "indicator_and_trade_reconciled", "qlib_indicator_object",
+        "explicit_order_intent", "position_transition_only",
+    ]
+    | None = Query(None),
+    exit_execution_evidence_level: Literal[
+        "none", "ambiguous_trade_match", "exit_signal_only", "reconciled_trade",
+        "position_transition", "qlib_indicator_object", "indicator_and_exit_reconciled",
+        "explicit_order_intent", "position_transition_only",
     ]
     | None = Query(None),
     limit: int = Query(20, ge=1, le=100),
@@ -156,11 +169,14 @@ def query_qe_archive_long_trend_quality(
             label_horizon=label_horizon,
             evaluation_asof=evaluation_asof,
             outcome_dataset_snapshot_id=outcome_dataset_snapshot_id,
+            metric_key=metric_key,
             horizon=horizon,
             sector_code=sector_code,
             family_status=family_status,
             entry_execution_status=entry_execution_status,
             exit_execution_status=exit_execution_status,
+            entry_execution_evidence_level=entry_execution_evidence_level,
+            exit_execution_evidence_level=exit_execution_evidence_level,
             limit=limit,
             cursor=cursor,
         )
