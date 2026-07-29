@@ -172,6 +172,7 @@ def test_archive_quality_endpoint_preserves_bounded_filters(monkeypatch: pytest.
         model_type="LGBM",
         label_horizon=60,
         evaluation_asof=None,
+        metric_key="rank_ic",
         horizon=120,
         sector_code="801010",
         family_status=None,
@@ -185,6 +186,7 @@ def test_archive_quality_endpoint_preserves_bounded_filters(monkeypatch: pytest.
     assert captured["outcome_dataset_snapshot_id"] == "snapshot-20260630"
     assert captured["model_type"] == "LGBM"
     assert captured["label_horizon"] == 60
+    assert captured["metric_key"] == "rank_ic"
     assert captured["horizon"] == 120
 
 

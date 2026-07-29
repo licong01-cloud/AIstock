@@ -772,6 +772,7 @@ class QELongTrendEvaluationResultRepository:
         label_horizon: int | None = None,
         evaluation_asof: date | None = None,
         outcome_dataset_snapshot_id: str | None = None,
+        metric_key: str | None = None,
         horizon: int | None = None,
         sector_code: str | None = None,
         family_status: str | None = None,
@@ -783,6 +784,7 @@ class QELongTrendEvaluationResultRepository:
         _validate_query_filters(
             model_type=model_type,
             label_horizon=label_horizon,
+            metric_key=metric_key,
             horizon=horizon,
             sector_code=sector_code,
             family_status=family_status,
@@ -813,6 +815,8 @@ class QELongTrendEvaluationResultRepository:
             add("(e.request_json->>'evaluation_asof')::date = %s", evaluation_asof)
         if outcome_dataset_snapshot_id:
             add("e.outcome_dataset_snapshot_id = %s", outcome_dataset_snapshot_id)
+        if metric_key:
+            add("m.metric_key = %s", metric_key)
         if horizon is not None:
             add("m.horizon = %s", int(horizon))
         if sector_code:
@@ -866,13 +870,16 @@ class QELongTrendEvaluationResultRepository:
                            COALESCE((e.request_json->>'evaluation_asof')::date, DATE '0001-01-01')
                                AS evaluation_asof_sort,
                            e.family_status_json, e.platform_delivery_status_json,
-                           e.created_at, r.model_type, r.label_horizon,
+                           e.created_at, r.model_type, r.factor_set_hash, r.factor_count,
+                           r.label_horizon, reproducibility.random_seed,
                            m.metric_key, m.metric_scope, m.horizon, m.sector_code,
                            m.dimension_key, m.dimension_json, m.value_num, m.value_text,
                            m.value_json, m.unit, m.direction, m.quality_flag
                     FROM {CONTROL_TABLE} e
                     JOIN {METRIC_TABLE} m ON m.evaluation_id = e.evaluation_id
                     LEFT JOIN qe_archive.run r ON r.run_id = e.run_id
+                    LEFT JOIN qe_archive.run_reproducibility_manifest reproducibility
+                      ON reproducibility.run_id = e.run_id
                     WHERE {' AND '.join(clauses)}
                     ORDER BY evaluation_asof_sort DESC, e.evaluation_id ASC,
                              m.metric_key ASC, m.dimension_key ASC
@@ -1317,6 +1324,7 @@ def _validate_query_filters(
     *,
     model_type: str | None,
     label_horizon: int | None,
+    metric_key: str | None,
     horizon: int | None,
     sector_code: str | None,
     family_status: str | None,
@@ -1335,6 +1343,8 @@ def _validate_query_filters(
                 ) from exc
             if parsed not in ALLOWED_HORIZONS or str(value).strip() not in {str(parsed), f"{parsed}.0"}:
                 raise QELongTrendResultQueryError(f"{field} must be one of {sorted(ALLOWED_HORIZONS)}")
+    if metric_key is not None and metric_key not in ALLOWED_METRIC_KEYS:
+        raise QELongTrendResultQueryError("metric_key is not an allowed long-trend metric")
     for field, value, allowed in (
         ("family_status", family_status, ALLOWED_FAMILY_STATUSES),
         ("entry_execution_status", entry_execution_status, ALLOWED_ENTRY_EXECUTION_STATUSES),

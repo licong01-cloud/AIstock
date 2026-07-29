@@ -1031,6 +1031,55 @@ def qe_long_trend_phase3_platform(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_long_trend_phase4_ui(session: nox.Session) -> None:
+    """Run the F-014 DB-restored Loop action and same-vintage Archive UI contracts."""
+    frontend_port = session.posargs[0] if session.posargs else os.environ.get("FRONTEND_PORT", "3014")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        frontend_port,
+        external=True,
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "node",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "node",
+            "node_modules/@playwright/test/cli.js",
+            "test",
+            "tests/quantevolver/qe_long_trend_evaluation.spec.ts",
+            "--project",
+            "chromium",
+            "--timeout",
+            "120000",
+            "--output",
+            "../tmp/playwright-results-f014-phase4",
+            env=_env(
+                {
+                    "BACKEND_PORT": os.environ.get("BACKEND_PORT", "8014"),
+                    "FRONTEND_PORT": frontend_port,
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{os.environ.get('BACKEND_PORT', '8014')}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                    "PLAYWRIGHT_HTML_OUTPUT_DIR": "../tmp/playwright-report-f014-phase4",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
 def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
     """Run QE-only sector-risk artifact, strategy, persistence, and evaluation contracts."""
     _run_pytest(

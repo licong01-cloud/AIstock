@@ -24,6 +24,7 @@ import {
   type WorkerRunReport,
   qeArchiveApi,
 } from "@/lib/qe-archive/api";
+import LongTrendComparisonPanel from "./LongTrendComparisonPanel";
 
 const WRITE_CONFIRM_TEXT = "QE_ARCHIVE_WRITE";
 const WORKER_CONFIRM_TEXT = "QE_ARCHIVE_WORKER_RUN";
@@ -774,6 +775,8 @@ export default function QEArchivePage() {
           ]}
         />
       </SectionCard>
+
+      <LongTrendComparisonPanel />
     </main>
   );
 }

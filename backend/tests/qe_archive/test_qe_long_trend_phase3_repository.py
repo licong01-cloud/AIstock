@@ -459,6 +459,8 @@ def test_quality_query_rejects_unknown_dimensions_before_database_access() -> No
     with pytest.raises(QELongTrendResultQueryError):
         repository.query_quality(exit_execution_status="filled")
     with pytest.raises(QELongTrendResultQueryError):
+        repository.query_quality(metric_key="unregistered_metric")
+    with pytest.raises(QELongTrendResultQueryError):
         repository.query_quality(
             cursor=_encode_cursor(
                 datetime(2026, 6, 30, tzinfo=timezone.utc),
@@ -558,6 +560,11 @@ def test_repository_get_list_and_quality_queries_are_bounded_and_keyset_stable()
             return [{"artifact_type": "artifact_manifest", "sha256": "c" * 64}]
         if "JOIN qe_archive.run_evaluation_metric" in sql:
             assert "ORDER BY evaluation_asof_sort DESC" in sql
+            assert "LEFT JOIN qe_archive.run_reproducibility_manifest" in sql
+            assert "r.factor_set_hash" in sql
+            assert "reproducibility.random_seed" in sql
+            if "rank_ic" in params:
+                assert "m.metric_key = %s" in sql
             if "filled_t1" in params:
                 assert "entry_status_counts" in sql
                 assert "exit_status_counts" in sql
@@ -599,6 +606,7 @@ def test_repository_get_list_and_quality_queries_are_bounded_and_keyset_stable()
         label_horizon=60,
         evaluation_asof=date(2026, 6, 30),
         outcome_dataset_snapshot_id="outcome-1",
+        metric_key="rank_ic",
         horizon=60,
         sector_code="801010",
         family_status="COMPUTED",

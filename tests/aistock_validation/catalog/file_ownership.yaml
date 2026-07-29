@@ -1,5 +1,16 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: qe_long_trend_evaluation_phase4
+    priority: 127
+    include:
+      - frontend/src/app/qe-archive/LongTrendComparisonPanel.tsx
+      - frontend/src/app/quantevolver/evolution/components/LongTrendEvaluationPanel.tsx
+      - frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts
+    primary_module: qe.long_trend_evaluation
+    impact_modules: [qe.core, qe.archive]
+    layer: frontend
+    risk_level: high
+    ownership_reason: F-014 Phase 4 DB-restored Loop operator action and same-vintage Archive comparison form one bounded QE-only UI delivery.
   - rule_id: qe_long_trend_evaluation_phase3
     priority: 126
     include:
