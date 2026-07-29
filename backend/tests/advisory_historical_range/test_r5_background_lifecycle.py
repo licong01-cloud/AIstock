@@ -24,6 +24,7 @@ from backend.services.advisory_historical_range.service import ResponseBoundHist
 from backend.services.advisory_historical_range.repository import (
     PostgresHistoricalRangePreclaimFailureRepository,
 )
+from backend.services.advisory_historical_range import runtime_factories
 
 
 class _Background:
@@ -299,6 +300,108 @@ def _artifact_ref(kind: HistoricalRangeArtifactKind, char: str) -> HistoricalRan
         payload_sha256=digest,
         file_sha256=digest,
     )
+
+
+class _BridgeRefsCursor:
+    def __init__(self, result_sets):
+        self._result_sets = iter(result_sets)
+        self._rows = ()
+        self.statements = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, statement, params):
+        self.statements.append((statement, params))
+        self._rows = next(self._result_sets)
+
+    def fetchall(self):
+        return self._rows
+
+
+class _BridgeRefsConnection:
+    def __init__(self, result_sets):
+        self.cursor_instance = _BridgeRefsCursor(result_sets)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def set_session(self, **_kwargs):
+        return None
+
+    def cursor(self, **_kwargs):
+        return self.cursor_instance
+
+    def rollback(self):
+        return None
+
+
+def test_bridge_refs_uses_fine_grained_maturity_instead_of_outer_outcome_status(
+    monkeypatch,
+) -> None:
+    day_ref = _artifact_ref(HistoricalRangeArtifactKind.DAY_RECEIPT, "1")
+    candidate_ref = _artifact_ref(
+        HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT,
+        "2",
+    )
+    matured_ref = _artifact_ref(HistoricalRangeArtifactKind.OUTCOME, "3")
+    pending_ref = _artifact_ref(HistoricalRangeArtifactKind.OUTCOME, "4")
+    connection = _BridgeRefsConnection(
+        (
+            (
+                {
+                    "day_receipt_ref": day_ref.model_dump(mode="json"),
+                    "candidate_artifact_ref": candidate_ref.model_dump(mode="json"),
+                },
+            ),
+            (
+                {
+                    "outcome_artifact_ref": matured_ref.model_dump(mode="json"),
+                    "outcome_json": {"fine_grained_status": "COMPLETE"},
+                },
+                {
+                    "outcome_artifact_ref": pending_ref.model_dump(mode="json"),
+                    "outcome_json": {"fine_grained_status": "NOT_DUE"},
+                },
+            ),
+            (),
+        )
+    )
+    observed_statuses = []
+
+    def eligible(outcome_json, *, requested_maturity_statuses):
+        observed_statuses.append(requested_maturity_statuses)
+        return (
+            (object(),)
+            if outcome_json["fine_grained_status"]
+            in {status.value for status in requested_maturity_statuses}
+            else ()
+        )
+
+    monkeypatch.setattr(runtime_factories, "_eligible_executable_results", eligible)
+
+    refs = runtime_factories._bridge_refs(
+        conn_factory=lambda: connection,
+        range_run_id="ahrr_1",
+        policy_hash="a" * 64,
+        horizons=(1,),
+        maturity_statuses=("COMPLETE",),
+    )
+
+    assert refs["outcome_refs"] == (matured_ref,)
+    assert observed_statuses == [
+        (runtime_factories.HistoricalRangeOutcomeStatus.COMPLETE,),
+        (runtime_factories.HistoricalRangeOutcomeStatus.COMPLETE,),
+    ]
+    outcome_sql, outcome_params = connection.cursor_instance.statements[1]
+    assert "outcome.maturity_status = ANY" not in outcome_sql
+    assert outcome_params == ("ahrr_1", [1], "a" * 64)
 
 
 def _bridge_receipt(status: HistoricalRangeBridgeResultStatus) -> HistoricalRangeDatasetBridgeReceiptV1:
