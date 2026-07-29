@@ -699,29 +699,54 @@ class QELongTrendEvaluationResultRepository:
         profile_id: str,
         outcome_dataset_snapshot_id: str,
     ) -> tuple[dict[str, Any], ...]:
-        """Return at most two exact terminal CAS candidates for conflict detection."""
+        """Return the best terminal CAS status tier, capped at two for conflict detection.
+
+        Historical retries can leave failed/cancelled CAS receipts beside a later
+        partial or succeeded result for the same Loop identity.  Lower-quality
+        terminal attempts must not hide the sole usable result merely because
+        their evaluation IDs sort first.  Ambiguity is still preserved within
+        the best available status tier so the API can fail closed instead of
+        silently choosing between equivalent outcomes.
+        """
 
         self.ensure_schema_ready()
         with self._connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     f"""
+                    WITH ranked_candidates AS (
+                        SELECT evaluation_id, run_id, parent_task_id, parent_loop_index,
+                               profile_id, feature_dataset_snapshot_id,
+                               outcome_dataset_snapshot_id, status,
+                               worker_terminal_sha256, artifact_manifest_sha256,
+                               platform_delivery_status_json,
+                               DENSE_RANK() OVER (
+                                   ORDER BY CASE status
+                                       WHEN 'succeeded' THEN 0
+                                       WHEN 'partial' THEN 1
+                                       WHEN 'failed' THEN 2
+                                       WHEN 'cancelled' THEN 3
+                                   END
+                               ) AS status_priority_rank
+                        FROM {CONTROL_TABLE}
+                        WHERE run_id = %s
+                          AND parent_task_id = %s
+                          AND parent_loop_index = %s
+                          AND evaluation_type = 'long_trend'
+                          AND profile_id = %s
+                          AND outcome_dataset_snapshot_id = %s
+                          AND status IN ('succeeded', 'partial', 'failed', 'cancelled')
+                          AND worker_terminal_sha256 IS NOT NULL
+                          AND artifact_manifest_sha256 IS NOT NULL
+                          AND platform_delivery_status_json->>'cas' = 'published'
+                    )
                     SELECT evaluation_id, run_id, parent_task_id, parent_loop_index,
                            profile_id, feature_dataset_snapshot_id,
                            outcome_dataset_snapshot_id, status,
                            worker_terminal_sha256, artifact_manifest_sha256,
                            platform_delivery_status_json
-                    FROM {CONTROL_TABLE}
-                    WHERE run_id = %s
-                      AND parent_task_id = %s
-                      AND parent_loop_index = %s
-                      AND evaluation_type = 'long_trend'
-                      AND profile_id = %s
-                      AND outcome_dataset_snapshot_id = %s
-                      AND status IN ('succeeded', 'partial', 'failed', 'cancelled')
-                      AND worker_terminal_sha256 IS NOT NULL
-                      AND artifact_manifest_sha256 IS NOT NULL
-                      AND platform_delivery_status_json->>'cas' = 'published'
+                    FROM ranked_candidates
+                    WHERE status_priority_rank = 1
                     ORDER BY evaluation_id
                     LIMIT 2
                     """,
