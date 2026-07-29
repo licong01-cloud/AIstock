@@ -333,6 +333,10 @@ jobs:
       - name: Lint frontend surface
         run: npm run lint
 
+      - name: Install Playwright Chromium
+        if: needs.classify-changes.outputs.frontend_test_targets != '[]'
+        run: npx playwright install --with-deps chromium
+
       - name: Run owning frontend module tests
         if: needs.classify-changes.outputs.frontend_test_targets != '[]'
         env:

@@ -827,6 +827,7 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     frontend_runs = "\n".join(str(step.get("run", "")) for step in jobs["frontend-quality"]["steps"])
     assert "npm exec tsc" in frontend_runs
     assert "npm run lint" in frontend_runs
+    assert "npx playwright install --with-deps chromium" in frontend_runs
     assert "FRONTEND_TEST_TARGETS" in frontend_runs
     assert 'npm run test:e2e -- "${module_test_targets[@]}"' in frontend_runs
     assert jobs["tdx-go-tests"]["if"] == "needs.classify-changes.outputs.go_required == 'true'"
