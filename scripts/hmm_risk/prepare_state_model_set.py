@@ -206,6 +206,12 @@ def _b3_semantic_source_request(request: dict[str, Any]) -> dict[str, Any]:
     _require_approved_b3_windows(request)
     semantic_request = deepcopy(request)
     source = semantic_request["source"]
+    source_start = _date(source.get("source_start"), "source_start")
+    source_end = _date(source.get("source_end"), "source_end")
+    semantic_start = _date(B3_APPROVED_WINDOWS["train_start"], "train_start")
+    semantic_end = _date(B3_APPROVED_WINDOWS["common_data_watermark"], "common_data_watermark")
+    if source_start > semantic_start or source_end < semantic_end:
+        raise StateModelSetError("formal B3 semantic window escapes the immutable source window")
     circ_mv_history_start = str(source.get("circ_mv_history_start") or source.get("source_start") or "")
     source["source_start"] = B3_APPROVED_WINDOWS["train_start"]
     source["source_end"] = B3_APPROVED_WINDOWS["common_data_watermark"]
@@ -229,6 +235,26 @@ def _require_formal_semantic_identity(request: dict[str, Any]) -> None:
         identity = str(request.get(field) or "")
         if len(identity) != 64 or any(character not in "0123456789abcdef" for character in identity.lower()):
             raise StateModelSetError(f"formal B3 {field} is missing or invalid")
+
+
+def _semantic_input_identities(inputs: dict[str, Any]) -> dict[str, str]:
+    return {
+        "semantic_dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "semantic_mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "semantic_calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+        "semantic_l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+    }
+
+
+def _load_verified_formal_semantic_inputs(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    _require_formal_semantic_identity(request)
+    semantic_request = deepcopy(request)
+    semantic_request["source"] = deepcopy(request["semantic_source"])
+    inputs = _load_l1_source_inputs(semantic_request, db_prefix=db_prefix, c010_formal=True)
+    for field, actual in _semantic_input_identities(inputs).items():
+        if request[field] != actual:
+            raise StateModelSetError(f"formal B3 semantic input drifted from {field}")
+    return inputs
 
 
 def _require_formal_train_coverage_identity(value: dict[str, Any]) -> None:
@@ -852,10 +878,7 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
     dataset_hash = canonical_sha256(inputs["dataset_manifest"])
     mapping_hash = canonical_sha256(inputs["mapping_manifest"])
     l2_stock_fact_hash = canonical_sha256(inputs["l2_stock_fact_manifest"])
-    semantic_dataset_hash = canonical_sha256(semantic_inputs["dataset_manifest"])
-    semantic_mapping_hash = canonical_sha256(semantic_inputs["mapping_manifest"])
-    semantic_calendar_hash = canonical_sha256(semantic_inputs["dataset_manifest"]["calendar_benchmark"])
-    semantic_l2_stock_fact_hash = canonical_sha256(semantic_inputs["l2_stock_fact_manifest"])
+    semantic_identities = _semantic_input_identities(semantic_inputs)
     policy_manifest = _c010_policy_manifest(inputs, train_request, producer_commit=producer_commit)
     policy_sha256 = str(policy_manifest["receipt_sha256"])
     inputs["feature_domain_policy_sha256"] = policy_sha256
@@ -883,10 +906,7 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
             "mapping_manifest_hash": mapping_hash,
             "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
             "semantic_source": deepcopy(semantic_request["source"]),
-            "semantic_dataset_manifest_hash": semantic_dataset_hash,
-            "semantic_mapping_manifest_hash": semantic_mapping_hash,
-            "semantic_calendar_manifest_hash": semantic_calendar_hash,
-            "semantic_l2_stock_fact_manifest_hash": semantic_l2_stock_fact_hash,
+            **semantic_identities,
             "parent_frozen_identities": dict(B3_APPROVED_FROZEN_IDENTITIES),
             "feature_domain_policy_manifest": policy_manifest,
             "feature_domain_policy_sha256": policy_sha256,
@@ -925,10 +945,7 @@ def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefi
         "dataset_manifest_hash": dataset_hash,
         "mapping_manifest_hash": mapping_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
-        "semantic_dataset_manifest_hash": semantic_dataset_hash,
-        "semantic_mapping_manifest_hash": semantic_mapping_hash,
-        "semantic_calendar_manifest_hash": semantic_calendar_hash,
-        "semantic_l2_stock_fact_manifest_hash": semantic_l2_stock_fact_hash,
+        **semantic_identities,
         "request_candidate": request_candidate,
         "request_candidate_sha256": canonical_sha256(request_candidate),
         "l1_sector_count": 31,
@@ -1764,6 +1781,10 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
     _require_formal_semantic_identity(request)
     _require_c010_policy_identity(request)
     _require_formal_train_coverage_identity(request)
+    _load_verified_formal_semantic_inputs(
+        request,
+        db_prefix=str(args.db_env_prefix),
+    )
     environment = os.environ.copy()
     for key in (
         "OMP_NUM_THREADS",
@@ -1824,24 +1845,11 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
     if recomputed_policy["receipt_sha256"] != repeats[0]["feature_domain_policy_sha256"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the C-010 policy identity")
     train_inputs["feature_domain_policy_sha256"] = recomputed_policy["receipt_sha256"]
-    semantic_request = deepcopy(request)
-    semantic_request["source"] = deepcopy(request["semantic_source"])
-    semantic_inputs = _load_l1_source_inputs(
-        semantic_request,
+    semantic_inputs = _load_verified_formal_semantic_inputs(
+        request,
         db_prefix=str(args.db_env_prefix),
-        c010_formal=True,
     )
-    semantic_identities = {
-        "semantic_dataset_manifest_hash": canonical_sha256(semantic_inputs["dataset_manifest"]),
-        "semantic_mapping_manifest_hash": canonical_sha256(semantic_inputs["mapping_manifest"]),
-        "semantic_calendar_manifest_hash": canonical_sha256(
-            semantic_inputs["dataset_manifest"]["calendar_benchmark"]
-        ),
-        "semantic_l2_stock_fact_manifest_hash": canonical_sha256(semantic_inputs["l2_stock_fact_manifest"]),
-    }
-    for field, actual in semantic_identities.items():
-        if request[field] != actual:
-            raise StateModelSetError(f"formal B3 D6 reload drifted from {field}")
+    semantic_identities = _semantic_input_identities(semantic_inputs)
     semantic_inputs["feature_domain_policy_sha256"] = recomputed_policy["receipt_sha256"]
     selections: dict[tuple[str, str], dict[str, Any]] = {}
     selected_artifacts: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1891,6 +1899,10 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
             mapping_manifest_hash=repeats[0]["mapping_manifest_hash"],
             calendar_manifest_hash=repeats[0]["calendar_manifest_hash"],
             l2_stock_fact_manifest_hash=repeats[0]["l2_stock_fact_manifest_hash"],
+            semantic_dataset_manifest_hash=semantic_identities["semantic_dataset_manifest_hash"],
+            semantic_mapping_manifest_hash=semantic_identities["semantic_mapping_manifest_hash"],
+            semantic_calendar_manifest_hash=semantic_identities["semantic_calendar_manifest_hash"],
+            semantic_l2_stock_fact_manifest_hash=semantic_identities["semantic_l2_stock_fact_manifest_hash"],
             feature_domain_policy_sha256=repeats[0]["feature_domain_policy_sha256"],
             feature_domain_policy_manifest=request["feature_domain_policy_manifest"],
             producer_commit=_git_commit(),
@@ -1903,6 +1915,7 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         "mapping_manifest_hash": repeats[0]["mapping_manifest_hash"],
         "calendar_manifest_hash": repeats[0]["calendar_manifest_hash"],
         "l2_stock_fact_manifest_hash": repeats[0]["l2_stock_fact_manifest_hash"],
+        **semantic_identities,
         "feature_domain_policy_sha256": repeats[0]["feature_domain_policy_sha256"],
         "formula_version": C010_FORMULA_VERSION,
         "fresh_process_receipt_hashes": [repeat["single_pass_receipt_sha256"] for repeat in repeats],

@@ -815,6 +815,10 @@ def _validate_ready_layer(
     mapping_manifest_hash: str,
     calendar_manifest_hash: str,
     l2_stock_fact_manifest_hash: str,
+    semantic_dataset_manifest_hash: str,
+    semantic_mapping_manifest_hash: str,
+    semantic_calendar_manifest_hash: str,
+    semantic_l2_stock_fact_manifest_hash: str,
     feature_domain_policy_sha256: str,
 ) -> None:
     if artifact.get("schema_version") != "hmm_risk_b3_selected_level_artifact_v1":
@@ -1064,10 +1068,10 @@ def _validate_ready_layer(
             if (
                 receipt_evidence.get("direct_sector_level") != level
                 or receipt_evidence.get("sector_code") != code
-                or receipt_evidence.get("dataset_manifest_hash") != dataset_manifest_hash
-                or receipt_evidence.get("mapping_manifest_hash") != mapping_manifest_hash
-                or receipt_evidence.get("calendar_manifest_hash") != calendar_manifest_hash
-                or receipt_evidence.get("l2_stock_fact_manifest_hash") != l2_stock_fact_manifest_hash
+                or receipt_evidence.get("dataset_manifest_hash") != semantic_dataset_manifest_hash
+                or receipt_evidence.get("mapping_manifest_hash") != semantic_mapping_manifest_hash
+                or receipt_evidence.get("calendar_manifest_hash") != semantic_calendar_manifest_hash
+                or receipt_evidence.get("l2_stock_fact_manifest_hash") != semantic_l2_stock_fact_manifest_hash
                 or receipt_evidence.get("feature_domain_policy_sha256") != feature_domain_policy_sha256
             ):
                 raise StateModelSetError(f"B3 READY frozen input lineage is invalid for {family}/{level}/{code}")
@@ -1087,6 +1091,10 @@ def write_b3_ready_model_set(
     mapping_manifest_hash: str,
     calendar_manifest_hash: str,
     l2_stock_fact_manifest_hash: str,
+    semantic_dataset_manifest_hash: str,
+    semantic_mapping_manifest_hash: str,
+    semantic_calendar_manifest_hash: str,
+    semantic_l2_stock_fact_manifest_hash: str,
     feature_domain_policy_sha256: str,
     feature_domain_policy_manifest: Mapping[str, Any],
     producer_commit: str,
@@ -1100,6 +1108,14 @@ def write_b3_ready_model_set(
     _require_hex_identity(mapping_manifest_hash, length=64, label="mapping manifest hash")
     _require_hex_identity(calendar_manifest_hash, length=64, label="calendar manifest hash")
     _require_hex_identity(l2_stock_fact_manifest_hash, length=64, label="L2 stock-fact manifest hash")
+    _require_hex_identity(semantic_dataset_manifest_hash, length=64, label="semantic dataset manifest hash")
+    _require_hex_identity(semantic_mapping_manifest_hash, length=64, label="semantic mapping manifest hash")
+    _require_hex_identity(semantic_calendar_manifest_hash, length=64, label="semantic calendar manifest hash")
+    _require_hex_identity(
+        semantic_l2_stock_fact_manifest_hash,
+        length=64,
+        label="semantic L2 stock-fact manifest hash",
+    )
     _require_hex_identity(feature_domain_policy_sha256, length=64, label="feature-domain policy hash")
     policy_source_identities = {
         "dataset_manifest_hash": dataset_manifest_hash,
@@ -1134,6 +1150,10 @@ def write_b3_ready_model_set(
             mapping_manifest_hash=mapping_manifest_hash,
             calendar_manifest_hash=calendar_manifest_hash,
             l2_stock_fact_manifest_hash=l2_stock_fact_manifest_hash,
+            semantic_dataset_manifest_hash=semantic_dataset_manifest_hash,
+            semantic_mapping_manifest_hash=semantic_mapping_manifest_hash,
+            semantic_calendar_manifest_hash=semantic_calendar_manifest_hash,
+            semantic_l2_stock_fact_manifest_hash=semantic_l2_stock_fact_manifest_hash,
             feature_domain_policy_sha256=feature_domain_policy_sha256,
         )
         payload = canonical_json_bytes(artifact)
@@ -1159,6 +1179,10 @@ def write_b3_ready_model_set(
         "mapping_manifest_hash": mapping_manifest_hash,
         "calendar_manifest_hash": calendar_manifest_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_manifest_hash,
+        "semantic_dataset_manifest_hash": semantic_dataset_manifest_hash,
+        "semantic_mapping_manifest_hash": semantic_mapping_manifest_hash,
+        "semantic_calendar_manifest_hash": semantic_calendar_manifest_hash,
+        "semantic_l2_stock_fact_manifest_hash": semantic_l2_stock_fact_manifest_hash,
         "feature_domain_policy_sha256": feature_domain_policy_sha256,
         "feature_domain_policy_manifest": validated_policy,
         "contracts": {

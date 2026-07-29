@@ -815,10 +815,10 @@ def _semantic_receipt(model_hash: str, *, level: str, sector_code: str) -> dict:
         "validation_observation_sha256": "f" * 64,
         "validation_dates": encoded_dates,
         "validation_dates_sha256": canonical_sha256(encoded_dates),
-        "dataset_manifest_hash": "a" * 64,
-        "mapping_manifest_hash": "b" * 64,
-        "calendar_manifest_hash": "c" * 64,
-        "l2_stock_fact_manifest_hash": "d" * 64,
+        "dataset_manifest_hash": "e" * 64,
+        "mapping_manifest_hash": "f" * 64,
+        "calendar_manifest_hash": "1" * 64,
+        "l2_stock_fact_manifest_hash": "2" * 64,
         "feature_domain_policy_sha256": TEST_POLICY_SHA256,
         "source_cutoff": utility["source_cutoff"],
         "formula_version": utility["formula_version"],
@@ -980,6 +980,10 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
         mapping_manifest_hash="b" * 64,
         calendar_manifest_hash="c" * 64,
         l2_stock_fact_manifest_hash="d" * 64,
+        semantic_dataset_manifest_hash="e" * 64,
+        semantic_mapping_manifest_hash="f" * 64,
+        semantic_calendar_manifest_hash="1" * 64,
+        semantic_l2_stock_fact_manifest_hash="2" * 64,
         feature_domain_policy_sha256=policy_manifest["receipt_sha256"],
         feature_domain_policy_manifest=policy_manifest,
         producer_commit="c" * 40,
@@ -990,6 +994,11 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
     assert len(manifest["layers"]) == 4
     assert manifest["feature_domain_policy_sha256"] == policy_manifest["receipt_sha256"]
     assert manifest["feature_domain_policy_manifest"] == policy_manifest
+    assert manifest["dataset_manifest_hash"] == "a" * 64
+    assert manifest["semantic_dataset_manifest_hash"] == "e" * 64
+    assert manifest["semantic_mapping_manifest_hash"] == "f" * 64
+    assert manifest["semantic_calendar_manifest_hash"] == "1" * 64
+    assert manifest["semantic_l2_stock_fact_manifest_hash"] == "2" * 64
     invalid_policy = json.loads(json.dumps(policy_manifest))
     invalid_entry = invalid_policy["contributor_ledger"][0]
     invalid_entry["moneyflow_contributor_eligible"] = "true"
@@ -1007,6 +1016,10 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="e" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
             feature_domain_policy_sha256=invalid_policy["receipt_sha256"],
             feature_domain_policy_manifest=invalid_policy,
             producer_commit="c" * 40,
@@ -1023,8 +1036,35 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="e" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
             feature_domain_policy_sha256=policy_manifest["receipt_sha256"],
             feature_domain_policy_manifest=policy_manifest,
+            producer_commit="c" * 40,
+        )
+
+
+def test_ready_writer_rejects_semantic_lineage_drift(tmp_path) -> None:
+    keys = {(family, level) for family in ("legacy_covfix", "autocycle_all_core") for level in ("L1", "L2")}
+    pairs = {key: _selected_artifact(*key) for key in keys}
+
+    with pytest.raises(StateModelSetError, match="frozen input lineage"):
+        write_b3_ready_model_set(
+            tmp_path,
+            selected_artifacts={key: pair[0] for key, pair in pairs.items()},
+            selection_receipts={key: pair[1] for key, pair in pairs.items()},
+            dataset_manifest_hash="a" * 64,
+            mapping_manifest_hash="b" * 64,
+            calendar_manifest_hash="c" * 64,
+            l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="9" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
+            feature_domain_policy_sha256=TEST_POLICY_MANIFEST["receipt_sha256"],
+            feature_domain_policy_manifest=TEST_POLICY_MANIFEST,
             producer_commit="c" * 40,
         )
 
@@ -1043,6 +1083,10 @@ def test_ready_writer_rejects_rehashed_policy_source_identity_drift(tmp_path) ->
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="e" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
             feature_domain_policy_sha256=policy_manifest["receipt_sha256"],
             feature_domain_policy_manifest=policy_manifest,
             producer_commit="c" * 40,
@@ -1070,6 +1114,10 @@ def test_ready_writer_rejects_declared_count_without_durable_entries(tmp_path) -
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="e" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
             feature_domain_policy_sha256=policy_manifest["receipt_sha256"],
             feature_domain_policy_manifest=policy_manifest,
             producer_commit="c" * 40,
@@ -1104,6 +1152,10 @@ def test_ready_layer_rejects_rehashed_but_empty_semantic_evidence() -> None:
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="e" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
             feature_domain_policy_sha256=TEST_POLICY_SHA256,
         )
 
@@ -1130,6 +1182,10 @@ def test_ready_layer_rejects_selection_receipt_hashes_not_linked_to_durable_trai
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="e" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
             feature_domain_policy_sha256=TEST_POLICY_SHA256,
         )
 
@@ -1148,5 +1204,9 @@ def test_ready_layer_rejects_feature_domain_policy_lineage_drift() -> None:
             mapping_manifest_hash="b" * 64,
             calendar_manifest_hash="c" * 64,
             l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="e" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
             feature_domain_policy_sha256="0" * 64,
         )
