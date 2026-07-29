@@ -455,6 +455,16 @@ rules:
     layer: backend_test
     risk_level: critical
     ownership_reason: MiniQMT runtime tests must select the canonical event-loop and sustained tick-driver regression plan instead of the generic backend-test fallback.
+  - rule_id: miniqmt_current_three_shadow_inventory_cli
+    priority: 96
+    include:
+      - scripts/miniqmt_current_three_inventory.py
+      - backend/tests/scripts/test_miniqmt_current_three_inventory.py
+    primary_module: miniqmt_execution_runtime
+    impact_modules: []
+    layer: script
+    risk_level: critical
+    ownership_reason: The K3 current-three inventory CLI is a read-only MiniQMT shadow evidence entrypoint and must select the canonical MiniQMT runtime plan.
   - rule_id: miniqmt_execution_kernel_migrations
     priority: 96
     include:
