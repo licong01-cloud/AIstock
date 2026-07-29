@@ -22,7 +22,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-913",
-  "closed_at": null,
+  "closed_at": "2026-07-29T19:15:37Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -201,8 +201,8 @@
   },
   "first_seen_at": "2026-07-29T16:28:34.785003Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2bc502ba80ee01ed2de9071f95ed460410841500",
+  "fixed_at": "2026-07-29T19:19:02.260125Z",
   "github_issue_number": 2204,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2204",
   "last_seen_at": "2026-07-29T16:28:34.785003Z",
@@ -210,6 +210,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2901",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -225,7 +226,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -268,6 +269,15 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_catalog_integrity -> 6 passed",
+    "python -m pytest backend/tests/test_validation_catalog_integrity.py::test_nightly_codegraph_freshness_is_not_skipped_by_weekly_ua_guard backend/tests/scripts/test_ci_change_classifier.py::test_github_workflow_wires_workflow_validation_fast_lane -q -p no:cacheprovider -> 2 passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --module validation --changed-file .github/workflows/test.yml --changed-file backend/mcp/modules/qe_experiment.py --changed-file backend/tests/research_pipeline/test_hmm_realtime_ingestion.py --changed-file backend/tests/scripts/test_ci_change_classifier.py --changed-file backend/tests/test_validation_catalog_integrity.py --changed-file frontend/tests/strategy-package-governance/governance.spec.ts --changed-file tests/aistock_validation/catalog/file_ownership.yaml --changed-file tests/mcp/test_gateway_profiles.py --changed-file tests/mcp/test_mcp_gateway_cli.py --changed-file tests/mcp/test_mcp_inventory_diff.py -> passed",
+    "git diff --check origin/main...HEAD -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
