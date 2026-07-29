@@ -493,6 +493,12 @@ def test_materializable_candidate_lookup_is_exact_bounded_and_cas_published() ->
             assert "evaluation_type = 'long_trend'" in sql
             assert "worker_terminal_sha256 IS NOT NULL" in sql
             assert "artifact_manifest_sha256 IS NOT NULL" in sql
+            assert "DENSE_RANK() OVER" in sql
+            assert "WHEN 'succeeded' THEN 0" in sql
+            assert "WHEN 'partial' THEN 1" in sql
+            assert "WHEN 'failed' THEN 2" in sql
+            assert "WHEN 'cancelled' THEN 3" in sql
+            assert "WHERE status_priority_rank = 1" in sql
             assert "LIMIT 2" in sql
             return [expected]
         raise AssertionError(sql)

@@ -1,6 +1,8 @@
 {
   "actual": "重启后对R8B Loop4执行F-014精确物化canary，POST返回QELT_CONTROL_STATE_CONFLICT。同一task_id=qe_20260715_104922_001d、loop_index=4、profile_id=qe_long_trend_v1、outcome_dataset_snapshot_id=qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2下检测到两条terminal且CAS已发布候选，现有BUG-900逻辑只允许唯一候选，导致历史重复CAS状态无法确定性收敛并阻断物化。要求保留全部历史证据、不静默任选、不创建新评估；基于CAS内容身份和已发布评价身份给出可审计的确定性收敛或显式不可消歧错误，并补充回归测试。",
   "allowed_write_scope": [
+    "backend/services/qe_archive/long_trend_repository.py",
+    "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py",
     "tests/aistock_validation/bugs/20260729_BUG-903-f-014-cas-loop.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,10 +25,13 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "同一Loop存在多个历史terminal CAS时，应先按succeeded、partial、failed、cancelled的显式状态优先级收敛到最高质量层级；最高层级唯一时复用并物化该评价，最高层级仍有多个候选时显式返回QELT_CONTROL_STATE_CONFLICT。不得删除历史记录、按evaluation_id或时间静默任选，也不得创建新评价。",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/qe_archive/long_trend_repository.py",
+      "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +41,12 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/qe_archive/long_trend_repository.py",
+      "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py",
+      "tests/aistock_validation/bugs/20260729_BUG-903-f-014-cas-loop.json",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    ]
   },
   "first_seen_at": "2026-07-29T02:50:47.627196Z",
   "fix_branch": null,
@@ -52,7 +62,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "POST /api/v1/quantevolver/evolution/tasks/qe_20260715_104922_001d/loops/4/long-trend-evaluations with profile_id=qe_long_trend_v1 and the moneyflow_v2 outcome snapshot",
   "required_verification": [
     "l0"
   ],
