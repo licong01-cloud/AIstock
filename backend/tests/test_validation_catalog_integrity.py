@@ -290,7 +290,9 @@ def test_nightly_codegraph_freshness_is_not_skipped_by_weekly_ua_guard() -> None
     assert freshness_runs
     assert "date -u +%u" not in freshness_runs[0]
     assert "exit 0" not in freshness_runs[0]
-    assert "|| true" in freshness_runs[0]
+    assert "$LASTEXITCODE -ne 0" in freshness_runs[0]
+    assert 'throw "CodeGraph freshness evidence generation failed."' in freshness_runs[0]
+    assert "|| true" not in freshness_runs[0]
     assert ua_config_runs
     assert ua_runs
     assert "date -u +%u" not in ua_runs[0]

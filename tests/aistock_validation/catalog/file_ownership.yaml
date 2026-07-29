@@ -267,6 +267,15 @@ rules:
     layer: test_runner
     risk_level: high
     ownership_reason: noxfile.py defines allowlisted local validation sessions.
+  - rule_id: research_pipeline_tests
+    priority: 100
+    include:
+      - backend/tests/research_pipeline/**
+    primary_module: research_pipeline
+    impact_modules: [tests.backend, validation.runner]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Research Pipeline tests prove workflow, HMM ingestion, artifact, and promotion contracts.
   - rule_id: dev_quality_tooling
     priority: 100
     include:

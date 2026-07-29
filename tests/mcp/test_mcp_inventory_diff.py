@@ -86,6 +86,13 @@ def test_mcp_modules_do_not_import_backend_services_directly() -> None:
     assert offenders == []
 
 
+def test_qe_mcp_label_horizons_match_service_contract() -> None:
+    from backend.mcp.modules.qe_experiment import QE_LABEL_HORIZONS
+    from backend.services.quantevolver.experiment_config import ALLOWED_LABEL_HORIZONS
+
+    assert QE_LABEL_HORIZONS == frozenset(ALLOWED_LABEL_HORIZONS)
+
+
 def test_mcp_modules_do_not_import_scripts_or_transitive_business_code() -> None:
     offenders: list[str] = []
     module_names: list[str] = []
