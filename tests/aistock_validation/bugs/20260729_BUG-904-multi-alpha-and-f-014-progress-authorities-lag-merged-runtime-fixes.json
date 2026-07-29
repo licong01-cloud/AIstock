@@ -1,133 +1,168 @@
 {
-  "actual": "The reader removes open before parity, so every real worker fails even when daily_pv.h5 contains open.",
+  "actual": "Project memory still says P0-2 through P0-4 remain to implement; blueprint headers and acceptance matrices disagree; F-014 Phase 3 runtime/schema activation and pending materialization are not synchronized.",
   "allowed_write_scope": [
-    "backend/services/quantevolver/long_trend_data_reader.py",
-    "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py",
-    "tests/aistock_validation/bugs/20260723_BUG-843-f-014-price-reader-drops-open-before-required-ohlc-parity.json",
+    "docs/codex_project_memory.md",
+    "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+    "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+    "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md",
+    "tests/aistock_validation/bugs/20260729_BUG-904-multi-alpha-and-f-014-progress-authorities-lag-merged-runtime-fixes.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-843",
-  "closed_at": "2026-07-23T09:43:27Z",
+  "bug_id": "BUG-904",
+  "closed_at": "2026-07-29T05:23:48Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-23T09:33:09.375167Z",
-  "description": "The reader removes open before parity, so every real worker fails even when daily_pv.h5 contains open.",
+  "created_at": "2026-07-29T04:39:02.782415Z",
+  "description": "Project memory still says P0-2 through P0-4 remain to implement; blueprint headers and acceptance matrices disagree; F-014 Phase 3 runtime/schema activation and pending materialization are not synchronized.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260723-30235e1f7d40",
-      "timestamp": "2026-07-23T09:33:09.375167Z"
+      "note": "Promoted from IC-20260729-dbfa1454de57",
+      "timestamp": "2026-07-29T04:39:02.782415Z"
     }
   ],
-  "evidence_uris": [
-    "qelt_8c198e8448682fc04847b1cfc29c2178ef30e44dddebe8718e0a17123f210726 / QELT_DAILY_PV_SCHEMA_INVALID"
-  ],
-  "expected": "Reader-normalized feature and outcome price frames contain qfq OHLC and volume, allowing exact same-snapshot parity; missing or invalid open remains a structured schema failure.",
+  "evidence_uris": [],
+  "expected": "Project memory and blueprint acceptance/progress ledgers match current main and separate source merge, DDL, runtime activation, data materialization, open evidence gaps, and issue cleanup state.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/services/quantevolver/long_trend_data_reader.py",
-      "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py"
+      "docs/codex_project_memory.md",
+      "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+      "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+      "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md"
     ],
     "ownership": {
       "changed_files": [
-        "backend/services/quantevolver/long_trend_data_reader.py",
-        "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py"
+        "docs/codex_project_memory.md",
+        "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+        "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+        "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md"
       ],
       "impacted_modules": [
+        "docs.standards",
+        "validation.guardrails",
+        "validation.module_quality",
+        "docs.architecture",
         "qe.long_trend_evaluation",
         "qe.core",
-        "qe.data_completeness",
-        "qe.enhanced_metrics"
+        "qe.archive",
+        "platform.mcp_gateway"
       ],
       "matched_rules": [
         {
-          "file": "backend/services/quantevolver/long_trend_data_reader.py",
+          "file": "docs/codex_project_memory.md",
           "impact_modules": [
-            "qe.core",
-            "qe.data_completeness",
-            "qe.enhanced_metrics"
+            "validation.guardrails",
+            "validation.module_quality"
           ],
-          "primary_module": "qe.long_trend_evaluation",
-          "risk_level": "high",
-          "rule_id": "qe_long_trend_evaluation_phase2"
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
         },
         {
-          "file": "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py",
+          "file": "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md",
           "impact_modules": [
             "qe.core",
-            "qe.data_completeness",
-            "qe.enhanced_metrics"
+            "qe.archive",
+            "platform.mcp_gateway"
           ],
           "primary_module": "qe.long_trend_evaluation",
           "risk_level": "high",
-          "rule_id": "qe_long_trend_evaluation_phase2"
+          "rule_id": "qe_long_trend_evaluation_phase3"
         }
       ],
       "risk_levels": [
+        "medium",
+        "low",
         "high"
       ],
       "suggested_scope": [
-        "backend/services/quantevolver/long_trend_data_reader.py",
-        "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py"
+        "docs/codex_project_memory.md",
+        "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+        "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+        "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/services/quantevolver/long_trend_data_reader.py",
-      "backend/tests/unified_engine/test_qe_long_trend_contract_reader.py"
+      "docs/codex_project_memory.md",
+      "docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md",
+      "docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md",
+      "docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md"
     ]
   },
-  "first_seen_at": "2026-07-23T09:33:09.375167Z",
+  "first_seen_at": "2026-07-29T04:39:02.782415Z",
   "fix_branch": null,
-  "fix_commit": "779c4da36da26af8016f27103c5410b411b691c6",
-  "fixed_at": "2026-07-29T04:56:15.441555Z",
-  "github_issue_number": 2669,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2669",
-  "last_seen_at": "2026-07-23T09:33:09.375167Z",
-  "module": "qe.long_trend_evaluation",
+  "fix_commit": "d3b830ea5a48d970d4e4e538c00c4f40e743423a",
+  "fixed_at": "2026-07-29T05:25:51.298719Z",
+  "github_issue_number": 2860,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2860",
+  "last_seen_at": "2026-07-29T04:39:02.782415Z",
+  "module": "quantevolver",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2670",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2862",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "pytest backend/tests/unified_engine/test_qe_long_trend_contract_reader.py -q",
+  "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "qe_long_trend_phase2_backend"
+    "qe_long_trend_phase2_backend",
+    "qe_long_trend_phase3_platform"
   ],
-  "risk_area": "regression",
+  "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "fixed",
   "suspected_modules": [
-    "qe.long_trend_evaluation"
+    "quantevolver"
   ],
-  "title": "F-014 price reader drops open before required OHLC parity",
+  "title": "Multi-alpha and F-014 progress authorities lag merged runtime fixes",
   "trigger_condition": {
-    "fingerprint": "30235e1f7d405c3c3b8e1ba5",
-    "source_event_id": "FE-20260723-30235e1f7d40"
+    "fingerprint": "dbfa1454de57a11384348162",
+    "source_event_id": "FE-20260729-dbfa1454de57"
   },
   "validation_evidence": [
-    "PR #2670 merged; CI static gate and qe_long_trend_phase2_backend passed"
+    "nox -s l0 -> passed, 0 guardrail findings",
+    "nox -s validation_module_registry_l0 -> passed, 8 tests and ownership 14/14"
   ],
   "verification_budget": {
-    "budget": "standard",
+    "budget": "deep",
     "deferred_nightly_verification": {
       "modules": [
-        "qe.long_trend_evaluation",
-        "qe_long_trend_phase2"
+        "quantevolver",
+        "qe_long_trend_phase2",
+        "qe_long_trend_phase3_platform"
       ],
       "plans": [
-        "qe_long_trend_phase2_backend"
+        "qe_long_trend_phase2_backend",
+        "qe_long_trend_phase3_platform"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -162,7 +197,7 @@
       "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "30-45%"
+    "target_cost_percent_of_legacy": "45-60%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -178,14 +213,16 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "standard",
+      "budget": "deep",
       "deferred_nightly_verification": {
         "modules": [
-          "qe.long_trend_evaluation",
-          "qe_long_trend_phase2"
+          "quantevolver",
+          "qe_long_trend_phase2",
+          "qe_long_trend_phase3_platform"
         ],
         "plans": [
-          "qe_long_trend_phase2_backend"
+          "qe_long_trend_phase2_backend",
+          "qe_long_trend_phase3_platform"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -220,7 +257,7 @@
         "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "30-45%"
+      "target_cost_percent_of_legacy": "45-60%"
     }
   }
 }
