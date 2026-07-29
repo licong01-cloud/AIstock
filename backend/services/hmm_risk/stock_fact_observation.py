@@ -1203,6 +1203,10 @@ def _validate_c010_domain_receipt_set(
         if value.get(f"{prefix}_aggregate_count") != len(valid):
             raise StateModelSetError(f"C-010 {level} aggregate receipt count is invalid")
         expected_keys = {(code, trade_date) for trade_date in dates for code in level_codes[level]}
+        if value.get(f"{prefix}_domain_expected_count") != len(expected_keys) or value.get(
+            f"{prefix}_domain_receipt_count"
+        ) != len(valid) + len(invalid):
+            raise StateModelSetError(f"C-010 {level} aggregate receipt set is incomplete")
         observed_keys: set[tuple[str, str]] = set()
         for entry, is_valid_entry in itertools.chain(
             ((entry, True) for entry in valid),
@@ -1474,6 +1478,33 @@ def _validate_c010_cross_section_receipt(
     return codes
 
 
+def _validate_c010_feature_definitions(value: Mapping[str, Any]) -> None:
+    for level in ("l1", "l2"):
+        definition = value.get(f"{level}_feature_definition")
+        direct_level = level.upper()
+        expected_count = 31 if direct_level == "L1" else 131
+        if (
+            not isinstance(definition, Mapping)
+            or definition.get("schema_version") != C010_FORMULA_VERSION
+            or definition.get("feature_domain_policy_version") != C010_POLICY_VERSION
+            or definition.get("diagnostic_only") is not False
+            or definition.get("direct_sector_level") != direct_level
+            or definition.get("cross_section_required_sector_count") != expected_count
+            or definition.get("cross_section_min_coverage") != MIN_COVERAGE
+            or definition.get("cross_section_min_valid_sector_count") != (28 if direct_level == "L1" else 118)
+            or tuple(definition.get("base_features") or ()) != BASE_FEATURES
+            or tuple(definition.get("all_core_features") or ()) != ALL_CORE_FEATURES
+            or tuple(definition.get("moneyflow_mandatory_fields") or ()) != MONEYFLOW_STOCK_FIELDS
+            or definition.get("moneyflow_denominator_by_feature") != C010_MONEYFLOW_DENOMINATOR_BY_FEATURE
+            or definition.get("cross_section_operator_by_feature") != C010_CROSS_SECTION_OPERATORS
+            or definition.get("formula_diff_by_feature") != C010_FORMULA_DIFF_BY_FEATURE
+            or definition.get("moneyflow_rolling_post_mask_required") is not True
+            or definition.get("range_cross_section_rolling_post_mask_required") is not True
+            or value.get(f"{level}_feature_definition_sha256") != canonical_sha256(dict(definition))
+        ):
+            raise StateModelSetError(f"C-010 {level.upper()} feature definition is invalid")
+
+
 def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
     """Fail closed unless a C-010 policy is complete, self-contained, and semantically readback-safe."""
 
@@ -1578,6 +1609,7 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
         raise StateModelSetError("C-010 policy manifest fixed contract is invalid")
     if tuple(sorted(parsed_dates)) != parsed_dates or len(set(parsed_dates)) != len(parsed_dates):
         raise StateModelSetError("C-010 receipt trading dates are not strictly increasing")
+    _validate_c010_feature_definitions(value)
     ledger, excluded = _validate_c010_eligibility_receipt(value.get("eligibility_receipt"))
     if (
         value["eligibility_receipt"].get("train_start") != train_start.isoformat()
@@ -1609,30 +1641,6 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
     )
     if value.get("aggregate_receipt_sha256") != value["aggregate_receipt"].get("receipt_sha256"):
         raise StateModelSetError("C-010 policy aggregate receipt identity is invalid")
-    for level in ("l1", "l2"):
-        definition = value.get(f"{level}_feature_definition")
-        direct_level = level.upper()
-        expected_count = 31 if direct_level == "L1" else 131
-        if (
-            not isinstance(definition, Mapping)
-            or definition.get("schema_version") != C010_FORMULA_VERSION
-            or definition.get("feature_domain_policy_version") != C010_POLICY_VERSION
-            or definition.get("diagnostic_only") is not False
-            or definition.get("direct_sector_level") != direct_level
-            or definition.get("cross_section_required_sector_count") != expected_count
-            or definition.get("cross_section_min_coverage") != MIN_COVERAGE
-            or definition.get("cross_section_min_valid_sector_count") != (28 if direct_level == "L1" else 118)
-            or tuple(definition.get("base_features") or ()) != BASE_FEATURES
-            or tuple(definition.get("all_core_features") or ()) != ALL_CORE_FEATURES
-            or tuple(definition.get("moneyflow_mandatory_fields") or ()) != MONEYFLOW_STOCK_FIELDS
-            or definition.get("moneyflow_denominator_by_feature") != C010_MONEYFLOW_DENOMINATOR_BY_FEATURE
-            or definition.get("cross_section_operator_by_feature") != C010_CROSS_SECTION_OPERATORS
-            or definition.get("formula_diff_by_feature") != C010_FORMULA_DIFF_BY_FEATURE
-            or definition.get("moneyflow_rolling_post_mask_required") is not True
-            or definition.get("range_cross_section_rolling_post_mask_required") is not True
-            or value.get(f"{level}_feature_definition_sha256") != canonical_sha256(dict(definition))
-        ):
-            raise StateModelSetError(f"C-010 {level.upper()} feature definition is invalid")
     circ_mv = value.get("causal_circ_mv_identity")
     if (
         not isinstance(circ_mv, Mapping)

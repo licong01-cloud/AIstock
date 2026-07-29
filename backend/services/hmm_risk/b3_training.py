@@ -1101,20 +1101,22 @@ def write_b3_ready_model_set(
     _require_hex_identity(calendar_manifest_hash, length=64, label="calendar manifest hash")
     _require_hex_identity(l2_stock_fact_manifest_hash, length=64, label="L2 stock-fact manifest hash")
     _require_hex_identity(feature_domain_policy_sha256, length=64, label="feature-domain policy hash")
-    try:
-        validated_policy = validate_c010_policy_manifest(feature_domain_policy_manifest)
-    except StateModelSetError as exc:
-        raise StateModelSetError(f"B3 READY feature-domain policy manifest is invalid: {exc}") from exc
-    if validated_policy.get("receipt_sha256") != feature_domain_policy_sha256:
-        raise StateModelSetError("B3 READY feature-domain policy manifest identity is invalid")
     policy_source_identities = {
         "dataset_manifest_hash": dataset_manifest_hash,
         "mapping_manifest_hash": mapping_manifest_hash,
         "calendar_manifest_hash": calendar_manifest_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_manifest_hash,
     }
-    if any(validated_policy.get(field) != expected for field, expected in policy_source_identities.items()):
+    if any(
+        feature_domain_policy_manifest.get(field) != expected for field, expected in policy_source_identities.items()
+    ):
         raise StateModelSetError("B3 READY feature-domain policy source identity is invalid")
+    try:
+        validated_policy = validate_c010_policy_manifest(feature_domain_policy_manifest)
+    except StateModelSetError as exc:
+        raise StateModelSetError(f"B3 READY feature-domain policy manifest is invalid: {exc}") from exc
+    if validated_policy.get("receipt_sha256") != feature_domain_policy_sha256:
+        raise StateModelSetError("B3 READY feature-domain policy manifest identity is invalid")
     _require_hex_identity(producer_commit, length=40, label="producer commit")
     layers: dict[str, Any] = {}
     payloads: dict[str, bytes] = {}
