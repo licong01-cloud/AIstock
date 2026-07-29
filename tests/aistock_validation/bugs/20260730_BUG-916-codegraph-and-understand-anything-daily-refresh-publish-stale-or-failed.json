@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-916",
-  "closed_at": null,
+  "closed_at": "2026-07-29T18:20:55Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -124,8 +124,8 @@
   },
   "first_seen_at": "2026-07-29T17:08:18.594830Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5205c96b9b3dffee2a588cc4b9a7a1afdd794a31",
+  "fixed_at": "2026-07-29T18:21:18.436106Z",
   "github_issue_number": 2897,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2897",
   "last_seen_at": "2026-07-29T17:08:18.594830Z",
@@ -133,6 +133,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2903",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -144,7 +145,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -153,6 +154,14 @@
     "fingerprint": "c03e9267fc76fa115563ce12",
     "source_event_id": "FE-20260730-c03e9267fc76"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py::test_ua_skip_refuses_to_publish_incomplete_state backend/tests/scripts/test_code_intelligence_adapter.py::test_graph_refresh_commands_fail_when_publish_ready_is_required backend/tests/scripts/test_code_intelligence_adapter.py::test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scoped backend/tests/scripts/test_code_intelligence_adapter.py::test_codegraph_freshness_rejects_old_mtime_even_when_status_is_up_to_date backend/tests/scripts/test_code_intelligence_adapter.py::test_understand_anything_summary_reads_graph_without_blocking backend/tests/scripts/test_code_intelligence_adapter.py::test_ua_summary_command_defaults_to_compact_stdout backend/tests/scripts/test_code_intelligence_adapter.py::test_understand_anything_summary_marks_ancestor_graph_as_stale backend/tests/scripts/test_code_intelligence_adapter.py::test_understand_anything_status_falls_back_to_graph_freshness_for_legacy_summary_manifest -q -> 8 passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-916 --module validation --changed-file .github/workflows/code-intelligence-refresh.yml --changed-file .github/workflows/nightly.yml --changed-file scripts/code_intelligence_adapter.py --changed-file backend/tests/scripts/test_code_intelligence_adapter.py -> passed",
+    "python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "git diff --check origin/main...HEAD -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
