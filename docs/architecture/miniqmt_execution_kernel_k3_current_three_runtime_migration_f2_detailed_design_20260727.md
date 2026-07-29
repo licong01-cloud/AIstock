@@ -1,12 +1,12 @@
 # MiniQMT 统一执行内核 K3 Current-Three Runtime Migration F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_verified`；设计 PR #2816 / merge `d4a7fb2c8d4fcb191d75addd3fbc0faef2632b8e` 已合入。K3-A 已通过 PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b` 完成 `implemented_verified + merged`；K3-B source 已完成 `implemented_verified`，当前 `source_merge=pending_pr`，K3 overall 为 `implemented_verified`，产品 runtime 仍未切换。
+> Feature tier：`F2`。文档状态：`implementation_verified`；设计 PR #2816 / merge `d4a7fb2c8d4fcb191d75addd3fbc0faef2632b8e` 已合入。K3-A 已通过 PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b` 完成 `implemented_verified + merged`；K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 完成 `implemented_verified + merged`，`source_merge=merged_pr_2848`，K3 overall 为 `implemented_verified + merged`，产品 runtime 仍未切换。
 >
 > 上位唯一架构：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
 > 模拟盘唯一总蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
 >
-> 已合入前置：K1 overall、K2 overall 均为 `implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 已通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入。K3-A 为 `implemented_verified + merged`；K3-B source 为 `implemented_verified`、尚未合入；K4/K6 均为 `not_started`，产品 runtime 未切换。
+> 已合入前置：K1 overall、K2 overall 均为 `implemented_verified + merged`；K2-D final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 已通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入。K3-A 为 `implemented_verified + merged`；K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 完成 `implemented_verified + merged`；K4/K6 均为 `not_started`，产品 runtime 未切换。
 >
 > K3-A/K3-B 均保持 shadow-only。K3-B 以单事务 committed legacy snapshot、strict inventory/parity carrier 和 K2 public creation/ingress/delivery/materializer/outbox seam 完成 broker-neutral 验证；未执行生产 DDL/DML，未修改生产配置或 binding，未调用 broker，未启动、停止或重启服务，未激活 runtime。
 
@@ -1003,7 +1003,7 @@ backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py
 本设计阶段：
 
 ```text
-source_merge=pending_pr_k3b
+source_merge=merged_pr_2848
 close_sync=not_applicable_feature
 production_ddl_gate=noop
 production_dml_gate=noop
