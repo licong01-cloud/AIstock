@@ -742,10 +742,16 @@ class PostgresHistoricalRangeRepository:
                 cur.execute(
                     """
                     SELECT * FROM app.advisory_historical_range_operation
-                    WHERE batch_id = %s AND operation_idempotency_key = %s
+                    WHERE batch_id = %s
+                      AND operation_type = %s
+                      AND operation_idempotency_key = %s
                     FOR UPDATE
                     """,
-                    (request.batch_id, request.operation_idempotency_key),
+                    (
+                        request.batch_id,
+                        request.operation_type.value,
+                        request.operation_idempotency_key,
+                    ),
                 )
                 row = cur.fetchone()
                 if row is not None:
@@ -755,9 +761,15 @@ class PostgresHistoricalRangeRepository:
                 cur.execute(
                     """
                     SELECT * FROM app.advisory_historical_range_operation
-                    WHERE batch_id = %s AND operation_idempotency_key = %s
+                    WHERE batch_id = %s
+                      AND operation_type = %s
+                      AND operation_idempotency_key = %s
                     """,
-                    (request.batch_id, request.operation_idempotency_key),
+                    (
+                        request.batch_id,
+                        request.operation_type.value,
+                        request.operation_idempotency_key,
+                    ),
                 )
                 created = cur.fetchone()
                 if created is None:
