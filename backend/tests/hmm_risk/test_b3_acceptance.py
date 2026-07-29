@@ -271,6 +271,122 @@ def test_d5_repeat_mismatch_and_validation_access_fail_closed() -> None:
     assert "hmm_risk_model_selection_contract_unsatisfied" in receipt["failure_reason_codes"]
 
 
+def test_d5_persists_compact_rejection_reasons_for_each_ineligible_candidate() -> None:
+    first = _selection_repeat(level="L1", preferred_seed=46)
+    second = _selection_repeat(level="L1", preferred_seed=46)
+    rejected_dates = _train_dates(30)
+    rejected_states = [0 if index % 2 == 0 else 1 for index in range(30)]
+    rejected_states[-1] = 2
+    rejected_occupancy = subject.evaluate_train_occupancy(
+        _posterior(rejected_states),
+        rejected_dates,
+        frozen_input_manifest=_train_manifest(rejected_dates),
+    )
+
+    for repeat in (first, second):
+        entry_index = next(
+            index
+            for index, entry in enumerate(repeat["entries"])
+            if entry["seed"] == 42 and entry["sector_code"] == "S000"
+        )
+        entry_body = {
+            key: value for key, value in repeat["entries"][entry_index].items() if key != "entry_receipt_sha256"
+        }
+        entry_body.update(
+            train_occupancy=rejected_occupancy,
+            model_entry_status="failed",
+            model_entry_valid=False,
+        )
+        repeat["entries"][entry_index] = {
+            **entry_body,
+            "entry_receipt_sha256": subject.canonical_sha256(entry_body),
+        }
+        candidate_payload = {
+            key: repeat[key]
+            for key in (
+                "family",
+                "level",
+                "schedule",
+                "canonical_sector_codes",
+                "feature_names",
+                "preprocess",
+                "numeric_environment",
+                "entries",
+                "models",
+            )
+        }
+        repeat["candidate_payload_sha256"] = subject.canonical_sha256(candidate_payload)
+
+    receipt = subject.select_level_restart(
+        first,
+        second,
+        family="legacy_covfix",
+        level="L1",
+        expected_sector_codes=[f"S{index:03d}" for index in range(31)],
+        feature_count=7,
+        feature_domain_policy_sha256="e" * 64,
+    )
+
+    rejected_candidate = next(candidate for candidate in receipt["evidence"]["candidates"] if candidate["seed"] == 42)
+    assert rejected_candidate["eligible"] is False
+    assert rejected_occupancy["failure_reason_codes"]
+    assert rejected_candidate["failure_reason_codes"] == rejected_occupancy["failure_reason_codes"]
+    assert rejected_candidate["blocking_reason_codes"] == []
+    assert rejected_candidate["primary_reason_code"] == rejected_occupancy["primary_reason_code"]
+    assert rejected_candidate["rejection_summary"] == [
+        {
+            "sector_code": "S000",
+            "entry_receipt_sha256": first["entries"][0]["entry_receipt_sha256"],
+            "failed_stages": [
+                {
+                    "stage": "train_occupancy",
+                    "status": "failed",
+                    "valid": False,
+                    "failure_reason_codes": rejected_candidate["failure_reason_codes"],
+                    "blocking_reason_codes": [],
+                    "primary_reason_code": rejected_occupancy["primary_reason_code"],
+                }
+            ],
+        }
+    ]
+    assert rejected_candidate["rejection_summary_sha256"] == subject.canonical_sha256(
+        rejected_candidate["rejection_summary"]
+    )
+
+
+def test_d5_rejection_summary_keeps_fit_failure_stage_without_inventing_model_mismatch() -> None:
+    failure_body = {
+        "family": "legacy_covfix",
+        "level": "L1",
+        "seed": 42,
+        "sector_code": "S000",
+        "fit_status": "failed",
+        "model_entry_status": "failed",
+        "model_entry_valid": False,
+        "failure_stage": "fit",
+        "failure_reason_codes": ["hmm_risk_model_fit_failed"],
+        "blocking_reason_codes": [],
+    }
+    entry = {**failure_body, "entry_receipt_sha256": subject.canonical_sha256(failure_body)}
+
+    assert subject._candidate_rejection_summary([entry]) == [
+        {
+            "sector_code": "S000",
+            "entry_receipt_sha256": entry["entry_receipt_sha256"],
+            "failed_stages": [
+                {
+                    "stage": "fit",
+                    "status": "failed",
+                    "valid": False,
+                    "failure_reason_codes": ["hmm_risk_model_fit_failed"],
+                    "blocking_reason_codes": [],
+                    "primary_reason_code": "hmm_risk_model_fit_failed",
+                }
+            ],
+        }
+    ]
+
+
 def _validation_dates() -> tuple[date, ...]:
     start = date(2024, 7, 1)
     end = date(2025, 3, 31)
