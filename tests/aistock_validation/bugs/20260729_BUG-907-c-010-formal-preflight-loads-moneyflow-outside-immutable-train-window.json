@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-907",
-  "closed_at": null,
+  "closed_at": "2026-07-29T08:10:00Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -73,8 +73,8 @@
   },
   "first_seen_at": "2026-07-29T05:19:48.958093Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6d33647cb7e4bc0bff87b713827b05c351379696",
+  "fixed_at": "2026-07-29T08:12:28.345775Z",
   "github_issue_number": 2866,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2866",
   "last_seen_at": "2026-07-29T05:19:48.958093Z",
@@ -82,6 +82,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2869",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -93,7 +94,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -102,6 +103,9 @@
     "fingerprint": "b5891fdf78d672a824035c27",
     "source_event_id": "FE-20260729-b5891fdf78d6"
   },
+  "validation_evidence": [
+    "F:\\Dev\\AIstock_worktrees\\BUG-907-c-010-formal-preflight-loads-moneyflow-outside-i-20260729\\tmp\\validation\\hmm_risk\\c010_formal_preflight_20260729_3d7c3cd9.json"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
