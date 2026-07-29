@@ -6,6 +6,7 @@
     "tests/aistock_validation/catalog/test_plans.yaml",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/test_validation_catalog_integrity.py",
     "backend/tests/research_pipeline/test_service.py",
     "backend/tests/research_pipeline/test_hmm_realtime_ingestion.py",
     "backend/tests/mcp/test_profiles_registry_gateway.py",
@@ -30,6 +31,12 @@
   "created_at": "2026-07-29T16:28:34.785003Z",
   "description": "strategy_package_governance_ui reports no tests; research_pipeline_backend asserts an obsolete hook count; MCP/RA/MiniQMT sessions report contract or isolation failures and Paper v2 is skipped.",
   "events": [
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR static validation exposed a stale Nightly CodeGraph contract that still required Bash '|| true' after the workflow moved to PowerShell fail-closed handling. Update the contract to require explicit LASTEXITCODE checking and a throwing failure path.",
+      "timestamp": "2026-07-29T18:59:22.113477Z"
+    },
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex",
