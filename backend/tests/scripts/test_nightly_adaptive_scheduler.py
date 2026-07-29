@@ -345,6 +345,16 @@ def test_nightly_execution_plan_uses_catalog_and_deduplicates_sessions() -> None
     assert plan["retry_window_on_failure"] is True
 
 
+def test_nightly_full_run_excludes_changed_file_only_plans() -> None:
+    plan = scheduler.build_nightly_execution_plan([], full_run=True, head_commit="def456")
+
+    assert plan["full_run"] is True
+    assert plan["excluded_change_file_only_plans"] == ["l0"]
+    assert "l0" not in plan["selected_plan_keys"]
+    assert "l0" not in plan["selected_sessions"]
+    assert plan["selected_sessions"]
+
+
 def test_nightly_execution_plan_fails_closed_for_unmapped_code(monkeypatch) -> None:
     monkeypatch.setattr(
         scheduler.issue_flow,
@@ -423,6 +433,10 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "using explicit full-run fallback" in workflow
     assert "foreach ($session in $plan.selected_sessions)" in workflow
     assert "nox -s paper_v2_l3" not in workflow
+    assert "id: upload_nightly_l3" in workflow
+    assert "steps.upload_nightly_l3.outcome == 'failure'" in workflow
+    assert workflow.count("name: nightly-l3-results-${{ github.run_id }}") == 3
+    assert "overwrite: true" in workflow
 
 
 def test_nightly_workflow_always_materializes_discovery_input_pack_handoff() -> None:

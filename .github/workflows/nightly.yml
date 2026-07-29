@@ -324,13 +324,25 @@ jobs:
           }
 
       - name: Upload Nightly L3 session results
+        id: upload_nightly_l3
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: nightly-l3-results-${{ github.run_id }}
           path: tmp/validation/nightly_l3/
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Retry Nightly L3 session results upload
+        if: always() && steps.upload_nightly_l3.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-l3-results-${{ github.run_id }}
+          path: tmp/validation/nightly_l3/
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
 
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
