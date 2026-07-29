@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "noxfile.py",
     "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "backend/tests/research_pipeline/test_service.py",
     "backend/tests/research_pipeline/test_hmm_realtime_ingestion.py",
     "backend/tests/mcp/test_profiles_registry_gateway.py",
@@ -27,6 +28,12 @@
   "created_at": "2026-07-29T16:28:34.785003Z",
   "description": "strategy_package_governance_ui reports no tests; research_pipeline_backend asserts an obsolete hook count; MCP/RA/MiniQMT sessions report contract or isolation failures and Paper v2 is skipped.",
   "events": [
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR CI classified backend/tests/research_pipeline/test_hmm_realtime_ingestion.py as unmapped code. Add the missing research_pipeline test ownership rule so all CI entrypoints select the approved research_pipeline_backend plan.",
+      "timestamp": "2026-07-29T18:03:29.8345734Z"
+    },
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex",
