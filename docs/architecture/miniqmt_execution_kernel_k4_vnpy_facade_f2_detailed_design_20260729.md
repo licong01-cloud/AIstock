@@ -1,12 +1,12 @@
 # MiniQMT 统一执行内核 K4 vn.py Compatibility Façade F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_verified_source_pending_user_authorization`；K4-A=`implemented_verified_contract_slice + merged`、K4-B=`implemented_verified_source_pending_user_authorization`。
+> Feature tier：`F2`。文档状态：`implementation_verified`；K4-A=`implemented_verified_contract_slice + merged`、K4-B=`implemented_verified + merged`，K4 overall=`implemented_verified + merged`。
 >
 > 设计交付：PR #2861，merge `8250b64ff3c2deb04eb3594f1ae3fba3acd1e6ce`，`source_merge=merged_pr_2861`。
 >
 > 2026-07-29 正式修订复核：K4/父蓝图/统一蓝图 F2 validator 分别为 `10/10`、`48/48`、`90/90`，均 `warnings=0`；DESIGN-COMPLIANCE-001逐项通过。该结果仅表示K4 shadow设计可实施，不表示K4代码、K5/K6、产品command authority或runtime activation已完成。
 >
-> 2026-07-31 K4-B正式审核补修已完成本地direct、DEV PostgreSQL、MiniQMT/Paper、coverage、L0、module registry与F2闭环；PR #2953补修HEAD `534ed8fb` 的required CI run `30573150209`全绿。K4-B=`implemented_verified_source_pending_user_authorization`。该状态不表示source已合入、产品runtime已切换或生产gate已执行。
+> 2026-07-31 K4-B正式审核补修已完成本地direct、DEV PostgreSQL、MiniQMT/Paper、coverage、L0、module registry与F2闭环；final source HEAD `3b7407211de61634cb5ffb4acc3bc986994a2b6f`、required CI run `30573914476`已通过PR #2953 / merge `cbb5f12871f41d1fd529a9a98e8811484eac8ba0`闭合。K4-B与K4 overall均为`implemented_verified + merged`。该状态不表示产品runtime已切换或生产gate已执行。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -1101,7 +1101,7 @@ K4-A implementation receipt（2026-07-30）：
 - 单command仅做broker-neutral existing materializer shadow closure，多command完整保留trace并明确不materialize；所有测试`dispatch_attempt=0/broker_called=false`；
 - direct/DEV PostgreSQL/L2/Paper/coverage/F2/DESIGN-COMPLIANCE全部闭合后才能标记K4-B implemented；不修改 current-three binding，不注册Iceberg/Stop，不切产品 route。
 
-K4-B实现状态（2026-07-31）：`implemented_verified_source_pending_user_authorization`。正式审核发现并修复K3 manifest/process binding使用工作树原始EOL导致Windows/Linux identity分裂、异常reason renderer二次失败、无标记message截断/绝对路径残片，以及characterization preflight失败未进入active diagnostics的问题。AIstock-owned source attribution与binding readback现统一canonical-LF；repo-owned artifact仍包含`81`个full-input/full-trace vectors与`6`项K3 BUY/SELL committed-parity material，重新使用当前production K3 constructors闭合，semantic artifact hash=`37dc70e54a4576ceb909d07df7d599ce93737948920d0182b1f4d81572f3b758`、vector-set hash=`4a3117fa3865e0b7f759f61102ea58a426c5d45844d1a821fa5161197f506cf2`、canonical-LF file hash=`ec7bc3c740fab18277c698a80a1b985b7e474d038bc37230c6f8911abbac9396`、live K3 binding hash=`123b3349bfdf79edd739cd355f6667cf98d18f2826b1480fb354c3dad3f1bedb`。本地非DB direct=`202 passed,1 skipped`、DEV PostgreSQL=`2 passed`、MiniQMT=`1099 passed,30 skipped`、Paper=`1050 passed,2 skipped,2 xfailed`；八个K4核心模块line均`>=80%`且branch均`>=70%`，最低分别为`80.06%/70.00%`。PR classifier=`targeted_ci_required`且`unmapped_code_files=[]`；required CI run `30573150209`全绿，source merge与产品runtime状态继续分离。
+K4-B实现状态（2026-07-31）：`implemented_verified + merged`。正式审核发现并修复K3 manifest/process binding使用工作树原始EOL导致Windows/Linux identity分裂、异常reason renderer二次失败、无标记message截断/绝对路径残片，以及characterization preflight失败未进入active diagnostics的问题。AIstock-owned source attribution与binding readback现统一canonical-LF；repo-owned artifact仍包含`81`个full-input/full-trace vectors与`6`项K3 BUY/SELL committed-parity material，重新使用当前production K3 constructors闭合，semantic artifact hash=`37dc70e54a4576ceb909d07df7d599ce93737948920d0182b1f4d81572f3b758`、vector-set hash=`4a3117fa3865e0b7f759f61102ea58a426c5d45844d1a821fa5161197f506cf2`、canonical-LF file hash=`ec7bc3c740fab18277c698a80a1b985b7e474d038bc37230c6f8911abbac9396`、live K3 binding hash=`123b3349bfdf79edd739cd355f6667cf98d18f2826b1480fb354c3dad3f1bedb`。本地非DB direct=`202 passed,1 skipped`、DEV PostgreSQL=`2 passed`、MiniQMT=`1099 passed,30 skipped`、Paper=`1050 passed,2 skipped,2 xfailed`；八个K4核心模块line均`>=80%`且branch均`>=70%`，最低分别为`80.06%/70.00%`。PR classifier=`targeted_ci_required`且`unmapped_code_files=[]`；final source HEAD `3b7407211de61634cb5ffb4acc3bc986994a2b6f`与required CI run `30573914476`已由PR #2953 / merge `cbb5f12871f41d1fd529a9a98e8811484eac8ba0`闭合，产品runtime状态继续分离。
 
 任一 PR 不得以“后续补齐”为由省略本切片的 writer/readback、negative、restart或failure evidence。
 
@@ -1116,7 +1116,8 @@ design_source_merge=merged_pr_2861
 k4a_source_merge=merged_pr_2883
 k4b_design_source_merge=merged_pr_2914
 k4b_design_merge_commit=15c38cb8d3a2c3a1710a29526ac6ac07ef580238
-k4b_code_source_merge=pending_user_authorization
+k4b_code_source_merge=merged_pr_2953
+k4b_code_merge_commit=cbb5f12871f41d1fd529a9a98e8811484eac8ba0
 close_sync=not_applicable_feature
 production_ddl_gate=noop
 production_dml_gate=noop
@@ -1128,9 +1129,9 @@ broker_gate=noop
 service_restart=noop
 runtime_activation=noop
 product_runtime=not_switched
-K4_overall=implemented_verified_pending_source_merge
+K4_overall=implemented_verified_merged
 K4-A=implemented_verified_contract_slice_merged
-K4-B=implemented_verified_source_pending_user_authorization
+K4-B=implemented_verified_merged
 K5=not_started
 K6=not_started
 ```
@@ -1198,4 +1199,4 @@ K4 implementation只有同时满足以下条件才可标记 `implemented_verifie
 9. K4 source状态、K5/K6、产品route、DDL/config/binding/restart/runtime activation分别报告；
 10. 产品 runtime 仍为 `not_switched`，不因 K4 source merge自动重启或激活。
 
-当前K4-B source已满足1–10的代码与验证条件，PR #2953 required CI已通过；source merge仍待用户明确授权，合入后仍不得自动执行服务重启或runtime activation。
+当前K4-B source已满足1–10的代码与验证条件，并已通过PR #2953合入；产品runtime仍未切换，且不得因source merge自动执行服务重启或runtime activation。
