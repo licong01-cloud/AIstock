@@ -771,6 +771,19 @@ class PostgresHistoricalRangeBridgeAdapters:
                 REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
                 "label capture source is not a retrospective observation capture",
             )
+        capture_policy_identities = {
+            (
+                item.historical_range_policy_bundle_ref,
+                item.historical_range_policy_bundle_hash,
+                item.policy_component_set_hash,
+            )
+            for item in labels
+        }
+        if len(capture_policy_identities) != 1:
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                "one label capture group requires one exact policy/component set",
+            )
         mappings = self._select_observations(
             request=request,
             observations=observations,
@@ -1694,17 +1707,26 @@ class PostgresHistoricalRangeBridgeAdapters:
         requested_outcomes = set(request.outcome_refs)
         requested_policies = set(request.policy_bundle_refs)
         label_signals: set[str] = set()
-        policy_identities: set[tuple[HistoricalRangeArtifactRefV1, str]] = set()
-        component_hashes: set[str] = set()
+        policy_identity_by_signal: dict[
+            str,
+            tuple[HistoricalRangeArtifactRefV1, str, str],
+        ] = {}
         for label in labels:
             label_signals.add(label.canonical_signal_id)
-            policy_identities.add(
-                (
-                    label.historical_range_policy_bundle_ref,
-                    label.historical_range_policy_bundle_hash,
-                )
+            policy_identity = (
+                label.historical_range_policy_bundle_ref,
+                label.historical_range_policy_bundle_hash,
+                label.policy_component_set_hash,
             )
-            component_hashes.add(label.policy_component_set_hash)
+            existing_policy_identity = policy_identity_by_signal.setdefault(
+                label.canonical_signal_id,
+                policy_identity,
+            )
+            if existing_policy_identity != policy_identity:
+                raise HistoricalRangeDatasetBridgeError(
+                    REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                    "one canonical signal requires one exact policy/component set",
+                )
             if (
                 label.canonical_signal_id not in observation_signals
                 or label.historical_range_policy_bundle_ref
@@ -1717,14 +1739,10 @@ class PostgresHistoricalRangeBridgeAdapters:
                     REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
                     "bridge capture label lies outside the exact request",
                 )
-        if (
-            label_signals != set(observation_signals)
-            or len(policy_identities) != 1
-            or len(component_hashes) != 1
-        ):
+        if label_signals != set(observation_signals):
             raise HistoricalRangeDatasetBridgeError(
                 REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
-                "one bridge capture requires one exact policy/component set",
+                "bridge capture labels must cover every exact observation signal",
             )
 
 

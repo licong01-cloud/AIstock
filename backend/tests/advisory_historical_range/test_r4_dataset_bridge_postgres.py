@@ -338,7 +338,7 @@ def test_label_capture_rejects_source_without_terminal_closure() -> None:
         )
 
 
-def test_capture_preflight_rejects_mixed_policy_before_repository_mutation() -> None:
+def test_capture_preflight_rejects_mixed_policy_for_one_signal() -> None:
     outcome_ref = _ref(HistoricalRangeArtifactKind.OUTCOME, "e")
     policy_a = _ref(HistoricalRangeArtifactKind.REQUEST, "a")
     policy_f = _ref(HistoricalRangeArtifactKind.REQUEST, "f")
@@ -369,12 +369,112 @@ def test_capture_preflight_rejects_mixed_policy_before_repository_mutation() -> 
 
     with pytest.raises(
         HistoricalRangeDatasetBridgeError,
-        match="one exact policy/component set",
+        match="one canonical signal requires one exact policy/component set",
     ):
         PostgresHistoricalRangeBridgeAdapters._validate_capture_inputs(
             request=request,
             observations=(observation,),
             labels=(label_a, label_f),
+        )
+
+
+def test_capture_preflight_accepts_distinct_policy_sets_for_independent_signals() -> None:
+    outcome_a = _ref(HistoricalRangeArtifactKind.OUTCOME, "e")
+    outcome_f = _ref(HistoricalRangeArtifactKind.OUTCOME, "d")
+    policy_a = _ref(HistoricalRangeArtifactKind.REQUEST, "a")
+    policy_f = _ref(HistoricalRangeArtifactKind.REQUEST, "f")
+    base = _request(
+        outcome_refs=tuple(
+            sorted(
+                (outcome_a, outcome_f),
+                key=lambda item: item.semantic_content_hash,
+            )
+        ),
+        policy_ref=policy_a,
+    )
+    components_a = base.policy_component_hashes[policy_a.payload_sha256]
+    components_f = {
+        **components_a,
+        "MARKET_DATA": "9" * 64,
+    }
+    payload = base.model_dump(mode="python", exclude={"request_hash"})
+    payload["policy_bundle_refs"] = (policy_a, policy_f)
+    payload["policy_component_hashes"] = {
+        policy_a.payload_sha256: components_a,
+        policy_f.payload_sha256: components_f,
+    }
+    request = type(base).model_validate(payload)
+
+    def component_set_hash(components: dict[str, str]) -> str:
+        return canonical_json_sha256(
+            [
+                {
+                    "component_role": role,
+                    "component_hash": components[role],
+                }
+                for role in sorted(components)
+            ]
+        )
+
+    labels = (
+        SimpleNamespace(
+            canonical_signal_id="signal-1",
+            historical_range_policy_bundle_ref=policy_a,
+            historical_range_policy_bundle_hash=policy_a.payload_sha256,
+            policy_component_set_hash=component_set_hash(components_a),
+            accepted_outcome_refs=(outcome_a,),
+        ),
+        SimpleNamespace(
+            canonical_signal_id="signal-2",
+            historical_range_policy_bundle_ref=policy_f,
+            historical_range_policy_bundle_hash=policy_f.payload_sha256,
+            policy_component_set_hash=component_set_hash(components_f),
+            accepted_outcome_refs=(outcome_f,),
+        ),
+    )
+
+    PostgresHistoricalRangeBridgeAdapters._validate_capture_inputs(
+        request=request,
+        observations=(
+            SimpleNamespace(canonical_signal_id="signal-1"),
+            SimpleNamespace(canonical_signal_id="signal-2"),
+        ),
+        labels=labels,
+    )
+
+
+def test_label_capture_rejects_mixed_policy_within_one_capture_group() -> None:
+    policy_a = _ref(HistoricalRangeArtifactKind.REQUEST, "a")
+    policy_f = _ref(HistoricalRangeArtifactKind.REQUEST, "f")
+    source_batch = SimpleNamespace(
+        membership_hash="1" * 64,
+        capture_receipt_hash="2" * 64,
+        request=_capture_request(),
+    )
+    labels = (
+        SimpleNamespace(
+            historical_range_policy_bundle_ref=policy_a,
+            historical_range_policy_bundle_hash=policy_a.payload_sha256,
+            policy_component_set_hash="3" * 64,
+        ),
+        SimpleNamespace(
+            historical_range_policy_bundle_ref=policy_f,
+            historical_range_policy_bundle_hash=policy_f.payload_sha256,
+            policy_component_set_hash="4" * 64,
+        ),
+    )
+
+    with pytest.raises(
+        HistoricalRangeDatasetBridgeError,
+        match="one label capture group requires one exact policy/component set",
+    ):
+        _adapter_with_repository(InMemoryCaptureBatchRepository())._capture_labels(
+            request=_request(),
+            source_batch=source_batch,
+            observations=(),
+            labels=labels,
+            label_source_revision_id="label-source-1",
+            label_source_revision_hash="6" * 64,
         )
 
 
