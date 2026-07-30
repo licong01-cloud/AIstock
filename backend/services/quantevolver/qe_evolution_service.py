@@ -2959,6 +2959,7 @@ class AutoEvolutionScheduler:
                         f"""
                         SELECT task_id, task_name, target_desc, max_loops, current_loop,
                                status, base_experiment_id, node_id, label_horizon,
+                               long_trend_profile_id,
                                task_type, source_type, strategy_id, strategy_params,
                                strategy_evo_config, execution_algo,
                                strategy_evo_execution_mode, created_at, updated_at

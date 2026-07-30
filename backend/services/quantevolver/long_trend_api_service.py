@@ -309,7 +309,11 @@ class QELongTrendAPIService:
                     )
                     inventory_ready = True
                     warnings.extend(inventory.warnings)
-                    for name, artifact in inventory.artifacts.items():
+                    # Preview has a stable input contract: a missing optional
+                    # artifact must remain visible instead of disappearing
+                    # from the response when the resolver has no catalog row.
+                    for name in _PREVIEW_ARTIFACT_NAMES:
+                        artifact = inventory.artifacts.get(name)
                         available = artifact is not None
                         reason_code = None if available else _artifact_missing_reason(name)
                         artifact_rows.append(

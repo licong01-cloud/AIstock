@@ -509,6 +509,12 @@ def test_input_preview_is_read_only_and_reports_exact_inventory(
     assert artifacts["positions"]["available"] is True
     assert artifacts["portfolio_report"]["available"] is False
     assert artifacts["indicator_object"]["reason_code"] == "QELT_INDICATOR_OBJECT_MISSING"
+    assert artifacts["orders"]["available"] is False
+    assert artifacts["orders"]["reason_code"] == "QELT_ORDERS_ARTIFACT_MISSING"
+    assert artifacts["trades"]["available"] is False
+    assert artifacts["trades"]["reason_code"] == "QELT_TRADES_ARTIFACT_MISSING"
+    action_inputs = {item.get("input_name") for item in result["data_action_plan"]}
+    assert {"orders", "trades"}.issubset(action_inputs)
     assert all(value is False for value in result["side_effects"].values())
 
 

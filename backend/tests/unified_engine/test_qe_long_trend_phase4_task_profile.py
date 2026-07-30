@@ -49,6 +49,55 @@ def test_compact_task_payload_restores_persisted_profile() -> None:
     assert payload["long_trend_profile_id"] == "qe_long_trend_v1"
 
 
+def test_summary_task_query_projects_persisted_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Cursor:
+        sql = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params):  # type: ignore[no-untyped-def]
+            self.sql = sql
+
+        def fetchall(self):
+            assert "long_trend_profile_id" in self.sql
+            return [
+                {
+                    "task_id": "task-1",
+                    "task_name": "task",
+                    "task_type": "evolution",
+                    "long_trend_profile_id": "qe_long_trend_v1",
+                }
+            ]
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return _Cursor()
+
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_evolution_service.get_conn",
+        lambda: _Connection(),
+    )
+
+    import asyncio
+
+    rows = asyncio.run(scheduler.get_all_tasks(detail="summary"))
+
+    assert rows[0]["long_trend_profile_id"] == "qe_long_trend_v1"
+
+
 def test_existing_task_identity_rejects_profile_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Cursor:
         row = None
