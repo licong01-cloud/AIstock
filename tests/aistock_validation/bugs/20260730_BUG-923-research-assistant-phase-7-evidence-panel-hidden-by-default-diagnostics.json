@@ -1,0 +1,242 @@
+{
+  "actual": "The summary bubble appears, but ra-phase7-evidence-panel is absent and Playwright times out after 30 seconds.",
+  "allowed_write_scope": [
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "tests/aistock_validation/bugs/20260730_BUG-923-research-assistant-phase-7-evidence-panel-hidden-by-default-diagnostics.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-923",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-30T01:46:53.298083Z",
+  "description": "The summary bubble appears, but ra-phase7-evidence-panel is absent and Playwright times out after 30 seconds.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260730-5c6701df5ae0",
+      "timestamp": "2026-07-30T01:46:53.298077Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/30502893537"
+  ],
+  "expected": "Phase 7 chat shows evidence cards and gated blockers after the orchestrator summary without enabling developer diagnostics.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "frontend/src/app/research-assistant/chat/page.tsx"
+    ],
+    "ownership": {
+      "changed_files": [
+        "frontend/src/app/research-assistant/chat/page.tsx"
+      ],
+      "impacted_modules": [
+        "research_assistant",
+        "research_assistant.memory_tree",
+        "research_assistant.agent_teams",
+        "research_assistant.evidence_guard",
+        "research_assistant.qe_autonomy",
+        "validation.runner"
+      ],
+      "matched_rules": [
+        {
+          "file": "frontend/src/app/research-assistant/chat/page.tsx",
+          "impact_modules": [
+            "research_assistant.memory_tree",
+            "research_assistant.agent_teams",
+            "research_assistant.evidence_guard",
+            "research_assistant.qe_autonomy",
+            "validation.runner"
+          ],
+          "primary_module": "research_assistant",
+          "risk_level": "critical",
+          "rule_id": "research_assistant_phase7_full_accept"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "frontend/src/app/research-assistant/chat/page.tsx"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "frontend/src/app/research-assistant/chat/page.tsx"
+    ]
+  },
+  "first_seen_at": "2026-07-30T01:46:53.298083Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2926,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2926",
+  "last_seen_at": "2026-07-30T01:46:53.298083Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m nox -s ra_phase7_full_accept",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant Phase 7 evidence panel hidden by default diagnostics gate",
+  "trigger_condition": {
+    "fingerprint": "5c6701df5ae0b42159803831",
+    "source_event_id": "FE-20260730-5c6701df5ae0"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/research-assistant/chat/page.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/app/research-assistant/chat/page.tsx",
+    "ui_routes": [
+      "/src/app/research-assistant/chat/page.tsx"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "research_assistant",
+        "research_assistant_mcp_contract"
+      ],
+      "plans": [
+        "research_assistant_backend",
+        "research_assistant_mcp_contract"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "research_assistant",
+          "research_assistant_mcp_contract"
+        ],
+        "plans": [
+          "research_assistant_backend",
+          "research_assistant_mcp_contract"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
