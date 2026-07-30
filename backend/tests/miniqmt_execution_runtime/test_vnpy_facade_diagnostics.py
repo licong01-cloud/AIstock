@@ -6,6 +6,7 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import thaw_jso
 from backend.services.miniqmt_execution_runtime.vnpy_facade_diagnostics import (
     _reset_vnpy_facade_diagnostics_for_tests_v1,
     read_vnpy_facade_diagnostics_v1,
+    record_vnpy_facade_characterization_build_v1,
     record_vnpy_facade_conformance_v1,
     record_vnpy_facade_repository_read_v1,
     record_vnpy_facade_runtime_invocation_v1,
@@ -19,6 +20,10 @@ def test_diagnostics_are_bounded_low_cardinality_and_keep_active_last_failure_se
         algo_code="ICEBERG",
         status="FAILED",
         reason_code="MINIQMT_VNPY_FACADE_CHARACTERIZATION_EXECUTION_UNAVAILABLE",
+    )
+    record_vnpy_facade_characterization_build_v1(
+        status="FAILED",
+        reason_code="MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
     )
     record_vnpy_facade_repository_read_v1(read_kind="LATEST_PRIOR_TICK", outcome="UNAVAILABLE")
     record_vnpy_facade_runtime_invocation_v1(
@@ -43,6 +48,7 @@ def test_diagnostics_are_bounded_low_cardinality_and_keep_active_last_failure_se
     )
     assert {item.name for item in snapshot.metrics} == {
         "miniqmt_vnpy_facade_source_execution_total",
+        "miniqmt_vnpy_facade_characterization_build_total",
         "miniqmt_vnpy_facade_repository_read_total",
         "miniqmt_vnpy_facade_runtime_invocation_total",
         "miniqmt_vnpy_facade_conformance_build_total",

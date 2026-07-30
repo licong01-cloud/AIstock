@@ -451,7 +451,9 @@ def _state_schema(algo_code: str) -> dict[str, Any]:
 
 
 def _file_hash(path: str) -> FileHashV1:
-    return FileHashV1(path=path, sha256=hashlib.sha256((_REPO_ROOT / path).read_bytes()).hexdigest())
+    payload = (_REPO_ROOT / path).read_bytes()
+    canonical_lf = payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return FileHashV1(path=path, sha256=hashlib.sha256(canonical_lf).hexdigest())
 
 
 def _source_attribution(algo_code: str) -> SourceAttributionV1:

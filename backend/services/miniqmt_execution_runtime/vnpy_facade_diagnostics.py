@@ -166,6 +166,17 @@ class _VnpyFacadeDiagnosticsStateV1:
             if status == "FAILED":
                 self._record_failure(stage="SOURCE_EXECUTION", reason_code=reason_code, outcome=status)
 
+    def record_characterization_build(self, *, status: str, reason_code: str) -> None:
+        status = _strict_member(status, ("PASSED", "FAILED"), field_name="status")
+        reason_code = _strict_member(reason_code, _REASON_CODES, field_name="reason_code")
+        with self._lock:
+            self._increment(
+                "miniqmt_vnpy_facade_characterization_build_total",
+                {"status": status, "reason_code": reason_code},
+            )
+            if status == "FAILED":
+                self._record_failure(stage="CHARACTERIZATION", reason_code=reason_code, outcome=status)
+
     def record_conformance(self, *, status: str, reason_code: str) -> None:
         status = _strict_member(status, ("PASSED", "FAILED"), field_name="status")
         reason_code = _strict_member(reason_code, _REASON_CODES, field_name="reason_code")
@@ -224,7 +235,6 @@ class _VnpyFacadeDiagnosticsStateV1:
             self._execution_set_sha256s = tuple(item.execution_set_sha256 for item in authority.source_execution_sets)
             self._characterization_receipt_sha256s = tuple(item.receipt_sha256 for item in authority.receipts)
             self._algorithm_statuses = {item.algo_code: item.status.value for item in authority.receipts}
-            self._active_failure = None
 
     def publish_conformance(self, authority: VnpyFacadeConformanceAuthorityV2) -> None:
         if not isinstance(authority, VnpyFacadeConformanceAuthorityV2):
@@ -293,6 +303,10 @@ def record_vnpy_facade_source_execution_v1(*, algo_code: str, status: str, reaso
     _STATE.record_source_execution(algo_code=algo_code, status=status, reason_code=reason_code)
 
 
+def record_vnpy_facade_characterization_build_v1(*, status: str, reason_code: str) -> None:
+    _STATE.record_characterization_build(status=status, reason_code=reason_code)
+
+
 def record_vnpy_facade_conformance_v1(*, status: str, reason_code: str) -> None:
     _STATE.record_conformance(status=status, reason_code=reason_code)
 
@@ -342,6 +356,7 @@ __all__ = [
     "publish_vnpy_facade_conformance_v1",
     "read_vnpy_facade_diagnostics_v1",
     "record_vnpy_facade_conformance_v1",
+    "record_vnpy_facade_characterization_build_v1",
     "record_vnpy_facade_repository_read_v1",
     "record_vnpy_facade_runtime_invocation_v1",
     "record_vnpy_facade_source_execution_v1",

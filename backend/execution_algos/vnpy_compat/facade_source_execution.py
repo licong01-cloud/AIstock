@@ -38,6 +38,8 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     execution_child_order_id_v1,
     strict_readback_kernel_event_payload_v1,
     validate_json_schema_instance_v1,
+    bounded_exception_summary_v1,
+    stable_exception_reason_code_v1,
 )
 
 from .facade import VnpyAlgoEngineFacadeV1, VnpyFacadeEffectCollectorV1, VnpyFacadeTraceCollectorV2
@@ -100,19 +102,14 @@ def _source_failure(field_path: str, reason_code: str, **context: Any) -> VnpyFa
 
 
 def _safe_exception_evidence_v1(exc: Exception) -> dict[str, Any]:
-    try:
-        message = str(exc)[:2048]
-    except Exception as render_error:  # pragma: no branch - retain the primary failure
-        message = "<unavailable>"
-        render_error_type = f"{type(render_error).__module__}.{type(render_error).__qualname__}"
-    else:
-        root = Path(__file__).resolve().parents[3]
-        for spelling in (str(root), str(root).replace("\\", "\\\\"), root.as_posix()):
-            message = message.replace(spelling, "<repository_root>")
-        render_error_type = None
+    root = Path(__file__).resolve().parents[3]
+    summary = bounded_exception_summary_v1(
+        exc,
+        redacted_values=(str(root), str(root).replace("\\", "\\\\"), root.as_posix()),
+    )
+    render_error_type = summary.pop("renderer_error_type")
     return {
-        "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
-        "exception_message": message,
+        **summary,
         "message_render_error_type": render_error_type,
     }
 
@@ -959,7 +956,10 @@ def _failed_result_v1(
         evidence["trace_snapshot_failure"] = _safe_exception_evidence_v1(trace_snapshot_error)
     failure = _source_failure(
         f"vectors.{vector.vector_id}",
-        getattr(exc, "reason_code", "MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED"),
+        stable_exception_reason_code_v1(
+            exc,
+            default="MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED",
+        ),
         vector_id=vector.vector_id,
         scenario_id=vector.scenario_id,
         step_ordinal=vector.step_ordinal,

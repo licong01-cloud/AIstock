@@ -31,13 +31,14 @@ from backend.execution_algos.vnpy_compat.facade_source_execution import (
     _active_orders_v1,
     _callback_v1,
     _decode_state_value_v1,
+    _failed_result_v1,
     _safe_exception_evidence_v1,
     _state_value_v1,
     build_vnpy_facade_source_executor_binding_v1,
     execute_vnpy_facade_source_vectors_v1,
     readback_vnpy_facade_source_executor_binding_v1,
 )
-from backend.execution_algos.vnpy_compat.facade import VnpyFacadeEffectCollectorV1
+from backend.execution_algos.vnpy_compat.facade import VnpyFacadeEffectCollectorV1, VnpyFacadeTraceCollectorV2
 from backend.execution_algos.vnpy_compat.facade_projection import Status
 from backend.execution_algos.vnpy_style.plugin_manifests import current_three_manifests_v3
 from backend.services.miniqmt_execution_runtime.plugin_contracts import EventTypeV2, algo_transition_id_v1
@@ -595,5 +596,81 @@ def test_source_executor_missing_repo_owned_source_and_state_codecs_are_explicit
             raise RuntimeError("render failed")
 
     evidence = _safe_exception_evidence_v1(_BrokenMessage())
-    assert evidence["exception_message"] == "<unavailable>"
+    assert evidence["exception_message"] == "<_BrokenMessage: unrenderable>"
     assert evidence["message_render_error_type"].endswith("RuntimeError")
+    assert evidence["message_truncated"] is False
+    assert evidence["omitted_message_sha256"] is None
+
+
+def test_source_failure_evidence_is_path_safe_bounded_and_hash_closes_omitted_text() -> None:
+    root = str(Path(__file__).resolve().parents[3])
+    message = "x" * 2030 + root + "/private.py" + "z" * 3000
+    evidence = _safe_exception_evidence_v1(RuntimeError(message))
+
+    assert root not in evidence["exception_message"]
+    assert evidence["message_truncated"] is True
+    assert evidence["observed_message_chars"] > len(evidence["exception_message"])
+    assert len(evidence["omitted_message_sha256"]) == 64
+
+
+def test_trace_collector_preserves_primary_failure_when_reason_code_property_breaks() -> None:
+    artifact = readback_vnpy_facade_characterization_vector_artifact_v2().artifact
+    vector = artifact.ordered_vectors[0]
+    assert vector.start_context_or_null is not None
+    effects = VnpyFacadeEffectCollectorV1.create(
+        vector.deterministic_context,
+        vector.start_context_or_null.parent_intent_id,
+        "transition_trace_primary_failure",
+    )
+    trace = VnpyFacadeTraceCollectorV2(vector_id=vector.vector_id, effect_collector=effects)
+
+    class _PrimaryFailure(RuntimeError):
+        @property
+        def reason_code(self) -> str:
+            raise LookupError("secondary reason renderer failed")
+
+    def operation() -> None:
+        raise _PrimaryFailure("primary failure")
+
+    with pytest.raises(_PrimaryFailure, match="primary failure"):
+        trace.invoke_v1(method_name="write_log", normalized_arguments={"msg": "x"}, operation=operation)
+
+    assert len(trace.ordered_calls) == 1
+    assert trace.ordered_calls[0].return_disposition == "RAISED"
+    assert (
+        thaw_json_v1(trace.ordered_calls[0].normalized_return_or_null)["reason_code"]
+        == "MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED"
+    )
+
+
+def test_failed_vector_result_preserves_primary_reason_and_secondary_trace_failure() -> None:
+    artifact = readback_vnpy_facade_characterization_vector_artifact_v2()
+    vector = artifact.artifact.ordered_vectors[0]
+    source_manifest = build_vnpy_facade_source_manifest_v1()
+    facade_contract = build_vnpy_facade_contract_v1(
+        compatibility_requirements=tuple(item.compatibility_requirement for item in current_three_manifests_v3())
+    )
+    binding = build_vnpy_facade_source_executor_binding_v1(
+        source_manifest=source_manifest,
+        facade_contract=facade_contract,
+        vector_artifact_sha256=artifact.artifact.artifact_sha256,
+        vector_artifact_file_sha256=artifact.canonical_lf_file_sha256,
+    )
+
+    class _BrokenReason(RuntimeError):
+        @property
+        def reason_code(self) -> str:
+            raise LookupError("secondary reason renderer failed")
+
+    result = _failed_result_v1(
+        vector=vector,
+        source_executor_binding=binding,
+        source_identity_sha256="a" * 64,
+        exc=_BrokenReason("primary failure"),
+        trace_snapshot_error=RuntimeError("trace snapshot failure"),
+    )
+
+    assert result.invocation_status == "FAILED"
+    failure = result.ordered_execution_failures[0]
+    assert failure.reason_code == "MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED"
+    assert thaw_json_v1(failure.context)["trace_snapshot_failure"]["exception_message"] == "trace snapshot failure"

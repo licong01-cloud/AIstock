@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import backend.execution_algos.vnpy_compat.facade_characterization as characterization_module
+import backend.services.miniqmt_execution_runtime.vnpy_facade_characterization_runner as runner_module
 from backend.execution_algos.vnpy_compat.facade_characterization import (
     VnpyFacadeCharacterizationArtifactAuthorityV2,
     build_vnpy_facade_algorithm_bindings_v2,
@@ -51,7 +52,11 @@ from backend.services.miniqmt_execution_runtime.vnpy_facade_characterization_run
     validate_vnpy_facade_k3_expected_trace_materials_v1,
 )
 from backend.services.miniqmt_execution_runtime.vnpy_facade_diagnostics import (
+    _reset_vnpy_facade_diagnostics_for_tests_v1,
+    publish_vnpy_facade_characterization_v1,
+    publish_vnpy_facade_conformance_v1,
     read_vnpy_facade_diagnostics_v1,
+    record_vnpy_facade_conformance_v1,
 )
 from backend.tests.miniqmt_execution_runtime.test_kernel_creation import _catalog, _gateway
 
@@ -423,8 +428,94 @@ def test_runner_input_carriers_and_error_rendering_are_bounded_and_fail_loud() -
             raise RuntimeError("secondary renderer failed")
 
     evidence = _safe_failure_v1(_BrokenMessage(), algo_code="ICEBERG")
-    assert evidence["exception_message"] == "<unavailable>"
+    assert evidence["exception_message"] == "<_BrokenMessage: unrenderable>"
     assert evidence["render_error_type"].endswith("RuntimeError")
+    assert evidence["message_truncated"] is False
+    assert evidence["omitted_message_sha256"] is None
+
+
+def test_runner_failure_evidence_survives_broken_reason_code_and_closes_truncation() -> None:
+    class _BrokenReason(RuntimeError):
+        @property
+        def reason_code(self) -> str:
+            raise LookupError("secondary reason renderer failed")
+
+    root = str(Path(__file__).resolve().parents[3])
+    evidence = _safe_failure_v1(_BrokenReason("x" * 2030 + root + "z" * 3000), algo_code="STOP")
+
+    assert evidence["reason_code"] == "MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED"
+    assert root not in evidence["exception_message"]
+    assert evidence["message_truncated"] is True
+    assert len(evidence["omitted_message_sha256"]) == 64
+
+
+def test_k3_preflight_failure_records_active_characterization_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    source_manifest, facade_contract, requirements = _authority_inputs()
+    artifact = readback_vnpy_facade_characterization_vector_artifact_v2()
+    _reset_vnpy_facade_diagnostics_for_tests_v1()
+    monkeypatch.setattr(runner_module, "_live_k3_contract_binding_sha256_v1", lambda: "0" * 64)
+
+    with pytest.raises(VnpyFacadeContractError, match="K3 contract binding"):
+        run_vnpy_facade_source_execution_sets_v1(
+            source_manifest=source_manifest,
+            facade_contract=facade_contract,
+            requirements=requirements,
+            artifact_authority=artifact,
+        )
+
+    snapshot = read_vnpy_facade_diagnostics_v1()
+    assert snapshot.active_failure is not None
+    assert snapshot.active_failure.stage == "CHARACTERIZATION"
+    assert snapshot.active_failure.reason_code == "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED"
+
+
+def test_artifact_readback_failure_records_active_characterization_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    source_manifest, facade_contract, requirements = _authority_inputs()
+    _reset_vnpy_facade_diagnostics_for_tests_v1()
+
+    def fail_readback():
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            "artifact readback failed",
+            context={"stage": "ARTIFACT_READBACK"},
+        )
+
+    monkeypatch.setattr(runner_module, "readback_vnpy_facade_characterization_vector_artifact_v2", fail_readback)
+    with pytest.raises(VnpyFacadeContractError, match="artifact readback failed"):
+        build_vnpy_facade_characterization_authority_fresh_process_v2(
+            source_manifest=source_manifest,
+            facade_contract=facade_contract,
+            requirements=requirements,
+        )
+
+    snapshot = read_vnpy_facade_diagnostics_v1()
+    assert snapshot.active_failure is not None
+    assert snapshot.active_failure.stage == "CHARACTERIZATION"
+    assert snapshot.active_failure.reason_code == "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED"
+
+
+def test_characterization_publication_only_clears_failure_after_full_conformance(
+    characterization_authority,
+    formal_v2_bundle,
+) -> None:
+    _reset_vnpy_facade_diagnostics_for_tests_v1()
+    record_vnpy_facade_conformance_v1(
+        status="FAILED",
+        reason_code="MINIQMT_VNPY_FACADE_CONFORMANCE_AUTHORITY_INVALID",
+    )
+    publish_vnpy_facade_characterization_v1(
+        authority=characterization_authority,
+        source_manifest_sha256=_authority_inputs()[0].manifest_sha256,
+        vector_artifact_sha256=readback_vnpy_facade_characterization_vector_artifact_v2().artifact.artifact_sha256,
+        vector_artifact_file_sha256=readback_vnpy_facade_characterization_vector_artifact_v2().canonical_lf_file_sha256,
+    )
+    after_characterization = read_vnpy_facade_diagnostics_v1()
+    assert after_characterization.active_failure is not None
+
+    publish_vnpy_facade_conformance_v1(formal_v2_bundle[3])
+    after_conformance = read_vnpy_facade_diagnostics_v1()
+    assert after_conformance.active_failure is None
+    assert after_conformance.last_failure == after_characterization.last_failure
 
 
 def test_runner_numeric_decoder_and_oversized_carrier_are_explicit() -> None:

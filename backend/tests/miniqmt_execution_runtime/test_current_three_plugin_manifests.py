@@ -680,7 +680,20 @@ def test_source_attribution_closes_actual_files() -> None:
     for descriptor in current_three_descriptors_v2():
         assert descriptor.factory_callable_ref == descriptor.manifest.implementation_ref
         for item in descriptor.manifest.source_attribution.aistock_files:
-            assert hashlib.sha256((repo_root / item.path).read_bytes()).hexdigest() == item.sha256
+            payload = (repo_root / item.path).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            assert hashlib.sha256(payload).hexdigest() == item.sha256
+
+
+def test_source_attribution_hash_is_checkout_eol_independent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "source.py"
+    monkeypatch.setattr(manifest_module, "_REPO_ROOT", tmp_path)
+    source.write_bytes(b"def value():\r\n    return 1\r\n")
+    crlf_hash = manifest_module._file_hash("source.py")
+    source.write_bytes(b"def value():\n    return 1\n")
+    lf_hash = manifest_module._file_hash("source.py")
+
+    assert crlf_hash == lf_hash
+    assert lf_hash.sha256 == hashlib.sha256(b"def value():\n    return 1\n").hexdigest()
 
 
 def test_legacy_projection_preserves_conflict_drift_unknown_and_invalid_values() -> None:

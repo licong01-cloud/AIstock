@@ -29,6 +29,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     OrderTypeV1,
     SideV1,
     TerminalOutcomeV1,
+    stable_exception_reason_code_v1,
 )
 
 from .facade_contracts import (
@@ -509,7 +510,10 @@ class VnpyFacadeTraceCollectorV2:
                 return_disposition="RAISED",
                 normalized_return_or_null={
                     "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
-                    "reason_code": getattr(exc, "reason_code", None),
+                    "reason_code": stable_exception_reason_code_v1(
+                        exc,
+                        default="MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED",
+                    ),
                 },
                 ordered_diagnostic_reason_codes=tuple(item.reason_code for item in diagnostics),
             )

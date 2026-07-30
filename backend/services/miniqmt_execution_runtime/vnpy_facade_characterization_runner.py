@@ -28,12 +28,15 @@ from backend.execution_algos.vnpy_compat.facade_contracts import (
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     GatewayCapabilityCatalogV1,
+    bounded_exception_summary_v1,
+    stable_exception_reason_code_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_registry import PluginCatalogRuntimeV2
 from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1, thaw_json_v1
 from backend.services.miniqmt_execution_runtime.vnpy_facade_diagnostics import (
     publish_vnpy_facade_characterization_v1,
     publish_vnpy_facade_conformance_v1,
+    record_vnpy_facade_characterization_build_v1,
     record_vnpy_facade_conformance_v1,
     record_vnpy_facade_source_execution_v1,
 )
@@ -53,21 +56,19 @@ _SUPPORTED_ALGOS = (
 
 
 def _safe_failure_v1(exc: Exception, *, algo_code: str) -> dict[str, Any]:
-    try:
-        message = str(exc)[:2048]
-    except Exception as render_error:  # pragma: no branch - preserve the primary worker failure
-        message = "<unavailable>"
-        render_error_type = f"{type(render_error).__module__}.{type(render_error).__qualname__}"
-    else:
-        root = Path(__file__).resolve().parents[3]
-        for spelling in (str(root), str(root).replace("\\", "\\\\"), root.as_posix()):
-            message = message.replace(spelling, "<repository_root>")
-        render_error_type = None
+    root = Path(__file__).resolve().parents[3]
+    summary = bounded_exception_summary_v1(
+        exc,
+        redacted_values=(str(root), str(root).replace("\\", "\\\\"), root.as_posix()),
+    )
+    render_error_type = summary.pop("renderer_error_type")
     return {
         "algo_code": algo_code,
-        "reason_code": getattr(exc, "reason_code", "MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED"),
-        "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
-        "exception_message": message,
+        "reason_code": stable_exception_reason_code_v1(
+            exc,
+            default="MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED",
+        ),
+        **summary,
         "render_error_type": render_error_type,
     }
 
@@ -309,7 +310,7 @@ def _worker_v1(payload_json: str, output: Any) -> None:
         output.close()
 
 
-def run_vnpy_facade_source_execution_sets_v1(
+def _run_vnpy_facade_source_execution_sets_unrecorded_v1(
     *,
     source_manifest: VnpyFacadeSourceManifestV1,
     facade_contract: VnpyFacadeContractV1,
@@ -455,6 +456,47 @@ def run_vnpy_facade_source_execution_sets_v1(
     return tuple(execution_sets)
 
 
+def run_vnpy_facade_source_execution_sets_v1(
+    *,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    facade_contract: VnpyFacadeContractV1,
+    requirements: tuple[VnpyFacadeCharacterizationRequirementV1, ...],
+    artifact_authority: VnpyFacadeCharacterizationArtifactAuthorityV2,
+) -> tuple[VnpyFacadeSourceExecutionSetV1, ...]:
+    """Run the complete five-algorithm authority and retain aggregate failure state."""
+
+    try:
+        return _run_vnpy_facade_source_execution_sets_unrecorded_v1(
+            source_manifest=source_manifest,
+            facade_contract=facade_contract,
+            requirements=requirements,
+            artifact_authority=artifact_authority,
+        )
+    except VnpyFacadeContractError as exc:
+        record_vnpy_facade_characterization_build_v1(
+            status="FAILED",
+            reason_code=stable_exception_reason_code_v1(
+                exc,
+                default="MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            ),
+        )
+        raise
+
+
+def _read_artifact_authority_with_diagnostics_v1() -> VnpyFacadeCharacterizationArtifactAuthorityV2:
+    try:
+        return readback_vnpy_facade_characterization_vector_artifact_v2()
+    except VnpyFacadeContractError as exc:
+        record_vnpy_facade_characterization_build_v1(
+            status="FAILED",
+            reason_code=stable_exception_reason_code_v1(
+                exc,
+                default="MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            ),
+        )
+        raise
+
+
 def build_vnpy_facade_characterization_authority_fresh_process_v2(
     *,
     source_manifest: VnpyFacadeSourceManifestV1,
@@ -467,7 +509,7 @@ def build_vnpy_facade_characterization_authority_fresh_process_v2(
         build_vnpy_facade_characterization_authority_v2,
     )
 
-    artifact_authority = readback_vnpy_facade_characterization_vector_artifact_v2()
+    artifact_authority = _read_artifact_authority_with_diagnostics_v1()
     execution_sets = run_vnpy_facade_source_execution_sets_v1(
         source_manifest=source_manifest,
         facade_contract=facade_contract,
@@ -478,20 +520,31 @@ def build_vnpy_facade_characterization_authority_fresh_process_v2(
         build_vnpy_facade_source_executor_binding_v1,
     )
 
-    binding = build_vnpy_facade_source_executor_binding_v1(
-        source_manifest=source_manifest,
-        facade_contract=facade_contract,
-        vector_artifact_sha256=artifact_authority.artifact.artifact_sha256,
-        vector_artifact_file_sha256=artifact_authority.canonical_lf_file_sha256,
-    )
-    authority = build_vnpy_facade_characterization_authority_v2(
-        source_manifest=source_manifest,
-        facade_contract=facade_contract,
-        requirements=requirements,
-        ordered_vectors=artifact_authority.artifact.ordered_vectors,
-        source_executor_binding=binding,
-        source_execution_sets=execution_sets,
-    )
+    try:
+        binding = build_vnpy_facade_source_executor_binding_v1(
+            source_manifest=source_manifest,
+            facade_contract=facade_contract,
+            vector_artifact_sha256=artifact_authority.artifact.artifact_sha256,
+            vector_artifact_file_sha256=artifact_authority.canonical_lf_file_sha256,
+        )
+        authority = build_vnpy_facade_characterization_authority_v2(
+            source_manifest=source_manifest,
+            facade_contract=facade_contract,
+            requirements=requirements,
+            ordered_vectors=artifact_authority.artifact.ordered_vectors,
+            source_executor_binding=binding,
+            source_execution_sets=execution_sets,
+        )
+    except VnpyFacadeContractError as exc:
+        record_vnpy_facade_characterization_build_v1(
+            status="FAILED",
+            reason_code=stable_exception_reason_code_v1(
+                exc,
+                default="MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            ),
+        )
+        raise
+    record_vnpy_facade_characterization_build_v1(status="PASSED", reason_code="NONE")
     publish_vnpy_facade_characterization_v1(
         authority=authority,
         source_manifest_sha256=source_manifest.manifest_sha256,
@@ -514,7 +567,7 @@ def validate_vnpy_facade_characterization_authority_fresh_process_v2(
         validate_vnpy_facade_characterization_authority_v2,
     )
 
-    artifact_authority = readback_vnpy_facade_characterization_vector_artifact_v2()
+    artifact_authority = _read_artifact_authority_with_diagnostics_v1()
     execution_sets = run_vnpy_facade_source_execution_sets_v1(
         source_manifest=source_manifest,
         facade_contract=facade_contract,
@@ -525,21 +578,32 @@ def validate_vnpy_facade_characterization_authority_fresh_process_v2(
         build_vnpy_facade_source_executor_binding_v1,
     )
 
-    binding = build_vnpy_facade_source_executor_binding_v1(
-        source_manifest=source_manifest,
-        facade_contract=facade_contract,
-        vector_artifact_sha256=artifact_authority.artifact.artifact_sha256,
-        vector_artifact_file_sha256=artifact_authority.canonical_lf_file_sha256,
-    )
-    authority = validate_vnpy_facade_characterization_authority_v2(
-        receipts=receipts,
-        source_manifest=source_manifest,
-        facade_contract=facade_contract,
-        requirements=requirements,
-        ordered_vectors=artifact_authority.artifact.ordered_vectors,
-        source_executor_binding=binding,
-        source_execution_sets=execution_sets,
-    )
+    try:
+        binding = build_vnpy_facade_source_executor_binding_v1(
+            source_manifest=source_manifest,
+            facade_contract=facade_contract,
+            vector_artifact_sha256=artifact_authority.artifact.artifact_sha256,
+            vector_artifact_file_sha256=artifact_authority.canonical_lf_file_sha256,
+        )
+        authority = validate_vnpy_facade_characterization_authority_v2(
+            receipts=receipts,
+            source_manifest=source_manifest,
+            facade_contract=facade_contract,
+            requirements=requirements,
+            ordered_vectors=artifact_authority.artifact.ordered_vectors,
+            source_executor_binding=binding,
+            source_execution_sets=execution_sets,
+        )
+    except VnpyFacadeContractError as exc:
+        record_vnpy_facade_characterization_build_v1(
+            status="FAILED",
+            reason_code=stable_exception_reason_code_v1(
+                exc,
+                default="MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            ),
+        )
+        raise
+    record_vnpy_facade_characterization_build_v1(status="PASSED", reason_code="NONE")
     publish_vnpy_facade_characterization_v1(
         authority=authority,
         source_manifest_sha256=source_manifest.manifest_sha256,

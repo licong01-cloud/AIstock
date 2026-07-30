@@ -91,6 +91,7 @@ from backend.services.miniqmt_execution_runtime.plugin_registry import (
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     VnpyCompatibilityRequirementV2,
     GatewayCapabilityCatalogV1,
+    bounded_exception_summary_v1,
     compatibility_component_hashes_v2,
 )
 
@@ -268,24 +269,20 @@ def _source_error(message: str, **context: Any) -> VnpyFacadeContractError:
     return VnpyFacadeContractError("MINIQMT_VNPY_FACADE_SOURCE_INVALID", message, context=context)
 
 
-def _safe_exception_evidence_v1(exc: Exception) -> dict[str, str]:
-    try:
-        message = str(exc)[:2048]
-        repository_root = Path(__file__).resolve().parents[3]
-        for spelling in (
+def _safe_exception_evidence_v1(exc: Exception) -> dict[str, Any]:
+    repository_root = Path(__file__).resolve().parents[3]
+    summary = bounded_exception_summary_v1(
+        exc,
+        redacted_values=(
             str(repository_root),
             str(repository_root).replace("\\", "\\\\"),
             repository_root.as_posix(),
-        ):
-            message = message.replace(spelling, "<repository_root>")
-        render_error_type = "none"
-    except Exception as render_error:  # pragma: no branch - protects primary failure evidence
-        message = "<unavailable>"
-        render_error_type = f"{type(render_error).__module__}.{type(render_error).__qualname__}"
+        ),
+    )
+    render_error_type = summary.pop("renderer_error_type")
     return {
-        "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
-        "exception_message": message,
-        "message_render_error_type": render_error_type,
+        **summary,
+        "message_render_error_type": "none" if render_error_type is None else render_error_type,
     }
 
 

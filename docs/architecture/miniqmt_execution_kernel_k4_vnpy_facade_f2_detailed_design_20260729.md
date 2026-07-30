@@ -1,12 +1,12 @@
 # MiniQMT 统一执行内核 K4 vn.py Compatibility Façade F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_verified_pending_source_merge`；K4-A=`implemented_verified_contract_slice + merged`、K4-B=`implemented_verified_source_pending_pr`。
+> Feature tier：`F2`。文档状态：`implementation_verified_source_pending_pr_ci`；K4-A=`implemented_verified_contract_slice + merged`、K4-B=`implemented_verified_source_pending_pr_ci`。
 >
 > 设计交付：PR #2861，merge `8250b64ff3c2deb04eb3594f1ae3fba3acd1e6ce`，`source_merge=merged_pr_2861`。
 >
 > 2026-07-29 正式修订复核：K4/父蓝图/统一蓝图 F2 validator 分别为 `10/10`、`48/48`、`90/90`，均 `warnings=0`；DESIGN-COMPLIANCE-001逐项通过。该结果仅表示K4 shadow设计可实施，不表示K4代码、K5/K6、产品command authority或runtime activation已完成。
 >
-> 2026-07-30 K4-B实现收口：V2 executable authority、CLAIMED transition identity、same-transaction repository read、五算法actual trace、sealed conformance authority与低基数diagnostics均已按本设计实现并通过定向验证；K4-B=`implemented_verified_source_pending_pr`。该状态只表示当前feature source已验证，仍不表示source已合入、产品runtime已切换或生产gate已执行。
+> 2026-07-31 K4-B正式审核补修已完成本地direct、DEV PostgreSQL、coverage、L0、module registry与F2闭环；最终PR CI仍由PR #2953的补修HEAD独立闭合。K4-B=`implemented_verified_source_pending_pr_ci`。该状态不表示source已合入、产品runtime已切换或生产gate已执行。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -1101,7 +1101,7 @@ K4-A implementation receipt（2026-07-30）：
 - 单command仅做broker-neutral existing materializer shadow closure，多command完整保留trace并明确不materialize；所有测试`dispatch_attempt=0/broker_called=false`；
 - direct/DEV PostgreSQL/L2/Paper/coverage/F2/DESIGN-COMPLIANCE全部闭合后才能标记K4-B implemented；不修改 current-three binding，不注册Iceberg/Stop，不切产品 route。
 
-K4-B实现状态（2026-07-30）：`implemented_verified_source_pending_pr`。repo-owned artifact包含`81`个full-input/full-trace vectors与`6`项K3 BUY/SELL committed-parity material；semantic artifact hash=`f43313e0212856a3da1aa9bb67ee89f4d4e119ab0d475a1b7b49780de6be6c2a`、vector-set hash=`710650243c5e3fe3754902b2f2cf93bd37009e999be2ededd701e959c1019734`、canonical-LF file hash=`5c912f80b59deb48bd5c9d9426ef40a74a486b2197cdb83577608b21000c262b`、live K3 binding hash=`880372e95ef57b43b69e1f535d3310f151cb111007b9299bbe47a18ae4f49303`。直接矩阵=`159 passed,15 skipped`，façade覆盖矩阵=`98 passed,1 skipped`，八个核心模块line/branch均达到`>=80%/>=70%`；DEV disposable PostgreSQL=`2 passed`，MiniQMT L2=`1088 passed,30 skipped`，Paper=`1050 passed,2 skipped,2 xfailed`。source merge、CI与产品runtime状态继续分离。
+K4-B实现状态（2026-07-31）：`implemented_verified_source_pending_pr_ci`。正式审核发现并修复K3 manifest/process binding使用工作树原始EOL导致Windows/Linux identity分裂、异常reason renderer二次失败、无标记message截断/绝对路径残片，以及characterization preflight失败未进入active diagnostics的问题。AIstock-owned source attribution与binding readback现统一canonical-LF；repo-owned artifact仍包含`81`个full-input/full-trace vectors与`6`项K3 BUY/SELL committed-parity material，重新使用当前production K3 constructors闭合，semantic artifact hash=`37dc70e54a4576ceb909d07df7d599ce93737948920d0182b1f4d81572f3b758`、vector-set hash=`4a3117fa3865e0b7f759f61102ea58a426c5d45844d1a821fa5161197f506cf2`、canonical-LF file hash=`ec7bc3c740fab18277c698a80a1b985b7e474d038bc37230c6f8911abbac9396`、live K3 binding hash=`123b3349bfdf79edd739cd355f6667cf98d18f2826b1480fb354c3dad3f1bedb`。本地非DB direct=`202 passed,1 skipped`、DEV PostgreSQL=`2 passed`；八个K4核心模块line均`>=80%`且branch均`>=70%`，最低分别为`80.06%/70.00%`。PR classifier、MiniQMT/Paper及required CI由最终补修HEAD独立闭合；source merge、CI与产品runtime状态继续分离。
 
 任一 PR 不得以“后续补齐”为由省略本切片的 writer/readback、negative、restart或failure evidence。
 
@@ -1130,7 +1130,7 @@ runtime_activation=noop
 product_runtime=not_switched
 K4_overall=implemented_verified_pending_source_merge
 K4-A=implemented_verified_contract_slice_merged
-K4-B=implemented_verified_source_pending_pr
+K4-B=implemented_verified_source_pending_pr_ci
 K5=not_started
 K6=not_started
 ```
@@ -1163,9 +1163,9 @@ K6=not_started
 | `F-085` | §6.3–§8、§15；`facade_projection.py`与existing K2 read-only query | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_repository_postgres.py` DEV PostgreSQL=`2 passed`，覆盖same-transaction ALGO_START/TIMER prior-TICK、phase/freshness、independent readback与zero-write | implemented_verified | none |
 | `F-086` | §5.4.1、§5.6、§9–§10、§15；existing state/command/transition/materializer | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_lifecycle.py`、`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_kernel_invocation.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_delivery.py`：single/multi-command、callback/late trade/restore与materializer identity | implemented_verified | none |
 | `F-087` | §4.1、§5.1、§11–§12；V1 fail-closed + V2 source/characterization/conformance authority | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_conformance_authority_v2.py`：sealed authority、fresh writer/readback、V1/V2隔离、bounded failure与zero-partial publication | implemented_verified | none |
-| `F-088` | §3.2、§6.3、§10、§12；K3 parity与唯一V2 vector artifact | artifact `backend/execution_algos/vnpy_compat/characterization_artifacts/facade_characterization_vectors_v2.json`的六项K3 material由live K3 binding重放；`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py`覆盖current-three与Iceberg/Stop | implemented_verified | none |
-| `F-089` | §13–§17 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_conformance_authority_v2.py`、`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_diagnostics.py`覆盖malformed、timeout、fresh process、bounded evidence和低基数diagnostics | implemented_verified | none |
-| `F-090` | §18–§20 | `python -m nox -s miniqmt_execution_runtime_l2`=`1088/30`；`python -m nox -s paper_v2_backend`=`1050/2/2`；direct=`159/15`、coverage=`98/1`、DEV=`2`；三份F2 validator与L0/registry由本PR final gate闭合 | implemented_verified | none |
+| `F-088` | §3.2、§6.3、§10、§12；K3 parity与唯一V2 vector artifact | artifact: `backend/execution_algos/vnpy_compat/characterization_artifacts/facade_characterization_vectors_v2.json`；`backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py::test_source_attribution_hash_is_checkout_eol_independent`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py::test_registry_callable_source_hash_is_checkout_eol_independent`证明checkout EOL不改变source identity；`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py`覆盖current-three与Iceberg/Stop | implemented_verified | none |
+| `F-089` | §13–§17 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py::test_trace_collector_preserves_primary_failure_when_reason_code_property_breaks`、`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py::test_exception_summary_sanitizes_before_bounded_truncation`、`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_conformance_authority_v2.py::test_k3_preflight_failure_records_active_characterization_failure`、`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_diagnostics.py::test_characterization_success_does_not_clear_active_failure_before_conformance`证明primary failure、omitted hash和active/last failure闭合 | implemented_verified | none |
+| `F-090` | §18–§20 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_repository_postgres.py` DEV=`2 passed`；非DB direct=`202 passed,1 skipped`；coverage八核心line/branch均`>=80/>=70`；`python -m nox -s l0`、`python -m nox -s validation_module_registry_l0`、`python -m nox -s miniqmt_execution_runtime_l2`、`python -m nox -s paper_v2_backend`与三份F2 validator构成最终PR门禁 | implemented_verified | none |
 
 ## 23. DESIGN-COMPLIANCE-001 / 正式设计复核
 
