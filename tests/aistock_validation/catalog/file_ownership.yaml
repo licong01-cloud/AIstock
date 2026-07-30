@@ -557,11 +557,11 @@ rules:
       - backend/core/fund_flow_akshare_impl.py
       - backend/core/qstock_news_data_impl.py
       - backend/core/market_sentiment_data_impl.py
-    primary_module: analysis
-    impact_modules: [research_assistant]
+    primary_module: research_assistant
+    impact_modules: [analysis]
     layer: backend_service
     risk_level: high
-    ownership_reason: Legacy stock-analysis data fetchers are imported by Research Assistant and require analysis plus assistant regression routing.
+    ownership_reason: Legacy stock-analysis data fetchers are imported by Research Assistant and require direct assistant regression plus analysis impact routing.
   - rule_id: strategy_package_services
     priority: 80
     include:
