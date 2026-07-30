@@ -6,7 +6,7 @@
 >
 > 2026-07-29 正式修订复核：K4/父蓝图/统一蓝图 F2 validator 分别为 `10/10`、`48/48`、`90/90`，均 `warnings=0`；DESIGN-COMPLIANCE-001逐项通过。该结果仅表示K4 shadow设计可实施，不表示K4代码、K5/K6、产品command authority或runtime activation已完成。
 >
-> 2026-07-30 K4-B实施前补充复核：按真实K4-A/K2/K3接口补齐V2 executable authority、CLAIMED transition identity、same-transaction repository read、五算法actual trace与运行/生产边界；K4-B=`design_ready_pending_implementation`。本次只更新设计，不表示V2代码或PASSED receipt已存在。
+> 2026-07-30 K4-B实施前补充复核：按真实K4-A/K2/K3接口补齐V2 executable authority、CLAIMED transition identity、same-transaction repository read、五算法actual trace与运行/生产边界；K4-B=`design_ready_pending_implementation`。设计已通过PR #2914 / merge `15c38cb8d3a2c3a1710a29526ac6ac07ef580238`合入；本次状态同步不表示V2代码或PASSED receipt已存在。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -1114,7 +1114,8 @@ K4-B使用additive Python V2 carriers/artifact/API，无数据库migration。rol
 ```text
 design_source_merge=merged_pr_2861
 k4a_source_merge=merged_pr_2883
-k4b_design_source_merge=pending_user_authorization
+k4b_design_source_merge=merged_pr_2914
+k4b_design_merge_commit=15c38cb8d3a2c3a1710a29526ac6ac07ef580238
 k4b_code_source_merge=not_started
 close_sync=not_applicable_feature
 production_ddl_gate=noop
