@@ -32,6 +32,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.services.advisory_historical_range import composition
+from backend.services.advisory_historical_range.canonical import canonical_json_sha256
 from backend.services.advisory_historical_range.dataset_bridge import (
     HistoricalRangeDatasetBridgeError,
 )
@@ -180,6 +181,19 @@ def _build_request_for(
     """
     _, observation = _projection_fixture()
     policy = _policy()
+    component_set_hash = canonical_json_sha256(
+        [
+            {
+                "component_role": role,
+                "component_hash": _POLICY_COMPONENT_HASHES[role],
+            }
+            for role in sorted(_POLICY_COMPONENT_HASHES)
+        ]
+    )
+    labels = tuple(
+        item.model_copy(update={"policy_component_set_hash": component_set_hash})
+        for item in labels
+    )
     adapter._artifact_store = SimpleNamespace(
         load=lambda ref: SimpleNamespace(payload=policy.model_dump(mode="json"))
     )
