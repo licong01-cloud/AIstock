@@ -8,6 +8,7 @@ import {
   type JsonObject,
   type LongTrendEvaluation,
   type LongTrendEvaluationDetail,
+  type LongTrendInputPreview,
   type LongTrendMetric,
 } from "@/lib/qe-archive/api";
 
@@ -188,9 +189,11 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
   const [detail, setDetail] = React.useState<LongTrendEvaluationDetail | null>(null);
   const [selectedId, setSelectedId] = React.useState("");
   const [outcomeSnapshotId, setOutcomeSnapshotId] = React.useState("");
+  const [inputPreview, setInputPreview] = React.useState<LongTrendInputPreview | null>(null);
   const [sectorHorizon, setSectorHorizon] = React.useState<(typeof HORIZONS)[number]>(60);
   const [loading, setLoading] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+  const [previewing, setPreviewing] = React.useState(false);
   const [message, setMessage] = React.useState<{ ok: boolean; text: string } | null>(null);
   const requestSeq = React.useRef(0);
 
@@ -231,6 +234,7 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
     setDetail(null);
     setSelectedId("");
     setOutcomeSnapshotId("");
+    setInputPreview(null);
     void refresh();
     return () => { requestSeq.current += 1; };
     // selectedId must not retrigger DB recovery; the selector calls refresh explicitly.
@@ -264,6 +268,30 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
     }
   }, [loopIndex, outcomeSnapshotId, refresh, taskId]);
 
+  const previewInputs = React.useCallback(async () => {
+    const snapshot = outcomeSnapshotId.trim();
+    if (!snapshot) {
+      setMessage({ ok: false, text: "请输入已注册的 outcome dataset snapshot id" });
+      return;
+    }
+    setPreviewing(true);
+    setMessage(null);
+    try {
+      const result = await qeArchiveApi.longTrendInputPreview({
+        task_id: taskId,
+        loop_index: loopIndex,
+        profile_id: "qe_long_trend_v1",
+        outcome_dataset_snapshot_id: snapshot,
+      });
+      setInputPreview(result);
+    } catch (error) {
+      setInputPreview(null);
+      setMessage({ ok: false, text: errorMessage(error) });
+    } finally {
+      setPreviewing(false);
+    }
+  }, [loopIndex, outcomeSnapshotId, taskId]);
+
   const evaluation = detail?.evaluation;
   const metrics = detail?.metrics || [];
   const familyStatus = evaluation?.family_status_json || {};
@@ -278,6 +306,7 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
     .sort((left, right) => (asNumber(metricJson(right).sample_count) || 0) - (asNumber(metricJson(left).sample_count) || 0))
     .slice(0, 10);
   const canSubmit = loopStatus === "completed" && !submitting && outcomeSnapshotId.trim().length > 0;
+  const canPreview = loopStatus === "completed" && !previewing && outcomeSnapshotId.trim().length > 0;
 
   return (
     <div data-testid="qe-long-trend-panel" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -302,15 +331,27 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
           </button>
         </div>
 
-        <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "minmax(260px, 1fr) auto", gap: 10 }}>
+        <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "minmax(260px, 1fr) auto auto", gap: 10 }}>
           <input
             data-testid="qe-long-trend-outcome-snapshot"
             value={outcomeSnapshotId}
-            onChange={(event) => setOutcomeSnapshotId(event.target.value)}
+            onChange={(event) => {
+              setOutcomeSnapshotId(event.target.value);
+              setInputPreview(null);
+            }}
             placeholder="已注册 outcome_dataset_snapshot_id"
             aria-label="长期趋势 outcome dataset snapshot id"
             style={{ minWidth: 0, padding: "9px 11px", borderRadius: 7, border: "1px solid #cbd5e1", fontFamily: "monospace", fontSize: 12 }}
           />
+          <button
+            type="button"
+            data-testid="qe-long-trend-preview"
+            onClick={() => void previewInputs()}
+            disabled={!canPreview}
+            style={{ padding: "9px 14px", borderRadius: 7, border: "1px solid #2563eb", background: canPreview ? "#eff6ff" : "#f1f5f9", color: canPreview ? "#1d4ed8" : "#94a3b8", fontWeight: 700, cursor: canPreview ? "pointer" : "not-allowed" }}
+          >
+            {previewing ? "预检中..." : "只读输入预检"}
+          </button>
           <button
             type="button"
             data-testid="qe-long-trend-create"
@@ -327,6 +368,34 @@ export default function LongTrendEvaluationPanel({ taskId, loopIndex, loopStatus
         {message && (
           <div data-testid="qe-long-trend-message" style={{ marginTop: 10, padding: "9px 11px", borderRadius: 7, border: `1px solid ${message.ok ? "#86efac" : "#fecaca"}`, background: message.ok ? "#f0fdf4" : "#fef2f2", color: message.ok ? "#166534" : "#991b1b", fontSize: 12, wordBreak: "break-word" }}>
             {message.text}
+          </div>
+        )}
+        {inputPreview && (
+          <div data-testid="qe-long-trend-input-preview" style={{ marginTop: 12, padding: 12, borderRadius: 8, border: "1px solid #bfdbfe", background: "#f8fafc" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
+              <strong style={{ color: "#1e3a8a" }}>历史输入可用性（只读）</strong>
+              <span data-testid="qe-long-trend-preview-readiness" style={badgeStyle}>
+                技术提交就绪：{inputPreview.ready_for_node ? "是" : "否"}
+              </span>
+            </div>
+            <div style={{ marginTop: 6, color: "#64748b", fontSize: 11 }}>
+              此状态仅说明节点输入是否可解析，不是科研许可或方向门禁；缺失输入不会隐藏“生成/更新”入口。
+            </div>
+            <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 7 }}>
+              {[...inputPreview.dataset_inputs, ...inputPreview.artifact_inputs].map((item) => (
+                <div key={`${item.category}:${item.input_name}`} data-testid={`qe-long-trend-preview-${item.input_name}`} style={{ padding: "7px 9px", borderRadius: 6, border: `1px solid ${item.available ? "#bbf7d0" : "#fed7aa"}`, background: item.available ? "#f0fdf4" : "#fff7ed", fontSize: 11 }}>
+                  <strong>{item.input_name}</strong>：{item.available ? "可用" : "缺失/不可解析"}
+                  {!item.available && <div style={{ marginTop: 3, fontFamily: "monospace", wordBreak: "break-all" }}>{text(item.reason_code)}</div>}
+                </div>
+              ))}
+            </div>
+            {inputPreview.data_action_plan.length > 0 && (
+              <div data-testid="qe-long-trend-preview-actions" style={{ marginTop: 10, color: "#92400e", fontSize: 11 }}>
+                {inputPreview.data_action_plan.map((action, index) => (
+                  <div key={`${text(action.action)}:${index}`}>{text(action.action)} · {text(action.input_name)} · {text(action.reason_code)}</div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

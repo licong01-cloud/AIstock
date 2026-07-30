@@ -11,7 +11,11 @@ from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from .long_trend_evaluation_contract import EVALUATOR_VERSION, PROFILE_ID_V1
+from .long_trend_evaluation_contract import (
+    EVALUATOR_VERSION,
+    PROFILE_ID_V1,
+    get_long_trend_profile,
+)
 
 from .qe_dataset_contract import QE_ST_PIT_UNIVERSE_KEY
 
@@ -402,6 +406,10 @@ class ExperimentConfig(BaseModel):
 
     # Explicit normal-loop F-014 postprocess.  Omitted by default so ordinary
     # QE loop requests, commands, reservations, and metrics remain byte-stable.
+    # Public task creation persists only the immutable profile id.  The
+    # executor resolves node-owned roots immediately before submission and
+    # constructs the internal path-bound request below.
+    long_trend_profile_id: str | None = None
     long_trend_evaluation: LongTrendEvaluationOptIn | None = None
 
     # ── Model hyperparameters base ─────────────────────────────────────────────
@@ -434,6 +442,18 @@ class ExperimentConfig(BaseModel):
             raise ValueError("factor_names cannot be empty in single-alpha mode")
         if self.alpha_mode == "multi" and not self.multi_alpha_config:
             raise ValueError("multi_alpha_config required when alpha_mode='multi'")
+        if self.long_trend_profile_id is not None:
+            self.long_trend_profile_id = get_long_trend_profile(
+                str(self.long_trend_profile_id).strip()
+            ).profile_id
+        if (
+            self.long_trend_evaluation is not None
+            and self.long_trend_profile_id is not None
+            and self.long_trend_evaluation.profile_id != self.long_trend_profile_id
+        ):
+            raise ValueError(
+                "long_trend_profile_id conflicts with the resolved long_trend_evaluation profile"
+            )
         self.label_horizon = normalize_label_horizon(self.label_horizon)
         return self
 

@@ -696,6 +696,7 @@ def compact_task_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "source_type",
         "node_id",
         "label_horizon",
+        "long_trend_profile_id",
         "strategy_id",
         "execution_algo",
         "strategy_evo_execution_mode",

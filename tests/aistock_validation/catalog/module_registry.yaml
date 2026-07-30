@@ -35,7 +35,7 @@ modules:
     description: F-014 QE-only long-horizon signal, episode, execution, sector evidence, node compute, dedicated CAS, compact warehouse, bounded API/MCP, and DB-restored Loop/Archive UI.
     description_zh: F-014 QE 专属长期趋势信号、持仓阶段、执行、板块证据、节点计算、独立 CAS、紧凑数仓、有界 API/MCP 及 DB 恢复型 Loop/Archive UI。
     ui_routes: [/quantevolver/evolution, /qe-archive]
-    api_routes: [/api/v1/quantevolver/evolution/*/long-trend-evaluations*, /api/v1/qe-archive/analytics/long-trend-quality]
+    api_routes: [/api/v1/quantevolver/evolution/*/long-trend-*, /api/v1/qe-archive/analytics/long-trend-quality]
     test_plans:
       required_on_change: [l0, qe_long_trend_phase2_backend, qe_long_trend_phase3_platform, qe_long_trend_phase4_ui]
       recommended: [qe_read_backend]
@@ -647,6 +647,8 @@ modules:
     description: PostgreSQL pools, migrations, schema bootstraps, and DB comments.
     description_zh: 覆盖 PostgreSQL/TimescaleDB 连接池、迁移、schema 初始化和字段注释规范。
     ui_routes: [/rdagent/dispatch/db-monitor]
+    test_plans:
+      required_on_change: [l0, validation_catalog_integrity]
   - module_id: platform.config
     display_name: Platform config
     parent_module: platform

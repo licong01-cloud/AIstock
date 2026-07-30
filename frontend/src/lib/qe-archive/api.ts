@@ -449,6 +449,44 @@ export type LongTrendEvaluation = {
   ready_for_node?: boolean;
 };
 
+export type LongTrendInputPreviewItem = {
+  input_name: string;
+  category: "dataset_identity" | "recorder_artifact";
+  available: boolean;
+  reason_code?: string | null;
+  requested_snapshot_id?: string | null;
+  snapshot_id?: string | null;
+  manifest_sha256?: string | null;
+  artifact?: JsonObject | null;
+  data_action?: JsonObject | null;
+  action?: string | null;
+};
+
+export type LongTrendInputPreview = {
+  schema_version: "qe_long_trend_input_preview_v1";
+  task_id: string;
+  loop_index: number;
+  run_id: string;
+  node_id: string;
+  profile: {
+    profile_id: "qe_long_trend_v1";
+    profile_sha256: string;
+    horizons: number[];
+    barriers: number[];
+    calendar_slices: string[];
+  };
+  requested_outcome_dataset_snapshot_id: string;
+  backtest_freq?: string | null;
+  dataset_inputs: LongTrendInputPreviewItem[];
+  artifact_inputs: LongTrendInputPreviewItem[];
+  ready_for_node: boolean;
+  technical_readiness_only: true;
+  research_gate: false;
+  data_action_plan: JsonObject[];
+  warnings: string[];
+  side_effects: Record<string, false>;
+};
+
 export type LongTrendMetric = {
   evaluation_metric_id?: number;
   evaluation_id: string;
@@ -732,6 +770,19 @@ export const qeArchiveApi = {
     const path = `/quantevolver/evolution/tasks/${encodeURIComponent(taskId)}/loops/${loopIndex}/long-trend-evaluations?limit=100`;
     const response = await apiFetch<{ items: LongTrendEvaluation[] }>(path);
     return response.items || [];
+  },
+  async longTrendInputPreview(payload: {
+    task_id: string;
+    loop_index: number;
+    profile_id: "qe_long_trend_v1";
+    outcome_dataset_snapshot_id: string;
+  }): Promise<LongTrendInputPreview> {
+    const qs = new URLSearchParams({
+      profile_id: payload.profile_id,
+      outcome_dataset_snapshot_id: payload.outcome_dataset_snapshot_id,
+    });
+    const path = `/quantevolver/evolution/tasks/${encodeURIComponent(payload.task_id)}/loops/${payload.loop_index}/long-trend-input-preview?${qs.toString()}`;
+    return apiFetch<LongTrendInputPreview>(path);
   },
   async createOrUpdateLongTrendEvaluation(payload: {
     task_id: string;
