@@ -6,7 +6,7 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2 overall与K3 overall均为`implemented_verified + merged`。K4-A已通过PR #2883 / merge `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda`完成`implemented_verified_contract_slice + merged`；K4-B正式审核补修为`implemented_verified_source_pending_pr_ci`，K4 overall=`implemented_verified_pending_source_merge`，K5/K6=`not_started`；现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C均为`implemented_verified + merged`。K2 overall与K3 overall均为`implemented_verified + merged`。K4-A已通过PR #2883 / merge `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda`完成`implemented_verified_contract_slice + merged`；K4-B正式审核补修为`implemented_verified_source_pending_user_authorization`，K4 overall=`implemented_verified_pending_source_merge`，K5/K6=`not_started`；现有产品runtime未切换，production/runtime gates均为`noop`。
 >
 > K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B、K2-C和K2-D均为`implemented_verified + merged`，K2 overall=`implemented_verified + merged`。K2-D direct outbox/diagnostics/ops=`111 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；required CI run `30269640126` 全绿。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
@@ -16,7 +16,7 @@
 
 ## 0. Executive Decision / 核心决策
 
-K1、K2、K3 overall均保持`implemented_verified + merged`。K4-A为`implemented_verified_contract_slice + merged`；K4-B正式审核补修已完成本地direct/DEV/MiniQMT/Paper/coverage/L0/registry/F2闭环并处于`implemented_verified_source_pending_pr_ci`，K4 overall=`implemented_verified_pending_source_merge`。K5/K6=`not_started`，产品runtime未切换，production gates保持`noop`。
+K1、K2、K3 overall均保持`implemented_verified + merged`。K4-A为`implemented_verified_contract_slice + merged`；K4-B正式审核补修已完成本地direct/DEV/MiniQMT/Paper/coverage/L0/registry/F2及required CI run `30573150209`闭环，并处于`implemented_verified_source_pending_user_authorization`，K4 overall=`implemented_verified_pending_source_merge`。K5/K6=`not_started`，产品runtime未切换，production gates保持`noop`。
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -780,7 +780,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - current three manifest 化；
 - `LockedSurfaceV2` exact signature/object/enum receipt、import/static negative tests；
 - 实施级 schema、canonical/hash、deterministic context、current-three matrix、legacy config shadow projection 与 typed failure 以 [`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 为唯一 K1 下位合同；
-- K1/K2/K3 overall均为`implemented_verified + merged`；K4-A=`implemented_verified_contract_slice + merged`且`source_merge=merged_pr_2883`，K4-B exact source executor/integration=`implemented_verified_source_pending_pr_ci`，K4 overall=`implemented_verified_pending_source_merge`；`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
+- K1/K2/K3 overall均为`implemented_verified + merged`；K4-A=`implemented_verified_contract_slice + merged`且`source_merge=merged_pr_2883`，K4-B exact source executor/integration=`implemented_verified_source_pending_user_authorization`，K4 overall=`implemented_verified_pending_source_merge`；`close_sync=not_applicable_feature`，产品 runtime switch、DDL/DML、配置和 broker 行为均未发生；
 - 预计 1–2 PR，7–10 人日。
 
 ### K2：durable dispatcher、delivery、timer 与 outbox
@@ -816,10 +816,10 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - object/event/order mapping；
 - current three + Iceberg/Stop source-compatible characterization tests；
 - 不引入第二 runtime；
-- 实施级合同：[`miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md`](miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md)，design PR #2861 / merge `8250b64ff...`；K4-A=`implemented_verified_contract_slice + merged`，K4-B exact pinned-source executor/positive conformance/integration=`implemented_verified_source_pending_pr_ci`，K4 overall=`implemented_verified_pending_source_merge`；
+- 实施级合同：[`miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md`](miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md)，design PR #2861 / merge `8250b64ff...`；K4-A=`implemented_verified_contract_slice + merged`，K4-B exact pinned-source executor/positive conformance/integration=`implemented_verified_source_pending_user_authorization`，K4 overall=`implemented_verified_pending_source_merge`；
 - K4生成initialize/transition-scoped façade、通用façade-backed adapter、existing K2 optional invocation/read-only authority seam与exact conformance evidence；current-three factory/binding不变，Iceberg/Stop只做characterization且不注册；K4/K5完整保留多command trace但不冒充V1 product materialization，generic per-command authority aggregate与cutover仍由K6独立F2拥有；
 - K4-A已交付五个pure核心文件、五算法+`round_to` exact source manifest、K1 delegated-path closure、implementation/method/DTO/state/terminal/isolated bindings及strict carrier/observation writer/readback；review-fix明确禁止caller expected→actual回填生成PASSED，并在K4-B exact executor到位前阻止algorithm binding/conformance publication。K2 optional invocation/read-only query、真实current-three parity和Iceberg/Stop完整characterization明确留给K4-B；direct=`58 passed`，五核心line/branch均达到`>=80/>=70`，MiniQMT=`1047/29`、Paper=`1050/2/2`，full PR classifier=`21 files`且`unmapped_code_files=[]`；
-- K4-B已交付81项V2 full executable input/full actual trace、六项K3 BUY/SELL committed material、source-execution/characterization/conformance sealed authority、existing K2 optional invocation和same-transaction ALGO_START/prior native B0 TICK read；current-three继续使用原K3 factory/binding，Iceberg/Stop只characterization。2026-07-31正式审核补修把AIstock-owned source attribution/process-binding统一为canonical-LF单一identity，并闭合broken reason renderer、message truncation/path evidence和characterization active-failure语义；artifact semantic/vector/file=`37dc70e5.../4a3117fa.../ec7bc3c7...`、live K3 binding=`123b3349...`。补修HEAD本地非DB direct=`202 passed,1 skipped`、DEV=`2 passed`、MiniQMT=`1099 passed,30 skipped`、Paper=`1050 passed,2 skipped,2 xfailed`，required CI继续独立闭合；无新表/迁移、第二factory或产品route切换；
+- K4-B已交付81项V2 full executable input/full actual trace、六项K3 BUY/SELL committed material、source-execution/characterization/conformance sealed authority、existing K2 optional invocation和same-transaction ALGO_START/prior native B0 TICK read；current-three继续使用原K3 factory/binding，Iceberg/Stop只characterization。2026-07-31正式审核补修把AIstock-owned source attribution/process-binding统一为canonical-LF单一identity，并闭合broken reason renderer、message truncation/path evidence和characterization active-failure语义；artifact semantic/vector/file=`37dc70e5.../4a3117fa.../ec7bc3c7...`、live K3 binding=`123b3349...`。补修HEAD本地非DB direct=`202 passed,1 skipped`、DEV=`2 passed`、MiniQMT=`1099 passed,30 skipped`、Paper=`1050 passed,2 skipped,2 xfailed`，required CI run `30573150209`全绿；无新表/迁移、第二factory或产品route切换；
 - 预计 1–2 PR，9–14 人日。
 
 ### K5：Iceberg/Stop 扩展性验收
@@ -1100,7 +1100,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | no unauthorized gates | pass | route-independent catalog和per-route receipt保持；K4 conformance/disposition是code integrity contract而非人工run gate，current-three pure path不因set存在而切换；不新增RBAC、审批、acknowledge、confirm-run、人工恢复或永久enable flag |
 | no parallel product route | pass | 在现有`MiniQMTExecutionRuntime`/K2 creation+delivery中增加optional adapter seam；无第二runtime/repository/dispatcher/Gateway，current-three factory和legacy产品route均不改变 |
 | K5/K6 boundary | pass | K5只做Iceberg/Stop adapter plugin的shadow验收且不改kernel；generic per-command product authority aggregate、writer/readback与cutover由K6独立F2关闭，K4/K5不伪造产品PASSED |
-| production state separation | pass | K2/K3 overall=`implemented_verified + merged`；K4-A=`implemented_verified_contract_slice + merged`，K4-B=`implemented_verified_source_pending_pr_ci`，K4 overall=`implemented_verified_pending_source_merge`；K5/K6未开始，产品runtime未切换，DDL/DML/dependency/config/binding/broker/restart/runtime activation全部为`noop` |
+| production state separation | pass | K2/K3 overall=`implemented_verified + merged`；K4-A=`implemented_verified_contract_slice + merged`，K4-B=`implemented_verified_source_pending_user_authorization`，K4 overall=`implemented_verified_pending_source_merge`；K5/K6未开始，产品runtime未切换，DDL/DML/dependency/config/binding/broker/restart/runtime activation全部为`noop` |
 
 ## 20. Definition of Done / 完成定义
 
