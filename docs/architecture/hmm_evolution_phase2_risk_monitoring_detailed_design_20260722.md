@@ -3,12 +3,12 @@
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
 - 修订日期：2026-07-30
-- 状态：`B3_FORMAL_EXECUTED_BLOCKED_TARGETED_DIAGNOSTIC_DESIGN_PENDING_USER_APPROVAL`
+- 状态：`B3_FORMAL_EXECUTED_BLOCKED_TARGETED_DIAGNOSTIC_DESIGN_USER_APPROVED_IMPLEMENTATION_READY`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.12
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已按历史用户决定固化；Slice 0 B3/L2 retrain、C-009 与 C-010-FORMAL-A 源码均已合入。producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已在冻结 dataset/mapping、两个 family、seeds 42..49 和固定单线程 Conda `AIstock` 数值环境完成两次 fresh-process 正式制备，共 `5184/5184` fits；D5 已按 train-only 合同执行，未读取 validation/future utility，selection 后未 refit。正式 receipt canonical SHA-256=`e7992f87fb555eb26d6c2ef1ad9d45863954edd83fbfcc39f5ae01765cf3939f`，最终 `status=blocked`：只有 `legacy_covfix:L1` 选中 seed 43，且在 D6 因 `801980.SI` 失败；其余三个 family/level 均无 D5 eligible candidate。两 family 均 blocked，`ready_artifact_write_performed=false`、model/READY 数量为 0、数据库与 runtime 均未变化。下一步只能先完成 `C-008-B3-FORMAL-BLOCKER-DIAG-01` 精确诊断设计及用户确认；不得自动放宽 D4/D6、扩大 seed、排除 family/sector、采用 B2 soft authority或重新运行完整 grid。
+- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已按历史用户决定固化；Slice 0 B3/L2 retrain、C-009 与 C-010-FORMAL-A 源码均已合入。producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已在冻结 dataset/mapping、两个 family、seeds 42..49 和固定单线程 Conda `AIstock` 数值环境完成两次 fresh-process 正式制备，共 `5184/5184` fits；D5 已按 train-only 合同执行，未读取 validation/future utility，selection 后未 refit。正式 receipt canonical SHA-256=`e7992f87fb555eb26d6c2ef1ad9d45863954edd83fbfcc39f5ae01765cf3939f`，最终 `status=blocked`：只有 `legacy_covfix:L1` 选中 seed 43，且在 D6 因 `801980.SI` 失败；其余三个 family/level 均无 D5 eligible candidate。两 family 均 blocked，`ready_artifact_write_performed=false`、model/READY 数量为 0、数据库与 runtime 均未变化。用户于 2026-07-30 明确批准 `C-008-B3-FORMAL-BLOCKER-DIAG-01`；下一步可进入独立诊断实现，但本设计合入本身不运行 348 fits 或 D6 replay。不得自动放宽 D4/D6、扩大 seed、排除 family/sector、采用 B2 soft authority或重新运行完整 grid。
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -1288,9 +1288,9 @@ formal grid、runtime activation 或服务重启已完成。上述分离不是�
 
 ### 4.3.3 C-008-B3-FORMAL-BLOCKER-DIAG-01：正式制备 blocker 定向诊断设计
 
-本决策项当前状态为 `PROPOSED_NOT_APPROVED_NOT_IMPLEMENTATION_READY`。它只定义在一次完整正式制备已经
+本决策项已于 2026-07-30 获用户明确批准，当前状态为 `RESOLVED_USER_APPROVED_IMPLEMENTATION_READY_NOT_STARTED`。它只定义在一次完整正式制备已经
 fail-closed 后，如何用受控、可复现、结果中立的定向诊断区分模型几何/初始化/数值优化问题与已批准 D4/D6 合同的真实
-不满足。本文修订不授权实现诊断脚本、不授权 HMM refit、不选择 seed、不修改任何已批准阈值，也不生成 model/READY。
+不满足。该批准允许后续独立实现 PR 按本合同开发；本次 docs 合入不运行诊断脚本或 HMM refit、不选择 seed、不修改任何已批准阈值，也不生成 model/READY。
 
 #### A. 冻结权威与正式执行事实
 
@@ -1939,11 +1939,11 @@ Decision C-004 已按用户指令确定为 `NO_MIGRATION`：本 Phase 2 不修�
   model artifact 完成。
 - 仅 DEV DDL 验证；production DDL 独立 pending。
 
-### Slice 0A：formal blocker targeted diagnostic（待用户批准）
+### Slice 0A：formal blocker targeted diagnostic（已批准、未实施）
 
-- 当前只完成 `C-008-B3-FORMAL-BLOCKER-DIAG-01` 设计和正式审核；状态保持
-  `PROPOSED_NOT_APPROVED_NOT_IMPLEMENTATION_READY`，不把本 docs PR 当作诊断实现授权。
-- 后续若获批准，独立实现 target derivation、348-fit 两 fresh-process runner、3-entry D6 replay、compact canonical artifact
+- `C-008-B3-FORMAL-BLOCKER-DIAG-01` 设计和正式审核已完成并获用户批准；状态为
+  `RESOLVED_USER_APPROVED_IMPLEMENTATION_READY_NOT_STARTED`，不把本 docs PR 合入当作诊断已经执行。
+- 后续独立实现 target derivation、348-fit 两 fresh-process runner、3-entry D6 replay、compact canonical artifact
   和 parser/hash tests；不得复用完整 5184-fit runner 后再丢弃无关结果。
 - target derivation 必须由 formal report canonical hash 和 candidate rejection summaries 机械生成；150 rejected pair、24 control、
   3 replay 任一不闭合即在 fit 前或 artifact 完成前 fail closed。
@@ -2135,7 +2135,7 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-D6-01 | hard semantic validation count/month/run/utility gap | `RESOLVED_USER_APPROVED_D6_01_B` | `hmm_risk_c008_b3_d6_01_b_v1`：selected restart 后的 hard authority；每 state count `>=max(5,ceil(2%*N))`、occupancy `>=2%`、month/run `>=2`、incoming/outgoing `>=2`、max-run-share `<=0.9`、posterior row-sum `<=1e-12`、margin严格 `>1e-12`；hard utility mean/variance finite、numeric adjacent gap；95%/soft evidence只诊断，失败不得换 seed |
 | C-008-B3-D7-01 | B3 runtime dependency identity | `RESOLVED_USER_APPROVED_D7_01_A` | 未来实现声明 `hmmlearn==0.3.3`；本 docs-only PR 不安装依赖，未来 production dependency gate 独立 pending |
 | C-008-B3-FORMAL-EXEC-01 | 已批准 B3 合同在当前冻结输入上是否形成两-family READY | `VERIFIED_FORMAL_EXECUTION_BLOCKED_NO_READY` | producer `e2c01bae…` 完成 5184/5184 fits；formal canonical `e7992f87…39f`。D5 只选出 `legacy_covfix:L1/seed=43`，该 level 又在 D6 因 `801980.SI` failed；其余三个 family/level 无 eligible candidate。两 family blocked，selection未读validation/future utility，selection后未refit，model/READY/DB/runtime write均为false |
-| C-008-B3-FORMAL-BLOCKER-DIAG-01 | 是否按 formal rejection summaries 对全部 blocker pair 与 deterministic controls 执行两 fresh-process 定向根因诊断 | `PROPOSED_NOT_APPROVED_NOT_IMPLEMENTATION_READY` | 设计固定150 rejected pair+24 train-only controls=174 pair、348 targeted fits，以及 selected legacy L1 的3-entry D6 no-refit replay；只计算已批准阈值 signed distance，不选择seed、不改阈值/authority、不写model/READY/DB/runtime。须经用户确认后方可实施 |
+| C-008-B3-FORMAL-BLOCKER-DIAG-01 | 是否按 formal rejection summaries 对全部 blocker pair 与 deterministic controls 执行两 fresh-process 定向根因诊断 | `RESOLVED_USER_APPROVED_IMPLEMENTATION_READY_NOT_STARTED` | 用户于2026-07-30明确批准；固定150 rejected pair+24 train-only controls=174 pair、348 targeted fits，以及 selected legacy L1 的3-entry D6 no-refit replay；只计算已批准阈值 signed distance，不选择seed、不改阈值/authority、不写model/READY/DB/runtime。本docs合入不表示诊断已执行 |
 
 C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准并回填本文；它们不是运行时人工审批。
 C-006-A 已于 2026-07-23 获用户明确批准并回填本文；它不新增运行时审批或第二套股票池。
@@ -2154,7 +2154,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 - F-011 parent：`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_BLOCKED_MODEL_ACCEPTANCE`；C-009、BUG-892 与
   C-010-FORMAL-A 已合入并完成 clean-main 601 日 formal preflight。两 fresh-process 共 5184 fits 和 D5/D6 已执行；formal canonical
-  `e7992f87…39f` 为 blocked，未生成 model/READY。下一步为待用户批准的 targeted blocker diagnostic，不重跑完整 grid；Slice 1-3 仍未开始。
+  `e7992f87…39f` 为 blocked，未生成 model/READY。targeted blocker diagnostic 已获用户批准但尚未实施，不重跑完整 grid；Slice 1-3 仍未开始。
 - F-011-A 数据/PIT/observation：`C010_FORMAL_A_PREFLIGHT_AND_FORMAL_INPUT_VERIFIED`；C-007-A 单位、PIT sector mapping、7/20 维公式、
   hard semantic authority、120/30 行合同与既有 `0.90` coverage authority 均保留。已批准 policy 只把 full-universe train-frozen
   contributor ledger、price/moneyflow 双层 coverage、同源 moneyflow denominator 与逐 feature cross-section 形式化；它不删除证券或
@@ -2242,7 +2242,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
    不执行 DML。新的 dataset/mapping/source-identity hash 必须使用新 content identity，不能覆盖 `c07177…/9cdddd…/d4a5cc…`。
 9. C-010-A1/A2/A3/A4 源码、601 日 formal preflight 与正式 5184 fits 均已执行；input/policy gate 已闭合，模型验收结果为
    blocked。该结果不回滚 C-010 policy，也不授权删除证券/feature、改变公式或重跑完整 grid。
-10. 下一步先由用户确认 `C-008-B3-FORMAL-BLOCKER-DIAG-01`。获批后才创建独立源码 PR，实现精确348-fit targeted runner
+10. `C-008-B3-FORMAL-BLOCKER-DIAG-01` 已获用户确认。下一步创建独立源码 PR，实现精确348-fit targeted runner
     与3-entry D6 replay；诊断完成后再以证据决定是否提出新的模型合同修订。diagnostic implementation、PR merge、后续模型变更、
     production/runtime action继续分别报告，不增加运行时人工审批。
 
@@ -2271,7 +2271,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 - C-010-FORMAL-A 已完成 formal preflight/grid；本次 docs revision 不改变其 source、依赖或 runtime，DDL/DML、frontend/backend
   dependency 与 runtime activation 均为 `noop`。
 - C-008-B3-FORMAL-BLOCKER-DIAG-01 本次仅设计：`production_ddl_gate=noop`、`production_dml_gate=noop`、
-  `production_frontend_dependency_gate=noop`、`production_backend_dependency_gate=noop`、`runtime_activation=noop`；未获批准前不执行348 fits或D6 replay。
+  `production_frontend_dependency_gate=noop`、`production_backend_dependency_gate=noop`、`runtime_activation=noop`；合同虽已批准，本次合入仍不执行348 fits或D6 replay。
 - `sector_data` identity DDL/DML：`noop`，生产表保持 fact-only，行业 mapping 动态解析。
 - 未来 schema implementation：DEV `applied_and_verified` 后，production DDL 仍为 `pending`，需要目标明确授权。
 - C-008-B3 controlled execution dependency：仓库已声明 `hmmlearn==0.3.3`；用户已授权并在 Conda `AIstock` 环境完成
@@ -2343,27 +2343,26 @@ exact fields、mask/rolling 与状态一致性缺口均已修复；这只表示�
 
 ### 23.2 C-008-B3-FORMAL-BLOCKER-DIAG-01 正式设计审核结论
 
-- **禁止简化/子集/POC**：`PASS_DESIGN_COMPLETE_PENDING_USER_APPROVAL`。设计覆盖 formal receipt 中全部150个 D4 rejected
+- **禁止简化/子集/POC**：`PASS_USER_APPROVED_DESIGN_COMPLETE`。设计覆盖 formal receipt 中全部150个 D4 rejected
   seed/sector pair、三个 affected family/level、8 seeds、24个确定性 controls 和唯一 selected L1 的 failed D6 entry；没有只诊断
   `801030.SI`、`801980.SI` 或单一 L2 stage，也没有把348-fit诊断声明为两-family模型交付。
-- **禁止静默错误**：`PASS_DESIGN_COMPLETE_PENDING_USER_APPROVAL`。authority/target/control/repeat/stage/evidence/hash/collision
+- **禁止静默错误**：`PASS_USER_APPROVED_DESIGN_COMPLETE`。authority/target/control/repeat/stage/evidence/hash/collision
   均有 fail-closed 状态；初始化失败不会伪造后续stage，multi-stage failure不会压缩为单一generic reason，non-finite和缺失字段
   不会被null/空数组写成 diagnostic complete。
-- **禁止业务逻辑迁移**：`PASS_DESIGN_COMPLETE_PENDING_USER_APPROVAL`。两个 family、direct L1/L2、seeds 42..49、D3-D6、hard
+- **禁止业务逻辑迁移**：`PASS_USER_APPROVED_DESIGN_COMPLETE`。两个 family、direct L1/L2、seeds 42..49、D3-D6、hard
   semantic authority、单一 validation与D5 selected identity均保持。D4 refit不可见validation/future utility；D6 replay不refit、不
   reselect；未加入B2、neutral、index fallback、per-sector stitching、family/sector排除或阈值放宽。
-- **禁止未经确认的门禁和审批**：`PASS_DESIGN_COMPLETE_PENDING_USER_APPROVAL`。signed distance是观察字段，不是新gate；设计未增加
-  manual acknowledge、逐sector审批、研究方向淘汰或runtime gate。`PROPOSED_NOT_APPROVED_NOT_IMPLEMENTATION_READY`准确表示新诊断
-  合同尚待用户决定，不会被转化为永久运行时人工审批。
+- **禁止未经确认的门禁和审批**：`PASS_USER_APPROVED_DESIGN_COMPLETE`。signed distance是观察字段，不是新gate；设计未增加
+  manual acknowledge、逐sector审批、研究方向淘汰或runtime gate。用户批准的是一次确定性诊断合同，不会被转化为永久运行时人工审批。
 - **可区分性与结果价值**：`PASS`。formal report只提供compact rejection summary，无法判定失败距阈值的量级或与accepted
   control的几何差异；本设计要求raw likelihood/covariance/hard-sequence和signed-distance evidence，能区分“已批准合同正确拒绝”与
   “初始化/数值/结构需要另行设计修订”，且不预设任何方向必然通过。
 - **验证与预算**：`PASS`。150 rejected + 24 controls = 174 unique pair，两个 fresh process精确348 fits；D6为3-entry/0-fit
   replay。完整target覆盖和两次bitwise equality均为diagnostic completeness，不是模型acceptance或新人工门禁。
 
-综合审核结论：`PASS_COMPLETE_PROPOSAL_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`。未发现简化交付、静默错误、业务语义
-漂移或未经确认的门禁；但该结论只证明详细设计具备送审条件。用户批准该 decision 前，不实施诊断、不运行 HMM、不生成 artifact，
-也不把本设计状态改为 implementation-ready。
+综合审核结论：`PASS_USER_APPROVED_DESIGN_IMPLEMENTATION_READY_NOT_STARTED`。未发现简化交付、静默错误、业务语义
+漂移或未经确认的门禁；用户已批准该确定性诊断合同，但本次合入不实施诊断、不运行 HMM、不生成 artifact，
+也不把 design approval 伪报为 execution complete。
 
 ## 24. 当前完成状态与下一步
 
@@ -2387,7 +2386,7 @@ C-008-B3-D4-L2-AUDIT-01 与受控 L2 重训设计 A，并登记 DIAG-02/03/04 hi
 formal input/policy 已验证，F-011-B/C/D 分别 blocked 于 D3/D4、D5/D6 与两-family READY 合取。F-012 保持
 `DESIGN_READY_USER_APPROVED`，F-013 保持 `PENDING_UPSTREAM_MODEL_SET`。
 
-下一步不是再次运行完整 5184 grid，也不是直接修改阈值或模型。`C-008-B3-FORMAL-BLOCKER-DIAG-01` 已形成完整设计并通过
-DESIGN-COMPLIANCE-001 正式审核，但状态仍为 `PROPOSED_NOT_APPROVED_NOT_IMPLEMENTATION_READY`。只有用户明确批准后，才可在
-独立实现流程执行 348 targeted fits 与 3-entry D6 replay；结果完成后再提交精确模型/合同决策。当前 docs revision 的 DDL/DML、
+下一步不是再次运行完整 5184 grid，也不是直接修改阈值或模型。`C-008-B3-FORMAL-BLOCKER-DIAG-01` 已形成完整设计、通过
+DESIGN-COMPLIANCE-001 正式审核并获用户批准，状态为 `RESOLVED_USER_APPROVED_IMPLEMENTATION_READY_NOT_STARTED`。下一独立实现流程可开发
+348 targeted fits runner 与 3-entry D6 replay；结果完成后再提交精确模型/合同决策。当前 docs revision 的 DDL/DML、
 依赖、runtime、数据库、model/READY 与客户端同步均为 `noop`，PR merge 仍按 C-005 等待用户单独确认。
