@@ -1,6 +1,8 @@
 {
   "actual": "Production bridge operation ahrop_46e4bbe136ef65a61f98211be80475aa completed exact input and CAPTURED 673 observations plus 2686 labels for two Programs, then child ahrop_bd9f68a2604a6b02cf2c40c62818b112 failed ADVISORY_HR_DATASET_BRIDGE_LINEAGE_CONFLICT before BUILT. _build_request still requires one global policy_hash/component_hash and emits singular label_policy_bundle/component fields, although the batch legitimately contains distinct frozen per-Program policy sets. Repair must preserve every per-label policy authority and deterministic snapshot identity; do not remove validation, pick the first policy, or weaken PIT/lineage closure.",
   "allowed_write_scope": [
+    "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+    "backend/tests/advisory_historical_range/test_r4_bridge_policy_set_union.py",
     "tests/aistock_validation/bugs/20260730_BUG-926-r5-multi-program-snapshot-build-collapses-policy-set-to-singular.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "A retrospective snapshot build must preserve every exact per-label range policy while deriving one deterministic snapshot-level composite policy authority for any valid single- or multi-Program policy set. Single-policy builds must retain their existing identity. Multi-policy builds must not select an arbitrary member, weaken lineage validation, or collapse distinct component identities.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,7 +54,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r4_bridge_policy_set_union.py -q -p no:cacheprovider",
   "required_verification": [
     "l0"
   ],
