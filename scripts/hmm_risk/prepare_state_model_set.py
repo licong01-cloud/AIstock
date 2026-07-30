@@ -40,10 +40,19 @@ from backend.services.hmm_risk.state_model_set import (  # noqa: E402
     sha256_bytes,
 )
 from backend.services.hmm_risk.b3_acceptance import select_level_restart  # noqa: E402
+from backend.services.hmm_risk.b3_blocker_diagnostic import (  # noqa: E402
+    DIAGNOSTIC_VERSION as B3_BLOCKER_DIAGNOSTIC_VERSION,
+    FORMAL_AUTHORITY as B3_BLOCKER_FORMAL_AUTHORITY,
+    build_matched_comparisons as build_b3_blocker_matched_comparisons,
+    derive_target_manifest as derive_b3_blocker_target_manifest,
+    replay_selected_d6 as replay_b3_blocker_selected_d6,
+    run_targeted_level as run_b3_blocker_targeted_level,
+)
 from backend.services.hmm_risk.b3_training import (  # noqa: E402
     audit_train_only_coverage,
     build_train_only_series,
     build_selected_level_artifact,
+    formal_b3_parameter_profile,
     models_from_repeat,
     run_level_repeat,
     write_b3_ready_model_set,
@@ -135,6 +144,26 @@ def _load_request(path: Path) -> dict[str, Any]:
         identity = str(value.get(field) or "")
         if len(identity) != 64 or any(character not in "0123456789abcdef" for character in identity.lower()):
             raise StateModelSetError(f"preparation request {field} must be a SHA-256 identity")
+    return value
+
+
+def _reject_duplicate_json_keys(items: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in items:
+        if key in value:
+            raise StateModelSetError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def _load_json_mapping(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateModelSetError(f"{label} cannot be read: {exc}") from exc
+    if not isinstance(value, dict):
+        raise StateModelSetError(f"{label} must contain one JSON object")
     return value
 
 
@@ -1717,6 +1746,318 @@ def prepare_b3_single_pass(
     return {**body, "single_pass_receipt_sha256": canonical_sha256(body)}
 
 
+def _load_b3_blocker_train_inputs(
+    request: dict[str, Any],
+    *,
+    db_prefix: str,
+    target_manifest: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Reload the frozen formal inputs without requiring the old producer checkout."""
+
+    authority = B3_BLOCKER_FORMAL_AUTHORITY
+    _require_approved_b3_windows(request)
+    _require_c010_policy_identity(request)
+    _require_formal_train_coverage_identity(request)
+    for field in (
+        "producer_commit",
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+        "semantic_dataset_manifest_hash",
+        "semantic_mapping_manifest_hash",
+        "semantic_calendar_manifest_hash",
+        "semantic_l2_stock_fact_manifest_hash",
+        "feature_domain_policy_sha256",
+    ):
+        if str(request.get(field) or "") != authority[field]:
+            raise StateModelSetError(f"blocker diagnostic request {field} differs from formal authority")
+    if target_manifest.get("formal_producer_commit") != authority["producer_commit"]:
+        raise StateModelSetError("blocker diagnostic target producer identity is invalid")
+    parameter_profile_sha256 = canonical_sha256(formal_b3_parameter_profile())
+    if parameter_profile_sha256 != target_manifest.get("parameter_profile_sha256"):
+        raise StateModelSetError("blocker diagnostic current parameter profile differs from the formal artifact")
+
+    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix, c010_formal=True)
+    identities = {
+        "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+        "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+    }
+    for field, actual in identities.items():
+        if actual != authority[field] or actual != str(request.get(field) or actual):
+            raise StateModelSetError(f"blocker diagnostic frozen input drifted from {field}")
+    recomputed_policy = _c010_policy_manifest(
+        inputs,
+        request,
+        producer_commit=authority["producer_commit"],
+    )
+    if (
+        recomputed_policy != request.get("feature_domain_policy_manifest")
+        or recomputed_policy.get("receipt_sha256") != authority["feature_domain_policy_sha256"]
+    ):
+        raise StateModelSetError("blocker diagnostic C-010 feature-domain policy identity drifted")
+    inputs["feature_domain_policy_sha256"] = str(recomputed_policy["receipt_sha256"])
+    train_coverage = _b3_train_coverage_preflight(inputs, request)
+    _require_canonical_receipt(train_coverage, label="blocker diagnostic train coverage")
+    if train_coverage.get("train_coverage_valid") is not True or train_coverage.get("receipt_sha256") != request.get(
+        "train_coverage_receipt_sha256"
+    ):
+        raise StateModelSetError("blocker diagnostic frozen train coverage identity drifted")
+    return inputs, identities
+
+
+def prepare_b3_blocker_diag01_pass(
+    request: dict[str, Any],
+    formal_report: dict[str, Any],
+    target_manifest: dict[str, Any],
+    *,
+    db_prefix: str,
+) -> dict[str, Any]:
+    """Run exactly one approved 174-pair train-only diagnostic pass."""
+
+    inputs, identities = _load_b3_blocker_train_inputs(
+        request,
+        db_prefix=db_prefix,
+        target_manifest=target_manifest,
+    )
+    if canonical_sha256(formal_report) != target_manifest.get("formal_report_sha256"):
+        raise StateModelSetError("blocker diagnostic formal report changed after target derivation")
+    families = {str(item.get("family") or ""): item for item in request.get("families") or ()}
+    if set(families) != {"legacy_covfix", "autocycle_all_core"}:
+        raise StateModelSetError("blocker diagnostic requires exactly the two approved families")
+    evidence: list[dict[str, Any]] = []
+    train_series_by_family: dict[str, dict[str, dict[str, Any]]] = {}
+    for key in ("autocycle_all_core:L1", "autocycle_all_core:L2", "legacy_covfix:L2"):
+        family, level = key.split(":", 1)
+        family_request = families[family]
+        if family not in train_series_by_family:
+            train_series_by_family[family] = _direct_train_series_for_family(inputs, family_request)
+        series = train_series_by_family[family][level]
+        targets = [
+            target for target in target_manifest["targets"] if target["family"] == family and target["level"] == level
+        ]
+        evidence.extend(
+            run_b3_blocker_targeted_level(
+                series,
+                targets,
+                family=family,
+                level=level,
+                feature_names=tuple(str(value) for value in family_request.get("feature_names") or ()),
+                preprocess_family=str(family_request.get("preprocess_family") or ""),
+            )
+        )
+    if len(evidence) != 174 or len({item["diagnostic_entry_sha256"] for item in evidence}) != 174:
+        raise StateModelSetError("blocker diagnostic pass did not produce 174 unique evidence receipts")
+    numeric_environment = c008_b3_diag04_fixed_numeric_environment()
+    body = {
+        "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_pass_v1",
+        "diagnostic_producer_commit": _formal_producer_commit(),
+        "formal_producer_commit": B3_BLOCKER_FORMAL_AUTHORITY["producer_commit"],
+        "formal_report_sha256": target_manifest["formal_report_sha256"],
+        "target_manifest_sha256": target_manifest["target_manifest_sha256"],
+        **identities,
+        "feature_domain_policy_sha256": B3_BLOCKER_FORMAL_AUTHORITY["feature_domain_policy_sha256"],
+        "formula_version": B3_BLOCKER_FORMAL_AUTHORITY["formula_version"],
+        "parameter_profile_sha256": target_manifest["parameter_profile_sha256"],
+        "numeric_environment": numeric_environment,
+        "numeric_environment_sha256": canonical_sha256(numeric_environment),
+        "targeted_evidence": evidence,
+        "fit_count": len(evidence),
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "acceptance_decision_reexecuted": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "pass_receipt_sha256": canonical_sha256(body)}
+
+
+def _b3_blocker_child_command(args: argparse.Namespace, target_manifest_sha256: str) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--request",
+        str(Path(args.request).resolve()),
+        "--output-root",
+        str(Path(args.output_root).resolve()),
+        "--env-file",
+        str(Path(args.env_file).resolve()),
+        "--db-env-prefix",
+        str(args.db_env_prefix),
+        "--b3-formal-report",
+        str(Path(args.b3_formal_report).resolve()),
+        "--b3-target-manifest-sha256",
+        target_manifest_sha256,
+        "--_b3-blocker-diag01-child",
+    ]
+
+
+def _parse_canonical_child_payload(payload: bytes, *, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(payload.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateModelSetError(f"{label} returned invalid JSON: {exc}") from exc
+    if not isinstance(value, dict) or canonical_json_bytes(value) != payload:
+        raise StateModelSetError(f"{label} did not return one canonical JSON object")
+    identity = str(value.get("pass_receipt_sha256") or "")
+    body = {key: item for key, item in value.items() if key != "pass_receipt_sha256"}
+    if identity != canonical_sha256(body):
+        raise StateModelSetError(f"{label} pass receipt hash is invalid")
+    return value
+
+
+def _validate_b3_blocker_pass(value: dict[str, Any], target_manifest: dict[str, Any]) -> None:
+    authority = B3_BLOCKER_FORMAL_AUTHORITY
+    expected_scalars = {
+        "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_pass_v1",
+        "formal_producer_commit": authority["producer_commit"],
+        "formal_report_sha256": target_manifest["formal_report_sha256"],
+        "target_manifest_sha256": target_manifest["target_manifest_sha256"],
+        "dataset_manifest_hash": authority["dataset_manifest_hash"],
+        "mapping_manifest_hash": authority["mapping_manifest_hash"],
+        "calendar_manifest_hash": authority["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": authority["l2_stock_fact_manifest_hash"],
+        "feature_domain_policy_sha256": authority["feature_domain_policy_sha256"],
+        "formula_version": authority["formula_version"],
+        "parameter_profile_sha256": target_manifest["parameter_profile_sha256"],
+        "fit_count": target_manifest["target_pair_count"],
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "acceptance_decision_reexecuted": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    for field, expected in expected_scalars.items():
+        if value.get(field) != expected:
+            raise StateModelSetError(f"blocker diagnostic child {field} closure is invalid")
+    producer_commit = str(value.get("diagnostic_producer_commit") or "").lower()
+    if len(producer_commit) != 40 or any(character not in "0123456789abcdef" for character in producer_commit):
+        raise StateModelSetError("blocker diagnostic child producer commit identity is invalid")
+    numeric_environment = value.get("numeric_environment")
+    if (
+        not isinstance(numeric_environment, dict)
+        or value.get("numeric_environment_sha256") != canonical_sha256(numeric_environment)
+        or numeric_environment != c008_b3_diag04_fixed_numeric_environment()
+    ):
+        raise StateModelSetError("blocker diagnostic child numeric environment identity is invalid")
+    evidence = value.get("targeted_evidence")
+    if not isinstance(evidence, list) or len(evidence) != target_manifest["target_pair_count"]:
+        raise StateModelSetError("blocker diagnostic child evidence count is invalid")
+    identities: set[str] = set()
+    target_fields = (
+        "role",
+        "family",
+        "level",
+        "seed",
+        "sector_code",
+        "source_entry_receipt_sha256",
+        "formal_failed_stages",
+    )
+    for index, (entry, target) in enumerate(zip(evidence, target_manifest["targets"], strict=True)):
+        if not isinstance(entry, dict) or any(entry.get(field) != target.get(field) for field in target_fields):
+            raise StateModelSetError(f"blocker diagnostic child target identity differs at index {index}")
+        identity = str(entry.get("diagnostic_entry_sha256") or "")
+        body = {key: item for key, item in entry.items() if key != "diagnostic_entry_sha256"}
+        if identity != canonical_sha256(body) or identity in identities:
+            raise StateModelSetError(f"blocker diagnostic child evidence receipt is invalid at index {index}")
+        identities.add(identity)
+        if entry.get("status") not in {"fit_completed", "fit_failed"}:
+            raise StateModelSetError(f"blocker diagnostic child status is invalid at index {index}")
+        if entry.get("formal_entry_receipt_reproduced") is not True:
+            raise StateModelSetError(f"blocker diagnostic child did not reproduce formal receipt at index {index}")
+        for field in ("validation_accessed", "future_utility_accessed", "selection_performed", "model_write_performed"):
+            if entry.get(field) is not False:
+                raise StateModelSetError(f"blocker diagnostic child {field} is invalid at index {index}")
+
+
+def run_b3_blocker_diag01_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
+    """Run the approved targeted train replay twice, then replay selected D6 without refitting."""
+
+    formal_report = _load_json_mapping(Path(args.b3_formal_report).resolve(), label="formal B3 report")
+    target_manifest = derive_b3_blocker_target_manifest(formal_report)
+    environment = os.environ.copy()
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        environment[key] = "1"
+    raw_repeats: list[bytes] = []
+    repeats: list[dict[str, Any]] = []
+    for index in (1, 2):
+        completed = subprocess.run(
+            _b3_blocker_child_command(args, target_manifest["target_manifest_sha256"]),
+            check=False,
+            capture_output=True,
+            env=environment,
+            timeout=7200,
+        )
+        if completed.returncode != 0:
+            error = completed.stderr.decode("utf-8", errors="replace")[-4000:]
+            raise StateModelSetError(f"blocker diagnostic fresh process {index} failed: {error}")
+        raw_repeats.append(completed.stdout)
+        repeat = _parse_canonical_child_payload(completed.stdout, label=f"fresh process {index}")
+        _validate_b3_blocker_pass(repeat, target_manifest)
+        repeats.append(repeat)
+    if raw_repeats[0] != raw_repeats[1]:
+        raise StateModelSetError("blocker diagnostic fresh-process canonical payloads differ")
+    if repeats[0].get("target_manifest_sha256") != target_manifest["target_manifest_sha256"]:
+        raise StateModelSetError("blocker diagnostic child used a different target manifest")
+
+    semantic_inputs = _load_verified_formal_semantic_inputs(request, db_prefix=str(args.db_env_prefix))
+    semantic_identities = _semantic_input_identities(semantic_inputs)
+    for field, actual in semantic_identities.items():
+        if actual != B3_BLOCKER_FORMAL_AUTHORITY[field]:
+            raise StateModelSetError(f"blocker diagnostic D6 semantic input drifted from {field}")
+    semantic_inputs["feature_domain_policy_sha256"] = B3_BLOCKER_FORMAL_AUTHORITY["feature_domain_policy_sha256"]
+    family = next(item for item in request["families"] if str(item.get("family") or "") == "legacy_covfix")
+    semantic_series = _direct_series_for_family(semantic_inputs, family)["L1"]
+    d6_replay = replay_b3_blocker_selected_d6(formal_report, semantic_series, target_manifest)
+    matched_comparisons = build_b3_blocker_matched_comparisons(repeats[0]["targeted_evidence"])
+    body = {
+        "schema_version": B3_BLOCKER_DIAGNOSTIC_VERSION,
+        "status": "diagnostic_complete",
+        "diagnostic_contract": "C-008-B3-FORMAL-BLOCKER-DIAG-01",
+        "diagnostic_producer_commit": repeats[0]["diagnostic_producer_commit"],
+        "formal_authority": dict(B3_BLOCKER_FORMAL_AUTHORITY),
+        "target_manifest": target_manifest,
+        "numeric_environment": repeats[0]["numeric_environment"],
+        "numeric_environment_sha256": repeats[0]["numeric_environment_sha256"],
+        "expected_fresh_process_count": target_manifest["fresh_process_count"],
+        "observed_fresh_process_count": len(repeats),
+        "expected_fits_per_process": target_manifest["fits_per_process"],
+        "observed_fits_per_process": repeats[0]["fit_count"],
+        "expected_total_fit_count": target_manifest["total_fit_budget"],
+        "observed_total_fit_count": sum(repeat["fit_count"] for repeat in repeats),
+        "fresh_process_payload_sha256": [sha256_bytes(payload) for payload in raw_repeats],
+        "fresh_process_pass_receipt_sha256": [repeat["pass_receipt_sha256"] for repeat in repeats],
+        "canonical_payload_bitwise_equal": True,
+        "targeted_evidence": repeats[0]["targeted_evidence"],
+        "matched_comparisons": matched_comparisons,
+        "d6_replay": d6_replay,
+        "d6_replay_count": len(d6_replay),
+        "selection_performed": False,
+        "selection_reexecuted": False,
+        "acceptance_decision_reexecuted": False,
+        "formal_thresholds_changed": False,
+        "hard_semantic_authority_changed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def _b3_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
     return [
         sys.executable,
@@ -2005,6 +2346,10 @@ def parse_args() -> argparse.Namespace:
         "--b3-preparation-output",
         help="Run formal two-process B3 L1/L2 preparation and write its immutable receipt.",
     )
+    diagnostic_group.add_argument(
+        "--b3-blocker-diagnostic-output",
+        help="Run the approved 174-pair x two-process blocker diagnostic and zero-refit D6 replay.",
+    )
     parser.add_argument(
         "--b3-request-candidate-output",
         help="Immutable request candidate output; required only with --b3-preflight-output.",
@@ -2012,7 +2357,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--_c008-b3-diag02-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_c008-b3-diag04-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--_b3-blocker-diag01-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--b3-process-identity", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--b3-formal-report", help="Approved immutable formal B3 preparation report.")
+    parser.add_argument("--b3-target-manifest-sha256", default="", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -2032,6 +2380,20 @@ def main() -> int:
             if args.b3_request_candidate_output:
                 raise StateModelSetError("--b3-request-candidate-output is only valid with --b3-preflight-output")
             request = _load_request(request_path)
+        blocker_output = getattr(args, "b3_blocker_diagnostic_output", None)
+        blocker_formal_report = getattr(args, "b3_formal_report", None)
+        blocker_target_sha256 = getattr(args, "b3_target_manifest_sha256", "")
+        blocker_parent = bool(blocker_output)
+        blocker_child = bool(getattr(args, "_b3_blocker_diag01_child", False))
+        if blocker_parent or blocker_child:
+            if not blocker_formal_report:
+                raise StateModelSetError("--b3-formal-report is required for the blocker diagnostic")
+        elif blocker_formal_report or blocker_target_sha256:
+            raise StateModelSetError("blocker diagnostic authority arguments require blocker diagnostic mode")
+        if blocker_parent and blocker_target_sha256:
+            raise StateModelSetError("--b3-target-manifest-sha256 is child-only")
+        if blocker_child and not blocker_target_sha256:
+            raise StateModelSetError("blocker diagnostic child target manifest identity is required")
         if c010_diagnostic_output:
             if args.b3_request_candidate_output:
                 raise StateModelSetError(
@@ -2141,6 +2503,19 @@ def main() -> int:
             report = diagnose_c008_b3_diag04(request, db_prefix=str(args.db_env_prefix))
             sys.stdout.buffer.write(canonical_json_bytes(report))
             return 0
+        if blocker_child:
+            formal_report = _load_json_mapping(Path(blocker_formal_report).resolve(), label="formal B3 report")
+            target_manifest = derive_b3_blocker_target_manifest(formal_report)
+            if target_manifest["target_manifest_sha256"] != blocker_target_sha256:
+                raise StateModelSetError("blocker diagnostic child target manifest identity mismatch")
+            report = prepare_b3_blocker_diag01_pass(
+                request,
+                formal_report,
+                target_manifest,
+                db_prefix=str(args.db_env_prefix),
+            )
+            sys.stdout.buffer.write(canonical_json_bytes(report))
+            return 0
         if args._b3_child:
             if args.b3_process_identity not in {"fresh_process_1", "fresh_process_2"}:
                 raise StateModelSetError("formal B3 child process identity is invalid")
@@ -2170,6 +2545,51 @@ def main() -> int:
             }
             print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
             return 0 if report["status"] == "READY" else 1
+        if blocker_parent:
+            report_path = Path(blocker_output).resolve()
+            try:
+                report = run_b3_blocker_diag01_repeated(args, request)
+            except Exception as exc:
+                failure_body = {
+                    "schema_version": B3_BLOCKER_DIAGNOSTIC_VERSION,
+                    "status": "failed",
+                    "diagnostic_contract": "C-008-B3-FORMAL-BLOCKER-DIAG-01",
+                    "failure_reason_code": "hmm_risk_blocker_diagnostic_failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[-4000:],
+                    "selection_performed": False,
+                    "selection_reexecuted": False,
+                    "acceptance_decision_reexecuted": False,
+                    "formal_thresholds_changed": False,
+                    "hard_semantic_authority_changed": False,
+                    "model_write_performed": False,
+                    "ready_artifact_write_performed": False,
+                    "database_write_performed": False,
+                    "runtime_action_performed": False,
+                }
+                failure = {**failure_body, "receipt_sha256": canonical_sha256(failure_body)}
+                _write_diagnostic_report(report_path, failure)
+                raise
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_cli_receipt_v1",
+                "status": report["status"],
+                "diagnostic_contract": report["diagnostic_contract"],
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "target_pair_count": report["target_manifest"]["target_pair_count"],
+                "total_fit_count": report["observed_total_fit_count"],
+                "fresh_process_count": report["observed_fresh_process_count"],
+                "canonical_payload_bitwise_equal": report["canonical_payload_bitwise_equal"],
+                "d6_replay_count": report["d6_replay_count"],
+                "selection_performed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0
         if args.c008_b3_diag04_output:
             report, reproducible = _run_c008_b3_diag04_repeated(args)
             report_path = Path(args.c008_b3_diag04_output).resolve()
