@@ -1,6 +1,9 @@
 {
   "actual": "stock_universe_pit_service 入池规则(ipo_365d等)只过滤 .SH/.SZ 后缀，未排除B股板块段(200xxx.SZ/201xxx.SZ/900xxx.SH)，79只B股经 ipo_365d 规则进入 ST PIT 池 stock_universe_pit_spans。BUG-832 将 sector_data 契约 eligible 集合改为 PIT 池驱动后，75只无申万行业映射的B股造成 SECTOR_DATA_PIT_CONTRACT_INVALID (missing_pit_mappings=75) 每日确定性失败，sector_data 停在 2026-07-21，每日产生 retry_exhausted 告警。修复: 在 PIT universe 入池源头排除B股板块段，仅保留A股，重建 ST/QE universe spans 使 sector_data 契约自愈。策略上AIstock永无B股回测与交易。",
   "allowed_write_scope": [
+    "scripts/build_stock_universe_pit_spans.py",
+    "backend/services/stock_universe_pit_service.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
     "tests/aistock_validation/bugs/20260730_BUG-927-b-200-201-900-79-b-st-pit-sector-data.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +26,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "stock_universe_pit_spans/stock_universe_pit_events 的所有 universe(live ST 池及后续新建的 QE 不可变快照)仅含A股: 构建器在 stock_basic/stock_st/stock_st_events 读取层排除B股板块段(200xxx.SZ/201xxx.SZ/900xxx.SH)，compute_source_fingerprint 口径一致; 合并后经授权对 live universe 执行一次 force 全量重建(write_mode=replace)清除历史B股 spans, sector_data preflight 的 missing_pit_mappings 归零。存量 QE 不可变快照(20180801_20260630)按契约不原地修复, 下次数据集构建用新 key 自动获得无B股版本; 07-22起16只映射到已停更L2指数的A股(missing_sw_daily_facts=16)为独立数据缺口, 另案处理。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],

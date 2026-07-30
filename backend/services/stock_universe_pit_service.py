@@ -187,10 +187,15 @@ class StockUniversePitService:
 
     def compute_source_fingerprint(self, *, end_date: dt.date | None = None) -> dict[str, Any]:
         fingerprint_end = end_date or self.resolve_default_end_date()
+        # BUG-927: fingerprint scope must match the span builder exactly
+        # (A-shares only; B-share boards excluded) or the fingerprint drifts
+        # from the generated universe contents.
+        from scripts.build_stock_universe_pit_spans import a_share_ts_code_filter
+
         with get_conn() as conn:
             with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT
                         COUNT(*) FILTER (
                             WHERE (list_date IS NULL OR list_date::date <= %(end_date)s)
@@ -209,6 +214,7 @@ class StockUniversePitService:
                       FROM market.stock_basic
                      WHERE exchange IN ('SSE', 'SZSE')
                        AND (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
+                       {a_share_ts_code_filter("ts_code")}
                     """,
                     {"end_date": fingerprint_end},
                 )
