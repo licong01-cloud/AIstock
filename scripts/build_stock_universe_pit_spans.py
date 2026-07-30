@@ -4,6 +4,8 @@ The generated spans are eligibility ranges for new buys / selection. They do
 not delete feature data. Rules are intentionally conservative:
 
 - SH/SZ only; BJ/BSE are excluded.
+- A-shares only; B-share boards (200/201xxx.SZ, 900xxx.SH) are permanently
+  excluded from every generated universe (BUG-927).
 - IPO eligibility starts after ``list_date + ipo_filter_days``.
 - Negative ST events exclude from the first trading day after ``pub_date``.
 - ST removal/recovery can re-enter from
@@ -41,6 +43,30 @@ SUPPORTED_SCOPES = {"st_only_active", "legacy_delist_pause_pit"}
 RESTORE_KEYWORDS = ("撤销", "撤消")
 RESTORE_STILL_RISK_KEYWORDS = ("并实行ST", "并实施ST", "实行ST", "实施ST", "变为ST", "转为ST", "叠加")
 TERMINAL_KEYWORDS = ("退市整理期", "终止上市", "摘牌")
+
+# BUG-927: AIstock has no B-share backtest or trading coverage, so B-share
+# boards (Shenzhen B: 200/201xxx.SZ, Shanghai B: 900xxx.SH) must never enter
+# any generated stock universe.  ``%%`` escaping matches the psycopg2 style
+# used by every query in this module.
+B_SHARE_TS_CODE_PATTERNS = ("200%%.SZ", "201%%.SZ", "900%%.SH")
+
+
+def is_b_share_ts_code(ts_code: str) -> bool:
+    """Return True when ``ts_code`` belongs to a B-share board."""
+    code = str(ts_code or "").strip().upper()
+    prefix, dot, suffix = code.partition(".")
+    if not dot:
+        return False
+    for pattern in B_SHARE_TS_CODE_PATTERNS:
+        pattern_prefix, _, pattern_suffix = pattern.replace("%%", "%").partition(".")
+        if suffix == pattern_suffix and prefix.startswith(pattern_prefix.rstrip("%")):
+            return True
+    return False
+
+
+def a_share_ts_code_filter(column: str = "ts_code") -> str:
+    """SQL AND-fragment excluding B-share codes from ``column``."""
+    return "".join(f" AND {column} NOT LIKE '{pattern}'" for pattern in B_SHARE_TS_CODE_PATTERNS)
 
 
 @dataclass(frozen=True)
@@ -325,6 +351,7 @@ def _load_stock_basic(conn: Any, *, active_only: bool = False, active_as_of: dt.
               FROM market.stock_basic
              WHERE exchange IN ('SSE', 'SZSE')
                AND (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
+               {a_share_ts_code_filter("ts_code")}
                {status_filter}
              ORDER BY ts_code
             """,
@@ -379,10 +406,11 @@ def _load_st_events(
 ) -> list[EventRow]:
     with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
         cur.execute(
-            """
+            f"""
             SELECT ts_code, name, pub_date::date, imp_date::date, st_type, st_reason, st_explain
               FROM market.stock_st_events
              WHERE pub_date <= %s
+               {a_share_ts_code_filter("ts_code")}
              ORDER BY ts_code, pub_date, imp_date, st_type
             """,
             (end_date,),
@@ -456,6 +484,7 @@ def _load_initial_st_events(
              WHERE s.ann_date = %s
                AND b.exchange IN ('SSE', 'SZSE')
                AND (s.ts_code LIKE '%%.SH' OR s.ts_code LIKE '%%.SZ')
+               {a_share_ts_code_filter("s.ts_code")}
                 {status_filter}
              ORDER BY s.ts_code
             """,
@@ -515,11 +544,12 @@ def _stock_basic_terminal_events(stocks: Iterable[StockRow], calendar: TradingCa
 def _load_stock_basic_scope_counts(conn: Any, *, active_as_of: dt.date | None = None) -> dict[str, int]:
     with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
         cur.execute(
-            """
+            f"""
             SELECT COALESCE(list_status, '') AS list_status, COUNT(*) AS cnt
               FROM market.stock_basic
              WHERE exchange IN ('SSE', 'SZSE')
                AND (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
+               {a_share_ts_code_filter("ts_code")}
              GROUP BY COALESCE(list_status, '')
             """
         )
@@ -527,7 +557,7 @@ def _load_stock_basic_scope_counts(conn: Any, *, active_as_of: dt.date | None = 
         asof_counts: dict[str, int] = {}
         if active_as_of is not None:
             cur.execute(
-                """
+                f"""
                 SELECT
                     COUNT(*) FILTER (
                         WHERE (list_date IS NULL OR list_date::date <= %(active_as_of)s)
@@ -538,6 +568,7 @@ def _load_stock_basic_scope_counts(conn: Any, *, active_as_of: dt.date | None = 
                   FROM market.stock_basic
                  WHERE exchange IN ('SSE', 'SZSE')
                    AND (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
+                   {a_share_ts_code_filter("ts_code")}
                 """,
                 {"active_as_of": active_as_of},
             )

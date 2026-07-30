@@ -2,7 +2,18 @@ from __future__ import annotations
 
 import datetime as dt
 
-from scripts.build_stock_universe_pit_spans import SpanRow, _classify_st_event, _validate
+from scripts.build_stock_universe_pit_spans import (
+    SpanRow,
+    TradingCalendar,
+    _classify_st_event,
+    _load_initial_st_events,
+    _load_st_events,
+    _load_stock_basic,
+    _load_stock_basic_scope_counts,
+    _validate,
+    a_share_ts_code_filter,
+    is_b_share_ts_code,
+)
 
 
 def test_classify_st_event_restore_vs_still_risky() -> None:
@@ -42,3 +53,78 @@ def test_validate_rejects_overlapping_spans() -> None:
     result = _validate(spans, [])
 
     assert result["overlap_error_count"] == 1
+
+
+class _FakeCursor:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def __enter__(self) -> "_FakeCursor":
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+    def execute(self, sql: str, params: object = None) -> None:
+        self.queries.append(sql)
+
+    def fetchall(self) -> list[dict]:
+        return []
+
+    def fetchone(self) -> None:
+        return None
+
+
+class _FakeConn:
+    def __init__(self) -> None:
+        self.cursors: list[_FakeCursor] = []
+
+    def cursor(self, cursor_factory: object = None) -> _FakeCursor:
+        cur = _FakeCursor()
+        self.cursors.append(cur)
+        return cur
+
+
+_B_SHARE_EXCLUDES = ("NOT LIKE '200%%.SZ'", "NOT LIKE '201%%.SZ'", "NOT LIKE '900%%.SH'")
+
+
+def test_is_b_share_ts_code() -> None:
+    for code in ("200011.SZ", "201872.SZ", "900901.SH", "200011.sz"):
+        assert is_b_share_ts_code(code), code
+    for code in (
+        "000001.SZ",
+        "002594.SZ",
+        "300750.SZ",
+        "301269.SZ",
+        "600000.SH",
+        "601318.SH",
+        "603259.SH",
+        "605499.SH",
+        "688981.SH",
+        "689009.SH",
+    ):
+        assert not is_b_share_ts_code(code), code
+    assert not is_b_share_ts_code("")
+    assert not is_b_share_ts_code(None)
+
+
+def test_a_share_ts_code_filter_fragment() -> None:
+    fragment = a_share_ts_code_filter("s.ts_code")
+    for exclude in _B_SHARE_EXCLUDES:
+        assert f"s.ts_code {exclude}" in fragment
+
+
+def test_universe_source_queries_exclude_b_shares() -> None:
+    calendar = TradingCalendar([dt.date(2026, 1, 2), dt.date(2026, 1, 5)])
+
+    conn = _FakeConn()
+    _load_stock_basic(conn, active_only=True, active_as_of=dt.date(2026, 1, 5))
+    _load_stock_basic_scope_counts(conn, active_as_of=dt.date(2026, 1, 5))
+    _load_st_events(conn, calendar, dt.date(2026, 1, 5))
+    _load_initial_st_events(conn, calendar, dt.date(2026, 1, 1))
+
+    executed = [sql for cur in conn.cursors for sql in cur.queries]
+    assert len(executed) == 5
+    for sql in executed:
+        for exclude in _B_SHARE_EXCLUDES:
+            assert exclude in sql, sql
