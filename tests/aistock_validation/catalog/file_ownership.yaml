@@ -700,6 +700,19 @@ rules:
     layer: data_pipeline
     risk_level: critical
     ownership_reason: Qlib datasets are authoritative inputs for research and backtests.
+  - rule_id: local_data_stock_universe_pit
+    priority: 96
+    include:
+      - scripts/build_stock_universe_pit_spans.py
+      - backend/services/stock_universe_pit_service.py
+      - backend/routers/stock_universe.py
+      - backend/tests/test_stock_universe_pit_spans.py
+      - backend/tests/test_stock_universe_pit_service.py
+    primary_module: local_data
+    impact_modules: [selection_center, qe.core, paper_v2]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The derived PIT stock-universe builder, service, API, and direct tests form one local_data materialization boundary feeding selection/QE/paper ST policy and the sector_data contract, and must select the local_data focused plan instead of generic platform/scripts/tests catch-alls.
   - rule_id: local_data_sector_data_materialization
     priority: 95
     include:

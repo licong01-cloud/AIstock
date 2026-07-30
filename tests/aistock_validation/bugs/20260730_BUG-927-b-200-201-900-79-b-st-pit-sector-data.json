@@ -4,6 +4,7 @@
     "scripts/build_stock_universe_pit_spans.py",
     "backend/services/stock_universe_pit_service.py",
     "backend/tests/test_stock_universe_pit_spans.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260730_BUG-927-b-200-201-900-79-b-st-pit-sector-data.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
