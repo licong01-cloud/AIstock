@@ -3,6 +3,8 @@ import uuid
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 import backend.services.tushare_sync_engine as sync_engine
 import backend.services.event_signal.tushare_event_raw_sync as raw_sync_module
 import backend.services.stock_universe_pit_service as pit_service
@@ -12,6 +14,8 @@ from backend.services.tushare_dataset_specs import (
     QueryMode,
     STOCK_ST_EVENTS,
     SUSPEND_D,
+    SW_DAILY,
+    SW_INDEX_MEMBER,
     TUSHARE_FORECAST_RAW,
 )
 from backend.services.tushare_sync_engine import TushareSyncEngine
@@ -679,3 +683,126 @@ def test_sync_fails_fast_when_physical_table_is_missing_before_cold_floor(monkey
     assert "target table market.cyq_perf is missing" in (result.error or "")
     assert "scripts/create_cyq_tables.py" in (result.error or "")
     assert not any("dataset_date_refresh_audit" in sql for sql, _params in conn.executed)
+
+
+def _member_row(ts_code, l2_code="801767.SI", in_date="19960628", out_date=None):
+    return {
+        "l1_code": "801760.SI",
+        "l1_name": "能源",
+        "l2_code": l2_code,
+        "l2_name": "数字媒体",
+        "l3_code": "",
+        "l3_name": "",
+        "ts_code": ts_code,
+        "name": "测试股",
+        "in_date": in_date,
+        "out_date": out_date,
+        "is_new": "Y",
+    }
+
+
+def _stub_execute_values(monkeypatch):
+    def _record(cur, sql, values, *args, **kwargs):
+        cur._conn.executed.append((sql, None))
+
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", _record)
+
+
+def test_sw_index_member_spec_enables_replace_by_code():
+    assert SW_INDEX_MEMBER.replace_by_code is True
+    assert SW_DAILY.replace_by_code is False
+
+
+def test_replace_code_batch_deletes_then_inserts_in_single_transaction(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    _stub_execute_values(monkeypatch)
+    rows = [_member_row("000406.SZ"), _member_row("000817.SZ", in_date="19980528")]
+
+    inserted = engine._replace_code_batch(conn, SW_INDEX_MEMBER, "801767.SI", rows)
+
+    assert inserted == 2
+    assert conn.executed[0] == (
+        "DELETE FROM market.sw_index_member WHERE l2_code = %s",
+        ("801767.SI",),
+    )
+    assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert conn.commits == 1
+    assert conn.rollbacks == 0
+    assert conn.autocommit is True
+
+
+def test_replace_code_batch_rolls_back_when_insert_fails(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+
+    def _boom(conn, spec, rows):
+        raise RuntimeError("insert failed")
+
+    monkeypatch.setattr(engine, "_upsert_batch", _boom)
+
+    with pytest.raises(RuntimeError, match="insert failed"):
+        engine._replace_code_batch(conn, SW_INDEX_MEMBER, "801767.SI", [_member_row("000406.SZ")])
+
+    assert conn.commits == 0
+    assert conn.rollbacks == 1
+    assert conn.autocommit is True
+
+
+def _patch_by_code_loop(engine, monkeypatch, conn, codes, payload):
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(engine, "_fetch_code_list", lambda _conn, _spec: codes)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: payload)
+    monkeypatch.setattr(engine, "_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_record_by_code_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+    _stub_execute_values(monkeypatch)
+
+
+def test_by_code_batched_mirrors_payload_and_takes_down_missing_rows(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    _patch_by_code_loop(
+        engine, monkeypatch, conn, ["801767.SI"], [_member_row("000406.SZ")]
+    )
+
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+
+    assert result.success_batches == 1
+    assert result.failed_batches == 0
+    assert result.inserted_rows == 1
+    assert (
+        "DELETE FROM market.sw_index_member WHERE l2_code = %s",
+        ("801767.SI",),
+    ) in conn.executed
+    assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+def test_by_code_batched_refuses_to_mirror_empty_payload(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    _patch_by_code_loop(engine, monkeypatch, conn, ["801767.SI"], [])
+
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+
+    assert result.success_batches == 0
+    assert result.failed_batches == 1
+    assert result.inserted_rows == 0
+    assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+def test_by_code_batched_keeps_upsert_when_replace_by_code_disabled(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    spec = replace(SW_INDEX_MEMBER, replace_by_code=False)
+    _patch_by_code_loop(
+        engine, monkeypatch, conn, ["801767.SI"], [_member_row("000406.SZ")]
+    )
+
+    result = engine._sync_by_code_batched(spec, None, None, uuid.uuid4())
+
+    assert result.success_batches == 1
+    assert result.failed_batches == 0
+    assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
