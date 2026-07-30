@@ -101,6 +101,17 @@ l2_moneyflow AS (
       ON mf.ts_code = pit.ts_code
      AND mf.trade_date = %(trade_date)s
     GROUP BY pit.l2_code
+),
+unpublished_l2 AS (
+    -- BUG-929: Shenwan does not publish quotes for L2 indices with fewer
+    -- than five member stocks (market.sw_index_classify.is_pub = '0'), and
+    -- tushare withdrew their historical sw_daily rows on 2026-04-28.
+    -- Requiring sw_daily facts for these indices is unsatisfiable, so the
+    -- contract exempts their member stocks from the hard-failure count and
+    -- reports them separately as a warning instead.
+    SELECT index_code
+    FROM market.sw_index_classify
+    WHERE is_pub = '0'
 )
 SELECT
     (SELECT CASE WHEN EXISTS (SELECT 1 FROM authoritative_universes) THEN 0 ELSE 1 END),
@@ -118,17 +129,20 @@ SELECT
         LEFT JOIN market.sw_daily sd
           ON sd.ts_code = pit.l2_code
          AND sd.trade_date = %(trade_date)s
-        WHERE sd.ts_code IS NULL
-           OR sd.open IS NULL
-           OR sd.high IS NULL
-           OR sd.low IS NULL
-           OR sd.close IS NULL
-           OR sd.pct_change IS NULL
-           OR sd.vol IS NULL
-           OR sd.amount IS NULL
-           OR sd.pe IS NULL
-           OR sd.pb IS NULL
-           OR sd.total_mv IS NULL
+        WHERE (
+            sd.ts_code IS NULL
+            OR sd.open IS NULL
+            OR sd.high IS NULL
+            OR sd.low IS NULL
+            OR sd.close IS NULL
+            OR sd.pct_change IS NULL
+            OR sd.vol IS NULL
+            OR sd.amount IS NULL
+            OR sd.pe IS NULL
+            OR sd.pb IS NULL
+            OR sd.total_mv IS NULL
+        )
+          AND pit.l2_code NOT IN (SELECT index_code FROM unpublished_l2)
     ),
     (
         SELECT COUNT(*)
@@ -147,6 +161,27 @@ SELECT
            OR mf.buy_elg_vol IS NULL
            OR mf.sell_elg_vol IS NULL
            OR mf.net_mf_vol IS NULL
+    ),
+    (
+        SELECT COUNT(*)
+        FROM canonical_pit pit
+        LEFT JOIN market.sw_daily sd
+          ON sd.ts_code = pit.l2_code
+         AND sd.trade_date = %(trade_date)s
+        WHERE (
+            sd.ts_code IS NULL
+            OR sd.open IS NULL
+            OR sd.high IS NULL
+            OR sd.low IS NULL
+            OR sd.close IS NULL
+            OR sd.pct_change IS NULL
+            OR sd.vol IS NULL
+            OR sd.amount IS NULL
+            OR sd.pe IS NULL
+            OR sd.pb IS NULL
+            OR sd.total_mv IS NULL
+        )
+          AND pit.l2_code IN (SELECT index_code FROM unpublished_l2)
     )
 """
 
@@ -336,6 +371,7 @@ class SectorDataBuilder:
                     invalid_identity,
                     missing_sector_facts,
                     missing_moneyflow_facts,
+                    unpublished_l2_exempted,
                 ) = cur.fetchone()
                 if (
                     universe_not_ready
@@ -354,6 +390,14 @@ class SectorDataBuilder:
                         f"invalid_mapping_identities={invalid_identity}, "
                         f"missing_sw_daily_facts={missing_sector_facts}, "
                         f"missing_l2_moneyflow_facts={missing_moneyflow_facts}"
+                    )
+                if unpublished_l2_exempted:
+                    logger.warning(
+                        "sector_data build_date %s: %d stocks exempted from the "
+                        "sw_daily contract (unpublished is_pub=0 L2 indices); "
+                        "they are skipped for this day",
+                        trade_date,
+                        unpublished_l2_exempted,
                     )
                 cur.execute(_DELETE_STALE_DAY_SQL, params)
                 cur.execute(_BUILD_DAY_SQL, params)

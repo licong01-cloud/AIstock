@@ -9,7 +9,7 @@ from backend.services import sector_data_builder as module
 
 
 class _Cursor:
-    def __init__(self, preflight=(0, 0, 0, 0, 0, 0), build_rows=7):
+    def __init__(self, preflight=(0, 0, 0, 0, 0, 0, 0), build_rows=7):
         self.preflight = preflight
         self.build_rows = build_rows
         self.executed = []
@@ -78,12 +78,12 @@ def test_build_date_uses_dynamic_industry_mapping_without_persisted_identity(mon
 @pytest.mark.parametrize(
     ("preflight", "message"),
     [
-        ((1, 0, 0, 0, 0, 0), "universe_not_ready=1"),
-        ((0, 1, 0, 0, 0, 0), "missing_pit_mappings=1"),
-        ((0, 0, 1, 0, 0, 0), "ambiguous_latest_mappings=1"),
-        ((0, 0, 0, 1, 0, 0), "invalid_mapping_identities=1"),
-        ((0, 0, 0, 0, 1, 0), "missing_sw_daily_facts=1"),
-        ((0, 0, 0, 0, 0, 1), "missing_l2_moneyflow_facts=1"),
+        ((1, 0, 0, 0, 0, 0, 0), "universe_not_ready=1"),
+        ((0, 1, 0, 0, 0, 0, 0), "missing_pit_mappings=1"),
+        ((0, 0, 1, 0, 0, 0, 0), "ambiguous_latest_mappings=1"),
+        ((0, 0, 0, 1, 0, 0, 0), "invalid_mapping_identities=1"),
+        ((0, 0, 0, 0, 1, 0, 0), "missing_sw_daily_facts=1"),
+        ((0, 0, 0, 0, 0, 1, 0), "missing_l2_moneyflow_facts=1"),
     ],
 )
 def test_build_date_fails_loudly_before_mutation(monkeypatch, preflight, message):
@@ -96,6 +96,38 @@ def test_build_date_fails_loudly_before_mutation(monkeypatch, preflight, message
 
     assert connection.commits == 0
     assert [sql for sql, _ in cursor.executed] == [module._PREFLIGHT_DAY_SQL]
+
+
+def test_preflight_exempts_unpublished_l2_from_sw_daily_contract():
+    sql = module._PREFLIGHT_DAY_SQL
+
+    assert "unpublished_l2 AS" in sql
+    assert "market.sw_index_classify" in sql
+    assert "is_pub = '0'" in sql
+    assert "pit.l2_code NOT IN (SELECT index_code FROM unpublished_l2)" in sql
+    assert "pit.l2_code IN (SELECT index_code FROM unpublished_l2)" in sql
+
+
+def test_build_date_exempted_unpublished_l2_logs_warning_and_builds(monkeypatch, caplog):
+    cursor = _Cursor(preflight=(0, 0, 0, 0, 0, 0, 16))
+    connection = _Connection(cursor)
+    monkeypatch.setattr(module, "get_conn", lambda: connection)
+
+    with caplog.at_level("WARNING", logger=module.logger.name):
+        rows = module.SectorDataBuilder().build_date(dt.date(2026, 7, 22))
+
+    assert rows == 7
+    assert connection.commits == 1
+    assert [sql for sql, _ in cursor.executed] == [
+        module._PREFLIGHT_DAY_SQL,
+        module._DELETE_STALE_DAY_SQL,
+        module._BUILD_DAY_SQL,
+    ]
+    assert any(
+        "16 stocks exempted" in record.getMessage()
+        and "is_pub=0" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_schema_and_retirement_keep_sector_data_fact_only():
