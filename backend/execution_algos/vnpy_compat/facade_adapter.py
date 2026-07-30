@@ -20,30 +20,43 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AlgoStateSnapshotV2,
     AlgoTransitionV1,
     ActiveChildClosureStatusV1,
+    BrokerCommandTypeV2,
+    CurrentThreeActiveOrderStatusV3,
+    DiagnosticSeverityV1,
     EventTypeV2,
     ExecutionAlgoPluginManifestV2,
+    KernelCommandOutcomeEventPayloadV1,
+    KernelCommandOutcomeV1,
+    KernelOrderEventPayloadV1,
+    KernelOrderReconcileEventPayloadV1,
+    KernelTradeEventPayloadV1,
     NormalizedOrderStatusV1,
     RuntimeEventEnvelopeV2,
     SideV1,
     TerminalOutcomeV1,
     execution_child_order_id_v1,
+    strict_readback_kernel_event_payload_v1,
 )
 
 from .facade import VnpyAlgoEngineFacadeV1, VnpyFacadeEffectCollectorV1
 from .facade_contracts import (
     VnpyFacadeActiveOrderV1,
     VnpyFacadeAlgorithmBindingV1,
+    VnpyFacadeAlgorithmBindingV2,
     VnpyFacadeCommandAuthorityDispositionV1,
     VnpyFacadeContractError,
     VnpyFacadeContractViewV1,
     VnpyFacadeFieldRoleV1,
     VnpyFacadeInitializationInputV1,
+    VnpyFacadeInitializationInputV2,
     VnpyFacadeRuntimeBindingDispositionV1,
     VnpyFacadeStateEnvelopeV1,
     VnpyFacadeStateFieldMappingV1,
     VnpyFacadeStateValueV1,
     VnpyFacadeTerminalMappingV1,
     VnpyFacadeTransitionInputV1,
+    VnpyFacadeTransitionInputV2,
+    build_vnpy_facade_market_data_lineage_v1,
 )
 from .facade_projection import (
     AlgoStatus,
@@ -142,7 +155,7 @@ class VnpyFacadeBackedPluginAdapterV1:
         *,
         manifest: ExecutionAlgoPluginManifestV2,
         algorithm_class: type[Any],
-        algorithm_binding: VnpyFacadeAlgorithmBindingV1,
+        algorithm_binding: VnpyFacadeAlgorithmBindingV1 | VnpyFacadeAlgorithmBindingV2,
         state_mappings: tuple[VnpyFacadeStateFieldMappingV1, ...],
         terminal_mappings: tuple[VnpyFacadeTerminalMappingV1, ...],
     ) -> None:
@@ -150,8 +163,8 @@ class VnpyFacadeBackedPluginAdapterV1:
             raise TypeError("algorithm_class must be a class")
         if not isinstance(manifest, ExecutionAlgoPluginManifestV2):
             raise TypeError("manifest must be ExecutionAlgoPluginManifestV2")
-        if not isinstance(algorithm_binding, VnpyFacadeAlgorithmBindingV1):
-            raise TypeError("algorithm_binding must be VnpyFacadeAlgorithmBindingV1")
+        if not isinstance(algorithm_binding, (VnpyFacadeAlgorithmBindingV1, VnpyFacadeAlgorithmBindingV2)):
+            raise TypeError("algorithm_binding must be an exact VnpyFacadeAlgorithmBindingV1 or V2")
         if algorithm_binding.class_ref != f"{algorithm_class.__module__}:{algorithm_class.__qualname__}":
             raise _binding_error(
                 "algorithm class identity conflicts with binding",
@@ -322,6 +335,127 @@ class VnpyFacadeBackedPluginAdapterV1:
             ),
         )
 
+    def initialize_with_facade_v2(
+        self,
+        invocation_input: VnpyFacadeInitializationInputV2,
+    ) -> AlgoInitializationV1:
+        self._validate_invocation_receipt_v2(invocation_input)
+        context = invocation_input.start_context
+        collector = VnpyFacadeEffectCollectorV1.create(
+            context.deterministic_context,
+            context.parent_intent_id,
+            invocation_input.transition_id,
+        )
+        facade = VnpyAlgoEngineFacadeV1.create(invocation_input, collector)
+        config = thaw_json_v1(context.plugin_config)
+        try:
+            algorithm = self._algorithm_class(
+                facade,
+                context.algo_instance_id,
+                context.symbol.replace(".SH", ".SSE").replace(".SZ", ".SZSE").replace(".BJ", ".BSE"),
+                Direction.LONG if context.side is SideV1.BUY else Direction.SHORT,
+                Offset.NONE,
+                float(context.limit_price_decimal),
+                float(context.parent_quantity),
+                config,
+            )
+            algorithm.start()
+        except VnpyFacadeContractError:
+            raise
+        except Exception as exc:
+            raise _binding_error(
+                "pinned algorithm V2 initialization failed",
+                algo_instance_id=context.algo_instance_id,
+                algorithm_class=f"{self._algorithm_class.__module__}:{self._algorithm_class.__qualname__}",
+                error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
+            ) from exc
+        envelope = self.extract_state_v1(
+            algorithm=algorithm,
+            invocation_input=invocation_input,
+            collector=collector,
+            before_envelope=None,
+        )
+        next_state = AlgoStateSnapshotV2.create(
+            plugin_manifest=self.manifest,
+            deterministic_context=context.deterministic_context,
+            transition_sequence=1,
+            last_applied_delivery_sequence=1,
+            last_applied_delivery_id=context.start_delivery_id,
+            last_closed_delivery_sequence=1,
+            state=envelope.canonical_payload_v1(),
+            last_applied_event_id=context.start_event_id,
+        )
+        return collector.freeze_initialization(next_state)
+
+    def transition_with_facade_v2(
+        self,
+        invocation_input: VnpyFacadeTransitionInputV2,
+    ) -> AlgoTransitionV1:
+        self._validate_invocation_receipt_v2(invocation_input)
+        before = VnpyFacadeStateEnvelopeV1.model_validate_json(
+            json.dumps(
+                thaw_json_v1(invocation_input.before_state.state),
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            strict=True,
+        )
+        collector = VnpyFacadeEffectCollectorV1.create(
+            invocation_input.deterministic_context,
+            invocation_input.algo_instance.parent_intent_id,
+            invocation_input.transition_id,
+        )
+        try:
+            facade = VnpyAlgoEngineFacadeV1.create(invocation_input, collector)
+            algorithm = self.restore_algorithm_v1(before, facade=facade)
+            self._invoke_callback_once_v1(
+                algorithm=algorithm,
+                event=invocation_input.runtime_event,
+                facade=facade,
+                before_envelope=before,
+            )
+        except VnpyFacadeContractError:
+            raise
+        except Exception as exc:
+            raise _binding_error(
+                "pinned algorithm V2 restore or callback failed",
+                algo_instance_id=invocation_input.algo_instance.algo_instance_id,
+                event_id=invocation_input.runtime_event.event_id,
+                event_type=invocation_input.runtime_event.event_type.value,
+                error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
+            ) from exc
+        if getattr(algorithm, "algo_engine", None) is not facade:
+            raise _binding_error(
+                "callback replaced its transition-local facade owner",
+                algo_instance_id=invocation_input.algo_instance.algo_instance_id,
+                event_id=invocation_input.runtime_event.event_id,
+            )
+        after = self.extract_state_v1(
+            algorithm=algorithm,
+            invocation_input=invocation_input,
+            collector=collector,
+            before_envelope=before,
+        )
+        sequence = invocation_input.claimed_delivery.algo_delivery_sequence
+        next_state = AlgoStateSnapshotV2.create(
+            plugin_manifest=self.manifest,
+            deterministic_context=invocation_input.deterministic_context,
+            transition_sequence=sequence,
+            last_applied_delivery_sequence=sequence,
+            last_applied_delivery_id=invocation_input.claimed_delivery.delivery_id,
+            last_closed_delivery_sequence=sequence,
+            state=after.canonical_payload_v1(),
+            last_applied_event_id=invocation_input.runtime_event.event_id,
+        )
+        return collector.freeze(
+            next_state,
+            self._terminal_outcome_v1(
+                after,
+                invocation_input.runtime_event,
+                invocation_input.algo_instance.active_child_closure_status,
+            ),
+        )
+
     def restore_algorithm_v1(
         self,
         envelope: VnpyFacadeStateEnvelopeV1,
@@ -352,7 +486,12 @@ class VnpyFacadeBackedPluginAdapterV1:
                     price=float(item.price_decimal),
                 )
                 for item in envelope.ordered_active_orders
-                if item.status not in {"COMMAND_PENDING", "OUTCOME_UNKNOWN"}
+                if item.status
+                not in {
+                    CurrentThreeActiveOrderStatusV3.COMMAND_PENDING,
+                    CurrentThreeActiveOrderStatusV3.OUTCOME_UNKNOWN,
+                    CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING,
+                }
             },
             **enum_values,
         }
@@ -376,7 +515,12 @@ class VnpyFacadeBackedPluginAdapterV1:
         self,
         *,
         algorithm: Any,
-        invocation_input: VnpyFacadeInitializationInputV1 | VnpyFacadeTransitionInputV1,
+        invocation_input: (
+            VnpyFacadeInitializationInputV1
+            | VnpyFacadeTransitionInputV1
+            | VnpyFacadeInitializationInputV2
+            | VnpyFacadeTransitionInputV2
+        ),
         collector: VnpyFacadeEffectCollectorV1,
         before_envelope: VnpyFacadeStateEnvelopeV1 | None,
     ) -> VnpyFacadeStateEnvelopeV1:
@@ -388,7 +532,7 @@ class VnpyFacadeBackedPluginAdapterV1:
                 missing=sorted(mapped - actual),
                 extra=sorted(actual - mapped),
             )
-        if isinstance(invocation_input, VnpyFacadeInitializationInputV1):
+        if isinstance(invocation_input, (VnpyFacadeInitializationInputV1, VnpyFacadeInitializationInputV2)):
             context = invocation_input.start_context
             deterministic = context.deterministic_context
             contract_payload = thaw_json_v1(context.contract_projection)
@@ -514,7 +658,12 @@ class VnpyFacadeBackedPluginAdapterV1:
         self,
         *,
         algorithm: Any,
-        invocation_input: VnpyFacadeInitializationInputV1 | VnpyFacadeTransitionInputV1,
+        invocation_input: (
+            VnpyFacadeInitializationInputV1
+            | VnpyFacadeTransitionInputV1
+            | VnpyFacadeInitializationInputV2
+            | VnpyFacadeTransitionInputV2
+        ),
         collector: VnpyFacadeEffectCollectorV1,
         before_envelope: VnpyFacadeStateEnvelopeV1 | None,
     ) -> tuple[VnpyFacadeActiveOrderV1, ...]:
@@ -546,7 +695,12 @@ class VnpyFacadeBackedPluginAdapterV1:
                         local_vt_orderid=command.local_vt_orderid,
                         command_id=command.command_id,
                     )
-                by_local[command.local_vt_orderid] = replace_order(existing, status="CANCEL_PENDING")
+                by_local[command.local_vt_orderid] = replace_order(
+                    existing,
+                    status="CANCEL_PENDING",
+                    pending_command_type="CANCEL_ORDER",
+                    pending_command_id=command.command_id,
+                )
                 continue
             if command.command_type.value != "SUBMIT_LIMIT":
                 raise _binding_error(
@@ -554,6 +708,18 @@ class VnpyFacadeBackedPluginAdapterV1:
                     command_type=command.command_type.value,
                     command_id=command.command_id,
                 )
+            if not isinstance(
+                invocation_input,
+                (VnpyFacadeTransitionInputV1, VnpyFacadeTransitionInputV2),
+            ):
+                raise _binding_error(
+                    "initialization submit has no exact native market-data authority",
+                    command_id=command.command_id,
+                )
+            market_data_lineage = build_vnpy_facade_market_data_lineage_v1(
+                services=invocation_input.read_only_services,
+                deterministic_context=invocation_input.deterministic_context,
+            )
             by_local[command.local_vt_orderid] = VnpyFacadeActiveOrderV1.create(
                 local_vt_orderid=command.local_vt_orderid,
                 broker_order_id=None,
@@ -568,8 +734,15 @@ class VnpyFacadeBackedPluginAdapterV1:
                 cumulative_quantity=0,
                 remaining_quantity=command.quantity,
                 status="COMMAND_PENDING",
+                pending_command_type="SUBMIT_LIMIT",
+                pending_command_id=command.command_id,
                 last_order_event_id=None,
                 last_trade_event_id=None,
+                last_command_outcome_event_id=None,
+                last_oms_reconcile_event_id=None,
+                terminal_order_status=None,
+                terminal_observed_cumulative_filled_quantity=None,
+                market_data_lineage=market_data_lineage,
             )
         source_orders = getattr(algorithm, "active_orders", {})
         if type(source_orders) is not dict or any(
@@ -588,23 +761,25 @@ class VnpyFacadeBackedPluginAdapterV1:
         }
         current_mapping_ids: set[str] = set()
         callback_event_type: EventTypeV2 | None = None
-        if isinstance(invocation_input, VnpyFacadeTransitionInputV1):
+        if isinstance(invocation_input, (VnpyFacadeTransitionInputV1, VnpyFacadeTransitionInputV2)):
             current_mapping_ids = {item.local_vt_orderid for item in invocation_input.ordered_active_mappings}
         retained_ids = current_mapping_ids | new_submit_ids
-        if isinstance(invocation_input, VnpyFacadeTransitionInputV1):
+        if isinstance(invocation_input, (VnpyFacadeTransitionInputV1, VnpyFacadeTransitionInputV2)):
             event = invocation_input.runtime_event
             callback_event_type = event.event_type
             if event.event_type is EventTypeV2.ORDER:
-                payload = thaw_json_v1(event.payload)
-                target = payload.get("local_vt_orderid")
+                payload = strict_readback_kernel_event_payload_v1(event)
+                if not isinstance(payload, KernelOrderEventPayloadV1):
+                    raise _binding_error("ORDER event did not read back as the strict ORDER payload")
+                target = payload.local_vt_orderid
                 existing = by_local.get(target)
                 if existing is None:
                     raise _binding_error(
                         "ORDER callback target has no durable active-order identity",
                         local_vt_orderid=target,
                     )
-                observed = payload["observed_cumulative_filled_quantity"]
-                remaining = payload["observed_remaining_quantity"]
+                observed = payload.observed_cumulative_filled_quantity
+                remaining = payload.observed_remaining_quantity
                 if observed is None:
                     observed = existing.cumulative_quantity
                     remaining = existing.remaining_quantity
@@ -623,40 +798,63 @@ class VnpyFacadeBackedPluginAdapterV1:
                         observed=observed,
                         remaining=remaining,
                     )
-                if existing.broker_order_id not in (None, payload["broker_order_id"]):
+                if existing.broker_order_id not in (None, payload.broker_order_id):
                     raise _binding_error(
                         "ORDER callback broker identity conflicts with durable active order",
                         local_vt_orderid=target,
                         expected=existing.broker_order_id,
-                        actual=payload["broker_order_id"],
+                        actual=payload.broker_order_id,
                     )
-                by_local[target] = replace_order(
-                    existing,
-                    broker_order_id=payload["broker_order_id"],
-                    cumulative_quantity=observed,
-                    remaining_quantity=remaining,
-                    status=payload["normalized_order_status"],
-                    last_order_event_id=event.event_id,
-                )
-                if target in retained_ids and payload.get("terminal") is True:
-                    retained_ids.remove(target)
+                if payload.terminal:
+                    if payload.observed_cumulative_filled_quantity is None or observed > existing.cumulative_quantity:
+                        by_local[target] = replace_order(
+                            existing,
+                            broker_order_id=payload.broker_order_id,
+                            status=CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING,
+                            pending_command_type=None,
+                            pending_command_id=None,
+                            last_order_event_id=event.event_id,
+                            terminal_order_status=payload.normalized_order_status,
+                            terminal_observed_cumulative_filled_quantity=(payload.observed_cumulative_filled_quantity),
+                        )
+                    else:
+                        by_local.pop(target)
+                        retained_ids.discard(target)
+                else:
+                    by_local[target] = replace_order(
+                        existing,
+                        broker_order_id=payload.broker_order_id,
+                        cumulative_quantity=observed,
+                        remaining_quantity=remaining,
+                        status=(
+                            CurrentThreeActiveOrderStatusV3.PARTIALLY_FILLED
+                            if payload.normalized_order_status is NormalizedOrderStatusV1.PARTIALLY_FILLED
+                            or observed > 0
+                            else CurrentThreeActiveOrderStatusV3.SUBMITTED
+                        ),
+                        pending_command_type=None,
+                        pending_command_id=None,
+                        last_order_event_id=event.event_id,
+                    )
             elif event.event_type is EventTypeV2.TRADE:
-                payload = thaw_json_v1(event.payload)
-                target = payload["local_vt_orderid"]
+                payload = strict_readback_kernel_event_payload_v1(event)
+                if not isinstance(payload, KernelTradeEventPayloadV1):
+                    raise _binding_error("TRADE event did not read back as the strict TRADE payload")
+                target = payload.local_vt_orderid
                 existing = by_local.get(target)
                 if existing is None:
                     raise _binding_error(
                         "TRADE callback target has no durable active-order identity",
                         local_vt_orderid=target,
                     )
-                if existing.broker_order_id not in (None, payload["broker_order_id"]):
+                if existing.broker_order_id not in (None, payload.broker_order_id):
                     raise _binding_error(
                         "TRADE callback broker identity conflicts with durable active order",
                         local_vt_orderid=target,
                         expected=existing.broker_order_id,
-                        actual=payload["broker_order_id"],
+                        actual=payload.broker_order_id,
                     )
-                cumulative = existing.cumulative_quantity + payload["trade_quantity"]
+                cumulative = existing.cumulative_quantity + payload.trade_quantity
                 if cumulative > existing.requested_quantity:
                     raise _binding_error(
                         "TRADE callback overfills durable requested quantity",
@@ -665,16 +863,173 @@ class VnpyFacadeBackedPluginAdapterV1:
                         cumulative=cumulative,
                     )
                 remaining = existing.requested_quantity - cumulative
-                by_local[target] = replace_order(
-                    existing,
-                    broker_order_id=payload["broker_order_id"],
-                    cumulative_quantity=cumulative,
-                    remaining_quantity=remaining,
-                    status="FILLED" if remaining == 0 else "PARTIALLY_FILLED",
-                    last_trade_event_id=event.event_id,
-                )
-        retained_ids |= source_local_ids
-        for local_id in source_local_ids:
+                terminal_observed = existing.terminal_observed_cumulative_filled_quantity
+                if (
+                    existing.status is CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING
+                    and terminal_observed is not None
+                    and cumulative >= terminal_observed
+                ):
+                    by_local.pop(target)
+                    retained_ids.discard(target)
+                else:
+                    by_local[target] = replace_order(
+                        existing,
+                        broker_order_id=payload.broker_order_id,
+                        cumulative_quantity=cumulative,
+                        remaining_quantity=remaining,
+                        status=(
+                            CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING
+                            if existing.status is CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING
+                            else CurrentThreeActiveOrderStatusV3.PARTIALLY_FILLED
+                        ),
+                        pending_command_type=None,
+                        pending_command_id=None,
+                        last_trade_event_id=event.event_id,
+                    )
+            elif event.event_type is EventTypeV2.COMMAND_OUTCOME:
+                payload = strict_readback_kernel_event_payload_v1(event)
+                if not isinstance(payload, KernelCommandOutcomeEventPayloadV1):
+                    raise _binding_error("COMMAND_OUTCOME event did not read back as the strict outcome payload")
+                existing = by_local.get(payload.local_vt_orderid)
+                if existing is None:
+                    collector.append_diagnostic(
+                        severity=DiagnosticSeverityV1.INFO,
+                        reason_code="MINIQMT_VNPY_FACADE_COMMAND_OUTCOME_CALLBACK_PRECEDED",
+                        message="a preceding callback already closed the facade active order",
+                        context={
+                            "event_id": event.event_id,
+                            "local_vt_orderid": payload.local_vt_orderid,
+                            "command_id": payload.command_id,
+                        },
+                    )
+                    retained_ids.discard(payload.local_vt_orderid)
+                    return tuple(by_local[key] for key in sorted(retained_ids & set(by_local)))
+                if payload.outcome is KernelCommandOutcomeV1.CONFLICT:
+                    raise _binding_error(
+                        "COMMAND_OUTCOME reported a durable identity conflict",
+                        local_vt_orderid=payload.local_vt_orderid,
+                        command_id=payload.command_id,
+                    )
+                if existing.pending_command_id != payload.command_id:
+                    if existing.last_command_outcome_event_id == event.event_id:
+                        pass
+                    else:
+                        raise _binding_error(
+                            "COMMAND_OUTCOME does not own the pending command",
+                            local_vt_orderid=payload.local_vt_orderid,
+                            expected_command_id=existing.pending_command_id,
+                            actual_command_id=payload.command_id,
+                        )
+                elif payload.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT:
+                    if payload.outcome is KernelCommandOutcomeV1.ACCEPTED:
+                        by_local[payload.local_vt_orderid] = replace_order(
+                            existing,
+                            broker_order_id=payload.broker_order_id,
+                            status=CurrentThreeActiveOrderStatusV3.SUBMITTED,
+                            pending_command_type=None,
+                            pending_command_id=None,
+                            last_command_outcome_event_id=event.event_id,
+                        )
+                    elif payload.outcome in {
+                        KernelCommandOutcomeV1.REJECTED,
+                        KernelCommandOutcomeV1.PRE_CALL_TERMINAL,
+                    }:
+                        by_local.pop(payload.local_vt_orderid)
+                        retained_ids.discard(payload.local_vt_orderid)
+                    else:
+                        by_local[payload.local_vt_orderid] = replace_order(
+                            existing,
+                            status=CurrentThreeActiveOrderStatusV3.OUTCOME_UNKNOWN,
+                            last_command_outcome_event_id=event.event_id,
+                        )
+                else:
+                    if payload.broker_order_id != existing.broker_order_id:
+                        raise _binding_error(
+                            "CANCEL outcome broker identity conflicts with durable active order",
+                            local_vt_orderid=payload.local_vt_orderid,
+                        )
+                    if payload.outcome is KernelCommandOutcomeV1.ACCEPTED:
+                        by_local[payload.local_vt_orderid] = replace_order(
+                            existing,
+                            status=CurrentThreeActiveOrderStatusV3.CANCEL_PENDING,
+                            last_command_outcome_event_id=event.event_id,
+                        )
+                    elif payload.outcome in {
+                        KernelCommandOutcomeV1.REJECTED,
+                        KernelCommandOutcomeV1.PRE_CALL_TERMINAL,
+                    }:
+                        by_local[payload.local_vt_orderid] = replace_order(
+                            existing,
+                            status=(
+                                CurrentThreeActiveOrderStatusV3.PARTIALLY_FILLED
+                                if existing.cumulative_quantity > 0
+                                else CurrentThreeActiveOrderStatusV3.SUBMITTED
+                            ),
+                            pending_command_type=None,
+                            pending_command_id=None,
+                            last_command_outcome_event_id=event.event_id,
+                        )
+                    else:
+                        by_local[payload.local_vt_orderid] = replace_order(
+                            existing,
+                            status=CurrentThreeActiveOrderStatusV3.OUTCOME_UNKNOWN,
+                            last_command_outcome_event_id=event.event_id,
+                        )
+            elif event.event_type is EventTypeV2.RECONCILE:
+                payload = strict_readback_kernel_event_payload_v1(event)
+                if not isinstance(payload, KernelOrderReconcileEventPayloadV1):
+                    raise _binding_error("RECONCILE event did not read back as the strict reconcile payload")
+                existing = by_local.get(payload.local_vt_orderid)
+                if existing is None:
+                    collector.append_diagnostic(
+                        severity=DiagnosticSeverityV1.INFO,
+                        reason_code="MINIQMT_VNPY_FACADE_RECONCILE_CALLBACK_PRECEDED",
+                        message="reconciliation observed an already closed facade active order",
+                        context={
+                            "event_id": event.event_id,
+                            "local_vt_orderid": payload.local_vt_orderid,
+                        },
+                    )
+                    retained_ids.discard(payload.local_vt_orderid)
+                    return tuple(by_local[key] for key in sorted(retained_ids & set(by_local)))
+                if payload.broker_order_id != existing.broker_order_id:
+                    raise _binding_error(
+                        "RECONCILE broker identity conflicts with durable active order",
+                        local_vt_orderid=payload.local_vt_orderid,
+                    )
+                if payload.authoritative_cumulative_filled_quantity != existing.cumulative_quantity:
+                    collector.append_diagnostic(
+                        severity=DiagnosticSeverityV1.WARNING,
+                        reason_code="MINIQMT_VNPY_FACADE_RECONCILE_TRADE_SET_INCOMPLETE",
+                        message="OMS cumulative cannot advance facade quantity without exact TRADE events",
+                        context={
+                            "event_id": event.event_id,
+                            "local_vt_orderid": payload.local_vt_orderid,
+                            "durable_cumulative_quantity": existing.cumulative_quantity,
+                            "oms_cumulative_quantity": payload.authoritative_cumulative_filled_quantity,
+                        },
+                    )
+                elif payload.authoritative_remaining_quantity != existing.remaining_quantity:
+                    raise _binding_error(
+                        "RECONCILE remaining quantity conflicts with exact TRADE-applied state",
+                        local_vt_orderid=payload.local_vt_orderid,
+                    )
+                elif payload.terminal and existing.status is CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING:
+                    by_local.pop(payload.local_vt_orderid)
+                    retained_ids.discard(payload.local_vt_orderid)
+                else:
+                    by_local[payload.local_vt_orderid] = replace_order(
+                        existing,
+                        last_oms_reconcile_event_id=event.event_id,
+                    )
+        if callback_event_type in {
+            EventTypeV2.TICK,
+            EventTypeV2.TIMER,
+            EventTypeV2.ORDER,
+            EventTypeV2.TRADE,
+        }:
+            retained_ids |= source_local_ids
+        for local_id in source_local_ids & set(by_local):
             source_order = source_orders[local_id]
             durable = by_local[local_id]
             if canonical_decimal_string_v1(
@@ -703,7 +1058,6 @@ class VnpyFacadeBackedPluginAdapterV1:
         facade: VnpyAlgoEngineFacadeV1,
         before_envelope: VnpyFacadeStateEnvelopeV1,
     ) -> None:
-        payload = thaw_json_v1(event.payload)
         if event.event_type is EventTypeV2.TICK:
             tick = facade.get_tick(algorithm)
             if tick is not None:
@@ -711,50 +1065,72 @@ class VnpyFacadeBackedPluginAdapterV1:
         elif event.event_type is EventTypeV2.TIMER:
             algorithm.update_timer()
         elif event.event_type is EventTypeV2.ORDER:
-            normalized_status = NormalizedOrderStatusV1(payload["normalized_order_status"])
-            observed = payload["observed_cumulative_filled_quantity"]
+            payload = strict_readback_kernel_event_payload_v1(event)
+            if not isinstance(payload, KernelOrderEventPayloadV1):
+                raise _binding_error("ORDER event did not read back as the strict ORDER payload")
+            normalized_status = payload.normalized_order_status
+            observed = payload.observed_cumulative_filled_quantity
             if observed is None:
                 previous = next(
                     (
                         item
                         for item in before_envelope.ordered_active_orders
-                        if item.local_vt_orderid == payload["local_vt_orderid"]
+                        if item.local_vt_orderid == payload.local_vt_orderid
                     ),
                     None,
                 )
                 if previous is None:
                     raise _binding_error(
                         "ORDER callback lacks cumulative quantity authority",
-                        local_vt_orderid=payload["local_vt_orderid"],
+                        local_vt_orderid=payload.local_vt_orderid,
                     )
                 observed = previous.cumulative_quantity
+            previous = next(
+                (
+                    item
+                    for item in before_envelope.ordered_active_orders
+                    if item.local_vt_orderid == payload.local_vt_orderid
+                ),
+                None,
+            )
+            if previous is None:
+                raise _binding_error(
+                    "ORDER callback target has no durable active-order authority",
+                    local_vt_orderid=payload.local_vt_orderid,
+                )
             algorithm.update_order(
                 OrderData(
-                    vt_orderid=payload["local_vt_orderid"],
+                    vt_orderid=payload.local_vt_orderid,
                     status=project_order_status_v1(normalized_status),
                     traded=float(observed),
-                    price=float(
-                        next(
-                            item.price_decimal
-                            for item in before_envelope.ordered_active_orders
-                            if item.local_vt_orderid == payload["local_vt_orderid"]
-                        )
-                    ),
+                    price=float(previous.price_decimal),
                 )
             )
         elif event.event_type is EventTypeV2.TRADE:
             from datetime import datetime
 
+            payload = strict_readback_kernel_event_payload_v1(event)
+            if not isinstance(payload, KernelTradeEventPayloadV1):
+                raise _binding_error("TRADE event did not read back as the strict TRADE payload")
             trade_datetime = datetime.fromisoformat(event.event_time_utc.replace("Z", "+00:00"))
             algorithm.update_trade(
                 TradeData(
-                    vt_orderid=payload["local_vt_orderid"],
-                    vt_tradeid=payload["trade_id"],
-                    price=float(payload["trade_price_decimal"]),
-                    volume=float(payload["trade_quantity"]),
+                    vt_orderid=payload.local_vt_orderid,
+                    vt_tradeid=payload.trade_id,
+                    price=float(payload.trade_price_decimal),
+                    volume=float(payload.trade_quantity),
                     datetime=trade_datetime,
                 )
             )
+        elif event.event_type in {
+            EventTypeV2.COMMAND_OUTCOME,
+            EventTypeV2.RECONCILE,
+            EventTypeV2.SESSION,
+            EventTypeV2.EOD,
+        }:
+            # These are K2 lifecycle facts, not pinned AlgoTemplate callbacks.
+            # The durable active-order state is advanced by _active_orders_v1.
+            return
         else:
             raise _binding_error(
                 "event type is not mapped to a pinned callback",
@@ -819,6 +1195,48 @@ class VnpyFacadeBackedPluginAdapterV1:
         ):
             raise _binding_error(
                 "runtime adapter invocation authority conflicts with sealed adapter binding",
+                algo_code=self.manifest.algo_code,
+                manifest_sha256=self.manifest.manifest_sha256,
+                algorithm_binding_sha256=self._algorithm_binding.binding_sha256,
+                conformance_receipt_sha256=receipt.receipt_sha256,
+            )
+
+    def _validate_invocation_receipt_v2(
+        self,
+        invocation_input: VnpyFacadeInitializationInputV2 | VnpyFacadeTransitionInputV2,
+    ) -> None:
+        if not isinstance(self._algorithm_binding, VnpyFacadeAlgorithmBindingV2):
+            raise _binding_error(
+                "V2 facade invocation requires an exact V2 algorithm binding",
+                algo_code=self.manifest.algo_code,
+                binding_type=type(self._algorithm_binding).__name__,
+            )
+        authority = invocation_input.authority_input
+        receipt = authority.facade_conformance_receipt_v2
+        conformance_set = authority.facade_conformance_set_v2
+        if (
+            receipt.runtime_binding_disposition is not VnpyFacadeRuntimeBindingDispositionV1.FACADE_BACKED_ADAPTER
+            or receipt.command_authority_disposition is not VnpyFacadeCommandAuthorityDispositionV1.SHADOW_ONLY_K2_V1
+        ):
+            raise _binding_error(
+                "runtime adapter V2 invocation requires exact shadow adapter conformance",
+                runtime_binding_disposition=receipt.runtime_binding_disposition.value,
+                command_authority_disposition=receipt.command_authority_disposition.value,
+            )
+        if (
+            receipt.algo_code != self.manifest.algo_code
+            or receipt.manifest_sha256 != self.manifest.manifest_sha256
+            or receipt.algorithm_binding_sha256 != self._algorithm_binding.binding_sha256
+            or receipt.algorithm_characterization_receipt_v2_sha256
+            != self._algorithm_binding.characterization_receipt_sha256
+            or receipt.source_executor_binding_sha256 != self._algorithm_binding.source_executor_binding_sha256
+            or receipt.source_execution_set_sha256 != self._algorithm_binding.source_execution_set_sha256
+            or receipt.state_mapping_set_sha256 != conformance_set.state_mapping_set_sha256
+            or receipt.terminal_mapping_set_sha256 != conformance_set.terminal_mapping_set_sha256
+            or receipt.source_executor_binding_sha256 != conformance_set.source_executor_binding_sha256
+        ):
+            raise _binding_error(
+                "runtime adapter V2 authority conflicts with sealed adapter binding",
                 algo_code=self.manifest.algo_code,
                 manifest_sha256=self.manifest.manifest_sha256,
                 algorithm_binding_sha256=self._algorithm_binding.binding_sha256,

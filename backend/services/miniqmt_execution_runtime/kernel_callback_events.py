@@ -24,8 +24,8 @@ from .plugin_contracts import (
     KernelTradeEventPayloadV1,
     KernelTradeFactRefV1,
     NormalizedOrderStatusV1,
-    RuntimeEventEnvelopeV2,
     SideV1,
+    strict_readback_kernel_event_payload_v1,
 )
 
 _NUMERIC_ORDER_STATUS = {
@@ -475,20 +475,6 @@ def build_kernel_order_reconcile_event_payload_v1(
             "fact_sha256": hash_hex_v1("miniqmt_kernel_order_reconcile_payload_v1", fact),
         }
     )
-
-
-def strict_readback_kernel_event_payload_v1(event: RuntimeEventEnvelopeV2) -> object:
-    model_by_schema = {
-        "miniqmt_order_event_v1": KernelOrderEventPayloadV1,
-        "miniqmt_trade_fact_v1": KernelTradeEventPayloadV1,
-        "miniqmt_command_outcome_v1": KernelCommandOutcomeEventPayloadV1,
-        "miniqmt_reconciliation_receipt_v1": KernelOrderReconcileEventPayloadV1,
-    }
-    try:
-        model = model_by_schema[event.payload_schema_version]
-    except KeyError as exc:
-        raise ValueError("runtime event does not use a strict callback/outcome payload schema") from exc
-    return model.model_validate_json(json.dumps(thaw_json_v1(event.payload), sort_keys=True, separators=(",", ":")))
 
 
 __all__ = [

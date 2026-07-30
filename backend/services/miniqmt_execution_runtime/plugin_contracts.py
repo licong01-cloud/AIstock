@@ -1495,6 +1495,18 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
         return self
 
 
+def strict_readback_kernel_event_payload_v1(event: RuntimeEventEnvelopeV2) -> FrozenStrictModel:
+    """Read one callback/outcome payload through the envelope's strict model authority."""
+
+    if not isinstance(event, RuntimeEventEnvelopeV2):
+        raise TypeError("event must be RuntimeEventEnvelopeV2")
+    try:
+        model = _STRICT_EVENT_PAYLOAD_MODELS[event.event_type]
+    except KeyError as exc:
+        raise ValueError("runtime event does not use a strict callback/outcome payload schema") from exc
+    return model.model_validate_json(json.dumps(thaw_json_v1(event.payload), sort_keys=True, separators=(",", ":")))
+
+
 class AlgoEventDeliveryV1(FrozenStrictModel):
     schema_version: Literal["miniqmt_algo_event_delivery_v1"]
     delivery_id: IdentityV1
@@ -5764,6 +5776,7 @@ __all__ = [
     "kernel_lease_fence_token_v1",
     "safe_exception_summary_v1",
     "stable_exception_reason_code_v1",
+    "strict_readback_kernel_event_payload_v1",
     "transaction_commit_identity_v1",
     "validate_json_schema_instance_v1",
 ]

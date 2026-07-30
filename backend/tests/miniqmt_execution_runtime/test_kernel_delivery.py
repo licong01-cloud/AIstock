@@ -720,7 +720,7 @@ def test_delivery_worker_applies_exact_lifecycle_projection_and_terminalizes_dri
             services=services,
             deterministic_context=context,
             consumed_lineage_refs=lineage_refs,
-            command_lifecycle_projection=_args[-1],
+            command_lifecycle_projection=_args[-2],
         ),
     )
     assert repository.delivery.lease_owner == owner
@@ -1600,7 +1600,7 @@ class _WorkerRepository:
         return self.delivery
 
     def apply_claimed_delivery_atomic(self, **values):
-        self.bundle = values["bundle_builder"](self.event, self.delivery, self.algo, self.state, (), (), ())
+        self.bundle = values["bundle_builder"](self.event, self.delivery, self.algo, self.state, (), (), (), None)
         return {"bundle": self.bundle}
 
     def mark_delivery_retryable(self, **values):

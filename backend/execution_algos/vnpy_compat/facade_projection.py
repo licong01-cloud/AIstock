@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     canonical_decimal_string_v1,
+    canonical_utc_datetime_v1,
     hash_hex_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
@@ -247,6 +248,75 @@ def project_contract_data_v1(
         min_volume=float(min_volume_text),
         pricetick=float(pricetick_text),
     )
+
+
+def project_tick_data_v1(*, symbol: str, payload: Any) -> TickData:
+    if not isinstance(payload, dict):
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_MARKET_DATA_INVALID",
+            "immutable market-data projection must be a strict object",
+            context={"symbol": symbol, "payload_type": type(payload).__name__},
+        )
+    required = {
+        "symbol",
+        "logical_at_utc",
+        "bid_price_1",
+        "bid_volume_1",
+        "ask_price_1",
+        "ask_volume_1",
+        "last_price",
+        "limit_up",
+        "limit_down",
+    }
+    missing = sorted(required - set(payload))
+    try:
+        if missing:
+            raise ValueError("market-data projection is missing required fields")
+        if type(payload["symbol"]) is not str or payload["symbol"] != symbol:
+            raise ValueError("market-data projection symbol conflicts with transition owner")
+        logical = datetime.fromisoformat(
+            canonical_utc_datetime_v1(payload["logical_at_utc"], field_name="market_data.logical_at_utc").replace(
+                "Z", "+00:00"
+            )
+        )
+        prices = {
+            field: float(
+                canonical_decimal_string_v1(
+                    payload[field],
+                    field_name=f"market_data.{field}",
+                    allow_zero=True,
+                )
+            )
+            for field in ("bid_price_1", "ask_price_1", "last_price", "limit_up", "limit_down")
+        }
+        volumes: dict[str, float] = {}
+        for field in ("bid_volume_1", "ask_volume_1"):
+            value = payload[field]
+            if type(value) is not int or value < 0:
+                raise TypeError(f"market_data.{field} must be a non-negative strict integer share quantity")
+            volumes[field] = float(value)
+        return TickData(
+            vt_symbol=symbol.replace(".SH", ".SSE").replace(".SZ", ".SZSE").replace(".BJ", ".BSE"),
+            datetime=logical,
+            bid_price_1=prices["bid_price_1"],
+            bid_volume_1=volumes["bid_volume_1"],
+            ask_price_1=prices["ask_price_1"],
+            ask_volume_1=volumes["ask_volume_1"],
+            last_price=prices["last_price"],
+            limit_up=prices["limit_up"],
+            limit_down=prices["limit_down"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_MARKET_DATA_INVALID",
+            "immutable market-data projection is malformed",
+            context={
+                "symbol": symbol,
+                "missing_fields": missing,
+                "error_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+                "error_message": str(exc),
+            },
+        ) from exc
 
 
 def _round_to_node_v1(source_root: Path) -> ast.FunctionDef:
@@ -549,5 +619,6 @@ __all__ = [
     "dto_mapping_set_sha256_v1",
     "project_contract_data_v1",
     "project_order_status_v1",
+    "project_tick_data_v1",
     "readback_vnpy_facade_dto_mappings_v1",
 ]

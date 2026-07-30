@@ -3578,7 +3578,9 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             expected_lease_owner=lease_owner,
             expected_lease_epoch=1,
             expected_lease_fence_token=fence,
-            bundle_builder=lambda event, delivery, algo, state, mappings, outboxes, timers: transition_bundle,
+            bundle_builder=lambda event, delivery, algo, state, mappings, outboxes, timers, facade_reads: (
+                transition_bundle
+            ),
         )
         assert applied_readback["receipt"] == receipt
         reserved_mapping, pending_submit_outbox = _submit_chain(receipt.transition_id)
@@ -3780,7 +3782,7 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
 
         durable_algo = repository.read_algo_instance(algo_id)
 
-        def build_failure(event, delivery, algo, state, mappings, outboxes, timers):
+        def build_failure(event, delivery, algo, state, mappings, outboxes, timers, facade_reads):
             return materialize_failure_transition_v1(
                 event=event,
                 predecessor_delivery=delivery,
@@ -3851,7 +3853,7 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             expected_lease_owner=recovery_owner,
             expected_lease_epoch=claimed_skip.lease_epoch,
             expected_lease_fence_token=skip_fence,
-            bundle_builder=lambda event, delivery, algo, state, mappings, outboxes, timers: skip_bundle,
+            bundle_builder=lambda event, delivery, algo, state, mappings, outboxes, timers, facade_reads: skip_bundle,
         )
         assert repository.read_delivery(claimed_skip.delivery_id).status is DeliveryStatusV1.SKIPPED_TERMINAL
         assert skipped["algo"].failure_receipt_id == failed["algo"].failure_receipt_id

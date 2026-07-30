@@ -8,7 +8,10 @@ import pytest
 
 from backend.execution_algos.vnpy_compat.facade_contracts import (
     VnpyFacadeActiveOrderV1,
+    VnpyFacadeAlgorithmCharacterizationReceiptV2,
     VnpyFacadeAlgorithmBindingV1,
+    VnpyFacadeCompatibilityStatusV1,
+    VnpyFacadeConformanceAuthorityValidationReceiptV2,
     VnpyFacadeContractViewV1,
     VnpyFacadeConformanceFailureV1,
     VnpyFacadeDeterministicInputsV1,
@@ -30,6 +33,129 @@ from backend.execution_algos.vnpy_compat.facade_characterization import (
 from backend.execution_algos.vnpy_compat.facade_projection import build_vnpy_facade_dto_mappings_v1
 from backend.execution_algos.vnpy_compat.locked_surface import PINNED_SOURCE_ROOT
 from backend.execution_algos.vnpy_style.plugin_manifests import current_three_manifests_v2
+from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
+
+
+def _market_lineage() -> dict[str, object]:
+    return {
+        "market_data_id": "market_k4_contract",
+        "event_id": "mqrtevt_k4_contract",
+        "payload_sha256": "e" * 64,
+        "generation": 1,
+        "sequence": 1,
+        "exchange_time_utc": "2026-07-29T01:30:00Z",
+        "session_phase": "CONTINUOUS_AM",
+    }
+
+
+def test_active_order_rejects_missing_or_malformed_native_market_lineage() -> None:
+    values = {
+        "local_vt_orderid": "local_k4_lineage",
+        "broker_order_id": None,
+        "command_id": "command_k4_lineage",
+        "child_order_id": "child_k4_lineage",
+        "symbol": "600000.SH",
+        "side": "BUY",
+        "price_decimal": "10",
+        "requested_quantity": 100,
+        "cumulative_quantity": 0,
+        "remaining_quantity": 100,
+        "status": "COMMAND_PENDING",
+        "pending_command_type": "SUBMIT_LIMIT",
+        "pending_command_id": "command_k4_lineage",
+        "last_order_event_id": None,
+        "last_trade_event_id": None,
+        "last_command_outcome_event_id": None,
+        "last_oms_reconcile_event_id": None,
+        "terminal_order_status": None,
+        "terminal_observed_cumulative_filled_quantity": None,
+    }
+    with pytest.raises(ValueError, match="exact market-data lineage"):
+        VnpyFacadeActiveOrderV1.create(**values, market_data_lineage={})
+    with pytest.raises(ValueError, match="continuous native quote"):
+        VnpyFacadeActiveOrderV1.create(
+            **values,
+            market_data_lineage={**_market_lineage(), "session_phase": "LUNCH_BREAK"},
+        )
+
+
+def test_failed_v2_receipts_cannot_claim_an_empty_failure_set() -> None:
+    with pytest.raises(ValueError, match="FAILED characterization receipt V2 requires failures"):
+        VnpyFacadeAlgorithmCharacterizationReceiptV2.model_validate(
+            {
+                "schema_version": "miniqmt_vnpy_facade_algorithm_characterization_receipt_v2",
+                "algo_code": "SNIPER_MINIQMT",
+                "source_identity_sha256": "1" * 64,
+                "facade_source_manifest_sha256": "2" * 64,
+                "characterization_requirement_sha256": "3" * 64,
+                "canonical_factory_probe_config": {},
+                "factory_probe_config_sha256": "4" * 64,
+                "facade_contract_sha256": "5" * 64,
+                "implementation_binding_set_sha256": "6" * 64,
+                "dto_mapping_set_sha256": "7" * 64,
+                "state_mapping_set_sha256": "8" * 64,
+                "terminal_mapping_set_sha256": "9" * 64,
+                "isolated_module_binding_set_sha256": "a" * 64,
+                "source_executor_binding_sha256": "b" * 64,
+                "source_execution_set_sha256": "c" * 64,
+                "ordered_vector_ids": ("vector_one",),
+                "vector_set_sha256": "d" * 64,
+                "status": VnpyFacadeCompatibilityStatusV1.FAILED,
+                "ordered_failures": (),
+                "receipt_sha256": "e" * 64,
+            },
+            strict=True,
+        )
+
+    failure = VnpyFacadeConformanceFailureV1.create(
+        field_path="authority.vector",
+        reason_code="MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED",
+        context={"vector_id": "vector_one"},
+    )
+    characterization = VnpyFacadeAlgorithmCharacterizationReceiptV2.create(
+        algo_code="SNIPER_MINIQMT",
+        source_identity_sha256="1" * 64,
+        facade_source_manifest_sha256="2" * 64,
+        characterization_requirement_sha256="3" * 64,
+        canonical_factory_probe_config={},
+        factory_probe_config_sha256=hash_hex_v1("miniqmt_vnpy_facade_factory_probe_config_v1", {}),
+        facade_contract_sha256="5" * 64,
+        implementation_binding_set_sha256="6" * 64,
+        dto_mapping_set_sha256="7" * 64,
+        state_mapping_set_sha256="8" * 64,
+        terminal_mapping_set_sha256="9" * 64,
+        isolated_module_binding_set_sha256="a" * 64,
+        source_executor_binding_sha256="b" * 64,
+        source_execution_set_sha256="c" * 64,
+        ordered_vector_ids=("vector_one",),
+        vector_set_sha256="d" * 64,
+        status=VnpyFacadeCompatibilityStatusV1.FAILED,
+        ordered_failures=(failure,),
+    )
+    validation = VnpyFacadeConformanceAuthorityValidationReceiptV2.create(
+        conformance_set_v2_sha256="1" * 64,
+        source_executor_binding_sha256="2" * 64,
+        ordered_source_execution_set_sha256s=("3" * 64,),
+        validation_input_sha256="4" * 64,
+        status=VnpyFacadeCompatibilityStatusV1.FAILED,
+        ordered_failures=(failure,),
+    )
+    assert characterization.ordered_failures == (failure,)
+    assert validation.ordered_failures == (failure,)
+    with pytest.raises(ValueError, match="FAILED conformance authority validation requires failures"):
+        VnpyFacadeConformanceAuthorityValidationReceiptV2.model_validate(
+            {
+                "schema_version": "miniqmt_vnpy_facade_conformance_authority_validation_receipt_v2",
+                "conformance_set_v2_sha256": "1" * 64,
+                "source_executor_binding_sha256": "2" * 64,
+                "ordered_source_execution_set_sha256s": ("3" * 64,),
+                "validation_input_sha256": "4" * 64,
+                "status": VnpyFacadeCompatibilityStatusV1.FAILED,
+                "ordered_failures": (),
+                "receipt_sha256": "5" * 64,
+            },
+            strict=True,
+        )
 
 
 EXPECTED_SOURCES = {
@@ -183,8 +309,15 @@ def test_contract_carrier_hash_readback_rejects_self_consistent_type_drift() -> 
         cumulative_quantity=0,
         remaining_quantity=100,
         status="COMMAND_PENDING",
+        pending_command_type="SUBMIT_LIMIT",
+        pending_command_id="command_k4_contract",
         last_order_event_id=None,
         last_trade_event_id=None,
+        last_command_outcome_event_id=None,
+        last_oms_reconcile_event_id=None,
+        terminal_order_status=None,
+        terminal_observed_cumulative_filled_quantity=None,
+        market_data_lineage=_market_lineage(),
     )
     draw = VnpyFacadeUniformDrawV1.create(ordinal=0, u53_integer=0)
     inputs = VnpyFacadeDeterministicInputsV1.create(ordered_uniform_draws=(draw,))
@@ -330,8 +463,15 @@ def test_source_manifest_and_simple_state_semantic_conflicts_fail_loud() -> None
             cumulative_quantity=1,
             remaining_quantity=100,
             status="COMMAND_PENDING",
+            pending_command_type="SUBMIT_LIMIT",
+            pending_command_id="command_k4_contract",
             last_order_event_id=None,
             last_trade_event_id=None,
+            last_command_outcome_event_id=None,
+            last_oms_reconcile_event_id=None,
+            terminal_order_status=None,
+            terminal_observed_cumulative_filled_quantity=None,
+            market_data_lineage=_market_lineage(),
         )
 
 

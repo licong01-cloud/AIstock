@@ -32,6 +32,18 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
 from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
 
 
+def _market_lineage() -> dict[str, object]:
+    return {
+        "market_data_id": "market_k4_callback",
+        "event_id": "mqrtevt_k4_callback",
+        "payload_sha256": "e" * 64,
+        "generation": 1,
+        "sequence": 1,
+        "exchange_time_utc": "2026-07-29T01:30:00Z",
+        "session_phase": "CONTINUOUS_AM",
+    }
+
+
 def _adapter() -> VnpyFacadeBackedPluginAdapterV1:
     algo_code = "SNIPER_MINIQMT"
     algorithm_class = load_pinned_vnpy_algorithm_classes_v1()[algo_code]
@@ -163,6 +175,27 @@ def test_adapter_rejects_a_non_class_binding() -> None:
         )
 
 
+def test_adapter_rejects_non_contract_manifest_and_binding_carriers() -> None:
+    adapter = _adapter()
+    values = {
+        "algorithm_class": adapter._algorithm_class,
+        "state_mappings": adapter._state_mappings,
+        "terminal_mappings": adapter._terminal_mappings,
+    }
+    with pytest.raises(TypeError, match="manifest must be"):
+        VnpyFacadeBackedPluginAdapterV1(
+            manifest=object(),  # type: ignore[arg-type]
+            algorithm_binding=adapter._algorithm_binding,
+            **values,
+        )
+    with pytest.raises(TypeError, match="algorithm_binding must be"):
+        VnpyFacadeBackedPluginAdapterV1(
+            manifest=adapter.manifest,
+            algorithm_binding=object(),  # type: ignore[arg-type]
+            **values,
+        )
+
+
 def _event(event_type: EventTypeV2, payload: dict[str, object]) -> RuntimeEventEnvelopeV2:
     source = EventSourceV2.EXCHANGE_SESSION_CLOCK
     schema = "miniqmt_session_event_v1"
@@ -217,6 +250,13 @@ def _event(event_type: EventTypeV2, payload: dict[str, object]) -> RuntimeEventE
         trade_payload["fact_sha256"] = hash_hex_v1("miniqmt_kernel_trade_event_payload_v1", trade_payload)
         payload = trade_payload
         identity = {"trade_id": str(payload["trade_id"])}
+    elif event_type is EventTypeV2.EOD:
+        schema = "miniqmt_eod_event_v1"
+        identity = {
+            "runtime_id": "runtime_k4_callback",
+            "trade_date": "2026-07-29",
+            "session_epoch": "session_k4_callback",
+        }
     return RuntimeEventEnvelopeV2.create(
         runtime_id="runtime_k4_callback",
         sequence=1,
@@ -228,6 +268,83 @@ def _event(event_type: EventTypeV2, payload: dict[str, object]) -> RuntimeEventE
         payload_schema_version=schema,
         payload=payload,
         source_identity=identity,
+        correlation={},
+    )
+
+
+def _command_outcome_event(*, outcome: str = "ACCEPTED") -> RuntimeEventEnvelopeV2:
+    receipt_id = f"receipt_k4_{outcome.lower()}"
+    receipt_sha = hash_hex_v1("test_k4_command_outcome_receipt", {"outcome": outcome})
+    payload = {
+        "receipt_id": receipt_id,
+        "receipt_sha256": receipt_sha,
+        "runtime_id": "runtime_k4_callback",
+        "algo_instance_id": "algo_k4_callback",
+        "parent_intent_id": "parent_k4_callback",
+        "strategy_slot_id": "slot_k4_callback",
+        "mapping_id": "mapping_k4_callback",
+        "command_id": "command_k4_callback",
+        "command_type": "SUBMIT_LIMIT",
+        "local_vt_orderid": "local_k4_callback",
+        "broker_order_id": "broker_k4_callback" if outcome == "ACCEPTED" else None,
+        "outcome": outcome,
+        "outbox_status": "ACKED" if outcome == "ACCEPTED" else "ACKED_REJECTED",
+        "outbox_row_version": 2,
+        "outcome_receipt_sha256": receipt_sha,
+        "outbox_terminal": True,
+        "order_terminal": outcome == "REJECTED",
+    }
+    payload["fact_sha256"] = hash_hex_v1("miniqmt_kernel_command_outcome_payload_v1", payload)
+    return RuntimeEventEnvelopeV2.create(
+        runtime_id="runtime_k4_callback",
+        sequence=2,
+        event_type=EventTypeV2.COMMAND_OUTCOME,
+        event_time_utc="2026-07-29T01:30:01Z",
+        monotonic_ns=None,
+        source=EventSourceV2.MINIQMT_EXECUTION_KERNEL,
+        symbol="600000.SH",
+        payload_schema_version="miniqmt_command_outcome_v1",
+        payload=payload,
+        source_identity={"receipt_id": receipt_id, "receipt_sha256": receipt_sha},
+        correlation={},
+    )
+
+
+def _reconcile_event() -> RuntimeEventEnvelopeV2:
+    trade_set_sha = hash_hex_v1("miniqmt_kernel_order_reconcile_trade_set_v1", [])
+    payload = {
+        "receipt_id": "reconcile_k4_callback",
+        "receipt_sha256": "c" * 64,
+        "runtime_id": "runtime_k4_callback",
+        "algo_instance_id": "algo_k4_callback",
+        "parent_intent_id": "parent_k4_callback",
+        "strategy_slot_id": "slot_k4_callback",
+        "mapping_id": "mapping_k4_callback",
+        "local_vt_orderid": "local_k4_callback",
+        "broker_order_id": "broker_k4_callback",
+        "symbol": "600000.SH",
+        "side": "BUY",
+        "normalized_order_status": "FILLED",
+        "authoritative_cumulative_filled_quantity": 25,
+        "authoritative_remaining_quantity": 75,
+        "ordered_trade_refs": [],
+        "trade_set_sha256": trade_set_sha,
+        "callback_watermark": "callback_k4_reconcile",
+        "snapshot_sha256": "d" * 64,
+        "terminal": True,
+    }
+    payload["fact_sha256"] = hash_hex_v1("miniqmt_kernel_order_reconcile_payload_v1", payload)
+    return RuntimeEventEnvelopeV2.create(
+        runtime_id="runtime_k4_callback",
+        sequence=3,
+        event_type=EventTypeV2.RECONCILE,
+        event_time_utc="2026-07-29T01:30:02Z",
+        monotonic_ns=None,
+        source=EventSourceV2.QMT_OMS_RECONCILIATION,
+        symbol="600000.SH",
+        payload_schema_version="miniqmt_reconciliation_receipt_v1",
+        payload=payload,
+        source_identity={"receipt_id": payload["receipt_id"], "receipt_sha256": payload["receipt_sha256"]},
         correlation={},
     )
 
@@ -266,9 +383,16 @@ def test_callback_router_invokes_each_exact_callback_once_and_rejects_unknown() 
         requested_quantity=100,
         cumulative_quantity=25,
         remaining_quantity=75,
-        status="BROKER_ACCEPTED",
+        status="PARTIALLY_FILLED",
+        pending_command_type=None,
+        pending_command_id=None,
         last_order_event_id=None,
         last_trade_event_id=None,
+        last_command_outcome_event_id=None,
+        last_oms_reconcile_event_id=None,
+        terminal_order_status=None,
+        terminal_observed_cumulative_filled_quantity=None,
+        market_data_lineage=_market_lineage(),
     )
     before = SimpleNamespace(ordered_active_orders=(active,))
 
@@ -327,13 +451,18 @@ def test_callback_router_invokes_each_exact_callback_once_and_rejects_unknown() 
             facade=facade,
             before_envelope=SimpleNamespace(ordered_active_orders=()),
         )
-    with pytest.raises(ValueError, match="not mapped"):
+    callback_count = len(algorithm.calls)
+    for lifecycle_event_type in (
+        EventTypeV2.SESSION,
+        EventTypeV2.EOD,
+    ):
         adapter._invoke_callback_once_v1(
             algorithm=algorithm,
-            event=_event(EventTypeV2.SESSION, {}),
+            event=_event(lifecycle_event_type, {}),
             facade=facade,
             before_envelope=before,
         )
+    assert len(algorithm.calls) == callback_count
 
 
 def test_active_order_state_uses_exact_order_and_trade_callback_facts() -> None:
@@ -349,9 +478,16 @@ def test_active_order_state_uses_exact_order_and_trade_callback_facts() -> None:
         requested_quantity=100,
         cumulative_quantity=25,
         remaining_quantity=75,
-        status="BROKER_ACCEPTED",
+        status="PARTIALLY_FILLED",
+        pending_command_type=None,
+        pending_command_id=None,
         last_order_event_id=None,
         last_trade_event_id=None,
+        last_command_outcome_event_id=None,
+        last_oms_reconcile_event_id=None,
+        terminal_order_status=None,
+        terminal_observed_cumulative_filled_quantity=None,
+        market_data_lineage=_market_lineage(),
     )
     before = SimpleNamespace(ordered_active_orders=(active,))
     collector = SimpleNamespace(broker_commands=())
@@ -427,6 +563,8 @@ def test_active_order_state_uses_exact_order_and_trade_callback_facts() -> None:
             "cumulative_quantity": 0,
             "remaining_quantity": 100,
             "status": "COMMAND_PENDING",
+            "pending_command_type": "SUBMIT_LIMIT",
+            "pending_command_id": active.command_id,
         }
     )
     callback_before_ack_state = adapter._active_orders_v1(
@@ -460,6 +598,142 @@ def test_active_order_state_uses_exact_order_and_trade_callback_facts() -> None:
             collector=collector,
             before_envelope=before,
         )
+
+
+def test_active_order_lifecycle_closes_command_outcome_terminal_order_trade_and_reconcile() -> None:
+    adapter = _adapter()
+
+    class Collector:
+        broker_commands: tuple[object, ...] = ()
+
+        def __init__(self) -> None:
+            self.diagnostics: list[dict[str, object]] = []
+
+        def append_diagnostic(self, **values: object) -> None:
+            self.diagnostics.append(values)
+
+    pending = VnpyFacadeActiveOrderV1.create(
+        local_vt_orderid="local_k4_callback",
+        broker_order_id=None,
+        command_id="command_k4_callback",
+        child_order_id="child_k4_callback",
+        symbol="600000.SH",
+        side="BUY",
+        price_decimal="10",
+        requested_quantity=100,
+        cumulative_quantity=0,
+        remaining_quantity=100,
+        status="COMMAND_PENDING",
+        pending_command_type="SUBMIT_LIMIT",
+        pending_command_id="command_k4_callback",
+        last_order_event_id=None,
+        last_trade_event_id=None,
+        last_command_outcome_event_id=None,
+        last_oms_reconcile_event_id=None,
+        terminal_order_status=None,
+        terminal_observed_cumulative_filled_quantity=None,
+        market_data_lineage=_market_lineage(),
+    )
+    mapping = SimpleNamespace(local_vt_orderid=pending.local_vt_orderid)
+    accepted_event = _command_outcome_event()
+    accepted = adapter._active_orders_v1(
+        algorithm=SimpleNamespace(active_orders={}),
+        invocation_input=VnpyFacadeTransitionInputV1.model_construct(
+            runtime_event=accepted_event,
+            ordered_active_mappings=(mapping,),
+        ),
+        collector=Collector(),
+        before_envelope=SimpleNamespace(ordered_active_orders=(pending,)),
+    )
+    assert len(accepted) == 1
+    assert accepted[0].status.value == "SUBMITTED"
+    assert accepted[0].broker_order_id == "broker_k4_callback"
+    assert accepted[0].last_command_outcome_event_id == accepted_event.event_id
+    assert accepted[0].pending_command_id is None
+
+    rejected = adapter._active_orders_v1(
+        algorithm=SimpleNamespace(active_orders={}),
+        invocation_input=VnpyFacadeTransitionInputV1.model_construct(
+            runtime_event=_command_outcome_event(outcome="REJECTED"),
+            ordered_active_mappings=(mapping,),
+        ),
+        collector=Collector(),
+        before_envelope=SimpleNamespace(ordered_active_orders=(pending,)),
+    )
+    assert rejected == ()
+
+    active = VnpyFacadeActiveOrderV1.create(
+        **{
+            **pending.canonical_payload_v1(exclude={"schema_version", "active_order_sha256"}),
+            "broker_order_id": "broker_k4_callback",
+            "cumulative_quantity": 25,
+            "remaining_quantity": 75,
+            "status": "PARTIALLY_FILLED",
+            "pending_command_type": None,
+            "pending_command_id": None,
+        }
+    )
+    terminal_order_event = _event(
+        EventTypeV2.ORDER,
+        {
+            "local_vt_orderid": active.local_vt_orderid,
+            "normalized_order_status": "FILLED",
+            "observed_cumulative_filled_quantity": 50,
+            "observed_remaining_quantity": 50,
+            "terminal": True,
+        },
+    )
+    terminal_pending = adapter._active_orders_v1(
+        algorithm=SimpleNamespace(active_orders={}),
+        invocation_input=VnpyFacadeTransitionInputV1.model_construct(
+            runtime_event=terminal_order_event,
+            ordered_active_mappings=(mapping,),
+        ),
+        collector=Collector(),
+        before_envelope=SimpleNamespace(ordered_active_orders=(active,)),
+    )
+    assert terminal_pending[0].status.value == "TERMINAL_TRADE_PENDING"
+    assert terminal_pending[0].terminal_observed_cumulative_filled_quantity == 50
+
+    catchup_trade = _event(
+        EventTypeV2.TRADE,
+        {
+            "local_vt_orderid": active.local_vt_orderid,
+            "trade_id": "trade_k4_callback",
+            "trade_price_decimal": "10",
+            "trade_quantity": 25,
+        },
+    )
+    closed = adapter._active_orders_v1(
+        algorithm=SimpleNamespace(active_orders={}),
+        invocation_input=VnpyFacadeTransitionInputV1.model_construct(
+            runtime_event=catchup_trade,
+            ordered_active_mappings=(mapping,),
+        ),
+        collector=Collector(),
+        before_envelope=SimpleNamespace(ordered_active_orders=terminal_pending),
+    )
+    assert closed == ()
+
+    reconcile_pending = VnpyFacadeActiveOrderV1.create(
+        **{
+            **active.canonical_payload_v1(exclude={"schema_version", "active_order_sha256"}),
+            "status": "TERMINAL_TRADE_PENDING",
+            "last_order_event_id": terminal_order_event.event_id,
+            "terminal_order_status": "FILLED",
+            "terminal_observed_cumulative_filled_quantity": 50,
+        }
+    )
+    reconciled = adapter._active_orders_v1(
+        algorithm=SimpleNamespace(active_orders={}),
+        invocation_input=VnpyFacadeTransitionInputV1.model_construct(
+            runtime_event=_reconcile_event(),
+            ordered_active_mappings=(mapping,),
+        ),
+        collector=Collector(),
+        before_envelope=SimpleNamespace(ordered_active_orders=(reconcile_pending,)),
+    )
+    assert reconciled == ()
 
 
 def test_terminal_outcome_requires_exact_clean_active_child_closure() -> None:

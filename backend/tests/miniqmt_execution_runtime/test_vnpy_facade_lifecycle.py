@@ -87,6 +87,18 @@ from backend.services.miniqmt_execution_runtime.plugin_registry import (
 )
 
 
+def _market_lineage() -> dict[str, object]:
+    return {
+        "market_data_id": "market_k4_test_only",
+        "event_id": "mqrtevt_k4_test_only",
+        "payload_sha256": "e" * 64,
+        "generation": 1,
+        "sequence": 1,
+        "exchange_time_utc": "2026-07-29T01:30:00Z",
+        "session_phase": "CONTINUOUS_AM",
+    }
+
+
 @dataclass(frozen=True)
 class _Fixture:
     adapter: VnpyFacadeBackedPluginAdapterV1
@@ -569,6 +581,11 @@ def _transition(
         "pricetick_decimal": "0.01",
     }
     market = {
+        "market_data_id": "market_k4_test_only",
+        "source_event_id": event.event_id,
+        "generation": 1,
+        "source_sequence": event.sequence,
+        "exchange_time_utc": event.event_time_utc,
         "symbol": "600000.SH",
         "logical_at_utc": "2026-07-29T01:30:00Z",
         "bid_price_1": "10",
@@ -578,9 +595,26 @@ def _transition(
         "last_price": "10",
         "limit_up": "11",
         "limit_down": "9",
+        "exchange_trade_date": "2026-07-29",
+        "session_epoch": "session_k4_test_only",
+        "session_phase": "CONTINUOUS_AM",
+        "quote_source": "B0_QUOTE_V2",
     }
     if market_overrides:
         market.update(market_overrides)
+    event = RuntimeEventEnvelopeV2.create(
+        runtime_id=context.runtime_id,
+        sequence=2,
+        event_type=EventTypeV2.TICK,
+        event_time_utc="2026-07-29T01:30:00Z",
+        monotonic_ns=None,
+        source=EventSourceV2.B0_QUOTE_V2,
+        symbol=context.symbol,
+        payload_schema_version="miniqmt_market_data_view_v2",
+        payload=market,
+        source_identity={"market_data_id": "market_k4_test_only"},
+        correlation={},
+    )
     refs = tuple(
         sorted(
             (
@@ -877,9 +911,16 @@ def test_transition_input_closes_valid_active_mapping_lifecycle_and_before_state
         requested_quantity=mapping.requested_quantity,
         cumulative_quantity=0,
         remaining_quantity=mapping.requested_quantity,
-        status=mapping.mapping_status.value,
+        status="COMMAND_PENDING",
+        pending_command_type="SUBMIT_LIMIT",
+        pending_command_id=mapping.command_id,
         last_order_event_id=mapping.last_order_event_id,
         last_trade_event_id=mapping.last_trade_event_id,
+        last_command_outcome_event_id=None,
+        last_oms_reconcile_event_id=None,
+        terminal_order_status=None,
+        terminal_observed_cumulative_filled_quantity=None,
+        market_data_lineage=_market_lineage(),
     )
     envelope_with_active = VnpyFacadeStateEnvelopeV1.create(
         **{
