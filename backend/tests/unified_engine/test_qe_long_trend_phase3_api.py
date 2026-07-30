@@ -4,7 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 from backend.routers import qe_archive as qe_archive_router
 from backend.routers import quantevolver_evolution as evolution_router
@@ -133,12 +133,65 @@ def test_public_create_maps_typed_snapshot_error(monkeypatch: pytest.MonkeyPatch
     assert exc_info.value.detail["reason_code"] == "QELT_SNAPSHOT_IDENTITY_AMBIGUOUS"
 
 
+def test_public_input_preview_uses_query_contract_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Service:
+        async def preview_inputs(self, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            return {"schema_version": "qe_long_trend_input_preview_v1"}
+
+    monkeypatch.setattr(evolution_router, "QELongTrendAPIService", _Service)
+
+    result = asyncio.run(
+        evolution_router.preview_long_trend_inputs(
+            task_id="task-1",
+            loop_index=3,
+            profile_id="qe_long_trend_v1",
+            outcome_dataset_snapshot_id="snapshot-20260630",
+        )
+    )
+
+    assert result["schema_version"] == "qe_long_trend_input_preview_v1"
+    request = captured["request"]
+    assert request.profile_id == "qe_long_trend_v1"  # type: ignore[attr-defined]
+    assert request.outcome_dataset_snapshot_id == "snapshot-20260630"  # type: ignore[attr-defined]
+    assert not hasattr(request, "node_id")
+    assert not hasattr(request, "outcome_data_root_uri")
+
+
 def test_public_create_maps_invalid_profile_to_bad_request() -> None:
     with pytest.raises(HTTPException) as exc_info:
         evolution_router._raise_long_trend_http(
             QELongTrendAPIServiceError("bad profile", reason_code="QELT_PROFILE_INVALID")
         )
     assert exc_info.value.status_code == 400
+
+
+def test_task_create_rejects_unregistered_profile_before_scheduler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _unexpected_create_task(**_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("scheduler must not run for an invalid profile")
+
+    monkeypatch.setattr(evolution_router.scheduler, "create_task", _unexpected_create_task)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            evolution_router.create_evolution_task(
+                evolution_router.EvolutionTaskCreateRequest(
+                    task_name="task",
+                    target_desc="target",
+                    base_experiment_id="exp-1",
+                    random_seed=42,
+                    long_trend_profile_id="caller_override_v9",
+                ),
+                BackgroundTasks(),
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["reason_code"] == "QELT_PROFILE_INVALID"
 
 
 def test_public_error_does_not_expose_internal_control_payload() -> None:
@@ -362,6 +415,107 @@ def test_create_or_update_resolves_both_snapshots_and_submits_ready_request(
     assert phase2.prepared_request.outcome_data_root_uri == "/allowlisted/outcome"
     assert phase2.submitted is True
     assert result["evaluation_id"].startswith("qelt_")
+
+
+def test_input_preview_is_read_only_and_reports_exact_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        async def list_workspace_files(self, task_id, loop_id):  # type: ignore[no-untyped-def]
+            assert (task_id, loop_id) == ("task-1", "Loop3")
+            prefix = "mlruns/exp-1/rec-1/artifacts"
+            return {
+                "schema_version": "qe_workspace_catalog_v1",
+                "catalog_completeness": "complete",
+                "task_id": task_id,
+                "loop_name": loop_id,
+                "files": [
+                    {
+                        "relative_path": f"{prefix}/pred.pkl",
+                        "sha256": "1" * 64,
+                        "size_bytes": 123,
+                    },
+                    {
+                        "relative_path": f"{prefix}/portfolio_analysis/positions_normal_1day.pkl",
+                        "sha256": "2" * 64,
+                        "size_bytes": 456,
+                    },
+                ],
+            }
+
+    class _ClientContext:
+        async def __aenter__(self):
+            return _Client()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Resolver:
+        async def resolve_requested_snapshot(self, *, node_id, requested_snapshot_id, client, snapshot_role="outcome"):
+            del client
+            return ResolvedDatasetSnapshot(
+                node_id=node_id,
+                requested_snapshot_id=requested_snapshot_id,
+                root_uri=f"/allowlisted/{snapshot_role}",
+                identity=_identity(requested_snapshot_id),
+                data_action=None,
+            )
+
+    class _NoWrites:
+        def __getattr__(self, name):
+            raise AssertionError(f"preview must not access write dependency: {name}")
+
+    async def _recorder_ref(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {"experiment_id": "exp-1", "recorder_id": "rec-1"}
+
+    service = QELongTrendAPIService(
+        snapshot_resolver=_Resolver(),  # type: ignore[arg-type]
+        result_repository=_NoWrites(),  # type: ignore[arg-type]
+        artifact_store=_NoWrites(),  # type: ignore[arg-type]
+        phase2_service=_NoWrites(),  # type: ignore[arg-type]
+    )
+    service._load_loop_context = lambda **_kwargs: {  # type: ignore[method-assign]
+        "node_id": "wsl",
+        "run_id": "run-1",
+        "feature_snapshot_id": "feature-20260630",
+        "config_json": {"backtest_freq": "1day"},
+    }
+    monkeypatch.setattr(
+        "backend.services.quantevolver.long_trend_api_service.QEWorkspaceClient.for_node",
+        classmethod(lambda _cls, _node_id: _ClientContext()),
+    )
+    monkeypatch.setattr(
+        "backend.services.quantevolver.long_trend_api_service.load_authoritative_recorder_ref",
+        _recorder_ref,
+    )
+
+    result = asyncio.run(
+        service.preview_inputs(
+            task_id="task-1",
+            loop_index=3,
+            request=LongTrendCreateRequest(
+                profile_id="qe_long_trend_v1",
+                outcome_dataset_snapshot_id="outcome-20260728",
+            ),
+        )
+    )
+
+    artifacts = {item["input_name"]: item for item in result["artifact_inputs"]}
+    assert result["ready_for_node"] is True
+    assert result["technical_readiness_only"] is True
+    assert result["research_gate"] is False
+    assert artifacts["prediction"]["available"] is True
+    assert "relative_path" not in artifacts["prediction"]["artifact"]
+    assert artifacts["positions"]["available"] is True
+    assert artifacts["portfolio_report"]["available"] is False
+    assert artifacts["indicator_object"]["reason_code"] == "QELT_INDICATOR_OBJECT_MISSING"
+    assert artifacts["orders"]["available"] is False
+    assert artifacts["orders"]["reason_code"] == "QELT_ORDERS_ARTIFACT_MISSING"
+    assert artifacts["trades"]["available"] is False
+    assert artifacts["trades"]["reason_code"] == "QELT_TRADES_ARTIFACT_MISSING"
+    action_inputs = {item.get("input_name") for item in result["data_action_plan"]}
+    assert {"orders", "trades"}.issubset(action_inputs)
+    assert all(value is False for value in result["side_effects"].values())
 
 
 def test_terminal_existing_evaluation_materializes_without_resubmitting(

@@ -107,6 +107,7 @@ plans:
     command_key: nox_qe_long_trend_phase4_ui
     nox_session: qe_long_trend_phase4_ui
     ci_lane: frontend
+    frontend_test_path: tests/quantevolver/qe_long_trend_evaluation.spec.ts
     enabled: true
     requires_backend: false
     requires_frontend: true

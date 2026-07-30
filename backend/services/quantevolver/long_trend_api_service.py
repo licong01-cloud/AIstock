@@ -12,14 +12,30 @@ from backend.db.pg_pool import get_conn
 from backend.services.qe_archive.long_trend_repository import QELongTrendEvaluationResultRepository
 from backend.services.quantevolver.experiment_config import normalize_label_horizon
 from backend.services.quantevolver.long_trend_artifact_store import QELongTrendArtifactStore
-from backend.services.quantevolver.long_trend_evaluation_contract import EVALUATOR_VERSION, PROFILE_ID_V1
+from backend.services.quantevolver.long_trend_artifact_resolver import (
+    resolve_long_trend_recorder_artifacts,
+)
+from backend.services.quantevolver.long_trend_evaluation_contract import (
+    EVALUATOR_VERSION,
+    PROFILE_ID_V1,
+    QELongTrendError,
+    QELongTrendReason,
+    get_long_trend_profile,
+)
 from backend.services.quantevolver.long_trend_evaluation_control_repository import QE_RUN_TYPES, QE_SOURCE_SYSTEMS
 from backend.services.quantevolver.long_trend_evaluation_phase2 import (
     QELongTrendPhase2Service,
     ResolvedLongTrendEvaluationRequest,
 )
-from backend.services.quantevolver.long_trend_snapshot_resolver import QELongTrendSnapshotResolver
+from backend.services.quantevolver.long_trend_snapshot_resolver import (
+    QELongTrendSnapshotResolver,
+    ResolvedDatasetSnapshot,
+)
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient, QEWorkspaceDatasetIdentity
+from backend.services.quantevolver.results_only_retry import (
+    ResultsOnlyGateError,
+    load_authoritative_recorder_ref,
+)
 
 
 class QELongTrendAPIServiceError(RuntimeError):
@@ -205,6 +221,213 @@ class QELongTrendAPIService:
             "reason_code": row.get("reason_code"),
         }
 
+    async def preview_inputs(
+        self,
+        *,
+        task_id: str,
+        loop_index: int,
+        request: LongTrendCreateRequest,
+    ) -> dict[str, Any]:
+        """Inspect historical F-014 inputs without creating any platform state."""
+
+        try:
+            profile = get_long_trend_profile(request.profile_id)
+        except QELongTrendError as exc:
+            raise QELongTrendAPIServiceError(
+                "unsupported long-trend profile",
+                reason_code=exc.reason_code,
+                context=exc.context,
+            ) from exc
+        context = await asyncio.to_thread(
+            self._load_loop_context,
+            task_id=task_id,
+            loop_index=loop_index,
+        )
+        node_id = str(context["node_id"])
+        loop_id = f"Loop{int(loop_index)}"
+        data_actions: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        artifact_rows: list[dict[str, Any]] = []
+        inventory_ready = False
+
+        async with QEWorkspaceClient.for_node(node_id) as client:
+            archived_feature_snapshot_id = str(
+                context.get("feature_snapshot_id") or context.get("dataset_snapshot_id") or ""
+            ).strip()
+            feature = (
+                await self.snapshot_resolver.resolve_requested_snapshot(
+                    node_id=node_id,
+                    requested_snapshot_id=archived_feature_snapshot_id,
+                    client=client,
+                    snapshot_role="feature",
+                )
+                if archived_feature_snapshot_id
+                else self.snapshot_resolver.unresolved_archived_feature(node_id=node_id)
+            )
+            outcome = await self.snapshot_resolver.resolve_requested_snapshot(
+                node_id=node_id,
+                requested_snapshot_id=request.outcome_dataset_snapshot_id,
+                client=client,
+                snapshot_role="outcome",
+            )
+            for item in (feature.data_action, outcome.data_action):
+                if item is not None:
+                    data_actions.append(dict(item))
+
+            backtest_freq = _backtest_freq(context.get("config_json"))
+            if not backtest_freq:
+                reason_code = QELongTrendReason.PROFILE_UNSUPPORTED_RUN_MODE.value
+                warnings.append(reason_code)
+                artifact_rows = _unavailable_artifact_rows(
+                    reason_code=reason_code,
+                    action="archive_authoritative_backtest_frequency",
+                )
+                data_actions.append(
+                    {
+                        "action": "archive_authoritative_backtest_frequency",
+                        "reason_code": reason_code,
+                        "input_name": "backtest_freq",
+                        "task_id": task_id,
+                        "loop_index": int(loop_index),
+                    }
+                )
+            else:
+                try:
+                    recorder_ref = await load_authoritative_recorder_ref(
+                        client,
+                        task_id=task_id,
+                        loop_id=loop_id,
+                        node_id=node_id,
+                    )
+                    catalog = await client.list_workspace_files(task_id, loop_id)
+                    inventory = resolve_long_trend_recorder_artifacts(
+                        task_id=task_id,
+                        loop_id=loop_id,
+                        recorder_ref=recorder_ref,
+                        catalog=catalog,
+                        backtest_freq=backtest_freq,
+                    )
+                    inventory_ready = True
+                    warnings.extend(inventory.warnings)
+                    # Preview has a stable input contract: a missing optional
+                    # artifact must remain visible instead of disappearing
+                    # from the response when the resolver has no catalog row.
+                    for name in _PREVIEW_ARTIFACT_NAMES:
+                        artifact = inventory.artifacts.get(name)
+                        available = artifact is not None
+                        reason_code = None if available else _artifact_missing_reason(name)
+                        artifact_rows.append(
+                            {
+                                "input_name": name,
+                                "category": "recorder_artifact",
+                                "available": available,
+                                "reason_code": reason_code,
+                                "artifact": _public_artifact_summary(artifact),
+                            }
+                        )
+                        if not available:
+                            data_actions.append(
+                                {
+                                    "action": "archive_missing_qe_recorder_artifact",
+                                    "reason_code": reason_code,
+                                    "input_name": name,
+                                    "task_id": task_id,
+                                    "loop_index": int(loop_index),
+                                }
+                            )
+                except ResultsOnlyGateError as exc:
+                    reason_code = QELongTrendReason.RECORDER_REF_MISSING.value
+                    artifact_rows = _unavailable_artifact_rows(
+                        reason_code=reason_code,
+                        action="restore_authoritative_qe_recorder_reference",
+                    )
+                    warnings.append(reason_code)
+                    data_actions.append(
+                        {
+                            "action": "restore_authoritative_qe_recorder_reference",
+                            "reason_code": reason_code,
+                            "source_reason_code": exc.reason_code,
+                            "input_name": "recorder_ref",
+                            "task_id": task_id,
+                            "loop_index": int(loop_index),
+                        }
+                    )
+                except QELongTrendError as exc:
+                    if exc.reason_code == QELongTrendReason.NON_QE_SOURCE_REJECTED.value:
+                        raise QELongTrendAPIServiceError(
+                            "workspace catalog does not match the authoritative QE identity",
+                            reason_code=exc.reason_code,
+                            context=exc.context,
+                        ) from exc
+                    artifact_rows = _unavailable_artifact_rows(
+                        reason_code=exc.reason_code,
+                        action="repair_qe_workspace_catalog",
+                    )
+                    warnings.append(exc.reason_code)
+                    data_actions.append(
+                        {
+                            "action": "repair_qe_workspace_catalog",
+                            "reason_code": exc.reason_code,
+                            "input_name": "workspace_catalog",
+                            "task_id": task_id,
+                            "loop_index": int(loop_index),
+                        }
+                    )
+                except Exception as exc:
+                    reason_code = QELongTrendReason.WORKSPACE_CATALOG_PARTIAL.value
+                    artifact_rows = _unavailable_artifact_rows(
+                        reason_code=reason_code,
+                        action="restore_qe_workspace_catalog",
+                    )
+                    warnings.append(reason_code)
+                    data_actions.append(
+                        {
+                            "action": "restore_qe_workspace_catalog",
+                            "reason_code": reason_code,
+                            "input_name": "workspace_catalog",
+                            "task_id": task_id,
+                            "loop_index": int(loop_index),
+                            "error_type": type(exc).__name__,
+                        }
+                    )
+
+        dataset_rows = [
+            _dataset_preview_row("feature_dataset_identity", feature),
+            _dataset_preview_row("outcome_dataset_identity", outcome),
+        ]
+        return {
+            "schema_version": "qe_long_trend_input_preview_v1",
+            "task_id": task_id,
+            "loop_index": int(loop_index),
+            "run_id": str(context["run_id"]),
+            "node_id": node_id,
+            "profile": {
+                "profile_id": profile.profile_id,
+                "profile_sha256": profile.profile_sha256,
+                "horizons": list(profile.horizons),
+                "barriers": list(profile.barriers),
+                "calendar_slices": list(profile.calendar_slices),
+            },
+            "requested_outcome_dataset_snapshot_id": request.outcome_dataset_snapshot_id,
+            "backtest_freq": _backtest_freq(context.get("config_json")),
+            "dataset_inputs": dataset_rows,
+            "artifact_inputs": artifact_rows,
+            "ready_for_node": feature.resolved and outcome.resolved and inventory_ready,
+            "technical_readiness_only": True,
+            "research_gate": False,
+            "data_action_plan": _dedupe_preview_actions(data_actions),
+            "warnings": sorted(set(warnings)),
+            "side_effects": {
+                "training_started": False,
+                "backtest_started": False,
+                "evaluation_created": False,
+                "control_row_created": False,
+                "worker_submitted": False,
+                "cas_written": False,
+                "database_written": False,
+            },
+        }
+
     def materialize_existing(self, evaluation_id: str) -> dict[str, Any]:
         persisted = self._materialize_existing(evaluation_id)
         return {
@@ -319,6 +542,81 @@ def _backtest_freq(config: Any) -> str | None:
         return None
     value = config.get("backtest_freq") or config.get("freq")
     return str(value).strip() if value else None
+
+
+_PREVIEW_ARTIFACT_NAMES = (
+    "prediction",
+    "label",
+    "params",
+    "portfolio_report",
+    "positions",
+    "indicator_summary",
+    "indicator_object",
+    "orders",
+    "trades",
+)
+
+
+def _artifact_missing_reason(name: str) -> str:
+    return {
+        "prediction": QELongTrendReason.PREDICTION_ARTIFACT_MISSING.value,
+        "positions": QELongTrendReason.POSITION_ARTIFACT_MISSING.value,
+        "indicator_object": QELongTrendReason.INDICATOR_OBJECT_MISSING.value,
+    }.get(name, f"QELT_{name.upper()}_ARTIFACT_MISSING")
+
+
+def _public_artifact_summary(artifact: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if artifact is None:
+        return None
+    return {
+        key: artifact.get(key)
+        for key in ("sha256", "size_bytes", "parser_contract")
+        if artifact.get(key) is not None
+    }
+
+
+def _unavailable_artifact_rows(*, reason_code: str, action: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "input_name": name,
+            "category": "recorder_artifact",
+            "available": False,
+            "reason_code": reason_code,
+            "artifact": None,
+            "action": action,
+        }
+        for name in _PREVIEW_ARTIFACT_NAMES
+    ]
+
+
+def _dataset_preview_row(
+    input_name: str,
+    resolved: ResolvedDatasetSnapshot,
+) -> dict[str, Any]:
+    identity = resolved.identity
+    snapshot = identity.long_trend_snapshot if identity is not None else None
+    return {
+        "input_name": input_name,
+        "category": "dataset_identity",
+        "available": resolved.resolved,
+        "requested_snapshot_id": resolved.requested_snapshot_id or None,
+        "snapshot_id": snapshot.get("snapshot_id") if isinstance(snapshot, Mapping) else None,
+        "manifest_sha256": snapshot.get("manifest_sha256") if isinstance(snapshot, Mapping) else None,
+        "reason_code": (
+            resolved.data_action.get("reason_code")
+            if resolved.data_action is not None
+            else None
+        ),
+        "data_action": dict(resolved.data_action) if resolved.data_action is not None else None,
+    }
+
+
+def _dedupe_preview_actions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if row not in result:
+            result.append(dict(row))
+    return result
 
 
 def _label_horizon(context: Mapping[str, Any]) -> int | None:
