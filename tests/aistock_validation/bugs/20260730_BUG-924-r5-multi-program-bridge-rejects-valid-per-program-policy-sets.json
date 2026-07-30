@@ -1,6 +1,8 @@
 {
   "actual": "Production R5 bridge for completed batch ahrb_dccde5770463663ecbde96fbe304cd26 loads 673 exact candidates and projects 673 observations plus 2686 labels, then fails ADVISORY_HR_DATASET_BRIDGE_LINEAGE_CONFLICT because _validate_capture_inputs requires one global policy/component set. A multi-Program batch legitimately carries one frozen policy set per Program/capture scope. Preserve exact requested-policy, per-signal/group consistency, PIT lineage, and fail-closed behavior without weakening unrelated checks.",
   "allowed_write_scope": [
+    "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+    "backend/tests/advisory_historical_range/test_r4_dataset_bridge_postgres.py",
     "tests/aistock_validation/bugs/20260730_BUG-924-r5-multi-program-bridge-rejects-valid-per-program-policy-sets.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,20 +25,37 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "A multi-Program bridge accepts distinct frozen policy/component identities across independent canonical signals and capture groups, while each signal and each concrete label capture group remains bound to exactly one requested policy/component identity and all existing lineage checks remain fail-closed.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+      "backend/tests/advisory_historical_range/test_r4_dataset_bridge_postgres.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
+      "changed_files": [
+        "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+        "backend/tests/advisory_historical_range/test_r4_dataset_bridge_postgres.py"
+      ],
+      "impacted_modules": [
+        "advisory.historical_range",
+        "tests.backend"
+      ],
       "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+        "backend/tests/advisory_historical_range/test_r4_dataset_bridge_postgres.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/advisory_historical_range/dataset_bridge_postgres.py",
+      "backend/tests/advisory_historical_range/test_r4_dataset_bridge_postgres.py"
+    ]
   },
   "first_seen_at": "2026-07-30T02:55:10.330133Z",
   "fix_branch": null,
@@ -52,7 +71,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r4_dataset_bridge_postgres.py -q -p no:cacheprovider",
   "required_verification": [
     "l0"
   ],
