@@ -37,6 +37,7 @@ class DatasetSpec:
     code_param_name: str = "ts_code"       # BY_CODE: API parameter name for the code value
     skip_date_params: bool = False         # True = don't pass start_date/end_date to API
     replace_existing_dates: bool = False   # True = replace one date window instead of append-only upsert
+    replace_by_code: bool = False          # BY_CODE full mirror: delete the code's local rows before reinserting the complete upstream payload (takedown fidelity)
     rate_per_minute: int = 500             # per-API 频率限制，默认 500/min (10000积分)
     date_param_name: str = "trade_date"    # BY_DATE: API date parameter name
     incremental_cursor_from_audit: bool = False  # sparse BY_DATE datasets can advance through successful empty-date refreshes
@@ -452,6 +453,7 @@ SW_INDEX_MEMBER = DatasetSpec(
     code_param_name="l2_code",
     skip_date_params=True,
     supports_incremental=False,
+    replace_by_code=True,
     batch_sleep=0.2,
     rate_per_minute=300,
 )

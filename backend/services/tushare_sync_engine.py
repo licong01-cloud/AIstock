@@ -318,6 +318,38 @@ class TushareSyncEngine:
             pgx.execute_values(cur, sql, values)
         return len(values)
 
+    def _replace_code_batch(
+        self,
+        conn,
+        spec: DatasetSpec,
+        code_val: str,
+        rows: List[Dict[str, Any]],
+    ) -> int:
+        """Mirror one BY_CODE payload: delete the code's local rows, then insert.
+
+        BUG-930: full-refresh BY_CODE datasets (``spec.replace_by_code``) must
+        take down local rows the upstream no longer returns; append-only
+        upsert leaves ended mappings active forever (e.g. sw_index_member
+        dual-active PIT pollution). The delete and insert run in a single
+        transaction so a failure can never leave the code without rows.
+        """
+        previous_autocommit = conn.autocommit
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM {spec.target_table} WHERE {spec.code_param_name} = %s",
+                    (code_val,),
+                )
+            inserted = self._upsert_batch(conn, spec, rows)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.autocommit = previous_autocommit
+        return inserted
+
     def _validate_rows_for_date(
         self,
         spec: DatasetSpec,
@@ -1297,8 +1329,19 @@ class TushareSyncEngine:
                                    f"(>= {spec.row_limit}); narrow date range and rerun")
                             self._log(conn, job_id, "error", msg)
                             raise RuntimeError(msg)
+                        # BUG-930: never mirror an empty upstream payload by
+                        # deleting local rows; a transient upstream gap would
+                        # otherwise wipe the whole code.
+                        if spec.replace_by_code and not rows:
+                            raise RuntimeError(
+                                f"{spec.name} {spec.code_param_name}={code_val} returned no rows; "
+                                "refusing to mirror-delete local rows"
+                            )
 
-                        inserted = self._upsert_batch(conn, spec, rows)
+                        if spec.replace_by_code:
+                            inserted = self._replace_code_batch(conn, spec, code_val, rows)
+                        else:
+                            inserted = self._upsert_batch(conn, spec, rows)
                         result.inserted_rows += inserted
                         result.success_batches += 1
                     except Exception as exc:
