@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-928",
-  "closed_at": null,
+  "closed_at": "2026-07-30T15:39:18.912720Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -75,8 +75,8 @@
   },
   "first_seen_at": "2026-07-30T06:53:33.184950Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "efe38e9f9fe34718db6db4140bbc19c77b5716bc",
+  "fixed_at": "2026-07-30T15:39:18.912733Z",
   "github_issue_number": 2944,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2944",
   "last_seen_at": "2026-07-30T06:53:33.184950Z",
@@ -84,6 +84,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2948",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -95,7 +96,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -104,6 +105,10 @@
     "fingerprint": "17b03e57f8bd7f85a0746c7c",
     "source_event_id": "FE-20260730-17b03e57f8bd"
   },
+  "validation_evidence": [
+    "PR #2948 CI -> 16 passed, 0 failed",
+    "python -m pytest backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -q -p no:cacheprovider -> 38 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
