@@ -944,6 +944,95 @@ def _blocker_args(tmp_path) -> SimpleNamespace:
     )
 
 
+def _blocker_numeric_environment(*, thread_pools=None) -> dict:
+    return {
+        "schema_version": "hmm_risk_c008_b3_diag04_numeric_environment_v1",
+        "scope": "same_host_same_fixed_numeric_environment_only",
+        "python_version": "3.13.5",
+        "python_implementation": "CPython",
+        "python_executable": "C:/Miniconda/envs/AIstock/python.exe",
+        "packages": {
+            "numpy": "2.4.0",
+            "scipy": "1.16.3",
+            "scikit-learn": "1.8.0",
+            "hmmlearn": "0.3.3",
+            "threadpoolctl": "3.6.0",
+        },
+        "thread_env": {
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+        },
+        "thread_pools": [
+            {
+                "user_api": "blas",
+                "internal_api": "openblas",
+                "num_threads": 1,
+                "prefix": "libscipy_openblas",
+            }
+        ]
+        if thread_pools is None
+        else thread_pools,
+    }
+
+
+def _valid_blocker_child_value(numeric_environment: dict) -> tuple[dict, dict]:
+    target_entry = {
+        "role": "control",
+        "family": "legacy_covfix",
+        "level": "L2",
+        "seed": 42,
+        "sector_code": "L2-001",
+        "source_entry_receipt_sha256": "7" * 64,
+        "formal_failed_stages": [],
+    }
+    target = {
+        "formal_report_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["report_sha256"],
+        "target_manifest_sha256": "1" * 64,
+        "parameter_profile_sha256": "2" * 64,
+        "target_pair_count": 1,
+        "targets": [target_entry],
+    }
+    evidence_body = {
+        **target_entry,
+        "status": "fit_completed",
+        "formal_entry_receipt_reproduced": True,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "model_write_performed": False,
+    }
+    value = {
+        "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_pass_v1",
+        "diagnostic_producer_commit": "d" * 40,
+        "formal_producer_commit": subject.B3_BLOCKER_FORMAL_AUTHORITY["producer_commit"],
+        "formal_report_sha256": target["formal_report_sha256"],
+        "target_manifest_sha256": target["target_manifest_sha256"],
+        "dataset_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["dataset_manifest_hash"],
+        "mapping_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["mapping_manifest_hash"],
+        "calendar_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["l2_stock_fact_manifest_hash"],
+        "feature_domain_policy_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["feature_domain_policy_sha256"],
+        "formula_version": subject.B3_BLOCKER_FORMAL_AUTHORITY["formula_version"],
+        "parameter_profile_sha256": target["parameter_profile_sha256"],
+        "numeric_environment": numeric_environment,
+        "numeric_environment_sha256": subject.canonical_sha256(numeric_environment),
+        "fit_count": 1,
+        "targeted_evidence": [{**evidence_body, "diagnostic_entry_sha256": subject.canonical_sha256(evidence_body)}],
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "acceptance_decision_reexecuted": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return value, target
+
+
 def test_blocker_child_pass_validator_rejects_incomplete_success(monkeypatch) -> None:
     target_entry = {
         "role": "control",
@@ -970,8 +1059,8 @@ def test_blocker_child_pass_validator_rejects_incomplete_success(monkeypatch) ->
         "selection_performed": False,
         "model_write_performed": False,
     }
-    numeric_environment = {"packages": {"hmmlearn": "0.3.3"}, "thread_env": {"OMP_NUM_THREADS": "1"}}
-    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: numeric_environment)
+    numeric_environment = _blocker_numeric_environment()
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: deepcopy(numeric_environment))
     value = {
         "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_pass_v1",
         "diagnostic_producer_commit": "d" * 40,
@@ -1004,6 +1093,62 @@ def test_blocker_child_pass_validator_rejects_incomplete_success(monkeypatch) ->
     incomplete["targeted_evidence"] = []
     with pytest.raises(StateModelSetError, match="evidence count is invalid"):
         subject._validate_b3_blocker_pass(incomplete, target)
+
+
+def test_blocker_child_accepts_additional_post_fit_single_thread_pool(monkeypatch) -> None:
+    parent_environment = _blocker_numeric_environment()
+    child_environment = _blocker_numeric_environment(
+        thread_pools=[
+            *parent_environment["thread_pools"],
+            {
+                "user_api": "openmp",
+                "internal_api": "openmp",
+                "num_threads": 1,
+                "prefix": "libomp",
+            },
+        ]
+    )
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: parent_environment)
+    value, target = _valid_blocker_child_value(child_environment)
+
+    subject._validate_b3_blocker_pass(value, target)
+
+
+def test_blocker_child_rejects_non_single_thread_post_fit_pool(monkeypatch) -> None:
+    parent_environment = _blocker_numeric_environment()
+    child_environment = _blocker_numeric_environment(
+        thread_pools=[{"user_api": "openmp", "internal_api": "openmp", "num_threads": 2}]
+    )
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: parent_environment)
+    value, target = _valid_blocker_child_value(child_environment)
+
+    with pytest.raises(StateModelSetError, match="thread pools are not single-threaded"):
+        subject._validate_b3_blocker_pass(value, target)
+
+
+def test_blocker_child_rejects_numeric_environment_hash_mismatch(monkeypatch) -> None:
+    numeric_environment = _blocker_numeric_environment()
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: numeric_environment)
+    value, target = _valid_blocker_child_value(numeric_environment)
+    value["numeric_environment_sha256"] = "0" * 64
+
+    with pytest.raises(StateModelSetError, match="numeric environment identity is invalid"):
+        subject._validate_b3_blocker_pass(value, target)
+
+
+@pytest.mark.parametrize("field", ["python_executable", "packages", "thread_env"])
+def test_blocker_child_rejects_stable_numeric_environment_drift(monkeypatch, field) -> None:
+    parent_environment = _blocker_numeric_environment()
+    child_environment = deepcopy(parent_environment)
+    if field == "python_executable":
+        child_environment[field] = "C:/other/python.exe"
+    else:
+        child_environment[field] = {**child_environment[field], next(iter(child_environment[field])): "drifted"}
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: parent_environment)
+    value, target = _valid_blocker_child_value(child_environment)
+
+    with pytest.raises(StateModelSetError, match="numeric environment identity is invalid"):
+        subject._validate_b3_blocker_pass(value, target)
 
 
 def test_blocker_parent_rejects_non_bitwise_fresh_process_payloads(monkeypatch, tmp_path) -> None:

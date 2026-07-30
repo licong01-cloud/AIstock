@@ -1910,6 +1910,39 @@ def _parse_canonical_child_payload(payload: bytes, *, label: str) -> dict[str, A
     return value
 
 
+def _validate_b3_blocker_numeric_environment(numeric_environment: dict[str, Any]) -> None:
+    expected = c008_b3_diag04_fixed_numeric_environment()
+    stable_fields = (
+        "schema_version",
+        "scope",
+        "python_version",
+        "python_implementation",
+        "python_executable",
+        "packages",
+        "thread_env",
+    )
+    if set(numeric_environment) != set(expected) or any(
+        numeric_environment.get(field) != expected.get(field) for field in stable_fields
+    ):
+        raise StateModelSetError("blocker diagnostic child numeric environment identity is invalid")
+    pools = numeric_environment.get("thread_pools")
+    if not isinstance(pools, list) or any(not isinstance(pool, dict) for pool in pools):
+        raise StateModelSetError("blocker diagnostic child thread pool inventory is invalid")
+    non_single = [
+        {
+            "user_api": pool.get("user_api"),
+            "internal_api": pool.get("internal_api"),
+            "num_threads": pool.get("num_threads"),
+        }
+        for pool in pools
+        if isinstance(pool.get("num_threads"), bool)
+        or not isinstance(pool.get("num_threads"), int)
+        or pool["num_threads"] != 1
+    ]
+    if non_single:
+        raise StateModelSetError(f"blocker diagnostic child thread pools are not single-threaded: {non_single}")
+
+
 def _validate_b3_blocker_pass(value: dict[str, Any], target_manifest: dict[str, Any]) -> None:
     authority = B3_BLOCKER_FORMAL_AUTHORITY
     expected_scalars = {
@@ -1941,12 +1974,11 @@ def _validate_b3_blocker_pass(value: dict[str, Any], target_manifest: dict[str, 
     if len(producer_commit) != 40 or any(character not in "0123456789abcdef" for character in producer_commit):
         raise StateModelSetError("blocker diagnostic child producer commit identity is invalid")
     numeric_environment = value.get("numeric_environment")
-    if (
-        not isinstance(numeric_environment, dict)
-        or value.get("numeric_environment_sha256") != canonical_sha256(numeric_environment)
-        or numeric_environment != c008_b3_diag04_fixed_numeric_environment()
+    if not isinstance(numeric_environment, dict) or value.get("numeric_environment_sha256") != canonical_sha256(
+        numeric_environment
     ):
         raise StateModelSetError("blocker diagnostic child numeric environment identity is invalid")
+    _validate_b3_blocker_numeric_environment(numeric_environment)
     evidence = value.get("targeted_evidence")
     if not isinstance(evidence, list) or len(evidence) != target_manifest["target_pair_count"]:
         raise StateModelSetError("blocker diagnostic child evidence count is invalid")
