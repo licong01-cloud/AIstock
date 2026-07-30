@@ -49,6 +49,9 @@ from backend.services.advisory_phase1.dataset_build import (
     LabelTargetIdentity,
     RetrospectiveCaptureSetMember,
     RetrospectiveDatasetBuildRequest,
+    RetrospectiveSnapshotPolicyMember,
+    RetrospectiveSnapshotPolicySet,
+    SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
     SnapshotUniversePolicySetError,
     build_snapshot_universe_policy_set_hash,
 )
@@ -112,9 +115,6 @@ from backend.services.advisory_phase1.source_revision_postgres import (
 )
 
 
-_SNAPSHOT_POLICY_SET_SCHEMA_VERSION = "advisory_phase1r_snapshot_policy_set_v1"
-
-
 @dataclass(frozen=True)
 class _SnapshotPolicyAuthority:
     policy_bundle_id: str
@@ -163,7 +163,12 @@ class PostgresHistoricalRangeBridgeAdapters:
             conn_factory=conn_factory,
         )
         self._build_repository = PostgresDatasetBuildRepository(
-            conn_factory=conn_factory
+            conn_factory=conn_factory,
+            historical_range_policy_payload_loader=lambda raw_ref: (
+                self._artifact_store.load(
+                    HistoricalRangeArtifactRefV1.model_validate(raw_ref)
+                ).payload
+            ),
         )
         writer = DeterministicParquetWriter(lineage_identity_type="HISTORICAL_RANGE")
         source_reader = PostgresSnapshotSourceReader(
@@ -1456,7 +1461,7 @@ class PostgresHistoricalRangeBridgeAdapters:
         refs_by_hash = {
             item.payload_sha256: item for item in request.policy_bundle_refs
         }
-        members: list[dict[str, Any]] = []
+        members: list[RetrospectiveSnapshotPolicyMember] = []
         policy_ids: dict[str, str] = {}
         component_hashes_by_policy: dict[str, dict[str, str]] = {}
         component_set_hashes: dict[str, str] = {}
@@ -1485,18 +1490,20 @@ class PostgresHistoricalRangeBridgeAdapters:
             policy_ids[policy_hash] = str(policy.policy_bundle_id)
             component_hashes_by_policy[policy_hash] = dict(component_hashes)
             component_set_hashes[policy_hash] = component_set_hash
-            members.append(
-                {
-                    "policy_bundle_id": policy_ids[policy_hash],
-                    "policy_bundle_hash": policy_hash,
-                    "policy_bundle_ref": policy_ref.model_dump(mode="json"),
-                    "policy_component_hashes": {
-                        role: component_hashes[role]
-                        for role in sorted(component_hashes)
-                    },
-                    "policy_component_set_hash": component_set_hash,
-                }
-            )
+            try:
+                member = RetrospectiveSnapshotPolicyMember(
+                    policy_bundle_id=policy_ids[policy_hash],
+                    policy_bundle_hash=policy_hash,
+                    policy_bundle_ref=policy_ref.model_dump(mode="json"),
+                    policy_component_hashes=component_hashes,
+                    policy_component_set_hash=component_set_hash,
+                )
+            except ValueError as exc:
+                raise HistoricalRangeDatasetBridgeError(
+                    REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                    "snapshot policy member differs from its exact component authority",
+                ) from exc
+            members.append(member)
 
         if len(members) == 1:
             policy_hash = policy_hashes[0]
@@ -1508,65 +1515,14 @@ class PostgresHistoricalRangeBridgeAdapters:
                 component_set_hash=component_set_hashes[policy_hash],
             )
 
-        component_roles = tuple(
-            sorted(
-                {
-                    role
-                    for values in component_hashes_by_policy.values()
-                    for role in values
-                }
-            )
-        )
-        if any(
-            tuple(sorted(values)) != component_roles
-            for values in component_hashes_by_policy.values()
-        ):
+        try:
+            policy_set = RetrospectiveSnapshotPolicySet.from_members(members)
+        except ValueError as exc:
             raise HistoricalRangeDatasetBridgeError(
                 REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
-                "snapshot policies do not expose one complete component role set",
-            )
-        aggregate_component_hashes = {
-            role: canonical_json_sha256(
-                {
-                    "schema_version": (
-                        "advisory_phase1r_snapshot_policy_component_binding_set_v1"
-                    ),
-                    "component_role": role,
-                    "members": [
-                        {
-                            "policy_bundle_hash": policy_hash,
-                            "component_hash": component_hashes_by_policy[
-                                policy_hash
-                            ][role],
-                        }
-                        for policy_hash in policy_hashes
-                    ],
-                }
-            )
-            for role in component_roles
-        }
-        aggregate_component_set_hash = canonical_json_sha256(
-            {
-                "schema_version": "advisory_phase1r_snapshot_policy_component_set_v1",
-                "members": [
-                    {
-                        "policy_bundle_hash": policy_hash,
-                        "policy_component_set_hash": component_set_hashes[
-                            policy_hash
-                        ],
-                    }
-                    for policy_hash in policy_hashes
-                ],
-            }
-        )
-        payload = {
-            "schema_version": _SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
-            "members": members,
-            "aggregate_component_hashes": aggregate_component_hashes,
-            "aggregate_component_set_hash": aggregate_component_set_hash,
-            "research_scope": "RETROSPECTIVE_RESEARCH_ONLY",
-            "execution_prohibited": True,
-        }
+                "snapshot policy set differs from its exact members",
+            ) from exc
+        payload = policy_set.canonical_payload()
         upstream_refs = tuple(
             sorted(
                 (refs_by_hash[policy_hash] for policy_hash in policy_hashes),
@@ -1579,8 +1535,8 @@ class PostgresHistoricalRangeBridgeAdapters:
         )
         stored = self._artifact_store.publish_payload(
             artifact_kind=HistoricalRangeArtifactKind.REQUEST,
-            producer_contract_version=_SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
-            payload_schema_version=_SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
+            producer_contract_version=SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
+            payload_schema_version=SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
             resolved_request_hash=str(request.request_hash),
             payload=payload,
             upstream_refs=upstream_refs,
@@ -1595,8 +1551,8 @@ class PostgresHistoricalRangeBridgeAdapters:
             policy_bundle_id=f"ahrpbs_{stored.ref.payload_sha256[:20]}",
             policy_bundle_hash=stored.ref.payload_sha256,
             policy_bundle_ref=stored.ref,
-            component_hashes=aggregate_component_hashes,
-            component_set_hash=aggregate_component_set_hash,
+            component_hashes=policy_set.aggregate_component_hashes,
+            component_set_hash=policy_set.aggregate_component_set_hash,
         )
 
     def _build_request(

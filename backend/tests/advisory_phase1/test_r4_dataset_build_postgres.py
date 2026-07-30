@@ -5,6 +5,7 @@ import hashlib
 
 import pytest
 
+from backend.services.advisory_phase0a.policy import canonical_json_sha256
 from backend.services.advisory_phase1.dataset_build import (
     BaseSnapshotIdentity,
     CompositeCapabilityRequirement,
@@ -12,6 +13,9 @@ from backend.services.advisory_phase1.dataset_build import (
     LabelTargetIdentity,
     RetrospectiveCaptureSetMember,
     RetrospectiveDatasetBuildRequest,
+    RetrospectiveSnapshotPolicyMember,
+    RetrospectiveSnapshotPolicySet,
+    SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
     build_id_for,
     logical_build_key,
 )
@@ -112,8 +116,13 @@ def _request() -> RetrospectiveDatasetBuildRequest:
 
 
 class _CaptureCursor:
-    def __init__(self, request: RetrospectiveDatasetBuildRequest) -> None:
+    def __init__(
+        self,
+        request: RetrospectiveDatasetBuildRequest,
+        policy_by_capture: dict[str, RetrospectiveSnapshotPolicyMember] | None = None,
+    ) -> None:
         self.request = request
+        self.policy_by_capture = policy_by_capture or {}
         self.query = ""
         self.params: tuple[object, ...] = ()
 
@@ -126,6 +135,21 @@ class _CaptureCursor:
             return None
         capture_id = str(self.params[0])
         member = next(item for item in self.request.captures if item.capture_batch_id == capture_id)
+        policy = self.policy_by_capture.get(capture_id)
+        policy_ref = (
+            policy.policy_bundle_ref
+            if policy is not None
+            else self.request.historical_range_policy_bundle_ref
+        )
+        policy_hash = (
+            policy.policy_bundle_hash
+            if policy is not None
+            else self.request.label_policy_bundle_hash
+        )
+        suffix = capture_id.rsplit("-", 1)[-1] if policy is not None else None
+        observation_mapping_id = (
+            f"observation-mapping-{suffix}" if suffix else "observation-mapping"
+        )
         common = {
             "capture_request_hash": member.capture_request_hash,
             "capture_status": "COMPLETE",
@@ -156,8 +180,8 @@ class _CaptureCursor:
                         }
                     ]
                 },
-                historical_range_policy_bundle_ref=self.request.historical_range_policy_bundle_ref,
-                historical_range_policy_bundle_hash=self.request.label_policy_bundle_hash,
+                historical_range_policy_bundle_ref=policy_ref,
+                historical_range_policy_bundle_hash=policy_hash,
             )
         else:
             common.update(
@@ -171,24 +195,38 @@ class _CaptureCursor:
                     ],
                     "selected_observation_mappings": [
                         {
-                            "selected_mapping_id": "observation-mapping",
-                            "selected_mapping_hash": _hash("observation-mapping"),
+                            "selected_mapping_id": observation_mapping_id,
+                            "selected_mapping_hash": _hash(observation_mapping_id),
                         }
                     ],
                     "label_source_revision_set_id": member.source_revision_set_id,
                     "label_source_revision_set_hash": member.source_revision_set_hash,
-                    "label_policy_bundle_id": self.request.label_policy_bundle_id,
-                    "label_policy_bundle_hash": self.request.label_policy_bundle_hash,
+                    "label_policy_bundle_id": (
+                        policy.policy_bundle_id
+                        if policy is not None
+                        else self.request.label_policy_bundle_id
+                    ),
+                    "label_policy_bundle_hash": policy_hash,
+                    "policy_component_set_hash": (
+                        policy.policy_component_set_hash
+                        if policy is not None
+                        else self.request.policy_component_set_hash
+                    ),
                     "label_as_of_ts": self.request.label_as_of_ts.isoformat(),
                 },
-                historical_range_policy_bundle_ref=self.request.historical_range_policy_bundle_ref,
-                historical_range_policy_bundle_hash=self.request.label_policy_bundle_hash,
+                historical_range_policy_bundle_ref=policy_ref,
+                historical_range_policy_bundle_hash=policy_hash,
             )
         return common
 
     def fetchall(self) -> list[dict[str, str]]:
         capture_id = str(self.params[0])
-        if capture_id == "capture-observation":
+        member = next(
+            item
+            for item in self.request.captures
+            if item.capture_batch_id == capture_id
+        )
+        if member.capture_purpose == "OBSERVATION_CAPTURE_V1":
             return [
                 {
                     "evidence_role": "OBSERVATION_VERSION",
@@ -196,11 +234,13 @@ class _CaptureCursor:
                     "evidence_content_hash": _hash("observation-version"),
                 }
             ]
+        suffix = capture_id.rsplit("-", 1)[-1] if capture_id in self.policy_by_capture else None
+        label_mapping_id = f"label-mapping-{suffix}" if suffix else "label-mapping"
         return [
             {
                 "evidence_role": "SELECTED_LABEL_MAPPING",
-                "evidence_id": "label-mapping",
-                "evidence_content_hash": _hash("label-mapping"),
+                "evidence_id": label_mapping_id,
+                "evidence_content_hash": _hash(label_mapping_id),
             }
         ]
 
@@ -279,6 +319,171 @@ def test_retrospective_capture_admission_and_readback_are_exact() -> None:
     )
     persisted = PostgresDatasetBuildRepository._build_from_row(_build_row(request))
     assert persisted.request == request
+
+
+def _snapshot_policy_member(name: str) -> RetrospectiveSnapshotPolicyMember:
+    component_hashes = {
+        role: _hash(f"{name}:{role}")
+        for role in (
+            "BARRIER",
+            "BENCHMARK",
+            "CALENDAR",
+            "CASH_RETURN",
+            "CORPORATE_ACTION",
+            "COST",
+            "EXECUTION",
+            "MARKET_DATA",
+            "TERMINAL",
+        )
+    }
+    component_set_hash = canonical_json_sha256(
+        [
+            {"component_role": role, "component_hash": component_hashes[role]}
+            for role in sorted(component_hashes)
+        ]
+    )
+    policy_hash = _hash(f"policy:{name}")
+    return RetrospectiveSnapshotPolicyMember(
+        policy_bundle_id=f"policy-{name}",
+        policy_bundle_hash=policy_hash,
+        policy_bundle_ref=_policy_ref(policy_hash),
+        policy_component_hashes=component_hashes,
+        policy_component_set_hash=component_set_hash,
+    )
+
+
+def _composite_request() -> tuple[
+    RetrospectiveDatasetBuildRequest,
+    RetrospectiveSnapshotPolicySet,
+    dict[str, RetrospectiveSnapshotPolicyMember],
+]:
+    policies = {
+        "a": _snapshot_policy_member("a"),
+        "b": _snapshot_policy_member("b"),
+    }
+    policy_set = RetrospectiveSnapshotPolicySet.from_members(policies.values())
+    aggregate_hash = canonical_json_sha256(policy_set.canonical_payload())
+    aggregate_ref = {
+        **_policy_ref(aggregate_hash),
+        "producer_contract_version": SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
+        "payload_schema_version": SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
+    }
+    scopes = tuple(
+        FrozenIdentity(
+            identity_id=f"range-scope-{suffix}",
+            identity_hash=_hash(f"range-scope-{suffix}"),
+        )
+        for suffix in policies
+    )
+    captures = tuple(
+        sorted(
+            (
+                RetrospectiveCaptureSetMember(
+                    capture_batch_id=f"capture-{kind}-{suffix}",
+                    capture_request_hash=_hash(f"request-{kind}-{suffix}"),
+                    capture_receipt_hash=_hash(f"receipt-{kind}-{suffix}"),
+                    membership_hash=_hash(f"membership-{kind}-{suffix}"),
+                    capture_purpose=purpose,
+                    range_lineage_scope_id=f"range-scope-{suffix}",
+                    range_lineage_scope_hash=_hash(f"range-scope-{suffix}"),
+                    source_revision_set_id="source-revision",
+                    source_revision_set_hash=_hash("source-revision"),
+                    date_start=date(2026, 7, 1),
+                    date_end=date(2026, 7, 1),
+                )
+                for suffix in policies
+                for kind, purpose in (
+                    ("label", "LABEL_CAPTURE_V1"),
+                    ("observation", "OBSERVATION_CAPTURE_V1"),
+                )
+            ),
+            key=lambda item: item.capture_batch_id,
+        )
+    )
+    payload = _request().model_dump(mode="python")
+    payload.update(
+        range_lineage_scopes=scopes,
+        range_lineage_scope_set_hash=None,
+        captures=captures,
+        capture_set_hash=None,
+        selected_observation_mappings=tuple(
+            FrozenIdentity(
+                identity_id=f"observation-mapping-{suffix}",
+                identity_hash=_hash(f"observation-mapping-{suffix}"),
+            )
+            for suffix in policies
+        ),
+        selected_observation_mapping_set_hash=None,
+        selected_label_mappings=tuple(
+            FrozenIdentity(
+                identity_id=f"label-mapping-{suffix}",
+                identity_hash=_hash(f"label-mapping-{suffix}"),
+            )
+            for suffix in policies
+        ),
+        selected_label_mapping_set_hash=None,
+        label_policy_bundle_id=f"ahrpbs_{aggregate_hash[:20]}",
+        label_policy_bundle_hash=aggregate_hash,
+        historical_range_policy_bundle_ref=aggregate_ref,
+        benchmark_policy_hash=policy_set.aggregate_component_hashes["BENCHMARK"],
+        cost_policy_hash=policy_set.aggregate_component_hashes["COST"],
+        policy_component_set_hash=policy_set.aggregate_component_set_hash,
+        build_request_hash=None,
+    )
+    request = RetrospectiveDatasetBuildRequest.model_validate(payload)
+    by_capture = {
+        member.capture_batch_id: policies[member.capture_batch_id.rsplit("-", 1)[-1]]
+        for member in captures
+    }
+    return request, policy_set, by_capture
+
+
+def test_composite_snapshot_policy_admission_preserves_each_capture_policy() -> None:
+    request, policy_set, by_capture = _composite_request()
+
+    PostgresDatasetBuildRepository._require_capture_admission(
+        _CaptureCursor(request, by_capture),
+        request,
+        lambda _ref: policy_set.canonical_payload(),
+    )
+
+
+def test_composite_snapshot_policy_admission_requires_exact_artifact_readback() -> None:
+    request, _, by_capture = _composite_request()
+
+    with pytest.raises(Exception, match="requires exact artifact readback"):
+        PostgresDatasetBuildRepository._require_capture_admission(
+            _CaptureCursor(request, by_capture),
+            request,
+        )
+
+
+def test_composite_snapshot_policy_admission_requires_complete_member_coverage() -> None:
+    request, policy_set, by_capture = _composite_request()
+    policy_a = next(
+        item for item in policy_set.members if item.policy_bundle_id == "policy-a"
+    )
+    incomplete = {capture_id: policy_a for capture_id in by_capture}
+
+    with pytest.raises(Exception, match="do not exactly cover the snapshot set"):
+        PostgresDatasetBuildRepository._require_capture_admission(
+            _CaptureCursor(request, incomplete),
+            request,
+            lambda _ref: policy_set.canonical_payload(),
+        )
+
+
+def test_composite_snapshot_policy_admission_rejects_tampered_aggregate() -> None:
+    request, policy_set, by_capture = _composite_request()
+    payload = policy_set.canonical_payload()
+    payload["aggregate_component_set_hash"] = _hash("tampered")
+
+    with pytest.raises(Exception, match="artifact is invalid"):
+        PostgresDatasetBuildRepository._require_capture_admission(
+            _CaptureCursor(request, by_capture),
+            request,
+            lambda _ref: payload,
+        )
 
 
 def test_retrospective_build_readback_rejects_mixed_selector_hash() -> None:
