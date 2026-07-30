@@ -775,7 +775,7 @@ h20 继续作为当前模型对照的统一信号标签，但它不能单独代�
 
 Type A 超跌反弹与 Type B 长期趋势保持独立因子选择、标签头、调仓和退出逻辑；旧多 Alpha 腿只能作为组合相关性/风险基线，不能作为 Type B 演进母体。
 
-F-014 的可实施详细设计已更新至父设计 v1.18，并继续引用 `qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md`。它只读复用现有 Recorder/prediction pointer 和 `qe_archive.run` 父身份，不扩展通用 Prediction Store 或既有 Archive 通用 writer/schema；使用 feature/outcome 双快照、execution environment identity、extension-only 历史价格校验和右删失；逐信号/episode 明细进入 QE-only CAS Parquet。Phase 2 control/worker/CAS 与 Phase 3 metric/artifact/API/MCP 已完成。PR #2906 source/CI、生产 DDL 和当前 8001 runtime contract 已闭合；固定 R8B Loop4 的 historical preview GET 已真实返回 8/11 可用与 3 个 typed gap，且数据库前后不变。normal Loop activation、完整 root/runtime SHA 对齐、live browser visual、其余 5 个 R8B、Phase 5 中断恢复与批量历史重评仍待实施。所有可用结果继续用于研究，缺口不形成研究门禁。
+F-014 的可实施详细设计已更新至父设计 v1.19，并继续引用 `qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md`。它只读复用现有 Recorder/prediction pointer 和 `qe_archive.run` 父身份，不扩展通用 Prediction Store 或既有 Archive 通用 writer/schema；使用 feature/outcome 双快照、execution environment identity、extension-only 历史价格校验和右删失；逐信号/episode 明细进入 QE-only CAS Parquet。Phase 2 control/worker/CAS 与 Phase 3 metric/artifact/API/MCP 已完成。PR #2906 source/CI、生产 DDL 和当前 8001 runtime contract 已闭合；固定 R8B Loop4 的 historical preview GET 已真实返回 8/11 可用与 3 个 typed gap，且数据库前后不变。normal Loop activation、完整 root/runtime SHA 对齐、live browser visual、其余 5 个 R8B、Phase 5 中断恢复与批量历史重评仍待实施。所有可用结果继续用于研究，缺口不形成研究门禁。
 
 F-014 按三个并行工作流推进：`计算/统计/可成交性`、`CAS/状态/三表/幂等恢复`、`API/MCP/UI/历史补算`。不再设置全局 ready 状态，而按指标族分别发布证据：
 
@@ -1111,7 +1111,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 - R11A 已 9/9，hold20 平均 CAGR 略高于 hold10 但 Sharpe/回撤未同步改善，hold30 明显弱化；R11B 已 6/6，h40 在相近回撤下以约一半年化换手取得接近 h60 的收益。15 个 Loop 均 fully archived；
 - GAT h20/h40/h60 已证明与 LGBM 存在排序差异和较浅回撤，但二值同行业边无稳定增量；下一交付转为 EfficientGATs cooperative-execution canary、板块时序动态图、回撤 hazard、sector gating 和动态退出，不重复静态边或简单 prediction average；
 - 与 Advisory Phase 8 对齐的 Phase 1 计算能力已覆盖 20–180 日、MFE/MAE、有序目标、time-to-hit、删失调整的 stage survival、右删失、episode capture/false-exit，以及信号→成交/退出阻断分层；Phase 2 control/worker/CAS 与 Phase 3 单 canary 明细表/API/MCP 已闭合，PR #2875 Loop/Archive UI slice 已通过第三审、源码 CI、合入及用户重启后的后端 API 运行态回读；
-- F-014 详细设计：父设计已更新至 v1.18，Phase 2 从属设计保持有效；当前为 `PHASE4_TASK_PROFILE_INPUT_PREVIEW_PROD_DDL_RUNTIME_API_VERIFIED_NORMAL_LOOP_VISUAL_PHASE5_PENDING`，其余 5 个 R8B、normal Loop activation、前端 live visual 与 Phase 5 状态单列；
+- F-014 详细设计：父设计已更新至 v1.19，Phase 2 从属设计保持有效；当前为 `PHASE4_TASK_PROFILE_INPUT_PREVIEW_PROD_DDL_RUNTIME_API_VERIFIED_NORMAL_LOOP_VISUAL_PHASE5_PENDING`，其余 5 个 R8B、normal Loop activation、前端 live visual 与 Phase 5 状态单列；
 - R8M 独立设计卡：独立训练、共享多头、冻结迁移、全量微调四臂；per-head maturity/purge、transfer matrix、LOO、梯度冲突和 F-014 各指标族并列分析；
 - HIST-industry 的逐日 PIT relation artifact、mapping hash、`stock_index` 对齐测试、composer/fit/predict canary 与资源 receipt；
 - 动态/多关系图的逐关系消融；概念 PIT 数据获取、代理/部分样本、缺失损失和模型研究并行推进；
