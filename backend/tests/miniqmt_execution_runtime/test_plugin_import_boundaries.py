@@ -79,6 +79,10 @@ def test_real_k1_a_and_k1_c_modules_pass_ast_and_isolated_import() -> None:
             "backend.execution_algos.vnpy_compat.facade_characterization",
             REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_characterization.py",
         ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_source_execution",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_source_execution.py",
+        ),
     )
 
     receipt = validate_plugin_import_boundaries_v1(repo_root=REPO_ROOT, targets=targets)

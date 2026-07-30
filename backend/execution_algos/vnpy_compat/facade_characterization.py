@@ -11,6 +11,7 @@ import ast
 import builtins
 import hashlib
 import inspect
+import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -20,11 +21,22 @@ from typing import Any
 
 from .facade_contracts import (
     VnpyFacadeAlgorithmBindingV1,
+    VnpyFacadeAlgorithmBindingV2,
     VnpyFacadeAlgorithmCharacterizationReceiptV1,
+    VnpyFacadeAlgorithmCharacterizationReceiptV2,
     VnpyFacadeCharacterizationRequirementV1,
+    VnpyFacadeCharacterizationManifestViewV1,
     VnpyFacadeCharacterizationVectorV1,
+    VnpyFacadeCharacterizationVectorV2,
+    VnpyFacadeCharacterizationVectorArtifactV2,
     VnpyFacadeCompatibilityStatusV1,
     VnpyFacadeConformanceFailureV1,
+    VnpyFacadeConformanceAuthorityV2,
+    VnpyFacadeConformanceAuthorityValidationReceiptV2,
+    VnpyFacadeConformanceBuildItemV2,
+    VnpyFacadeConformanceReceiptV2,
+    VnpyFacadeConformanceSetV2,
+    VnpyFacadeCommandAuthorityDispositionV1,
     VnpyFacadeConformanceSetV1,
     VnpyFacadeContractV1,
     VnpyFacadeConstructorDispositionV1,
@@ -36,11 +48,15 @@ from .facade_contracts import (
     VnpyFacadeImplementationBindingV1,
     VnpyFacadeMethodContractV1,
     VnpyFacadeRegistrationDispositionV1,
+    VnpyFacadeRuntimeBindingDispositionV1,
     VnpyFacadeSourceManifestV1,
     VnpyFacadeSourceRoleV1,
     VnpyFacadeSourceV1,
+    VnpyFacadeSourceExecutionSetV1,
+    VnpyFacadeSourceExecutorBindingV1,
     VnpyFacadeStateFieldMappingV1,
     VnpyFacadeTerminalMappingV1,
+    _seal_vnpy_facade_conformance_authority_v2,
 )
 from .facade_adapter import (
     VnpyFacadeBackedPluginAdapterV1,
@@ -67,11 +83,15 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     thaw_json_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_registry import (
+    CompatibilityStatusV1,
     PluginCatalogRuntimeV2,
+    PluginRouteCompatibilityReceiptV1,
     callable_ref_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     VnpyCompatibilityRequirementV2,
+    GatewayCapabilityCatalogV1,
+    bounded_exception_summary_v1,
     compatibility_component_hashes_v2,
 )
 
@@ -81,6 +101,78 @@ _ALGOTRADING_AUTHORITY = "ad72ed1dd243d45d41d3c476d9dd7fbf17f49e6efcb7c12739f8ae
 _CORE_REPO = "https://github.com/vnpy/vnpy"
 _CORE_COMMIT = "1049acf64afd5b2d06d09b1e139dd0cca5d9d6b9"
 _CORE_AUTHORITY = "8e73ba64d3d405c382ae3b8b8d1c2df334c809b3331828fa4d85b0d62ed00ad2"
+_VECTOR_ARTIFACT_REPO_PATH = (
+    "backend/execution_algos/vnpy_compat/characterization_artifacts/facade_characterization_vectors_v2.json"
+)
+_VECTOR_ARTIFACT_PATH = (
+    Path(__file__).resolve().parent / "characterization_artifacts" / ("facade_characterization_vectors_v2.json")
+)
+
+
+@dataclass(frozen=True, slots=True)
+class VnpyFacadeCharacterizationArtifactAuthorityV2:
+    artifact: VnpyFacadeCharacterizationVectorArtifactV2
+    canonical_lf_file_sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.artifact, VnpyFacadeCharacterizationVectorArtifactV2):
+            raise TypeError("artifact must be VnpyFacadeCharacterizationVectorArtifactV2")
+        if len(self.canonical_lf_file_sha256) != 64 or any(
+            item not in "0123456789abcdef" for item in self.canonical_lf_file_sha256
+        ):
+            raise ValueError("canonical_lf_file_sha256 must be lowercase SHA-256")
+
+
+def _strict_json_object_v1(payload: str) -> dict[str, Any]:
+    def object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key {key}")
+            result[key] = value
+        return result
+
+    parsed = json.loads(
+        payload,
+        object_pairs_hook=object_pairs,
+        parse_constant=lambda value: (_ for _ in ()).throw(ValueError(f"invalid JSON constant {value}")),
+    )
+    if type(parsed) is not dict:
+        raise TypeError("characterization vector artifact root must be an object")
+    return parsed
+
+
+def readback_vnpy_facade_characterization_vector_artifact_v2(
+    *, artifact_path: Path = _VECTOR_ARTIFACT_PATH
+) -> VnpyFacadeCharacterizationArtifactAuthorityV2:
+    """Strict-read the single repository-owned K4-B vector authority."""
+
+    if not isinstance(artifact_path, Path):
+        raise TypeError("artifact_path must be pathlib.Path")
+    if not artifact_path.is_file():
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            "repository-owned characterization vector artifact is missing",
+            context={"source_path": _VECTOR_ARTIFACT_REPO_PATH},
+        )
+    payload = artifact_path.read_bytes()
+    canonical_lf = payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    try:
+        _strict_json_object_v1(canonical_lf.decode("utf-8", errors="strict"))
+        artifact = VnpyFacadeCharacterizationVectorArtifactV2.model_validate_json(canonical_lf, strict=True)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            "repository-owned characterization vector artifact failed strict readback",
+            context={
+                "source_path": _VECTOR_ARTIFACT_REPO_PATH,
+                **_safe_exception_evidence_v1(exc),
+            },
+        ) from exc
+    return VnpyFacadeCharacterizationArtifactAuthorityV2(
+        artifact=artifact,
+        canonical_lf_file_sha256=hashlib.sha256(canonical_lf).hexdigest(),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,24 +269,20 @@ def _source_error(message: str, **context: Any) -> VnpyFacadeContractError:
     return VnpyFacadeContractError("MINIQMT_VNPY_FACADE_SOURCE_INVALID", message, context=context)
 
 
-def _safe_exception_evidence_v1(exc: Exception) -> dict[str, str]:
-    try:
-        message = str(exc)[:2048]
-        repository_root = Path(__file__).resolve().parents[3]
-        for spelling in (
+def _safe_exception_evidence_v1(exc: Exception) -> dict[str, Any]:
+    repository_root = Path(__file__).resolve().parents[3]
+    summary = bounded_exception_summary_v1(
+        exc,
+        redacted_values=(
             str(repository_root),
             str(repository_root).replace("\\", "\\\\"),
             repository_root.as_posix(),
-        ):
-            message = message.replace(spelling, "<repository_root>")
-        render_error_type = "none"
-    except Exception as render_error:  # pragma: no branch - protects primary failure evidence
-        message = "<unavailable>"
-        render_error_type = f"{type(render_error).__module__}.{type(render_error).__qualname__}"
+        ),
+    )
+    render_error_type = summary.pop("renderer_error_type")
     return {
-        "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
-        "exception_message": message,
-        "message_render_error_type": render_error_type,
+        **summary,
+        "message_render_error_type": "none" if render_error_type is None else render_error_type,
     }
 
 
@@ -342,6 +430,11 @@ class VnpyFacadeDeterministicUniformV1:
                 context={"consumed": self._next, "supplied": len(self._draws)},
             )
         return tuple(dict(item) for item in self._trace)
+
+    def consumed_inputs_v1(self) -> VnpyFacadeDeterministicInputsV1:
+        """Return only draws that were actually consumed by the source execution."""
+
+        return VnpyFacadeDeterministicInputsV1.create(ordered_uniform_draws=tuple(self._draws[: self._next]))
 
 
 def _load_class_source_v1(
@@ -495,7 +588,20 @@ def _constructor_assignments_v1(class_node: ast.ClassDef) -> dict[str, tuple[str
         elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Attribute):
             target = node.targets[0]
         if target is not None and isinstance(target.value, ast.Name) and target.value.id == "self":
-            result[target.attr] = (annotation, ast.dump(node.value, include_attributes=False))
+            expression = ast.dump(node.value, include_attributes=False)
+            existing = result.get(target.attr)
+            if annotation != "Any":
+                if existing is not None and existing[0] != "Any" and existing[0] != annotation:
+                    raise _source_error(
+                        "algorithm field carries conflicting constructor annotations",
+                        class_name=class_node.name,
+                        attribute_name=target.attr,
+                        first_annotation=existing[0],
+                        second_annotation=annotation,
+                    )
+                result[target.attr] = (annotation, expression)
+            elif existing is None:
+                result[target.attr] = (annotation, expression)
     return result
 
 
@@ -1485,12 +1591,803 @@ def readback_vnpy_facade_contract_v1(
     return expected
 
 
+def build_vnpy_facade_characterization_requirements_v1(
+    *,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    source_root: Path = PINNED_SOURCE_ROOT,
+) -> tuple[VnpyFacadeCharacterizationRequirementV1, ...]:
+    """Build five exact characterization requirements without registering Iceberg/Stop."""
+
+    if not isinstance(catalog_runtime, PluginCatalogRuntimeV2):
+        raise TypeError("catalog_runtime must be PluginCatalogRuntimeV2")
+    if not isinstance(source_manifest, VnpyFacadeSourceManifestV1):
+        raise TypeError("source_manifest must be VnpyFacadeSourceManifestV1")
+    source_by_algo = {
+        item.algo_code_or_helper_name: item
+        for item in source_manifest.ordered_sources
+        if item.source_role is VnpyFacadeSourceRoleV1.ALGORITHM
+    }
+    descriptor_by_algo = {
+        item.manifest.algo_code: item
+        for item in catalog_runtime.snapshot.registration_descriptors
+        if item.manifest.required_facade_methods
+    }
+    if tuple(sorted(descriptor_by_algo)) != (
+        "BEST_LIMIT_MINIQMT",
+        "SNIPER_MINIQMT",
+        "TWAP_LITE_MINIQMT",
+    ):
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            "current catalog characterization owner set differs from current-three",
+            context={"algo_codes": sorted(descriptor_by_algo)},
+        )
+    state_mappings = build_vnpy_facade_state_mappings_v1(source_root=source_root)
+    planned = {
+        "ICEBERG": {
+            "schema_version": "iceberg_characterization_config_v1",
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["display_volume", "interval"],
+                "properties": {
+                    "display_volume": {"type": "number", "minimum": 0},
+                    "interval": {"type": "integer", "minimum": 0},
+                },
+            },
+            "methods": (
+                "cancel_order",
+                "get_tick",
+                "put_algo_event",
+                "send_order",
+                "update_order",
+                "update_timer",
+                "update_trade",
+                "write_log",
+            ),
+            "objects": (
+                "OrderData.price",
+                "OrderData.status",
+                "OrderData.traded",
+                "OrderData.vt_orderid",
+                "TickData.ask_price_1",
+                "TickData.bid_price_1",
+                "TickData.vt_symbol",
+                "TradeData.price",
+                "TradeData.volume",
+                "TradeData.vt_orderid",
+                "TradeData.vt_tradeid",
+            ),
+            "enums": (
+                "AlgoStatus.FINISHED",
+                "AlgoStatus.RUNNING",
+                "Direction.LONG",
+                "Direction.SHORT",
+                "Offset.NONE",
+                "OrderType.LIMIT",
+            ),
+            "events": ("ALGO_START", "ORDER", "TIMER", "TRADE"),
+            "capabilities": ("L1_ASK", "L1_BID"),
+        },
+        "STOP": {
+            "schema_version": "stop_characterization_config_v1",
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["price_add"],
+                "properties": {
+                    "price_add": {
+                        "type": "string",
+                        "pattern": r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+                    }
+                },
+            },
+            "methods": (
+                "put_algo_event",
+                "send_order",
+                "update_order",
+                "update_tick",
+                "update_trade",
+                "write_log",
+            ),
+            "objects": (
+                "OrderData.status",
+                "OrderData.vt_orderid",
+                "TickData.last_price",
+                "TickData.limit_down",
+                "TickData.limit_up",
+                "TickData.vt_symbol",
+                "TradeData.price",
+                "TradeData.volume",
+                "TradeData.vt_orderid",
+                "TradeData.vt_tradeid",
+            ),
+            "enums": (
+                "AlgoStatus.FINISHED",
+                "AlgoStatus.RUNNING",
+                "Direction.LONG",
+                "Direction.SHORT",
+                "Offset.NONE",
+                "OrderType.LIMIT",
+            ),
+            "events": ("ALGO_START", "ORDER", "TICK", "TRADE"),
+            "capabilities": ("LAST_PRICE", "LIMIT_UP_DOWN"),
+        },
+    }
+    requirements: list[VnpyFacadeCharacterizationRequirementV1] = []
+    for algo_code in sorted(source_by_algo):
+        source = source_by_algo[algo_code]
+        algo_state = tuple(item for item in state_mappings if item.algo_code == algo_code)
+        descriptor = descriptor_by_algo.get(algo_code)
+        if descriptor is not None:
+            manifest = descriptor.manifest
+            schema = thaw_json_v1(manifest.config_schema)
+            object_fields = tuple(
+                f"{owner.object_name}.{field.name}"
+                for owner in manifest.required_facade_object_fields
+                for field in owner.fields
+            )
+            enum_members = tuple(
+                f"{owner.enum_name}.{member.name}"
+                for owner in manifest.compatibility_requirement.required_enum_values
+                for member in owner.members
+            )
+            methods = manifest.required_facade_methods
+            events = tuple(item.value for item in manifest.subscribed_event_types)
+            capabilities = tuple(item.capability.value for item in manifest.market_data_requirements)
+            schema_version = manifest.config_schema_version
+            config_contract = {
+                "algo_code": algo_code,
+                "config_validator_binding_id": descriptor.config_validator_binding_id,
+                "config_validator_callable_ref": descriptor.config_validator_callable_ref,
+                "config_validator_signature_sha256": descriptor.config_validator_signature_sha256,
+                "config_schema_sha256": manifest.config_schema_sha256,
+            }
+        else:
+            facts = planned[algo_code]
+            schema = facts["schema"]
+            object_fields = facts["objects"]
+            enum_members = facts["enums"]
+            methods = facts["methods"]
+            events = facts["events"]
+            capabilities = facts["capabilities"]
+            schema_version = facts["schema_version"]
+            config_contract = {
+                "algo_code": algo_code,
+                "source_identity_sha256": source.source_identity_sha256,
+                "config_schema": schema,
+                "validation": "STRICT_NO_DEFAULTS_ADDITIONAL_PROPERTIES_FALSE",
+            }
+        requirements.append(
+            VnpyFacadeCharacterizationRequirementV1.create(
+                algo_code=algo_code,
+                registration_disposition=source.registration_disposition,
+                source_identity_sha256=source.source_identity_sha256,
+                config_schema_version=schema_version,
+                config_schema=schema,
+                config_schema_sha256=hash_hex_v1("miniqmt_plugin_config_schema_v1", schema),
+                config_validation_contract_sha256=hash_hex_v1(
+                    "miniqmt_vnpy_facade_config_validation_contract_v1", config_contract
+                ),
+                ordered_required_methods=methods,
+                ordered_required_object_fields=object_fields,
+                ordered_required_enum_members=enum_members,
+                ordered_event_types=events,
+                ordered_market_data_capabilities=capabilities,
+                state_mapping_set_sha256=state_mapping_set_sha256_v1(algo_state),
+            )
+        )
+    return tuple(requirements)
+
+
+def build_vnpy_facade_characterization_manifest_views_v1(
+    *,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    requirements: tuple[VnpyFacadeCharacterizationRequirementV1, ...],
+) -> tuple[VnpyFacadeCharacterizationManifestViewV1, ...]:
+    requirement_by_algo = {item.algo_code: item for item in requirements}
+    descriptor_by_algo = {
+        item.manifest.algo_code: item
+        for item in catalog_runtime.snapshot.registration_descriptors
+        if item.manifest.required_facade_methods
+    }
+    views: list[VnpyFacadeCharacterizationManifestViewV1] = []
+    for source in source_manifest.ordered_sources:
+        if source.source_role is not VnpyFacadeSourceRoleV1.ALGORITHM:
+            continue
+        algo_code = source.algo_code_or_helper_name
+        requirement = requirement_by_algo[algo_code]
+        descriptor = descriptor_by_algo.get(algo_code)
+        manifest = None if descriptor is None else descriptor.manifest
+        views.append(
+            VnpyFacadeCharacterizationManifestViewV1.create(
+                algo_code=algo_code,
+                registration_disposition=source.registration_disposition,
+                real_plugin_key_or_null=(None if descriptor is None else descriptor.plugin_key.canonical_payload_v1()),
+                real_manifest_sha256_or_null=(None if manifest is None else manifest.manifest_sha256),
+                required_facade_methods=requirement.ordered_required_methods,
+                required_object_fields=requirement.ordered_required_object_fields,
+                required_enum_members=requirement.ordered_required_enum_members,
+                order_types=("LIMIT",),
+                market_data_capabilities=requirement.ordered_market_data_capabilities,
+                state_schema_sha256=(
+                    requirement.state_mapping_set_sha256 if manifest is None else manifest.state_schema_sha256
+                ),
+                characterization_requirement_sha256=requirement.requirement_sha256,
+            )
+        )
+    return tuple(sorted(views, key=lambda item: item.algo_code))
+
+
+_CHARACTERIZATION_AUTHORITY_TOKEN_V2 = object()
+
+
+class VnpyFacadeCharacterizationAuthorityV2:
+    """Process-local sealed five-algorithm execution/receipt authority."""
+
+    __slots__ = (
+        "_authority_sha256",
+        "_receipts",
+        "_sealed",
+        "_source_execution_sets",
+        "_source_executor_binding",
+    )
+
+    def __init__(
+        self,
+        *,
+        token: object,
+        source_executor_binding: VnpyFacadeSourceExecutorBindingV1,
+        source_execution_sets: tuple[VnpyFacadeSourceExecutionSetV1, ...],
+        receipts: tuple[VnpyFacadeAlgorithmCharacterizationReceiptV2, ...],
+        authority_sha256: str,
+    ) -> None:
+        if token is not _CHARACTERIZATION_AUTHORITY_TOKEN_V2:
+            raise TypeError("VnpyFacadeCharacterizationAuthorityV2 can only be created by its authority builder")
+        self._source_executor_binding = source_executor_binding
+        self._source_execution_sets = source_execution_sets
+        self._receipts = receipts
+        self._authority_sha256 = authority_sha256
+        self._sealed = True
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError("VnpyFacadeCharacterizationAuthorityV2 is immutable")
+        object.__setattr__(self, name, value)
+
+    @property
+    def source_executor_binding(self) -> VnpyFacadeSourceExecutorBindingV1:
+        return self._source_executor_binding
+
+    @property
+    def source_execution_sets(self) -> tuple[VnpyFacadeSourceExecutionSetV1, ...]:
+        return self._source_execution_sets
+
+    @property
+    def receipts(self) -> tuple[VnpyFacadeAlgorithmCharacterizationReceiptV2, ...]:
+        return self._receipts
+
+    @property
+    def authority_sha256(self) -> str:
+        return self._authority_sha256
+
+    def receipt_for_algo_v2(self, algo_code: str) -> VnpyFacadeAlgorithmCharacterizationReceiptV2:
+        matches = tuple(item for item in self._receipts if item.algo_code == algo_code)
+        if len(matches) != 1:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+                "characterization authority does not contain one exact algorithm receipt",
+                context={"algo_code": algo_code, "match_count": len(matches)},
+            )
+        return matches[0]
+
+    def execution_set_for_algo_v2(self, algo_code: str) -> VnpyFacadeSourceExecutionSetV1:
+        matches = tuple(item for item in self._source_execution_sets if item.algo_code == algo_code)
+        if len(matches) != 1:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+                "characterization authority does not contain one exact source execution set",
+                context={"algo_code": algo_code, "match_count": len(matches)},
+            )
+        return matches[0]
+
+
+def _seal_characterization_authority_v2(
+    *,
+    source_executor_binding: VnpyFacadeSourceExecutorBindingV1,
+    source_execution_sets: tuple[VnpyFacadeSourceExecutionSetV1, ...],
+    receipts: tuple[VnpyFacadeAlgorithmCharacterizationReceiptV2, ...],
+) -> VnpyFacadeCharacterizationAuthorityV2:
+    ordered_sets = tuple(sorted(source_execution_sets, key=lambda item: item.algo_code))
+    ordered_receipts = tuple(sorted(receipts, key=lambda item: item.algo_code))
+    expected_algos = (
+        "BEST_LIMIT_MINIQMT",
+        "ICEBERG",
+        "SNIPER_MINIQMT",
+        "STOP",
+        "TWAP_LITE_MINIQMT",
+    )
+    if (
+        tuple(item.algo_code for item in ordered_sets) != expected_algos
+        or tuple(item.algo_code for item in ordered_receipts) != expected_algos
+        or any(item.status is not VnpyFacadeCompatibilityStatusV1.PASSED for item in ordered_sets)
+        or any(item.status is not VnpyFacadeCompatibilityStatusV1.PASSED for item in ordered_receipts)
+    ):
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            "characterization authority requires complete PASSED five-algorithm sets and receipts",
+            context={
+                "execution_algorithms": [item.algo_code for item in ordered_sets],
+                "receipt_algorithms": [item.algo_code for item in ordered_receipts],
+            },
+        )
+    by_algo = {item.algo_code: item for item in ordered_sets}
+    if any(
+        item.source_executor_binding_sha256 != source_executor_binding.binding_sha256
+        or item.source_execution_set_sha256 != by_algo[item.algo_code].execution_set_sha256
+        for item in ordered_receipts
+    ):
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            "characterization receipt/execution-set/executor closure drifted",
+            context={},
+        )
+    authority_payload = {
+        "source_executor_binding": source_executor_binding.canonical_payload_v1(),
+        "ordered_source_execution_sets": [item.canonical_payload_v1() for item in ordered_sets],
+        "ordered_receipts": [item.canonical_payload_v1() for item in ordered_receipts],
+    }
+    return VnpyFacadeCharacterizationAuthorityV2(
+        token=_CHARACTERIZATION_AUTHORITY_TOKEN_V2,
+        source_executor_binding=source_executor_binding,
+        source_execution_sets=ordered_sets,
+        receipts=ordered_receipts,
+        authority_sha256=hash_hex_v1("miniqmt_vnpy_facade_characterization_authority_v2", authority_payload),
+    )
+
+
+def _characterization_receipts_v2(
+    *,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    facade_contract: VnpyFacadeContractV1,
+    requirements: tuple[VnpyFacadeCharacterizationRequirementV1, ...],
+    ordered_vectors: tuple[VnpyFacadeCharacterizationVectorV2, ...],
+    source_executor_binding: VnpyFacadeSourceExecutorBindingV1,
+    execution_sets: tuple[VnpyFacadeSourceExecutionSetV1, ...],
+) -> tuple[VnpyFacadeAlgorithmCharacterizationReceiptV2, ...]:
+    requirements_by_algo = {item.algo_code: item for item in requirements}
+    execution_by_algo = {item.algo_code: item for item in execution_sets}
+    source_by_algo = {
+        item.algo_code_or_helper_name: item
+        for item in source_manifest.ordered_sources
+        if item.source_role is VnpyFacadeSourceRoleV1.ALGORITHM
+    }
+    state_mappings = build_vnpy_facade_state_mappings_v1()
+    terminal_mappings = build_vnpy_facade_terminal_mappings_v1()
+    receipts: list[VnpyFacadeAlgorithmCharacterizationReceiptV2] = []
+    for algo_code in sorted(requirements_by_algo):
+        requirement = requirements_by_algo[algo_code]
+        execution_set = execution_by_algo[algo_code]
+        vectors = tuple(item for item in ordered_vectors if item.algo_code == algo_code)
+        if not vectors:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+                "one algorithm characterization receipt requires at least one executable vector",
+                context={"algo_code": algo_code},
+            )
+        # The receipt retains one deterministic factory probe while the full
+        # (potentially multi-config) characterization matrix remains bound by
+        # vector_set_sha256.  Every vector config has already passed the exact
+        # requirement schema in the source executor.
+        config = thaw_json_v1(vectors[0].canonical_config)
+        vector_set_sha = hash_hex_v1(
+            "miniqmt_vnpy_facade_characterization_vector_set_v1",
+            [item.canonical_payload_v1() for item in vectors],
+        )
+        if (
+            execution_set.status is not VnpyFacadeCompatibilityStatusV1.PASSED
+            or execution_set.characterization_requirement_sha256 != requirement.requirement_sha256
+            or execution_set.vector_set_sha256 != vector_set_sha
+            or tuple(item.vector_id for item in execution_set.ordered_results)
+            != tuple(item.vector_id for item in vectors)
+        ):
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+                "source execution set does not close to its exact requirement/vector authority",
+                context={"algo_code": algo_code, "execution_set_sha256": execution_set.execution_set_sha256},
+            )
+        receipts.append(
+            VnpyFacadeAlgorithmCharacterizationReceiptV2.create(
+                algo_code=algo_code,
+                source_identity_sha256=source_by_algo[algo_code].source_identity_sha256,
+                facade_source_manifest_sha256=source_manifest.manifest_sha256,
+                characterization_requirement_sha256=requirement.requirement_sha256,
+                canonical_factory_probe_config=config,
+                factory_probe_config_sha256=hash_hex_v1("miniqmt_vnpy_facade_factory_probe_config_v1", config),
+                facade_contract_sha256=facade_contract.facade_contract_sha256,
+                implementation_binding_set_sha256=facade_contract.implementation_binding_set_sha256,
+                dto_mapping_set_sha256=facade_contract.dto_mapping_set_sha256,
+                state_mapping_set_sha256=state_mapping_set_sha256_v1(
+                    tuple(item for item in state_mappings if item.algo_code == algo_code)
+                ),
+                terminal_mapping_set_sha256=terminal_mapping_set_sha256_v1(
+                    tuple(item for item in terminal_mappings if item.algo_code == algo_code)
+                ),
+                isolated_module_binding_set_sha256=facade_contract.isolated_module_binding_set_sha256,
+                source_executor_binding_sha256=source_executor_binding.binding_sha256,
+                source_execution_set_sha256=execution_set.execution_set_sha256,
+                ordered_vector_ids=tuple(item.vector_id for item in vectors),
+                vector_set_sha256=vector_set_sha,
+                status=VnpyFacadeCompatibilityStatusV1.PASSED,
+                ordered_failures=(),
+            )
+        )
+    return tuple(receipts)
+
+
+def build_vnpy_facade_characterization_authority_v2(
+    *,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    facade_contract: VnpyFacadeContractV1,
+    requirements: tuple[VnpyFacadeCharacterizationRequirementV1, ...],
+    ordered_vectors: tuple[VnpyFacadeCharacterizationVectorV2, ...],
+    source_executor_binding: VnpyFacadeSourceExecutorBindingV1,
+    source_execution_sets: tuple[VnpyFacadeSourceExecutionSetV1, ...],
+) -> VnpyFacadeCharacterizationAuthorityV2:
+    if not isinstance(source_executor_binding, VnpyFacadeSourceExecutorBindingV1):
+        raise TypeError("source_executor_binding must be VnpyFacadeSourceExecutorBindingV1")
+    execution_sets = tuple(
+        VnpyFacadeSourceExecutionSetV1.model_validate(item.model_dump(mode="python"), strict=True)
+        for item in source_execution_sets
+    )
+    receipts = _characterization_receipts_v2(
+        source_manifest=source_manifest,
+        facade_contract=facade_contract,
+        requirements=requirements,
+        ordered_vectors=ordered_vectors,
+        source_executor_binding=source_executor_binding,
+        execution_sets=execution_sets,
+    )
+    return _seal_characterization_authority_v2(
+        source_executor_binding=source_executor_binding,
+        source_execution_sets=execution_sets,
+        receipts=receipts,
+    )
+
+
+def validate_vnpy_facade_characterization_authority_v2(
+    *,
+    receipts: tuple[VnpyFacadeAlgorithmCharacterizationReceiptV2, ...],
+    source_manifest: VnpyFacadeSourceManifestV1,
+    facade_contract: VnpyFacadeContractV1,
+    requirements: tuple[VnpyFacadeCharacterizationRequirementV1, ...],
+    ordered_vectors: tuple[VnpyFacadeCharacterizationVectorV2, ...],
+    source_executor_binding: VnpyFacadeSourceExecutorBindingV1,
+    source_execution_sets: tuple[VnpyFacadeSourceExecutionSetV1, ...],
+) -> VnpyFacadeCharacterizationAuthorityV2:
+    authoritative = build_vnpy_facade_characterization_authority_v2(
+        source_manifest=source_manifest,
+        facade_contract=facade_contract,
+        requirements=requirements,
+        ordered_vectors=ordered_vectors,
+        source_executor_binding=source_executor_binding,
+        source_execution_sets=source_execution_sets,
+    )
+    supplied = tuple(
+        VnpyFacadeAlgorithmCharacterizationReceiptV2.model_validate(item, strict=True) for item in receipts
+    )
+    if supplied != authoritative.receipts:
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+            "V2 characterization receipt readback differs from a fresh five-algorithm execution",
+            context={
+                "expected": [item.receipt_sha256 for item in authoritative.receipts],
+                "actual": [item.receipt_sha256 for item in supplied],
+            },
+        )
+    return authoritative
+
+
+def build_vnpy_facade_algorithm_bindings_v2(
+    *,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    source_root: Path = PINNED_SOURCE_ROOT,
+) -> tuple[VnpyFacadeAlgorithmBindingV2, ...]:
+    if not isinstance(characterization_authority_v2, VnpyFacadeCharacterizationAuthorityV2):
+        raise TypeError("characterization_authority_v2 must be sealed VnpyFacadeCharacterizationAuthorityV2")
+    if not isinstance(facade_contract, VnpyFacadeContractV1):
+        raise TypeError("facade_contract must be VnpyFacadeContractV1")
+    if not isinstance(source_manifest, VnpyFacadeSourceManifestV1):
+        raise TypeError("source_manifest must be VnpyFacadeSourceManifestV1")
+    source_by_algo = {
+        item.algo_code_or_helper_name: item
+        for item in source_manifest.ordered_sources
+        if item.source_role is VnpyFacadeSourceRoleV1.ALGORITHM
+    }
+    spec_by_algo = {item.name: item for item in _SPECS if item.role is VnpyFacadeSourceRoleV1.ALGORITHM}
+    state_mappings = build_vnpy_facade_state_mappings_v1(source_root=source_root)
+    terminal_mappings = build_vnpy_facade_terminal_mappings_v1(source_root=source_root)
+    bindings: list[VnpyFacadeAlgorithmBindingV2] = []
+    for receipt in characterization_authority_v2.receipts:
+        spec = spec_by_algo[receipt.algo_code]
+        source = _validated_source_bytes(source_root, spec).decode("utf-8")
+        tree = ast.parse(source, filename=spec.path)
+        classes = [item for item in tree.body if isinstance(item, ast.ClassDef) and item.name == spec.class_or_function]
+        if len(classes) != 1:
+            raise _source_error(
+                "algorithm binding requires one exact pinned class",
+                algo_code=receipt.algo_code,
+                class_name=spec.class_or_function,
+            )
+        constructors = [
+            item
+            for item in classes[0].body
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__"
+        ]
+        if len(constructors) != 1:
+            raise _source_error(
+                "algorithm binding requires one exact constructor",
+                algo_code=receipt.algo_code,
+            )
+        constructor = constructors[0]
+        signature_payload = {
+            "posonly": [item.arg for item in constructor.args.posonlyargs],
+            "args": [item.arg for item in constructor.args.args],
+            "vararg": None if constructor.args.vararg is None else constructor.args.vararg.arg,
+            "kwonly": [item.arg for item in constructor.args.kwonlyargs],
+            "kwarg": None if constructor.args.kwarg is None else constructor.args.kwarg.arg,
+            "defaults": [ast.dump(item, include_attributes=False) for item in constructor.args.defaults],
+            "kw_defaults": [
+                None if item is None else ast.dump(item, include_attributes=False)
+                for item in constructor.args.kw_defaults
+            ],
+            "returns": None if constructor.returns is None else ast.dump(constructor.returns, include_attributes=False),
+        }
+        execution_set = characterization_authority_v2.execution_set_for_algo_v2(receipt.algo_code)
+        bindings.append(
+            VnpyFacadeAlgorithmBindingV2.create(
+                algo_code=receipt.algo_code,
+                source_identity_sha256=source_by_algo[receipt.algo_code].source_identity_sha256,
+                class_ref=f"vnpy_algotrading.algos.{Path(spec.path).stem}:{spec.class_or_function}",
+                constructor_signature_sha256=hash_hex_v1(
+                    "miniqmt_vnpy_facade_constructor_signature_v1", signature_payload
+                ),
+                constructor_body_sha256=hash_hex_v1(
+                    "miniqmt_vnpy_facade_constructor_body_v1",
+                    [ast.dump(item, include_attributes=False) for item in constructor.body],
+                ),
+                state_mapping_set_sha256=state_mapping_set_sha256_v1(
+                    tuple(item for item in state_mappings if item.algo_code == receipt.algo_code)
+                ),
+                terminal_mapping_set_sha256=terminal_mapping_set_sha256_v1(
+                    tuple(item for item in terminal_mappings if item.algo_code == receipt.algo_code)
+                ),
+                characterization_receipt_sha256=receipt.receipt_sha256,
+                adapter_contract_sha256=facade_contract.facade_contract_sha256,
+                source_executor_binding_sha256=characterization_authority_v2.source_executor_binding.binding_sha256,
+                source_execution_set_sha256=execution_set.execution_set_sha256,
+            )
+        )
+    return tuple(sorted(bindings, key=lambda item: item.algo_code))
+
+
+def build_vnpy_facade_conformance_set_v2(
+    *,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+    algorithm_bindings_v2: tuple[VnpyFacadeAlgorithmBindingV2, ...],
+) -> VnpyFacadeConformanceSetV2:
+    if not isinstance(catalog_runtime, PluginCatalogRuntimeV2):
+        raise TypeError("catalog_runtime must be PluginCatalogRuntimeV2")
+    strict_gateway = GatewayCapabilityCatalogV1.model_validate(gateway_catalog.model_dump(mode="python"), strict=True)
+    if not isinstance(characterization_authority_v2, VnpyFacadeCharacterizationAuthorityV2):
+        raise TypeError("characterization_authority_v2 must be sealed V2 characterization authority")
+    bindings = tuple(sorted(algorithm_bindings_v2, key=lambda item: item.algo_code))
+    if len(bindings) != len({item.algo_code for item in bindings}):
+        raise ValueError("algorithm_bindings_v2 must be unique by algo_code")
+    binding_by_algo = {item.algo_code: item for item in bindings}
+    snapshot = catalog_runtime.snapshot
+    descriptors = tuple(item for item in snapshot.registration_descriptors if item.manifest.required_facade_methods)
+    expected_algos = tuple(sorted(item.manifest.algo_code for item in descriptors))
+    if expected_algos != ("BEST_LIMIT_MINIQMT", "SNIPER_MINIQMT", "TWAP_LITE_MINIQMT"):
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CONFORMANCE_RECEIPT_INVALID",
+            "K4-B current catalog facade descriptor set differs from current-three authority",
+            context={"actual_algo_codes": list(expected_algos)},
+        )
+    k1_by_key = {item.plugin_key: item for item in snapshot.pinned_compatibility_receipts}
+    receipts: list[VnpyFacadeConformanceReceiptV2] = []
+    build_items: list[VnpyFacadeConformanceBuildItemV2] = []
+    for descriptor in sorted(descriptors, key=lambda item: item.plugin_key.sort_key_v1()):
+        manifest = descriptor.manifest
+        plugin_key = descriptor.plugin_key
+        k1 = k1_by_key.get(plugin_key)
+        binding = binding_by_algo.get(manifest.algo_code)
+        characterization = characterization_authority_v2.receipt_for_algo_v2(manifest.algo_code)
+        execution_set = characterization_authority_v2.execution_set_for_algo_v2(manifest.algo_code)
+        if k1 is None or binding is None:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CONFORMANCE_RECEIPT_INVALID",
+                "current-three descriptor lacks K1 or K4 algorithm authority",
+                context={"plugin_key": plugin_key.canonical_payload_v1()},
+            )
+        route = PluginRouteCompatibilityReceiptV1.create(
+            catalog_snapshot=snapshot,
+            plugin_key=plugin_key,
+            gateway_catalog=strict_gateway,
+        ).validate_against_authority_v1(
+            catalog_snapshot=snapshot,
+            gateway_catalog=strict_gateway,
+        )
+        failures: tuple[VnpyFacadeConformanceFailureV1, ...] = ()
+        if route.status is not CompatibilityStatusV1.PASSED:
+            failures = tuple(
+                VnpyFacadeConformanceFailureV1.create(
+                    field_path=f"route.{item.field_path}",
+                    reason_code=item.reason_code,
+                    context=thaw_json_v1(item.context),
+                )
+                for item in route.ordered_failures
+            )
+        receipt = VnpyFacadeConformanceReceiptV2.create(
+            plugin_id=manifest.plugin_id,
+            plugin_version=manifest.plugin_version,
+            algo_code=manifest.algo_code,
+            manifest_sha256=manifest.manifest_sha256,
+            runtime_binding_disposition=VnpyFacadeRuntimeBindingDispositionV1.PURE_PLUGIN_SHADOW_CONFORMANCE,
+            command_authority_disposition=VnpyFacadeCommandAuthorityDispositionV1.NOT_APPLICABLE_PURE_PLUGIN,
+            pinned_compatibility_receipt_sha256=k1.receipt_sha256,
+            requirement_sha256=k1.requirement_sha256,
+            surface_sha256=k1.surface_sha256,
+            source_lock_sha256=k1.source_lock_sha256,
+            method_signature_sha256=k1.method_signature_sha256,
+            object_field_sha256=k1.object_field_sha256,
+            characterization_sha256=k1.characterization_sha256,
+            facade_contract_sha256=facade_contract.facade_contract_sha256,
+            implementation_binding_set_sha256=facade_contract.implementation_binding_set_sha256,
+            method_contract_set_sha256=facade_contract.method_contract_set_sha256,
+            dto_mapping_set_sha256=facade_contract.dto_mapping_set_sha256,
+            state_mapping_set_sha256=binding.state_mapping_set_sha256,
+            terminal_mapping_set_sha256=binding.terminal_mapping_set_sha256,
+            isolated_module_binding_set_sha256=facade_contract.isolated_module_binding_set_sha256,
+            facade_source_manifest_sha256=source_manifest.manifest_sha256,
+            source_executor_binding_sha256=characterization_authority_v2.source_executor_binding.binding_sha256,
+            source_execution_set_sha256=execution_set.execution_set_sha256,
+            algorithm_characterization_receipt_v2_sha256=characterization.receipt_sha256,
+            algorithm_binding_sha256=binding.binding_sha256,
+            status=(VnpyFacadeCompatibilityStatusV1.FAILED if failures else VnpyFacadeCompatibilityStatusV1.PASSED),
+            ordered_failures=failures,
+        )
+        receipts.append(receipt)
+        build_items.append(
+            VnpyFacadeConformanceBuildItemV2.create(
+                plugin_key=plugin_key.canonical_payload_v1(),
+                registration_descriptor_full_payload=descriptor.canonical_payload_v1(),
+                pinned_compatibility_receipt_sha256=k1.receipt_sha256,
+                source_executor_binding_sha256=characterization_authority_v2.source_executor_binding.binding_sha256,
+                source_execution_set_sha256=execution_set.execution_set_sha256,
+                algorithm_characterization_receipt_v2_sha256=characterization.receipt_sha256,
+                algorithm_binding_sha256=binding.binding_sha256,
+                runtime_binding_disposition=VnpyFacadeRuntimeBindingDispositionV1.PURE_PLUGIN_SHADOW_CONFORMANCE,
+                command_authority_disposition=VnpyFacadeCommandAuthorityDispositionV1.NOT_APPLICABLE_PURE_PLUGIN,
+            )
+        )
+    if any(item.status is not VnpyFacadeCompatibilityStatusV1.PASSED for item in receipts):
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CONFORMANCE_RECEIPT_INVALID",
+            "current-three V2 conformance contains route or component failures; no partial set is published",
+            context={
+                "failed_plugins": [
+                    item.plugin_id for item in receipts if item.status is not VnpyFacadeCompatibilityStatusV1.PASSED
+                ]
+            },
+        )
+    selected_set_hashes = tuple(
+        characterization_authority_v2.execution_set_for_algo_v2(item.manifest.algo_code).execution_set_sha256
+        for item in descriptors
+    )
+    return VnpyFacadeConformanceSetV2.create(
+        plugin_catalog_sha256=snapshot.catalog_sha256,
+        facade_contract_sha256=facade_contract.facade_contract_sha256,
+        dto_mapping_set_sha256=facade_contract.dto_mapping_set_sha256,
+        state_mapping_set_sha256=facade_contract.state_mapping_set_sha256,
+        terminal_mapping_set_sha256=facade_contract.terminal_mapping_set_sha256,
+        isolated_module_binding_set_sha256=facade_contract.isolated_module_binding_set_sha256,
+        facade_source_manifest_sha256=source_manifest.manifest_sha256,
+        source_executor_binding_sha256=characterization_authority_v2.source_executor_binding.binding_sha256,
+        ordered_source_execution_set_sha256s=selected_set_hashes,
+        ordered_receipts=tuple(receipts),
+        build_items=tuple(build_items),
+    )
+
+
+def validate_vnpy_facade_conformance_set_against_authority_v2(
+    *,
+    conformance_set: VnpyFacadeConformanceSetV2,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+) -> VnpyFacadeConformanceAuthorityV2:
+    supplied = VnpyFacadeConformanceSetV2.model_validate(conformance_set.model_dump(mode="python"), strict=True)
+    if not isinstance(characterization_authority_v2, VnpyFacadeCharacterizationAuthorityV2):
+        raise TypeError("characterization_authority_v2 must be sealed VnpyFacadeCharacterizationAuthorityV2")
+    characterization = characterization_authority_v2
+    bindings = build_vnpy_facade_algorithm_bindings_v2(
+        characterization_authority_v2=characterization,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+    )
+    expected = build_vnpy_facade_conformance_set_v2(
+        catalog_runtime=catalog_runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization,
+        algorithm_bindings_v2=bindings,
+    )
+    if supplied != expected:
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CONFORMANCE_AUTHORITY_INVALID",
+            "conformance set differs from fresh source/catalog/gateway authority reconstruction",
+            context={
+                "expected_receipt_set_sha256": expected.receipt_set_sha256,
+                "actual_receipt_set_sha256": supplied.receipt_set_sha256,
+            },
+        )
+    validation_input = {
+        "conformance_set_v2_sha256": expected.receipt_set_sha256,
+        "source_executor_binding_sha256": characterization.source_executor_binding.binding_sha256,
+        "ordered_source_execution_set_sha256s": [
+            item.execution_set_sha256 for item in characterization.source_execution_sets
+        ],
+        "characterization_authority_sha256": characterization.authority_sha256,
+        "plugin_catalog_sha256": catalog_runtime.snapshot.catalog_sha256,
+        "gateway_catalog_sha256": gateway_catalog.catalog_sha256,
+    }
+    validation_receipt = VnpyFacadeConformanceAuthorityValidationReceiptV2.create(
+        conformance_set_v2_sha256=expected.receipt_set_sha256,
+        source_executor_binding_sha256=characterization.source_executor_binding.binding_sha256,
+        ordered_source_execution_set_sha256s=tuple(
+            item.execution_set_sha256 for item in characterization.source_execution_sets
+        ),
+        validation_input_sha256=hash_hex_v1(
+            "miniqmt_vnpy_facade_conformance_authority_validation_input_v2",
+            validation_input,
+        ),
+        status=VnpyFacadeCompatibilityStatusV1.PASSED,
+        ordered_failures=(),
+    )
+    return _seal_vnpy_facade_conformance_authority_v2(
+        conformance_set=expected,
+        source_executor_binding=characterization.source_executor_binding,
+        source_execution_sets=characterization.source_execution_sets,
+        characterization_receipts=characterization.receipts,
+        algorithm_bindings=bindings,
+        validation_receipt=validation_receipt,
+    )
+
+
 __all__ = [
+    "VnpyFacadeCharacterizationAuthorityV2",
     "VnpyFacadeDeterministicUniformV1",
     "build_vnpy_facade_source_manifest_v1",
     "build_vnpy_facade_algorithm_bindings_v1",
+    "build_vnpy_facade_algorithm_bindings_v2",
+    "build_vnpy_facade_characterization_authority_v2",
+    "build_vnpy_facade_characterization_manifest_views_v1",
+    "build_vnpy_facade_characterization_requirements_v1",
     "build_vnpy_facade_characterization_receipt_v1",
     "build_vnpy_facade_conformance_set_v1",
+    "build_vnpy_facade_conformance_set_v2",
     "build_vnpy_facade_isolated_module_bindings_v1",
     "build_vnpy_facade_contract_v1",
     "build_vnpy_facade_implementation_bindings_v1",
@@ -1508,4 +2405,6 @@ __all__ = [
     "readback_vnpy_facade_source_manifest_v1",
     "readback_vnpy_facade_state_mappings_v1",
     "readback_vnpy_facade_terminal_mappings_v1",
+    "validate_vnpy_facade_characterization_authority_v2",
+    "validate_vnpy_facade_conformance_set_against_authority_v2",
 ]

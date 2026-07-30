@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import json
 from typing import Any, Sequence
 
 import psycopg2
 import psycopg2.extras
+
+from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeContractError,
+    VnpyFacadeRepositoryEventReadV1,
+    VnpyFacadeRepositoryReadKindV1,
+)
 
 from .kernel_repository_common import (
     KernelRepositoryConflict,
@@ -16,6 +22,7 @@ from .kernel_repository_common import (
     _row_json,
 )
 from .plugin_canonical import canonical_utc_datetime_v1, thaw_json_v1
+from .vnpy_facade_diagnostics import record_vnpy_facade_repository_read_v1
 from .kernel_repository_projection import (
     _assert_scalar_columns,
     _delivery_scalar_projection,
@@ -41,6 +48,7 @@ from .plugin_contracts import (
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoPersistenceStatusV2,
     RuntimeEventEnvelopeV2,
+    SessionPhaseV1,
     RuntimeEventIngressReceiptV1,
     KernelErrorEvidenceV1,
     KernelCallbackMappingUpdateV1,
@@ -74,6 +82,266 @@ class KernelRepositoryEventDeliveryMixin:
 
     def read_runtime_event(self, event_id: str) -> RuntimeEventEnvelopeV2:
         return self.read_event_transaction(event_id)["event"]
+
+    @staticmethod
+    def _read_facade_algo_start_event_with_cursor(
+        cur: Any,
+        *,
+        runtime_id: str,
+        algo_instance_id: str,
+    ) -> VnpyFacadeRepositoryEventReadV1:
+        cur.execute(
+            """
+            SELECT event.payload AS event_payload, delivery.carrier_json AS delivery_payload
+            FROM qmt_strategy.execution_algo_event_delivery AS delivery
+            JOIN qmt_strategy.execution_runtime_event AS event
+              ON event.runtime_id=delivery.runtime_id AND event.event_id=delivery.event_id
+            WHERE delivery.runtime_id=%s AND delivery.algo_instance_id=%s
+              AND delivery.algo_delivery_sequence=1
+            ORDER BY event.event_id
+            LIMIT 2
+            """,
+            (runtime_id, algo_instance_id),
+        )
+        rows = tuple(cur.fetchall())
+        if len(rows) != 1:
+            record_vnpy_facade_repository_read_v1(read_kind="ALGO_START", outcome="INVALID")
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_REPOSITORY_READ_INVALID",
+                "facade ALGO_START read requires exactly one first delivery fact",
+                context={
+                    "read_kind": "ALGO_START",
+                    "runtime_id": runtime_id,
+                    "algo_instance_id": algo_instance_id,
+                    "match_count": len(rows),
+                },
+            )
+        try:
+            event = _model_from_json(RuntimeEventEnvelopeV2, _row_json(rows[0], "event_payload"))
+            delivery = _model_from_json(AlgoDeliveryPersistenceV1, _row_json(rows[0], "delivery_payload"))
+            result = VnpyFacadeRepositoryEventReadV1.create(
+                read_kind=VnpyFacadeRepositoryReadKindV1.ALGO_START,
+                runtime_id=runtime_id,
+                algo_instance_id=algo_instance_id,
+                cutoff_delivery_sequence_or_null=None,
+                cutoff_event_sequence_or_null=None,
+                event=event,
+                delivery=delivery,
+            )
+            record_vnpy_facade_repository_read_v1(read_kind="ALGO_START", outcome="FOUND")
+            return result
+        except VnpyFacadeContractError:
+            raise
+        except Exception as exc:
+            record_vnpy_facade_repository_read_v1(read_kind="ALGO_START", outcome="INVALID")
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_REPOSITORY_READ_INVALID",
+                "facade ALGO_START durable carrier failed strict readback",
+                context={
+                    "read_kind": "ALGO_START",
+                    "runtime_id": runtime_id,
+                    "algo_instance_id": algo_instance_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            ) from exc
+
+    @staticmethod
+    def _read_facade_latest_prior_tick_with_cursor(
+        cur: Any,
+        *,
+        runtime_id: str,
+        algo_instance_id: str,
+        cutoff_delivery_sequence: int,
+        cutoff_event_sequence: int,
+        exchange_trade_date: str,
+        session_epoch: str,
+        session_phase: SessionPhaseV1,
+        expected_symbol: str,
+    ) -> VnpyFacadeRepositoryEventReadV1 | None:
+        cur.execute(
+            """
+            SELECT event.payload AS event_payload, delivery.carrier_json AS delivery_payload
+            FROM qmt_strategy.execution_algo_event_delivery AS delivery
+            JOIN qmt_strategy.execution_runtime_event AS event
+              ON event.runtime_id=delivery.runtime_id AND event.event_id=delivery.event_id
+            WHERE delivery.runtime_id=%s AND delivery.algo_instance_id=%s
+              AND delivery.status='APPLIED'
+              AND delivery.algo_delivery_sequence < %s
+              AND event.sequence < %s
+              AND event.event_contract_version='KERNEL_V2'
+              AND event.event_type='TICK' AND event.source='B0_QUOTE_V2'
+              AND event.payload_schema_version='miniqmt_market_data_view_v2'
+            ORDER BY delivery.algo_delivery_sequence DESC,event.sequence DESC,event.event_id DESC
+            LIMIT 1
+            """,
+            (
+                runtime_id,
+                algo_instance_id,
+                cutoff_delivery_sequence,
+                cutoff_event_sequence,
+            ),
+        )
+        row = cur.fetchone()
+        if row is None:
+            record_vnpy_facade_repository_read_v1(read_kind="LATEST_PRIOR_TICK", outcome="UNAVAILABLE")
+            return None
+        try:
+            event = _model_from_json(RuntimeEventEnvelopeV2, _row_json(row, "event_payload"))
+            delivery = _model_from_json(AlgoDeliveryPersistenceV1, _row_json(row, "delivery_payload"))
+            if event.symbol != expected_symbol:
+                record_vnpy_facade_repository_read_v1(read_kind="LATEST_PRIOR_TICK", outcome="UNAVAILABLE")
+                return None
+            correlation = thaw_json_v1(event.correlation)
+            required_session = {
+                "exchange_trade_date": exchange_trade_date,
+                "session_epoch": session_epoch,
+                "session_phase": session_phase.value,
+            }
+            if correlation != required_session:
+                record_vnpy_facade_repository_read_v1(read_kind="LATEST_PRIOR_TICK", outcome="UNAVAILABLE")
+                return None
+            payload = thaw_json_v1(event.payload)
+            required_payload_fields = {
+                "symbol",
+                "logical_at_utc",
+                "bid_price_1",
+                "bid_volume_1",
+                "ask_price_1",
+                "ask_volume_1",
+                "last_price",
+                "limit_up",
+                "limit_down",
+                "eligibility_state",
+                "freshness_state",
+                "generation",
+                "quote_source",
+                "exchange_time_utc",
+                "exchange_trade_date",
+                "session_epoch",
+                "session_phase",
+            }
+            source_identity = thaw_json_v1(event.source_identity)
+            if (
+                not isinstance(payload, dict)
+                or not required_payload_fields.issubset(payload)
+                or payload.get("symbol") != expected_symbol
+                or payload.get("eligibility_state") != "READY"
+                or payload.get("freshness_state") != "READY"
+                or type(payload.get("generation")) is not int
+                or payload["generation"] < 0
+                or payload.get("quote_source") != "B0_QUOTE_V2"
+                or payload.get("exchange_trade_date") != exchange_trade_date
+                or payload.get("session_epoch") != session_epoch
+                or payload.get("session_phase") != session_phase.value
+                or not isinstance(source_identity, dict)
+                or type(source_identity.get("market_data_id")) is not str
+                or not source_identity["market_data_id"]
+            ):
+                record_vnpy_facade_repository_read_v1(read_kind="LATEST_PRIOR_TICK", outcome="UNAVAILABLE")
+                return None
+            read = VnpyFacadeRepositoryEventReadV1.create(
+                read_kind=VnpyFacadeRepositoryReadKindV1.LATEST_PRIOR_TICK,
+                runtime_id=runtime_id,
+                algo_instance_id=algo_instance_id,
+                cutoff_delivery_sequence_or_null=cutoff_delivery_sequence,
+                cutoff_event_sequence_or_null=cutoff_event_sequence,
+                event=event,
+                delivery=delivery,
+            )
+            record_vnpy_facade_repository_read_v1(read_kind="LATEST_PRIOR_TICK", outcome="FOUND")
+            return read
+        except VnpyFacadeContractError:
+            raise
+        except Exception as exc:
+            record_vnpy_facade_repository_read_v1(read_kind="LATEST_PRIOR_TICK", outcome="INVALID")
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_REPOSITORY_READ_INVALID",
+                "facade latest prior TICK durable carrier failed strict readback",
+                context={
+                    "read_kind": "LATEST_PRIOR_TICK",
+                    "runtime_id": runtime_id,
+                    "algo_instance_id": algo_instance_id,
+                    "cutoff_event_sequence": cutoff_event_sequence,
+                    "cutoff_delivery_sequence": cutoff_delivery_sequence,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            ) from exc
+
+    def read_facade_algo_start_event_v1(
+        self,
+        *,
+        runtime_id: str,
+        algo_instance_id: str,
+    ) -> VnpyFacadeRepositoryEventReadV1:
+        for field_name, value in (("runtime_id", runtime_id), ("algo_instance_id", algo_instance_id)):
+            if type(value) is not str or not value or value != value.strip():
+                raise TypeError(f"{field_name} must be a trim-stable strict string")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                return self._read_facade_algo_start_event_with_cursor(
+                    cur,
+                    runtime_id=runtime_id,
+                    algo_instance_id=algo_instance_id,
+                )
+
+    def read_facade_latest_prior_tick_v1(
+        self,
+        *,
+        runtime_id: str,
+        algo_instance_id: str,
+        timer_delivery_sequence: int,
+        timer_event_sequence: int,
+        exchange_trade_date: str,
+        session_epoch: str,
+        session_phase: SessionPhaseV1,
+    ) -> VnpyFacadeRepositoryEventReadV1 | None:
+        for field_name, value in (("runtime_id", runtime_id), ("algo_instance_id", algo_instance_id)):
+            if type(value) is not str or not value or value != value.strip():
+                raise TypeError(f"{field_name} must be a trim-stable strict string")
+        for field_name, value in (
+            ("timer_delivery_sequence", timer_delivery_sequence),
+            ("timer_event_sequence", timer_event_sequence),
+        ):
+            if type(value) is not int or value <= 0:
+                raise TypeError(f"{field_name} must be a positive strict integer")
+        if type(exchange_trade_date) is not str or len(exchange_trade_date) != 10:
+            raise TypeError("exchange_trade_date must be a YYYY-MM-DD strict string")
+        try:
+            if date.fromisoformat(exchange_trade_date).isoformat() != exchange_trade_date:
+                raise ValueError
+        except ValueError as exc:
+            raise ValueError("exchange_trade_date must be canonical YYYY-MM-DD") from exc
+        if type(session_epoch) is not str or not session_epoch or session_epoch != session_epoch.strip():
+            raise TypeError("session_epoch must be a trim-stable strict string")
+        if not isinstance(session_phase, SessionPhaseV1):
+            raise TypeError("session_phase must be SessionPhaseV1")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT kernel_carrier_json FROM qmt_strategy.execution_algo_instance "
+                    "WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'",
+                    (runtime_id, algo_instance_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise KeyError(algo_instance_id)
+                algo = _model_from_json(
+                    ExecutionAlgoInstancePersistenceV2,
+                    _row_json(row, "kernel_carrier_json"),
+                )
+                return self._read_facade_latest_prior_tick_with_cursor(
+                    cur,
+                    runtime_id=runtime_id,
+                    algo_instance_id=algo_instance_id,
+                    cutoff_delivery_sequence=timer_delivery_sequence,
+                    cutoff_event_sequence=timer_event_sequence,
+                    exchange_trade_date=exchange_trade_date,
+                    session_epoch=session_epoch,
+                    session_phase=session_phase,
+                    expected_symbol=algo.symbol,
+                )
 
     def read_callback_watermark(self, *, runtime_id: str) -> str:
         if type(runtime_id) is not str or not runtime_id.strip() or runtime_id != runtime_id.strip():

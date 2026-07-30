@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Mapping
-from datetime import datetime
+from decimal import Decimal
 from enum import Enum
-from typing import Any, Self
+from typing import Any, Callable, Self, TypeVar
 
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     canonical_decimal_string_v1,
@@ -29,21 +29,31 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     OrderTypeV1,
     SideV1,
     TerminalOutcomeV1,
+    stable_exception_reason_code_v1,
 )
 
 from .facade_contracts import (
+    VnpyFacadeCharacterizationManifestViewV1,
+    VnpyFacadeCharacterizationStartContextV2,
     VnpyFacadeContractError,
     VnpyFacadeInitializationInputV1,
+    VnpyFacadeInitializationInputV2,
     VnpyFacadeTransitionInputV1,
+    VnpyFacadeTransitionInputV2,
+    VnpyFacadeTraceCallV1,
+    VnpyFacadeTraceEffectV1,
 )
 from .facade_projection import (
     ContractData,
     Direction,
     Offset,
+    OrderData,
     OrderType,
     TickData,
+    TradeData,
     build_pinned_round_to_v1,
     project_contract_data_v1,
+    project_tick_data_v1,
 )
 
 
@@ -78,7 +88,10 @@ def _diagnostic_json_v1(value: Any, *, depth: int = 0) -> Any:
     if type(value) is float:
         if not math.isfinite(value):
             raise ValueError("facade diagnostic context contains non-finite float")
-        return canonical_decimal_string_v1(str(value), field_name="diagnostic_float", allow_zero=True)
+        normalized = format(Decimal(str(value)), "f")
+        if "." in normalized:
+            normalized = normalized.rstrip("0").rstrip(".")
+        return "0" if normalized in {"", "-0"} else normalized
     if isinstance(value, Enum):
         return {
             "enum_owner": type(value).__name__,
@@ -92,6 +105,80 @@ def _diagnostic_json_v1(value: Any, *, depth: int = 0) -> Any:
     if type(value) in (tuple, list):
         return [_diagnostic_json_v1(item, depth=depth + 1) for item in value]
     raise TypeError(f"unsupported facade diagnostic value: {type(value).__name__}")
+
+
+def _trace_json_v1(value: Any) -> Any:
+    if isinstance(value, TickData):
+        return {
+            "object_type": "TickData",
+            "vt_symbol": value.vt_symbol,
+            "datetime": canonical_utc_datetime_v1(value.datetime, field_name="trace.tick.datetime"),
+            "bid_price_1": canonical_decimal_string_v1(
+                str(value.bid_price_1), field_name="trace.tick.bid_price_1", allow_zero=True
+            ),
+            "bid_volume_1": canonical_decimal_string_v1(
+                str(value.bid_volume_1), field_name="trace.tick.bid_volume_1", allow_zero=True
+            ),
+            "ask_price_1": canonical_decimal_string_v1(
+                str(value.ask_price_1), field_name="trace.tick.ask_price_1", allow_zero=True
+            ),
+            "ask_volume_1": canonical_decimal_string_v1(
+                str(value.ask_volume_1), field_name="trace.tick.ask_volume_1", allow_zero=True
+            ),
+            "last_price": canonical_decimal_string_v1(
+                str(value.last_price), field_name="trace.tick.last_price", allow_zero=True
+            ),
+            "limit_up": canonical_decimal_string_v1(
+                str(value.limit_up), field_name="trace.tick.limit_up", allow_zero=True
+            ),
+            "limit_down": canonical_decimal_string_v1(
+                str(value.limit_down), field_name="trace.tick.limit_down", allow_zero=True
+            ),
+        }
+    if isinstance(value, ContractData):
+        return {
+            "object_type": "ContractData",
+            "symbol": value.symbol,
+            "exchange": _diagnostic_json_v1(value.exchange),
+            "gateway_name": value.gateway_name,
+            "min_volume": canonical_decimal_string_v1(
+                str(value.min_volume), field_name="trace.contract.min_volume", allow_zero=False
+            ),
+            "pricetick": canonical_decimal_string_v1(
+                str(value.pricetick), field_name="trace.contract.pricetick", allow_zero=False
+            ),
+        }
+    if isinstance(value, OrderData):
+        return {
+            "object_type": "OrderData",
+            "vt_orderid": value.vt_orderid,
+            "status": _diagnostic_json_v1(value.status),
+            "traded": canonical_decimal_string_v1(str(value.traded), field_name="trace.order.traded", allow_zero=True),
+            "price": canonical_decimal_string_v1(str(value.price), field_name="trace.order.price", allow_zero=False),
+        }
+    if isinstance(value, TradeData):
+        return {
+            "object_type": "TradeData",
+            "vt_orderid": value.vt_orderid,
+            "vt_tradeid": value.vt_tradeid,
+            "price": canonical_decimal_string_v1(str(value.price), field_name="trace.trade.price", allow_zero=False),
+            "volume": canonical_decimal_string_v1(str(value.volume), field_name="trace.trade.volume", allow_zero=False),
+            "datetime": (
+                None
+                if value.datetime is None
+                else canonical_utc_datetime_v1(value.datetime, field_name="trace.trade.datetime")
+            ),
+        }
+    if isinstance(value, Mapping):
+        if any(type(key) is not str for key in value):
+            raise TypeError("facade trace object keys must be strict strings")
+        return {key: _trace_json_v1(item) for key, item in value.items()}
+    if type(value) in (tuple, list):
+        return [_trace_json_v1(item) for item in value]
+    return _diagnostic_json_v1(value)
+
+
+_TraceReturnT = TypeVar("_TraceReturnT")
 
 
 class VnpyFacadeEffectCollectorV1:
@@ -351,6 +438,137 @@ class VnpyFacadeEffectCollectorV1:
         object.__setattr__(self, "_bound_manifest", manifest)
 
 
+class VnpyFacadeTraceCollectorV2:
+    """Transition-local full call/effect trace owner for pinned-source characterization."""
+
+    __slots__ = ("_calls", "_effect_collector", "_frozen", "_vector_id")
+
+    def __init__(
+        self,
+        *,
+        vector_id: str,
+        effect_collector: VnpyFacadeEffectCollectorV1,
+    ) -> None:
+        if type(vector_id) is not str or not vector_id or vector_id != vector_id.strip():
+            raise TypeError("vector_id must be a trim-stable strict string")
+        if not isinstance(effect_collector, VnpyFacadeEffectCollectorV1):
+            raise TypeError("effect_collector must be VnpyFacadeEffectCollectorV1")
+        if effect_collector.is_frozen:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_EFFECT_CONFLICT",
+                "trace collector cannot bind an already frozen effect collector",
+                context={"vector_id": vector_id},
+            )
+        self._vector_id = vector_id
+        self._effect_collector = effect_collector
+        self._calls: list[VnpyFacadeTraceCallV1 | None] = []
+        self._frozen = False
+
+    @property
+    def vector_id(self) -> str:
+        return self._vector_id
+
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
+
+    @property
+    def ordered_calls(self) -> tuple[VnpyFacadeTraceCallV1, ...]:
+        if any(item is None for item in self._calls):
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_EFFECT_CONFLICT",
+                "trace collector contains an unfinished call",
+                context={"vector_id": self._vector_id},
+            )
+        return tuple(item for item in self._calls if item is not None)
+
+    def invoke_v1(
+        self,
+        *,
+        method_name: str,
+        normalized_arguments: dict[str, Any],
+        operation: Callable[[], _TraceReturnT],
+    ) -> _TraceReturnT:
+        if self._frozen:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_EFFECT_CONFLICT",
+                "trace collector is already frozen",
+                context={"vector_id": self._vector_id, "method_name": method_name},
+            )
+        normalized_args = _trace_json_v1(normalized_arguments)
+        ordinal = len(self._calls)
+        self._calls.append(None)
+        diagnostic_start = len(self._effect_collector.diagnostic_observations)
+        try:
+            result = operation()
+        except Exception as exc:
+            diagnostics = self._effect_collector.diagnostic_observations[diagnostic_start:]
+            self._calls[ordinal] = VnpyFacadeTraceCallV1.create(
+                ordinal=ordinal,
+                method_name=method_name,
+                normalized_arguments=normalized_args,
+                return_disposition="RAISED",
+                normalized_return_or_null={
+                    "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+                    "reason_code": stable_exception_reason_code_v1(
+                        exc,
+                        default="MINIQMT_VNPY_FACADE_SOURCE_EXECUTION_FAILED",
+                    ),
+                },
+                ordered_diagnostic_reason_codes=tuple(item.reason_code for item in diagnostics),
+            )
+            raise
+        diagnostics = self._effect_collector.diagnostic_observations[diagnostic_start:]
+        if result is None:
+            disposition = "NONE"
+            normalized_result = None
+        elif result == "":
+            disposition = "EMPTY_STRING"
+            normalized_result = ""
+        else:
+            disposition = "VALUE"
+            normalized_result = _trace_json_v1(result)
+        self._calls[ordinal] = VnpyFacadeTraceCallV1.create(
+            ordinal=ordinal,
+            method_name=method_name,
+            normalized_arguments=normalized_args,
+            return_disposition=disposition,
+            normalized_return_or_null=normalized_result,
+            ordered_diagnostic_reason_codes=tuple(item.reason_code for item in diagnostics),
+        )
+        return result
+
+    def freeze_v1(self) -> tuple[tuple[VnpyFacadeTraceCallV1, ...], tuple[VnpyFacadeTraceEffectV1, ...]]:
+        if self._frozen:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_EFFECT_CONFLICT",
+                "trace collector cannot be frozen twice",
+                context={"vector_id": self._vector_id},
+            )
+        snapshot = self.snapshot_v1()
+        self._frozen = True
+        return snapshot
+
+    def snapshot_v1(
+        self,
+    ) -> tuple[tuple[VnpyFacadeTraceCallV1, ...], tuple[VnpyFacadeTraceEffectV1, ...]]:
+        """Read the exact current trace without weakening single-use freeze semantics."""
+
+        carriers: list[BrokerCommandV2 | DiagnosticObservationV1] = [
+            *self._effect_collector.broker_commands,
+            *self._effect_collector.diagnostic_observations,
+        ]
+        carriers.sort(key=lambda item: item.ordinal)
+        if tuple(item.ordinal for item in carriers) != tuple(range(len(carriers))):
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_EFFECT_CONFLICT",
+                "characterization effect ordinals are not contiguous",
+                context={"vector_id": self._vector_id},
+            )
+        effects = tuple(VnpyFacadeTraceEffectV1.create(ordinal=item.ordinal, carrier=item) for item in carriers)
+        return self.ordered_calls, effects
+
+
 class VnpyAlgoEngineFacadeV1:
     """Exact six-method facade; it never owns a Gateway or repository."""
 
@@ -364,6 +582,8 @@ class VnpyAlgoEngineFacadeV1:
         "_side",
         "_symbol",
         "_tick",
+        "_trace_collector",
+        "_trace_depth",
     )
 
     def __init__(self) -> None:
@@ -372,12 +592,22 @@ class VnpyAlgoEngineFacadeV1:
     @classmethod
     def create(
         cls,
-        invocation_input: VnpyFacadeInitializationInputV1 | VnpyFacadeTransitionInputV1,
+        invocation_input: (
+            VnpyFacadeInitializationInputV1
+            | VnpyFacadeTransitionInputV1
+            | VnpyFacadeInitializationInputV2
+            | VnpyFacadeTransitionInputV2
+        ),
         effect_collector: VnpyFacadeEffectCollectorV1,
     ) -> Self:
         if not isinstance(
             invocation_input,
-            (VnpyFacadeInitializationInputV1, VnpyFacadeTransitionInputV1),
+            (
+                VnpyFacadeInitializationInputV1,
+                VnpyFacadeTransitionInputV1,
+                VnpyFacadeInitializationInputV2,
+                VnpyFacadeTransitionInputV2,
+            ),
         ):
             raise TypeError("invocation_input must be an exact K4 facade input")
         if not isinstance(effect_collector, VnpyFacadeEffectCollectorV1):
@@ -387,7 +617,7 @@ class VnpyAlgoEngineFacadeV1:
                 "MINIQMT_VNPY_FACADE_EFFECT_CONFLICT",
                 "cannot construct facade with a frozen collector",
             )
-        if isinstance(invocation_input, VnpyFacadeInitializationInputV1):
+        if isinstance(invocation_input, (VnpyFacadeInitializationInputV1, VnpyFacadeInitializationInputV2)):
             context = invocation_input.start_context
             deterministic = context.deterministic_context
             parent_intent_id = context.parent_intent_id
@@ -419,12 +649,16 @@ class VnpyAlgoEngineFacadeV1:
             effect_collector.deterministic_context != deterministic
             or effect_collector.parent_intent_id != parent_intent_id
             or (
-                isinstance(invocation_input, VnpyFacadeInitializationInputV1)
+                isinstance(invocation_input, (VnpyFacadeInitializationInputV1, VnpyFacadeInitializationInputV2))
                 and effect_collector.transition_id != invocation_input.transition_id
             )
             or (
                 isinstance(invocation_input, VnpyFacadeTransitionInputV1)
                 and effect_collector.transition_id != invocation_input.delivery.transition_id
+            )
+            or (
+                isinstance(invocation_input, VnpyFacadeTransitionInputV2)
+                and effect_collector.transition_id != invocation_input.transition_id
             )
         ):
             raise _facade_error(
@@ -442,6 +676,8 @@ class VnpyAlgoEngineFacadeV1:
         instance._tick = instance._project_tick_v1(tick_payload)
         instance._active_mappings = {item.local_vt_orderid: item for item in mappings}
         instance._round_to = build_pinned_round_to_v1()
+        instance._trace_collector = None
+        instance._trace_depth = 0
         effect_collector.bind_manifest_v1(manifest)
         return instance
 
@@ -517,8 +753,109 @@ class VnpyAlgoEngineFacadeV1:
         instance._tick = tick
         instance._active_mappings = {item.local_vt_orderid: item for item in ordered}
         instance._round_to = build_pinned_round_to_v1()
+        instance._trace_collector = None
+        instance._trace_depth = 0
         effect_collector.bind_manifest_v1(manifest)
         return instance
+
+    @classmethod
+    def _create_characterization_v2(
+        cls,
+        *,
+        manifest_view: VnpyFacadeCharacterizationManifestViewV1,
+        characterization_context: VnpyFacadeCharacterizationStartContextV2,
+        trace_collector: VnpyFacadeTraceCollectorV2,
+        contract: ContractData | None,
+        tick: TickData | None,
+        active_mappings: tuple[ExecutionCommandChildMappingV1, ...],
+    ) -> Self:
+        if not isinstance(manifest_view, VnpyFacadeCharacterizationManifestViewV1):
+            raise TypeError("manifest_view must be VnpyFacadeCharacterizationManifestViewV1")
+        if not isinstance(characterization_context, VnpyFacadeCharacterizationStartContextV2):
+            raise TypeError("characterization_context must be VnpyFacadeCharacterizationStartContextV2")
+        if not isinstance(trace_collector, VnpyFacadeTraceCollectorV2):
+            raise TypeError("trace_collector must be VnpyFacadeTraceCollectorV2")
+        if characterization_context.manifest_view != manifest_view:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+                "characterization manifest view differs from the start authority",
+                context={"vector_id": characterization_context.vector_id},
+            )
+        effect_collector = trace_collector._effect_collector
+        if (
+            effect_collector.deterministic_context != characterization_context.deterministic_context
+            or effect_collector.parent_intent_id != characterization_context.parent_intent_id
+            or trace_collector.vector_id != characterization_context.vector_id
+            or trace_collector.is_frozen
+        ):
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+                "characterization trace/effect/start owners do not close",
+                context={"vector_id": characterization_context.vector_id},
+            )
+        ordered = tuple(sorted(active_mappings, key=lambda item: item.local_vt_orderid))
+        if active_mappings != ordered or len({item.local_vt_orderid for item in ordered}) != len(ordered):
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CANCEL_OWNERSHIP_INVALID",
+                "characterization active mappings must be unique and sorted",
+                context={"vector_id": characterization_context.vector_id},
+            )
+        if any(
+            (
+                item.runtime_id,
+                item.algo_instance_id,
+                item.parent_intent_id,
+                item.symbol,
+                item.side,
+            )
+            != (
+                characterization_context.runtime_id,
+                characterization_context.algo_instance_id,
+                characterization_context.parent_intent_id,
+                characterization_context.symbol,
+                characterization_context.side,
+            )
+            for item in ordered
+        ):
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CANCEL_OWNERSHIP_INVALID",
+                "characterization active mapping owner drifted",
+                context={"vector_id": characterization_context.vector_id},
+            )
+        instance = object.__new__(cls)
+        instance._input = None
+        instance._collector = effect_collector
+        instance._parent_intent_id = characterization_context.parent_intent_id
+        instance._symbol = characterization_context.symbol
+        instance._side = characterization_context.side
+        instance._contract = contract
+        instance._tick = tick
+        instance._active_mappings = {item.local_vt_orderid: item for item in ordered}
+        instance._round_to = build_pinned_round_to_v1()
+        instance._trace_collector = trace_collector
+        instance._trace_depth = 0
+        effect_collector.bind_manifest_v1(manifest_view)
+        return instance
+
+    def _invoke_traced_v2(
+        self,
+        *,
+        method_name: str,
+        normalized_arguments: dict[str, Any],
+        operation: Callable[[], _TraceReturnT],
+    ) -> _TraceReturnT:
+        trace = self._trace_collector
+        if trace is None or self._trace_depth > 0:
+            return operation()
+        self._trace_depth += 1
+        try:
+            return trace.invoke_v1(
+                method_name=method_name,
+                normalized_arguments=normalized_arguments,
+                operation=operation,
+            )
+        finally:
+            self._trace_depth -= 1
 
     def _project_contract_v1(self, payload: Mapping[str, Any] | None) -> ContractData | None:
         if payload is None:
@@ -536,66 +873,31 @@ class VnpyAlgoEngineFacadeV1:
     def _project_tick_v1(self, payload: Mapping[str, Any] | None) -> TickData | None:
         if payload is None:
             return None
-        required = {
-            "symbol",
-            "logical_at_utc",
-            "bid_price_1",
-            "bid_volume_1",
-            "ask_price_1",
-            "ask_volume_1",
-            "last_price",
-            "limit_up",
-            "limit_down",
-        }
-        missing = sorted(required - set(payload))
-        try:
-            if missing:
-                raise ValueError("market-data projection is missing required fields")
-            if type(payload["symbol"]) is not str or payload["symbol"] != self._symbol:
-                raise ValueError("market-data projection symbol conflicts with transition owner")
-            logical = datetime.fromisoformat(
-                canonical_utc_datetime_v1(payload["logical_at_utc"], field_name="market_data.logical_at_utc").replace(
-                    "Z", "+00:00"
-                )
-            )
-            prices = {
-                field: float(
-                    canonical_decimal_string_v1(
-                        payload[field],
-                        field_name=f"market_data.{field}",
-                        allow_zero=True,
-                    )
-                )
-                for field in ("bid_price_1", "ask_price_1", "last_price", "limit_up", "limit_down")
-            }
-            volumes: dict[str, float] = {}
-            for field in ("bid_volume_1", "ask_volume_1"):
-                value = payload[field]
-                if type(value) is not int or value < 0:
-                    raise TypeError(f"market_data.{field} must be a non-negative strict integer share quantity")
-                volumes[field] = float(value)
-            return TickData(
-                vt_symbol=self._symbol.replace(".SH", ".SSE").replace(".SZ", ".SZSE").replace(".BJ", ".BSE"),
-                datetime=logical,
-                bid_price_1=prices["bid_price_1"],
-                bid_volume_1=volumes["bid_volume_1"],
-                ask_price_1=prices["ask_price_1"],
-                ask_volume_1=volumes["ask_volume_1"],
-                last_price=prices["last_price"],
-                limit_up=prices["limit_up"],
-                limit_down=prices["limit_down"],
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise _facade_error(
-                "MINIQMT_VNPY_FACADE_MARKET_DATA_INVALID",
-                "immutable market-data projection is malformed",
-                symbol=self._symbol,
-                missing_fields=missing,
-                error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
-                error_message=str(exc),
-            ) from exc
+        return project_tick_data_v1(symbol=self._symbol, payload=dict(payload))
 
     def send_order(
+        self,
+        algo: Any,
+        direction: Direction,
+        price: float,
+        volume: float,
+        order_type: OrderType,
+        offset: Offset,
+    ) -> str:
+        return self._invoke_traced_v2(
+            method_name="send_order",
+            normalized_arguments={
+                "algo_instance_id": getattr(algo, "algo_name", None),
+                "direction": direction,
+                "price": price,
+                "volume": volume,
+                "order_type": order_type,
+                "offset": offset,
+            },
+            operation=lambda: self._send_order_impl_v1(algo, direction, price, volume, order_type, offset),
+        )
+
+    def _send_order_impl_v1(
         self,
         algo: Any,
         direction: Direction,
@@ -615,7 +917,9 @@ class VnpyAlgoEngineFacadeV1:
                 "send_order requires exact pinned enum projections",
             )
         price_value = self._finite_number_v1(price, field_name="price", positive=True)
-        volume_value = self._finite_number_v1(volume, field_name="volume", positive=True)
+        volume_value = self._finite_number_v1(volume, field_name="volume", positive=False)
+        if volume_value < 0:
+            raise ValueError("volume must be finite non-negative")
         contract = self.get_contract(algo)
         if contract is None:
             return ""
@@ -643,6 +947,16 @@ class VnpyAlgoEngineFacadeV1:
         return command.local_vt_orderid
 
     def cancel_order(self, algo: Any, vt_orderid: str) -> None:
+        return self._invoke_traced_v2(
+            method_name="cancel_order",
+            normalized_arguments={
+                "algo_instance_id": getattr(algo, "algo_name", None),
+                "vt_orderid": vt_orderid,
+            },
+            operation=lambda: self._cancel_order_impl_v1(algo, vt_orderid),
+        )
+
+    def _cancel_order_impl_v1(self, algo: Any, vt_orderid: str) -> None:
         self._assert_algo_owner_v1(algo)
         if type(vt_orderid) is not str or not vt_orderid or vt_orderid != vt_orderid.strip():
             raise TypeError("vt_orderid must be a trim-stable strict string")
@@ -663,6 +977,13 @@ class VnpyAlgoEngineFacadeV1:
         )
 
     def get_tick(self, algo: Any) -> TickData | None:
+        return self._invoke_traced_v2(
+            method_name="get_tick",
+            normalized_arguments={"algo_instance_id": getattr(algo, "algo_name", None)},
+            operation=lambda: self._get_tick_impl_v1(algo),
+        )
+
+    def _get_tick_impl_v1(self, algo: Any) -> TickData | None:
         self._assert_algo_owner_v1(algo)
         if self._tick is None:
             self._collector.append_diagnostic(
@@ -674,6 +995,13 @@ class VnpyAlgoEngineFacadeV1:
         return self._tick
 
     def get_contract(self, algo: Any) -> ContractData | None:
+        return self._invoke_traced_v2(
+            method_name="get_contract",
+            normalized_arguments={"algo_instance_id": getattr(algo, "algo_name", None)},
+            operation=lambda: self._get_contract_impl_v1(algo),
+        )
+
+    def _get_contract_impl_v1(self, algo: Any) -> ContractData | None:
         self._assert_algo_owner_v1(algo)
         if self._contract is None:
             self._collector.append_diagnostic(
@@ -685,6 +1013,16 @@ class VnpyAlgoEngineFacadeV1:
         return self._contract
 
     def write_log(self, msg: str, algo: Any | None = None) -> None:
+        return self._invoke_traced_v2(
+            method_name="write_log",
+            normalized_arguments={
+                "msg": msg,
+                "algo_instance_id": None if algo is None else getattr(algo, "algo_name", None),
+            },
+            operation=lambda: self._write_log_impl_v1(msg, algo),
+        )
+
+    def _write_log_impl_v1(self, msg: str, algo: Any | None = None) -> None:
         if algo is not None:
             self._assert_algo_owner_v1(algo)
         if type(msg) is not str:
@@ -703,6 +1041,16 @@ class VnpyAlgoEngineFacadeV1:
         )
 
     def put_algo_event(self, algo: Any, data: dict[str, Any]) -> None:
+        return self._invoke_traced_v2(
+            method_name="put_algo_event",
+            normalized_arguments={
+                "algo_instance_id": getattr(algo, "algo_name", None),
+                "data": data,
+            },
+            operation=lambda: self._put_algo_event_impl_v1(algo, data),
+        )
+
+    def _put_algo_event_impl_v1(self, algo: Any, data: dict[str, Any]) -> None:
         self._assert_algo_owner_v1(algo)
         if type(data) is not dict or any(type(key) is not str for key in data):
             raise TypeError("algo event data must be a strict string-keyed dict")
@@ -732,4 +1080,4 @@ class VnpyAlgoEngineFacadeV1:
         return normalized
 
 
-__all__ = ["VnpyAlgoEngineFacadeV1", "VnpyFacadeEffectCollectorV1"]
+__all__ = ["VnpyAlgoEngineFacadeV1", "VnpyFacadeEffectCollectorV1", "VnpyFacadeTraceCollectorV2"]

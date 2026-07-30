@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from decimal import Decimal
 import json
 from typing import Any
+
+from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeStateEnvelopeV1,
+    read_vnpy_facade_lifecycle_items_v1,
+)
 
 from .kernel_delivery import KernelTransitionWriteBundleV1
 from .plugin_canonical import hash_hex_v1, thaw_json_v1
@@ -55,13 +61,23 @@ class KernelEffectMaterializationError(ValueError):
 
 
 def _active_order_items_v3(state_payload: dict[str, Any]) -> dict[str, CurrentThreeActiveOrderStateV3]:
-    raw_items = state_payload.get("active_orders")
-    if not isinstance(raw_items, list):
-        raise KernelEffectMaterializationError(
-            "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
-            "current-three durable state must expose a strict active_orders list",
-            context={"active_orders_type": type(raw_items).__name__},
-        )
+    if state_payload.get("schema_version") == "miniqmt_vnpy_facade_state_envelope_v1":
+        try:
+            raw_items = [item.model_dump(mode="json") for item in read_vnpy_facade_lifecycle_items_v1(state_payload)]
+        except (TypeError, ValueError) as exc:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "facade durable lifecycle state failed strict K2 projection",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+    else:
+        raw_items = state_payload.get("active_orders")
+        if not isinstance(raw_items, list):
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "current-three durable state must expose a strict active_orders list",
+                context={"active_orders_type": type(raw_items).__name__},
+            )
     items: dict[str, CurrentThreeActiveOrderStateV3] = {}
     for raw_item in raw_items:
         if not isinstance(raw_item, dict):
@@ -865,8 +881,30 @@ def materialize_applied_transition_v1(
         else ActiveChildClosureStatusV1.NOT_APPLICABLE
     )
     state_payload = thaw_json_v1(next_state.state)
-    state_parent_quantity = state_payload.get("parent_quantity")
-    traded_quantity = state_payload.get("traded_quantity")
+    if state_payload.get("schema_version") == "miniqmt_vnpy_facade_state_envelope_v1":
+        try:
+            facade_state = VnpyFacadeStateEnvelopeV1.model_validate_json(
+                json.dumps(state_payload, sort_keys=True, separators=(",", ":")),
+                strict=True,
+            )
+            parent_decimal = Decimal(facade_state.target_volume_decimal)
+            traded_decimal = Decimal(facade_state.traded_volume_decimal)
+            if (
+                parent_decimal != parent_decimal.to_integral_value()
+                or traded_decimal != traded_decimal.to_integral_value()
+            ):
+                raise ValueError("facade share quantities must be integral")
+            state_parent_quantity = int(parent_decimal)
+            traded_quantity = int(traded_decimal)
+        except (TypeError, ValueError, ArithmeticError) as exc:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_QUANTITY_AUTHORITY_INVALID",
+                "facade state does not expose strict integral parent/traded quantity",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+    else:
+        state_parent_quantity = state_payload.get("parent_quantity")
+        traded_quantity = state_payload.get("traded_quantity")
     if (
         type(state_parent_quantity) is not int
         or state_parent_quantity != target_quantity

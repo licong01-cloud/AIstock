@@ -1495,6 +1495,18 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
         return self
 
 
+def strict_readback_kernel_event_payload_v1(event: RuntimeEventEnvelopeV2) -> FrozenStrictModel:
+    """Read one callback/outcome payload through the envelope's strict model authority."""
+
+    if not isinstance(event, RuntimeEventEnvelopeV2):
+        raise TypeError("event must be RuntimeEventEnvelopeV2")
+    try:
+        model = _STRICT_EVENT_PAYLOAD_MODELS[event.event_type]
+    except KeyError as exc:
+        raise ValueError("runtime event does not use a strict callback/outcome payload schema") from exc
+    return model.model_validate_json(json.dumps(thaw_json_v1(event.payload), sort_keys=True, separators=(",", ":")))
+
+
 class AlgoEventDeliveryV1(FrozenStrictModel):
     schema_version: Literal["miniqmt_algo_event_delivery_v1"]
     delivery_id: IdentityV1
@@ -2968,6 +2980,48 @@ def safe_exception_summary_v1(error: BaseException) -> dict[str, str]:
     return {
         "exception_type": error_type,
         "exception_message": rendered or type(error).__name__,
+    }
+
+
+def bounded_exception_summary_v1(
+    error: BaseException,
+    *,
+    max_message_chars: int = 2048,
+    redacted_values: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Render stable, bounded failure evidence without hiding omitted bytes."""
+
+    if not isinstance(error, BaseException):
+        raise TypeError("error must be a BaseException")
+    if type(max_message_chars) is not int or isinstance(max_message_chars, bool) or max_message_chars <= 0:
+        raise TypeError("max_message_chars must be a positive strict integer")
+    if type(redacted_values) is not tuple or any(type(item) is not str or not item for item in redacted_values):
+        raise TypeError("redacted_values must be a tuple of non-empty strict strings")
+    error_type = _qualified_exception_type_v1(error)
+    try:
+        rendered = str(error) or type(error).__name__
+    except Exception as renderer_error:
+        return {
+            "exception_type": error_type,
+            "exception_message": f"<{type(error).__name__}: unrenderable>",
+            "renderer_error_type": _qualified_exception_type_v1(renderer_error),
+            "message_truncated": False,
+            "observed_message_chars": None,
+            "omitted_message_sha256": None,
+        }
+    for value in sorted(set(redacted_values), key=lambda item: (-len(item), item)):
+        rendered = rendered.replace(value, "<repository_root>")
+    observed_chars = len(rendered)
+    omitted = rendered[max_message_chars:]
+    return {
+        "exception_type": error_type,
+        "exception_message": rendered[:max_message_chars],
+        "renderer_error_type": None,
+        "message_truncated": bool(omitted),
+        "observed_message_chars": observed_chars,
+        "omitted_message_sha256": (
+            None if not omitted else hash_hex_v1("miniqmt_exception_message_omitted_v1", omitted)
+        ),
     }
 
 
@@ -5763,7 +5817,9 @@ __all__ = [
     "execution_child_order_id_v1",
     "kernel_lease_fence_token_v1",
     "safe_exception_summary_v1",
+    "bounded_exception_summary_v1",
     "stable_exception_reason_code_v1",
+    "strict_readback_kernel_event_payload_v1",
     "transaction_commit_identity_v1",
     "validate_json_schema_instance_v1",
 ]

@@ -7,6 +7,12 @@ from typing import Any
 
 import psycopg2.extras
 
+from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeContractError,
+    VnpyFacadeRepositoryReadRequestV1,
+    VnpyFacadeRepositoryReadSetV1,
+)
+
 from .kernel_delivery import (
     KernelAlgoCreationRequestV1,
     KernelAlgoStartWriteBundleV1,
@@ -399,14 +405,18 @@ class KernelRepositoryK2BMixin:
                 tuple[ExecutionCommandChildMappingV1, ...],
                 tuple[BrokerCommandOutboxV1, ...],
                 tuple[ExecutionAlgoTimerScheduleV1, ...],
+                VnpyFacadeRepositoryReadSetV1 | None,
             ],
             KernelTransitionWriteBundleV1,
         ],
+        facade_read_request: VnpyFacadeRepositoryReadRequestV1 | None = None,
     ) -> dict[str, Any]:
         if type(delivery_id) is not str or not delivery_id.strip():
             raise TypeError("delivery_id must be a non-empty string")
         if not callable(bundle_builder):
             raise TypeError("bundle_builder must be callable")
+        if facade_read_request is not None and not isinstance(facade_read_request, VnpyFacadeRepositoryReadRequestV1):
+            raise TypeError("facade_read_request must be VnpyFacadeRepositoryReadRequestV1 or None")
         transition_identity: str | None = None
         expected_bundle: KernelTransitionWriteBundleV1 | None = None
         with self._connection(transaction=True) as conn:
@@ -556,6 +566,51 @@ class KernelRepositoryK2BMixin:
                     _model_from_json(ExecutionAlgoTimerScheduleV1, _row_json(row, "carrier_json"))
                     for row in cur.fetchall()
                 )
+                facade_read_set: VnpyFacadeRepositoryReadSetV1 | None = None
+                if facade_read_request is not None:
+                    request = facade_read_request
+                    if (
+                        request.runtime_id != event.runtime_id
+                        or request.algo_instance_id != algo.algo_instance_id
+                        or request.current_event_id != event.event_id
+                        or request.current_event_sequence != event.sequence
+                        or request.current_delivery_id != claimed.delivery_id
+                        or request.current_delivery_sequence != claimed.algo_delivery_sequence
+                    ):
+                        raise VnpyFacadeContractError(
+                            "MINIQMT_VNPY_FACADE_REPOSITORY_READ_INVALID",
+                            "facade repository request differs from the locked event/delivery/algo cutoff",
+                            context={
+                                "runtime_id": event.runtime_id,
+                                "algo_instance_id": algo.algo_instance_id,
+                                "event_id": event.event_id,
+                                "delivery_id": claimed.delivery_id,
+                                "request_sha256": request.request_sha256,
+                            },
+                        )
+                    algo_start_read = self._read_facade_algo_start_event_with_cursor(
+                        cur,
+                        runtime_id=event.runtime_id,
+                        algo_instance_id=algo.algo_instance_id,
+                    )
+                    latest_tick = None
+                    if event.event_type is EventTypeV2.TIMER:
+                        latest_tick = self._read_facade_latest_prior_tick_with_cursor(
+                            cur,
+                            runtime_id=event.runtime_id,
+                            algo_instance_id=algo.algo_instance_id,
+                            cutoff_delivery_sequence=claimed.algo_delivery_sequence,
+                            cutoff_event_sequence=event.sequence,
+                            exchange_trade_date=request.exchange_trade_date,
+                            session_epoch=request.session_epoch,
+                            session_phase=request.session_phase,
+                            expected_symbol=algo.symbol,
+                        )
+                    facade_read_set = VnpyFacadeRepositoryReadSetV1.create(
+                        request=request,
+                        algo_start_read=algo_start_read,
+                        latest_prior_tick_read_or_null=latest_tick,
+                    )
                 bundle = bundle_builder(
                     event,
                     claimed,
@@ -564,6 +619,7 @@ class KernelRepositoryK2BMixin:
                     locked_mappings,
                     locked_command_outboxes,
                     active_timer_schedules,
+                    facade_read_set,
                 )
                 if not isinstance(bundle, KernelTransitionWriteBundleV1):
                     raise TypeError("bundle_builder must return KernelTransitionWriteBundleV1")

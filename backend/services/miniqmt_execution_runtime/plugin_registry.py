@@ -978,7 +978,12 @@ def _source_path_and_hash(value: Callable[..., Any]) -> tuple[str, str]:
     path = Path(source).resolve()
     root = Path(__file__).resolve().parents[3]
     relative = path.relative_to(root).as_posix()
-    return relative, hashlib.sha256(path.read_bytes()).hexdigest()
+    return relative, _canonical_lf_file_sha256_v1(path)
+
+
+def _canonical_lf_file_sha256_v1(path: Path) -> str:
+    payload = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def build_plugin_catalog_v2(
@@ -1109,7 +1114,7 @@ def build_plugin_catalog_v2(
         manifest_files = {item.path: item.sha256 for item in descriptor.manifest.source_attribution.aistock_files}
         for item in descriptor.manifest.source_attribution.aistock_files:
             path = Path(__file__).resolve().parents[3] / item.path
-            actual = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+            actual = _canonical_lf_file_sha256_v1(path) if path.is_file() else None
             if actual != item.sha256:
                 _failure(
                     failures,

@@ -47,10 +47,20 @@ from backend.services.miniqmt_execution_runtime.plugin_registry import (
     PluginRouteCompatibilityReceiptV1,
     VnpyCompatibilityFailureV1,
     VnpyCompatibilityReceiptV1,
+    _canonical_lf_file_sha256_v1,
     build_plugin_catalog_v2,
     compatibility_component_hashes_v1,
     evaluate_plugin_route_compatibility_v1,
 )
+
+
+def test_registry_callable_source_hash_is_checkout_eol_independent(tmp_path: Path) -> None:
+    source = tmp_path / "binding.py"
+    source.write_bytes(b"def binding():\r\n    return 1\r\n")
+    crlf_hash = _canonical_lf_file_sha256_v1(source)
+    source.write_bytes(b"def binding():\n    return 1\n")
+
+    assert _canonical_lf_file_sha256_v1(source) == crlf_hash
 
 
 @lru_cache(maxsize=1)
