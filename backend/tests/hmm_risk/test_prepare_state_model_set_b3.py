@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -914,6 +915,172 @@ def test_child_failure_receipt_bounds_untrusted_error_text(monkeypatch, tmp_path
 
     assert len(failure["error_type"]) == 256
     assert len(failure["error"]) == 4000
+
+
+def _blocker_pass_payload() -> bytes:
+    numeric_environment = {"packages": {"hmmlearn": "0.3.3"}, "thread_env": {"OMP_NUM_THREADS": "1"}}
+    body = {
+        "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_pass_v1",
+        "diagnostic_producer_commit": "d" * 40,
+        "target_manifest_sha256": "1" * 64,
+        "targeted_evidence": [{"diagnostic_entry_sha256": "2" * 64}],
+        "fit_count": 174,
+        "numeric_environment": numeric_environment,
+        "numeric_environment_sha256": subject.canonical_sha256(numeric_environment),
+    }
+    value = {**body, "pass_receipt_sha256": subject.canonical_sha256(body)}
+    return subject.canonical_json_bytes(value)
+
+
+def _blocker_args(tmp_path) -> SimpleNamespace:
+    formal = tmp_path / "formal.json"
+    formal.write_text("{}", encoding="utf-8")
+    return SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_formal_report=str(formal),
+    )
+
+
+def test_blocker_child_pass_validator_rejects_incomplete_success(monkeypatch) -> None:
+    target_entry = {
+        "role": "control",
+        "family": "legacy_covfix",
+        "level": "L2",
+        "seed": 42,
+        "sector_code": "L2-001",
+        "source_entry_receipt_sha256": "7" * 64,
+        "formal_failed_stages": [],
+    }
+    target = {
+        "formal_report_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["report_sha256"],
+        "target_manifest_sha256": "1" * 64,
+        "parameter_profile_sha256": "2" * 64,
+        "target_pair_count": 1,
+        "targets": [target_entry],
+    }
+    evidence_body = {
+        **target_entry,
+        "status": "fit_completed",
+        "formal_entry_receipt_reproduced": True,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "model_write_performed": False,
+    }
+    numeric_environment = {"packages": {"hmmlearn": "0.3.3"}, "thread_env": {"OMP_NUM_THREADS": "1"}}
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: numeric_environment)
+    value = {
+        "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_pass_v1",
+        "diagnostic_producer_commit": "d" * 40,
+        "formal_producer_commit": subject.B3_BLOCKER_FORMAL_AUTHORITY["producer_commit"],
+        "formal_report_sha256": target["formal_report_sha256"],
+        "target_manifest_sha256": target["target_manifest_sha256"],
+        "dataset_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["dataset_manifest_hash"],
+        "mapping_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["mapping_manifest_hash"],
+        "calendar_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["l2_stock_fact_manifest_hash"],
+        "feature_domain_policy_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["feature_domain_policy_sha256"],
+        "formula_version": subject.B3_BLOCKER_FORMAL_AUTHORITY["formula_version"],
+        "parameter_profile_sha256": target["parameter_profile_sha256"],
+        "numeric_environment": numeric_environment,
+        "numeric_environment_sha256": subject.canonical_sha256(numeric_environment),
+        "fit_count": 1,
+        "targeted_evidence": [{**evidence_body, "diagnostic_entry_sha256": subject.canonical_sha256(evidence_body)}],
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "acceptance_decision_reexecuted": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    subject._validate_b3_blocker_pass(value, target)
+
+    incomplete = deepcopy(value)
+    incomplete["targeted_evidence"] = []
+    with pytest.raises(StateModelSetError, match="evidence count is invalid"):
+        subject._validate_b3_blocker_pass(incomplete, target)
+
+
+def test_blocker_parent_rejects_non_bitwise_fresh_process_payloads(monkeypatch, tmp_path) -> None:
+    args = _blocker_args(tmp_path)
+    target = {"target_manifest_sha256": "1" * 64}
+    first = _blocker_pass_payload()
+    second_value = json.loads(first)
+    second_body = {key: value for key, value in second_value.items() if key != "pass_receipt_sha256"}
+    second_body["diagnostic_producer_commit"] = "e" * 40
+    second = subject.canonical_json_bytes({**second_body, "pass_receipt_sha256": subject.canonical_sha256(second_body)})
+    payloads = iter((first, second))
+    monkeypatch.setattr(subject, "derive_b3_blocker_target_manifest", lambda report: target)
+    monkeypatch.setattr(subject, "_validate_b3_blocker_pass", lambda value, manifest: None)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=next(payloads), stderr=b""),
+    )
+
+    with pytest.raises(StateModelSetError, match="canonical payloads differ"):
+        subject.run_b3_blocker_diag01_repeated(args, _request())
+
+
+def test_blocker_parent_keeps_d4_and_d6_replay_read_only(monkeypatch, tmp_path) -> None:
+    args = _blocker_args(tmp_path)
+    target = {
+        "target_manifest_sha256": "1" * 64,
+        "target_pair_count": 174,
+        "fits_per_process": 174,
+        "total_fit_budget": 348,
+        "fresh_process_count": 2,
+        "formal_report_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["report_sha256"],
+    }
+    payload = _blocker_pass_payload()
+    monkeypatch.setattr(subject, "derive_b3_blocker_target_manifest", lambda report: target)
+    monkeypatch.setattr(subject, "_validate_b3_blocker_pass", lambda value, manifest: None)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=payload, stderr=b""),
+    )
+    monkeypatch.setattr(subject, "_load_verified_formal_semantic_inputs", lambda request, db_prefix: {})
+    monkeypatch.setattr(
+        subject,
+        "_semantic_input_identities",
+        lambda inputs: {
+            field: subject.B3_BLOCKER_FORMAL_AUTHORITY[field]
+            for field in (
+                "semantic_dataset_manifest_hash",
+                "semantic_mapping_manifest_hash",
+                "semantic_calendar_manifest_hash",
+                "semantic_l2_stock_fact_manifest_hash",
+            )
+        },
+    )
+    monkeypatch.setattr(subject, "_direct_series_for_family", lambda inputs, family: {"L1": {}})
+    monkeypatch.setattr(
+        subject,
+        "replay_b3_blocker_selected_d6",
+        lambda report, series, manifest: [{"d6_replay_sha256": str(index) * 64} for index in (3, 4, 5)],
+    )
+    monkeypatch.setattr(
+        subject,
+        "build_b3_blocker_matched_comparisons",
+        lambda evidence: {"receipt_sha256": "6" * 64},
+    )
+
+    report = subject.run_b3_blocker_diag01_repeated(args, _request())
+
+    assert report["status"] == "diagnostic_complete"
+    assert report["observed_total_fit_count"] == 348
+    assert report["canonical_payload_bitwise_equal"] is True
+    assert report["d6_replay_count"] == 3
+    assert report["selection_performed"] is False
+    assert report["acceptance_decision_reexecuted"] is False
+    assert report["model_write_performed"] is False
+    assert report["ready_artifact_write_performed"] is False
 
 
 def test_formal_single_pass_runs_both_families_and_levels_without_selection_or_validation(monkeypatch) -> None:

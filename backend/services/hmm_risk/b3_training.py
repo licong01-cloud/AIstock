@@ -57,6 +57,7 @@ class B3TrainingStageError(StateModelSetError):
         self.stage = stage
         self.reason_code = reason_code
         self.cause_type = type(cause).__name__
+        self.cause_evidence = dict(getattr(cause, "evidence", {}) or {})
 
 
 @dataclass(frozen=True)
@@ -519,6 +520,34 @@ def _fit_b3_train_only(
         "postfit_projection_performed": False,
     }
     return {**entry_body, "entry_receipt_sha256": canonical_sha256(entry_body)}, fitted
+
+
+def fit_b3_target_entry(
+    item: B3TrainOnlySeries,
+    *,
+    family: str,
+    level: str,
+    feature_names: Sequence[str],
+    preprocess: Mapping[str, Any],
+    seed: int,
+    numeric_environment: Mapping[str, Any],
+) -> tuple[dict[str, Any], B3FittedModel]:
+    """Fit one approved B3 identity for a bounded diagnostic without selection or writes."""
+
+    features = tuple(str(value) for value in feature_names)
+    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+        raise StateModelSetError("B3 target feature_names must match the approved 7/20 dimensional family")
+    if seed not in RESTART_SCHEDULE:
+        raise StateModelSetError("B3 target seed is outside the approved restart schedule")
+    return _fit_b3_train_only(
+        item,
+        family=family,
+        level=level,
+        feature_names=features,
+        preprocess=preprocess,
+        seed=seed,
+        numeric_environment=numeric_environment,
+    )
 
 
 def run_level_repeat(
