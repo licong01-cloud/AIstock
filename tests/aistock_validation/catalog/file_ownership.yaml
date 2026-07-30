@@ -551,6 +551,17 @@ rules:
     layer: product_feature
     risk_level: high
     ownership_reason: Watchlist realtime quote normalization, import/display APIs, and focused tests must be attributed to watchlist so small data-display fixes use scoped validation instead of generic platform or Validation Center gates.
+  - rule_id: analysis_core_data_fetchers
+    priority: 82
+    include:
+      - backend/core/fund_flow_akshare_impl.py
+      - backend/core/qstock_news_data_impl.py
+      - backend/core/market_sentiment_data_impl.py
+    primary_module: analysis
+    impact_modules: [research_assistant]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Legacy stock-analysis data fetchers are imported by Research Assistant and require analysis plus assistant regression routing.
   - rule_id: strategy_package_services
     priority: 80
     include:

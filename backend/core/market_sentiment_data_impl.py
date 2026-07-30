@@ -12,27 +12,22 @@ import akshare as ak
 from datetime import datetime, timedelta
 import warnings
 import sys
-import io
 from .data_source_manager_impl import data_source_manager
 from ..infra.network_optimizer import network_optimizer
 
 warnings.filterwarnings('ignore')
 
 # 设置标准输出编码为UTF-8（仅在命令行环境，避免streamlit冲突）
-def _setup_stdout_encoding():
-    """仅在命令行环境设置标准输出编码"""
-    if sys.platform == 'win32' and not hasattr(sys.stdout, '_original_stream'):
+def _setup_stdout_encoding() -> None:
+    """Configure the real Windows console without replacing captured streams."""
+    if sys.platform != "win32" or sys.stdout is not sys.__stdout__:
+        return
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
         try:
-            # 检测是否在streamlit环境中
-            import streamlit
-            # 在streamlit中不修改stdout
-            return
-        except ImportError:
-            # 不在streamlit环境，可以安全修改
-            try:
-                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='ignore')
-            except:
-                pass
+            reconfigure(encoding="utf-8", errors="ignore")
+        except (AttributeError, OSError, ValueError):
+            pass
 
 _setup_stdout_encoding()
 

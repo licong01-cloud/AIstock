@@ -4,6 +4,9 @@
     "noxfile.py",
     "backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/core/fund_flow_akshare_impl.py",
+    "backend/core/qstock_news_data_impl.py",
+    "backend/core/market_sentiment_data_impl.py",
     "tests/aistock_validation/bugs/20260730_BUG-922-nightly-clean-workspace-breaks-frontend-bootstrap-and-test-process-isola.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -131,7 +134,10 @@
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "validation.runner"
+    "validation.runner",
+    "analysis",
+    "research_assistant",
+    "miniqmt_execution_runtime"
   ],
   "title": "Nightly clean workspace breaks frontend bootstrap and test process isolation",
   "trigger_condition": {
