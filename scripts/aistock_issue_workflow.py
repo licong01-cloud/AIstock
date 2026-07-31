@@ -11790,6 +11790,9 @@ def build_close_sync_plan(
         if isinstance(record.get("runtime_contract"), dict)
         else [],
     )
+    runtime_contract_errors = list(runtime_contract.get("blocking") or [])
+    if apply and runtime_contract_errors:
+        raise WorkflowError("runtime contract blocks close-sync: " + "; ".join(runtime_contract_errors))
     runtime_receipt: dict[str, Any] | None = None
     runtime_receipt_errors: list[str] = []
     if post_restart_receipt:
@@ -11844,8 +11847,11 @@ def build_close_sync_plan(
             if runtime_receipt.get("probe_evidence_digest") != _probe_evidence_digest(receipt_probes):
                 runtime_receipt_errors.append("post-restart receipt probe evidence digest mismatch")
     runtime_gate_passed = bool(
-        not runtime_contract.get("backend_restart_required")
-        or (runtime_receipt and not runtime_receipt_errors)
+        not runtime_contract_errors
+        and (
+            not runtime_contract.get("backend_restart_required")
+            or (runtime_receipt and not runtime_receipt_errors)
+        )
     )
     registry_worktree_plan = _maybe_create_close_sync_worktree(
         bug_id=canonical_bug_id,
@@ -11865,7 +11871,9 @@ def build_close_sync_plan(
         raise WorkflowError("; ".join(apply_guard["blocking"]))
     output_dir = close_sync_root / WORKFLOW_ROOT / canonical_bug_id
     workflow_gate = "ready_for_apply" if pr_url and evidence else ("missing_validation_evidence" if pr_url else "missing_pr_url")
-    if pr_url and evidence and runtime_contract.get("backend_restart_required") and not runtime_gate_passed:
+    if runtime_contract_errors:
+        workflow_gate = "blocked_runtime_contract"
+    elif pr_url and evidence and runtime_contract.get("backend_restart_required") and not runtime_gate_passed:
         workflow_gate = "fixed_source_pending_user_restart"
     payload = {
         "schema_version": "aistock_issue_workflow_close_sync_v1",
@@ -11897,6 +11905,7 @@ def build_close_sync_plan(
         ),
         "post_restart_receipt": post_restart_receipt,
         "post_restart_receipt_errors": runtime_receipt_errors,
+        "runtime_contract_errors": runtime_contract_errors,
         "dry_run": not apply,
         "workflow_gate": workflow_gate,
         "required_checks": [
@@ -12056,17 +12065,30 @@ def build_close_sync_batch_plan(
             raise WorkflowError(f"{item} has invalid status for close/sync: {status!r}")
         records.append({"bug_id": item, "record": record, "source_path": source_path, "missing_github_linkage": missing})
         source_paths.append(source_path)
-    runtime_batch_bug_ids = [
-        row["bug_id"]
-        for row in records
-        if build_runtime_contract(
+    runtime_contracts = {
+        row["bug_id"]: build_runtime_contract(
             record=row["record"],
             changed_files=flow._as_list(row["record"].get("allowed_write_scope")),
             root=REPO_ROOT,
             fresh_process_evidence=flow._as_list((row["record"].get("runtime_contract") or {}).get("fresh_process_evidence"))
             if isinstance(row["record"].get("runtime_contract"), dict)
             else [],
-        ).get("backend_restart_required")
+        )
+        for row in records
+    }
+    runtime_contract_errors = {
+        bug_id: list(contract.get("blocking") or [])
+        for bug_id, contract in runtime_contracts.items()
+        if contract.get("blocking")
+    }
+    if runtime_contract_errors:
+        detail = "; ".join(
+            f"{bug_id}: {', '.join(errors)}"
+            for bug_id, errors in sorted(runtime_contract_errors.items())
+        )
+        raise WorkflowError("runtime contracts block close-sync-batch: " + detail)
+    runtime_batch_bug_ids = [
+        bug_id for bug_id, contract in runtime_contracts.items() if contract.get("backend_restart_required")
     ]
     if runtime_batch_bug_ids:
         raise WorkflowError(

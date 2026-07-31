@@ -1373,6 +1373,42 @@ def test_close_sync_rejects_receipt_without_complete_probe_evidence(
     assert any("contract digest mismatch" in item for item in payload["post_restart_receipt_errors"])
 
 
+def test_close_sync_rejects_non_backend_runtime_contract_conflicts(
+    isolated_workflow_root: Path,
+) -> None:
+    issue_payload = _bug(
+        allowed_write_scope=[".codex/skills/fix-aistock-issue/SKILL.md"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+        },
+    )
+    issue = _write_json(isolated_workflow_root / "client-runtime-bug.json", issue_payload)
+
+    dry = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+
+    assert dry["workflow_gate"] == "blocked_runtime_contract"
+    assert any("cannot downgrade" in item for item in dry["runtime_contract_errors"])
+    with pytest.raises(workflow.WorkflowError, match="runtime contract blocks close-sync"):
+        workflow.build_close_sync_plan(
+            bug_id=None,
+            issue_json=str(issue),
+            pr_url="https://github.example/pull/199",
+            apply=True,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+            allow_current_worktree=True,
+        )
+
+
 def test_runtime_close_sync_preserves_source_fixed_time_and_uses_verification_close_time(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5140,6 +5176,36 @@ def test_close_sync_batch_rejects_runtime_bugs_without_per_issue_receipts(
     )
 
     with pytest.raises(workflow.WorkflowError, match="cannot close runtime BUGs"):
+        workflow.build_close_sync_batch_plan(
+            bug_ids=["BUG-199", "BUG-200"],
+            pr_url="https://github.example/pull/299",
+            apply=False,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+        )
+
+
+def test_close_sync_batch_rejects_any_invalid_runtime_contract(
+    isolated_workflow_root: Path,
+) -> None:
+    invalid = _bug(
+        allowed_write_scope=[".codex/skills/fix-aistock-issue/SKILL.md"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+        },
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        invalid,
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
+        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="runtime contracts block close-sync-batch"):
         workflow.build_close_sync_batch_plan(
             bug_ids=["BUG-199", "BUG-200"],
             pr_url="https://github.example/pull/299",
