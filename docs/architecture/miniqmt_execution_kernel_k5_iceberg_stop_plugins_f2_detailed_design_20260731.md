@@ -517,7 +517,7 @@ DEV测试只使用现有DEV配置和disposable schema，不执行新DDL：
 - K5 implementation：`not_started`。
 - K6：`not_started`。
 - Product runtime：未切换，现有产品route不变。
-- `design_source_merge=pending_pr`。
+- `design_source_merge=merged_pr_2968`；merge commit=`1e739dce8a5a18d9e9e4c16027801a7a81e34384`。
 - `implementation_source_merge=not_started`。
 - `close_sync=not_applicable_feature`。
 - `production_ddl_gate=noop`。
