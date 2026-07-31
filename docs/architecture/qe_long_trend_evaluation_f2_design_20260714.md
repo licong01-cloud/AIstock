@@ -1,18 +1,19 @@
 # QE 长期上涨趋势评价层 F2 设计
 
-- 版本：v1.21
-- 日期：2026-07-15；Phase 2 运行态核验：2026-07-23；Phase 3 源码实现与本地验证：2026-07-28；Phase 3 单 canary 物化核验：2026-07-29；Phase 4 Loop/Archive UI 源码与只读 live smoke：2026-07-29；PR #2875 第三次正式审核、合入及用户重启后运行态回读：2026-07-29；Phase 4 follow-up 正式审核、PR #2906 合入与 root sync、PR #2935/#2946 状态同步、生产 DDL 执行及 readback、运行态合同与真实 preview GET 核验：2026-07-30；现行进程身份修正与运行态复核：2026-07-31；人类可用检索与截图验收修订：2026-07-31
-- 状态：`PHASE3_SINGLE_CANARY_VERIFIED_PHASE4_TASK_PROFILE_INPUT_PREVIEW_RUNTIME_API_VERIFIED_HUMAN_SEARCH_UI_CONTROLLED_CHROMIUM_VERIFIED_NORMAL_LOOP_LIVE_PENDING_PHASE5_PENDING`
+- 版本：v1.22
+- 日期：2026-07-15；Phase 2 运行态核验：2026-07-23；Phase 3 源码实现与本地验证：2026-07-28；Phase 3 单 canary 物化核验：2026-07-29；Phase 4 Loop/Archive UI 源码与只读 live smoke：2026-07-29；PR #2875 第三次正式审核、合入及用户重启后运行态回读：2026-07-29；Phase 4 follow-up 正式审核、PR #2906 合入与 root sync、PR #2935/#2946 状态同步、生产 DDL 执行及 readback、运行态合同与真实 preview GET 核验：2026-07-30；现行进程身份修正、人类检索验收与 strategy-first freeze：2026-07-31
+- 状态：`PHASE3_SINGLE_CANARY_VERIFIED_EXISTING_CAPABILITY_FROZEN_NO_UI_HISTORY_OR_PHASE5_ACTIVE_WORK`
 - 任务分级：`T3 / F2`
 - 模块：`QuantEvolver / QE-only Evaluation Store / QE Archive Read Model / QE UI`
 - 风险等级：高（跨计算节点、制品、数仓、API、MCP 与 UI）
-- 当前阶段：Phase 1 纯计算核、Phase 2 control/worker/QE-only CAS 与 Phase 3 三表/API/MCP 已按既有 receipt 完成；R8B Loop4 existing-CAS 已物化 2,004 条 metric 与 6 条 artifact，exact replay 保持 row version `42`、更新时间、主键范围、摘要和 task evaluation 数量不变。PR #2875 第三次正式审核关闭 v1.12 的合入阻断；任务创建不可变 profile、生产 DDL、当前 runtime contract 与真实 preview GET 均已有分层证据。用户于 2026-07-31 提供的五张真实截图确认 Phase 4 仍有操作员可用性缺口：Run/Task/outcome snapshot/L2 sector 依赖人工输入内部 ID，部分筛选和状态直接显示英文技术枚举，Top-K 卡把空 source 缺省成 `pred_label_artifacts` 并令 Calmar 头部旧 Run 看似“全部 missing”。当前 8001 只读聚合证明 Top-K 前 100 条实际为 92 条 ok、8 条 missing；缺失只影响没有可连接 pred/label 制品的历史批次，不得传播为全库失败。v1.20 在不改变评价、vintage、研究或写入语义的前提下增加 bounded operator options、业务检索选择器、无 raw JSON 展示和成功截图流水线证据；PR #2964 的 AIstock CI `30598333361` 已通过类型、Lint、四组 QE 后端门禁与受控 Playwright Chromium，并产出 `frontend-ui-evidence-30598333361` 成功截图。normal Loop、完整 runtime/root SHA 对齐、当前 3000 live browser visual、其余 5 个 R8B 与 Phase 5 仍待后续。
+- 当前阶段：Phase 1 纯计算核、Phase 2 control/worker/QE-only CAS、Phase 3 三表/API/MCP、R8B 6/6 CAS、Loop4 2,004 metric + 6 artifact、任务 profile/preview 合同与 PR #2964 受控 Chromium 证据均按既有 receipt 只读保留。自 v1.22 起，本设计不再追求平台完整交付：用户已终止 normal Loop 平台 smoke、完整 runtime/root SHA 对齐、当前 3000 live visual、其余 5 个 R8B 物化、Phase 5、历史补算/重评与批量 E2E。F-014 仅作为 MA-E01 等新策略 trial 可选复用的现有评价能力；缺少某指标族不得阻断策略提交，也不得触发历史补账。
 - v1.15 source snapshot：任务创建不可变 profile 与独立历史输入预检完成源码、本地 mock/单元验证及现有 DEV migration 零残留验证；正式审核补齐缺失 order/trade 显式状态与 summary task profile projection，聚焦后端更新为 `92 passed`。
 - v1.16 post-merge 状态：PR #2906 required checks `15 passed / 0 failed`，以 squash commit `bba48911342a3bee51e4339d597d9b2a5b85d71a` 合入；root `main` 已同步并包含该 merge。source merge/CI/root sync 已完成，close-sync 不适用于 feature PR；生产 DDL、运行时激活、real Recorder preview、live browser、其余 5 个 R8B 与 Phase 5 均未执行。source worktree/local/remote branch 保留，等待独立清理授权。
 - v1.17 production DDL 状态：PR #2935 已以 `005e0e8a3ef30f844ee269d3ad7b14cc6f8bef72` 合入并同步 post-merge 状态。随后在 `127.0.0.1:5433/aistock_dev` 重跑 preflight/forward/readback/reapply/guarded rollback 并确认零残留；用户授权后在 `127.0.0.1:5432/aistock` 执行 `qe_long_trend_task_profile_phase4_20260730.sql`，重连回读确认 `long_trend_profile_id` 为 nullable `text`、列注释精确一致、114 条既有 task 全部为 `NULL`，业务 DML 变更为 0。production DDL 已完成；服务重启、运行态激活、real Recorder preview、live browser、其余 5 个 R8B 与 Phase 5 仍未执行。
 - v1.18 runtime preview 状态：PR #2946 已以 `95e21655c0c0c2dc23bc531b55cb98ed64a2b52f` 合入生产 DDL 状态同步。截至 2026-07-30 该轮核验时，8001/3000 进程启动于 2026-07-30 11:37 +08:00；8001 `/api/v1/health` 与 QE Archive health 成功，OpenAPI 有 1,107 条 path 并包含 F-014 preview GET 和 `long_trend_profile_id`。固定 task `qe_20260715_104922_001d` Loop 4 对已归档 outcome snapshot 的真实 GET 返回 200、`qe_long_trend_input_preview_v1`、8/11 输入可用；feature snapshot identity、orders、trades 以 typed reason 和 3 条 data action 显式缺失。所有 side-effect flags 为 false，调用前后生产 DB 保持 17 evaluation / 2,004 metric / 6 artifact、该 task/Loop 6 evaluation、既有 task profile `NULL`。浏览器列表为空，所以 3000 HTTP 200 不能替代逐控件 visual；normal Loop 执行也未发生。
 - v1.19 current-process correction：2026-07-31 复核确认当前 8001/3000 进程均启动于 01:55 +08:00，说明 v1.18 的进程时间仅是 2026-07-30 历史观察，不是当前进程身份。本次文档任务未执行启动、停止或重启；只读复核再次确认 8001 health、1,107 条 OpenAPI path、F-014 preview/profile 合同、固定 task/Loop preview 的 8/11 可用与 3 个 typed gap，以及七项 side-effect flags 全 false。完整 runtime/root SHA 对齐、normal Loop 与 live browser visual 仍未完成。
 - v1.21 human-search acceptance：真实截图与 8001 只读聚合确认 Top-K 可用覆盖和人类检索缺口。Run、Task、outcome snapshot、L2 sector 的 canonical ID 继续作为后端身份，但只允许由业务选择器产生，操作员不能输入或复制 ID；查询选项按名称、日期、类型、模型、标签期限和 as-of 做 bounded 搜索。QE Archive/F-014 操作员视图不得显示 raw JSON、JSON 代码、原始 payload 或未翻译的技术枚举。Top-K 缺失展示覆盖范围、业务原因和恢复行动，不把 8 条历史缺失冒充全库 missing，也不自动回填或写 DB。只读 options API、业务选择器、Top-K 投影与 Playwright 断言已通过 PR #2964 的受控 Chromium，成功截图和 HTML report 保存在 `frontend-ui-evidence-30598333361`；当前 3000 runtime visual 仍保持独立待执行状态。
+- v1.22 strategy-first freeze：v1.21 及更早版本中的“待补 visual/normal Loop/其余 R8B/Phase 5/历史补算/完整平台交付”只记录当时计划，全部被本条当前授权边界取代，不再是 active backlog。既有评价事实不得删除或改写；新策略 run 自然产生的最小比较输出可以保存，但禁止借此恢复历史平台工程。
 - 上位蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` 第 9.6 节与 F-014
 - 相关蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` Phase 8
 
@@ -46,7 +47,7 @@ label_h = close[T+h+1] / close[T+1] - 1
 2. 计算 20/40/60/120/180D 收益、RankIC、Top-K 右尾召回、30%/50%/70% 目标触达、ordered stage、删失调整的 stage survival、time-to-hit、MFE/MAE、右删失和路径覆盖；
 3. 从 Qlib position/trade artifact 重建持仓 episode，计算趋势捕获率、退出后机会和 false early-exit；
 4. 使用信号日 PIT `l2_code_id` 输出板块分解、板块集中和板块内/板块间归因；
-5. 支持实验完成时自动评价，以及对已完成 R6 等历史 Loop 做 `long_trend_only` 结果评价；两种入口复用同一引擎和身份契约；
+5. 既有实现支持实验完成时自动评价和 `long_trend_only` 结果评价，并复用同一引擎和身份契约；v1.22 后只允许新策略 trial 按需复用，不再对历史 Loop 发起补算；
 6. 将小型汇总指标固化到 QE 专属 evaluation 表，将逐信号和逐 episode 明细固化为 QE 专属 CAS Parquet，不把百万级明细写入 PostgreSQL；
 7. 在 QE Loop 详情、QE Archive 比较页和只读 QE MCP 中展示相同结果、成熟度和失败原因；
 8. 保证后台重启不终止已提交到计算节点的评价任务，不重复启动，不重复归档。
@@ -54,15 +55,15 @@ label_h = close[T+h+1] / close[T+1] - 1
 
 ### 2.2 交付边界
 
-实施完成时必须同时覆盖计算引擎、异步状态、制品、数仓、API、MCP、UI、历史结果评价和回归测试。只提供离线脚本、只写 JSON、不入数仓、只做后端不做 UI、只做新实验不支持已完成 Loop，均不构成本设计的完整实现。
+v1.21 及更早版本曾把计算、异步状态、制品、数仓、API、MCP、UI、历史结果评价和 E2E 定义为完整平台交付。v1.22 由用户终止未完成的平台面，只保留已经实现的计算、CAS、数仓和查询能力供新策略 trial 复用；不再以“完整实现”为目标，也不得用 UI/历史结果评价缺口阻断策略演进。
 
-为提高吞吐，实施允许三个工作流并行：`计算/统计/可成交性`、`CAS/状态/三表/幂等恢复`、`API/MCP/UI/历史补算`。状态分为三条互不替代、互不传播阻断的轴：
+既有实现仍可按三条互不替代的状态轴解释结果：
 
 - `task_status`：queued/running/succeeded/partial/failed，描述本次计算任务生命周期；
 - `family_status`：分别描述 `signal_path`、`position_episode`、`portfolio_result`、`order_fill`、`execution_cause`、`sector_regime` 是否 `COMPUTED`、`COMPUTED_WITH_LIMITATIONS`、`NOT_COMPUTABLE` 或 `NOT_VERIFIABLE`；
 - `platform_delivery_status`：core_compute/cas/database/api/mcp/ui/backfill/e2e 各子项的实施进度，只描述平台是否完整交付。
 
-六个指标族独立解析输入、独立计算、独立持久化状态。某族不可计算或不可验证时，其他族继续执行；receipt 必须生成对应的数据获取、补归档或补算计划。期限选择、R8B2、R8M、R8C 和后续研究可以使用当时已计算出的结果，并必须连同适用范围、缺失项和相互印证情况一起分析。平台最终交付仍覆盖计算、CAS、数仓、API、MCP、UI、历史补算和真实 E2E，但任何平台子项的完成度都不决定科研结果是否可分析。
+六个指标族独立解析输入、独立计算、独立持久化状态。某族不可计算或不可验证时，其他族继续执行；receipt 保留对应 data action 以解释限制，但不得据此自动启动历史数据获取、补归档或补算。新策略可以使用当时已计算出的结果，并必须连同适用范围和缺失项一起分析；不再要求补齐 UI、历史补算或真实平台 E2E。
 
 ### 2.3 科研分析原则
 
@@ -130,12 +131,13 @@ label_h = close[T+h+1] / close[T+1] - 1
 | F-020 | DESIGN-COMPLIANCE-001、真实制品 E2E、DEV DB E2E、UI E2E、重启恢复和 extension snapshot oracle 作为平台交付质量记录；未完成项必须可见，但不限制已计算科研结果的分析和后续研究。 |
 | F-021 | 代码所有权和运行依赖执行 QE-only allowlist；静态 import/route/schema 回归证明 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 和通用 Prediction Store 零变化。 |
 | F-022 | 理论机会与实际可成交结果分层：Qlib `indicators_normal_{freq}_obj.pkl` 的 `amount/deal_amount/ffr` 与 reconciled trade/position 提供下单目标和成交证据；entry/exit 使用同一 authority、逐信号 trade 一对一归属及数量/时点矛盾 fail-fast；日线触板不直接推断原因；缺队列或原因码时仅 `execution_cause` 为 `NOT_VERIFIABLE`。 |
-| F-023 | 六个指标族独立计算和定级；缺 position/order/trade/maturity/价格/板块数据只影响依赖它的指标，不传播为全局失败，并输出结构化数据获取、补归档或补算计划。 |
+| F-023 | 六个指标族独立计算和定级；缺 position/order/trade/maturity/价格/板块数据只影响依赖它的指标，不传播为全局失败；既有结构化 data action 只解释限制，不自动启动数据获取、补归档或补算。 |
 | F-024 | CAS、DDL、API、MCP、UI、历史补算和 E2E 只形成 `platform_delivery_status`；不得解锁或阻断期限选择、R8B2、R8M、R8C、oracle、两层模型或任何研究方向。 |
 | F-025 | QE Archive/F-014 操作员不得人工输入 Run ID、Task ID、snapshot ID、sector code 或其他内部标识；Run、任务、结果快照和板块使用 bounded 业务选择器，支持名称、日期、类型、模型、标签期限、as-of 等检索，canonical ID 只作为隐藏 value 传给现有 API。 |
 | F-026 | QE Archive/F-014 操作员业务视图不得显示 raw JSON、JSON 代码、原始 payload、hash 主标签或未翻译的内部枚举；配置、指标、曲线、因子、质量与缺失原因使用中文表格、卡片、图表和可行动说明。 |
 | F-027 | Top-K 质量按真实 coverage/status 表达：页面分别显示当前查询样本的可用/缺失数量、覆盖交易日和 joined observations；缺 pred/label 制品的历史 Run 标记为局部证据缺失并给出恢复行动，不用默认 source、0 值或全局 missing 冒充事实。 |
 | F-028 | Phase 4 流水线在受控 3012 Chromium 中逐项验证业务选择器、无 ID 文本框、无 raw JSON、Top-K 缺失说明和同-vintage 查询，并为成功场景保存截图/HTML；该证据只闭合 source/controlled-browser visual，不冒充当前 3000 runtime/root SHA 对齐。 |
+| F-029 | F-014 现有能力冻结复用；UI、normal Loop 平台 smoke、Phase 5、其余 R8B 物化和历史补算由用户终止，不得作为新策略实验前置或重新进入 backlog。 |
 
 ## 6. Architecture / 架构
 
@@ -731,7 +733,7 @@ Loop 详情增加“长期趋势”页签：
 5. 新增 QE-only `QELongTrendArtifactStore`、独立 root/manifest/按 family required allowlist，并保存可得的 QE order/trade/position 输入指纹；通用 Prediction Store 保持只读回归目标；
 6. `read_exp_res.py` 只校验和挂载 registration receipt，原 Loop不等待 CPU worker；worker/published receipt由独立 evaluation task/CAS 保存且三者互不覆盖。
 
-### Phase 3：数仓、API 与 MCP
+### Phase 3：数仓、API 与 MCP（既有实现冻结）
 
 1. 添加 metric/artifact forward/preflight/guarded rollback/init schema mirror，不重复创建或重定义 Phase 2 control table；
 2. 复用 `RunEvaluationRecord`，添加 `RunEvaluationMetricRecord/RunEvaluationArtifactRecord`、专属 repository，以及“canonical parse → manifest verify → 两表事务写入 → delivery status CAS”的 receipt writer；
@@ -740,7 +742,7 @@ Loop 详情增加“长期趋势”页签：
 5. 补充 `tests/aistock_validation/catalog/file_ownership.yaml`、module registry、test plan 与 route/schema ownership，使 Phase 3 新文件进入明确 QE-only 验证归属；
 6. 对旧 Archive payload、旧 prediction manifest、旧 run_metric/run_artifact、通用 Prediction Store 和非 QE 路由/schema 做零变化回归。
 
-### Phase 4：UI 与历史 R6 路径
+### Phase 4：UI 与历史 R6 路径（历史设计，后续已终止）
 
 1. Loop 创建页增加不可变 profile 开关；
 2. Loop 详情增加进度、成熟度、长期指标与入场/退出可成交性分层；
@@ -748,7 +750,7 @@ Loop 详情增加“长期趋势”页签：
 4. 对已归档 R6 执行输入可用性预览：分别列出 pred/position/report/indicator/dataset identity 的可得性；
 5. UI 始终允许对 QE run 创建 `long_trend_only` 评价任务；缺失输入只把依赖它的指标族标为 `NOT_COMPUTABLE/NOT_VERIFIABLE`，并显示数据行动计划。
 
-### Phase 5：真实验证与发布准备
+### Phase 5：真实验证与发布准备（历史设计，后续已终止）
 
 1. 使用小型 deterministic fixture 验证所有公式；
 2. 使用真实非生产 Recorder + snapshot 完成 worker → CAS → DEV DB → API/MCP → UI E2E；
@@ -759,7 +761,9 @@ Loop 详情增加“长期趋势”页签：
 
 ### 12.1 并行工作流与完成语义
 
-Phase 1–5 是依赖顺序，不要求所有开发串行。实际实施拆为：
+以下并行工作流描述 v1.21 及更早版本的原始完整平台方案。v1.22 只保留 A/B 已有能力供新策略复用；C 的 UI/历史补算与 Phase 5 后续验证均已终止，不再实施或作为依赖顺序。
+
+原始实施拆为：
 
 | 工作流 | 覆盖 | 可独立到达的内部里程碑 |
 |---|---|---|
@@ -776,9 +780,9 @@ A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 res
 | Phase 1 计算、统计、删失、episode 与 execution bridge | `CORE_IMPLEMENTED_VERIFIED` | `long_trend_evaluation_contract.py`、`long_trend_data_reader.py`、`long_trend_evaluation.py` 及定向 oracle；冻结 profile、双快照、20–180D、HAC/bootstrap、PIT L2、position/report/order/trade 分层均已有实现证据 | 无 Phase 1 语义缺口；平台展示不等同于纯计算核 |
 | Phase 2 编排、资源、恢复与 QE-only CAS | `RUNTIME_CANARY_VERIFIED` | AIstock PR #2630/#2643/#2654/#2668/#2670/#2672/#2674；RD-Agent PR #7/#8；DEV/生产 control DDL 已回读；8001/9000 已加载；R8B 6/6 为唯一 job/attempt、六族计算、partial + CAS published；后端重启后同 identity 幂等 replay | metric/artifact 明细表和公共用户链属于 Phase 3–5 |
 | Phase 2 真实样本 | `R8B_6_OF_6_PARTIAL_CAS_PUBLISHED` | 12,024 项指标、13,241,712 行 signal observations、13,726 行 holding episodes、2,898 个 portfolio trading days；各 Loop coverage/limitations 独立保存 | `partial` 是指标族数据可得性事实，不是科研失败或方向淘汰状态 |
-| Phase 3 数仓/API/MCP | `SINGLE_CANARY_MATERIALIZATION_VERIFIED` | PR #2835 与 BUG-899/900/903 修复已合入；R8B Loop4 `qelt_89331d…` 从 existing CAS 物化 2,004 metric + 6 artifact，manifest SHA-256 `82db1d6b…14ceeb`；detail/quality 共 21 页/2,004 metric，MCP bounded 首屏 100 条与 API payload 相同；Phase 3 专属矩阵 `102 passed` | 仅 1/6 R8B 已物化；其余 5 个 R8B 与 Phase 5 中断恢复/批量 E2E 继续单列；当前连接 DB 的数据写入 receipt 不替代任何未来目标特定 DDL 授权 |
-| Phase 4 UI/历史操作面 | `UI_SLICE_SOURCE_CI_MERGED_RUNTIME_API_VERIFIED_FRONTEND_VISUAL_PENDING` | PR #2875 已合入 `5413d799…`；Loop DB 恢复/唯一 POST/as-of/六族失败证据/coverage/censoring/entry-exit 证据；Archive 同 snapshot 跨 run/model/seed/factor-set，metric+horizon server filter，成交状态与 evidence-level quality filter；mock Playwright `2 passed/1 skipped`，Phase 2 `122 passed`，Phase 3 `102 passed`，catalog 0 findings，F2 24/24，PR CI verdict PASS。用户重启后，8001 OpenAPI 新参数可见；固定 evaluation list/detail/Archive 为 200，`rank_ic + horizon=60` 返回 3 条；3000 页面 HTTP 为 200 | 浏览器运行时无可用实例，前端逐控件可视验收待补；旧 receipt 不含新增 evidence-level summary，相关筛选返回空集而非静默匹配；任务创建页不可变 profile 开关、独立历史输入可用性预览仍是 Phase 4 后续 slice；历史评价执行和其余 R8B 物化需单独授权 |
-| Phase 5 E2E/发布准备 | `DESIGN_AUDITED_DEVELOPMENT_READY` | deterministic fixture、真实非生产 Recorder、重启/重复 callback/CAS-DB 中断恢复和非 QE 零影响矩阵已有验证计划 | 尚未执行；不阻断已有 receipt 的科研使用 |
+| Phase 3 数仓/API/MCP | `SINGLE_CANARY_MATERIALIZATION_VERIFIED_FROZEN` | PR #2835 与 BUG-899/900/903 修复已合入；R8B Loop4 `qelt_89331d…` 从 existing CAS 物化 2,004 metric + 6 artifact，manifest SHA-256 `82db1d6b…14ceeb`；detail/quality 共 21 页/2,004 metric，MCP bounded 首屏 100 条与 API payload 相同；Phase 3 专属矩阵 `102 passed` | 既有单 canary 证据只读保留；其余 5 个 R8B 不再物化，也不新增历史 schema/数据任务 |
+| Phase 4 UI/历史操作面 | `EXISTING_CAPABILITY_FROZEN_USER_TERMINATED_FOLLOWUP` | PR #2875/#2906/#2964 已形成源码、API、业务检索与受控 Chromium 证据；固定 evaluation readback 和 92 ok / 8 missing 的真实覆盖保留 | 用户已终止当前 3000 visual、normal Loop 平台 smoke、历史评价与 UI 完整化；不是活动缺口 |
+| Phase 5 E2E/发布准备 | `USER_TERMINATED_NOT_REQUIRED_FOR_STRATEGY_EVOLUTION` | 原验证计划保留为历史设计记录 | 不执行；MA-E01 不以 Phase 5 为前置条件 |
 
 ### 12.2.1 v1.18 任务 profile、生产 DDL 与运行态 preview 进度（2026-07-30）
 
@@ -786,13 +790,13 @@ A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 res
 
 | 子项 | 当前状态 | 实现 / 证据 | 后续独立门禁 |
 |---|---|---|---|
-| task profile persistence | `SOURCE_CI_MERGED_PROD_DDL_APPLIED_VERIFIED` | `qe_evolution_tasks.long_trend_profile_id` additive nullable migration、preflight、带 `ACCESS EXCLUSIVE` 竞态保护的 guarded rollback 与 init mirror；标准创建、普通 fork、策略 fork、自定义 create/clone 只接受注册 `profile_id`，默认 `NULL`；复用既有 task identity 时拒绝 profile 变化。DEV 已重跑 forward/readback/reapply/guarded rollback并确认零残留；生产 `127.0.0.1:5432/aistock` 已执行 migration，重连回读确认 nullable `text`、精确 comment、114 条既有 task 的非空 profile 数为 0，DML 变更 0 行 | 服务重启、运行态激活与真实 Loop smoke 仍待后续单独执行 |
-| normal-loop activation | `RUNTIME_CONTRACT_LOADED_LOOP_SMOKE_PENDING` | 四条 task/Loop config builder 透传 profile；当前 8001 OpenAPI 暴露 `long_trend_profile_id` 和 preview GET，证明 PR #2906 合同已加载；`BacktestExecutor` 仍从 node registry 解析权威 root | 当前进程启动早于后续 root 合入，不声明全量 source/runtime SHA 对齐；真实 normal Loop smoke 属于 Phase 5 |
+| task profile persistence | `SOURCE_CI_MERGED_PROD_DDL_APPLIED_VERIFIED_FROZEN` | `qe_evolution_tasks.long_trend_profile_id` additive nullable migration、preflight、带 `ACCESS EXCLUSIVE` 竞态保护的 guarded rollback 与 init mirror；标准创建、普通 fork、策略 fork、自定义 create/clone 只接受注册 `profile_id`，默认 `NULL`；复用既有 task identity 时拒绝 profile 变化。DEV 已重跑 forward/readback/reapply/guarded rollback并确认零残留；生产 `127.0.0.1:5432/aistock` 已执行 migration，重连回读确认 nullable `text`、精确 comment、114 条既有 task 的非空 profile 数为 0，DML 变更 0 行 | 后续运行态/Loop smoke 已由用户终止 |
+| normal-loop activation | `FROZEN_NOT_ACTIVE` | 四条 task/Loop config builder 透传 profile；当前 8001 OpenAPI 暴露 `long_trend_profile_id` 和 preview GET，证明既有合同已加载 | 用户终止真实 normal Loop 平台 smoke；不再作为交付门禁 |
 | historical input preview | `LIVE_API_VERIFIED_EXPLICIT_GAPS` | 固定 task/Loop 真实 GET 返回 200、8/11 输入可用；feature snapshot identity、orders、trades 分别返回 typed reason 与 data action；`technical_readiness_only=true`、`research_gate=false`，DB 前后行数相同 | `ready_for_node=false` 是输入证据事实；不阻断研究，也不冒充 normal Loop 或评价执行 |
-| operator UI | `HTTP_200_MOCK_VERIFIED_BROWSER_VISUAL_PENDING` | 3000 `/qe-archive` HTTP 200；创建页/新 fork 默认关闭 profile 开关，Loop 页预检与创建入口独立；mock Playwright `3 passed / 1 live skipped` | 浏览器运行时列表为空，逐控件 visual 尚未执行，不能由 HTTP/mock 替代 |
-| local/PR gates | `PASS` | 正式审核修复后后端定向 `92 passed`；完整 Phase 2 `122 passed`、Phase 3 `105 passed`、QE read `14 passed`；TypeScript/ESLint PASS；mock Playwright `3 passed / 1 live skipped`；F2 `24/24`、catalog `0 findings`、module registry `14/14 mapped`、L0 `blocking=0`；PR #2906 required checks `15 passed / 0 failed` | live browser 待后续 |
+| operator UI | `USER_TERMINATED_EXISTING_EVIDENCE_RETAINED` | PR #2964 受控 Chromium 已验证业务选择器、无人工 ID/JSON 与 Top-K 覆盖；既有截图只读保留 | 不执行当前 3000 visual 或进一步 UI 完善 |
+| local/PR gates | `PASS_FROZEN` | 正式审核修复后后端定向 `92 passed`；完整 Phase 2 `122 passed`、Phase 3 `105 passed`、QE read `14 passed`；TypeScript/ESLint PASS；mock Playwright `3 passed / 1 live skipped`；F2 `24/24`、catalog `0 findings`、module registry `14/14 mapped`、L0 `blocking=0`；PR #2906 required checks `15 passed / 0 failed` | 无后续 F-014 平台 gate；策略实验只复用现有能力 |
 
-当前 `source_merge=merged_bba48911342a`，`post_merge_docs_sync=merged_005e0e8a3ef3_95e21655c0c0`，`root_sync=verified_contains_merges`，`dev_migration_gate=verified_zero_residue`，`production_ddl_gate=applied_and_verified`，`production_dml_gate=noop`，`runtime_contract_activation=verified_current_process`，`process_restart=externally_performed_20260731_0155_this_docs_task_not_run`，`normal_loop_execution=not_run`，`historical_preview_live_api=verified_explicit_gaps`，`frontend_visual=pending_browser_unavailable`，`historical_evaluation_execution=not_run`。这些是平台交付状态，不是科研许可或方向门禁。
+当前 `source_merge=merged_bba48911342a`，`post_merge_docs_sync=merged_005e0e8a3ef3_95e21655c0c0`，`root_sync=verified_contains_merges`，`dev_migration_gate=verified_zero_residue`，`production_ddl_gate=applied_and_verified`，`production_dml_gate=noop`，`runtime_contract_activation=verified_current_process`，`process_restart=externally_performed_20260731_0155_this_docs_task_not_run`，`historical_preview_live_api=verified_explicit_gaps`。`normal_loop_execution`、`frontend_visual`、`historical_evaluation_execution` 和 Phase 5 均为 `terminated_by_user_not_active`；既有缺口保持事实可见，但不再是 backlog 或科研许可条件。
 
 ### 12.2.2 v1.20 人类可用检索与视觉验收修订（2026-07-31）
 
@@ -805,7 +809,7 @@ A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 res
 5. 操作员视图不得渲染 `<pre>` raw JSON、`JSON.stringify` 输出或原始 payload。内部 reason/status 通过固定业务词典翻译；未知值显示“暂未识别的系统状态”并写入客户端诊断日志，不把技术值直接暴露给用户。
 6. Playwright 对任务/快照/板块/Run 的搜索选择、无 ID 文本框、无 raw JSON、Top-K 局部缺失说明、同-vintage 参数和无写副作用做直接断言；成功运行显式保存关键截图并由 CI/Validation Center artifact 引用。当前 3000 live runtime visual 仍作为独立状态。
 
-### 12.3 Phase 3–5 开发就绪性审计（2026-07-29）
+### 12.3 Phase 3–5 开发就绪性审计（2026-07-29 历史快照）
 
 审计结论更新为 `SINGLE_CANARY_DATA_PATH_VERIFIED_PHASE4_PR2875_UI_SLICE_SOURCE_CI_MERGED_RUNTIME_API_VERIFIED_FRONTEND_VISUAL_PENDING`。这表示 Phase 3 单 canary 链保持闭合，PR #2875 的 Loop/Archive UI slice 已通过详细设计第三审与源码 CI、完成合入，并在用户重启后通过后端 OpenAPI 与固定历史回执的只读 API 回读；它不表示前端逐控件可视验收、任务创建 profile、历史输入预览、其余 R8B、历史批量补算或中断恢复已经完成，也不是科研审批、方向门禁、未来服务控制或生产 DDL 授权。
 
@@ -821,7 +825,7 @@ A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 res
 | 科研连续性 | `READY` | 数据不全只生成 family status、limitation 和 data action；继续所有可计算研究，不新增人工审批、研究阻断或淘汰门禁 |
 | 验证归属 | `VERIFIED` | `nox_qe_long_trend_phase4_ui` 已注册，DEV frontend port 固定 3012；catalog 0 findings、module ownership 14/14、Static gate 与 CI verdict 均通过 |
 
-### 12.4 PR #2875 正式审核纠偏与重新验收条件
+### 12.4 PR #2875 正式审核纠偏与重新验收条件（历史快照）
 
 本节只纠正交付状态，不降低第 10.3/10.4 节合同，也不把源码存在、mock 通过或 live 只读回读等同于 Phase 4 验收。修复必须按以下顺序闭合：
 
@@ -947,11 +951,11 @@ completed Recorder
 4. `[COMPLETED]` Phase 3 metric/artifact 两表、API/MCP 源码由 PR #2835 合入，后续三项修复已合入；
 5. `[COMPLETED_SINGLE_CANARY]` 当前 `8001` 连接 DB 的 result schema readiness、四条 route 与 R8B Loop4 非空物化已验证；本次没有执行 DDL；
 6. `[COMPLETED_SINGLE_CANARY]` existing-CAS exact replay 未新增 evaluation/metric/artifact，row version、更新时间、主键范围与摘要均不变；API/MCP bounded readback 一致；
-7. `[UI_SLICE_SOURCE_CI_MERGED_RUNTIME_API_VERIFIED_FRONTEND_VISUAL_PENDING]` PR #2875 的 Loop/Archive UI slice 已关闭 12.4 合入阻断、通过第三次审核并合入；用户重启后 8001 新合同与固定 evaluation API readback 已验证，前端逐控件可视验收仍待浏览器实例；
-8. `[NEXT_SOURCE_DELIVERY]` 任务创建不可变 profile 与历史输入预检已进入本轮源码；后续源码/验证聚焦 Phase 5 重启、重复 callback、CAS-DB 中断恢复、非 QE 零影响 E2E；
-9. 其余 5 个 R8B 或更大历史批量物化属于独立运行授权，不随单 canary 或 UI 完成自动执行。
+7. `[COMPLETED_EXISTING_CAPABILITY_FROZEN]` PR #2875/#2906/#2964 的既有 UI/API/profile/preview/受控 Chromium 证据只读保留；不再执行当前 3000 visual 或 UI 完整化；
+8. `[TERMINATED_BY_USER]` Phase 5 重启、重复 callback、CAS-DB 中断恢复和平台完整 E2E 不再实施，也不阻断策略演进；
+9. `[TERMINATED_BY_USER]` 其余 5 个 R8B、历史批量物化、历史补算与 Archive 补录不得启动。
 
-步骤 1–6 已形成对应完成证据；步骤 7 仅表示源码存在，不表示设计或 CI 验收通过。步骤 1 的任一指标族一旦形成可复算 receipt 即可用于科研分析；CAS、DB、API/MCP/UI、canary 和批量补算完成度分别记录，不存在研究解锁状态。
+步骤 1–7 已形成各自范围内的完成证据；步骤 8–9 是用户终止决定，不表示原计划动作已完成。步骤 1 的任一指标族一旦形成可复算 receipt 即可用于科研分析；CAS、DB、API/MCP/UI 与历史补算状态分别记录，不存在研究解锁状态。
 
 ### 15.2 回滚
 
@@ -969,11 +973,11 @@ completed Recorder
 | 唯一硬边界 | `QE_ONLY_ZERO_NON_QE_IMPACT` | 所有任务、数据读取、CAS、表、API/MCP/UI 和写入仅限 QE；非 QE 变更必须为零 |
 | QE core compute | Phase 1 已实现并定向验证 | 纯函数、严格 QE reader 和 unit oracle 已存在；Phase 2 已用真实 evaluation task 验证，不代表 Phase 3–5 平台用户链完成 |
 | QE control schema/runtime | Phase 2 已应用并验证 | control DDL、worker、CAS、恢复和 R8B 6/6 已有运行态证据 |
-| QE result schema/API/MCP/UI | Phase 3 source/schema/runtime 与单 canary 数据链已验证；PR #2906 task profile/input preview source+CI 与生产 DDL 已闭合；当前 8001 已加载新 OpenAPI 合同，固定 task/Loop 的真实 preview GET 已验证 | R8B Loop4 已有 2,004 metric + 6 artifact；preview 8/11 可用并显式报告 feature identity/orders/trades 缺口，调用前后 DB 不变。normal Loop、浏览器 visual、其余 5 个 R8B 和恢复 E2E 继续作为独立 `platform_delivery_status` |
+| QE result schema/API/MCP/UI | Phase 3 source/schema/runtime 与单 canary 数据链已验证；既有 API/profile/preview/受控 Chromium 证据保留 | R8B Loop4 已有 2,004 metric + 6 artifact；preview 8/11 可用并显式报告 feature identity/orders/trades 缺口。normal Loop、浏览器 visual、其余 5 个 R8B 和恢复 E2E 已由用户终止，不再交付 |
 | QE result data write | `single_canary_applied_and_verified` | 仅写 `qelt_89331d…` 的 canonical metric/artifact；exact replay no-op；没有批量补算、删除或覆盖历史 evidence |
 | frontend/backend dependency | 当前无新增依赖 | 未来变化按平台状态记录，不形成研究门禁 |
 | runtime restart | Phase 2 已执行并验证幂等回放；2026-07-29 用户再次重启 backend 并加载 Phase 3 routes | 只读复核确认 `8001` 监听和 route/schema readiness；本次未启停服务，2,004 + 6 结果行来自单独授权的 existing-CAS 物化而非重启动作 |
-| experiment/evaluation execution | 独立任务状态 | canary、历史补算和新实验可在 QE 范围内并行，不依赖平台全部完成 |
+| experiment/evaluation execution | 新策略实验最高优先级 | MA-E01 等新 trial 可直接复用现有 evaluator；禁止历史补算，缺失指标族只限制对应分析，不阻断提交 |
 | data/metric availability | 按指标族记录 | 缺失、部分、未成熟或不可验证均生成 `data_action_plan`；其他指标族和研究方向继续 |
 
 本设计不引入任何研究门禁、人工 approval/RBAC、双人复核或方向淘汰规则。schema、hash、数据身份、成熟度和制品完整性用于说明结果口径、可复算性与限制；任何缺口都转化为获取、补归档、补算、代理实验和互证任务。未经用户专门要求并确认，不得新增研究阻断状态。
@@ -1012,6 +1016,7 @@ completed Recorder
 | F-026 | QE Archive/F-014 business projection；禁止 raw JSON/技术枚举 | 定向 TypeScript/ESLint -> 0 error；`frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts` 在 PR #2964 CI `30598333361` 断言无 `<pre>`/JSON payload、使用中文业务组件并通过 | controlled_chromium_verified | none |
 | F-027 | Top-K coverage/status/error/action projection | `frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts` 断言不补造 source、不把首条 missing 冒充整体状态；8001 只读基线为前 100 条 92 ok / 8 missing / 92 joined nonzero；artifact 截图显示“数据完整”“完整 1 / 缺失 1”且无逐字换行 | controlled_chromium_and_readonly_data_verified | none |
 | F-028 | controlled Chromium success screenshots + HTML artifact | `frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts` 由 `.github/workflows/test.yml` 在 PR #2964 CI `30598333361` 执行并上传 `frontend-ui-evidence-30598333361`，内含 `playwright-results-f014-phase4/qe-archive-human-search.png` 与 `playwright-report/index.html` | controlled_chromium_artifact_verified | none |
+| F-029 | 本文 v1.22 current stage、Phase 3–5 标题、12.2、15–16 | validation-receipt: 用户 2026-07-31 strategy-first 指令；既有 Phase 1–3、PR #2964 和单 canary evidence | APPROVED_BY_USER: EXISTING_CAPABILITY_FROZEN_STRATEGY_REUSE_ONLY | none；MA-E01 不等待 F-014 平台完整化 |
 
 ## 18. DESIGN-COMPLIANCE-001
 
@@ -1045,8 +1050,12 @@ completed Recorder
 - [x] PR #2906 required checks `15 passed / 0 failed`，已以 `bba48911342a3bee51e4339d597d9b2a5b85d71a` 合入且 root `main` 已同步包含该 merge；close-sync 不适用于 feature PR。
 - [x] 生产 `127.0.0.1:5432/aistock` 已执行 `qe_long_trend_task_profile_phase4_20260730.sql`；重连 readback 确认 nullable `text`、精确列注释、114 条既有 task 全部保持 `NULL`，业务 DML 变更 0 行。
 - [x] 当前 8001 已加载 F-014 profile/preview OpenAPI 合同；固定 task/Loop 的 real Recorder preview GET 返回 200、8/11 可用、3 个 typed gap，且 DB before/after 无变化。
-- [ ] normal Loop profile activation smoke、完整 root/runtime SHA 对齐与 live browser 逐控件 visual 尚未完成；这些状态不得由 OpenAPI、preview GET、HTTP 200 或 mock Playwright 冒充。
-- [ ] 其余 5 个 R8B 物化、Phase 5 中断恢复和完整 E2E 尚未完成；这些是 platform delivery 状态，不阻断科研。
+- [x] `[TERMINATED_BY_USER / v1.22]` normal Loop 平台 smoke、完整 root/runtime SHA 对齐与 live browser 逐控件 visual 已从活动交付中移除；本项表示终止决定已记录，不表示这些动作曾执行。
+- [x] `[TERMINATED_BY_USER / v1.22]` 其余 5 个 R8B 物化、Phase 5 中断恢复、完整 E2E 与历史补算已从活动交付中移除；本项表示终止决定已记录，不表示平台完整化已完成。
+- [x] `no_simplified_delivery / v1.22 strategy-first freeze`：只声明既有能力冻结和活动范围收缩，不把 F-014 平台、MA-E01 策略或未执行验证包装为完成。
+- [x] `no_silent_error / v1.22 strategy-first freeze`：历史缺口、指标族 limitation 与 92 ok / 8 missing 事实继续可见；终止补账不把 missing 改写为 available。
+- [x] `no_business_semantic_drift / v1.22 strategy-first freeze`：既有 evaluator、profile、identity、计算和 QE-only 语义不变；只改变未来工作优先级和授权范围。
+- [x] `no_unrequested_gate_or_approval / v1.22 strategy-first freeze`：F-014 完整度不再成为策略前置，且未新增审批、确认、RBAC 或 research-ready 状态。
 - [x] 理论机会、实际成交和证据不足三层明确分开；买入/退出阻断对称，日线触板不冒充订单真值，正常成交不被错误计入原因缺失分母。
 - [x] 任一可复算指标族立即可用于科研分析；工程里程碑只表示 platform delivery 进度，不控制研究。
 - [x] source merge、DEV/生产 DDL、服务重启、canary、结果物化和历史批量评价保持分离；本轮第三审只执行了现有 DEV 的可逆 migration 验证并最终零残留，未执行生产 DDL/DML、服务启停、训练、回测、评价 POST 或批量补算。

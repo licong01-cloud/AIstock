@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发与实验分析蓝图 / 历史批次 `Gate-0` 开发记录（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v5.23（F-014 人类可用检索已通过 PR #2964 受控 Chromium 与截图验收；当前 3000 runtime visual、normal Loop、Phase 5 待后续，2026-07-31）
+- 当前版本：v5.24（策略演进最高优先级；Multi-Alpha 基础架构封板为 maintenance-only；UI 完善、历史归档补账、历史物化与 F-014 平台完整化任务由用户终止，2026-07-31）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 - 多 Alpha 基础研发详细设计：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
@@ -68,14 +68,18 @@
 
 本蓝图唯一硬边界是 **QE-only 隔离**：所有实验、评价、缓存、CAS、数据库表、API/MCP/UI 展示和任何写入都只能属于 QE；不得读取、修改、调用或影响 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage、生产交易及其他非 QE 模块的服务、表、缓存、任务、数据语义或运行状态。除这一隔离边界外，本蓝图不设置任何研究门禁。
 
-- 数据缺失、覆盖不足、PIT 证据不完整、执行原因不可验证、平台功能未完成或某项统计结果偏弱时，统一记录：缺口范围、可用部分、数据获取方案、代理/部分样本实验、可能损失或偏差、可互证证据和后续实验；这些情况不阻止实验、不淘汰候选，也不放弃研发方向。
+- 数据缺失、覆盖不足、PIT 证据不完整、执行原因不可验证、平台功能未完成或某项统计结果偏弱时，统一记录缺口范围、可用部分、可能损失或偏差和可互证证据；这些情况不阻止实验、不淘汰候选。数据获取或替代实验仅在真实策略运行期间按未来价值并行评估，不自动形成前置任务。
 - 预注册、冻结口径、HAC/bootstrap、DSR/PBO、相关性、成本容量、oracle 和 F-014 都是分析工具，用于说明结果可信度、适用范围和损失，不是准入条件或停止开关。
 - 同公式、反向、窗口变体和高相关候选可以研究，但需显式记录谱系、差异和重复度，避免把重复结果误称为独立发现；记录本身不限制继续实验。
-- 任一指标族只要可计算即可立即用于科研分析。不可计算的指标族保持 `MISSING/PARTIAL/NOT_VERIFIABLE`，并启动数据补充或替代验证，不影响其他指标族和实验路线。
+- 任一指标族只要可计算即可立即用于科研分析。不可计算的指标族保持 `MISSING/PARTIAL/NOT_VERIFIABLE`，但不自动启动历史数据补充、物化或替代验证，也不影响其他指标族和实验路线。
 - 任何“弱、负、混合、重复、未完成”结论都只限定于当前 trial、数据版本、样本和公式，不得外推为方向级终止。
-- task 状态只描述编排整体状态，不代表其全部 Loop 的研究结论。任何 Loop 只要成功进入 QE 数仓并具有可查询指标或制品，就必须进入 append-only 研究总账、聚合分析和后续互证；不得因父 task 为 `failed/partial/cancelled` 而忽略。
+- task 状态只描述编排整体状态，不代表其全部 Loop 的研究结论。新策略 trial 的成功 Loop 由现有 writer 自然保存最小比较结果，父 task 为 `failed/partial/cancelled` 时不得覆盖已成功结果；既有历史 Loop 只读保留，不再要求补录 append-only 总账、聚合或互证。
 - 失败 Loop 按模型、因子集、种子、数据、训练、预测、回测或归档阶段单独记录；它不覆盖同 task 的成功 Loop，也不把“无结果”伪装成负 Alpha 结果。成功 Loop、失败 Loop、缺失制品与任务编排异常分别报告。
 - 未经用户在未来任务中专门要求并确认，不再新增研究门禁、阻断状态、淘汰规则或 `PASS/KILL/GO/STOP` 类决策语义。
+- **策略演进最高优先级**：任何时刻只要现有 QE/Multi-Alpha 能完成目标 trial，就必须先运行策略候选；基础架构、数据完善、诊断和文档工作不得排在策略源码与真实实验之前。
+- **基础架构封板**：P0-1～P0-4 视为满足当前演进要求。只有真实策略 trial 出现可复现、无安全替代路径的阻断性故障时，才允许建立最小 BUG 修复；不得预建通用平台能力。
+- **终止历史工程**：不再执行旧任务/Loop 的 Archive 补录、历史补账、批量物化、rematerialize、证据完整化或 UI 完善。既有历史事实只读保留，不删除、不改写，也不再成为 active/pending 工作。
+- **新 trial 最小证据例外**：新策略实验必须自然产出比较优劣所需的配置快照、输入身份、回测指标、成本/风险结果和失败原因；这属于当前 trial 输出，不属于历史归档工程。除现有 writer 的正常落盘外，不为此新增通用 schema、Archive、UI 或审批流程。
 
 ### 2.3 2026-07-11 `Gate-0` 历史批次记录
 
@@ -115,7 +119,9 @@ v5.11 将 R12P 从“只有编排失败证据”更新为“append-only 历史�
 
 v5.12 记录 R12P append-only 恢复和首次完整可比结果。最终 successor `macb_recovery_ce14e0a572673ff88ab22b6a4089bb7276f1cec676c19d535315bffc47e448de` 为 `partial_recovered`，但研究可用 child 已达到预期的 11/21：1 个 LGBM baseline、2 个 scheme 和 8 个 LOO；其余 10 个 `ic_weighted/risk_parity` child 继续保留 `not_recovered`，不伪造结果。LGBM baseline CAGR/Sharpe/Calmar/最大回撤/换手为 `53.57%/1.602/2.649/-20.22%/5.975`；四腿 equal 为 `74.47%/1.922/3.554/-20.95%/6.521`，orthogonality-aware 为 `72.12%/1.893/3.302/-21.84%/6.506`。equal 相对 baseline 的 CAGR、Sharpe、Calmar 分别提高约 `20.90` 个百分点、`0.3204`、`0.9051`，而最大回撤只加深约 `0.73` 个百分点；当前 trial 证明跨标签、跨任务四腿 portfolio fusion 可以产生组合层增益，并撤销“R7 两腿简单融合失败可外推到其他融合”的错误解释。LOO 显示 LGBM 是两个 scheme 中最稳定的核心贡献腿；GAT 与 LSTM 在 equal 下提供收益/Calmar 补充，TCN 在 equal 下小幅增加 CAGR/Calmar 但拖累 Sharpe，orthogonality-aware 下 GAT/LSTM/TCN 多数风险效率边际为中性或负。该归因用于下一轮板块风险条件化和组合权重研究，不淘汰任何模型或任务。正式 sector-risk overlay adapter 尚未实现，现进入基于现有 QE 策略/数据/评价链的 F2 设计与实现，不允许用 HMM 新买入过滤冒充动态减仓、退出和重入。
 
-### 2.5 当前执行总账（截至 2026-07-26）
+v5.24 纠正“平台完整度先于策略演进”的执行偏移。Multi-Alpha P0-1～P0-4 已满足当前策略研发所需的提交、运行、恢复和结果读取能力，现封板为 maintenance-only。用户明确终止 F-014 UI、Phase 5 平台认证、其余 R8B/历史 Loop 物化、历史 Archive 补录、总账固化和其他历史证据完整化任务；既有记录只读保留。主动主线切换为 `MA-E01 Sector-Conditioned Multi-Alpha Strategy Package v1`：复用现有 LGBM/LSTM/TCN/EfficientGATs prediction，以四腿 equal 为基线，开发板块状态条件化权重、有界减仓、退出和重入，并以真实 QE run 比较 CAGR、Sharpe、Calmar、最大回撤、换手、成本、false early-exit、重入延迟和趋势捕获。源码能力已由 `afe5634d` 合入；2026-07-31 已提交 `none/entry_gate/bounded_de_risk/exit_reentry` 四个正式 policy run，每个严格规划 LGBM baseline + equal 两个 child，共 8 个真实 CPU pred-backtest child。结果尚未终态，不得预写 Alpha 结论。非阻断但对未来有价值的动态关系、数据或诊断工作，只能在实验运行期间并行，不得延迟下一次策略提交。
+
+### 2.5 当前执行总账（截至 2026-07-31）
 
 本表是阅读本文时判断“已完成/待执行/仅设计”的首要入口。历史 Gate-0 receipt 不因后续进度而删除，但当前状态以本表、对应实验 task/run 和第 15 节验收矩阵为准。
 
@@ -130,26 +136,27 @@ v5.12 记录 R12P append-only 恢复和首次完整可比结果。最终 success
 | R7A 两腿 `equal + rank` | `COMPLETED_CURRENT_TRIAL_BELOW_BASELINE` | `macb_365aed6303e71d6e_20240701_20260629_20260714T174425343045Z` | 组合 Sharpe/Calmar 均低于 LGBM 基线；说明当前等权 rank trial 中“低重合/正交”未转化为成本后组合增益，不外推到其他融合或关系路线。 |
 | R7B 两腿 `equal + zscore` | `COMPLETED_CURRENT_TRIAL_BELOW_BASELINE` | `macb_365aed6303e71d6e_20240701_20260629_20260714T190901628242Z` | CAGR 67.95%、Sharpe 1.8313、Calmar 3.5429；较 R7A 略改善，但 Sharpe/Calmar 分别落后 LGBM 基线 0.1902/0.1200。继续保存为融合方法、成本和换手互证样本。 |
 | 30/40/60/120/180D 标签基础架构 | `IMPLEMENTED` | `ALLOWED_LABEL_HORIZONS`、`LongHorizonLabelMaturityPurge` 及对应测试 | 可训练长周期标签；标签期限不等于 LSTM 输入窗口或策略持仓期。 |
-| F-014 长期趋势评价层 | `PHASE4_HUMAN_SEARCH_CONTROLLED_CHROMIUM_VERIFIED_RUNTIME_VISUAL_NORMAL_LOOP_PHASE5_PENDING` | PR #2906 source/CI merged；生产 DDL reconnect readback；当前 8001 OpenAPI 已加载 profile/preview；固定 task `qe_20260715_104922_001d` Loop 4 live GET 返回 200、8/11 可用，feature identity/orders/trades typed missing，`research_gate=false`；DB 保持 17 evaluation/2,004 metric/6 artifact，7 个 side-effect flags 全 false；PR #2964 CI `30598333361` 已验证业务检索、无人工 ID/JSON 与 Top-K 真实覆盖，并产出截图 artifact | 当前 3000 runtime 逐控件 visual、normal Loop activation smoke、完整 root/runtime SHA 对齐、其余 5 个 R8B、Phase 5 与批量重评尚未完成；缺输入不形成研究门禁。source/docs worktree/branch 保留待独立清理授权。 |
-| F-014 指标族证据 | `R8B_6_OF_6_THREE_COMPUTED_TWO_LIMITED_ONE_NOT_VERIFIABLE` | 第 9.6 节；6 个 evaluation/manifest；12,024 metrics；13,241,712 signals；13,726 episodes | 六个 Loop 的 `signal_path/portfolio_result/sector_regime` 已完整计算，`position_episode/order_fill` 带覆盖限制，`execution_cause` 缺直接原因证据；可用结果立即进入研究，限制项进入补数和损失分析。 |
-| F-014 历史重评资产 | `R8_R11_108_LOOP_AUDITED` | 12 task / 108 Loop Archive 与 Prediction Store 审计 | 108/108 completed + research_valid，324/324 prediction/label/params blob 存在；57 Loop 可直接 parser，51 Loop 只做 results/backtest-only rematerialize，不重训、不覆盖原 Archive run。 |
+| F-014 长期趋势评价层 | `FROZEN_EXISTING_CAPABILITY_REUSABLE_NO_UI_HISTORY_OR_PLATFORM_COMPLETION_WORK` | Phase 1–3、R8B 6/6 CAS、Loop4 2,004 metric + 6 artifact、PR #2906 runtime contract 与 PR #2964 受控 Chromium 证据均只读保留 | 用户已终止当前 3000 visual、normal Loop 平台 smoke、其余 5 个 R8B、Phase 5、历史重评和批量物化；F-014 仅作为新策略 trial 可选的现有评价函数复用，缺失指标不阻断 MA-E01。 |
+| F-014 指标族证据 | `R8B_6_OF_6_THREE_COMPUTED_TWO_LIMITED_ONE_NOT_VERIFIABLE` | 第 9.6 节；6 个 evaluation/manifest；12,024 metrics；13,241,712 signals；13,726 episodes | 六个 Loop 的 `signal_path/portfolio_result/sector_regime` 已完整计算，`position_episode/order_fill` 带覆盖限制，`execution_cause` 缺直接原因证据；可用结果立即进入研究，限制项只在解释中保留，不启动历史补数。 |
+| F-014 历史重评资产 | `FROZEN_NO_BACKFILL_NO_REMATERIALIZATION` | 12 task / 108 Loop 与 324 prediction/label/params blob 的既有审计结果只读保留 | 禁止执行 57 个 direct parser、51 个 results/backtest-only rematerialize、其余 5 个 R8B 或任何历史补账/物化；新策略直接复用已有 prediction。 |
 | R8A 长周期 LGBM 对照 | `COMPLETED_12_OF_12` | `qe_20260715_101942_d873`；h30/h40/h60/h120 均 3/3；18 个 R8 Loop 预测资产深度分析 | 种子平均 RankIC 随 h30→h120 从 `0.09824` 升至 `0.12115`，但 2026H1 h30/h40/h60 ensemble RankIC 仅 `0.02331/0.02591/0.02916`；预测期限增强未自动形成近期主升浪捕获。 |
-| R8B LSTM 长周期对照 | `COMPLETED_6_OF_6` | `qe_20260715_104922_001d`；h40、h60 均 3/3 完成 | h40 平均 RankIC/CAGR/Calmar/Sharpe/换手约 `0.10092/61.88%/3.17/1.6848/18.47`；h60 约 `0.10011/61.19%/2.98/1.7655/15.98`。结合历史最高单 Alpha 记录，LSTM 提升为 Type-B 长期趋势第一主模型，后续优先做 R8B2、策略周期、因子角色、种子集成与长期腿组合。 |
-| R8 预测资产深度归因 | `COMPLETED_SIGNAL_LEVEL` | 18/18 Loop 的 `pred.pkl/label.pkl/params.pkl`；2024-07-01 至 2026-06-30；第 9.6.2.1 节 | LSTM ensemble 增益高于 LGBM；LGBM/LSTM 同期限 Top50 重合约 21%；右尾捕获接近随机重合基线，且 2026H1 半导体/通信/软件主升浪显著漏捕。该证据是 signal-level；逐日 position/order 缺失范围单列并通过 F-014 补充，不影响现有分析。 |
+| R8B LSTM 长周期对照 | `COMPLETED_6_OF_6` | `qe_20260715_104922_001d`；h40、h60 均 3/3 完成 | h40 平均 RankIC/CAGR/Calmar/Sharpe/换手约 `0.10092/61.88%/3.17/1.6848/18.47`；h60 约 `0.10011/61.19%/2.98/1.7655/15.98`。该历史结果支持 LSTM 作为 MA-E01 四腿之一；R8B2 等独立演进不再先于 MA-E01。 |
+| R8 预测资产深度归因 | `COMPLETED_SIGNAL_LEVEL` | 18/18 Loop 的 `pred.pkl/label.pkl/params.pkl`；2024-07-01 至 2026-06-30；第 9.6.2.1 节 | LSTM ensemble 增益高于 LGBM；LGBM/LSTM 同期限 Top50 重合约 21%；右尾捕获接近随机重合基线，且 2026H1 半导体/通信/软件主升浪显著漏捕。该证据是 signal-level；逐日 position/order 缺失范围继续显式保留，但不再执行历史补充。 |
 | R9S 信号到策略转换 | `COMPLETED_24_OF_24` | LSTM `qe_20260715_190925_2cd9` 12/12；LGBM `qe_20260715_190941_b667` 12/12；均已完整归档 | LSTM h40 的 `n_drop=1` 平均 CAGR `64.70%`、换手 `6.40`，优于更高换手的 `n_drop=3`；LSTM h60 则由 `n_drop=3` 取得 CAGR `61.80%`、Sharpe `1.7445`，明显高于 `n_drop=1`。LGBM h60 偏向 `n_drop=3`，h120 偏向 `n_drop=1`；不存在跨期限统一调仓速度。 |
-| R10 模型 × 因子角色 | `COMPLETED_51_OF_51` | LTR `qe_20260716_002956_b2eb` 6/6；LGBM `qe_20260716_052124_63d2` 12/12；TCN `qe_20260716_050817_4b7e` 12/12；LSTM `qe_20260716_011004_21b2` 12/12；持仓 9/9 | TCN `G13-F+h40` 平均 RankIC/CAGR `0.10838/65.19%`，`G15-FPL+h60` 为 `0.10298/60.20%`；LGBM 呈现 G15 排序增强、G13 收益转换分工；LSTM `G15-FPL+h60` 三种子平均 RankIC/CAGR/Sharpe `0.10206/67.55%/1.806`，继续支持 LSTM Type-B 主线。LTR h40/h60 平均 RankIC `-0.0241/0.0097`，保留方向、标签和 NDCG/右尾目标诊断。 |
+| R10 模型 × 因子角色 | `COMPLETED_51_OF_51` | LTR `qe_20260716_002956_b2eb` 6/6；LGBM `qe_20260716_052124_63d2` 12/12；TCN `qe_20260716_050817_4b7e` 12/12；LSTM `qe_20260716_011004_21b2` 12/12；持仓 9/9 | TCN `G13-F+h40` 平均 RankIC/CAGR `0.10838/65.19%`，`G15-FPL+h60` 为 `0.10298/60.20%`；LGBM 呈现 G15 排序增强、G13 收益转换分工；LSTM `G15-FPL+h60` 三种子平均 RankIC/CAGR/Sharpe `0.10206/67.55%/1.806`。这些结果用于 MA-E01 腿选择；LTR 诊断等仅作后续并行候选。 |
 | R10 持仓与退出周期 | `COMPLETED_9_OF_9` | R10E2 `qe_20260716_045612_4ddd` 6/6；R10E3 `qe_20260716_083500_a8e0` 3/3 | hold10 三种子平均 CAGR/Sharpe `61.72%/1.7158`；hold30 三种子平均 `54.21%/1.566`、换手约 `5.995`。固定延长持仓稳定降低换手，但没有稳定提高收益或回撤，下一步使用趋势存活、回撤 hazard、动态退出和 false early-exit 解释。 |
 | R11A 固定持仓转换 | `COMPLETED_9_OF_9_FULLY_ARCHIVED` | `qe_20260717_134109_97e1`；G14-FP h60；hold10/20/30 × seeds 123/314/2718；BUG-741/PR #2391 | hold10/20/30 平均 CAGR `58.44%/59.18%/49.30%`，Sharpe `1.738/1.708/1.496`，最大回撤 `-20.06%/-20.58%/-21.79%`。hold20 是可继续解释的固定基线，hold30 明显偏弱；下一步不是继续盲目延长，而是研究板块风险条件化的持有、减仓、退出和重入。 |
 | R11B 图模型长期基线 | `COMPLETED_6_OF_6_FULLY_ARCHIVED` | `qe_20260717_134306_6354`；EfficientGATs G14-FP；h40/h60 × 3 seeds；`gpu_serial_graph=1` | h40/h60 平均 RankIC `0.10461/0.10156`、CAGR `54.73%/55.51%`、Sharpe `1.588/1.677`、最大回撤 `-17.02%/-16.95%`、年化换手 `5.78/11.17`。h40 的效率明显更高；图模型现阶段价值更可能来自较浅回撤、关系状态和 sector gating，而不是单腿收益天花板。 |
-| 图模型与关系研究 | `LONG_HORIZON_BASELINE_AND_EXECUTION_CANARY_COMPLETE` | R0–R6 GAT；R4 真码二值邻接；R6 `qe_20260714_104830_0230` 15/15；R11B 6/6；R12G 1/1 | R6 GAT G12 相对 LGBM G12 排序更强、回撤更浅但收益更低；R4 二值行业边削弱 RankIC；R11B h40 更具效率；R12G cooperative execution 完成且 RankIC `0.10569`。后续追加动态多关系、板块趋势/回撤双头、sector gating 和组合层风险预算，不把静态边或当前单腿均值外推为方向结论。 |
-| QE 任务与数仓状态 | `R10_R11_COMPLETE_FULLY_ARCHIVED` | R10 51/51；R11A 9/9；R11B 6/6；R11 backfill run `qear_bf_f9115c130b94464089b45de3f26c5fdf` 15/15 | R10/R11 成功 Loop 已进入研究总账与 Archive。BUG-741 只修复恢复状态重算，不改变模型、预测、回测或研究指标；后续实验可直接引用数仓和 prediction-store 制品。 |
+| 图模型与关系研究 | `LONG_HORIZON_BASELINE_COMPLETE_PARALLEL_ONLY` | R0–R6 GAT；R4 真码二值邻接；R6 `qe_20260714_104830_0230` 15/15；R11B 6/6；R12G 1/1 | 既有结果只支持保留动态图/sector gating 候选；相关研发仅在 MA-E01 运行期间并行，不得先于下一 candidate。 |
+| QE 任务与数仓状态 | `EXISTING_RESULTS_REUSABLE_NO_HISTORY_COMPLETION_WORK` | R10 51/51、R11A 9/9、R11B 6/6 与既有 prediction-store/数仓结果只读可用 | 后续实验直接引用现有 prediction 和最小 trial 输出；不再执行 Archive 补录、历史状态重算、总账固化或旧制品完整化。 |
 | R12G EfficientGATs 执行 canary | `COMPLETED_1_OF_1_GPU_SERIAL_NO_TELEMETRY` | `qe_20260718_040323_9a4a`；RankIC `0.10569`、CAGR `62.12%`、Sharpe `1.8108`、最大回撤 `-15.78%`、年化换手 `5.72` | cooperative execution canary 已完成；没有调用 `nvidia-smi`、NVML 或任何 GPU/显存轮询。该结果说明新的 chunk/yield 执行方式没有使当前 Loop 丢失训练结果，图模型仍保持 WSL 1 串行。 |
 | R12P 跨任务四腿组合 | `RECOVERY_COMPLETE_11_OF_21_EQUAL_AND_ORTHOGONALITY_LOO_ANALYZED` | 最终 successor `macb_recovery_ce14e0a572673ff88ab22b6a4089bb7276f1cec676c19d535315bffc47e448de`；BUG-864/#2736、BUG-865/#2740、BUG-867/#2744 | 11 个研究可用 child 已恢复：baseline 1、scheme 2、LOO 8；10 个 ic-weighted/risk-parity child 保留证据缺口。equal CAGR/Sharpe/Calmar `74.47%/1.922/3.554`，明显高于 LGBM baseline `53.57%/1.602/2.649`，也高于 orthogonality-aware `72.12%/1.893/3.302`。 |
-| 多 Alpha QE 演进平台基础 | `P0_1_TO_P0_4_RUNTIME_VERIFIED_RECOVERY_HARDENED` | 第 4.11、9.9、Phase G0-H；基础 PR 与 BUG-864/865/867 source/close-sync；重启后 recovery preview | 持久化编排、生命周期/子任务恢复、QE 规范创建器、child/attempt grid、event SSE 和重启 readback 已完成；累计 successor 的远端结果、inline result 与 ancestry 复用均已补齐，异常 lineage 不静默降级。后续研究直接复用现有平台。 |
-| 两层板块 oracle 上界 | `DESIGN_READY_RUN_PENDING` | 第 9.5 节；F-018 | 先做 reality/oracle 四格与 soft gating，预注册阈值和置信区间；它是不可部署的未来信息上界，不是 Alpha 证据。 |
-| 两层板块→个股模型 | `RESEARCH_PLANNED` | 第 9.5 节 | oracle 与现实 hard/soft 两层模型可并行；板块层和个股层分别归因。oracle 弱结果只描述其当前口径，不停止完整工程或新假设。 |
-| R8M 多期限共享表示 | `DESIGN_PLANNED_NOT_STARTED` | 第 9.6.3 节；F-019 | 独立实验比较独立训练、共享头、冻结迁移和全量微调；transfer matrix/LOO/梯度冲突与各 F-014 可用指标族共同形成分析，不存在全局裁决门。 |
-| HIST/动态多关系/概念超图 | `RESEARCH_AND_DATA_ACQUISITION_PLANNED` | 第 9.7–9.8 节 | HIST-industry、动态关系与概念数据获取可并行。概念 PIT 未就绪时使用明确标注的部分样本/代理实验，并评估覆盖损失和未来数据补算方案。 |
+| MA-E01 板块状态条件化多 Alpha 策略包 | `REAL_RUN_SUBMITTED_4_POLICY_8_CHILD_IN_PROGRESS` | `afe5634d`；`macb_idem_fd513f8f…` none、`macb_idem_5445a95e…` entry_gate、`macb_idem_ef4430e2…` bounded_de_risk、`macb_idem_57af2233…` exit_reentry | 四个 run 均冻结 `baseline:lgbm_g14_fp_h60 + scheme:equal`、无 LOO，共 8 个真实 child；当前 running/planning，尚无终态策略结论。 |
+| 多 Alpha QE 演进平台基础 | `P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY` | 第 4.11、9.9、Phase G0-H；基础 PR、生产 DDL、重启验收与 BUG-864/865/867 恢复链 | 当前能力已满足后续演进。除真实 MA-E01/后续 trial 暴露的可复现阻断 BUG 外，禁止继续建设通用编排、UI、Archive、历史补账或 provenance 完整化功能。 |
+| 两层板块 oracle 上界 | `PARALLEL_ONLY_WHILE_MA_E01_RUNNING` | 第 9.5 节；F-018 | 不可部署上界仅在 MA-E01 运行期间按空闲资源执行，不得延迟下一 candidate。 |
+| 两层板块→个股模型 | `PARALLEL_ONLY_WHILE_MA_E01_RUNNING` | 第 9.5 节 | 只在 MA-E01 运行期间按空闲资源研究，板块层和个股层分别归因。 |
+| R8M 多期限共享表示 | `PARALLEL_ONLY_WHILE_MA_E01_RUNNING` | 第 9.6.3 节；F-019 | 保留四臂设计，但只在 MA-E01 运行期间并行，不作为策略主线前置。 |
+| HIST/动态多关系/概念超图 | `PARALLEL_ONLY_WHILE_STRATEGY_RUN_ACTIVE` | 第 9.7–9.8 节 | 只在 MA-E01 已提交并处于运行/排队期间利用空闲资源并行；不得延迟下一 candidate，也不执行历史数据补算。 |
 
 ### 2.6 F-014 历史评价资产与执行顺序
 
@@ -775,9 +782,9 @@ h20 继续作为当前模型对照的统一信号标签，但它不能单独代�
 
 Type A 超跌反弹与 Type B 长期趋势保持独立因子选择、标签头、调仓和退出逻辑；旧多 Alpha 腿只能作为组合相关性/风险基线，不能作为 Type B 演进母体。
 
-F-014 的可实施详细设计已更新至父设计 v1.21，并继续引用 `qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md`。它只读复用现有 Recorder/prediction pointer 和 `qe_archive.run` 父身份，不扩展通用 Prediction Store 或既有 Archive 通用 writer/schema；使用 feature/outcome 双快照、execution environment identity、extension-only 历史价格校验和右删失；逐信号/episode 明细进入 QE-only CAS Parquet。Phase 2 control/worker/CAS 与 Phase 3 metric/artifact/API/MCP 已完成。PR #2906 source/CI、生产 DDL 和当前 8001 runtime contract 已闭合；固定 R8B Loop4 的 historical preview GET 已真实返回 8/11 可用与 3 个 typed gap，且数据库前后不变。PR #2964 的受控 Chromium 已验证业务检索选择器、无人工 ID/JSON 与 Top-K 真实覆盖，并产出成功截图；normal Loop activation、完整 root/runtime SHA 对齐、当前 3000 runtime visual、其余 5 个 R8B、Phase 5 中断恢复与批量历史重评仍待实施。所有可用结果继续用于研究，缺口不形成研究门禁。
+F-014 的可实施详细设计已更新至父设计 v1.22，并继续引用 `qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md`。它只读复用现有 Recorder/prediction pointer 和 `qe_archive.run` 父身份，不扩展通用 Prediction Store 或既有 Archive 通用 writer/schema；使用 feature/outcome 双快照、execution environment identity、extension-only 历史价格校验和右删失；逐信号/episode 明细进入 QE-only CAS Parquet。Phase 2 control/worker/CAS 与 Phase 3 metric/artifact/API/MCP 已完成。PR #2906 source/CI、生产 DDL 和当前 8001 runtime contract 已闭合；固定 R8B Loop4 的 historical preview GET 已真实返回 8/11 可用与 3 个 typed gap，且数据库前后不变。PR #2964 的受控 Chromium 已验证业务检索选择器、无人工 ID/JSON 与 Top-K 真实覆盖，并产出成功截图。自 v5.24 起，normal Loop 平台 smoke、完整 root/runtime SHA 对齐、当前 3000 runtime visual、其余 5 个 R8B、Phase 5 中断恢复与批量历史重评均由用户终止，不再是活动缺口；既有可用结果只读复用，MA-E01 不等待 F-014 完整化。
 
-F-014 按三个并行工作流推进：`计算/统计/可成交性`、`CAS/状态/三表/幂等恢复`、`API/MCP/UI/历史补算`。不再设置全局 ready 状态，而按指标族分别发布证据：
+F-014 历史上按三个工作流建设：`计算/统计/可成交性`、`CAS/状态/三表/幂等恢复`、`API/MCP/UI/历史补算`。v5.24 后前两条只复用既有能力，第三条已终止；不再继续推进平台交付。既有结果仍按指标族分别解释：
 
 | 指标族 | 典型来源 | 独立状态与科研用途 |
 |---|---|---|
@@ -786,9 +793,9 @@ F-014 按三个并行工作流推进：`计算/统计/可成交性`、`CAS/状�
 | `portfolio_result` | report/portfolio indicator | 可计算成本后收益、回撤、换手时立即分析；缺失不影响信号与持仓研究。 |
 | `order_fill` | indicator object 的 `amount/deal_amount/ffr` 等 | 可区分 attempted/filled/partial/zero-fill 时立即分析；缺字段时研究其他指标族。 |
 | `execution_cause` | reason code、订单/队列轨迹或可复算规则 | 证据不足时仅把具体原因标为 `NOT_VERIFIABLE`，并设计采集或互证方案；不阻断成交状态、长期捕获或任何实验。 |
-| `platform_surface` | QE CAS/三表/API/MCP/UI/历史补算 | 分别记录工程完成度；UI、API、DDL 或历史批量补算缺失不影响已有计算结果用于科研分析。 |
+| `platform_surface` | QE CAS/三表/API/MCP/UI/历史补算 | 只读记录既有工程完成度；UI 与历史批量补算缺失不再形成待办，也不影响已有计算结果用于科研分析。 |
 
-每个指标族使用 `AVAILABLE/PARTIAL/MISSING/NOT_VERIFIABLE/NOT_APPLICABLE`，并同时记录覆盖率、缺口、获取方案、可用部分、损失/偏差和互证路径。脚本、CAS、后端、UI 与历史补算是同一平台的不同交付面，但任何一面不作为科研方向或其他证据族的前置条件。
+每个指标族使用 `AVAILABLE/PARTIAL/MISSING/NOT_VERIFIABLE/NOT_APPLICABLE`，并同时记录覆盖率、缺口、可用部分和损失/偏差。脚本、CAS、后端、UI 与历史补算的既有状态互不替代；缺失面不再启动补齐工作，也不作为策略实验前置条件。
 
 F-014 同时增加信号→成交桥接：理论机会层以 `T+1 qfq close` 衡量可预测机会，实际捕获层优先使用经 reconciliation 的 order/trade artifact，区分 `filled_t1`、`delayed_fill`、`blocked_limit_up`、`blocked_suspension`、`never_filled` 及 `entry_delay_days`，并报告入场损失的 MFE/barrier winner；退出侧对称分析跌停、停牌和延迟退出。日线触及涨跌停不等于订单必然未成交；没有订单/队列证据时仅将精确原因标记 `NOT_VERIFIABLE`，继续使用 position、report、indicator object 和价格路径做可支持的捕获、成交状态、损失区间与互证分析。
 
@@ -1004,20 +1011,20 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 详细设计和逐文件实施顺序见 `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`。P0-1～P0-4 的完成标准是可靠性与 UI 生命周期能力，不是任何 Alpha 方向的 go/stop 条件。
 
-#### 9.9.2 科研方向优先级（与基础研发可并行）
+#### 9.9.2 科研方向优先级（策略演进先行）
 
-1. **P0：EfficientGATs 单 Loop 执行行为 canary（已完成）**：`qe_20260718_040323_9a4a` 复用 R11B h40 seed123 的模型、因子、标签、数据与策略，显式启用 attention query chunk 和 cooperative yield，保持 `gpu_serial_graph=1`、`resource_telemetry_enabled=false`；1/1 完成，RankIC `0.10569`、CAGR `62.12%`、Sharpe `1.8108`。该 canary 证明当前执行方式可完成训练和回测，不调用 `nvidia-smi`、NVML 或任何 GPU/显存轮询；桌面体感仍作为独立执行证据记录。
-2. **P0：F-014 Phase 2–4 与 R8–R11 真实重评**：Phase 2 worker/CAS、Phase 3 三表/API/MCP与 Loop4 2,004 metric + 6 artifact/exact replay 已完成；PR #2906 source/CI、DEV/生产 DDL 与当前 runtime contract 已闭合，固定 task/Loop historical preview GET 已验证显式缺口和零副作用；PR #2964 已完成受控 Chromium 人类检索验收；下一步处理当前 3000 runtime visual、normal Loop activation smoke 和 Phase 5 恢复 E2E，其他 5 个 R8B 和历史补算继续单独授权。
-3. **P0：低成本板块回撤预警 overlay**：复用现有 R8–R11 prediction，不重训主模型；先实现独立 QE-only overlay/strategy adapter，以板块宽度恶化、资金流背离、领导扩散衰减、波动/拥挤上升和相对强弱拐点生成板块风险状态。现有 HMM 只覆盖系数调整或新买入过滤，不能冒充动态退出。比较 hold10/20、无 overlay、只入场 gating、有界减仓、退出与重入，输出 `1/3/5/10` 日预警提前量、避免回撤、false early-exit、重入延迟、趋势捕获和成本。
-4. **P0：图模型 sector gating 与板块时序动态图**：R11B 已完成 `l2 embedding only` 的 h40/h60 基线，后续以 h40 为效率锚点扩展动态 residual co-movement、flow/state、leadership 多关系与未来 5/10/20 日回撤 hazard。图输出优先作为板块风险预算/条件输入，不重复 R7 的简单等权 prediction fusion；图训练继续 `gpu_serial_graph=1`。
-5. **P1：跨任务 portfolio fusion 与任务级 LOO（R12P 当前 trial 已完成）**：最终 successor 已恢复 baseline、equal、orthogonality-aware 和对应八条 LOO；equal 当前优于 baseline 与 orthogonality-aware，LGBM 是最稳定贡献腿，GAT/LSTM/TCN 的边际随 scheme 变化。10 个 ic-weighted/risk-parity child 保留历史证据缺口，并可在未来取得充分输入后另立新 trial；当前结果不外推否定任何权重方法、portfolio fusion、sector gating 或 Alpha 腿。
-6. **P1：右尾信号、四格 sector oracle 与现实两层模型**：围绕半导体、通信、软件、IT 服务等漏捕板块，比较 reality/oracle 板块层 × reality/oracle 个股层、hard Top-M 与 soft gating；板块长期趋势、回撤风险和板块内龙头排序分别归因。
-7. **P1：LSTM/TCN Type-B 继续演进**：LSTM R8B2 比较 `step_len=20/40/60`、G13/G14/G15、跨种子 ensemble 与动态退出；TCN 补 G14-FP h40/h60 三种子，使 G13/G14/G15 矩阵完整。LSTM/TCN 按 `gpu_parallel_standard` 最多 2 Loop，不能与 `gpu_serial_graph` 图训练同时提高并发。
-8. **P1：Loop 级总账与制品关联持续化**：成功 Loop 自动进入 Archive、prediction/CAS、蓝图摘要和后续比较；失败或取消 Loop 保存阶段与原因。BUG-730 已修复 rerun 节点并发透传，BUG-741 已修复 results-only 状态重算；基础架构故障不得覆盖已成功制品和指标。
-9. **P2：R8M 与迁移对照**：以 LSTM encoder 比较独立训练、共享 head、冻结迁移、全量微调、transfer matrix、LOO 和梯度冲突；PCGrad/动态权重作为独立 trial。
-10. **P2：LTR/排序目标重开与正交数据**：校验当前 LambdaMART score 方向、ranking group 和 label 后，比较 regression、LambdaMART/NDCG、右尾 barrier；holder concentration、flow acceleration、资金流/情绪和基本面交叉数据并行做覆盖、多期限和重合分析。
-11. **P2/P3：HIST/HATS/MASTER/IGMTF/TRA/概念多关系**：HIST-industry、动态关系、层次图、状态路由、概念 PIT/代理实验和超图保持开放；当前二值行业边、时间 Transformer 或单个种子结果不外推到其他结构。
-12. **P3：ALSTM/GRU2/Transformer 等当前弱或失败配置复核**：保存现有弱/失败证据，并可按 wiring 修复、任务定义或结构变化另立新卡，不使用方向淘汰状态。
+1. **P0：MA-E01 Sector-Conditioned Multi-Alpha Strategy Package v1（当前唯一主动主线）**：复用现有 LGBM/LSTM/TCN/EfficientGATs prediction 和 R12P 四腿 equal 基线，不重训主模型；实现板块状态条件化权重、有界减仓、退出与重入。必须提交真实 QE trial，对照 LGBM baseline、equal 与 orthogonality-aware，输出 CAGR、Sharpe、Calmar、最大回撤、换手、成本、false early-exit、重入延迟和趋势捕获。文档、代码、单测或平台状态均不能替代真实策略结果。
+2. **P1：MA-E02 动态关系与 sector gating**：只允许在 MA-E01 已提交且真实实验处于运行/等待期间并行准备；复用 R11B `l2 embedding only` 的 h40/h60 基线，研究 dynamic residual co-movement、flow/state、leadership 多关系与未来 5/10/20 日回撤 hazard。若会延迟下一次 MA-E01 候选提交，则立即让位于策略主线。
+3. **REFERENCE：EfficientGATs 单 Loop 执行行为 canary（已完成）**：`qe_20260718_040323_9a4a` 复用 R11B h40 seed123 的模型、因子、标签、数据与策略，显式启用 attention query chunk 和 cooperative yield，保持 `gpu_serial_graph=1`、`resource_telemetry_enabled=false`；1/1 完成，RankIC `0.10569`、CAGR `62.12%`、Sharpe `1.8108`。该结果只证明现有执行方式可完成训练和回测，不是新的策略演进结果。
+4. **FROZEN：F-014 平台/UI/历史完整化**：Phase 1–3、既有 R8B 6/6 CAS、Loop4 2,004 metric + 6 artifact、API/MCP 与已完成 UI 证据只读保留。用户已终止当前 3000 visual、normal Loop 平台 smoke、其余 5 个 R8B、Phase 5、历史补算/物化与 Archive 补账；这些事项不得重新进入主动优先级，也不得阻断 MA-E01。
+5. **PARALLEL-ONLY：跨任务 portfolio fusion 与任务级 LOO（R12P 当前 trial 已完成）**：最终 successor 已恢复 baseline、equal、orthogonality-aware 和对应八条 LOO；equal 当前优于 baseline 与 orthogonality-aware，LGBM 是最稳定贡献腿，GAT/LSTM/TCN 的边际随 scheme 变化。10 个 ic-weighted/risk-parity child 仅保留历史证据缺口；只有在 MA-E01 运行期间且不延迟下一 candidate 时，才可另立新 trial。
+6. **PARALLEL-ONLY：右尾信号、四格 sector oracle 与现实两层模型**：围绕半导体、通信、软件、IT 服务等漏捕板块，比较 reality/oracle 板块层 × reality/oracle 个股层、hard Top-M 与 soft gating；只在 MA-E01 运行期间使用空闲资源，不得成为其前置。
+7. **PARALLEL-ONLY：LSTM/TCN Type-B 继续演进**：LSTM R8B2 与 TCN 多种子矩阵保留为后续候选；只在 MA-E01 运行期间使用空闲资源。LSTM/TCN 按 `gpu_parallel_standard` 最多 2 Loop，不能与 `gpu_serial_graph` 图训练同时提高并发。
+8. **TERMINATED：历史 Loop 总账补齐与制品固化**：既有事实和制品只读保留，不执行历史 Archive 补录、状态重算、旧 Loop 物化、证据补齐或总账固化。新策略 trial 仍须随运行自然保存比较所需的最小配置、输入身份、指标、成本、风险和失败原因；该最小输出不构成历史工程。
+9. **PARALLEL-ONLY：R8M 与迁移对照**：保留独立/共享/迁移候选设计；只在 MA-E01 运行期间使用空闲资源。
+10. **PARALLEL-ONLY：LTR/排序目标与正交数据**：保留 score/group/label 诊断和正交数据候选；不在 MA-E01 提交前启动。
+11. **PARALLEL-ONLY：HIST/HATS/MASTER/IGMTF/TRA/概念多关系**：方向保持开放，但仅在策略实验运行期间使用空闲资源，不先建设数据或关系平台。
+12. **PARALLEL-ONLY：ALSTM/GRU2/Transformer 弱/失败配置复核**：只读保存现有证据；只有 MA-E01 运行期间有空闲资源且具备明确策略假设时才可另立新卡。
 
 低成本、复用预测的实验先于新架构训练；同一研究阶段不得为了等待一个节点而擅自提升图模型并行度。
 
@@ -1025,6 +1032,21 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 - LSTM/TCN 等已验证可并行的模型归为 `gpu_parallel_standard`，并行上限由调度器按模型类判断；回测可与下一 loop 训练重叠，但必须隔离 recorder、工作目录和 GPU/CPU/内存配额。
 - 远端 CPU 可并行执行 LGBM/融合回测；共享 factor cache 原子写、每因子锁、损坏检测/重建和 MLflow recorder 隔离决定安全并发数。并发证据不足时降为串行或较低并发继续实验，不把基础架构缺口变成研究阻断。
 - 后端重启不应终止已启动的外部 QE worker；新增调度逻辑必须继续满足任务状态可恢复、运行进程不被重复启动、结果只归档一次的契约。
+
+#### 9.9.3 策略优先执行合同（v5.24）
+
+1. 当前比较锚点固定为 R12P：LGBM baseline 的 CAGR/Sharpe/Calmar 为 `53.57%/1.602/2.649`，四腿 equal 为 `74.47%/1.922/3.554`，orthogonality-aware 为 `72.12%/1.893/3.302`。MA-E01 必须在同口径真实 QE run 中比较，不能只报告离线函数或局部样例。
+2. 每轮迭代必须形成版本化 strategy candidate、冻结输入/预测身份、真实 run identity，以及收益、回撤、换手、成本、退出/重入和失败原因。运行自然产生的这些最小输出属于策略比较结果，不得扩张为历史 Archive、全量证据补齐或平台完整化项目。
+3. 不新增通用 UI、schema、Archive writer、历史解析器或历史物化任务。只有 MA-E01 真实提交或运行暴露出的、可复现且直接阻止策略产生结果的 BUG，才允许暂停策略主线修复；修复后立即恢复同一 candidate。
+4. 动态关系、PIT 数据、诊断和其他未来有价值的工作，只能在真实实验已经提交并处于运行/排队期间利用空闲资源并行推进；不得把“准备更完整”设为下一 candidate 的前置条件。
+5. MA-E01 源码已在既有 `afe5634d` 中合入；本轮已提交四个正式 policy run，但尚未终态。只有 8 个 child 的真实回测与跨 policy 对照完成后，才能形成策略结论；queued/running、代码或测试均不等于验证完成。
+
+#### 9.9.4 v5.24 DESIGN-COMPLIANCE-001 文档审核
+
+- `no_simplified_delivery`：蓝图只把 MA-E01 标为设计就绪、源码/真实 run 待执行，没有以文档、测试、平台或旧结果冒充新策略完成。
+- `no_silent_error`：R12P 的 10 个未恢复 child、F-014 指标限制和 provenance 缺口继续显式保留；终止历史工程不改写任何缺失为成功。
+- `no_business_semantic_drift`：R12P baseline/equal/orthogonality-aware 数值、四腿来源、QE-only 边界和现有组合公式不变；MA-E01 另立版本化 candidate 做真实对照。
+- `no_unrequested_gate_or_approval`：P0-1～P0-4 和 F-014 完整度不再是前置；唯一允许暂停主线的是实际 trial 的可复现阻断 BUG，未新增人工审批或 research-ready 状态。
 
 ## 10. 风险与控制
 
@@ -1111,7 +1133,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 - R11A 已 9/9，hold20 平均 CAGR 略高于 hold10 但 Sharpe/回撤未同步改善，hold30 明显弱化；R11B 已 6/6，h40 在相近回撤下以约一半年化换手取得接近 h60 的收益。15 个 Loop 均 fully archived；
 - GAT h20/h40/h60 已证明与 LGBM 存在排序差异和较浅回撤，但二值同行业边无稳定增量；下一交付转为 EfficientGATs cooperative-execution canary、板块时序动态图、回撤 hazard、sector gating 和动态退出，不重复静态边或简单 prediction average；
 - 与 Advisory Phase 8 对齐的 Phase 1 计算能力已覆盖 20–180 日、MFE/MAE、有序目标、time-to-hit、删失调整的 stage survival、右删失、episode capture/false-exit，以及信号→成交/退出阻断分层；Phase 2 control/worker/CAS 与 Phase 3 单 canary 明细表/API/MCP 已闭合，PR #2875 Loop/Archive UI slice 已通过第三审、源码 CI、合入及用户重启后的后端 API 运行态回读；
-- F-014 详细设计：父设计已更新至 v1.21，Phase 2 从属设计保持有效；当前为 `PHASE4_HUMAN_SEARCH_CONTROLLED_CHROMIUM_VERIFIED_RUNTIME_VISUAL_NORMAL_LOOP_PHASE5_PENDING`，其余 5 个 R8B、normal Loop activation、当前 3000 runtime visual 与 Phase 5 状态单列；
+- F-014 详细设计：父设计已更新至 v1.22，Phase 2 从属设计保持有效；当前为 `EXISTING_CAPABILITY_FROZEN_STRATEGY_REUSE_ONLY`，其余 5 个 R8B、normal Loop 平台 smoke、当前 3000 runtime visual、历史物化与 Phase 5 均由用户终止，不再列为演进前置；
 - R8M 独立设计卡：独立训练、共享多头、冻结迁移、全量微调四臂；per-head maturity/purge、transfer matrix、LOO、梯度冲突和 F-014 各指标族并列分析；
 - HIST-industry 的逐日 PIT relation artifact、mapping hash、`stock_index` 对齐测试、composer/fit/predict canary 与资源 receipt；
 - 动态/多关系图的逐关系消融；概念 PIT 数据获取、代理/部分样本、缺失损失和模型研究并行推进；
@@ -1143,10 +1165,13 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 | F-018 | 两层 oracle 上界 | reality/oracle 四格与 soft-gating 保存 Top-M/horizon/Top-K/PIT/可交易/成本口径，输出连续增量、置信区间、损失和限制；结果永久标记为未来信息上界，不产生 GO/STOP。 |
 | F-019 | 多期限迁移完整性 | R8M 独立训练、共享多头、冻结迁移、全量微调四臂；per-head maturity/purge、transfer matrix、LOO、梯度冲突与 F-014 可用指标族并列分析。 |
 | F-020 | 任务级 Alpha 比较 | 不同 horizon/模型名不自动视为独立腿；预测/持仓/入场/板块/P&L/右尾事件/成本重合和固定风险预算 LOO 用于解释互补、冗余与损失，不形成准入门。 |
-| F-021 | Loop 级证据不可丢失 | task 与 Loop 状态分离；任一成功入 QE 数仓的 Loop 都进入 append-only 总账、指标聚合和后续比较；父 task 失败不覆盖成功 Loop，失败 Loop 单列阶段、原因和可用制品。 |
-| F-022 | 多 Alpha QE 演进底座 P0 | 基于现有 combine-backtest 增量实现持久化 task/run/child/attempt/event、同事务状态/event、重启接管、统一节点占用、暂停/恢复/取消、legacy stop→cancel、`not_computable`、子任务三种恢复模式、QE 自动演进规范页面创建器及子任务运行网格；schema/Archive 错误 QE-scoped 可见，不另建新版本、不改组合业务公式、不新增研究门禁或审批。 |
+| F-021 | 当前 trial 最小证据不可丢失 | task 与 Loop 状态分离；新策略 trial 随运行自然保存比较所需的配置、输入身份、指标、成本、风险和失败原因，父 task 失败不得覆盖已成功结果。既有历史事实只读保留，但不再要求历史 Archive 补录、旧 Loop 物化、状态重算或总账固化。 |
+| F-022 | 多 Alpha QE 演进底座 P0 | 已有 task/run/child/attempt/event、状态/event 原子性、重启接管、统一节点占用、暂停/恢复/取消、`not_computable`、子任务恢复、QE 创建器及运行网格满足策略演进需求，现为 maintenance-only；只有真实策略 trial 暴露的可复现阻断 BUG 才允许扩展或修复。 |
+| F-023 | 策略演进优先与基础设施封板 | MA-E01 等每轮必须产出版本化 strategy candidate 和真实 QE run；只修复真实 trial 暴露的阻断 BUG。UI、历史补账/物化、平台完整化不得抢占策略主线；其他未来价值项仅在实验运行期间并行。 |
 
 ## 13. Implementation Plan / 实施计划
+
+v5.24 当前执行顺序覆盖以下历史 Phase 顺序：先完成本文文档审核，再进入 MA-E01 源码与真实 QE run；其余 Phase 只作为既有设计目录，只有在实验运行期间并行且不延迟下一 candidate 时才可取用。F-014/UI/历史补账/物化和底座完整化不再实施。
 
 ### Phase G0-A：研究设计与证据记录
 
@@ -1178,7 +1203,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 4. `[R9S_COMPLETED_24_OF_24]` 两个 backtest-only task 已完成；h40/h60/h120 的最佳替换速度不同，结果已写入第 9.6.5 节。
 5. `[R10_COMPLETED_51_OF_51]` LGBM/TCN/LTR/LSTM 与 hold10/20/30 全部完成；LSTM `G15-FPL+h60` 三种子与 hold30 第三种子已补齐。成功结果进入研究总账，模型、标签、因子角色与策略转换分开解释。
 6. `[R11_COMPLETED_15_OF_15_FULLY_ARCHIVED]` R11A 9/9、R11B 6/6；R11A Loop5–8 的训练/预测/回测制品成功，BUG-741 修复状态重算后以 results-only 恢复。backfill run `qear_bf_f9115c130b94464089b45de3f26c5fdf` 已 15/15 写入，两个 task 均 fully archived。matched-seed 持仓与图模型长期基线结论写入第 9.6.6 节。
-7. `[F014_PHASE4_UI_SLICE_SOURCE_CI_MERGED_RUNTIME_API_VERIFIED_FRONTEND_VISUAL_PENDING]` Phase 1–3 与 Loop4 单 canary 保持完成；PR #2875 已通过第三审、mock 2/2、Phase 2/3、catalog/F2/L0 与 CI，并以 `5413d799…` 合入。用户重启后 8001 已加载新参数，固定 evaluation 的 list/detail/Archive 只读回读通过；3000 页面 HTTP 存活，但浏览器实例不可用，前端逐控件可视验收待补。其余 Phase 4/5 项继续单列且不形成科研准入条件。
+7. `[F014_EXISTING_CAPABILITY_FROZEN]` Phase 1–3、Loop4 单 canary、PR #2875/#2906/#2964 与既有只读回读证据保持完成；当前 3000 visual、其余 Phase 4/5 和历史完整化均由用户终止，不再是待补项。
 8. `[GRAPH_LONG_HORIZON_BASELINE_COMPLETE]` GAT h20、embedding、二值行业边、R7 简单融合及 R11B h40/h60 三种子证据已齐；h40 为当前效率锚点，后续追加动态板块关系、趋势/回撤双头、sector gating 和动态退出。
 9. `[R12G_COMPLETE_R12P_RECOVERY_COMPLETE]` EfficientGATs cooperative-execution canary `qe_20260718_040323_9a4a` 已 1/1 完成；跨任务四腿 portfolio fusion 已通过 append-only successor 恢复形成 baseline、equal、orthogonality-aware 和八条 LOO，最终研究可用 child 为 11/21。低成本板块回撤 overlay 已进入 F2 设计/实现，右尾/板块状态研究、四格 oracle、LSTM R8B2 和 TCN G14-FP 长期限对照继续设计。
 10. `[PLANNED]` 按第 9.6.3 节建立独立 R8M，wiring、transfer、多种子和 F-014 各指标族可并行，不预设共享表示优于独立训练。
@@ -1198,7 +1223,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 ### Phase G0-H：多 Alpha QE 演进底座 P0-1～P0-4
 
-`[P0_1_TO_P0_4_MERGED_RUNTIME_VERIFIED]` 该 Phase 已于 2026-07-22 完成。实施与运行证据以 `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md` 的稳定 `F-201`～`F-218` 条目为权威；完成事实不构成科研准入条件。
+`[P0_1_TO_P0_4_MERGED_RUNTIME_VERIFIED]` 该 Phase 已于 2026-07-22 完成。实施与运行证据以 `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md` 的稳定 201～218 验收条目为权威；完成事实不构成科研准入条件。
 
 1. **P0-1 durable orchestration**：在现有 combine-backtest 表和服务上增加 first-class task、child、attempt、event 与 run lease/fencing/CAS；权威状态和 event 同事务；将 `QEWorkspaceClient` 作为 WSL/远端统一执行契约；统一读取现有 QE active execution 来源并按 remote identity 去重；启动 scanner/worker 在后端重启后核对并接管，不重复提交远端 loop。schema 缺失只让 multi-alpha worker/写接口结构化不可用，不得阻止整个 FastAPI 或非 QE 模块启动。
 2. **P0-2 lifecycle/recovery**：提供 run 的 pause/resume/cancel；legacy stop 委托 cancel/kill 并保持现有单 Alpha 终止语义。提供 child 的 `backtest_only/results_only/rematerialize_and_backtest` retry；所有动作保留 lineage、attempt、远端 ID 和已成功结果，不把未知远端状态静默变成失败，也不创建伪 child pause 状态。
@@ -1255,30 +1280,33 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 ## 15. Design Acceptance Matrix / 设计验收矩阵
 
+v5.24 解释规则：本矩阵中 F-001～F-022 的历史 `PLANNED/OPEN/PENDING` 只保留设计和证据状态，不代表当前排期。除 F-023/MA-E01 外，任何未完成方向只能在 MA-E01 已提交并处于运行/排队期间按空闲资源并行，且不得启动历史补账、UI 或平台完整化。
+
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | 本文 2.3、4.6–4.9、8、18 | ledger 字段/存储契约、候选族与研究来源已冻结；本批未运行候选公式 | VERIFIED | 无 |
-| F-002 | RD-Agent `tools/generate_static_factors_bundle.py` | 9 项 unit；7,304,119 行 candidate receipt；parquet/schema SHA-256 | VERIFIED | 无 |
-| F-003 | AIstock `scripts/quick_ic_screen.py` | horizon/label/direction/manifest/HAC/CLI 单测 20 passed；与 shared contract 合计 coverage 92% | VERIFIED | 无 |
-| F-004 | RD-Agent metrics engine 与 SOTA API | h20 engine/API 2 passed；与 bundle 合计 11 passed | VERIFIED | 无 |
-| F-005 | AIstock migration、`factor_metrics_contract.py`、official writer、routers/MCP | contract 9 passed；contract+MCP/emit 51 passed；official batch 26 passed/1 skipped | VERIFIED | 无 |
-| F-006 | AIstock `scripts/p1_new_factors.py` F4/R2 tracked repair source | PIT 当前行业历史与冲突 fail-fast 2 passed；旧 catalog 口径失效已记录 | VERIFIED | 无 |
-| F-007 | 后续候选 asset/realtime loader | 三个候选已登记并由 R6 QE 离线执行；catalog asset/transformation 状态复核 | APPROVED_BY_USER: PARTIAL_QE_ASSET_READY | catalog 1525/1528/1532 `is_available=true` 且 QE 可运行；`asset_status/transformation_status=pending/PENDING`、`realtime_code_text` 为空，离线/实时 parity 与荐股/模拟盘加载仍未验收。 |
-| F-008 | 因子库 MCP + Stage 0/3 | 2026-06-30 官方 h20 批次；每因子 583 个基本相关性 pair；第 3.1 节 | APPROVED_BY_USER: PARTIAL_OFFICIAL_METRICS_CORR_COMPLETE | 独立指标和基本相关性已完成；板块原生层、partial/residual IC 和分类/谱系分析可并行补充，不影响继续研究。 |
-| F-009 | Stage 1/3 + portfolio evaluator | R6/R7A/R7B 已有成本后回测；HAC/bootstrap/DSR/PBO/cost/capacity/crowding 设计与 L4 oracle | APPROVED_BY_USER: PARTIAL_QE_BACKTEST_COMPLETE | 已有统一回测；多规模 capacity、冲击/拥挤、DSR/PBO 和 portfolio fusion 作为并列分析继续补充。 |
-| F-010 | QE GATs/LGBM experiment specs | R4 二值邻接、R6 30 Loop、multi-seed OOS 与第 9.4.2 节 | APPROVED_BY_USER: PARTIAL_R6_COMPLETE | 2×2/真码邻接和 R6 LGBM/GAT 多种子已完成；长期标签、两层模型和完整 L4 成本容量验收仍 pending。 |
-| F-011 | 两仓隔离 worktree 与第 17 节 | active/旧 candidate/production DB/DDL/runtime 均未修改 | VERIFIED | 无 |
-| F-012 | 两仓定向测试、lint/compile/diff 与 F2 validation | AIstock 99 passed/1 skipped；RD-Agent 11 passed；F2 PASS；authority 14 passed/2 个 origin/main 既有失败已分离；PR/merge 分离 | VERIFIED | 无 |
-| F-013 | 本文 4.10、9.4–9.5、11.6、Phase G0-E | R6 同口径 prediction receipt；R7A/R7B 正式回测；固定风险预算、长期成本后组合与 leave-one-leg-out | APPROVED_BY_USER: PARTIAL_FORMAL_BACKTEST_COMPLETE | R7A/R7B 均成功但 Sharpe/Calmar 低于 LGBM，只证伪当前 0.5/0.5 rank/zscore prediction-fusion；portfolio fusion、跨标签组合、完整任务级 LOO、容量和两层模型仍 pending。 |
-| F-014 | 本文 9.6、11.6、Phase G0-E；父设计 v1.19 与 Phase 2 从属设计；Advisory Phase 8 | 既有 R8B 6/6、Loop4 2,004+6；PR #2906 source/CI；生产 DDL reconnect readback；2026-07-31 当前 8001/3000 进程身份与 8001 OpenAPI/health；固定 task/Loop preview 200、8/11 可用、3 typed gap、七项 side-effect flags 全 false | PHASE4_TASK_PROFILE_INPUT_PREVIEW_PROD_DDL_RUNTIME_API_VERIFIED | normal Loop activation、完整 runtime/root SHA 对齐、live visual、其余 5 个 R8B、Phase 5 E2E 与批量重评继续交付。 |
-| F-015 | 本文 4.10、9.7、Phase G0-F | R4 真码邻接 receipt；GAT h40/h60；HIST PIT/代理 relation；动态关系；板块趋势/回撤 hazard；mapping 对齐、composer/resource canary 和逐关系消融 | APPROVED_BY_USER: R11B_LONG_HORIZON_COMPLETE_RESEARCH_OPEN | 二值同业邻接当前 trial RankIC 无增益；R11B h40/h60 已 6/6 完成，h40 在相近回撤下换手明显更低。动态/层次关系、sector gating、回撤预警与 cooperative-execution canary 按第 9.9 节继续。 |
-| F-016 | 本文 4.10、9.8、Phase G0-G | 概念 PIT 数据设计、成员变更/多成员/版本/回放，以及部分/代理数据实验 | APPROVED_BY_USER: DATA_ACQUISITION_AND_RESEARCH_PARALLEL | 当前概念 PIT 未完整入库；数据获取、代理/部分样本、损失评估和模型实验并行，代理结果显式标注。 |
-| F-017 | 本文 9.9、Phase G0-F、14.3 | 模型资源分类、cache/recorder 隔离、并行制品、combine-backtest、results-only 与 restart recovery | APPROVED_BY_USER: R12P_APPEND_ONLY_RECOVERY_COMPLETE_11_OF_21 | R6、R7A/R7B 证明组合路径可运行；R8A 远端 CPU 12/12，R8B 标准 GPU 6/6，R11A/R11B 15/15，R12G 1/1。BUG-741 完成 R11A results-only；BUG-864/865/867 完成 R12P 恢复链。R12P 11 个研究可用 child 已恢复，10 个缺口保留；资源遥测保持关闭。 |
-| F-018 | 本文 9.5、9.9、14 | 四格 oracle、soft-gating、连续增量/置信区间、PIT/成本/可交易同口径、不可部署标记 | APPROVED_BY_USER: DESIGN_READY_RUN_PENDING | 尚未运行；可与 F-014、真实两层模型和数据补充并行，输出上界与损失，不输出 go/stop。 |
-| F-019 | 本文 9.6.3、9.9、14 | R8M 四臂、per-head maturity/purge、transfer matrix、LOO、梯度冲突和 F-014 评价 | APPROVED_BY_USER: DESIGN_PLANNED_RESEARCH_OPEN | 尚未创建实验；wiring、多种子、迁移和 F-014 指标族可并行，不预设正迁移。 |
-| F-020 | 本文 9.6.4、9.9、14 | 预测/持仓/入场/板块/P&L/右尾事件/成本重合和固定风险预算 LOO | APPROVED_BY_USER: DESIGN_READY_RESEARCH_OPEN | 长周期腿、R8C 和更多腿均可研究；重合/LOO 结果解释互补、冗余和损失，不形成阻断。 |
-| F-021 | 本文 2.2、2.4、2.5、9.4.5、9.6.5–9.6.7、9.9、Phase G0-E | 6 个顶层失败 task 的 50 个成功 Loop；R2–R5 67/67；R6 30/30；R8 18/18；R9S 24/24；R10 51/51；R11 15/15；R12P child 级恢复；task/Loop 状态分离规则 | APPROVED_BY_USER: LOOP_LEVEL_LEDGER_REQUIRED | 主线 Phase0/R1–R11 的成功 Loop、R7 两个正式组合回测和 R12P 11 个研究可用 child 进入研究总账；父 task 或恢复阶段状态不得过滤成功结果，基础架构错误、证据缺口与模型研究结果分开归因。 |
-| F-022 | 本文 4.11、9.9.1、Phase G0-H；`multi_alpha_qe_evolution_foundation_f2_design_20260718.md` | service/router/UI adapter；task/run/child/attempt/event、restart、control/retry、create UI、child grid；R12P timeout 与 BUG-864/865/867 恢复链 | RUNTIME_VERIFIED_RECOVERY_HARDENED | P0-1～P0-4 已合入并完成 DDL、API/UI/重启验收；R12P 真实恢复进一步验证 child-level append-only successor。累计恢复仍按当前 3+8+10 事实推进，不把平台修复状态写成组合研究结论。 |
+| F-001 | 本文 2.3、4.6–4.9、8、18 | validation-receipt: ledger 字段/存储契约、候选族与研究来源已冻结；本批未运行候选公式 | VERIFIED | 无 |
+| F-002 | RD-Agent `tools/generate_static_factors_bundle.py` | validation-receipt: 9 项 unit；7,304,119 行 candidate receipt；parquet/schema SHA-256 | VERIFIED | 无 |
+| F-003 | AIstock `scripts/quick_ic_screen.py` | validation-receipt: horizon/label/direction/manifest/HAC/CLI 单测 20 passed；与 shared contract 合计 coverage 92% | VERIFIED | 无 |
+| F-004 | RD-Agent metrics engine 与 SOTA API | validation-receipt: h20 engine/API 2 passed；与 bundle 合计 11 passed | VERIFIED | 无 |
+| F-005 | AIstock migration、`factor_metrics_contract.py`、official writer、routers/MCP | validation-receipt: contract 9 passed；contract+MCP/emit 51 passed；official batch 26 passed/1 skipped | VERIFIED | 无 |
+| F-006 | AIstock `scripts/p1_new_factors.py` F4/R2 tracked repair source | validation-receipt: PIT 当前行业历史与冲突 fail-fast 2 passed；旧 catalog 口径失效已记录 | VERIFIED | 无 |
+| F-007 | 后续候选 asset/realtime loader | validation-receipt: 三个候选已登记并由 R6 QE 离线执行；catalog asset/transformation 状态复核 | APPROVED_BY_USER: PARTIAL_QE_ASSET_READY | catalog 1525/1528/1532 `is_available=true` 且 QE 可运行；`asset_status/transformation_status=pending/PENDING`、`realtime_code_text` 为空，离线/实时 parity 与荐股/模拟盘加载仍未验收。 |
+| F-008 | 因子库 MCP + Stage 0/3 | validation-receipt: 2026-06-30 官方 h20 批次；每因子 583 个基本相关性 pair；第 3.1 节 | APPROVED_BY_USER: PARTIAL_OFFICIAL_METRICS_CORR_COMPLETE | 独立指标和基本相关性已完成；板块原生层、partial/residual IC 和分类/谱系分析可并行补充，不影响继续研究。 |
+| F-009 | Stage 1/3 + portfolio evaluator | validation-receipt: R6/R7A/R7B 已有成本后回测；HAC/bootstrap/DSR/PBO/cost/capacity/crowding 设计与 L4 oracle | APPROVED_BY_USER: PARTIAL_QE_BACKTEST_COMPLETE | 已有统一回测；多规模 capacity、冲击/拥挤、DSR/PBO 和 portfolio fusion 作为并列分析继续补充。 |
+| F-010 | QE GATs/LGBM experiment specs | validation-receipt: R4 二值邻接、R6 30 Loop、multi-seed OOS 与第 9.4.2 节 | APPROVED_BY_USER: PARTIAL_R6_COMPLETE | 2×2/真码邻接和 R6 LGBM/GAT 多种子已完成；长期标签、两层模型和完整 L4 成本容量验收仍 pending。 |
+| F-011 | 两仓隔离 worktree 与第 17 节 | validation-receipt: active/旧 candidate/production DB/DDL/runtime 均未修改 | VERIFIED | 无 |
+| F-012 | 两仓定向测试、lint/compile/diff 与 F2 validation | validation-receipt: AIstock 99 passed/1 skipped；RD-Agent 11 passed；F2 PASS；authority 14 passed/2 个 origin/main 既有失败已分离；PR/merge 分离 | VERIFIED | 无 |
+| F-013 | 本文 4.10、9.4–9.5、11.6、Phase G0-E | validation-receipt: R6 同口径 prediction receipt；R7A/R7B 正式回测；固定风险预算、长期成本后组合与 leave-one-leg-out | APPROVED_BY_USER: PARTIAL_FORMAL_BACKTEST_COMPLETE | R7A/R7B 均成功但 Sharpe/Calmar 低于 LGBM，只证伪当前 0.5/0.5 rank/zscore prediction-fusion；portfolio fusion、跨标签组合、完整任务级 LOO、容量和两层模型仍 pending。 |
+| F-014 | 本文 9.6、11.6、Phase G0-E；父设计 v1.22 与 Phase 2 从属设计；Advisory Phase 8 | validation-receipt: 既有 R8B 6/6、Loop4 2,004+6；PR #2906 source/CI；生产 DDL reconnect readback；固定 task/Loop preview 200、8/11 可用、3 typed gap、七项 side-effect flags 全 false；PR #2964 受控 Chromium | APPROVED_BY_USER: FROZEN_EXISTING_CAPABILITY_REUSABLE | 用户已终止 normal Loop 平台 smoke、runtime SHA/visual、其余 5 个 R8B、Phase 5 和批量历史重评；这些不是待交付项，既有能力只作为 MA-E01 可选评价复用。 |
+| F-015 | 本文 4.10、9.7、Phase G0-F | validation-receipt: R4 真码邻接 receipt；GAT h40/h60；HIST PIT/代理 relation；动态关系；板块趋势/回撤 hazard；mapping 对齐、composer/resource canary 和逐关系消融 | APPROVED_BY_USER: R11B_LONG_HORIZON_COMPLETE_PARALLEL_ONLY | R11B 既有结果保留；动态关系和 sector gating 仅在 MA-E01 运行期间并行，不得延迟下一 candidate。 |
+| F-016 | 本文 4.10、9.8、Phase G0-G | validation-receipt: 概念 PIT 数据设计、成员变更/多成员/版本/回放，以及部分/代理数据实验 | APPROVED_BY_USER: DATA_RESEARCH_PARALLEL_ONLY | 当前概念 PIT 未完整入库；只在 MA-E01 运行期间评估，不启动历史补算或前置数据工程。 |
+| F-017 | 本文 9.9、Phase G0-F、14.3 | validation-receipt: 模型资源分类、cache/recorder 隔离、并行制品、combine-backtest、results-only 与 restart recovery | APPROVED_BY_USER: R12P_APPEND_ONLY_RECOVERY_COMPLETE_11_OF_21 | R6、R7A/R7B 证明组合路径可运行；R8A 远端 CPU 12/12，R8B 标准 GPU 6/6，R11A/R11B 15/15，R12G 1/1。BUG-741 完成 R11A results-only；BUG-864/865/867 完成 R12P 恢复链。R12P 11 个研究可用 child 已恢复，10 个缺口保留；资源遥测保持关闭。 |
+| F-018 | 本文 9.5、9.9、14 | validation-receipt: 四格 oracle、soft-gating、连续增量/置信区间、PIT/成本/可交易同口径、不可部署标记 | APPROVED_BY_USER: DESIGN_READY_PARALLEL_ONLY | 尚未运行；只在 MA-E01 运行期间使用空闲资源，不输出 go/stop。 |
+| F-019 | 本文 9.6.3、9.9、14 | validation-receipt: R8M 四臂、per-head maturity/purge、transfer matrix、LOO、梯度冲突和 F-014 评价 | APPROVED_BY_USER: DESIGN_PLANNED_PARALLEL_ONLY | 尚未创建实验；只在 MA-E01 运行期间并行，不预设正迁移。 |
+| F-020 | 本文 9.6.4、9.9、14 | validation-receipt: 预测/持仓/入场/板块/P&L/右尾事件/成本重合和固定风险预算 LOO | APPROVED_BY_USER: DESIGN_READY_PARALLEL_ONLY | 仅在 MA-E01 运行期间按空闲资源研究；不得阻断下一策略 candidate。 |
+| F-021 | 本文 2.2、2.4、2.5、9.4.5、9.6.5–9.6.7、9.9.3、Phase G0-E | validation-receipt: 既有 R2–R12 事实与 task/Loop 状态分离规则只读保留；新 trial 最小输出合同 | APPROVED_BY_USER: FROZEN_HISTORY_CURRENT_TRIAL_MINIMUM_ONLY | 禁止历史 Archive 补录、旧 Loop 物化、状态重算和总账固化；MA-E01 只自然保存比较所需的配置、输入身份、指标、成本、风险和失败原因。 |
+| F-022 | 本文 4.11、9.9.1、9.9.3、Phase G0-H；`multi_alpha_qe_evolution_foundation_f2_design_20260718.md` | validation-receipt: service/router/UI adapter；task/run/child/attempt/event、restart、control/retry、create UI、child grid；R12P timeout 与 BUG-864/865/867 恢复链 | APPROVED_BY_USER: P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY | P0-1～P0-4 已满足后续策略演进；除 MA-E01 真实运行暴露的可复现阻断 BUG 外，不再安排基础设施完整化研发。 |
+| F-023 | 本文 2.2、9.9.2–9.9.4、Phase G0-E；`qe_sector_risk_overlay_f2_design_20260726.md` | validation-receipt: `afe5634d` 与四个 `macb_idem_*` 正式 run；每个 child plan 精确为 baseline + equal，无 LOO | APPROVED_BY_USER: REAL_RUN_SUBMITTED_IN_PROGRESS | 8 个 child 尚未全部终态；必须回读收益、回撤、换手、成本、退出/重入与 failure evidence 后再形成 MA-E01 结论。 |
 
 ## 16. Rollout / Rollback / 发布回滚
 
@@ -1305,6 +1333,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 - v5.21 F-014 Phase 4 runtime preview rollout：截至 2026-07-30 该轮核验时，8001/3000 进程启动于 2026-07-30 11:37 +08:00；8001 health/OpenAPI 已加载 profile/preview 合同。固定 task `qe_20260715_104922_001d` Loop 4 对真实 snapshot 的 GET 返回 200、8/11 输入可用，feature identity/orders/trades typed missing，`ready_for_node=false`、`research_gate=false`、7 个 side-effect flags 全 false；DB before/after 保持 17 evaluation/2,004 metric/6 artifact。3000 `/qe-archive` HTTP 200，但 browser runtime 列表为空，逐控件 visual 与 normal Loop smoke 继续 pending。
 - v5.22 F-014 current-process correction：2026-07-31 只读复核确认当前 8001/3000 进程均启动于 01:55 +08:00；该重启由本次文档任务之外的操作完成，本任务未执行进程控制。当前 8001 health、1,107 条 OpenAPI path、profile/preview 合同仍有效；固定 task/Loop preview 再次为 8/11 可用、feature identity/orders/trades typed missing、`ready_for_node=false`、`research_gate=false` 且七项 side-effect flags 全 false。完整 runtime/root SHA 对齐、逐控件 visual 与 normal Loop smoke 继续 pending。
 - v5.23 F-014 human-search acceptance：PR #2964 将 Run/Task/outcome snapshot/L2 sector 改为业务检索选择器，canonical ID 仅作隐藏 value；操作员视图移除 raw JSON/人工 ID 输入，Top-K 展示真实完整/缺失覆盖而不以首条历史缺失冒充整体 missing。AIstock CI `30598333361` 的类型、Lint、四组 QE 后端门禁和 Playwright Chromium 全部通过，artifact `frontend-ui-evidence-30598333361` 含成功截图与 HTML report。当前 3000 runtime visual、normal Loop、完整 runtime/root SHA 对齐、其余 5 个 R8B 与 Phase 5 继续独立 pending；本轮未执行 DDL/DML、服务启停、评价 POST 或历史回填。
+- v5.24 strategy-evolution-first rollout：用户终止 v5.23 及更早版本仍列作未来动作的 UI visual、normal Loop 平台 smoke、其余 R8B、Phase 5、历史补算/物化、Archive 补录和总账固化；这些历史文本仅保留当时状态，不再构成当前 backlog。Multi-Alpha P0-1～P0-4 封板为 maintenance-only。文档审核通过后，本轮通过既有 QE API 提交四个正式 MA-E01 policy run，共 8 个 child；发生的是 QE 实验状态写入，不修改策略源码、不执行 DDL/历史回填、不控制进程或影响非 QE 模块。结果仍在运行，未宣称 MA-E01 完成。
 - v5.6 多 Alpha foundation design audit：修正未经逐项确认的批准标记、stop/pause 语义、child `not_computable` 和聚合规则、跨 QE 路径容量统计、状态/event 原子性、Archive 静默初始化、schema 的 QE-scoped failure 以及规范 UI 入口/逐像素视觉验收。该修订仍只更新设计文档，不执行 DDL、不修改运行代码、不创建/恢复实验、不写 DB、不重启服务。
 - Schema rollout：现有 factor h20 指标已可用；F-014 Phase 2 control table 与 Phase 3 metric/artifact 表已在当前 runtime DB ready/readback，Loop4 已形成非空数据；未来目标特定 DDL 仍独立授权，依赖既有每日备份，不新增导出门禁。
 - Data rollout：R8–R12 当前继续冻结 2026-06-30 QE 快照；任何新快照另立 dataset identity 并保留上一版本回滚，不影响非 QE PIT/模拟盘数据。
@@ -1319,12 +1348,13 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 | QE dataset | VERIFIED_20260630 | 当前 QE 快照已支持 R6–R12，并被 R8/R9/R10/R11/R12 冻结复用；未来数据切换继续要求版本化快照和回滚保留。 |
 | 唯一硬边界 | QE_ONLY_ZERO_NON_QE_IMPACT | 所有实验、评价、缓存、CAS、表、API/MCP/UI 和写入仅限 QE；不读取、修改、调用或影响任何非 QE 模块。 |
 | factor asset | RESEARCH_AVAILABLE_IN_QE | catalog 1525/1528/1532 可供 QE；本蓝图不接入荐股、模拟盘或生产交易。 |
-| QE schema | MULTI_ALPHA_P0_AND_F014_PHASE3_SINGLE_CANARY_READY | F-014 三张 `run_evaluation*` 表在当前 runtime DB ready；历史 control/CAS evidence 保留，Loop4 已有 2,004 metric + 6 artifact；其余 5 个 R8B 未批量物化。 |
-| QE research writes | FACTOR_WRITES_COMPLETE_R10_R11_FULLY_ARCHIVED_R12P_RECOVERY_LEDGER_11_OF_21 | 官方因子指标/相关性已持久化；R9S、R10、R11 已进入研究总账，R11A/R11B source-status 均为 fully archived；R12P 11 个研究可用 child 进入 append-only durable ledger。本 v5.12 文档任务不额外写 DB。 |
+| QE schema | EXISTING_SCHEMA_SUFFICIENT_NO_HISTORY_MATERIALIZATION | Multi-Alpha P0 与 F-014 既有表满足当前演进；Loop4 的 2,004 metric + 6 artifact 只读保留。不再物化其余 5 个 R8B，也不为历史完整化新增 schema。 |
+| QE research writes | NEW_TRIAL_MINIMUM_OUTPUT_ONLY | 既有 R9S–R12 结果只读复用；MA-E01 仅写入运行自然产生的版本化 candidate、输入身份、指标、成本、风险和失败原因，不执行历史补账、状态重算或总账固化。 |
 | frontend/backend dependency | noop | 本批无依赖或 lockfile 变化。 |
 | candidate snapshot | VERIFIED_QE_20260630 | R6–R12 当前使用该快照；其他快照可另立 identity 并行研究。 |
-| QE experiment | R12G_COMPLETE_R12P_RECOVERY_COMPLETE_11_OF_21_F014_PHASE3_SINGLE_CANARY_MATERIALIZED | R8–R11 的 108 Loop 均 completed/research_valid；F-014 R8B 6/6 已完成 worker/六族/CAS，Loop4 已完成 Phase 3 DB/API/MCP 物化；R12P baseline、2 scheme 与 8 LOO 已恢复并分析。partial/not_recovered 描述证据覆盖，不是模型或研究失败。 |
-| multi-alpha platform | P0_1_TO_P0_4_RUNTIME_VERIFIED_RECOVERY_HARDENED | durable orchestration、pause/resume/cancel、child retry/results-only、QE 规范创建器、child/attempt grid、event SSE 和重启 readback 均已实现；BUG-864/865/867 补齐真实 R12P 累计恢复链且不允许 silent fallback。 |
+| QE experiment | MA_E01_4_POLICY_8_CHILD_SUBMITTED_IN_PROGRESS | 四个正式 run 已提交并各精确规划 baseline + equal 两 child；运行态写入仅限 QE。terminal metrics、failure evidence 与策略结论尚待真实回读。 |
+| strategy evolution priority | MA_E01_ACTIVE_REAL_RUN | 当前唯一主动主线为 Sector-Conditioned Multi-Alpha Strategy Package v1；等待真实 child 运行期间才允许非阻断价值项并行。 |
+| multi-alpha platform | P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY | durable orchestration、pause/resume/cancel、child retry/results-only、QE 创建器、child/attempt grid、event SSE 和重启 readback 已满足演进；只修复真实 MA-E01 trial 暴露的可复现阻断问题。 |
 | service/runtime restart | MULTI_ALPHA_RECOVERY_BUG867_AND_F014_P2_PHASE4_CONTRACT_ACTIVE | 当前 8001/3000 进程均启动于 2026-07-31 01:55 +08:00；本次文档任务仅观察，未执行进程控制。8001 health 正常并加载 F-014 profile/preview 合同；这不证明完整 runtime/root SHA 对齐或 normal Loop 已执行。R12P 八个待恢复 child 的既有 successor 链完成证据保持不变。 |
 | F-014 CAS | R8B_6_OF_6_PUBLISHED_AND_HASH_VERIFIED | 根目录为 `F:\Dev\AIstock\rdagent_assets\long_trend_evaluation_store`，与 Prediction Store 分离且不在 `E:`；R8B 六个 manifest 及 required artifacts 已完成 hash/size/row-count 回读。 |
 | paper/live trading | NOT_ENABLED | 不属于本规格自动动作。 |
