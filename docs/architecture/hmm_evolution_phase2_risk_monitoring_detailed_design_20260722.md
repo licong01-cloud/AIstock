@@ -3,12 +3,12 @@
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
 - 修订日期：2026-07-31
-- 状态：`B3_FORMAL_EXECUTED_BLOCKED_REMEDIATION_DIAG02_EXECUTED_D1_PROPOSED_NOT_IMPLEMENTATION_READY`
-- 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.14
+- 状态：`B3_FORMAL_EXECUTED_BLOCKED_D1_B_USER_SELECTED_SOURCE_NOT_STARTED_CONTROLLED_REFIT_PENDING`
+- 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.15
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已按历史用户决定固化；Slice 0 B3/L2 retrain、C-009 与 C-010-FORMAL-A 源码均已合入。producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已在冻结 dataset/mapping、两个 family、seeds 42..49 和固定单线程 Conda `AIstock` 数值环境完成两次 fresh-process 正式制备，共 `5184/5184` fits；D5 已按 train-only 合同执行，未读取 validation/future utility，selection 后未 refit。正式 receipt canonical SHA-256=`e7992f87fb555eb26d6c2ef1ad9d45863954edd83fbfcc39f5ae01765cf3939f`，最终 `status=blocked`：只有 `legacy_covfix:L1` 选中 seed 43，且在 D6 因 `801980.SI` 失败；其余三个 family/level 均无 D5 eligible candidate。两 family均 blocked，`ready_artifact_write_performed=false`、model/READY 数量为0、数据库与 runtime均未变化。随后 `C-008-B3-FORMAL-BLOCKER-DIAG-01` 完成348/348 targeted fits与3-entry D6 no-refit replay；`C-008-B3-REMEDIATION-DIAG-02` 又完成324/324 train profiles、163/163 completed entries与11/11 initialization sources的no-fit闭合，producer `b2456424b859f1635635129aa6a826a677f4fdec`、canonical SHA-256=`48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58`。当前D1-A/B、32-fit controlled-refit与D5 19/20维comparability均为proposed；不批准新的模型、优化器、threshold或acceptance，不得运行新fit、selection、D6、model/READY或生产动作。
+- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已按历史用户决定固化；Slice 0 B3/L2 retrain、C-009 与 C-010-FORMAL-A 源码均已合入。producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已在冻结 dataset/mapping、两个 family、seeds 42..49 和固定单线程 Conda `AIstock` 数值环境完成两次 fresh-process 正式制备，共 `5184/5184` fits；D5 已按 train-only 合同执行，未读取 validation/future utility，selection 后未 refit。正式 receipt canonical SHA-256=`e7992f87fb555eb26d6c2ef1ad9d45863954edd83fbfcc39f5ae01765cf3939f`，最终 `status=blocked`：只有 `legacy_covfix:L1` 选中 seed 43，且在 D6 因 `801980.SI` 失败；其余三个 family/level 均无 D5 eligible candidate。两 family均 blocked，`ready_artifact_write_performed=false`、model/READY 数量为0、数据库与 runtime均未变化。随后 `C-008-B3-FORMAL-BLOCKER-DIAG-01` 完成348/348 targeted fits与3-entry D6 no-refit replay；`C-008-B3-REMEDIATION-DIAG-02` 又完成324/324 train profiles、163/163 completed entries与11/11 initialization sources的no-fit闭合，producer `b2456424b859f1635635129aa6a826a677f4fdec`、canonical SHA-256=`48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58`。用户已选择D1-B显式inactive-dimension model identity设计方向，D1-A不采用；源码、32-fit controlled-refit与D5 19/20维comparability仍为独立pending。本次只更新设计与执行优先级，不批准新fit、selection、D6、model/READY或生产动作。
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -1470,9 +1470,10 @@ remediation decision 独立提交详细设计和用户确认，不能在实现�
 5. D6 temporal-evidence remediation：只处理 selected `801980.SI` 的 run/transition/concentration根因；不得改变 hard semantic authority、
    使用 validation reselect、加入 neutral/index/soft fallback，或以两个 control 的通过结果覆盖 failed entry。
 
-上述 decision 当前统一为 `PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`。在任何精确合同获批前，F-011-B/C/D
-保持 blocked，不运行新的完整 grid、不产生 candidate/selection/model/READY。获批后的验证也必须先执行受控诊断验证模型机制，
-正式 grid仍沿用既有执行授权边界；不得把本诊断的348 fits复用为正式 acceptance。
+上述五类remediation中，常量维子问题已选择D1-B设计方向；其源码与controlled-refit仍未授权，其余initialization、likelihood、
+covariance、train-structure与D6 temporal机制继续为`PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`。F-011-B/C/D保持
+blocked，不运行新的完整grid、不产生candidate/selection/model/READY。获批后的验证也必须先执行受控诊断验证模型机制，正式grid
+仍沿用既有执行授权边界；不得把本诊断的348 fits复用为正式acceptance。
 
 #### H. C-008-B3-REMEDIATION-DIAG-02：模型修订前证据闭合设计
 
@@ -1616,13 +1617,13 @@ implementation ready。
 `autocycle_all_core:L2/801207.SI/sf_dispersion_5d_neg`真实sector-local常量维的模型identity语义，在“保持fail-closed”与
 “显式inactive-dimension identity”之间给出完整公式、artifact/hash、runtime parser兼容、false accept/reject和controlled-refit
 验收；不得在该决策中同时修改EM、likelihood tolerance、covariance acceptance、transition/dwell或D4-03/D6 threshold。
-正reference prior仍属于另一个模型机制，不得与inactive dimension捆绑实施。该推荐是待用户确认的设计决策，不是新增模型gate、
-自动淘汰feature或人工runtime审批；在获批前不实施B3、不运行新fit、不选择seed、不生成model/READY。
+正reference prior仍属于另一个模型机制，不得与inactive dimension捆绑实施。用户现已选择D1-B设计方向；该选择不是新增模型gate、
+自动淘汰feature或人工runtime审批，也不授权源码或fit；在后续独立授权前不实施B3、不运行新fit、不选择seed、不生成model/READY。
 
 #### I. C-008-B3-REMEDIATION-D1：sector-local 常量维模型 identity 精确设计
 
-状态：`PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`。本节只形成精确设计选项与受控 refit 合同；不表示用户已选择
-方案、不修改源码、不运行 HMM、不执行 D5/D6、不生成 model/READY。权威证据仅为 REMEDIATION-DIAG-02 producer
+状态：`D1_B_USER_SELECTED_DESIGN_DIRECTION_SOURCE_NOT_STARTED_CONTROLLED_REFIT_PENDING`。用户已选择D1-B并明确不采用D1-A；
+该决定只批准设计方向，不授权源码实现、受控refit、D5/D6或model/READY。权威证据仅为 REMEDIATION-DIAG-02 producer
 `b2456424b859f1635635129aa6a826a677f4fdec`、canonical `48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58`。
 
 **1. 决策对象与非目标。** 当前唯一允许进入D1决策的identity固定为：
@@ -1647,11 +1648,11 @@ KMeans failure，不修改KMeans cluster count、EM、likelihood tolerance、cov
 
 **2. 精确选项。**
 
-- `C-008-B3-REMEDIATION-D1-A`：保持现有fail-closed。优点是model identity、D5 score与runtime parser完全不变；代价是
+- `C-008-B3-REMEDIATION-D1-A`：`NOT_SELECTED`。该方案保持现有fail-closed；优点是model identity、D5 score与runtime parser完全不变；代价是
   `autocycle_all_core:L2/801207.SI`在当前冻结数据和8个restart上持续无法进入fit，family仍blocked。该方案没有伪成功，
   但无法验证常量维显式投影是否能保留其余19维信息。
-- `C-008-B3-REMEDIATION-D1-B`：采用显式inactive-dimension model identity。推荐为
-  `RECOMMENDED_PENDING_USER_APPROVAL`，但只授权后述controlled-refit，不授权formal grid。该方案保持完整20-feature observation与
+- `C-008-B3-REMEDIATION-D1-B`：`RESOLVED_USER_SELECTED_DESIGN_DIRECTION`。采用显式inactive-dimension model identity；当前选择
+  不授权源码、后述controlled-refit或formal grid。该方案保持完整20-feature observation与
   preprocess contract，在model likelihood之前使用显式、hashed projection选择19个active dimensions；不加noise/floor，
   不伪造inactive covariance，不把hidden-state或hard semantic语义改为soft authority。
 
@@ -1835,9 +1836,29 @@ implementation ready。
 - D4各状态独立，0 D5/D6/validation/future utility/model/READY/DB/runtime write；
 - changed-file ownership、`hmm_risk_backend` required plan、F2 validator、scope、Ruff/compile与`git diff --check`。
 
-D1详细设计只有在用户明确选择A或B并批准相应精确合同后才能从proposed转为design-ready。选择B也只使controlled-refit
-implementation-ready；D5 comparability未闭合前仍禁止formal grid/selection/model/READY。该限制是既有D5业务语义的准确边界，
+D1-B设计方向已经用户选择；该状态只允许后续单独申请最小源码实现与controlled-refit执行，不等于源码implementation-ready，
+也不授权fit。D5 comparability未闭合前仍禁止formal grid/selection/model/READY。该限制是既有D5业务语义的准确边界，
 不是新增runtime人工审批。
+
+**9. Evidence-first执行优先级与反过度工程边界。** 完整设计合同不删减，但实现按最短可证伪路径逐步推进；每个slice必须完整实现其
+声明范围、保留typed failure与durable evidence，且不得把局部机制、受控训练或单level结果宣称为family/Phase 2完成。
+
+| 优先级 | 类型 | 任务 | 完成语义与禁止事项 |
+|---|---|---|---|
+| P0 | 设计状态同步 | 记录D1-B为用户已选择方向、D1-A不采用；保持D1-B-REFIT-01和D1-D5-COMPAT-01独立pending | 本文完成；不增加模型完成度，不授权源码或fit |
+| P1 | 最小必要模型基础 | 实现exact-zero authority、固定20→19 projection、identity20 control、projection/candidate receipt、32-attempt聚合状态机与定向测试 | 只支持D1-B因果验证；不得同时实现通用动态mask、任意维度插件、正式mixed-dimension READY writer、runtime/API/UI或调度器 |
+| P2 | 真实受控训练 | 在单独执行授权后运行801207 treatment与801011 control、seeds 42..49、两fresh processes，共32次真实HMM fit | 以真实模型拟合形成mechanism evidence；固定0 D5/D6/validation/model/READY，不构成family或Phase 2完成 |
+| P3 | 模型合同决策 | 根据32-fit evidence闭合`D1-D5-COMPAT-01`的19/20维score可比语义 | evidence不足保持blocked；不得由实现默认19或20、不得validation-driven选择 |
+| P4 | 必要模型制备管线 | 仅在D1-B机制受支持且D5合同获批后，实现完整mixed-dimension level entry、writer/parser same-authority与manifest/hash | 这时才实现最终artifact能力；禁止先造静态model、伪造READY或无真实consumer的通用框架 |
+| P5 | 正式真实训练 | 若依赖仍严格level-local，只重训受影响的`autocycle_all_core:L2`：131 sectors × 8 seeds × 2 fresh processes = 2096 fits | 只有共享KMeans/EM/covariance或公共算法合同变化时才有证据重跑完整5184；不得因便利默认全量重跑 |
+| P6 | 正式模型验收 | 对新`autocycle_all_core:L2`执行D5 train-only selection与唯一selected identity的D6 hard validation | D6失败不得返回D5换seed；不得用单level通过推导family READY |
+| P7 | 其余模型阻塞修复 | 分别处理autocycle L1 `801030.SI`、legacy L2 `801019.SI/801207.SI/801782.SI`及独立likelihood/covariance机制 | 一次只改一个可归因机制；禁止把多类根因塞入“大重构”或放宽统一阈值 |
+| P8 | 完整模型交付 | 四个family/level全部通过，闭合L1 31/31、L2 131/131、parser/hash/causal replay与两family READY | 任一层blocked时READY=0；不得交付autocycle-only、partial family或selected-only artifact |
+| P9 | 产品功能 | 在真实稳定model-set之上依次实现generator/job/repository，再实现真实API/UI，最后评估scheduler/runtime | 不先建设训练平台、通用插件框架、额外DDL、mock UI、静态矩阵或runtime人工审批 |
+
+P1是当前下一项开发，不是“过渡工程”：没有它无法运行可归因的P2真实训练；P4/P9则必须等证据或上游artifact，提前实施会形成
+无真实模型支撑的基础设施。按阶段推进不删除D1 §4/§4.1/§4.2的完整最终合同，只改变何时实现；对应阶段未到时继续保留为
+mandatory deferred contract，而不是optional或简化项。
 
 ### 4.4 InputManifest
 
@@ -2567,7 +2588,9 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-FORMAL-BLOCKER-DIAG-01 | 是否按 formal rejection summaries 对全部 blocker pair 与 deterministic controls 执行两 fresh-process 定向根因诊断 | `VERIFIED_DIAGNOSTIC_COMPLETE_NO_SELECTION_NO_READY` | producer `ac3687c2…`；artifact canonical `10287e84…cffe8`；150 rejected+24 controls、348/348 fits、3-entry D6 no-refit replay闭合，两次payload hash bitwise相同；不选择seed、不改阈值/authority、不写model/READY/DB/runtime |
 | C-008-B3-REMEDIATION-DESIGN | blocker diagnostic后 initialization/likelihood/covariance/train structure/D6 temporal evidence 的模型修订合同 | `PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY` | 诊断证明多阶段、多family/level根因；尚不足以批准具体模型、optimizer、prior、transition/dwell或threshold。五类合同必须分别给出精确公式、成本、false accept/reject与验收证据后由用户确认 |
 | C-008-B3-REMEDIATION-DIAG-02 | 是否在模型修订前执行324-profile variance provenance与163-entry likelihood/covariance/structure no-fit重聚合 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_DIAGNOSTIC_EXECUTED_NO_MODEL_DECISION` | producer `b2456424…fdec`；canonical `48157a42…bb58`；324/324 profiles、163 completed entries、11 initialization sources闭合；唯一zero-variance profile为autocycle L2 `801207.SI/sf_dispersion_5d_neg`且preprocess前后均为0；46个completed entry有train-structure failure、4个sector identity跨8 seed持续失败；6个常量相关向量组显式insufficient。未运行HMM、未访问validation、未执行selection/acceptance、未写model/READY/DB/runtime |
-| C-008-B3-REMEDIATION-D1 | `801207.SI/sf_dispersion_5d_neg`真实sector-local常量维应保持fail-closed还是采用显式inactive-dimension model identity | `PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY` | A保持fail-closed；B显式20→19 inactive-dimension identity，为唯一推荐但仍待用户批准。B保持full20 observation/preprocess，likelihood只用固定active indices；mixed-dimension level/family/READY identity、runtime InputManifest receipt与writer/parser same-authority已精确定义；不静默drop、padding、加floor/噪声或动态激活 |
+| C-008-B3-REMEDIATION-D1 | `801207.SI/sf_dispersion_5d_neg`真实sector-local常量维应保持fail-closed还是采用显式inactive-dimension model identity | `RESOLVED_USER_SELECTED_D1_B_DESIGN_DIRECTION_SOURCE_NOT_STARTED` | 用户选择B、A不采用。B保持full20 observation/preprocess，likelihood只用固定active indices；mixed-dimension level/family/READY identity、runtime InputManifest receipt与writer/parser same-authority已精确定义；选择不授权源码、fit、D5/D6或model/READY |
+| C-008-B3-REMEDIATION-D1-A | 保持现有constant-dimension fail-closed | `NOT_SELECTED` | 保留为决策审计记录；不得与D1-B并行实施或作为运行时fallback |
+| C-008-B3-REMEDIATION-D1-B | 显式20→19 inactive-dimension model identity | `RESOLVED_USER_SELECTED_DESIGN_DIRECTION_SOURCE_NOT_STARTED` | 下一开发仅为exact-zero authority、固定projection、identity20 control与controlled-refit report；正式mixed-dimension artifact/parser/runtime在evidence和D5兼容决策后实施，不建设通用动态维度框架 |
 | C-008-B3-REMEDIATION-D1-B-REFIT-01 | 若选择B，是否按固定treatment/control执行双fresh-process controlled refit | `PROPOSED_PENDING_USER_APPROVAL_NOT_EXECUTED` | 每process固定801207 treatment 8 seeds + 801011 identity20 control 8 seeds，两process共32 fits；control旧payload与两次repeat均须bitwise一致；`diagnostic_complete`与inconclusive/rejected/effect-supported分离，D5 evidence readiness单列；0 D5/D6/validation/model/READY/DB/runtime |
 | C-008-B3-REMEDIATION-D1-D5-COMPAT-01 | inactive dimension后D5 `LL/(N*d_family)`分母与跨sector score如何保持批准语义 | `PROPOSED_PENDING_EVIDENCE_AND_USER_DECISION` | 19会改变已批准D5，20可能产生跨sector偏置；D1 controlled refit不得选择其一或执行D5。该项闭合前禁止formal grid/selection/model/READY |
 
@@ -2579,9 +2602,12 @@ C-008-D1/C-008-B1/C-008-B3-DESIGN 方向已于 2026-07-23 获用户明确批准�
 C-008-B3-STRUCTURAL-A、DIAG-02、D3-01-A、D3-02-B、固定环境 D5-02-B、D7-01-A 与只读 D4-02-DIAG-03；
 2026-07-25 又批准 D3-03-A、D4-01-A、D4-02-A、D4-03-B、D5-01-B、D6-01-B、C-008-B3-D4-L2-AUDIT-01 结论与受控 L2 重训设计方案 A。
 上述设计批准本身不包含B3/L2 retrain源码实现、实际fit、seed selection、model/READY artifact或runtime/database写入；
-随后用户已单独授权并完成本 Slice 0 源码开发，但实际fit及其后续动作仍未执行。
+随后用户另行授权完成Slice 0源码与正式5184-fit执行。该执行已按批准D5/D6 fail closed并保持model/READY、database与runtime零写入，
+不能倒推历史设计批准曾包含执行授权。
 DIAG-02/03/04 的 `formal_acceptance_thresholds_applied=false` 仍是硬边界，
 不得把 diagnostic completion 改写为正式 candidate acceptance。
+C-008-B3-REMEDIATION-D1-B设计方向已于2026-07-31获用户选择；该选择不包含源码、32-fit执行、D5兼容语义、正式grid、
+selection、model/READY或runtime/database动作。后续必须按§4.3.1 I.9的evidence-first顺序单独授权和报告。
 C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
@@ -2611,9 +2637,9 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_remediation_diagnostic,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal canonical `e7992f87…39f`；blocker diagnostic canonical `10287e84…cffe8`；remediation DIAG-02 canonical `48157a42…bb58`；`backend/tests/hmm_risk/{test_b3_training,test_b3_remediation_diagnostic}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE | 两 family均blocked、READY=0；targeted与no-fit diagnostics已完成但未批准任何remediation。下一步只允许先形成D1常量维精确设计决策，不自动改模型/阈值或重跑完整grid |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_remediation_diagnostic,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal canonical `e7992f87…39f`；blocker diagnostic canonical `10287e84…cffe8`；remediation DIAG-02 canonical `48157a42…bb58`；`backend/tests/hmm_risk/{test_b3_training,test_b3_remediation_diagnostic}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE | 两 family均blocked、READY=0；D1-B设计方向已选择但源码与32-fit未授权。下一步只允许按evidence-first顺序实现最小模型机制并执行受控真实训练；D5兼容决策、2096-fit受影响level重训、其余blocker与产品层依次后置，不自动改阈值或重跑完整grid |
 | F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A/C-009/C-010 contracts | `F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_e2c01bae_bug912/c010_formal_preflight.json`；`backend/tests/hmm_risk/test_stock_fact_observation.py` | APPROVED_BY_USER_C010_FORMAL_INPUT_VERIFIED | 601日 formal input与policy identity已通过并进入两个 child；当前blocker属于模型验收，不得回退到删证券/feature或填充缺失值 |
-| F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,b3_remediation_diagnostic,state_model_set}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal rejection summaries；blocker diagnostic canonical `10287e84…cffe8`；remediation DIAG-02 canonical `48157a42…bb58`；`backend/tests/hmm_risk/{test_b3_acceptance,test_b3_remediation_diagnostic}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_D3_D4 | covariance 74、train structure 46、likelihood 29、initialization 11个stage事件；8个persistent zero-variance与3个singleton init failure已区分。DIAG-02进一步闭合唯一zero profile、46个structure failed entry和4个跨8-seed persistent sector identity；D1及其他remediation合同未获批准，不能改阈值、模型或执行新grid |
+| F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,b3_remediation_diagnostic,state_model_set}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal rejection summaries；blocker diagnostic canonical `10287e84…cffe8`；remediation DIAG-02 canonical `48157a42…bb58`；`backend/tests/hmm_risk/{test_b3_acceptance,test_b3_remediation_diagnostic}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_D3_D4 | covariance 74、train structure 46、likelihood 29、initialization 11个stage事件；8个persistent zero-variance与3个singleton init failure已区分。DIAG-02进一步闭合唯一zero profile、46个structure failed entry和4个跨8-seed persistent sector identity；D1-B只完成设计方向选择，源码、32-fit与其他remediation仍未执行，不能改阈值、选择seed或直接运行新formal grid |
 | F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal D5/D6 receipts；blocker diagnostic 3-entry replay canonical `10287e84…cffe8`；`backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_D5_D6 | selection train-only且无refit；D6失败未reselection；`801980.SI` assignment/utility有效但temporal evidence失败；B2不采用，remediation待用户批准 |
 | F-011-D two-family READY | `backend/services/hmm_risk/b3_training.py::write_b3_ready_model_set` | `F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_e2c01bae_bug912/b3_formal_preparation.json` top-level blocked/no-write receipt；`backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_BLOCKED_FORMAL_ACCEPTANCE | READY artifact数为0；四个family/level完整性未成立，禁止partial/single-family write |
 | F-011-E generator/job/revision | `backend/services/hmm_risk/{state_generator,job_service,repository}.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py` | APPROVED_BY_USER_PENDING_IMPLEMENTATION | 用户明确批准 C-008-D1：上游 READY model set 尚未形成，不推导 generator/job 已验证 |
@@ -2812,8 +2838,9 @@ exact fields、mask/rolling 与状态一致性缺口均已修复；这只表示�
   evidence未被压缩。文档明确区分变长numeric tree路径差异与真实 `missing_evidence`，不把150个comparison伪报为证据缺失。
 - **禁止业务逻辑迁移**：`PASS`。执行没有 selection/reselection、acceptance重跑、threshold变更、hard authority变更、model/READY、
   DB或runtime动作；D6失败保持temporal evidence failure，不改写为missing state或utility failure。
-- **禁止未经确认的门禁和审批**：`PASS`。诊断signed distance、matched comparison和分类只形成证据，不成为新gate；五类
-  remediation均明确保持 `PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`，没有自动淘汰family/sector或新增人工运行时审批。
+- **禁止未经确认的门禁和审批**：`PASS`。诊断signed distance、matched comparison和分类只形成证据，不成为新gate；本次诊断
+  执行审核时五类remediation均保持`PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`，之后D1-B才由用户选择；没有自动
+  淘汰family/sector或新增人工运行时审批。
 - **根因结论可区分性**：`PASS`。证据支持“多阶段、多family/level blocker”，并明确不足以批准具体模型机制或阈值；设计没有
   从observed distribution反推新acceptance，也没有把diagnostic completion写成implementation/READY。
 
@@ -2855,14 +2882,14 @@ selection、D6、model/READY、数据库或runtime动作。
 - **禁止业务逻辑迁移**：`PASS`。执行未读取validation/future utility，未重跑acceptance、未选择seed、未改变hard semantic authority，
   未删除feature、降低D4/D6 threshold或生成model/READY。
 - **禁止未经确认的门禁和审批**：`PASS`。variance quantile、correlation和structure persistence仅是描述性证据；未形成新acceptance gate、
-  runtime人工确认或研究方向淘汰。`C-008-B3-REMEDIATION-D1`仍为proposed，必须取得用户精确决策后才能实现。
+  runtime人工确认或研究方向淘汰。该执行审核时`C-008-B3-REMEDIATION-D1`仍为proposed；当前D1-B已由用户选择，但源码与fit仍需独立授权。
 - **交付状态分离**：源码producer已提交、repo外artifact已生成并通过canonical readback；design回填不等于PR已合入，PR合入不等于
   dependency/DDL/DML/runtime已激活。本执行的这些生产gate与runtime动作均为noop。
 
 ### 23.5 C-008-B3-REMEDIATION-D1 正式设计审核
 
-- **头部与父蓝图漂移**：`RESOLVED`。详细设计已更新修订日期、非implementation-ready状态与父蓝图v2.14；同PR同步父蓝图的
-  DIAG-02执行事实、D1 proposed状态、P2计划、F-011证据和版本历史。
+- **头部与父蓝图漂移**：`RESOLVED`。详细设计已更新修订日期、D1-B已选择但source未开始状态与父蓝图v2.15；同PR同步父蓝图的
+  DIAG-02执行事实、D1-B选择、evidence-first P2计划、F-011证据和版本历史。
 - **mixed-dimension aggregate缺口**：`RESOLVED`。已定义131-entry独立model entries、唯一19维allowlist、dimension histogram、
   ordered list hash、level/family/READY identity、writer/parser same-authority与禁止padding；D5未闭合前仍禁止写正式artifact。
 - **controlled-refit结论缺口**：`RESOLVED`。`diagnostic_complete`已与inconclusive/rejected/effect-supported分离，并单列
@@ -2870,8 +2897,9 @@ selection、D6、model/READY、数据库或runtime动作。
 - **canonical set hash缺口**：`RESOLVED`。两个8-entry set固定seed排序、三字段object和canonical JSON list envelope，可独立重算。
 - **runtime receipt缺口**：`RESOLVED`。inactive observation已绑定versioned receipt、dedupe key、InputManifest/daily-run hash lineage、
   conflict/replay语义；finite非零只记录，不动态激活或私增gate。
-- **完整性审核**：`PASS_FOR_USER_DECISION_NOT_IMPLEMENTATION_READY`。A/B选项、exact allowlist、20→19 projection、full preprocess先行、
-  artifact/parser/runtime、D4独立状态、32-fit treatment/control、reason codes与验证矩阵均已定义；没有把“drop一列”冒充完整实现。
+- **完整性审核**：`PASS_D1_B_USER_SELECTED_SOURCE_NOT_STARTED`。A/B选项、exact allowlist、20→19 projection、full preprocess先行、
+  artifact/parser/runtime、D4独立状态、32-fit treatment/control、reason codes与验证矩阵均已定义；用户已选择B，但没有把“drop一列”
+  或设计选择冒充完整实现。
 - **D5兼容缺口**：`BLOCKED_EXPLICITLY_NOT_SILENT`。审核确认inactive dimension会使`d_family=20`与`d_effective=19`产生真实score
   comparability决策；设计已拆出`D1-D5-COMPAT-01`，controlled-refit固定0 selection。未由实现默认选择19或20，也未把局部fit
   改写为full-grid ready。
@@ -2881,13 +2909,29 @@ selection、D6、model/READY、数据库或runtime动作。
   均fail closed；没有noise/floor、伪inactive covariance、identity fallback或dynamic activation。
 - **禁止业务逻辑迁移**：`PASS`。global 20-feature observation/preprocess contract、两个family、31/131完整性、hard semantic authority、
   D3/D4 thresholds与D6保持不变；B2仍NOT_APPROVED。runtime对inactive维的“不参与likelihood”由model identity显式持久化，不是隐藏fallback。
-- **禁止未经确认的门禁和审批**：`PASS`。A/B、controlled-refit和D5 comparability均保持proposed；未增加runtime人工确认、feature
-  淘汰审批或研究准入gate。exact allowlist是本次证据范围，不是动态业务门禁。
+- **禁止未经确认的门禁和审批**：`PASS`。A/B方向已由用户选择B；controlled-refit和D5 comparability仍保持pending。未增加runtime
+  人工确认、feature淘汰审批或研究准入gate。exact allowlist是本次证据范围，不是动态业务门禁。
 - **因果可区分性**：`PASS`。identity20 control必须与旧payload bitwise一致；treatment只改变projection，禁止同时改EM/covariance/
   transition/threshold。即使treatment通过，也只证明该mechanism可进入下一项设计证据，不证明family candidate或READY。
 
-综合审核结论：`PASS_PROPOSED_D1_B_CONTROLLED_REFIT_DESIGN_PENDING_USER_DECISION_D5_COMPAT_BLOCKED`。唯一推荐为D1-B，
-但用户尚未批准A/B选择、32-fit执行或D5 score语义；因此不得实施源码、运行fit或进入formal grid。
+综合审核结论：`PASS_D1_B_USER_SELECTED_SOURCE_NOT_STARTED_CONTROLLED_REFIT_PENDING_D5_COMPAT_BLOCKED`。用户已选择D1-B、
+D1-A不采用；源码、32-fit执行和D5 score语义仍未获授权，因此不得由本次文档修订实施源码、运行fit或进入formal grid。
+
+### 23.6 D1-B evidence-first优先级修订正式审核
+
+- **禁止简化/子集/POC**：`PASS`。P1与P2分别是完整的最小模型机制和真实受控训练，不是Phase 2交付声明；P4～P9的
+  mixed-dimension artifact、正式训练、两family READY和产品功能合同均保留为mandatory deferred contract，没有从蓝图删除。
+- **禁止静默错误**：`PASS`。P1必须实现全部authority/hash/shape/control/repeat/aggregate typed failure；P2任一attempt均形成durable
+  terminal evidence。blocked、inconclusive或failed不得转成warning success，D5 19/20不得由实现默认。
+- **禁止业务逻辑迁移**：`PASS`。两family、L1/L2完整性、hard semantic authority、D3/D4/D5/D6公式和validation边界均不变；
+  evidence-first只调整实施时间，不改变业务验收语义。
+- **禁止未经确认的门禁和审批**：`PASS`。没有新增runtime人工确认、research淘汰或发布门禁；源码、32-fit、D5兼容、正式训练和
+  PR merge继续作为彼此独立的既有授权/状态边界准确报告。
+- **反过度工程**：`PASS`。当前不实现通用动态维度框架、训练平台、调度器、额外DDL、API/UI或伪造READY；P4/P9仅在真实
+  上游证据和consumer存在后实施。仅受影响level的2096-fit重训由明确level-local依赖支持，公共算法变化时才允许升级为5184全量。
+
+综合审核结论：`PASS_D1_B_EVIDENCE_FIRST_PRIORITY_COMPLETE_NO_SIMPLIFIED_DELIVERY`。本结论只批准文档中的任务排序，未授权源码、fit、
+selection、model/READY、数据库、依赖或runtime动作。
 
 ## 24. 当前完成状态与下一步
 
@@ -2919,8 +2963,11 @@ formal input/policy 已验证，F-011-B/C/D 分别 blocked 于 D3/D4、D5/D6 与
 4个跨8-seed persistent sector identity与6个statistic-insufficient groups均保留exact evidence。执行没有HMM refit、validation、
 acceptance、selection、threshold/authority变更、model/READY、数据库或runtime动作。
 
-下一步不是再次运行完整5184 grid，也不是直接修改阈值或模型。`C-008-B3-REMEDIATION-D1`精确设计与正式审核已完成，当前等待用户
-在A“保持fail-closed”与B“显式inactive-dimension identity”之间决策；唯一推荐为B。若选择B，还需用户单独批准32-fit
-controlled-refit；该执行固定0 D5/D6/validation/model/READY。D5的19/20维score comparability继续由
-`D1-D5-COMPAT-01`显式blocked，不能由实现猜测。在A/B与controlled-refit取得批准前，不实施B3、不运行新fit、不选择seed、
-不生成model/READY。当前revision的DDL/DML、依赖、runtime、数据库、model/READY与客户端同步均为`noop`，PR merge仍等待用户单独确认。
+用户已选择B“显式inactive-dimension identity”，A“保持fail-closed”不采用；该决定不提升F-011完成计数。下一步不是再次运行完整
+5184 grid，而是单独获权后先实现P1最小必要模型机制，再单独获权运行P2的32-fit真实controlled-refit；该执行固定0
+D5/D6/validation/model/READY。D5的19/20维score comparability继续由`D1-D5-COMPAT-01`显式blocked，不能由实现猜测。
+
+若机制证据支持且D5兼容合同获批，才实现P4正式mixed-dimension artifact/parser，并在level-local依赖不变时执行P5的
+`autocycle_all_core:L2` 2096-fit正式重训；公共KMeans/EM/covariance或算法合同变化时才允许完整5184重跑。之后依次执行D5/D6、
+逐项修复其余persistent blocker、闭合两family READY，最终才实现generator/job/repository/API/UI/runtime。任何P1～P7局部结果都不得
+冒充family/Phase 2完成。当前revision的DDL/DML、依赖、runtime、数据库、model/READY与客户端同步均为`noop`，PR merge仍等待用户单独确认。
