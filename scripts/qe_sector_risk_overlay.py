@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +11,7 @@ import pandas as pd
 
 SUPPORTED_MODES = {"none", "entry_gate", "bounded_de_risk", "exit_reentry"}
 SUPPORTED_STATES = {"NORMAL", "CAUTION", "HIGH", "CRITICAL", "UNMAPPED", "INCOMPLETE"}
+MISSING_ARTIFACT_ROW = "MISSING_ARTIFACT_ROW"
 REQUIRED_COLUMNS = {
     "signal_date",
     "effective_trade_date",
@@ -67,6 +69,16 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _manifest_date(manifest, field: str) -> pd.Timestamp:
+    raw = manifest.get(field)
+    if not isinstance(raw, str) or not raw.strip():
+        raise RuntimeError(f"QE sector-risk manifest requires a valid {field} date")
+    try:
+        return pd.Timestamp(date.fromisoformat(raw.strip()))
+    except ValueError as exc:
+        raise RuntimeError(f"QE sector-risk manifest requires a valid {field} date") from exc
+
+
 class QESectorRiskOverlayPolicy:
     """Validated, deterministic stock-date sector-risk policy."""
 
@@ -112,6 +124,11 @@ class QESectorRiskOverlayPolicy:
         self.manifest = None
         self.frame = pd.DataFrame()
         self._lookup = None
+        self._output_start = None
+        self._output_end = None
+        self._runtime_dates = frozenset()
+        self._instrument_date_bounds = {}
+        self._missing_row_events = {}
         if self.enabled:
             self._load(manifest_file=manifest_file, data_file=data_file)
 
@@ -127,6 +144,10 @@ class QESectorRiskOverlayPolicy:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("schema_version") != "qe_sector_risk_overlay_manifest_v1":
             raise RuntimeError(f"invalid QE sector-risk manifest schema: {manifest.get('schema_version')}")
+        output_start = _manifest_date(manifest, "output_start")
+        output_end = _manifest_date(manifest, "output_end")
+        if output_start > output_end:
+            raise RuntimeError("QE sector-risk manifest output_start must not exceed output_end")
         runtime_meta = (manifest.get("artifacts") or {}).get("runtime") or {}
         expected_hash = str(runtime_meta.get("sha256") or "")
         actual_hash = _sha256(data_path)
@@ -150,11 +171,24 @@ class QESectorRiskOverlayPolicy:
             raise RuntimeError(f"QE sector-risk runtime contains unknown states: {sorted(unknown_states)}")
         if frame.duplicated(["effective_trade_date", "instrument"]).any():
             raise RuntimeError("QE sector-risk runtime contains duplicate effective stock-date keys")
+        outside_domain = ~frame["effective_trade_date"].between(output_start, output_end)
+        if outside_domain.any():
+            raise RuntimeError("QE sector-risk runtime contains rows outside the manifest date domain")
         frame = frame.sort_values(["effective_trade_date", "instrument"], kind="mergesort")
         self._attach_reentry_ready(frame)
         self.manifest = manifest
         self.frame = frame
         self._lookup = frame.set_index(["effective_trade_date", "instrument"], verify_integrity=True)
+        self._output_start = output_start
+        self._output_end = output_end
+        self._runtime_dates = frozenset(frame["effective_trade_date"].unique())
+        bounds = frame.groupby("instrument", sort=False, observed=True)["effective_trade_date"].agg(
+            ["min", "max"]
+        )
+        self._instrument_date_bounds = {
+            str(instrument): (pd.Timestamp(row["min"]), pd.Timestamp(row["max"]))
+            for instrument, row in bounds.iterrows()
+        }
 
     def _attach_reentry_ready(self, frame: pd.DataFrame) -> None:
         sector_daily = frame.loc[frame["l2_code_id"].ge(0), ["effective_trade_date", "l2_code_id", "risk_state"]]
@@ -193,10 +227,63 @@ class QESectorRiskOverlayPolicy:
             return self._lookup.loc[key]
         except KeyError:
             if self.strict:
-                raise RuntimeError(
-                    f"QE sector-risk runtime has no row for trade_date={key[0].date()} instrument={key[1]}"
+                if not self._output_start <= key[0] <= self._output_end:
+                    raise RuntimeError(
+                        "QE sector-risk runtime lookup is outside the manifest date domain: "
+                        f"trade_date={key[0].date()} instrument={key[1]} "
+                        f"domain={self._output_start.date()}..{self._output_end.date()}"
+                    )
+                if key[0] not in self._runtime_dates:
+                    raise RuntimeError(
+                        "QE sector-risk runtime lookup date is absent from the artifact trading calendar: "
+                        f"trade_date={key[0].date()} instrument={key[1]}"
+                    )
+                instrument_bounds = self._instrument_date_bounds.get(key[1])
+                if instrument_bounds is None:
+                    raise RuntimeError(
+                        "QE sector-risk runtime lookup instrument is absent from the artifact: "
+                        f"trade_date={key[0].date()} instrument={key[1]}"
+                    )
+                instrument_start, instrument_end = instrument_bounds
+                if not instrument_start <= key[0] <= instrument_end:
+                    raise RuntimeError(
+                        "QE sector-risk runtime lookup is outside the instrument coverage domain: "
+                        f"trade_date={key[0].date()} instrument={key[1]} "
+                        f"domain={instrument_start.date()}..{instrument_end.date()}"
+                    )
+                event = {
+                    "trade_date": str(key[0].date()),
+                    "instrument": key[1],
+                    "risk_state": "UNMAPPED",
+                    "source_status": MISSING_ARTIFACT_ROW,
+                    "instrument_coverage_start": str(instrument_start.date()),
+                    "instrument_coverage_end": str(instrument_end.date()),
+                }
+                self._missing_row_events[key] = event
+                return pd.Series(
+                    {
+                        "signal_date": pd.NaT,
+                        "effective_trade_date": key[0],
+                        "instrument": key[1],
+                        "l2_code_id": -1,
+                        "risk_score": float("nan"),
+                        "risk_state": "UNMAPPED",
+                        "rs_turn_risk": float("nan"),
+                        "breadth_deterioration": float("nan"),
+                        "flow_divergence_risk": float("nan"),
+                        "leadership_concentration": float("nan"),
+                        "vol_crowding_risk": float("nan"),
+                        "reentry_ready": True,
+                        "source_status": MISSING_ARTIFACT_ROW,
+                    }
                 )
             return None
+
+    def missing_row_events(self):
+        return tuple(
+            dict(self._missing_row_events[key])
+            for key in sorted(self._missing_row_events)
+        )
 
     def state(self, instrument, trade_date) -> str:
         row = self.row(instrument, trade_date)

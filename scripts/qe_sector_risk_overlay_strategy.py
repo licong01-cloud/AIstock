@@ -54,6 +54,7 @@ class _QESectorRiskOverlayMixin:
             self._qe_sector_risk_action_log.parent.mkdir(parents=True, exist_ok=True)
             self._qe_sector_risk_action_log.touch(exist_ok=True)
         self._qe_sector_risk_action_keys = set()
+        self._qe_sector_risk_missing_action_keys = set()
         self._qe_sector_risk_last_multiplier = {}
         self._qe_sector_risk_base_weights = {}
 
@@ -77,6 +78,22 @@ class _QESectorRiskOverlayMixin:
         with self._qe_sector_risk_action_log.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
             handle.flush()
+
+    def _record_missing_sector_risk_rows(self):
+        for event in self._qe_sector_risk_policy.missing_row_events():
+            key = (str(event["trade_date"]), str(event["instrument"]))
+            if key in self._qe_sector_risk_missing_action_keys:
+                continue
+            self._qe_sector_risk_missing_action_keys.add(key)
+            self._record_sector_risk_action(
+                {
+                    **event,
+                    "action_type": "MISSING_ARTIFACT_ROW",
+                    "target_multiplier": 1.0,
+                    "order_generated": False,
+                    "reason": "sector_risk_runtime_missing_artifact_row_neutral",
+                }
+            )
 
     def _normalize_signal_scores(self, all_pred_scores, pred_end_time):
         scores = super()._normalize_signal_scores(all_pred_scores, pred_end_time)
@@ -103,6 +120,7 @@ class _QESectorRiskOverlayMixin:
                         "reason": "sector_risk_entry_not_allowed",
                     }
                 )
+        self._record_missing_sector_risk_rows()
         return scores.drop(blocked, errors="ignore") if blocked else scores
 
     def _adjust_target_weight_map(self, weight_map, trade_start_time):
@@ -110,11 +128,13 @@ class _QESectorRiskOverlayMixin:
         self._qe_sector_risk_base_weights = dict(base)
         if not self._qe_sector_risk_policy.enabled:
             return base
-        return {
+        adjusted = {
             instrument: float(weight)
             * self._qe_sector_risk_policy.multiplier(instrument, trade_start_time)
             for instrument, weight in base.items()
         }
+        self._record_missing_sector_risk_rows()
+        return adjusted
 
     def _round_amount(self, amount, *, factor, instrument, trade_start_time, trade_end_time):
         unit = self.trade_exchange.get_amount_of_trade_unit(
@@ -286,6 +306,7 @@ class _QESectorRiskOverlayMixin:
                     }
                 )
             self._qe_sector_risk_last_multiplier[instrument] = multiplier
+        self._record_missing_sector_risk_rows()
         return orders
 
 

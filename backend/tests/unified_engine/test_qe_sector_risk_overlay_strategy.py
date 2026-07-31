@@ -68,29 +68,62 @@ def _load_strategy_module(monkeypatch):
     return module, OrderDir
 
 
-def _artifact(tmp_path, state="HIGH"):
+def _artifact(tmp_path, state="HIGH", include_gap_instrument=False):
     data_path = tmp_path / "runtime.parquet"
-    frame = pd.DataFrame(
-        [
+    rows = [
+        {
+            "signal_date": pd.Timestamp("2026-01-04"),
+            "effective_trade_date": pd.Timestamp("2026-01-05"),
+            "instrument": "000001.SZ",
+            "l2_code_id": 1,
+            "risk_score": 0.85,
+            "risk_state": state,
+            "rs_turn_risk": 0.8,
+            "breadth_deterioration": 0.8,
+            "flow_divergence_risk": 0.8,
+            "leadership_concentration": 0.8,
+            "vol_crowding_risk": 0.8,
+        }
+    ]
+    if include_gap_instrument:
+        for effective_date in ("2026-01-05", "2026-01-07"):
+            rows.append(
+                {
+                    "signal_date": pd.Timestamp(effective_date) - pd.offsets.BDay(1),
+                    "effective_trade_date": pd.Timestamp(effective_date),
+                    "instrument": "603227.SH",
+                    "l2_code_id": 2,
+                    "risk_score": 0.40,
+                    "risk_state": "NORMAL",
+                    "rs_turn_risk": 0.4,
+                    "breadth_deterioration": 0.4,
+                    "flow_divergence_risk": 0.4,
+                    "leadership_concentration": 0.4,
+                    "vol_crowding_risk": 0.4,
+                }
+            )
+        rows.append(
             {
-                "signal_date": pd.Timestamp("2026-01-04"),
-                "effective_trade_date": pd.Timestamp("2026-01-05"),
-                "instrument": "000001.SZ",
-                "l2_code_id": 1,
-                "risk_score": 0.85,
-                "risk_state": state,
-                "rs_turn_risk": 0.8,
-                "breadth_deterioration": 0.8,
-                "flow_divergence_risk": 0.8,
-                "leadership_concentration": 0.8,
-                "vol_crowding_risk": 0.8,
+                "signal_date": pd.Timestamp("2026-01-05"),
+                "effective_trade_date": pd.Timestamp("2026-01-06"),
+                "instrument": "000002.SZ",
+                "l2_code_id": 3,
+                "risk_score": 0.40,
+                "risk_state": "NORMAL",
+                "rs_turn_risk": 0.4,
+                "breadth_deterioration": 0.4,
+                "flow_divergence_risk": 0.4,
+                "leadership_concentration": 0.4,
+                "vol_crowding_risk": 0.4,
             }
-        ]
-    )
+        )
+    frame = pd.DataFrame(rows)
     frame.to_parquet(data_path, index=False)
     manifest = {
         "schema_version": "qe_sector_risk_overlay_manifest_v1",
         "dataset_identity": "fixture-v1",
+        "output_start": "2026-01-05",
+        "output_end": "2026-01-09",
         "artifacts": {
             "runtime": {"sha256": hashlib.sha256(data_path.read_bytes()).hexdigest()}
         },
@@ -133,6 +166,45 @@ def test_entry_gate_uses_effective_trade_date_not_prediction_date(tmp_path, monk
     event = json.loads(action_log.read_text(encoding="utf-8").strip())
     assert event["trade_date"] == "2026-01-05"
     assert event["action_type"] == "ENTRY_BLOCK"
+
+
+def test_entry_gate_keeps_in_domain_missing_row_and_records_neutral_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    module, _ = _load_strategy_module(monkeypatch)
+    manifest_path, data_path = _artifact(tmp_path, include_gap_instrument=True)
+
+    class Base:
+        def __init__(self, **kwargs):
+            self.trade_position = types.SimpleNamespace(get_stock_list=lambda: [])
+            self._qe_suspend_filter_trade_time = pd.Timestamp("2026-01-06")
+
+        def _normalize_signal_scores(self, scores, pred_end_time):
+            return scores
+
+    class Strategy(module._QESectorRiskOverlayMixin, Base):
+        pass
+
+    action_log = tmp_path / "missing_actions.jsonl"
+    strategy = Strategy(
+        sector_risk_overlay_enabled=True,
+        sector_risk_overlay_mode="entry_gate",
+        sector_risk_overlay_manifest_file=manifest_path,
+        sector_risk_overlay_data_file=data_path,
+        sector_risk_overlay_action_log=action_log,
+    )
+    scores = strategy._normalize_signal_scores(
+        pd.Series([1.0], index=["603227.SH"]),
+        pd.Timestamp("2026-01-05"),
+    )
+
+    assert list(scores.index) == ["603227.SH"]
+    event = json.loads(action_log.read_text(encoding="utf-8").strip())
+    assert event["action_type"] == "MISSING_ARTIFACT_ROW"
+    assert event["source_status"] == "MISSING_ARTIFACT_ROW"
+    assert event["risk_state"] == "UNMAPPED"
+    assert event["target_multiplier"] == 1.0
+    assert event["order_generated"] is False
 
 
 def test_bounded_de_risk_emits_factor_and_lot_aware_partial_sell(tmp_path, monkeypatch) -> None:
