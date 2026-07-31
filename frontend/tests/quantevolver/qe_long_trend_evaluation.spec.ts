@@ -362,7 +362,7 @@ test("QE Archive uses business search selectors, one outcome vintage and readabl
             dimension_json: { slice: "all_oos", horizon: 60 },
             value_num: 0.1234,
             value_json: { icir: 0.5 },
-            quality_flag: "complete",
+            quality_flag: "ok",
           }],
           next_cursor: null,
           limit: 100,
@@ -402,6 +402,7 @@ test("QE Archive uses business search selectors, one outcome vintage and readabl
   await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("LGBM");
   await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("123");
   await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("42");
+  await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("证据完整");
   await expect(page.getByTestId("qe-long-trend-archive-table")).not.toContainText("qear_run_fixture");
   const query = new URL(qualityUrl).searchParams;
   expect(query.get("task_id")).toBe("qe_long_trend_ui_task");
