@@ -6586,6 +6586,16 @@ def test_close_sync_worktree_fast_forwards_clean_stale_reuse(
         "_git",
         lambda args, cwd=None, check=True: calls.append((args, cwd)) or "",
     )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, cwd=None, **kwargs: {
+            "ok": args[-2:] == ["HEAD", "origin/main"],
+            "returncode": 0 if args[-2:] == ["HEAD", "origin/main"] else 1,
+            "stdout": "",
+            "stderr": "",
+        },
+    )
 
     payload = workflow._maybe_create_close_sync_worktree(
         bug_id="BUG-199",
@@ -6596,6 +6606,57 @@ def test_close_sync_worktree_fast_forwards_clean_stale_reuse(
     assert payload["reused"] is True
     assert payload["fast_forwarded"] is True
     assert (["merge", "--ff-only", "origin/main"], registry) in calls
+
+
+def test_close_sync_worktree_reuses_clean_ahead_branch_after_push_failure(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "worktrees" / "BUG-199-close-sync"
+    registry.mkdir(parents=True)
+    git_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        workflow,
+        "_close_sync_worktree_names",
+        lambda bug_id: ("chore/BUG-199-close-sync", registry),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "chore/BUG-199-close-sync",
+            "dirty": False,
+            "dirty_count": 0,
+            "head": "task-commit",
+            "origin_main": "main-commit",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, cwd=None, **kwargs: {
+            "ok": args[-2:] == ["origin/main", "HEAD"],
+            "returncode": 0 if args[-2:] == ["origin/main", "HEAD"] else 1,
+            "stdout": "",
+            "stderr": "",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, cwd=None, check=True: git_calls.append(args) or "",
+    )
+
+    payload = workflow._maybe_create_close_sync_worktree(
+        bug_id="BUG-199",
+        create=True,
+        dry_run=False,
+    )
+
+    assert payload["reused"] is True
+    assert payload["ahead_with_task_commits"] is True
+    assert not any(args[:2] == ["merge", "--ff-only"] for args in git_calls)
 
 
 def test_pr_check_summary_treats_skipped_as_non_blocking() -> None:
