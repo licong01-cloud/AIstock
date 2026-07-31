@@ -5,7 +5,7 @@
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父设计：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`
 > 上游交付：R1 contracts/schema/repository、R2 candidate adapter、R3 ordered day executor、R4 outcome/summary/retrospective SEALED bridge
-> 当前状态：`implementation_verified_except_external_f760_e2e`
+> 当前状态：`implementation_and_runtime_e2e_verified`
 > 研究边界：`HISTORICAL_RANGE_RESEARCH`、`RETROSPECTIVE_RESEARCH_ONLY`、`execution_prohibited=true`
 
 ## 1. 背景与当前事实
@@ -794,10 +794,10 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 | F-757 | no DDL；R1-R4 execution algorithms 不变；共享 operation 状态机仅 additive 增加 typed pre-claim `QUEUED -> RETRYABLE_FAILED`，不伪造 attempt | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `git diff --check` | verified | none |
 | F-758 | READ ONLY REPEATABLE READ queries and resource-specific keysets | `backend/tests/advisory_historical_range/test_r5_query_repository.py` | verified | none |
 | F-759 | responsive evidence UI and typed Dataset bridge receipt readback | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` covers SEALED/VALID_EMPTY and 375/768/1440 widths | verified | none |
-| F-760 | guarded PostgreSQL/UI E2E entrypoints only | `backend/tests/advisory_historical_range/test_r5_postgres_e2e.py` skipped; explicit configuration probe found all seven required roots absent | blocked_external_configuration | incomplete: single-Alpha/native-multi create/resume/query/outcome/summary/bridge mutation E2E and UI readback cannot run without explicit roots; no acceptance exception has been granted |
+| F-760 | 单 Alpha 与原生多 Alpha 共存的真实 API/UI E2E | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts`；artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 第 24 节；生产 batch `ahrb_dccde5770463663ecbde96fbe304cd26` 与 operation `ahrop_c8a5b7e09cc1edae2ea43f208ab2e26b` | verified_runtime_e2e | none |
 | F-761 | `scripts/aistock_feature_workflow.py` and this reconciled matrix | validation-receipt: `aistock_feature_workflow F2` final local gate | verified | none |
 | F-762 | this design and PR acceptance evidence | artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` | verified | none |
-| F-763 | parent design plus this matrix | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`; F-740-F-762 audit | incomplete_dependency | Phase 1R completion must not be claimed while F-760 remains incomplete; no acceptance exception has been granted |
+| F-763 | parent design plus this matrix | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`；artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 第 24 节；F-740-F-762 | verified_phase1r_complete | none |
 
 ## 21. DESIGN-COMPLIANCE-001 设计复核
 
@@ -857,6 +857,34 @@ PASS_DESIGN。没有角色、审批、双人复核、package 二次验证、最�
 
 ## 23. 当前结论
 
-R5 源码已按 R5-A 至 R5-D 落地，并通过变更模块、直接依赖、TypeScript、Playwright、所有权、guardrail 和静态合同验证。实现保持 R1-R4、Selection、当前 Advisory、Paper、Simulation、QE/Qlib/QMT 隔离；没有 DDL/DML、服务重启、runtime activation、角色、审批或额外业务门禁。
+R5 源码已按 R5-A 至 R5-D 落地，并通过变更模块、直接依赖、TypeScript、Playwright、所有权、guardrail、静态合同和真实 runtime E2E。实现保持 R1-R4、Selection、当前 Advisory、Paper、Simulation、QE/Qlib/QMT 隔离；没有 DDL、角色、审批或额外业务门禁。生产 runtime 仅在用户完成服务重启后执行显式历史研究命令，未建立 scheduler 或自动运行入口。
 
-F-760 所要求的单 Alpha 与原生多 Alpha 真实 mutation E2E 和 UI readback 仍因七个显式 roots 未配置而未执行，F-763 因此保持未完成。当前不得声明 R5、Phase 1R 或合入验收完成，也不得以 mock、只读 smoke 或文字状态替代该证据；后续必须提供明确 roots 并完成真实 E2E，或由用户明确批准对应验收例外。
+F-760 与 F-763 已由第 24 节真实证据闭合。R5 和 Phase 1R 可以声明完成；该结论严格限定于历史范围研究、Outcome/Summary、retrospective bridge、API/UI 和 legacy 主流程 cutover，不包含 Phase 0B、模型训练、Top5 重排、预期收益、持股周期或买入/止盈/止损区间能力。
+
+## 24. 2026-07-31 Runtime E2E 验收
+
+### 24.1 权威输入与业务范围
+
+- 生产历史 batch：`ahrb_dccde5770463663ecbde96fbe304cd26`。
+- 两个独立 Program：一个 `single_alpha`、一个原生 `multi_alpha` 父包；各完成 15 个交易日，共 30/30 package-day，0 个失败日。
+- Dataset Bridge 请求范围：两个 run、`requested_horizons=[1]`、`requested_maturity_statuses=[COMPLETE]`、batch row version `57`。
+- 七个显式 runtime roots 由已有冻结 artifact、calculation-evidence、policy-component 与 dataset CAS 身份反查闭合；数据库连接继续使用 `.env` 的既有 `TDX_DB_*`，未猜测 DSN。
+
+### 24.2 Bridge、lease 与 exact retry
+
+- 首次 post-restart operation `ahrop_7b458ceeedf049441428c5ee59fb844a` 因 calculation-evidence/dataset/policy root 漂移以 typed `FAILED` 结束；执行前后 Outcome、Summary、Observation、Label、Build、Snapshot 计数均不变，失败 receipt 保留，未删除或改写历史事实。
+- 配置纠正并由用户重启后，operation `ahrop_c8a5b7e09cc1edae2ea43f208ab2e26b` 使用唯一 attempt 完成：父 row version `2 -> 3 -> 4 -> 5`；child terminal 与 parent receipt 发布后的两次 heartbeat 分别续期，整个执行过程 `lease_expired=false`。
+- 最终状态为 `COMPLETED/SEALED`，result hash `a32317c707c43bf4e7da0ac6b6005e7907efabf69aea6551657098400082b51b`，build `advbuild_973b1a4ce8f3466874c05592`，snapshot `advsnap_9faa542fd165be6131715125`。
+- 相同幂等键重放返回 `exact_retry=true`、`dispatch_state=NOT_SCHEDULED`，operation id、row version `5`、attempt `1`、result hash 全部不变。
+
+### 24.3 数据幂等与 UI readback
+
+- Outcome `32,549`、Summary `4`、Observation `673`、Label `2,686` 在执行前后不变；新显式 bridge 命令形成一个新的内容闭合 Build/Snapshot，最终为 Build `6`、Snapshot `4`、blob ref `96`，没有重复信号或标签事实。
+- 真实页面从 `http://127.0.0.1:3000/paper-v2/advisory?view=historical-range` 读取同一生产 batch；1440x900 与 375x812 均显示单/多 Alpha、`SEALED` 和 `advsnap_9faa542fd165be6131715125`，console error 为 0，document body overflow 为 false。
+- batch 中 2026-07-25 形成的一条既有 `REFRESH_OUTCOMES/QUEUED` operation 未由本轮创建、修改或伪造终态；它作为独立历史诊断事实保留，不改变本轮 bridge 验收结论。
+
+### 24.4 生产影响边界
+
+- `production_ddl_gate=noop`；无 DDL、依赖安装、Selection/Paper/Simulation/QE/QMT 写入或交易能力变化。
+- 生产 DML 仅来自用户授权的显式 R5 Dataset Bridge operation 及其正式 R4 retrospective Build/Snapshot 状态机。
+- Phase 0B 和后续模型阶段仍未启动，不得从本节推导任何用户可见模型 capability。

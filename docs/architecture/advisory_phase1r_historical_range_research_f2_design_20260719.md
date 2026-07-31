@@ -5,7 +5,7 @@
 > 文档类型：F2 实施级详细设计，`docs-fast-new`
 > 父级权威：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父级验收映射：父蓝图 Phase 1R 的五项稳定验收要求
-> 当前状态：`r1_through_r4_merged_production_historical_e2e_accepted_r5_design_reviewed_ready`；R1-R3 已完成 contracts、候选计算、历史 PIT adapter、逐日列表执行和单/原生多 Alpha 15 日 E2E。R4 已按 `docs/architecture/advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md` 完整实现并由 PR `#2792` 合入（merge commit `f7cf3fb3c3e7417236671e1bef3cdb1f8a124ab9`），BUG close-sync 已由 PR `#2793` 合入（merge commit `81de5f93b8e7326ad9cd13ed2cb520c66847d321`）；DEV/production schema、32,549 条 outcome、4 个 summary、2 个非空 SEALED snapshot、360 条 source correction 和 exact retry 已验证。当前唯一下一实施批次为 R5 API/UI/legacy cutover，详细设计 `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 已完成正式审核；R5 源码、真实 API/UI E2E 和 runtime activation 尚未完成，完整 Phase 1R 尚未完成
+> 当前状态：`phase1r_complete_runtime_e2e_accepted`；R1-R3 已完成 contracts、候选计算、历史 PIT adapter、逐日列表执行和单/原生多 Alpha 15 日 E2E。R4 已完成 DEV/production schema、32,549 条 outcome、4 个 summary、source correction、retrospective SEALED snapshot 和 exact retry。R5 已由 PR `#2809` 合入 typed API/UI 与 legacy cutover，并在 2026-07-31 使用生产 batch `ahrb_dccde5770463663ecbde96fbe304cd26` 完成 post-restart Dataset Bridge、父级双 heartbeat、`SEALED`、相同幂等键 `NOT_SCHEDULED` 重放及桌面/移动真实 UI readback。Phase 1R 已闭合；Phase 0B 模型价值审计和后续模型能力仍是独立未完成阶段
 > 研究边界：学术历史研究，`execution_prohibited=true`，不产生订单、仓位或交易执行输入
 
 ## 1. 背景与设计结论
@@ -1090,6 +1090,7 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - task API、frontend contracts、历史验证 tab。
 - 真实 API/UI E2E。
 - legacy replay 卡片退出主流程，但不物理删除旧 API/数据。
+- 当前交付状态：源码、production runtime mutation、exact retry、单/原生多 Alpha readback 与桌面/移动 UI 已验收；权威 receipt 见 R5 子设计第 24 节。
 
 每个批次必须完整实现其设计范围，不得用 placeholder、mock-only、同步单日循环或静态页面冒充完成。
 
@@ -1341,4 +1342,4 @@ production_runtime_activation = none
 6. 无额外门禁、审批、角色、package 二次验证、回测数据或交易依赖。
 7. F2 validator、结构/引用/重复检查和 `git diff --check` 通过。
 
-R1-R4 已完成源码合入、DEV/production schema 与真实历史业务验收。下一任务固定为按 `advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 实现 typed API、稳定分页查询、显式命令分发、历史验证 UI 和 legacy replay 主流程 cutover。任何实现 PR 在报告完成前必须同时执行本文与 R5 子设计验收索引的 DESIGN-COMPLIANCE-001 映射审核；缺少真实 API/UI、单/原生多 Alpha、错误状态、exact retry 或隔离证据时不得声明 Phase 1R 完成。
+R1-R5 已完成源码合入、DEV/production schema、真实历史业务、typed API/UI、legacy cutover、单/原生多 Alpha、错误状态、lease、exact retry 和隔离验收，Phase 1R 完成。下一阶段进入 Phase 0B 基线质量与可建模性审计；不得把 Phase 1R 的历史 Outcome 或 retrospective snapshot 冒充已经训练、校准或启用的模型能力。
