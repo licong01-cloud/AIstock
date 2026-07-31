@@ -755,6 +755,7 @@ def test_terminal_outcome_requires_exact_clean_active_child_closure() -> None:
     )
 
     assert adapter._terminal_outcome_v1(envelope, event, ActiveChildClosureStatusV1.CLEAN).value == "FILLED"
+    assert adapter._terminal_outcome_v1(envelope, event, ActiveChildClosureStatusV1.NOT_APPLICABLE).value == "FILLED"
     assert (
         adapter._terminal_outcome_v1(
             envelope,
