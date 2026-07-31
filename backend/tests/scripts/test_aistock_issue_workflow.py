@@ -88,7 +88,7 @@ def _write_runtime_catalog(root: Path) -> Path:
                         "source_globs": ["backend/**/*.py"],
                         "production_port": 8001,
                         "isolated_validation_ports": [8011, 8012],
-                        "operator_runbook_ref": "docs/operations/backend_runtime_runbook.md",
+                        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
                         "expected_identity_ref": "merged_commit",
                         "probes": {
                             "health_ref": "bug_record.runtime_contract.health_ref",
@@ -955,6 +955,7 @@ def test_runtime_contract_is_lazy_fail_closed_and_restart_plan_never_controls_pr
             "target_id": "backend-main",
             "persistence_basis": "git_tracked_source",
             "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
+            "operator_runbook_ref": "docs/operations/example_backend_restart.md",
             "health_ref": "http://127.0.0.1:8001/health",
             "identity_ref": "http://127.0.0.1:8001/runtime-identity",
             "business_smoke_ref": "http://127.0.0.1:8001/api/example/smoke",
@@ -974,7 +975,26 @@ def test_runtime_contract_is_lazy_fail_closed_and_restart_plan_never_controls_pr
     assert plan["backend_restart_owner"] == "user"
     assert plan["process_control_performed"] is False
     assert plan["target_id"] == "backend-main"
-    assert plan["operator_runbook_ref"] == "docs/operations/backend_runtime_runbook.md"
+    assert plan["operator_runbook_ref"] == "docs/operations/example_backend_restart.md"
+
+    missing_runbook = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=["backend/services/example.py"],
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "backend",
+                "target_id": "backend-main",
+                "persistence_basis": "git_tracked_source",
+                "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
+                "health_ref": "http://127.0.0.1:8001/health",
+                "identity_ref": "http://127.0.0.1:8001/runtime-identity",
+                "business_smoke_ref": "http://127.0.0.1:8001/api/example/smoke",
+            },
+        ),
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+    assert "runtime target backend-main operator runbook ref is incomplete" in missing_runbook["blocking"]
 
     legacy = workflow.build_runtime_contract(
         record=_bug(allowed_write_scope=["backend/services/example.py"]),
@@ -1007,6 +1027,7 @@ def test_post_restart_verify_is_read_only_and_writes_only_ignored_receipt(
             "target_id": "backend-main",
             "persistence_basis": "git_tracked_source",
             "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
+            "operator_runbook_ref": "docs/operations/example_backend_restart.md",
             "health_ref": "http://127.0.0.1:8001/health",
             "identity_ref": "http://127.0.0.1:8001/runtime-identity",
             "business_smoke_ref": "http://127.0.0.1:8001/api/example/smoke",
@@ -1066,6 +1087,7 @@ def test_close_sync_runtime_bug_requires_passed_post_restart_receipt(
             "target_id": "backend-main",
             "persistence_basis": "git_tracked_source",
             "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
+            "operator_runbook_ref": "docs/operations/example_backend_restart.md",
             "health_ref": "http://127.0.0.1:8001/health",
             "identity_ref": "http://127.0.0.1:8001/runtime-identity",
             "business_smoke_ref": "http://127.0.0.1:8001/api/example/smoke",
@@ -1108,6 +1130,54 @@ def test_close_sync_runtime_bug_requires_passed_post_restart_receipt(
     )
     assert ready["workflow_gate"] == "ready_for_apply"
     assert ready["post_restart_effective_gate"] == "passed"
+
+
+def test_close_sync_create_pr_persists_post_restart_state_in_one_command(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        workflow,
+        "build_close_sync_plan",
+        lambda **kwargs: {
+            "schema_version": "aistock_issue_workflow_close_sync_v1",
+            "bug_id": "BUG-199",
+            "workflow_gate": "close_synced",
+            "registry_root": "F:/tmp/BUG-199-close-sync",
+            "updated_bug_json": "tests/aistock_validation/bugs/BUG-199.json",
+        },
+    )
+
+    def fake_commit_and_pr(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"workflow_gate": "pr_opened", "pr_url": "https://github.example/pull/200"}
+
+    monkeypatch.setattr(workflow, "_maybe_commit_and_pr_close_sync", fake_commit_and_pr)
+
+    exit_code = workflow.main(
+        [
+            "close-sync",
+            "--bug-id",
+            "BUG-199",
+            "--pr-url",
+            "https://github.example/pull/199",
+            "--validation-evidence",
+            "nox -s l0 -> passed",
+            "--post-restart-receipt",
+            "tmp/issue_workflow/BUG-199/post-restart-verify.json",
+            "--apply",
+            "--create-pr",
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["close_sync_commit"]["workflow_gate"] == "pr_opened"
+    assert captured["bug_id"] == "BUG-199"
+    assert captured["validation_evidence"] == ["nox -s l0 -> passed"]
 
 
 def test_finish_plan_only_can_draft_pr_body_without_evidence(

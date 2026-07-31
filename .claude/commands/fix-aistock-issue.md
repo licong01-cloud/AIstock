@@ -46,6 +46,6 @@ python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --valida
 
 Workflow/client changes add `workflow-smoke --changed-file <path> --module validation`. Merge aftercare uses `merge-finalizer` or `.claude/commands/aistock-merge-aftercare.md`.
 
-For runtime BUGs, `restart-plan` only expands catalog/runbook refs. After the user restarts, run `post-restart-verify --bug-id BUG-XXX --target <target> --expected-identity <merge-sha>` and pass the ignored receipt to close-sync; until then keep `fixed_source_pending_user_restart`.
+For runtime BUGs, `restart-plan` only expands catalog/runbook refs. After the user restarts, run `post-restart-verify --bug-id BUG-XXX --target <target> --expected-identity <merge-sha>`, then persist the ignored receipt with `close-sync --bug-id BUG-XXX --pr-url <source-pr> --validation-evidence "<command> -> passed" --post-restart-receipt <receipt> --create-registry-worktree --apply --create-pr`; until then keep `fixed_source_pending_user_restart`.
 
 Report branch, PR, commit, changed files, direct validation, production gates, delegated/nightly plans and runtime/DB impact.
