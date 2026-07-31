@@ -346,6 +346,19 @@ jobs:
           mapfile -t module_test_targets < module_test_targets.txt
           npm run test:e2e -- "${module_test_targets[@]}"
 
+      - name: Upload frontend UI acceptance evidence
+        if: always() && needs.classify-changes.outputs.frontend_test_targets != '[]'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-ui-evidence-${{ github.run_id }}
+          path: |
+            tmp/playwright-results-f014-phase4/
+            tmp/playwright-results/
+            tmp/playwright-report-f014-phase4/
+            tmp/playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
+
   tdx-go-tests:
     name: TDX Go tests
     needs: [classify-changes, static-gate]

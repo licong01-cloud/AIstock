@@ -193,6 +193,31 @@ def query_qe_archive_long_trend_quality(
         ) from exc
 
 
+@router.get("/analytics/long-trend-options", summary="Bounded business choices for long-trend comparison")
+def query_qe_archive_long_trend_options(
+    search: str | None = Query(None, max_length=120),
+    task_id: str | None = Query(None, max_length=200),
+    outcome_dataset_snapshot_id: str | None = Query(None, max_length=200),
+    evaluation_asof_from: date | None = Query(None),
+    evaluation_asof_to: date | None = Query(None),
+    limit: int = Query(30, ge=1, le=50),
+):
+    try:
+        return QELongTrendEvaluationResultRepository().query_operator_options(
+            search=search,
+            task_id=task_id,
+            outcome_dataset_snapshot_id=outcome_dataset_snapshot_id,
+            evaluation_asof_from=evaluation_asof_from,
+            evaluation_asof_to=evaluation_asof_to,
+            limit=limit,
+        )
+    except QELongTrendResultRepositoryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason_code": exc.reason_code, "message": str(exc)},
+        ) from exc
+
+
 @router.get(
     "/resource-phases",
     summary="Query QE runtime phase lifecycle and legacy resource telemetry history",
@@ -354,6 +379,30 @@ def list_qe_archive_runs(
             status=status,
             run_type=run_type,
             search=search,
+            limit=limit,
+        ),
+    }
+
+
+@router.get("/operator-options/runs", summary="Bounded business-labelled archived Run choices")
+def query_qe_archive_operator_run_options(
+    search: str | None = Query(None, max_length=120),
+    run_type: str | None = Query(None, max_length=80),
+    model_type: str | None = Query(None, max_length=128),
+    label_horizon: int | None = Query(None),
+    completed_from: date | None = Query(None),
+    completed_to: date | None = Query(None),
+    limit: int = Query(30, ge=1, le=50),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_operator_run_options(
+            search=search,
+            run_type=run_type,
+            model_type=model_type,
+            label_horizon=label_horizon,
+            completed_from=completed_from,
+            completed_to=completed_to,
             limit=limit,
         ),
     }

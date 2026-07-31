@@ -950,6 +950,143 @@ class QELongTrendEvaluationResultRepository:
             item.pop("evaluation_asof_sort", None)
         return {"items": items, "next_cursor": next_cursor, "limit": bounded}
 
+    def query_operator_options(
+        self,
+        *,
+        search: str | None = None,
+        task_id: str | None = None,
+        outcome_dataset_snapshot_id: str | None = None,
+        evaluation_asof_from: date | None = None,
+        evaluation_asof_to: date | None = None,
+        limit: int = 30,
+    ) -> dict[str, Any]:
+        """Return compact Task, vintage and L2-sector choices for the operator UI."""
+
+        bounded = max(1, min(int(limit or 30), 50))
+        clauses = [
+            "e.status IN ('succeeded', 'partial')",
+            "e.platform_delivery_status_json->>'db' = 'published'",
+            "e.outcome_dataset_snapshot_id IS NOT NULL",
+        ]
+        params: list[Any] = []
+        if task_id:
+            clauses.append("e.parent_task_id = %s")
+            params.append(task_id)
+        if outcome_dataset_snapshot_id:
+            clauses.append("e.outcome_dataset_snapshot_id = %s")
+            params.append(outcome_dataset_snapshot_id)
+        if evaluation_asof_from is not None:
+            clauses.append("(e.request_json->>'evaluation_asof')::date >= %s")
+            params.append(evaluation_asof_from)
+        if evaluation_asof_to is not None:
+            clauses.append("(e.request_json->>'evaluation_asof')::date <= %s")
+            params.append(evaluation_asof_to)
+        search_pattern = f"%{search.strip()}%" if search and search.strip() else None
+        where_sql = " AND ".join(clauses)
+
+        self.ensure_schema_ready()
+        # ALGO-COMPLEXITY-001: three compact aggregates return at most 50
+        # business choices each. They never load artifact payloads or expand
+        # signal/episode files; the sector branch narrows to its indexed metric family.
+        with self._connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                task_params = list(params)
+                task_search = ""
+                if search_pattern:
+                    task_search = (
+                        "AND (COALESCE(t.task_name, '') ILIKE %s OR COALESCE(r.model_type, '') ILIKE %s "
+                        "OR (e.request_json->>'evaluation_asof') ILIKE %s)"
+                    )
+                    task_params.extend([search_pattern] * 3)
+                task_params.append(bounded)
+                cur.execute(
+                    f"""
+                    SELECT e.parent_task_id AS value, COALESCE(t.task_name, '未命名演进任务') AS task_name,
+                           MIN((e.request_json->>'evaluation_asof')::date) AS first_evaluation_asof,
+                           MAX((e.request_json->>'evaluation_asof')::date) AS latest_evaluation_asof,
+                           COUNT(DISTINCT e.evaluation_id) AS evaluation_count,
+                           COUNT(DISTINCT e.outcome_dataset_snapshot_id) AS snapshot_count,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT r.model_type), NULL) AS model_types
+                    FROM {CONTROL_TABLE} e
+                    LEFT JOIN qe_evolution_tasks t ON t.task_id = e.parent_task_id
+                    LEFT JOIN qe_archive.run r ON r.run_id = e.run_id
+                    WHERE {where_sql} {task_search}
+                    GROUP BY e.parent_task_id, t.task_name
+                    ORDER BY latest_evaluation_asof DESC NULLS LAST, task_name ASC
+                    LIMIT %s
+                    """,
+                    task_params,
+                )
+                tasks = [dict(row) for row in cur.fetchall()]
+
+                snapshot_params = list(params)
+                snapshot_search = ""
+                if search_pattern:
+                    snapshot_search = (
+                        "AND (COALESCE(t.task_name, '') ILIKE %s OR (e.request_json->>'evaluation_asof') ILIKE %s)"
+                    )
+                    snapshot_params.extend([search_pattern] * 2)
+                snapshot_params.append(bounded)
+                cur.execute(
+                    f"""
+                    SELECT e.outcome_dataset_snapshot_id AS value,
+                           MIN((e.request_json->>'evaluation_asof')::date) AS first_evaluation_asof,
+                           MAX((e.request_json->>'evaluation_asof')::date) AS latest_evaluation_asof,
+                           COUNT(DISTINCT e.evaluation_id) AS evaluation_count,
+                           COUNT(DISTINCT e.parent_task_id) AS task_count,
+                           ARRAY_REMOVE(ARRAY_AGG(DISTINCT t.task_name), NULL) AS task_names
+                    FROM {CONTROL_TABLE} e
+                    LEFT JOIN qe_evolution_tasks t ON t.task_id = e.parent_task_id
+                    WHERE {where_sql} {snapshot_search}
+                    GROUP BY e.outcome_dataset_snapshot_id
+                    ORDER BY latest_evaluation_asof DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    snapshot_params,
+                )
+                snapshots = [dict(row) for row in cur.fetchall()]
+
+                sector_params = list(params)
+                sector_search = ""
+                if search_pattern:
+                    sector_search = (
+                        "AND (EXISTS (SELECT 1 FROM market.sw_index_member membership "
+                        "WHERE membership.l2_code = m.sector_code AND membership.l2_name ILIKE %s) "
+                        "OR COALESCE(r.model_type, '') ILIKE %s OR (e.request_json->>'evaluation_asof') ILIKE %s)"
+                    )
+                    sector_params.extend([search_pattern] * 3)
+                sector_params.append(bounded)
+                cur.execute(
+                    f"""
+                    WITH sector_options AS (
+                        SELECT m.sector_code AS value,
+                               COUNT(DISTINCT e.evaluation_id) AS evaluation_count,
+                               MAX((e.request_json->>'evaluation_asof')::date) AS latest_evaluation_asof
+                        FROM {CONTROL_TABLE} e
+                        JOIN {METRIC_TABLE} m ON m.evaluation_id = e.evaluation_id
+                        LEFT JOIN qe_archive.run r ON r.run_id = e.run_id
+                        WHERE {where_sql} AND m.metric_key = 'sector_signal_path'
+                          AND m.sector_code IS NOT NULL {sector_search}
+                        GROUP BY m.sector_code
+                        ORDER BY latest_evaluation_asof DESC NULLS LAST
+                        LIMIT %s
+                    )
+                    SELECT sector.value,
+                           COALESCE(member.l2_name, '未命名二级行业') AS sector_name,
+                           sector.evaluation_count, sector.latest_evaluation_asof
+                    FROM sector_options sector
+                    LEFT JOIN LATERAL (
+                        SELECT MAX(NULLIF(membership.l2_name, '')) AS l2_name
+                        FROM market.sw_index_member membership
+                        WHERE membership.l2_code = sector.value
+                    ) member ON TRUE
+                    ORDER BY sector.latest_evaluation_asof DESC NULLS LAST, sector_name ASC
+                    """,
+                    sector_params,
+                )
+                sectors = [dict(row) for row in cur.fetchall()]
+        return {"tasks": tasks, "snapshots": snapshots, "sectors": sectors, "limit": bounded}
+
     @staticmethod
     def _write_or_verify_metrics(
         cur: Any, *, evaluation_id: str, records: Sequence[RunEvaluationMetricRecord]

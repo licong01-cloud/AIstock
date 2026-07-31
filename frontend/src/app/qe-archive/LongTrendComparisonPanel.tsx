@@ -6,8 +6,13 @@ import {
   QEArchiveApiError,
   qeArchiveApi,
   type JsonObject,
+  type LongTrendOperatorOptions,
   type LongTrendQualityItem,
+  type LongTrendSectorOption,
+  type LongTrendSnapshotOption,
+  type LongTrendTaskOption,
 } from "@/lib/qe-archive/api";
+import BusinessSearchSelect, { type BusinessSearchOption } from "./BusinessSearchSelect";
 
 const HORIZONS = [20, 40, 60, 120, 180] as const;
 const METRICS = [
@@ -53,6 +58,51 @@ const EXIT_EVIDENCE_LEVELS = [
   "position_transition_only",
 ] as const;
 
+const FAMILY_STATUS_LABELS: Record<string, string> = {
+  COMPUTED: "证据完整",
+  COMPUTED_WITH_LIMITATIONS: "证据有限",
+  NOT_COMPUTABLE: "无法计算",
+  NOT_VERIFIABLE: "无法核验",
+};
+const EXECUTION_STATUS_LABELS: Record<string, string> = {
+  filled_t1: "次日完成成交",
+  partial_fill_t1: "次日部分成交",
+  delayed_fill: "延迟成交",
+  never_filled: "未成交",
+  filled_on_exit_signal_day: "退出信号日成交",
+  delayed_exit: "延迟退出",
+  never_exited: "未退出",
+  not_attempted_by_strategy: "策略未尝试",
+  not_verifiable: "无法核验",
+};
+const EVIDENCE_LEVEL_LABELS: Record<string, string> = {
+  none: "无证据",
+  ambiguous_trade_match: "成交匹配不明确",
+  reconciled_trade: "成交已核对",
+  indicator_and_trade_reconciled: "指标与成交已核对",
+  qlib_indicator_object: "Qlib 指标对象",
+  explicit_order_intent: "明确委托意图",
+  position_transition_only: "仅持仓变化",
+  exit_signal_only: "仅退出信号",
+  position_transition: "持仓变化已确认",
+  indicator_and_exit_reconciled: "指标与退出已核对",
+};
+const EVALUATION_STATUS_LABELS: Record<string, string> = {
+  succeeded: "完成",
+  partial: "部分完成",
+  failed: "失败",
+  cancelled: "已取消",
+  published: "已发布",
+};
+const QUALITY_LABELS: Record<string, string> = {
+  ok: "证据完整",
+  computed_with_limitations: "证据有限",
+  insufficient_maturity: "样本未成熟",
+  not_computable: "无法计算",
+  not_verifiable: "无法核验",
+  censored_only: "仅右删失样本",
+};
+
 function asObject(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
 }
@@ -74,11 +124,6 @@ function decimal(value: unknown, digits = 4): string {
 function percent(value: unknown, digits = 2): string {
   const parsed = number(value);
   return parsed === null ? "-" : `${(parsed * 100).toFixed(digits)}%`;
-}
-
-function shortHash(value: unknown): string {
-  const raw = text(value);
-  return raw.length > 18 ? `${raw.slice(0, 10)}…${raw.slice(-6)}` : raw;
 }
 
 function errorMessage(error: unknown): string {
@@ -140,9 +185,42 @@ const fieldStyle: React.CSSProperties = {
   fontSize: 12,
 };
 
+function taskChoice(option: LongTrendTaskOption): BusinessSearchOption {
+  const models = (option.model_types || []).join("/") || "模型未知";
+  return {
+    value: option.value,
+    label: option.task_name || "未命名演进任务",
+    description: `${text(option.latest_evaluation_asof, "日期未知")}｜${models}｜${option.evaluation_count} 次评价`,
+  };
+}
+
+function snapshotChoice(option: LongTrendSnapshotOption): BusinessSearchOption {
+  const taskNames = (option.task_names || []).slice(0, 2).join("、") || "任务未知";
+  return {
+    value: option.value,
+    label: `${text(option.latest_evaluation_asof, "日期未知")} 截止的结果快照`,
+    description: `${taskNames}｜${option.evaluation_count} 次评价`,
+  };
+}
+
+function sectorChoice(option: LongTrendSectorOption): BusinessSearchOption {
+  return {
+    value: option.value,
+    label: option.sector_name || "未命名二级行业",
+    description: `${text(option.latest_evaluation_asof, "日期未知")}｜${option.evaluation_count} 次评价`,
+  };
+}
+
 export default function LongTrendComparisonPanel() {
   const [taskId, setTaskId] = React.useState("");
   const [snapshotId, setSnapshotId] = React.useState("");
+  const [taskSearch, setTaskSearch] = React.useState("");
+  const [snapshotSearch, setSnapshotSearch] = React.useState("");
+  const [sectorSearch, setSectorSearch] = React.useState("");
+  const [taskOptions, setTaskOptions] = React.useState<LongTrendTaskOption[]>([]);
+  const [snapshotOptions, setSnapshotOptions] = React.useState<LongTrendSnapshotOption[]>([]);
+  const [sectorOptions, setSectorOptions] = React.useState<LongTrendSectorOption[]>([]);
+  const [optionsBusyCount, setOptionsBusyCount] = React.useState(0);
   const [horizon, setHorizon] = React.useState<(typeof HORIZONS)[number]>(60);
   const [metricKey, setMetricKey] = React.useState<(typeof METRICS)[number][0]>("rank_ic");
   const [barrier, setBarrier] = React.useState(0.5);
@@ -157,6 +235,57 @@ export default function LongTrendComparisonPanel() {
   const [error, setError] = React.useState("");
   const [queried, setQueried] = React.useState(false);
 
+  React.useEffect(() => {
+    setRows([]);
+    setQueried(false);
+  }, [barrier, entryEvidenceLevel, entryExecutionStatus, exitEvidenceLevel, exitExecutionStatus, familyStatus, horizon, metricKey, sectorCode, snapshotId, taskId]);
+
+  const loadOptions = React.useCallback(async (payload: Parameters<typeof qeArchiveApi.longTrendOperatorOptions>[0]) => {
+    setOptionsBusyCount((count) => count + 1);
+    try {
+      return await qeArchiveApi.longTrendOperatorOptions({ ...payload, limit: 30 });
+    } finally {
+      setOptionsBusyCount((count) => Math.max(0, count - 1));
+    }
+  }, []);
+  const optionsLoading = optionsBusyCount > 0;
+
+  React.useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void loadOptions({ search: taskSearch || undefined }).then((options: LongTrendOperatorOptions) => {
+        if (!active) return;
+        setTaskOptions(options.tasks || []);
+        if (!taskId && options.tasks?.length === 1) setTaskId(options.tasks[0].value);
+      }).catch((optionError) => active && setError(errorMessage(optionError)));
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [loadOptions, taskId, taskSearch]);
+
+  React.useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void loadOptions({ search: snapshotSearch || undefined, task_id: taskId || undefined }).then((options) => {
+        if (!active) return;
+        setSnapshotOptions(options.snapshots || []);
+        if (!snapshotId && options.snapshots?.length === 1) setSnapshotId(options.snapshots[0].value);
+      }).catch((optionError) => active && setError(errorMessage(optionError)));
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [loadOptions, snapshotId, snapshotSearch, taskId]);
+
+  React.useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void loadOptions({ search: sectorSearch || undefined, task_id: taskId || undefined, outcome_dataset_snapshot_id: snapshotId || undefined }).then((options) => {
+        if (!active) return;
+        setSectorOptions(options.sectors || []);
+        if (!sectorCode && options.sectors?.length === 1) setSectorCode(options.sectors[0].value);
+      }).catch((optionError) => active && setError(errorMessage(optionError)));
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [loadOptions, sectorCode, sectorSearch, snapshotId, taskId]);
+
   const runQuery = React.useCallback(async () => {
     const snapshot = snapshotId.trim();
     if (!snapshot) {
@@ -164,7 +293,7 @@ export default function LongTrendComparisonPanel() {
       return;
     }
     if (metricKey === "sector_signal_path" && !sectorCode.trim()) {
-      setError("板块路径比较必须指定 L2 sector code，避免无界板块展开。");
+      setError("板块路径比较必须先从二级行业候选中选择一个板块，避免无界展开。");
       return;
     }
     setLoading(true);
@@ -203,16 +332,16 @@ export default function LongTrendComparisonPanel() {
       </div>
 
       <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Task ID（可选）<input data-testid="qe-long-trend-archive-task" value={taskId} onChange={(event) => setTaskId(event.target.value)} style={fieldStyle} /></label>
-        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Outcome snapshot（必填）<input data-testid="qe-long-trend-archive-snapshot" value={snapshotId} onChange={(event) => setSnapshotId(event.target.value)} style={{ ...fieldStyle, fontFamily: "monospace" }} /></label>
+        <BusinessSearchSelect testId="qe-long-trend-archive-task" label="演进任务" value={taskId} options={taskOptions.map(taskChoice)} search={taskSearch} onSearchChange={(value) => { setTaskSearch(value); setTaskId(""); setSnapshotId(""); setSectorCode(""); }} onValueChange={(value) => { setTaskId(value); setSnapshotId(""); setSectorCode(""); }} searchPlaceholder="按任务名称、模型或评价日期搜索" emptyLabel="全部演进任务" loading={optionsLoading} />
+        <BusinessSearchSelect testId="qe-long-trend-archive-snapshot" label="结果快照" value={snapshotId} options={snapshotOptions.map(snapshotChoice)} search={snapshotSearch} onSearchChange={(value) => { setSnapshotSearch(value); setSnapshotId(""); setSectorCode(""); }} onValueChange={(value) => { setSnapshotId(value); setSectorCode(""); }} searchPlaceholder="按截止日期或任务名称搜索" emptyLabel="请选择同一结果快照" loading={optionsLoading} required />
         <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>指标<select data-testid="qe-long-trend-archive-metric" value={metricKey} onChange={(event) => setMetricKey(event.target.value as (typeof METRICS)[number][0])} style={fieldStyle}>{METRICS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>评价期限<select data-testid="qe-long-trend-archive-horizon" value={horizon} onChange={(event) => setHorizon(Number(event.target.value) as (typeof HORIZONS)[number])} style={fieldStyle}>{HORIZONS.map((value) => <option key={value} value={value}>{value}D</option>)}</select></label>
-        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Family evidence quality<select value={familyStatus} onChange={(event) => setFamilyStatus(event.target.value)} style={fieldStyle}><option value="">全部</option><option value="COMPUTED">COMPUTED</option><option value="COMPUTED_WITH_LIMITATIONS">COMPUTED_WITH_LIMITATIONS</option><option value="NOT_COMPUTABLE">NOT_COMPUTABLE</option><option value="NOT_VERIFIABLE">NOT_VERIFIABLE</option></select></label>
-        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Entry execution status<select data-testid="qe-long-trend-archive-entry-status" value={entryExecutionStatus} onChange={(event) => setEntryExecutionStatus(event.target.value as "" | (typeof ENTRY_EXECUTION_STATUSES)[number])} style={fieldStyle}><option value="">全部</option>{ENTRY_EXECUTION_STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Exit execution status<select data-testid="qe-long-trend-archive-exit-status" value={exitExecutionStatus} onChange={(event) => setExitExecutionStatus(event.target.value as "" | (typeof EXIT_EXECUTION_STATUSES)[number])} style={fieldStyle}><option value="">全部</option>{EXIT_EXECUTION_STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Entry evidence quality<select data-testid="qe-long-trend-archive-entry-evidence" value={entryEvidenceLevel} onChange={(event) => setEntryEvidenceLevel(event.target.value as "" | (typeof ENTRY_EVIDENCE_LEVELS)[number])} style={fieldStyle}><option value="">全部</option>{ENTRY_EVIDENCE_LEVELS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Exit evidence quality<select data-testid="qe-long-trend-archive-exit-evidence" value={exitEvidenceLevel} onChange={(event) => setExitEvidenceLevel(event.target.value as "" | (typeof EXIT_EVIDENCE_LEVELS)[number])} style={fieldStyle}><option value="">全部</option>{EXIT_EVIDENCE_LEVELS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        {metricKey === "barrier_capture" ? <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Barrier<select value={barrier} onChange={(event) => setBarrier(Number(event.target.value))} style={fieldStyle}><option value={0.3}>30%</option><option value={0.5}>50%</option><option value={0.7}>70%</option></select></label> : metricKey === "sector_signal_path" ? <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>L2 sector code（必填）<input value={sectorCode} onChange={(event) => setSectorCode(event.target.value)} style={{ ...fieldStyle, fontFamily: "monospace" }} /></label> : <div style={{ fontSize: 11, color: "#64748b", alignSelf: "end", padding: 8 }}>L2 sector filter 仅在板块路径指标启用。</div>}
+        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>指标族证据质量<select value={familyStatus} onChange={(event) => setFamilyStatus(event.target.value)} style={fieldStyle}><option value="">全部</option>{Object.entries(FAMILY_STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>入场执行状态<select data-testid="qe-long-trend-archive-entry-status" value={entryExecutionStatus} onChange={(event) => setEntryExecutionStatus(event.target.value as "" | (typeof ENTRY_EXECUTION_STATUSES)[number])} style={fieldStyle}><option value="">全部</option>{ENTRY_EXECUTION_STATUSES.map((value) => <option key={value} value={value}>{EXECUTION_STATUS_LABELS[value]}</option>)}</select></label>
+        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>退出执行状态<select data-testid="qe-long-trend-archive-exit-status" value={exitExecutionStatus} onChange={(event) => setExitExecutionStatus(event.target.value as "" | (typeof EXIT_EXECUTION_STATUSES)[number])} style={fieldStyle}><option value="">全部</option>{EXIT_EXECUTION_STATUSES.map((value) => <option key={value} value={value}>{EXECUTION_STATUS_LABELS[value]}</option>)}</select></label>
+        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>入场证据质量<select data-testid="qe-long-trend-archive-entry-evidence" value={entryEvidenceLevel} onChange={(event) => setEntryEvidenceLevel(event.target.value as "" | (typeof ENTRY_EVIDENCE_LEVELS)[number])} style={fieldStyle}><option value="">全部</option>{ENTRY_EVIDENCE_LEVELS.map((value) => <option key={value} value={value}>{EVIDENCE_LEVEL_LABELS[value]}</option>)}</select></label>
+        <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>退出证据质量<select data-testid="qe-long-trend-archive-exit-evidence" value={exitEvidenceLevel} onChange={(event) => setExitEvidenceLevel(event.target.value as "" | (typeof EXIT_EVIDENCE_LEVELS)[number])} style={fieldStyle}><option value="">全部</option>{EXIT_EVIDENCE_LEVELS.map((value) => <option key={value} value={value}>{EVIDENCE_LEVEL_LABELS[value]}</option>)}</select></label>
+        {metricKey === "barrier_capture" ? <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Barrier<select value={barrier} onChange={(event) => setBarrier(Number(event.target.value))} style={fieldStyle}><option value={0.3}>30%</option><option value={0.5}>50%</option><option value={0.7}>70%</option></select></label> : metricKey === "sector_signal_path" ? <BusinessSearchSelect testId="qe-long-trend-archive-sector" label="二级行业" value={sectorCode} options={sectorOptions.map(sectorChoice)} search={sectorSearch} onSearchChange={(value) => { setSectorSearch(value); setSectorCode(""); }} onValueChange={setSectorCode} searchPlaceholder="按行业名称或评价日期搜索" emptyLabel="请选择二级行业" loading={optionsLoading} required /> : <div style={{ fontSize: 11, color: "#64748b", alignSelf: "end", padding: 8 }}>二级行业筛选仅在板块路径指标启用。</div>}
       </div>
 
       {error && <div data-testid="qe-long-trend-archive-error" style={{ marginTop: 12, padding: 10, borderRadius: 7, border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontSize: 12 }}>{error}</div>}
@@ -220,20 +349,19 @@ export default function LongTrendComparisonPanel() {
       {queried && !loading && !error && (
         <div style={{ marginTop: 14, overflowX: "auto" }}>
           <table data-testid="qe-long-trend-archive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead><tr style={{ background: "#eff6ff" }}>{["Run", "Model", "Seed", "Factor set", "训练标签", "Evaluation as-of", "状态", "指标值", "质量"].map((label) => <th key={label} style={{ padding: 8, textAlign: "left", whiteSpace: "nowrap" }}>{label}</th>)}</tr></thead>
+            <thead><tr style={{ background: "#eff6ff" }}>{["模型", "随机种子", "因子数量", "训练标签", "评价截止日", "评价状态", "指标值", "证据质量"].map((label) => <th key={label} style={{ padding: 8, textAlign: "left", whiteSpace: "nowrap" }}>{label}</th>)}</tr></thead>
             <tbody>{rows.map((row) => <tr key={row.evaluation_id} style={{ borderBottom: "1px solid #e2e8f0" }}>
-              <td style={{ padding: 8, fontFamily: "monospace" }} title={text(row.run_id)}>{shortHash(row.run_id)}</td>
               <td style={{ padding: 8 }}>{text(row.model_type)}</td>
-              <td style={{ padding: 8, fontFamily: "monospace" }}>{text(row.random_seed)}</td>
-              <td style={{ padding: 8, fontFamily: "monospace" }} title={text(row.factor_set_hash)}>{shortHash(row.factor_set_hash)} ({text(row.factor_count)})</td>
+              <td style={{ padding: 8 }}>{text(row.random_seed)}</td>
+              <td style={{ padding: 8 }}>{text(row.factor_count)}</td>
               <td style={{ padding: 8 }}>{text(row.label_horizon)}D</td>
               <td style={{ padding: 8 }}>{text(row.evaluation_asof)}</td>
-              <td style={{ padding: 8 }}>{text(row.evaluation_status)}</td>
+              <td style={{ padding: 8 }}>{EVALUATION_STATUS_LABELS[text(row.evaluation_status, "")] || "状态未知"}</td>
               <td style={{ padding: 8, whiteSpace: "nowrap" }}>{metricDisplay(row)}</td>
-              <td style={{ padding: 8 }}>{text(row.quality_flag)}</td>
+              <td style={{ padding: 8 }}>{QUALITY_LABELS[text(row.quality_flag, "")] || "证据状态未知"}</td>
             </tr>)}</tbody>
           </table>
-          {rows.length === 0 && <div style={{ padding: 24, textAlign: "center", color: "#64748b" }}>当前同 vintage/filter 下没有可比较的 canonical metric。</div>}
+          {rows.length === 0 && <div style={{ padding: 24, textAlign: "center", color: "#64748b" }}>当前结果快照与筛选条件下没有可比较的指标。</div>}
         </div>
       )}
     </section>
