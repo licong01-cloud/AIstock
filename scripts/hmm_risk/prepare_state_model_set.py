@@ -48,11 +48,23 @@ from backend.services.hmm_risk.b3_blocker_diagnostic import (  # noqa: E402
     replay_selected_d6 as replay_b3_blocker_selected_d6,
     run_targeted_level as run_b3_blocker_targeted_level,
 )
+from backend.services.hmm_risk.b3_remediation_diagnostic import (  # noqa: E402
+    DIAGNOSTIC_CONTRACT as B3_REMEDIATION_DIAGNOSTIC_CONTRACT,
+    build_profile_variance_evidence as build_b3_remediation_profile_evidence,
+    build_report as build_b3_remediation_report,
+    build_train_only_projection as build_b3_remediation_projection,
+    failure_report as build_b3_remediation_failure,
+    preprocess_identities as b3_remediation_preprocess_identities,
+    reason_code_for_error as b3_remediation_reason_code,
+    validate_authorities as validate_b3_remediation_authorities,
+    write_diagnostic_artifact as write_b3_remediation_artifact,
+)
 from backend.services.hmm_risk.b3_training import (  # noqa: E402
     audit_train_only_coverage,
     build_train_only_series,
     build_selected_level_artifact,
     formal_b3_parameter_profile,
+    iter_train_only_series,
     models_from_repeat,
     run_level_repeat,
     write_b3_ready_model_set,
@@ -2090,6 +2102,101 @@ def run_b3_blocker_diag01_repeated(args: argparse.Namespace, request: dict[str, 
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def prepare_b3_remediation_diag02(
+    request: dict[str, Any],
+    formal_report: dict[str, Any],
+    blocker_report: dict[str, Any],
+    *,
+    db_prefix: str,
+) -> dict[str, Any]:
+    """Build the approved no-fit remediation evidence from frozen train inputs and prior receipts."""
+
+    validate_b3_remediation_authorities(formal_report, blocker_report)
+    target_manifest = derive_b3_blocker_target_manifest(formal_report)
+    inputs, identities = _load_b3_blocker_train_inputs(
+        request,
+        db_prefix=db_prefix,
+        target_manifest=target_manifest,
+    )
+    projection = build_b3_remediation_projection(blocker_report)
+    legacy_requests = [
+        item for item in request.get("families") or () if str(item.get("family") or "") == "legacy_covfix"
+    ]
+    if len(legacy_requests) != 1 or legacy_requests[0].get("preprocess_family") != "identity":
+        raise StateModelSetError("remediation diagnostic legacy L1 preprocess authority is invalid")
+    preprocess_by_level = b3_remediation_preprocess_identities(
+        projection,
+        approved_fallback={
+            "legacy_covfix:L1": {
+                "family": "identity",
+                "winsor_low": None,
+                "winsor_high": None,
+                "center": None,
+                "scale": None,
+            }
+        },
+    )
+    families = {str(item.get("family") or ""): item for item in request.get("families") or ()}
+    if set(families) != {"legacy_covfix", "autocycle_all_core"}:
+        raise StateModelSetError("remediation diagnostic requires exactly the approved two families")
+    profiles: list[dict[str, Any]] = []
+    for family_name in sorted(families):
+        family = families[family_name]
+        feature_names = tuple(str(value) for value in family.get("feature_names") or ())
+        train_start = _date(family.get("train_start"), "train_start")
+        train_end = _date(family.get("train_end"), "train_end")
+        for level, panel, constituents, feature_definition, expected_count in (
+            ("L1", inputs["panel"], inputs["constituents"], inputs["feature_definition"], 31),
+            (
+                "L2",
+                inputs["l2_panel"],
+                _direct_l2_constituents(inputs),
+                inputs["l2_feature_definition"],
+                131,
+            ),
+        ):
+            key = f"{family_name}:{level}"
+            source_provenance = {
+                **identities,
+                "feature_domain_policy_sha256": B3_BLOCKER_FORMAL_AUTHORITY["feature_domain_policy_sha256"],
+                "formula_version": B3_BLOCKER_FORMAL_AUTHORITY["formula_version"],
+                "feature_definition_sha256": canonical_sha256(feature_definition),
+                "train_coverage_receipt_sha256": request["train_coverage_receipt_sha256"],
+                "blocker_report_sha256": canonical_sha256(blocker_report),
+                "train_projection_sha256": projection["projection_sha256"],
+            }
+            for series in iter_train_only_series(
+                panel,
+                feature_names=feature_names,
+                train_start=train_start,
+                train_end=train_end,
+                constituent_manifest=constituents,
+                expected_sector_count=expected_count,
+                direct_sector_level=level,
+                frozen_input_identity=_frozen_input_identity(inputs),
+            ):
+                profiles.append(
+                    build_b3_remediation_profile_evidence(
+                        series,
+                        family=family_name,
+                        level=level,
+                        feature_names=feature_names,
+                        preprocess=preprocess_by_level[key],
+                        feature_definition=feature_definition,
+                        source_provenance=source_provenance,
+                    )
+                )
+    numeric_environment = c008_b3_diag04_fixed_numeric_environment()
+    _validate_b3_blocker_numeric_environment(numeric_environment)
+    return build_b3_remediation_report(
+        formal_report,
+        blocker_report,
+        profiles,
+        producer_commit=_git_commit(),
+        numeric_environment=numeric_environment,
+    )
+
+
 def _b3_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
     return [
         sys.executable,
@@ -2382,6 +2489,10 @@ def parse_args() -> argparse.Namespace:
         "--b3-blocker-diagnostic-output",
         help="Run the approved 174-pair x two-process blocker diagnostic and zero-refit D6 replay.",
     )
+    diagnostic_group.add_argument(
+        "--b3-remediation-diag02-output",
+        help="Run approved no-fit remediation evidence closure without validation, selection, or model writes.",
+    )
     parser.add_argument(
         "--b3-request-candidate-output",
         help="Immutable request candidate output; required only with --b3-preflight-output.",
@@ -2392,6 +2503,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--_b3-blocker-diag01-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--b3-process-identity", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-formal-report", help="Approved immutable formal B3 preparation report.")
+    parser.add_argument("--b3-blocker-report", help="Approved immutable C-008-B3-FORMAL-BLOCKER-DIAG-01 report.")
     parser.add_argument("--b3-target-manifest-sha256", default="", help=argparse.SUPPRESS)
     return parser.parse_args()
 
@@ -2413,15 +2525,26 @@ def main() -> int:
                 raise StateModelSetError("--b3-request-candidate-output is only valid with --b3-preflight-output")
             request = _load_request(request_path)
         blocker_output = getattr(args, "b3_blocker_diagnostic_output", None)
+        remediation_output = getattr(args, "b3_remediation_diag02_output", None)
         blocker_formal_report = getattr(args, "b3_formal_report", None)
+        remediation_blocker_report = getattr(args, "b3_blocker_report", None)
         blocker_target_sha256 = getattr(args, "b3_target_manifest_sha256", "")
         blocker_parent = bool(blocker_output)
         blocker_child = bool(getattr(args, "_b3_blocker_diag01_child", False))
         if blocker_parent or blocker_child:
             if not blocker_formal_report:
                 raise StateModelSetError("--b3-formal-report is required for the blocker diagnostic")
-        elif blocker_formal_report or blocker_target_sha256:
-            raise StateModelSetError("blocker diagnostic authority arguments require blocker diagnostic mode")
+            if remediation_blocker_report:
+                raise StateModelSetError("--b3-blocker-report is only valid with --b3-remediation-diag02-output")
+        elif remediation_output:
+            if not blocker_formal_report or not remediation_blocker_report:
+                raise StateModelSetError(
+                    "--b3-formal-report and --b3-blocker-report are required for remediation DIAG-02"
+                )
+            if blocker_target_sha256:
+                raise StateModelSetError("blocker child target identity is not valid for remediation DIAG-02")
+        elif blocker_formal_report or blocker_target_sha256 or remediation_blocker_report:
+            raise StateModelSetError("B3 diagnostic authority arguments require their matching diagnostic mode")
         if blocker_parent and blocker_target_sha256:
             raise StateModelSetError("--b3-target-manifest-sha256 is child-only")
         if blocker_child and not blocker_target_sha256:
@@ -2577,6 +2700,50 @@ def main() -> int:
             }
             print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
             return 0 if report["status"] == "READY" else 1
+        if remediation_output:
+            report_path = Path(remediation_output).resolve()
+            formal_report = _load_json_mapping(Path(blocker_formal_report).resolve(), label="formal B3 report")
+            blocker_report = _load_json_mapping(
+                Path(remediation_blocker_report).resolve(),
+                label="formal blocker diagnostic report",
+            )
+            try:
+                report = prepare_b3_remediation_diag02(
+                    request,
+                    formal_report,
+                    blocker_report,
+                    db_prefix=str(args.db_env_prefix),
+                )
+            except Exception as exc:
+                failure = build_b3_remediation_failure(
+                    producer_commit=_git_commit(),
+                    reason_code=b3_remediation_reason_code(exc),
+                    error=exc,
+                )
+                write_b3_remediation_artifact(report_path, failure)
+                raise
+            report_sha256 = write_b3_remediation_artifact(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_c008_b3_remediation_diag02_cli_receipt_v1",
+                "status": report["status"],
+                "diagnostic_contract": B3_REMEDIATION_DIAGNOSTIC_CONTRACT,
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "profile_count": report["profile_manifest"]["profile_count"],
+                "completed_entry_count": report["completed_entry_analysis"]["entry_count"],
+                "initialization_failure_count": report["initialization_source_evidence"]["entry_count"],
+                "hmm_refit_performed": False,
+                "selection_performed": False,
+                "validation_accessed": False,
+                "formal_acceptance_reexecuted": False,
+                "threshold_changed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0
         if blocker_parent:
             report_path = Path(blocker_output).resolve()
             try:

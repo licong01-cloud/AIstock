@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -231,7 +231,7 @@ def audit_train_only_coverage(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
-def build_train_only_series(
+def iter_train_only_series(
     panel: Any,
     *,
     feature_names: Sequence[str],
@@ -241,16 +241,20 @@ def build_train_only_series(
     expected_sector_count: int,
     direct_sector_level: str,
     frozen_input_identity: Mapping[str, Any] | None = None,
-) -> dict[str, B3TrainOnlySeries]:
-    """Freeze only D3/D4/D5 train inputs; validation and future utility remain unread."""
+) -> Iterable[B3TrainOnlySeries]:
+    """Yield one frozen D3/D4/D5 train profile at a time without retaining all matrices."""
 
     features = tuple(str(value) for value in feature_names)
     if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
         raise StateModelSetError("B3 train-only feature family is invalid")
     if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
         raise StateModelSetError("B3 train-only level/count contract is invalid")
-    output: dict[str, B3TrainOnlySeries] = {}
-    for code in sorted(panel.index.get_level_values("l1_code").unique()):
+    codes = tuple(sorted(panel.index.get_level_values("l1_code").unique()))
+    if len(codes) != expected_sector_count:
+        raise StateModelSetError(
+            f"B3 train-only requires {expected_sector_count} direct {direct_sector_level} sectors; actual={len(codes)}"
+        )
+    for code in codes:
         sector = panel.xs(code, level="l1_code")
         train = _train_only_frame(
             panel,
@@ -285,7 +289,7 @@ def build_train_only_series(
             "train_dates_sha256": canonical_sha256(train_dates),
             "train_observation_sha256": canonical_sha256(train.to_numpy(dtype=np.float64).tolist()),
         }
-        output[str(code)] = B3TrainOnlySeries(
+        yield B3TrainOnlySeries(
             sector_code=str(code),
             sector_name=str(sector["l1_name"].dropna().iloc[-1]),
             train_observations=train.to_numpy(dtype=np.float64),
@@ -295,11 +299,32 @@ def build_train_only_series(
             observation_manifest_hash=canonical_sha256(body),
             train_input_manifest=train_input_manifest,
         )
-    if len(output) != expected_sector_count:
-        raise StateModelSetError(
-            f"B3 train-only requires {expected_sector_count} direct {direct_sector_level} sectors; actual={len(output)}"
-        )
-    return output
+
+
+def build_train_only_series(
+    panel: Any,
+    *,
+    feature_names: Sequence[str],
+    train_start: date,
+    train_end: date,
+    constituent_manifest: Mapping[str, Mapping[str, Any]],
+    expected_sector_count: int,
+    direct_sector_level: str,
+    frozen_input_identity: Mapping[str, Any] | None = None,
+) -> dict[str, B3TrainOnlySeries]:
+    """Freeze only D3/D4/D5 train inputs; validation and future utility remain unread."""
+
+    values = iter_train_only_series(
+        panel,
+        feature_names=feature_names,
+        train_start=train_start,
+        train_end=train_end,
+        constituent_manifest=constituent_manifest,
+        expected_sector_count=expected_sector_count,
+        direct_sector_level=direct_sector_level,
+        frozen_input_identity=frozen_input_identity,
+    )
+    return {value.sector_code: value for value in values}
 
 
 def formal_b3_parameter_profile() -> dict[str, Any]:
