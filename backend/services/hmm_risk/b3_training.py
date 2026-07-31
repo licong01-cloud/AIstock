@@ -147,6 +147,24 @@ class B3TrainOnlySeries:
             _require_hex_identity(str(manifest.get(field) or ""), length=64, label=field)
 
 
+@dataclass(frozen=True)
+class B3CoreFitEvidence:
+    """Artifact-neutral train-only HMM evidence shared by formal and controlled fits."""
+
+    initialization: Mapping[str, Any]
+    monitor_evidence: Mapping[str, Any]
+    likelihood: Mapping[str, Any]
+    covariance: Mapping[str, Any]
+    train_occupancy: Mapping[str, Any]
+    startprob: np.ndarray
+    transmat: np.ndarray
+    means: np.ndarray
+    covars: np.ndarray
+    terminal_likelihood: float | None
+    model_entry_status: str
+    model_entry_valid: bool
+
+
 def _train_only_frame(
     panel: Any,
     *,
@@ -339,28 +357,35 @@ def formal_b3_parameter_profile() -> dict[str, Any]:
     }
 
 
-def _fit_b3_train_only(
+def fit_b3_preprocessed_train_only(
     item: B3TrainOnlySeries,
     *,
-    family: str,
-    level: str,
-    feature_names: tuple[str, ...],
-    preprocess: Mapping[str, Any],
+    train: np.ndarray,
     seed: int,
-    numeric_environment: Mapping[str, Any],
-) -> tuple[dict[str, Any], B3FittedModel]:
-    """Fit one formal B3 entry without touching validation or future utility."""
+) -> B3CoreFitEvidence:
+    """Fit one already-preprocessed train matrix without artifact or selection semantics."""
 
     try:
         from hmmlearn.hmm import GaussianHMM
     except ImportError as exc:  # pragma: no cover - dependency gate is explicit.
         raise StateModelSetError("hmmlearn==0.3.3 is required for formal B3 training") from exc
-    item.validate(len(feature_names))
+    prepared = np.ascontiguousarray(np.asarray(train, dtype="<f8"))
+    if prepared.ndim != 2 or prepared.shape[0] != len(item.train_dates) or prepared.shape[1] < 1:
+        raise B3TrainingStageError(
+            "initialization",
+            "hmm_risk_model_initialization_failed",
+            StateModelSetError("B3 preprocessed train matrix shape is invalid"),
+        )
+    if not np.isfinite(prepared).all():
+        raise B3TrainingStageError(
+            "initialization",
+            "hmm_risk_model_initialization_failed",
+            StateModelSetError("B3 preprocessed train matrix contains non-finite values"),
+        )
     try:
-        train = _apply_preprocess(item.train_observations, preprocess)
-        reference = _sector_local_reference_variance(train)
+        reference = _sector_local_reference_variance(prepared)
         startprob, transmat, means, initialized_covars, initialization = _manual_b3_diag04_initialization(
-            train,
+            prepared,
             sector_reference_variance=reference,
             random_seed=seed,
         )
@@ -377,7 +402,7 @@ def _fit_b3_train_only(
         "diagnostic_source_contract": initialization.get("schema_version"),
         "formal_initialization_contract_applied": True,
     }
-    prior = C008_B3_DIAG04_NU * np.broadcast_to(reference, (3, len(feature_names))).copy()
+    prior = C008_B3_DIAG04_NU * np.broadcast_to(reference, (3, prepared.shape[1])).copy()
     try:
         model = GaussianHMM(
             n_components=3,
@@ -402,7 +427,7 @@ def _fit_b3_train_only(
         model.transmat_ = transmat.copy()
         model.means_ = means.copy()
         model.covars_ = initialized_covars.copy()
-        model.fit(train)
+        model.fit(prepared)
     except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
         raise B3TrainingStageError("fit", "hmm_risk_model_fit_failed", exc) from exc
     try:
@@ -418,7 +443,7 @@ def _fit_b3_train_only(
         raw_covars = np.asarray(model._covars_, dtype=np.float64)
         covariance_evidence, _, smoothed_audit_log_likelihood = _b3_diag04_covariance_evidence(
             model,
-            train,
+            prepared,
             raw_covars=raw_covars,
             sector_reference_variance=reference,
         )
@@ -430,7 +455,7 @@ def _fit_b3_train_only(
         ) from exc
     covariance_evidence = {
         **covariance_evidence,
-        "train_rows": int(train.shape[0]),
+        "train_rows": int(prepared.shape[0]),
         "postfit_projection_performed": False,
         "smoothed_audit_log_likelihood": smoothed_audit_log_likelihood,
     }
@@ -440,7 +465,7 @@ def _fit_b3_train_only(
         fitted_transmat = _transition_matrix(model.transmat_, f"{item.sector_code}.transmat", 3)
         fitted_means = _finite_array(model.means_, f"{item.sector_code}.means", ndim=2)
         train_posteriors = causal_forward_posteriors(
-            train,
+            prepared,
             startprob=fitted_startprob,
             transmat=fitted_transmat,
             means=fitted_means,
@@ -459,6 +484,66 @@ def _fit_b3_train_only(
         ) from exc
     monitor_history = list(monitor_evidence.get("history") or ())
     terminal_likelihood = monitor_history[-1] if monitor_history else None
+    independent_valid = (
+        likelihood.get("convergence_valid") is True
+        and likelihood.get("likelihood_valid") is True
+        and covariance.get("covariance_valid") is True
+        and occupancy.get("train_occupancy_valid") is True
+    )
+    independent_statuses = {
+        str(likelihood.get("monitor_status") or ""),
+        str(likelihood.get("likelihood_status") or ""),
+        str(covariance.get("covariance_status") or ""),
+        str(occupancy.get("train_occupancy_status") or ""),
+    }
+    if independent_valid:
+        model_entry_status = "accepted"
+    elif "insufficient_evidence" in independent_statuses:
+        model_entry_status = "insufficient_evidence"
+    else:
+        model_entry_status = "failed"
+    return B3CoreFitEvidence(
+        initialization=initialization,
+        monitor_evidence=monitor_evidence,
+        likelihood=likelihood,
+        covariance=covariance,
+        train_occupancy=occupancy,
+        startprob=fitted_startprob,
+        transmat=fitted_transmat,
+        means=fitted_means,
+        covars=raw_covars,
+        terminal_likelihood=terminal_likelihood,
+        model_entry_status=model_entry_status,
+        model_entry_valid=independent_valid,
+    )
+
+
+def _fit_b3_train_only(
+    item: B3TrainOnlySeries,
+    *,
+    family: str,
+    level: str,
+    feature_names: tuple[str, ...],
+    preprocess: Mapping[str, Any],
+    seed: int,
+    numeric_environment: Mapping[str, Any],
+) -> tuple[dict[str, Any], B3FittedModel]:
+    """Fit one formal B3 entry without touching validation or future utility."""
+
+    item.validate(len(feature_names))
+    try:
+        train = _apply_preprocess(item.train_observations, preprocess)
+    except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+        raise B3TrainingStageError(
+            "initialization",
+            "hmm_risk_model_initialization_failed",
+            exc,
+        ) from exc
+    core = fit_b3_preprocessed_train_only(item, train=train, seed=seed)
+    fitted_startprob = core.startprob
+    fitted_transmat = core.transmat
+    fitted_means = core.means
+    raw_covars = core.covars
     model_body = {
         "schema_version": "hmm_risk_b3_fitted_model_v1",
         "contract_version": D3_CONTRACT_VERSION,
@@ -496,24 +581,6 @@ def _fit_b3_train_only(
         pit_constituent_manifest_hash=item.pit_constituent_manifest_hash,
         model_payload_sha256=model_hash,
     )
-    independent_valid = (
-        likelihood.get("convergence_valid") is True
-        and likelihood.get("likelihood_valid") is True
-        and covariance.get("covariance_valid") is True
-        and occupancy.get("train_occupancy_valid") is True
-    )
-    independent_statuses = {
-        str(likelihood.get("monitor_status") or ""),
-        str(likelihood.get("likelihood_status") or ""),
-        str(covariance.get("covariance_status") or ""),
-        str(occupancy.get("train_occupancy_status") or ""),
-    }
-    if independent_valid:
-        model_entry_status = "accepted"
-    elif "insufficient_evidence" in independent_statuses:
-        model_entry_status = "insufficient_evidence"
-    else:
-        model_entry_status = "failed"
     entry_body = {
         "schema_version": "hmm_risk_b3_training_entry_receipt_v1",
         "contract_version": D3_CONTRACT_VERSION,
@@ -525,16 +592,16 @@ def _fit_b3_train_only(
         "feature_count": len(feature_names),
         "training_rows": int(train.shape[0]),
         "fit_status": "accepted",
-        "model_entry_status": model_entry_status,
-        "model_entry_valid": independent_valid,
-        "initialization_evidence": initialization,
+        "model_entry_status": core.model_entry_status,
+        "model_entry_valid": core.model_entry_valid,
+        "initialization_evidence": dict(core.initialization),
         "parameter_profile": formal_b3_parameter_profile(),
         "numeric_environment": dict(numeric_environment),
-        "monitor_evidence": monitor_evidence,
-        "likelihood": likelihood,
-        "covariance": covariance,
-        "train_occupancy": occupancy,
-        "final_train_log_likelihood": terminal_likelihood,
+        "monitor_evidence": dict(core.monitor_evidence),
+        "likelihood": dict(core.likelihood),
+        "covariance": dict(core.covariance),
+        "train_occupancy": dict(core.train_occupancy),
+        "final_train_log_likelihood": core.terminal_likelihood,
         "final_train_log_likelihood_source": "monitor_history_terminal_value",
         "model_payload_sha256": model_hash,
         "validation_accessed": False,

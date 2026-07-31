@@ -69,6 +69,24 @@ from backend.services.hmm_risk.b3_training import (  # noqa: E402
     run_level_repeat,
     write_b3_ready_model_set,
 )
+from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
+    CONTROL_PROFILE_RECEIPT_SHA256 as B3_D1_CONTROL_PROFILE_RECEIPT_SHA256,
+    CONTROL_SECTOR as B3_D1_CONTROL_SECTOR,
+    CONTROL_SOURCE_SET_SHA256 as B3_D1_CONTROL_SOURCE_SET_SHA256,
+    CONTROL_TRAIN_INPUT_MANIFEST_SHA256 as B3_D1_CONTROL_TRAIN_INPUT_MANIFEST_SHA256,
+    D1InactiveDimensionError,
+    FEATURE_DEFINITION_SHA256 as B3_D1_FEATURE_DEFINITION_SHA256,
+    PREPROCESS_IDENTITY_SHA256 as B3_D1_PREPROCESS_IDENTITY_SHA256,
+    REPORT_SCHEMA_VERSION as B3_D1_REPORT_SCHEMA_VERSION,
+    TREATMENT_PROFILE_RECEIPT_SHA256 as B3_D1_TREATMENT_PROFILE_RECEIPT_SHA256,
+    TREATMENT_SECTOR as B3_D1_TREATMENT_SECTOR,
+    TREATMENT_SOURCE_SET_SHA256 as B3_D1_TREATMENT_SOURCE_SET_SHA256,
+    TREATMENT_TRAIN_INPUT_MANIFEST_SHA256 as B3_D1_TREATMENT_TRAIN_INPUT_MANIFEST_SHA256,
+    build_controlled_refit_report as build_b3_d1_controlled_refit_report,
+    run_controlled_process as run_b3_d1_controlled_process,
+    validate_source_identity_set as validate_b3_d1_source_identity_set,
+    write_controlled_refit_report as write_b3_d1_controlled_refit_report,
+)
 from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
     C010_FORMULA_VERSION,
     C010_POLICY_VERSION,
@@ -2197,6 +2215,325 @@ def prepare_b3_remediation_diag02(
     )
 
 
+def _b3_d1_frozen_authority(
+    formal_report: dict[str, Any],
+    blocker_report: dict[str, Any],
+    remediation_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate and extract the exact D1-B treatment/control authority without fitting."""
+
+    validate_b3_remediation_authorities(formal_report, blocker_report)
+    _require_canonical_receipt(remediation_report, label="D1-B remediation diagnostic")
+    projection = build_b3_remediation_projection(blocker_report)
+    if (
+        remediation_report.get("train_projection_sha256") != projection.get("projection_sha256")
+        or remediation_report.get("train_projection") != projection
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B remediation train projection differs from the blocker authority",
+        )
+    preprocess_by_level = b3_remediation_preprocess_identities(
+        projection,
+        approved_fallback={
+            "legacy_covfix:L1": {
+                "family": "identity",
+                "winsor_low": None,
+                "winsor_high": None,
+                "center": None,
+                "scale": None,
+            }
+        },
+    )
+    preprocess = preprocess_by_level.get("autocycle_all_core:L2")
+    if not isinstance(preprocess, dict) or canonical_sha256(preprocess) != B3_D1_PREPROCESS_IDENTITY_SHA256:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_preprocess_mismatch",
+            "D1-B autocycle L2 preprocess authority is invalid",
+        )
+
+    raw_profiles = remediation_report.get("profiles")
+    if not isinstance(raw_profiles, list):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B remediation profiles are missing",
+        )
+    profiles: dict[str, dict[str, Any]] = {}
+    for sector, expected_receipt, expected_train_input in (
+        (
+            B3_D1_TREATMENT_SECTOR,
+            B3_D1_TREATMENT_PROFILE_RECEIPT_SHA256,
+            B3_D1_TREATMENT_TRAIN_INPUT_MANIFEST_SHA256,
+        ),
+        (
+            B3_D1_CONTROL_SECTOR,
+            B3_D1_CONTROL_PROFILE_RECEIPT_SHA256,
+            B3_D1_CONTROL_TRAIN_INPUT_MANIFEST_SHA256,
+        ),
+    ):
+        matches = [
+            value
+            for value in raw_profiles
+            if isinstance(value, dict)
+            and value.get("family") == "autocycle_all_core"
+            and value.get("level") == "L2"
+            and value.get("sector_code") == sector
+        ]
+        if len(matches) != 1:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                f"D1-B remediation profile is incomplete for {sector}",
+            )
+        profile = matches[0]
+        profile_body = {key: value for key, value in profile.items() if key != "profile_receipt_sha256"}
+        if profile.get("profile_receipt_sha256") != canonical_sha256(profile_body):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                f"D1-B remediation profile receipt is invalid for {sector}",
+            )
+        if (
+            profile.get("profile_receipt_sha256") != expected_receipt
+            or profile.get("preprocess_identity_sha256") != B3_D1_PREPROCESS_IDENTITY_SHA256
+            or profile.get("feature_definition_sha256") != B3_D1_FEATURE_DEFINITION_SHA256
+            or profile.get("train_input_manifest_sha256") != expected_train_input
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                f"D1-B remediation profile identity drifted for {sector}",
+            )
+        profiles[sector] = profile
+
+    raw_evidence = blocker_report.get("targeted_evidence")
+    if not isinstance(raw_evidence, list):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B blocker evidence is missing",
+        )
+
+    def source_set(sector: str, source_role: str, expected_sha256: str) -> tuple[dict[str, Any], ...]:
+        matches = [
+            value
+            for value in raw_evidence
+            if isinstance(value, dict)
+            and value.get("family") == "autocycle_all_core"
+            and value.get("level") == "L2"
+            and value.get("sector_code") == sector
+            and value.get("role") == source_role
+        ]
+        values = [
+            {
+                "seed": value.get("seed"),
+                "diagnostic_entry_sha256": value.get("diagnostic_entry_sha256"),
+                "source_entry_receipt_sha256": value.get("source_entry_receipt_sha256"),
+            }
+            for value in matches
+        ]
+        return validate_b3_d1_source_identity_set(values, expected_sha256=expected_sha256)
+
+    treatment_sources = source_set(B3_D1_TREATMENT_SECTOR, "rejected", B3_D1_TREATMENT_SOURCE_SET_SHA256)
+    control_sources = source_set(B3_D1_CONTROL_SECTOR, "control", B3_D1_CONTROL_SOURCE_SET_SHA256)
+    control_by_seed = {
+        int(value["seed"]): value
+        for value in raw_evidence
+        if isinstance(value, dict)
+        and value.get("family") == "autocycle_all_core"
+        and value.get("level") == "L2"
+        and value.get("sector_code") == B3_D1_CONTROL_SECTOR
+        and value.get("role") == "control"
+    }
+    control_hashes: dict[int, dict[str, str]] = {}
+    for source in control_sources:
+        seed = int(source["seed"])
+        evidence = control_by_seed.get(seed)
+        training_receipt = evidence.get("training_receipt") if isinstance(evidence, dict) else None
+        fitted_model = evidence.get("fitted_model_payload") if isinstance(evidence, dict) else None
+        if not isinstance(training_receipt, dict) or not isinstance(fitted_model, dict):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                f"D1-B frozen control payload is missing for seed {seed}",
+            )
+        entry_hash = str(training_receipt.get("entry_receipt_sha256") or "")
+        model_hash = str(fitted_model.get("model_payload_sha256") or "")
+        if entry_hash != source["source_entry_receipt_sha256"]:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                f"D1-B frozen control entry identity drifted for seed {seed}",
+            )
+        control_hashes[seed] = {
+            "entry_receipt_sha256": entry_hash,
+            "model_payload_sha256": model_hash,
+        }
+    numeric_environment = blocker_report.get("numeric_environment")
+    thread_env = numeric_environment.get("thread_env") if isinstance(numeric_environment, dict) else None
+    thread_pools = numeric_environment.get("thread_pools") if isinstance(numeric_environment, dict) else None
+    if (
+        not isinstance(numeric_environment, dict)
+        or blocker_report.get("numeric_environment_sha256") != canonical_sha256(numeric_environment)
+        or not isinstance(thread_env, dict)
+        or any(
+            thread_env.get(key) != "1"
+            for key in (
+                "OMP_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS",
+                "MKL_NUM_THREADS",
+                "VECLIB_MAXIMUM_THREADS",
+                "NUMEXPR_NUM_THREADS",
+            )
+        )
+        or not isinstance(thread_pools, list)
+        or any(not isinstance(pool, dict) or pool.get("num_threads") != 1 for pool in thread_pools)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B numeric environment authority is invalid",
+        )
+    return {
+        "projection": projection,
+        "preprocess": preprocess,
+        "profiles": profiles,
+        "treatment_source_identities": treatment_sources,
+        "control_source_identities": control_sources,
+        "frozen_control_hashes": control_hashes,
+        "numeric_environment": numeric_environment,
+    }
+
+
+def prepare_b3_d1_controlled_pass(
+    request: dict[str, Any],
+    formal_report: dict[str, Any],
+    blocker_report: dict[str, Any],
+    remediation_report: dict[str, Any],
+    *,
+    db_prefix: str,
+    process_identity: str,
+) -> dict[str, Any]:
+    """Run one 16-attempt D1-B process after all frozen authorities close."""
+
+    if process_identity not in {"fresh_process_1", "fresh_process_2"}:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1-B child process identity is invalid",
+        )
+    authority = _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report)
+    current_environment = c008_b3_diag04_fixed_numeric_environment()
+    _validate_b3_blocker_numeric_environment(current_environment)
+    if current_environment != authority["numeric_environment"]:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B current numeric environment differs from the frozen blocker environment",
+        )
+    target_manifest = derive_b3_blocker_target_manifest(formal_report)
+    inputs, _ = _load_b3_blocker_train_inputs(
+        request,
+        db_prefix=db_prefix,
+        target_manifest=target_manifest,
+    )
+    families = [value for value in request.get("families") or () if value.get("family") == "autocycle_all_core"]
+    if len(families) != 1:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B autocycle family request is invalid",
+        )
+    series = _direct_train_series_for_family(inputs, families[0])["L2"]
+    if set((B3_D1_TREATMENT_SECTOR, B3_D1_CONTROL_SECTOR)) - set(series):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B treatment/control train inputs are missing",
+        )
+    return run_b3_d1_controlled_process(
+        treatment_item=series[B3_D1_TREATMENT_SECTOR],
+        control_item=series[B3_D1_CONTROL_SECTOR],
+        preprocess=authority["preprocess"],
+        process_identity=process_identity,
+        numeric_environment=current_environment,
+        treatment_source_identities=authority["treatment_source_identities"],
+        control_source_identities=authority["control_source_identities"],
+        frozen_control_hashes=authority["frozen_control_hashes"],
+    )
+
+
+def _b3_d1_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--request",
+        str(Path(args.request).resolve()),
+        "--output-root",
+        str(Path(args.output_root).resolve()),
+        "--env-file",
+        str(Path(args.env_file).resolve()),
+        "--db-env-prefix",
+        str(args.db_env_prefix),
+        "--b3-formal-report",
+        str(Path(args.b3_formal_report).resolve()),
+        "--b3-blocker-report",
+        str(Path(args.b3_blocker_report).resolve()),
+        "--b3-remediation-report",
+        str(Path(args.b3_remediation_report).resolve()),
+        "--b3-process-identity",
+        process_identity,
+        "--_b3-d1-controlled-child",
+    ]
+
+
+def _parse_b3_d1_child_payload(payload: bytes, *, process_identity: str) -> dict[str, Any]:
+    try:
+        value = json.loads(payload.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            f"D1-B {process_identity} returned invalid JSON: {exc}",
+        ) from exc
+    if not isinstance(value, dict) or canonical_json_bytes(value) != payload:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            f"D1-B {process_identity} did not return one canonical JSON object",
+        )
+    receipt = str(value.get("process_receipt_sha256") or "")
+    body = {key: item for key, item in value.items() if key != "process_receipt_sha256"}
+    if value.get("process_identity") != process_identity or receipt != canonical_sha256(body):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            f"D1-B {process_identity} receipt identity is invalid",
+        )
+    return value
+
+
+def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
+    """Run exactly two fresh 16-attempt processes; never select or write models."""
+
+    formal_report = _load_json_mapping(Path(args.b3_formal_report).resolve(), label="formal B3 report")
+    blocker_report = _load_json_mapping(Path(args.b3_blocker_report).resolve(), label="formal blocker report")
+    remediation_report = _load_json_mapping(Path(args.b3_remediation_report).resolve(), label="remediation report")
+    _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report)
+    environment = os.environ.copy()
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        environment[key] = "1"
+    processes: list[dict[str, Any]] = []
+    for process_identity in ("fresh_process_1", "fresh_process_2"):
+        completed = subprocess.run(
+            _b3_d1_child_command(args, process_identity),
+            check=False,
+            capture_output=True,
+            env=environment,
+            timeout=7200,
+        )
+        if completed.returncode != 0:
+            error = completed.stderr.decode("utf-8", errors="replace")[-4000:]
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_contract_invalid",
+                f"D1-B {process_identity} failed returncode={completed.returncode}: {error}",
+            )
+        processes.append(_parse_b3_d1_child_payload(completed.stdout, process_identity=process_identity))
+    return build_b3_d1_controlled_refit_report(processes[0], processes[1], producer_commit=_git_commit())
+
+
 def _b3_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
     return [
         sys.executable,
@@ -2493,6 +2830,10 @@ def parse_args() -> argparse.Namespace:
         "--b3-remediation-diag02-output",
         help="Run approved no-fit remediation evidence closure without validation, selection, or model writes.",
     )
+    diagnostic_group.add_argument(
+        "--b3-d1-controlled-refit-output",
+        help="Run the approved D1-B 32-fit controlled diagnostic without D5/D6 or model/READY writes.",
+    )
     parser.add_argument(
         "--b3-request-candidate-output",
         help="Immutable request candidate output; required only with --b3-preflight-output.",
@@ -2501,9 +2842,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--_c008-b3-diag04-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-blocker-diag01-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--_b3-d1-controlled-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--b3-process-identity", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-formal-report", help="Approved immutable formal B3 preparation report.")
     parser.add_argument("--b3-blocker-report", help="Approved immutable C-008-B3-FORMAL-BLOCKER-DIAG-01 report.")
+    parser.add_argument("--b3-remediation-report", help="Approved immutable C-008-B3-REMEDIATION-DIAG-02 report.")
     parser.add_argument("--b3-target-manifest-sha256", default="", help=argparse.SUPPRESS)
     return parser.parse_args()
 
@@ -2526,24 +2869,44 @@ def main() -> int:
             request = _load_request(request_path)
         blocker_output = getattr(args, "b3_blocker_diagnostic_output", None)
         remediation_output = getattr(args, "b3_remediation_diag02_output", None)
+        d1_output = getattr(args, "b3_d1_controlled_refit_output", None)
         blocker_formal_report = getattr(args, "b3_formal_report", None)
         remediation_blocker_report = getattr(args, "b3_blocker_report", None)
+        d1_remediation_report = getattr(args, "b3_remediation_report", None)
         blocker_target_sha256 = getattr(args, "b3_target_manifest_sha256", "")
         blocker_parent = bool(blocker_output)
         blocker_child = bool(getattr(args, "_b3_blocker_diag01_child", False))
-        if blocker_parent or blocker_child:
+        d1_parent = bool(d1_output)
+        d1_child = bool(getattr(args, "_b3_d1_controlled_child", False))
+        if d1_parent or d1_child:
+            if not blocker_formal_report or not remediation_blocker_report or not d1_remediation_report:
+                raise StateModelSetError(
+                    "--b3-formal-report, --b3-blocker-report, and --b3-remediation-report "
+                    "are required for the D1-B controlled diagnostic"
+                )
+            if blocker_target_sha256:
+                raise StateModelSetError("blocker target identity is not valid for the D1-B controlled diagnostic")
+            if d1_child and args.b3_process_identity not in {"fresh_process_1", "fresh_process_2"}:
+                raise StateModelSetError("D1-B controlled child process identity is invalid")
+            if d1_parent and args.b3_process_identity:
+                raise StateModelSetError("D1-B controlled parent must not declare a child process identity")
+        elif blocker_parent or blocker_child:
             if not blocker_formal_report:
                 raise StateModelSetError("--b3-formal-report is required for the blocker diagnostic")
             if remediation_blocker_report:
                 raise StateModelSetError("--b3-blocker-report is only valid with --b3-remediation-diag02-output")
+            if d1_remediation_report:
+                raise StateModelSetError("--b3-remediation-report is only valid with --b3-d1-controlled-refit-output")
         elif remediation_output:
             if not blocker_formal_report or not remediation_blocker_report:
                 raise StateModelSetError(
                     "--b3-formal-report and --b3-blocker-report are required for remediation DIAG-02"
                 )
+            if d1_remediation_report:
+                raise StateModelSetError("--b3-remediation-report is only valid with --b3-d1-controlled-refit-output")
             if blocker_target_sha256:
                 raise StateModelSetError("blocker child target identity is not valid for remediation DIAG-02")
-        elif blocker_formal_report or blocker_target_sha256 or remediation_blocker_report:
+        elif blocker_formal_report or blocker_target_sha256 or remediation_blocker_report or d1_remediation_report:
             raise StateModelSetError("B3 diagnostic authority arguments require their matching diagnostic mode")
         if blocker_parent and blocker_target_sha256:
             raise StateModelSetError("--b3-target-manifest-sha256 is child-only")
@@ -2658,6 +3021,26 @@ def main() -> int:
             report = diagnose_c008_b3_diag04(request, db_prefix=str(args.db_env_prefix))
             sys.stdout.buffer.write(canonical_json_bytes(report))
             return 0
+        if d1_child:
+            formal_report = _load_json_mapping(Path(blocker_formal_report).resolve(), label="formal B3 report")
+            blocker_report = _load_json_mapping(
+                Path(remediation_blocker_report).resolve(),
+                label="formal blocker report",
+            )
+            remediation_report = _load_json_mapping(
+                Path(d1_remediation_report).resolve(),
+                label="remediation report",
+            )
+            report = prepare_b3_d1_controlled_pass(
+                request,
+                formal_report,
+                blocker_report,
+                remediation_report,
+                db_prefix=str(args.db_env_prefix),
+                process_identity=str(args.b3_process_identity),
+            )
+            sys.stdout.buffer.write(canonical_json_bytes(report))
+            return 0
         if blocker_child:
             formal_report = _load_json_mapping(Path(blocker_formal_report).resolve(), label="formal B3 report")
             target_manifest = derive_b3_blocker_target_manifest(formal_report)
@@ -2700,6 +3083,63 @@ def main() -> int:
             }
             print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
             return 0 if report["status"] == "READY" else 1
+        if d1_parent:
+            report_path = Path(d1_output).resolve()
+            try:
+                report = run_b3_d1_controlled_repeated(args)
+            except Exception as exc:
+                failure_body = {
+                    "schema_version": B3_D1_REPORT_SCHEMA_VERSION,
+                    "diagnostic_contract": "C-008-B3-REMEDIATION-D1-B-REFIT-01",
+                    "producer_commit": _git_commit(),
+                    "status": "diagnostic_failed",
+                    "mechanism_assessment": "inconclusive",
+                    "mechanism_assessment_reason_codes": [
+                        str(
+                            getattr(
+                                exc,
+                                "reason_code",
+                                "hmm_risk_model_inactive_dimension_contract_invalid",
+                            )
+                        )
+                    ],
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[-4000:],
+                    "d5_compatibility_evidence_ready": False,
+                    "process_receipts": [],
+                    "canonical_payload_bitwise_equal": False,
+                    "attempt_count": None,
+                    "fit_budget_completion_unknown": True,
+                    "selection_performed": False,
+                    "d3_d4_descriptive_contracts_applied": False,
+                    "formal_model_set_acceptance_performed": False,
+                    "hard_semantic_authority_changed": False,
+                    "model_write_performed": False,
+                    "ready_artifact_write_performed": False,
+                    "database_write_performed": False,
+                    "runtime_action_performed": False,
+                }
+                failure = {**failure_body, "receipt_sha256": canonical_sha256(failure_body)}
+                write_b3_d1_controlled_refit_report(report_path, failure)
+                raise
+            report_sha256 = write_b3_d1_controlled_refit_report(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_c008_b3_d1_controlled_refit_cli_receipt_v1",
+                "status": report["status"],
+                "diagnostic_contract": report["diagnostic_contract"],
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "mechanism_assessment": report["mechanism_assessment"],
+                "d5_compatibility_evidence_ready": report["d5_compatibility_evidence_ready"],
+                "attempt_count": report["attempt_count"],
+                "selection_performed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0 if report["status"] == "diagnostic_complete" else 1
         if remediation_output:
             report_path = Path(remediation_output).resolve()
             formal_report = _load_json_mapping(Path(blocker_formal_report).resolve(), label="formal B3 report")
