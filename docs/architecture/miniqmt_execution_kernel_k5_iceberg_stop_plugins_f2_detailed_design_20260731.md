@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K5 Iceberg/Stop Plugin 扩展 F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_ready_for_pr`；K5 implementation=`implemented_verified_local_pending_pr_ci`，source merge=`not_committed`。
+> Feature tier：`F2`。文档状态：`implementation_pr_open_pending_required_ci`；K5 implementation=`implemented_verified_local_pr_2978_pending_required_ci`，source merge=`pending_pr_2978`。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -485,7 +485,7 @@ DEV测试只使用现有DEV配置和disposable schema，不执行新DDL：
 | `F-097` | §8 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k5_adapter_lifecycle.py` final=`15 passed`，Stop完整向量闭合 | implemented_verified_local | none |
 | `F-098` | §9–§11 | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_vnpy_k5_shadow_postgres.py -q`=`1 passed`；public K2 transition在lifecycle direct覆盖 | implemented_verified_local | none |
 | `F-099` | §12 | coverage aggregate=`38 passed` + manifest focused=`4 passed`；`python -m nox -s miniqmt_execution_runtime_l2`=`1127 passed,31 skipped`；`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；四模块line/branch均达标 | implemented_verified_local | none |
-| `F-100` | §13 | artifact: `docs/architecture/miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md`、父蓝图、统一蓝图；阶段与生产状态分离 | implementation_ready_for_pr | none |
+| `F-100` | §13 | artifact: `docs/architecture/miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md`、父蓝图、统一蓝图；PR #2978 已开放，required CI/merge/aftercare 与生产/runtime状态继续分离 | implemented_verified_local | none |
 
 ## 16. Formal Design Review and DESIGN-COMPLIANCE-001 / 正式设计审核
 
@@ -525,12 +525,12 @@ DEV测试只使用现有DEV配置和disposable schema，不执行新DDL：
 ## 17. Phase and Production State / 阶段与生产状态
 
 - K1/K2/K3/K4 overall：`implemented_verified + merged`。
-- K5 detailed design：`implementation_ready_for_pr`。
-- K5 implementation：`implemented_verified_local_pending_pr_ci`。
+- K5 detailed design：`implementation_pr_open_pending_required_ci`。
+- K5 implementation：`implemented_verified_local_pr_2978_pending_required_ci`。
 - K6：`not_started`。
 - Product runtime：未切换，现有产品route不变。
 - `design_source_merge=merged_pr_2968`；merge commit=`1e739dce8a5a18d9e9e4c16027801a7a81e34384`。
-- `implementation_source_merge=not_committed`。
+- `implementation_source_merge=pending_pr_2978`；实现主体 commit=`09e0755b`。
 - `close_sync=not_applicable_feature`。
 - `production_ddl_gate=noop`。
 - `production_dml_gate=noop`。
