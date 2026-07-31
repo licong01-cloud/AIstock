@@ -8,6 +8,7 @@ import types
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from backend.services.quantevolver.sector_risk_overlay import canonical_json_sha256
 
@@ -15,7 +16,7 @@ from backend.services.quantevolver.sector_risk_overlay import canonical_json_sha
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def _load_strategy_module(monkeypatch):
+def _load_strategy_module(monkeypatch, *, dedicated_v2=None, dedicated_capacity=None):
     decision = types.ModuleType("qlib.backtest.decision")
 
     class OrderDir:
@@ -58,6 +59,29 @@ def _load_strategy_module(monkeypatch):
     dependency.ScoreWeightedTopkStrategyV2 = ScoreV2
     dependency.ScoreWeightedTopkStrategyV2CapacityV1 = CapacityV1
     monkeypatch.setitem(sys.modules, "qe_suspend_filter_score_weighted_strategy", dependency)
+
+    class DefaultV2:
+        def _adjust_target_weight_map(self, weights, trade_start_time):
+            return dict(weights)
+
+        def _build_additional_rebalance_orders(self, **kwargs):
+            return []
+
+    class DefaultCapacity(DefaultV2):
+        pass
+
+    v2_module = types.ModuleType("score_weighted_strategy_v2")
+    v2_module.ScoreWeightedTopkStrategyV2 = dedicated_v2 or DefaultV2
+    monkeypatch.setitem(sys.modules, "score_weighted_strategy_v2", v2_module)
+    capacity_module = types.ModuleType("score_weighted_strategy_v2_capacity_v1")
+    capacity_module.ScoreWeightedTopkStrategyV2CapacityV1 = (
+        dedicated_capacity or DefaultCapacity
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "score_weighted_strategy_v2_capacity_v1",
+        capacity_module,
+    )
 
     spec = importlib.util.spec_from_file_location(
         "qe_sector_risk_overlay_strategy_under_test",
@@ -132,6 +156,53 @@ def _artifact(tmp_path, state="HIGH", include_gap_instrument=False):
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return manifest_path, data_path
+
+
+def test_de_risk_modes_fail_closed_when_parent_rebalance_hooks_are_missing(
+    tmp_path, monkeypatch
+) -> None:
+    module, _ = _load_strategy_module(monkeypatch)
+    manifest_path, data_path = _artifact(tmp_path)
+
+    class Base:
+        def __init__(self, **kwargs):
+            self.trade_position = types.SimpleNamespace(get_stock_list=lambda: [])
+
+    class Strategy(module._QESectorRiskOverlayMixin, Base):
+        pass
+
+    with pytest.raises(RuntimeError, match="missing required rebalance hooks"):
+        Strategy(
+            sector_risk_overlay_enabled=True,
+            sector_risk_overlay_mode="bounded_de_risk",
+            sector_risk_overlay_manifest_file=manifest_path,
+            sector_risk_overlay_data_file=data_path,
+            sector_risk_overlay_action_log=tmp_path / "actions.jsonl",
+        )
+
+
+def test_overlay_prefers_dedicated_rebalance_capable_parent(monkeypatch) -> None:
+    class DedicatedV2:
+        def _adjust_target_weight_map(self, weights, trade_start_time):
+            return dict(weights)
+
+        def _build_additional_rebalance_orders(self, **kwargs):
+            return []
+
+    class DedicatedCapacity(DedicatedV2):
+        pass
+
+    module, _ = _load_strategy_module(
+        monkeypatch,
+        dedicated_v2=DedicatedV2,
+        dedicated_capacity=DedicatedCapacity,
+    )
+
+    assert DedicatedV2 in module.QESectorRiskOverlayScoreWeightedTopkStrategyV2.__mro__
+    assert (
+        DedicatedCapacity
+        in module.QESectorRiskOverlayScoreWeightedTopkStrategyV2CapacityV1.__mro__
+    )
 
 
 def test_entry_gate_uses_effective_trade_date_not_prediction_date(tmp_path, monkeypatch) -> None:
