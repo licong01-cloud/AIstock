@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K6 产品切换与旧路线退役 F2 详细设计
 
-> Feature tier：`F2`。文档状态：`design_ready + merged`；design source PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`；K6 implementation=`not_started`。
+> Feature tier：`F2`。文档状态：`design_ready + merged`；design source PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`；K6-A=`implemented_verified_local`、`source_merge=pending_pr`，K6-B/C/D=`not_started`，K6 overall=`implementation_in_progress`。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -466,6 +466,8 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 - 实现 §4–§6 strict carriers、K6 migration triplet、repository writer/readback、diagnostics基底。
 - 复用 K2表并建立composite FK；无产品 activation。
 - 预计 5–7 个开发日；前置仅为本设计合入。
+- 当前实现证据：`kernel_product_contracts.py`、`kernel_product_repository.py`、七张 additive 表及 preflight/forward/guarded-rollback migration；append-only/CAS trigger、独立 `pg_catalog` 与 function-body readback、commit-unknown、幂等重试、0/1/N mixed command lineage均已直接验证。
+- 当前验证：K6 direct/DEV PostgreSQL=`34 passed`；contracts line/branch=`90.86%/72.50%`，repository line/branch=`87.17%/70.42%`；MiniQMT L2=`1159 passed,35 skipped`；L0、module registry、Ruff、format、py_compile、diff-check通过。首次 MiniQMT L2 暴露的 repository public-signature/MRO characterization 已补齐并由最终模块重跑验证，PR required CI仍是source merge前置证据。
 
 ### K6-B — dependent-BUY coordinator
 
@@ -530,11 +532,11 @@ K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | `F-101` | §0–§3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` scope/owner/no-diff matrix | design_ready | none |
-| `F-102` | §4.1 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py` dependent-BUY strict/negative matrix | design_ready | none |
+| `F-102` | §4.1；`kernel_product_contracts.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py` strict/negative matrix；direct/DEV aggregate=`34 passed`；contracts line/branch=`90.86%/72.50%` | implemented_verified_local | none |
 | `F-103` | §7 | target `backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy.py` full trigger/state/restart matrix | design_ready | none |
 | `F-104` | §4.2、§8 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py` 0/1/N, mixed, V1 reject, readback drift | design_ready | none |
-| `F-105` | §5 | target `backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py` clean/reapply/drift/readback/rollback | design_ready | none |
-| `F-106` | §6 | target `backend/tests/miniqmt_execution_runtime/test_kernel_k6_repository_postgres.py` atomicity/CAS/fence/concurrency/commit-unknown | design_ready | none |
+| `F-105` | §5；K6 migration triplet | `backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py` clean/reapply/catalog+function drift/readback/append-only/guarded rollback；DEV PostgreSQL通过 | implemented_verified_local | none |
+| `F-106` | §6；`kernel_product_repository.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py` transaction/CAS/fence/idempotency/mixed lineage/commit-unknown/readback drift；repository line/branch=`87.17%/70.42%` | implemented_verified_local | none |
 | `F-107` | §4.3、§9.1、§9.3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` owner/route-generation/drain/rollback matrix | design_ready | none |
 | `F-108` | §9.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_legacy_route_retirement.py` exact inventory + import/call-graph uniqueness | design_ready | none |
 | `F-109` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_diagnostics.py`; artifact: `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
@@ -576,7 +578,7 @@ K6 implementation完成定义：K6-A/B/C/D全部 `implemented_verified + merged`
 
 - K1/K2/K3/K4/K5 overall：`implemented_verified + merged`。
 - K6 detailed design：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）。
-- K6-A/B/C/D implementation：`not_started`。
+- K6-A implementation：`implemented_verified_local`，`source_merge=pending_pr`；K6-B/C/D：`not_started`；K6 overall：`implementation_in_progress`。
 - product runtime：`not_switched`。
 - `source_merge=merged_pr_2993`；`close_sync=not_applicable_feature`；state-sync/root sync/cleanup分别记录。
 - production DDL/DML/dependency/config/binding/broker/restart/runtime activation/normal trading day observation：全部 `noop/not_run`。
