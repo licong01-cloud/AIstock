@@ -1,11 +1,13 @@
-﻿# AIstock Issue Workflow Efficiency Case Optimization Design v2.4
+﻿# AIstock Issue Workflow Efficiency, RTK and Restart Governance Design v2.5
 
-版本：v2.4
-日期：2026-06-04
-状态：实施设计稿
+版本：v2.5（稳定文件路径沿用 v2.4）
+首次发布日期：2026-06-04
+本次更新日期：2026-07-31
+状态：实施设计稿，待设计 PR 审查与合入
 适用范围：AIstock issue / BUG 登记、修复、验证、PR、合入、close-sync、清理、复盘流程
 继承基线：`docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md`
-非目标：降低代码质量、绕过 PR/CI、跳过生产 Gate、修改业务功能、修改生产 DB 或运行时服务
+稳定路径说明：沿用 v2.4 文件路径作为本主题唯一主设计，避免新增平行文档或复制第二套规范
+非目标：降低代码质量、绕过 PR/CI、跳过生产 Gate、修改业务功能、修改生产 DB、替用户控制后端进程或把设计文档变成第二规范
 
 ## 1. 执行结论
 
@@ -14,7 +16,13 @@
 - **长任务 5 小时案例**：约 5 小时 20 分内连续合入 29 个 PR，其中 PR 打开到合入累计约 126 分钟，剩余约 208 分钟主要消耗在 PR 间重复实现、验证、同步、清理、状态检查和上下文切换。
 - **BUG-254 UI 案例**：Issue #714 13:17 创建，PR #730 15:57 合入，close-sync PR #732 16:01 合入；看似 2 小时 43 分，但集中修复与 PR/CI 阶段明显短得多，主要耗时来自排队穿插和 UI scope/验证计划不准。
 
-v2.4 的目标是：**不降低质量，只减少重复闭环、重复上下文、重复输出和错误验证选择**。今后的 issue/BUG 处理应让代码定位、修复和必要验证成为主要耗时，而不是流程恢复和报告开销。
+v2.5 在保留 v2.4 提效目标的基础上增加三个必须同时落地的治理目标：
+
+1. **RTK 纳入唯一开发规范**：支持时优先压缩高输出命令；不支持时明确回退，不把 RTK 变成阻塞任务的新门禁。
+2. **后端重启默认归用户所有**：任何 Codex、Claude、子代理、Validation Center 或其他窗口都不能从修复、验证、合入或 aftercare 授权中推断后端重启权限。
+3. **所有运行时相关 BUG 必须可跨重启生效**：修复必须落在持久化来源，并在用户完成重启后立即执行只读 smoke；仅在当前进程、热加载或手工缓存中成立的修复不能关闭 BUG。
+
+最终目标仍是：**不降低质量，只减少重复闭环、重复上下文、重复输出和错误验证选择**。代码定位、修复和必要验证应成为主要耗时，流程恢复、报告和等待不应反复放大固定成本。
 
 ## 2. 设计原则
 
@@ -26,6 +34,9 @@ v2.4 的目标是：**不降低质量，只减少重复闭环、重复上下文�
 6. **验证按风险选择**：本地先跑 targeted tests + changed-only/static；完整矩阵由 PR CI 判定，避免开发中反复跑全量。
 7. **close-sync 可批量**：registry-only close-sync 可集中 PR，但每个 BUG 仍保留独立证据、source PR、merge commit。
 8. **耗时可观测**：workflow 必须区分 queue time、active fix time、local validation、PR/CI wait、merge/sync/cleanup。
+9. **重启所有权与重启有效性分离**：窗口不得自行重启用户后端，但 workflow 必须产出可执行的用户重启计划和重启后验证计划。
+10. **授权不扩散**：修复、PR、merge、close-sync、DDL、依赖安装、runtime activation、backend restart 分别授权和报告；任一状态不能推导另一个状态。
+11. **文档不污染**：正式设计只进入 `docs/architecture/`，临时交换材料只进入忽略型 scratch；不得在根目录生成一次性 plan、日志、JSON 或 helper 脚本。
 
 ## 3. 案例问题归因
 
@@ -64,8 +75,17 @@ flowchart TD
   H --> I["one PR per compatible package"]
   I --> J["CI fast/full lane by classifier"]
   J --> K["merge when authorized"]
-  K --> L["batch/finalizer close-sync"]
-  L --> M["root fast-forward + cleanup"]
+  K --> L["root/release sync + dependency/DDL gates"]
+  L --> O{"Backend restart required?"}
+  O -->|"no"| P["post-restart gate = not_required"]
+  O -->|"yes"| Q["emit user-owned restart plan"]
+  Q --> R["wait for explicit user restart completion"]
+  R --> S["read-only identity + business smoke"]
+  S --> T{"post-restart gate passed?"}
+  T -->|"no"| U["fixed_source_pending_user_restart or failed"]
+  T -->|"yes"| P
+  P --> V["batch/finalizer close-sync"]
+  V --> M["root fast-forward + task-owned cleanup"]
   M --> N["compact report + postmortem summary"]
 ```
 
@@ -143,6 +163,132 @@ flowchart TD
 | `context_sources_count` | 读取的主要上下文源数量 |
 | `full_json_suppressed` | 是否避免向对话输出完整 JSON |
 
+### 5.7 RTK 使用契约
+
+在唯一开发规范新增稳定规则 `[TOOL-RTK-001]`，由 Markdown 定义语义、同版本 YAML 提供机器引用：
+
+- `git`、`rg`、`pytest`、`nox`、`npm` 等高输出外部命令在 RTK 可用且支持该子命令时优先使用 `rtk <command>`。
+- `Get-Content`、`Test-Path`、PowerShell 控制语句或 RTK 不支持的子命令允许直接执行；回退必须基于能力缺失，而不是静默绕过。
+- workflow receipt 记录 `rtk_used`、`rtk_version`、`fallback_used` 和 `fallback_reason`，不重复输出完整命令日志。
+- RTK 不存在、子命令不受支持或过滤器未信任时不得阻断业务任务；不得由窗口自行执行 `rtk trust`，也不得把项目过滤器当作业务或安全权威。
+- CI runner 不要求安装 RTK。CI 继续执行原始确定性命令，保证本地提效工具不会改变流水线语义。
+
+该规则只解决交互窗口输出压缩，不改变测试选择、业务逻辑、退出码和持久证据。
+
+### 5.8 后端重启所有权契约
+
+在唯一开发规范新增稳定规则 `[BACKEND-RESTART-OWNERSHIP-001]`：
+
+1. 默认所有 AIstock 后端实例均由用户负责重启，包括生产 `8001`、开发/验证 `8011/8012`、Validation Center、任务 worker、scheduler、WSL 后端和未固定端口的本地实例。
+2. Codex、Claude、子代理、IDE 窗口、浏览器验证窗口、Validation Center、CI/nightly 编排器不得自行重启用户拥有的后端。
+3. BUG 修复、测试、PR、merge、close-sync、aftercare、依赖安装、DDL、浏览器验证或“重启后验收”请求均不包含重启授权。
+4. 只有用户在当前任务中明确给出具体目标（服务/进程/端口/节点）和明确执行授权时，对应窗口才能执行一次该目标的重启；授权不能跨目标、跨窗口或跨任务复用。
+5. 未获授权时，窗口只输出 `backend_restart=pending_user_action`、精确重启命令、预期 runtime identity 和后续只读 smoke，然后等待用户执行。
+6. CI/测试框架可以创建并销毁由该测试在隔离端口上自行拥有的临时进程，但不得探测后控制、停止或替换用户已有后端；临时进程必须有 runner-owned identity 和 teardown receipt。
+
+这是用户明确要求的运维所有权，不是私增审批、RBAC 或业务门禁。它只约束实际进程控制，不阻止静态测试、subprocess 单测、隔离 cold-start 测试和重启计划生成。
+
+### 5.9 BUG 重启后生效契约
+
+在唯一开发规范新增稳定规则 `[BUG-RESTART-EFFECTIVE-001]`。每个正式 BUG 必须由 workflow 生成以下字段：
+
+```yaml
+runtime_impact: none | backend | frontend | worker | scheduler | client | database
+restart_target: none | backend:<port_or_service> | worker:<name> | client:<kind>
+restart_required: true | false
+restart_owner: user
+restart_authorization: not_required | pending_user_authorization | explicit_for_target
+persistence_basis:
+  merge_sha: <sha-or-pending>
+  config_version: <version-or-not-required>
+  migration_id: <id-or-not-required>
+  dependency_lock_hash: <hash-or-not-required>
+post_restart_smoke:
+  - <read-only health/identity/business command>
+post_restart_effective_gate: not_required | pending_user_restart | passed | failed
+```
+
+验收语义：
+
+- 运行时相关修复必须持久化到已合入源码、版本化配置、数据库 migration/DML readback、不可变 release 或持久任务状态；禁止只依赖 monkey patch、热加载、当前内存、手工 cache clear 或未追踪文件。
+- PR 前至少提供一次 fresh-process/subprocess/cold-import 直接测试，证明修复不依赖当前解释器或 Node 进程残留。
+- 涉及任务、队列、scheduler、idempotency key、远程 task mapping 或运行状态的修复，必须证明从 DB/CAS/outbox/manifest 等正式来源恢复。
+- 源码 PR 可以在 `post_restart_effective_gate=pending_user_restart` 时合入，但 BUG/GitHub Issue 不能 close-sync 为完成；状态保持 `fixed_source_pending_user_restart`。
+- 用户完成目标后端重启后，窗口只执行健康、runtime identity 与业务行为的只读 smoke。`merge_sha/config/schema/dependency` 任一不匹配或首个业务 smoke 失败时，gate 为 `failed`。
+- `runtime_impact=none` 的纯文档、纯测试或 registry 修复使用 `restart_required=false`、`post_restart_effective_gate=not_required`，并记录分类依据，禁止用 `not_required` 掩盖运行时影响。
+
+“立即生效”定义为：目标后端在其配置化 startup budget 内进入 ready，随后第一次只读业务 smoke 通过，不需要窗口再次改代码、补配置、清缓存或执行第二次重启。
+
+### 5.10 Workflow CLI 与状态机修改
+
+优先扩展现有 `scripts/aistock_issue_workflow.py`，不新建第二套 orchestrator：
+
+- `start/build_task_card`：根据 changed-file ownership、模块和 BUG 描述生成 runtime impact 与 restart contract；推断结果进入 task-card，允许在实现前通过正式 scope/metadata 更新纠正。
+- `finish`：验证 persistence basis、fresh-process evidence 和 restart plan；缺少时 `closure_ready=false`，但不要求在 PR 前实际控制生产后端。
+- `merge-finalizer/close-sync`：当 `restart_required=true` 且 gate 未通过时停止关闭动作，返回 `fixed_source_pending_user_restart`，不得把 source merged 改写为 BUG completed。
+- 新增只读 `restart-plan --bug-id BUG-NNN`：生成用户执行命令、精确目标、预期 identity、startup budget ref 与 smoke，不执行任何进程控制。
+- 新增 `post-restart-verify --bug-id BUG-NNN --target <target>`：只做 read-only identity/API/DB readback 与 evidence 记录；命令实现中不得包含 start/stop/restart 动作。
+- compact receipt 增加 `backend_restart`、`post_restart_effective_gate`、`runtime_identity_match` 和 `next_user_action`；完整证据仍只写任务 workflow artifact。
+- `postmortem` 分离 `waiting_for_user_restart_minutes`，避免把用户操作等待误算为 active fix time。
+
+`scripts/issue_flow.py` 只承载共享 schema/Context Pack 字段；不得复制标准正文。已有 BUG JSON 的兼容策略是缺失新字段时按 changed files 重新推断并标记 `schema_upgrade_required`，不得默认为 `not_required`。
+
+### 5.11 Skill、Claude command 与客户端同步
+
+实现 PR 必须同步修改以下入口的职责描述，但它们只引用标准 rule ID，不复制完整规范：
+
+| 入口 | 必须新增的行为 |
+| --- | --- |
+| `.codex/skills/aistock-task-router/SKILL.md` | 默认用户拥有后端重启；路由不得把验证或 aftercare 解释为重启授权；支持命令优先 RTK |
+| `.codex/skills/fix-aistock-issue/SKILL.md` | task-card 必读 restart contract；PR 前 fresh-process evidence；未重启时保持 pending |
+| `.codex/skills/aistock-merge-aftercare/SKILL.md` | merge/部署/重启分离；默认输出用户重启计划，不执行后端重启 |
+| `.codex/skills/aistock-validation-delegation/SKILL.md` | VC/CI 只能管理 runner-owned 隔离进程；不得重启用户后端 |
+| `.codex/skills/aistock-readonly-triage/SKILL.md` | 明确所有后端 restart 都超出只读范围 |
+| `.codex/skills/verify-aistock-feature/SKILL.md` | feature runtime acceptance 复用相同重启所有权与 post-restart evidence |
+| `.codex/skills/aistock-docs-handoff/SKILL.md` | 受控规范/skill 变更必须独立 worktree、workflow smoke，过程文件不得落根目录 |
+| 对应 `.claude/commands/*.md` | 与 Codex 入口保持相同语义和 hash 同步 |
+
+合入上述 client 文件后执行 `install-client --apply`，再用 `verify-clients --workflow-only` 校验所有目标 hash。旧客户端窗口重开只用于加载新入口，不等于、也不授权后端重启。
+
+### 5.12 CI、guardrail 与测试修改
+
+不新增独立长流水线，复用现有 workflow validation fast lane：
+
+- `docs/standards/aistock_development_standard_v1.5_20260523.md`：增加三个稳定 rule ID。
+- 同版本 YAML：更新 `source_sha256/updated_at`，新增 RTK machine reference、backend restart ownership manual control、BUG post-restart required evidence。
+- `scripts/ci_change_classifier.py`：确保标准、相关 skills/commands、workflow CLI 和 guardrail 测试仍路由到 `workflow_validation_only/docs_controlled`，不触发无关 backend 全矩阵。
+- `scripts/aistock_guardrail_scan.py` 或一个被其调用的窄检查：扫描 workflow/client/CI 路径中的未授权用户后端 process-control 命令；runner-owned 临时进程只允许通过显式结构化标记和隔离端口规则。
+- `.github/workflows/test.yml`：继续使用现有 workflow-validation-tests job，只增加目标测试；不得新增真实后端重启步骤。
+- `.github/workflows/pr-quality.yml`：在 compact summary 中显示 restart policy 检查结果和 docs-controlled 分类，不打印完整 receipt。
+- `backend/tests/test_aistock_guardrail_scan.py`：验证 Markdown/YAML 引用、source digest 和 process-control guardrail。
+- `backend/tests/scripts/test_aistock_issue_workflow.py`：覆盖 task-card、finish、restart-plan、post-restart-verify、close-sync pending/pass/fail 和旧 BUG schema 升级。
+- `backend/tests/scripts/test_ci_change_classifier.py`：覆盖标准+skill+workflow 混合变更仍使用 focused workflow lane。
+- `backend/tests/scripts/test_issue_flow.py`：覆盖新 Context Pack 字段和唯一标准引用。
+
+### 5.13 文档流程与目录洁净
+
+本设计及后续实现必须遵守：
+
+1. 设计更新使用最新 `origin/main` 创建 task branch 与独立 worktree；`F:\Dev\AIstock` 仅作为 sync/runtime root。
+2. 本主题只保留当前主设计文件；不得再创建 `proposal-final.md`、`new-plan.md` 或重复标准。
+3. 正式设计进入 `docs/architecture/`；临时 handoff 仅进入 `tmp/handoff/`、`docs/handoff/_scratch/` 或 `docs/handoff/local/`。
+4. 禁止新增或改写项目根目录的 `task_plan.md`、`findings.md`、`progress.md`、一次性 JSON、日志或调试脚本。最新 `origin/main` 已存在的三个同名 tracked 文件属于本设计之外的历史库存；本设计只读识别，不修改、不删除，后续清理必须由用户对明确文件另行授权。
+5. 设计 PR 使用 docs-fast-update：`git diff --check`、docs classifier dry-run、确认仅变更本主设计文件。
+6. 后续标准/skill/workflow 实现使用独立 docs-controlled/workflow PR，不与本设计 PR 偷渡；运行 workflow smoke、标准 digest/anchor 一致性、focused unit tests 和 client hash dry-run。
+7. 未经明确授权不合入设计或实现 PR，不同步生产根目录，不执行 `install-client --apply`，不清理 task worktree/branch。
+
+### 5.14 文件级实施清单
+
+| 阶段 | 文件 | 修改目的 |
+| --- | --- | --- |
+| D0 设计 | 本设计文件 | 固化边界、验收 ID、实施顺序；不改执行行为 |
+| D1 唯一规范 | `docs/standards/aistock_development_standard_v1.5_20260523.md/.yaml` | 新增 RTK、重启所有权、重启后生效 rule ID 与派生元数据 |
+| D2 Workflow | `scripts/aistock_issue_workflow.py`, `scripts/issue_flow.py` | restart contract、状态机、只读 plan/verify、兼容升级 |
+| D3 Guardrail/CI | `scripts/aistock_guardrail_scan.py`, `scripts/ci_change_classifier.py`, `.github/workflows/test.yml`, `.github/workflows/pr-quality.yml` | 拒绝未授权后端控制并保持 focused lane |
+| D4 客户端入口 | 上表 Codex skills 与对应 Claude commands | 跨窗口一致执行，不复制规范正文 |
+| D5 测试 | guardrail、issue workflow、classifier、issue flow focused tests | 证明门禁、兼容、无真实重启和最小流水线路由 |
+| D6 客户端 aftercare | `install-client`, `verify-clients` 运行证据 | 合入后同步入口；与后端重启完全分离 |
+
 ## 6. 验收矩阵
 
 | ID | 要求 | 验收方式 |
@@ -155,6 +301,19 @@ flowchart TD
 | IWO24-006 | workflow/CI 小修保持 fast-lane | ci_change_classifier 单元测试 |
 | IWO24-007 | postmortem 区分 queue 和 active fix | postmortem 单元测试 |
 | IWO24-008 | Batch PR 保留 per-issue evidence | batch workflow smoke |
+| IWO25-001 | 唯一规范包含 `[TOOL-RTK-001]`，支持时优先 RTK、缺失时显式回退 | Markdown/YAML anchor 与 workflow 单测 |
+| IWO25-002 | 所有用户后端默认 `restart_owner=user`，任何窗口不得推断授权 | guardrail scan + skill/command contract 测试 |
+| IWO25-003 | runner-owned 临时进程与用户后端严格区分 | CI fixture + isolation/port contract 测试 |
+| IWO25-004 | runtime 相关 BUG task-card 包含 persistence/restart/post-restart 字段 | issue workflow 单元测试 |
+| IWO25-005 | 缺少 fresh-process evidence 时 `closure_ready=false` | finish 单元测试 |
+| IWO25-006 | source merge 后 gate pending 时不能 close-sync completed | merge-finalizer/close-sync 单元测试 |
+| IWO25-007 | `restart-plan` 只生成用户命令，不执行 process control | subprocess mock/forbidden-call 单元测试 |
+| IWO25-008 | `post-restart-verify` 只读并核对 runtime identity 和首个业务 smoke | HTTP/DB readback fixture 单元测试 |
+| IWO25-009 | 旧 BUG 缺字段时要求 schema upgrade，不默认为 no-op | compatibility 单元测试 |
+| IWO25-010 | 标准/skill/workflow 混合变更只进入 focused workflow CI | classifier 单元测试和 CI dry-run |
+| IWO25-011 | 客户端同步后 Codex/Claude workflow lane hash 一致 | install-client dry-run + verify-clients |
+| IWO25-012 | 设计和实现均不新增或改写项目根目录过程文件；历史库存不被本任务触碰 | changed-files/root-pollution 检查 |
+| IWO25-013 | DESIGN-COMPLIANCE-001 四项逐项有直接证据 | 设计/代码/PR review matrix |
 
 ## 7. 预期收益
 
@@ -165,14 +324,19 @@ flowchart TD
 | UI Bug 登记 | scope/reproduce/verification 不准 | 一次登记生成可修复 Context Pack |
 | close-sync | 每 BUG 单独 2-4 分钟 | 批量或 finalizer 降低 aftercare 固定成本 |
 | token | 成功 JSON/rollup 重复输出 | 成功路径 token 降低 50%+ |
+| 重启验证 | merge 后临时热状态被误当完成 | 首次 cold-start smoke 可判定、可追溯 |
+| 后端控制 | 多窗口可能把验证请求解释为重启授权 | 默认用户执行，窗口只生成计划和只读验证 |
+| 文档管理 | 同主题方案和根目录过程文件扩散 | 单一主设计 + 独立 worktree + scratch 隔离 |
 
 ## 8. 落地顺序
 
-1. 合入本设计文档。
-2. 在独立 worktree 实施 workflow 工具优化：compact recommendation、UI intake hints、postmortem timing 字段、close-sync completed 语义。
-3. 增加/调整单元测试和 workflow-smoke。
-4. 合入后刷新 Codex/Claude client skill/command 入口。
-5. 用下一个真实 issue 验证：记录 active fix 时间和 compact 输出是否生效。
+1. 通过 docs-fast-update PR 审查并合入本设计，设计 PR 不改规范、skill 或执行代码。
+2. 新建独立 docs-controlled/workflow worktree，一次性更新唯一标准 Markdown/YAML、workflow schema 与 focused tests。
+3. 更新 Codex skills、Claude commands、classifier 与现有 CI jobs，运行标准 digest、workflow smoke、focused tests 和 client dry-run。
+4. 经明确授权合入实现 PR；分别报告 source merge、root sync、client install、backend restart 和 runtime verification。
+5. 合入后执行 `install-client --apply` 与 `verify-clients --workflow-only`；只要求客户端窗口重开加载入口，不触碰后端。
+6. 用下一个 runtime 相关真实 BUG 验证 `fixed_source_pending_user_restart -> 用户重启 -> post-restart passed -> close-sync` 完整状态机。
+7. 用一个 `runtime_impact=none` 的 docs/test BUG 验证 no-op 分类不会额外制造重启步骤。
 
 ## 9. 生产 Gate
 
@@ -180,4 +344,22 @@ flowchart TD
 - `production_frontend_dependency_gate`: `noop`
 - `production_backend_dependency_gate`: `noop`
 
-本设计只修改流程与文档，不触碰生产运行时、依赖或 DB。
+本设计 PR 只修改主设计文档，不触碰生产运行时、依赖或 DB，也不执行客户端同步。
+
+后续实现 PR 预计仍为：
+
+- `production_ddl_gate`: `noop`
+- `production_frontend_dependency_gate`: `noop`
+- `production_backend_dependency_gate`: `noop`
+- `backend_restart`: `pending_user_action` 或 `not_required`，绝不由实现窗口自行执行
+
+## 10. DESIGN-COMPLIANCE-001 预审
+
+| 检查项 | 本设计约束 | 当前结论 |
+| --- | --- | --- |
+| 禁止简化交付 | 标准、YAML、workflow、skills/commands、CI、测试和 client sync 全部纳入 D1-D6 | 设计覆盖；实现证据待后续 PR |
+| 禁止静默错误 | RTK 回退、schema upgrade、identity mismatch、post-restart failure 均要求显式状态 | 设计覆盖；实现证据待后续 PR |
+| 禁止改变业务逻辑 | 本设计只调整开发流程和进程控制所有权，不修改交易、研究或数据业务语义 | PASS for design scope |
+| 禁止私增门禁审批 | 后端用户重启所有权来自本次明确用户要求；不增加 RBAC、ACK 或研究审批 | PASS for design scope |
+
+本表只表示设计范围预审，不代表后续实现、PR、merge、client sync 或 runtime 验证已经完成。
