@@ -243,6 +243,19 @@ export type ArchivedRunListItem = {
   trade_count?: number;
 };
 
+export type RunOperatorOption = {
+  value: string;
+  task_name?: string | null;
+  run_type?: string | null;
+  model_type?: string | null;
+  label_horizon?: number | null;
+  factor_count?: number | null;
+  loop_index?: number | null;
+  status?: string | null;
+  completed_at?: string | null;
+  archived_at?: string | null;
+};
+
 export type BackfillCandidateReport = {
   status: string;
   include_archived: boolean;
@@ -564,6 +577,39 @@ export type LongTrendQualityQuery = {
   exit_execution_evidence_level?: "none" | "ambiguous_trade_match" | "exit_signal_only" | "reconciled_trade" | "position_transition" | "qlib_indicator_object" | "indicator_and_exit_reconciled" | "explicit_order_intent" | "position_transition_only";
 };
 
+export type LongTrendTaskOption = {
+  value: string;
+  task_name: string;
+  first_evaluation_asof?: string | null;
+  latest_evaluation_asof?: string | null;
+  evaluation_count: number;
+  snapshot_count: number;
+  model_types?: string[];
+};
+
+export type LongTrendSnapshotOption = {
+  value: string;
+  first_evaluation_asof?: string | null;
+  latest_evaluation_asof?: string | null;
+  evaluation_count: number;
+  task_count: number;
+  task_names?: string[];
+};
+
+export type LongTrendSectorOption = {
+  value: string;
+  sector_name: string;
+  evaluation_count: number;
+  latest_evaluation_asof?: string | null;
+};
+
+export type LongTrendOperatorOptions = {
+  tasks: LongTrendTaskOption[];
+  snapshots: LongTrendSnapshotOption[];
+  sectors: LongTrendSectorOption[];
+  limit: number;
+};
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -574,7 +620,7 @@ function errorMessage(payload: unknown, status: number): string {
     if (isObject(payload.detail)) {
       const detail = payload.detail;
       if (typeof detail.message === "string") return detail.message;
-      return JSON.stringify(detail);
+      return "请求失败；服务端已返回结构化诊断，请查看运行日志。";
     }
     if (typeof payload.message === "string") return payload.message;
     if (typeof payload.error === "string") return payload.error;
@@ -692,6 +738,25 @@ export const qeArchiveApi = {
     if (payload.search) qs.set("search", payload.search);
     const response = await apiFetch<{ status: string; data: ArchivedRunListItem[] }>(`/qe-archive/runs?${qs.toString()}`);
     return response.data || [];
+  },
+  async runOperatorOptions(payload: {
+    search?: string;
+    run_type?: string;
+    model_type?: string;
+    label_horizon?: number;
+    completed_from?: string;
+    completed_to?: string;
+    limit?: number;
+  } = {}): Promise<{ items: RunOperatorOption[]; limit: number }> {
+    const qs = new URLSearchParams({ limit: String(payload.limit ?? 30) });
+    for (const [key, value] of Object.entries(payload)) {
+      if (key === "limit" || value === undefined || value === null || value === "") continue;
+      qs.set(key, String(value));
+    }
+    const response = await apiFetch<{ status: string; data: { items: RunOperatorOption[]; limit: number } }>(
+      `/qe-archive/operator-options/runs?${qs.toString()}`,
+    );
+    return response.data;
   },
   async backfillCandidates(payload: { limit?: number; page?: number; page_size?: number; status?: string; include_archived?: boolean } = {}): Promise<BackfillCandidateReport> {
     const qs = new URLSearchParams({
@@ -848,6 +913,21 @@ export const qeArchiveApi = {
     return apiFetch<{ items: LongTrendQualityItem[]; next_cursor?: string | null; limit: number }>(
       `/qe-archive/analytics/long-trend-quality?${qs.toString()}`,
     );
+  },
+  async longTrendOperatorOptions(payload: {
+    search?: string;
+    task_id?: string;
+    outcome_dataset_snapshot_id?: string;
+    evaluation_asof_from?: string;
+    evaluation_asof_to?: string;
+    limit?: number;
+  } = {}): Promise<LongTrendOperatorOptions> {
+    const qs = new URLSearchParams({ limit: String(payload.limit ?? 30) });
+    for (const [key, value] of Object.entries(payload)) {
+      if (key === "limit" || value === undefined || value === null || value === "") continue;
+      qs.set(key, String(value));
+    }
+    return apiFetch<LongTrendOperatorOptions>(`/qe-archive/analytics/long-trend-options?${qs.toString()}`);
   },
   async allLongTrendQuality(payload: LongTrendQualityQuery, maxRows = 5000): Promise<LongTrendQualityItem[]> {
     const items: LongTrendQualityItem[] = [];

@@ -164,7 +164,7 @@ test("completed QE Loop restores long-trend DB state and posts the single idempo
             dimension_json: { slice: "all_oos", horizon: 60, k: null, barrier: null },
             value_num: 0.1234,
             value_json: { icir: 0.5 },
-            quality_flag: "complete",
+            quality_flag: "ok",
           },
           {
             evaluation_metric_id: 2,
@@ -298,10 +298,42 @@ test("new QE task sends only the immutable registered long-trend profile", async
   expect(createPayloads[1]).not.toHaveProperty("long_trend_barriers");
 });
 
-test("QE Archive comparison requires one outcome vintage and returns run/model/seed/factor evidence", async ({ page }) => {
+test("QE Archive uses business search selectors, one outcome vintage and readable evidence", async ({ page }) => {
   let qualityUrl = "";
   await page.route(/\/api\/v1\/qe-archive\/.*/, async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/operator-options/runs")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "success", data: { items: [{ value: "qear_run_fixture", task_name: "长期趋势 UI 验证任务", run_type: "evolution_loop", model_type: "LGBM", label_horizon: 60, factor_count: 42, loop_index: 1, completed_at: "2026-07-18T12:05:00+08:00" }], limit: 30 } }),
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/analytics/long-trend-options")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tasks: [{ value: "qe_long_trend_ui_task", task_name: "长期趋势 UI 验证任务", first_evaluation_asof: "2026-06-30", latest_evaluation_asof: "2026-06-30", evaluation_count: 1, snapshot_count: 1, model_types: ["LGBM"] }],
+          snapshots: [{ value: snapshotId, first_evaluation_asof: "2026-06-30", latest_evaluation_asof: "2026-06-30", evaluation_count: 1, task_count: 1, task_names: ["长期趋势 UI 验证任务"] }],
+          sectors: [{ value: "801010", sector_name: "农林牧渔", evaluation_count: 1, latest_evaluation_asof: "2026-06-30" }],
+          limit: 30,
+        }),
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/analytics/topk-quality")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "success", data: [
+          { run_id: "historical_missing", topk_quality_status: null, topk_date_count: 0, topk_joined_observation_count: 0 },
+          { run_id: "evidence_complete", topk_quality_status: "ok", topk_source: "pred_label_artifacts", topk_date_count: 126, topk_joined_observation_count: 25000, topk_return_20: 0.031, topk_return_50: 0.018, topk_hit_rate_20: 0.61, topk_hit_rate_50: 0.55 },
+        ] }),
+      });
+      return;
+    }
     if (url.pathname.endsWith("/analytics/long-trend-quality")) {
       qualityUrl = route.request().url();
       await route.fulfill({
@@ -330,7 +362,7 @@ test("QE Archive comparison requires one outcome vintage and returns run/model/s
             dimension_json: { slice: "all_oos", horizon: 60 },
             value_num: 0.1234,
             value_json: { icir: 0.5 },
-            quality_flag: "complete",
+            quality_flag: "ok",
           }],
           next_cursor: null,
           limit: 100,
@@ -348,11 +380,19 @@ test("QE Archive comparison requires one outcome vintage and returns run/model/s
 
   await page.goto("/qe-archive");
   await expect(page.getByTestId("qe-long-trend-archive-comparison")).toBeVisible();
-  await page.getByTestId("qe-long-trend-archive-query").click();
-  await expect(page.getByTestId("qe-long-trend-archive-error")).toContainText("不会混排不同 vintage");
-
-  await page.getByTestId("qe-long-trend-archive-task").fill("qe_long_trend_ui_task");
-  await page.getByTestId("qe-long-trend-archive-snapshot").fill(snapshotId);
+  await expect(page.getByTestId("qe-archive-quality-run-search")).toHaveAttribute("placeholder", /任务名称/);
+  await expect(page.getByText("Run ID", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("完整 1 / 缺失 1", { exact: true })).toBeVisible();
+  await expect(page.getByText("数据完整", { exact: true })).toBeVisible();
+  await expect(page.getByText("pred_label_artifacts", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("missing_forward_only", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("qe-long-trend-archive-task-search")).toHaveAttribute("placeholder", /任务名称/);
+  await expect(page.getByTestId("qe-long-trend-archive-snapshot-search")).toHaveAttribute("placeholder", /截止日期/);
+  await expect(page.getByTestId("qe-long-trend-archive-task-select")).toHaveValue("qe_long_trend_ui_task");
+  await expect(page.getByTestId("qe-long-trend-archive-snapshot-select")).toHaveValue(snapshotId);
+  await expect(page.getByText("Task ID（可选）")).toHaveCount(0);
+  await expect(page.getByText("Outcome snapshot（必填）")).toHaveCount(0);
+  await expect(page.locator("pre")).toHaveCount(0);
   await page.getByTestId("qe-long-trend-archive-entry-status").selectOption("filled_t1");
   await page.getByTestId("qe-long-trend-archive-exit-status").selectOption("filled_on_exit_signal_day");
   await page.getByTestId("qe-long-trend-archive-entry-evidence").selectOption("reconciled_trade");
@@ -361,7 +401,9 @@ test("QE Archive comparison requires one outcome vintage and returns run/model/s
 
   await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("LGBM");
   await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("123");
-  await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("(42)");
+  await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("42");
+  await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("证据完整");
+  await expect(page.getByTestId("qe-long-trend-archive-table")).not.toContainText("qear_run_fixture");
   const query = new URL(qualityUrl).searchParams;
   expect(query.get("task_id")).toBe("qe_long_trend_ui_task");
   expect(query.get("outcome_dataset_snapshot_id")).toBe(snapshotId);
@@ -372,24 +414,29 @@ test("QE Archive comparison requires one outcome vintage and returns run/model/s
   expect(query.get("entry_execution_evidence_level")).toBe("reconciled_trade");
   expect(query.get("exit_execution_evidence_level")).toBe("position_transition");
   expect(query.get("limit")).toBe("100");
+  await page.screenshot({ path: "../tmp/playwright-results-f014-phase4/qe-archive-human-search.png", fullPage: true });
 });
 
 test("live QE Archive UI reads the materialized F-014 canary without writes", async ({ page }) => {
   test.skip(process.env.QE_LONG_TREND_UI_LIVE !== "1", "set QE_LONG_TREND_UI_LIVE=1 for the read-only runtime smoke");
-  const liveTaskId = process.env.QE_LONG_TREND_TASK_ID || "qe_20260715_104922_001d";
-  const liveSnapshotId = process.env.QE_LONG_TREND_OUTCOME_SNAPSHOT_ID
-    || "qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2";
+  const liveTaskSearch = process.env.QE_LONG_TREND_TASK_SEARCH || "";
   let qualityStatus = 0;
   page.on("response", (response) => {
     if (response.url().includes("/api/v1/qe-archive/analytics/long-trend-quality")) qualityStatus = response.status();
   });
 
   await page.goto("/qe-archive");
-  await page.getByTestId("qe-long-trend-archive-task").fill(liveTaskId);
-  await page.getByTestId("qe-long-trend-archive-snapshot").fill(liveSnapshotId);
+  if (liveTaskSearch) await page.getByTestId("qe-long-trend-archive-task-search").fill(liveTaskSearch);
+  const taskSelect = page.getByTestId("qe-long-trend-archive-task-select");
+  await expect(taskSelect.locator("option")).not.toHaveCount(1);
+  if (!(await taskSelect.inputValue())) await taskSelect.selectOption({ index: 1 });
+  const snapshotSelect = page.getByTestId("qe-long-trend-archive-snapshot-select");
+  await expect(snapshotSelect.locator("option")).not.toHaveCount(1);
+  if (!(await snapshotSelect.inputValue())) await snapshotSelect.selectOption({ index: 1 });
   await page.getByTestId("qe-long-trend-archive-query").click();
 
-  await expect(page.getByTestId("qe-long-trend-archive-table").locator("tbody tr")).toHaveCount(1);
-  await expect(page.getByTestId("qe-long-trend-archive-table")).toContainText("qear_run_8");
+  await expect(page.getByTestId("qe-long-trend-archive-table").locator("tbody tr").first()).toBeVisible();
+  await expect(page.getByTestId("qe-long-trend-archive-table")).not.toContainText("qear_run_");
   expect(qualityStatus).toBe(200);
+  await page.screenshot({ path: "../tmp/playwright-results-f014-phase4/qe-archive-live-readonly.png", fullPage: true });
 });

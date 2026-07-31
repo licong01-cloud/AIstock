@@ -11,7 +11,6 @@ import { formatCompact, formatNumber, shortHash } from "@/lib/paper-v2/format";
 import {
   API_BASE,
   type ArchiveJob,
-  type ArchivedRunListItem,
   type ArchiveSummary,
   type BackfillCandidate,
   type BackfillCandidateLoop,
@@ -19,11 +18,13 @@ import {
   type OutboxEvent,
   type PromotionCandidateItem,
   type RunLeaderboardItem,
+  type RunOperatorOption,
   type RunQuality,
   type TopKQualityItem,
   type WorkerRunReport,
   qeArchiveApi,
 } from "@/lib/qe-archive/api";
+import BusinessSearchSelect, { type BusinessSearchOption } from "./BusinessSearchSelect";
 import LongTrendComparisonPanel from "./LongTrendComparisonPanel";
 
 const WRITE_CONFIRM_TEXT = "QE_ARCHIVE_WRITE";
@@ -60,11 +61,20 @@ function formatSignedPct(value: unknown, digits = 2): string {
 }
 
 function topkStatusLabel(status?: string | null): string {
-  if (!status) return "missing";
-  if (status === "ok") return "ok";
-  if (status === "missing_label") return "缺 label";
-  if (status === "missing_pred") return "缺 pred";
-  return status;
+  if (status === "ok") return "数据完整";
+  if (status === "missing_label") return "缺少标签制品";
+  if (status === "missing_pred") return "缺少预测制品";
+  return "历史证据缺失";
+}
+
+function topkSourceLabel(source?: string | null): string {
+  return source ? "预测与标签制品已关联" : "未形成可关联的预测/标签证据";
+}
+
+function topkMissingReason(status?: string | null): string {
+  if (status === "missing_pred") return "该历史实验未保存可用于排名的预测制品。";
+  if (status === "missing_label") return "该历史实验未保存可与预测按交易日关联的标签制品。";
+  return "该历史实验缺少可按交易日关联的预测与标签证据；已有 IC/RankIC 指标不等于具备 Top-K 明细。";
 }
 
 function gateText(pass?: boolean | null): string {
@@ -140,10 +150,20 @@ function loopMetric(loop: BackfillCandidateLoop, keys: string[]): unknown {
   return null;
 }
 
-function runListLabel(run: ArchivedRunListItem): string {
-  const source = run.loop_id || run.experiment_id || run.task_id || run.logical_experiment_id || run.run_id;
+function runTypeLabel(value?: string | null): string {
+  if (value === "evolution_loop") return "演进 Loop";
+  if (value === "single_experiment" || value === "qe_experiment") return "单次实验";
+  return "归档实验";
+}
+
+function runListChoice(run: RunOperatorOption): BusinessSearchOption {
   const loop = run.loop_index ? ` Loop${run.loop_index}` : "";
-  return `${shortHash(run.run_id)} | ${run.run_type || "-"} | ${source || "-"}${loop}`;
+  const date = formatDateTime(run.completed_at || run.archived_at).slice(0, 10);
+  return {
+    value: run.value,
+    label: run.task_name || `${runTypeLabel(run.run_type)}${loop}`,
+    description: `${date}｜${run.model_type || "模型未知"}｜标签 ${run.label_horizon ?? "-"}D｜因子 ${run.factor_count ?? "-"}`,
+  };
 }
 
 function StatusCountStrip({ counts, empty }: { counts?: Record<string, number>; empty: string }) {
@@ -199,7 +219,7 @@ function formatStats(stats: unknown): string {
     ["symbols", record.symbol_summaries_written ?? record.symbol_summary_count],
     ["trades", record.trades_written ?? record.trade_count],
     ["events", record.execution_events_written ?? record.execution_event_count],
-    ["raw", record.raw_payloads_written ?? record.raw_payload_count],
+    ["审计原文", record.raw_payloads_written ?? record.raw_payload_count],
   ]
     .filter(([, value]) => value !== undefined && value !== null)
     .map(([key, value]) => `${key} ${value}`);
@@ -207,7 +227,7 @@ function formatStats(stats: unknown): string {
 }
 
 function QualityPanel({ quality }: { quality: RunQuality | null }) {
-  if (!quality) return <div className="pv2-help">输入 run_id 后查询该实验是否已完整保存配置、指标、曲线、因子和 raw payload。</div>;
+  if (!quality) return <div className="pv2-help">从上方按任务名称、模型、类型或日期搜索并选择归档实验后，可核对配置、指标、曲线和因子是否完整。</div>;
   const checks = [
     { label: "配置完整", value: quality.config_capture_complete ? "是" : "否", tone: quality.config_capture_complete ? "success" as const : "warning" as const },
     { label: "可复现等级", value: quality.reproducibility_level || "-", tone: quality.reproducibility_level === "full" ? "success" as const : "warning" as const },
@@ -222,7 +242,7 @@ function QualityPanel({ quality }: { quality: RunQuality | null }) {
     { name: "股票汇总", value: quality.symbol_summary_count },
     { name: "交易明细", value: quality.trade_count },
     { name: "执行事件", value: quality.execution_event_count },
-    { name: "原始 payload", value: quality.raw_payload_count },
+    { name: "审计原文记录", value: quality.raw_payload_count },
     { name: "artifact manifest", value: quality.artifact_count },
     { name: "优先级分数", value: quality.priority_score_count },
   ];
@@ -233,7 +253,7 @@ function QualityPanel({ quality }: { quality: RunQuality | null }) {
       </div>
       <div className="pv2-readable-panel">
         <div className="pv2-readable-table">
-          <div className="pv2-readable-row"><div className="pv2-readable-key">Run</div><div className="pv2-readable-value pv2-mono">{quality.run_id}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">所选归档实验</div><div className="pv2-readable-value">质量记录已加载</div></div>
           <div className="pv2-readable-row"><div className="pv2-readable-key">类型/状态</div><div className="pv2-readable-value">{quality.run_type || "-"} / <StatusBadge status={quality.status} /></div></div>
           <div className="pv2-readable-row"><div className="pv2-readable-key">研究有效性</div><div className="pv2-readable-value">{quality.research_valid ? "有效" : `无效：${quality.invalid_reason || "未说明"}`}</div></div>
           <div className="pv2-readable-row"><div className="pv2-readable-key">频率/标签</div><div className="pv2-readable-value">{quality.freq || "-"} / horizon {quality.label_horizon ?? "-"}</div></div>
@@ -253,29 +273,31 @@ function QualityPanel({ quality }: { quality: RunQuality | null }) {
 }
 
 function TopKQualityCards({ rows }: { rows: TopKQualityItem[] }) {
-  const current = rows[0];
+  const current = rows.find((row) => row.topk_quality_status === "ok") || rows[0];
+  const completeCount = rows.filter((row) => row.topk_quality_status === "ok").length;
+  const missingCount = rows.length - completeCount;
   if (!current) {
     return (
       <div className="pv2-help">
-        Top-K 为前向 only：存量 616 run 无 pred.pkl 源数据时会显示缺失；新 run 完成归档后在这里展示 prediction-rank @20/@50 质量。
+        当前查询没有 Top-K 质量记录。新归档实验会在预测与标签制品可关联后自动形成质量证据；历史实验需先恢复原始制品才能重算。
       </div>
     );
   }
   return (
     <div className="pv2-readable-list">
-      <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="topk_return@20" value={formatSignedPct(current.topk_return_20)} hint={`@50 ${formatSignedPct(current.topk_return_50)}`} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
-        <MetricCard label="Hit Rate@20" value={formatPct(current.topk_hit_rate_20)} hint={`@50 ${formatPct(current.topk_hit_rate_50)}`} tone="info" />
-        <MetricCard label="@20-@50 Decay" value={formatSignedPct(current.topk_decay)} hint="rank<=20 均值 - rank<=50 均值" tone="neutral" />
-        <MetricCard label="Within RankIC" value={formatNumber(current.within_portfolio_rankic, 4)} hint={current.topk_rank_direction || "rank 1=best"} tone="neutral" />
+      <div className="pv2-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+        <MetricCard label="Top20 平均收益" value={formatSignedPct(current.topk_return_20)} hint={`Top50 ${formatSignedPct(current.topk_return_50)}`} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
+        <MetricCard label="Top20 命中率" value={formatPct(current.topk_hit_rate_20)} hint={`Top50 ${formatPct(current.topk_hit_rate_50)}`} tone="info" />
+        <MetricCard label="头部收益差" value={formatSignedPct(current.topk_decay)} hint="Top20 均值减 Top50 均值" tone="neutral" />
+        <MetricCard label="组合内 RankIC" value={formatNumber(current.within_portfolio_rankic, 4)} hint="预测排名 1 为最佳" tone="neutral" />
       </div>
-      <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="Dispersion@20" value={formatPct(current.topk_dispersion_20)} hint="Top20 realized return std" />
+      <div className="pv2-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+        <MetricCard label="Top20 离散度" value={formatPct(current.topk_dispersion_20)} hint="实际收益标准差" />
         <MetricCard label="覆盖交易日" value={formatCompact(current.topk_date_count || 0, 0)} hint={`joined ${formatCompact(current.topk_joined_observation_count || 0, 0)}`} />
-        <MetricCard label="Top-K 状态" value={topkStatusLabel(current.topk_quality_status)} hint={current.topk_source || "pred_label_artifacts"} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
-        <MetricCard label="历史回填" value="前向 only" hint="不做 616 存量 SQL 回填" tone="info" />
+        <MetricCard label="Top-K 证据" value={topkStatusLabel(current.topk_quality_status)} hint={topkSourceLabel(current.topk_source)} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
+        <MetricCard label="当前样本覆盖" value={`完整 ${completeCount} / 缺失 ${missingCount}`} hint="不以零值或 SQL 推导替代缺失证据" tone={missingCount ? "warning" : "success"} />
       </div>
-      {current.topk_error ? <div className="pv2-help" style={{ color: "#b91c1c" }}>Top-K 缺失原因：{current.topk_error}</div> : null}
+      {current.topk_quality_status !== "ok" ? <div className="pv2-help" data-topk-reason="historical_artifact_missing" style={{ color: "#b45309" }}>缺失原因：{topkMissingReason(current.topk_quality_status)} 下一步：恢复该实验的预测与标签制品后执行受控重算。</div> : null}
     </div>
   );
 }
@@ -284,7 +306,11 @@ export default function QEArchivePage() {
   const [summary, setSummary] = useState<ArchiveSummary | null>(null);
   const [outbox, setOutbox] = useState<OutboxEvent[]>([]);
   const [jobs, setJobs] = useState<ArchiveJob[]>([]);
-  const [archivedRuns, setArchivedRuns] = useState<ArchivedRunListItem[]>([]);
+  const [archivedRuns, setArchivedRuns] = useState<RunOperatorOption[]>([]);
+  const [runSearch, setRunSearch] = useState("");
+  const [runTypeFilter, setRunTypeFilter] = useState("");
+  const [runCompletedFrom, setRunCompletedFrom] = useState("");
+  const [runCompletedTo, setRunCompletedTo] = useState("");
   const [candidates, setCandidates] = useState<BackfillCandidate[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [expandedCandidateIds, setExpandedCandidateIds] = useState<Set<string>>(new Set());
@@ -342,9 +368,35 @@ export default function QEArchivePage() {
     }
   }, [candidatePage, candidatePageSize, candidateStatus, includeArchived]);
 
+  const loadArchivedRuns = useCallback(async () => {
+    setQualityBusy(true);
+    setError(null);
+    try {
+      const response = await qeArchiveApi.runOperatorOptions({
+        search: runSearch || undefined,
+        run_type: runTypeFilter || undefined,
+        completed_from: runCompletedFrom || undefined,
+        completed_to: runCompletedTo || undefined,
+        limit: 30,
+      });
+      setArchivedRuns(response.items || []);
+      if (response.items?.length === 1) setQualityRunId((previous) => previous || response.items[0].value);
+    } catch (err) {
+      setArchivedRuns([]);
+      setError(err);
+    } finally {
+      setQualityBusy(false);
+    }
+  }, [runCompletedFrom, runCompletedTo, runSearch, runTypeFilter]);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadArchivedRuns(), 250);
+    return () => window.clearTimeout(timer);
+  }, [loadArchivedRuns]);
 
   const validRuns = n(summary?.research_valid_counts?.true);
   const invalidRuns = n(summary?.research_valid_counts?.false);
@@ -352,18 +404,7 @@ export default function QEArchivePage() {
 
   const latestRows = useMemo(() => outbox.slice(0, 12), [outbox]);
   const latestJobs = useMemo(() => jobs.slice(0, 12), [jobs]);
-  const jobRunOptions = useMemo<ArchivedRunListItem[]>(
-    () => jobs
-      .filter((job) => job.run_id)
-      .map((job) => ({
-        run_id: String(job.run_id),
-        run_type: job.job_type,
-        status: job.status,
-        archived_at: job.completed_at || job.updated_at || job.created_at,
-      })),
-    [jobs],
-  );
-  const qualityRunOptions = archivedRuns.length ? archivedRuns : jobRunOptions;
+  const qualityRunOptions = archivedRuns.map(runListChoice);
   const selectedCandidates = useMemo(() => candidates.filter((item) => selectedIds.has(item.candidate_id)), [candidates, selectedIds]);
   const selectedTaskIds = selectedCandidates.filter((item) => item.candidate_type === "evolution_task" && item.task_id).map((item) => String(item.task_id));
   const selectedExperimentIds = selectedCandidates.filter((item) => item.candidate_type === "single_experiment" && item.experiment_id).map((item) => String(item.experiment_id));
@@ -535,19 +576,6 @@ export default function QEArchivePage() {
     }
   }
 
-  async function loadArchivedRuns() {
-    setQualityBusy(true);
-    setError(null);
-    try {
-      setArchivedRuns(await qeArchiveApi.runs({ limit: 100 }));
-    } catch (err) {
-      setArchivedRuns([]);
-      setError(err);
-    } finally {
-      setQualityBusy(false);
-    }
-  }
-
   async function lookupQuality() {
     const runId = qualityRunId.trim();
     if (!runId) return;
@@ -575,7 +603,7 @@ export default function QEArchivePage() {
             <div className="pv2-kicker">QE Archive Warehouse</div>
             <h1>QE 实验实时数仓</h1>
             <p>
-              从数据库列出尚未完整入库的 QE 实验或演进任务，选中后可将其所有可解析配置、指标、曲线、因子和原始 payload 写入数仓。
+              从数据库列出尚未完整入库的 QE 实验或演进任务，选中后可将其配置、指标、曲线、因子和审计原文记录写入数仓。
               <span className="pv2-mono"> {API_BASE}/qe-archive </span> API；不会重启或影响生产 8001。
             </p>
           </div>
@@ -592,7 +620,7 @@ export default function QEArchivePage() {
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="归档 Run" value={formatCompact(summary?.run_count || 0, 0)} hint={`有效 ${formatCompact(validRuns, 0)} / 无效 ${formatCompact(invalidRuns, 0)}`} tone="info" />
         <MetricCard label="待处理 Outbox" value={formatCompact(pendingOutbox, 0)} hint="loop/experiment 完成后进入 outbox" tone={pendingOutbox > 0 ? "warning" : "success"} />
-        <MetricCard label="Top-K 前向状态" value={formatCompact(topkRows.filter((row) => row.topk_quality_status === "ok").length, 0)} hint="历史不回填；新 run 才有 topk" tone="info" />
+        <MetricCard label="Top-K 证据覆盖" value={formatCompact(topkRows.filter((row) => row.topk_quality_status === "ok").length, 0)} hint={`当前 ${topkRows.length} 条中，缺失 ${topkRows.filter((row) => row.topk_quality_status !== "ok").length} 条`} tone="info" />
         <MetricCard label="最近归档" value={formatDateTime(summary?.latest_archived_at).slice(0, 10)} hint={formatDateTime(summary?.latest_archived_at)} />
       </div>
 
@@ -601,11 +629,11 @@ export default function QEArchivePage() {
           rows={leaderboard}
           empty="暂无 leaderboard 数据"
           columns={[
-            { key: "run", header: "Run", render: (row) => <><div className="pv2-mono">{shortHash(row.run_id)}</div><div className="pv2-muted">{row.task_id || row.experiment_id || "-"}</div></> },
+            { key: "run", header: "归档实验", render: (row, index) => <><div>{row.task_id ? `演进 Loop ${row.loop_index ?? "-"}` : row.experiment_id ? "单次实验" : `归档实验 ${index + 1}`}</div><div className="pv2-muted">完成于 {formatDateTime(row.completed_at).slice(0, 10)}</div></> },
             { key: "model", header: "模型/标签", render: (row) => <><div>{row.model_type || "-"}</div><div className="pv2-muted">horizon {row.label_horizon ?? "-"} / 因子 {row.factor_count ?? "-"}</div></> },
             { key: "return", header: "CAGR / MDD / Calmar", render: (row) => <><div>{formatPct(row.cagr)} / {formatPct(row.max_drawdown)}</div><div className="pv2-muted">Calmar {formatNumber(row.calmar, 2)}</div></> },
             { key: "topk", header: "Top-K @20", render: (row) => <><div>return {formatSignedPct(row.topk_return_20)} / hit {formatPct(row.topk_hit_rate_20)}</div><div className="pv2-muted">@50 {formatSignedPct(row.topk_return_50)} / decay {formatSignedPct(row.topk_decay)}</div></> },
-            { key: "quality", header: "Top-K 质量", render: (row) => <><StatusBadge status={topkStatusLabel(row.topk_quality_status)} /><div className="pv2-muted">days {formatCompact(row.topk_date_count || 0, 0)} / joined {formatCompact(row.topk_joined_observation_count || 0, 0)}</div></> },
+            { key: "quality", header: "Top-K 质量", render: (row) => <><span style={archiveStatusStyle(row.topk_quality_status === "ok" ? "archived" : "manual_only")}>{topkStatusLabel(row.topk_quality_status)}</span><div className="pv2-muted">覆盖 {formatCompact(row.topk_date_count || 0, 0)} 个交易日 / 关联 {formatCompact(row.topk_joined_observation_count || 0, 0)} 条</div></> },
             { key: "diagnostics", header: "IC 诊断", render: (row) => (
               <details>
                 <summary className="pv2-muted">展开 IC/RankIC</summary>
@@ -627,10 +655,10 @@ export default function QEArchivePage() {
             rows={promotionCandidates}
             empty="暂无晋升候选"
             columns={[
-              { key: "config", header: "配置", render: (row) => <><div className="pv2-mono">{shortHash(row.factor_set_hash)}</div><div className="pv2-muted">{row.model_type || "-"} / horizon {row.label_horizon ?? "-"}</div></> },
+              { key: "config", header: "配置", render: (row, index) => <><div>候选配置 {index + 1}｜{row.model_type || "模型未知"}</div><div className="pv2-muted">训练标签 {row.label_horizon ?? "-"}D / {formatCompact(row.distinct_seed_count || 0, 0)} 个随机种子</div></> },
               { key: "tier0", header: "硬门实际值", render: (row) => <><div>CAGR {formatPct(row.cagr_mean)} ≥ {formatPct(row.cagr_gate_threshold)}</div><div>MDD {formatPct(row.max_drawdown_mean)} ≥ {formatPct(row.max_drawdown_gate_threshold)}</div><div>CV {formatPct(row.cagr_cv)} &lt; {formatPct(row.cagr_cv_gate_threshold)}</div></> },
               { key: "gate", header: "门状态", render: (row) => <><StatusBadge status={gateText(row.passes_gate)} /><div className="pv2-muted">CAGR <StatusBadge status={gateText(row.cagr_gate_passes)} /> MDD <StatusBadge status={gateText(row.max_drawdown_gate_passes)} /> CV <StatusBadge status={gateText(row.cagr_cv_gate_passes)} /></div></> },
-              { key: "topk", header: "Top-K 软门", render: (row) => <><div>return@20 {formatSignedPct(row.topk_return_20_mean)} / hit {formatPct(row.topk_hit_rate_20_mean)}</div><div className="pv2-muted">{row.topk_soft_gate_status || "missing_forward_only"} / sample {formatCompact(row.topk_return_20_sample_count || 0, 0)}</div></> },
+              { key: "topk", header: "Top-K 软门", render: (row) => <><div>return@20 {formatSignedPct(row.topk_return_20_mean)} / hit {formatPct(row.topk_hit_rate_20_mean)}</div><div className="pv2-muted">{row.topk_soft_gate_status === "present" ? "证据已具备" : "等待预测与标签证据"} / 样本 {formatCompact(row.topk_return_20_sample_count || 0, 0)}</div></> },
               { key: "diagnostics", header: "诊断", render: (row) => <><div>Calmar {formatNumber(row.calmar ?? row.calmar_mean, 2)}</div><div className="pv2-muted">ICIR {formatNumber(row.icir_mean, 3)} / RankICIR {formatNumber(row.rank_icir_mean, 3)}</div></> },
             ]}
           />
@@ -662,7 +690,7 @@ export default function QEArchivePage() {
         <div className="pv2-row-actions" style={{ marginTop: 12, marginBottom: 12 }}>
           <button className="pv2-button" type="button" onClick={selectPendingCandidates}>选择全部待入库</button>
           <button className="pv2-button-ghost" type="button" onClick={() => { setSelectedIds(new Set()); setSelectedLoopIds(new Set()); }}>清空选择</button>
-          <span className="pv2-help">已选择 {selectedCandidates.length} 个候选、{selectedLoopIdList.length} 个精确 loop，预计写入 {selectedRunCount} 个 run；Top-K 历史不回填，补录存量仅补 Tier-0/既有指标。</span>
+          <span className="pv2-help">已选择 {selectedCandidates.length} 个候选、{selectedLoopIdList.length} 个精确 loop，预计写入 {selectedRunCount} 个实验；历史 Top-K 只有在预测与标签制品仍可恢复时才能重算。</span>
         </div>
         <div className="pv2-row-actions" style={{ marginTop: 8, marginBottom: 12 }}>
           <button className="pv2-button-ghost" type="button" aria-label="previous candidate page" onClick={() => setCandidatePage((page) => Math.max(1, page - 1))} disabled={candidatePage <= 1 || loading}>上一页</button>
@@ -684,7 +712,7 @@ export default function QEArchivePage() {
         />
         <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
           <div className="pv2-readable-table">
-            <div className="pv2-readable-row"><div className="pv2-readable-key">全部数据录入</div><div className="pv2-readable-value">写入配置、参数、因子列表、账户摘要、指标、曲线、原始 payload；演进任务会按 loop 展开逐个入库。</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">全部数据录入</div><div className="pv2-readable-value">写入配置、参数、因子列表、账户摘要、指标、曲线和审计原文记录；演进任务会按 loop 展开逐个入库。</div></div>
             <div className="pv2-readable-row"><div className="pv2-readable-key">质量阈值说明</div><div className="pv2-readable-value">最少 {QUALITY_GATE.min_metrics} 个指标、{QUALITY_GATE.min_curves} 条曲线、{QUALITY_GATE.min_factors} 条因子记录是写入后的完整性校验，不是采集范围开关。</div></div>
           </div>
         </div>
@@ -726,23 +754,14 @@ export default function QEArchivePage() {
       </div>
 
       <div className="pv2-grid pv2-grid-2">
-        <SectionCard title="Run 质量核对" eyebrow="config / metrics / curves / factors">
+        <SectionCard title="实验质量核对" eyebrow="配置 / 指标 / 曲线 / 因子">
           <div className="pv2-form-grid" style={{ marginBottom: 12 }}>
-            <label className="pv2-field">
-              <span>最近入库 Run</span>
-              <select className="pv2-select" value={qualityRunId} onChange={(event) => setQualityRunId(event.target.value)} aria-label="Select archived run for quality">
-                <option value="">选择已入库 Run</option>
-                {qualityRunOptions.map((run) => (
-                  <option key={run.run_id} value={run.run_id}>{runListLabel(run)}</option>
-                ))}
-              </select>
-            </label>
-            <label className="pv2-field">
-              <span>Run ID</span>
-              <input className="pv2-input" value={qualityRunId} onChange={(event) => setQualityRunId(event.target.value)} placeholder="qear_run_..." />
-            </label>
+            <BusinessSearchSelect testId="qe-archive-quality-run" label="归档实验" value={qualityRunId} options={qualityRunOptions} search={runSearch} onSearchChange={(value) => { setRunSearch(value); setQualityRunId(""); setQuality(null); }} onValueChange={(value) => { setQualityRunId(value); setQuality(null); }} searchPlaceholder="按任务名称、模型或完成日期搜索" emptyLabel="请选择归档实验" loading={qualityBusy} required />
+            <label className="pv2-field"><span>实验类型</span><select className="pv2-select" value={runTypeFilter} onChange={(event) => { setRunTypeFilter(event.target.value); setQualityRunId(""); setQuality(null); }}><option value="">全部类型</option><option value="evolution_loop">演进 Loop</option><option value="single_experiment">单次实验</option><option value="qe_experiment">QE 实验</option></select></label>
+            <label className="pv2-field"><span>完成日期起</span><input className="pv2-input" type="date" value={runCompletedFrom} onChange={(event) => { setRunCompletedFrom(event.target.value); setQualityRunId(""); setQuality(null); }} /></label>
+            <label className="pv2-field"><span>完成日期止</span><input className="pv2-input" type="date" value={runCompletedTo} onChange={(event) => { setRunCompletedTo(event.target.value); setQualityRunId(""); setQuality(null); }} /></label>
             <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button" type="button" aria-label="check run quality" onClick={() => void lookupQuality()} disabled={qualityBusy || !qualityRunId.trim()}>{qualityBusy ? "查询中" : "查询质量"}</button></div>
-            <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-ghost" type="button" aria-label="refresh run list" onClick={() => void loadArchivedRuns()} disabled={qualityBusy}>{qualityBusy ? "刷新中" : "刷新Run列表"}</button></div>
+            <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-ghost" type="button" aria-label="refresh run list" onClick={() => void loadArchivedRuns()} disabled={qualityBusy}>{qualityBusy ? "刷新中" : "刷新候选"}</button></div>
           </div>
           <QualityPanel quality={quality} />
         </SectionCard>

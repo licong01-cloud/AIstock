@@ -1,17 +1,18 @@
 # QE 长期上涨趋势评价层 F2 设计
 
-- 版本：v1.19
-- 日期：2026-07-15；Phase 2 运行态核验：2026-07-23；Phase 3 源码实现与本地验证：2026-07-28；Phase 3 单 canary 物化核验：2026-07-29；Phase 4 Loop/Archive UI 源码与只读 live smoke：2026-07-29；PR #2875 第三次正式审核、合入及用户重启后运行态回读：2026-07-29；Phase 4 follow-up 正式审核、PR #2906 合入与 root sync、PR #2935/#2946 状态同步、生产 DDL 执行及 readback、运行态合同与真实 preview GET 核验：2026-07-30；现行进程身份修正与运行态复核：2026-07-31
-- 状态：`PHASE3_SINGLE_CANARY_VERIFIED_PHASE4_TASK_PROFILE_INPUT_PREVIEW_SOURCE_CI_MERGED_ROOT_SYNCED_DEV_DDL_VERIFIED_PROD_DDL_RUNTIME_CONTRACT_PREVIEW_VERIFIED_NORMAL_LOOP_LIVE_PENDING_PHASE5_PENDING`
+- 版本：v1.21
+- 日期：2026-07-15；Phase 2 运行态核验：2026-07-23；Phase 3 源码实现与本地验证：2026-07-28；Phase 3 单 canary 物化核验：2026-07-29；Phase 4 Loop/Archive UI 源码与只读 live smoke：2026-07-29；PR #2875 第三次正式审核、合入及用户重启后运行态回读：2026-07-29；Phase 4 follow-up 正式审核、PR #2906 合入与 root sync、PR #2935/#2946 状态同步、生产 DDL 执行及 readback、运行态合同与真实 preview GET 核验：2026-07-30；现行进程身份修正与运行态复核：2026-07-31；人类可用检索与截图验收修订：2026-07-31
+- 状态：`PHASE3_SINGLE_CANARY_VERIFIED_PHASE4_TASK_PROFILE_INPUT_PREVIEW_RUNTIME_API_VERIFIED_HUMAN_SEARCH_UI_CONTROLLED_CHROMIUM_VERIFIED_NORMAL_LOOP_LIVE_PENDING_PHASE5_PENDING`
 - 任务分级：`T3 / F2`
 - 模块：`QuantEvolver / QE-only Evaluation Store / QE Archive Read Model / QE UI`
 - 风险等级：高（跨计算节点、制品、数仓、API、MCP 与 UI）
-- 当前阶段：Phase 1 纯计算核、Phase 2 control/worker/QE-only CAS 与 Phase 3 三表/API/MCP 已按既有 receipt 完成；R8B Loop4 existing-CAS 已物化 2,004 条 metric 与 6 条 artifact，exact replay 保持 row version `42`、更新时间、主键范围、摘要和 task evaluation 数量不变。PR #2875 第三次正式审核关闭 v1.12 的合入阻断：Loop detail/list 展示 evaluation as-of、逐 family reason/coverage/limitations/missing inputs/data actions、maturity/execution coverage、删失及阻断证据；Archive 将 metric/horizon 下推 bounded API，并同时支持 entry/exit 成交状态与 canonical evidence-level quality 过滤；validation catalog 使用受控 command key 与 3012；`mcp[cli]` 固定为仓库契约的 1.25.0。定向后端、Phase 2/3、TypeScript/ESLint、mock Playwright、catalog/module ownership、F2/L0 与 PR CI 均通过，F-017/F-020/F-021 对本 PR slice 恢复 `verified / none`。任务创建页不可变 profile 开关和独立历史输入可用性预览已随 PR #2906 合入，task-profile 生产 DDL 已应用并经重连回读验证。当前 8001/3000 进程均启动于 2026-07-31 01:55 +08:00；该重启由本次文档任务之外的操作完成，本任务只读观察且未执行进程控制。当前 8001 OpenAPI 已加载 `long_trend_profile_id` 与 preview GET；固定 task/Loop 的真实 preview 再次返回 8/11 可用、3 个 typed gap、`ready_for_node=false`、`research_gate=false`，七项 side-effect flags 全为 false。该证据只闭合 F-014 runtime contract 与只读 preview API，不等于当前进程完整匹配最新 root HEAD，也不等于 normal Loop 已执行。3000 `/qe-archive` HTTP 为 200，但浏览器运行时无可用实例，因此前端逐控件 visual、normal Loop smoke、其余 5 个 R8B CAS 与 Phase 5 中断恢复/完整 E2E 仍待后续。
+- 当前阶段：Phase 1 纯计算核、Phase 2 control/worker/QE-only CAS 与 Phase 3 三表/API/MCP 已按既有 receipt 完成；R8B Loop4 existing-CAS 已物化 2,004 条 metric 与 6 条 artifact，exact replay 保持 row version `42`、更新时间、主键范围、摘要和 task evaluation 数量不变。PR #2875 第三次正式审核关闭 v1.12 的合入阻断；任务创建不可变 profile、生产 DDL、当前 runtime contract 与真实 preview GET 均已有分层证据。用户于 2026-07-31 提供的五张真实截图确认 Phase 4 仍有操作员可用性缺口：Run/Task/outcome snapshot/L2 sector 依赖人工输入内部 ID，部分筛选和状态直接显示英文技术枚举，Top-K 卡把空 source 缺省成 `pred_label_artifacts` 并令 Calmar 头部旧 Run 看似“全部 missing”。当前 8001 只读聚合证明 Top-K 前 100 条实际为 92 条 ok、8 条 missing；缺失只影响没有可连接 pred/label 制品的历史批次，不得传播为全库失败。v1.20 在不改变评价、vintage、研究或写入语义的前提下增加 bounded operator options、业务检索选择器、无 raw JSON 展示和成功截图流水线证据；PR #2964 的 AIstock CI `30598333361` 已通过类型、Lint、四组 QE 后端门禁与受控 Playwright Chromium，并产出 `frontend-ui-evidence-30598333361` 成功截图。normal Loop、完整 runtime/root SHA 对齐、当前 3000 live browser visual、其余 5 个 R8B 与 Phase 5 仍待后续。
 - v1.15 source snapshot：任务创建不可变 profile 与独立历史输入预检完成源码、本地 mock/单元验证及现有 DEV migration 零残留验证；正式审核补齐缺失 order/trade 显式状态与 summary task profile projection，聚焦后端更新为 `92 passed`。
 - v1.16 post-merge 状态：PR #2906 required checks `15 passed / 0 failed`，以 squash commit `bba48911342a3bee51e4339d597d9b2a5b85d71a` 合入；root `main` 已同步并包含该 merge。source merge/CI/root sync 已完成，close-sync 不适用于 feature PR；生产 DDL、运行时激活、real Recorder preview、live browser、其余 5 个 R8B 与 Phase 5 均未执行。source worktree/local/remote branch 保留，等待独立清理授权。
 - v1.17 production DDL 状态：PR #2935 已以 `005e0e8a3ef30f844ee269d3ad7b14cc6f8bef72` 合入并同步 post-merge 状态。随后在 `127.0.0.1:5433/aistock_dev` 重跑 preflight/forward/readback/reapply/guarded rollback 并确认零残留；用户授权后在 `127.0.0.1:5432/aistock` 执行 `qe_long_trend_task_profile_phase4_20260730.sql`，重连回读确认 `long_trend_profile_id` 为 nullable `text`、列注释精确一致、114 条既有 task 全部为 `NULL`，业务 DML 变更为 0。production DDL 已完成；服务重启、运行态激活、real Recorder preview、live browser、其余 5 个 R8B 与 Phase 5 仍未执行。
 - v1.18 runtime preview 状态：PR #2946 已以 `95e21655c0c0c2dc23bc531b55cb98ed64a2b52f` 合入生产 DDL 状态同步。截至 2026-07-30 该轮核验时，8001/3000 进程启动于 2026-07-30 11:37 +08:00；8001 `/api/v1/health` 与 QE Archive health 成功，OpenAPI 有 1,107 条 path 并包含 F-014 preview GET 和 `long_trend_profile_id`。固定 task `qe_20260715_104922_001d` Loop 4 对已归档 outcome snapshot 的真实 GET 返回 200、`qe_long_trend_input_preview_v1`、8/11 输入可用；feature snapshot identity、orders、trades 以 typed reason 和 3 条 data action 显式缺失。所有 side-effect flags 为 false，调用前后生产 DB 保持 17 evaluation / 2,004 metric / 6 artifact、该 task/Loop 6 evaluation、既有 task profile `NULL`。浏览器列表为空，所以 3000 HTTP 200 不能替代逐控件 visual；normal Loop 执行也未发生。
 - v1.19 current-process correction：2026-07-31 复核确认当前 8001/3000 进程均启动于 01:55 +08:00，说明 v1.18 的进程时间仅是 2026-07-30 历史观察，不是当前进程身份。本次文档任务未执行启动、停止或重启；只读复核再次确认 8001 health、1,107 条 OpenAPI path、F-014 preview/profile 合同、固定 task/Loop preview 的 8/11 可用与 3 个 typed gap，以及七项 side-effect flags 全 false。完整 runtime/root SHA 对齐、normal Loop 与 live browser visual 仍未完成。
+- v1.21 human-search acceptance：真实截图与 8001 只读聚合确认 Top-K 可用覆盖和人类检索缺口。Run、Task、outcome snapshot、L2 sector 的 canonical ID 继续作为后端身份，但只允许由业务选择器产生，操作员不能输入或复制 ID；查询选项按名称、日期、类型、模型、标签期限和 as-of 做 bounded 搜索。QE Archive/F-014 操作员视图不得显示 raw JSON、JSON 代码、原始 payload 或未翻译的技术枚举。Top-K 缺失展示覆盖范围、业务原因和恢复行动，不把 8 条历史缺失冒充全库 missing，也不自动回填或写 DB。只读 options API、业务选择器、Top-K 投影与 Playwright 断言已通过 PR #2964 的受控 Chromium，成功截图和 HTML report 保存在 `frontend-ui-evidence-30598333361`；当前 3000 runtime visual 仍保持独立待执行状态。
 - 上位蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` 第 9.6 节与 F-014
 - 相关蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` Phase 8
 
@@ -131,6 +132,10 @@ label_h = close[T+h+1] / close[T+1] - 1
 | F-022 | 理论机会与实际可成交结果分层：Qlib `indicators_normal_{freq}_obj.pkl` 的 `amount/deal_amount/ffr` 与 reconciled trade/position 提供下单目标和成交证据；entry/exit 使用同一 authority、逐信号 trade 一对一归属及数量/时点矛盾 fail-fast；日线触板不直接推断原因；缺队列或原因码时仅 `execution_cause` 为 `NOT_VERIFIABLE`。 |
 | F-023 | 六个指标族独立计算和定级；缺 position/order/trade/maturity/价格/板块数据只影响依赖它的指标，不传播为全局失败，并输出结构化数据获取、补归档或补算计划。 |
 | F-024 | CAS、DDL、API、MCP、UI、历史补算和 E2E 只形成 `platform_delivery_status`；不得解锁或阻断期限选择、R8B2、R8M、R8C、oracle、两层模型或任何研究方向。 |
+| F-025 | QE Archive/F-014 操作员不得人工输入 Run ID、Task ID、snapshot ID、sector code 或其他内部标识；Run、任务、结果快照和板块使用 bounded 业务选择器，支持名称、日期、类型、模型、标签期限、as-of 等检索，canonical ID 只作为隐藏 value 传给现有 API。 |
+| F-026 | QE Archive/F-014 操作员业务视图不得显示 raw JSON、JSON 代码、原始 payload、hash 主标签或未翻译的内部枚举；配置、指标、曲线、因子、质量与缺失原因使用中文表格、卡片、图表和可行动说明。 |
+| F-027 | Top-K 质量按真实 coverage/status 表达：页面分别显示当前查询样本的可用/缺失数量、覆盖交易日和 joined observations；缺 pred/label 制品的历史 Run 标记为局部证据缺失并给出恢复行动，不用默认 source、0 值或全局 missing 冒充事实。 |
+| F-028 | Phase 4 流水线在受控 3012 Chromium 中逐项验证业务选择器、无 ID 文本框、无 raw JSON、Top-K 缺失说明和同-vintage 查询，并为成功场景保存截图/HTML；该证据只闭合 source/controlled-browser visual，不冒充当前 3000 runtime/root SHA 对齐。 |
 
 ## 6. Architecture / 架构
 
@@ -789,6 +794,17 @@ A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 res
 
 当前 `source_merge=merged_bba48911342a`，`post_merge_docs_sync=merged_005e0e8a3ef3_95e21655c0c0`，`root_sync=verified_contains_merges`，`dev_migration_gate=verified_zero_residue`，`production_ddl_gate=applied_and_verified`，`production_dml_gate=noop`，`runtime_contract_activation=verified_current_process`，`process_restart=externally_performed_20260731_0155_this_docs_task_not_run`，`normal_loop_execution=not_run`，`historical_preview_live_api=verified_explicit_gaps`，`frontend_visual=pending_browser_unavailable`，`historical_evaluation_execution=not_run`。这些是平台交付状态，不是科研许可或方向门禁。
 
+### 12.2.2 v1.20 人类可用检索与视觉验收修订（2026-07-31）
+
+本修订只改变 QE Archive/F-014 的只读检索选项和业务表达，不改变 canonical ID、同-vintage 条件、评价计算、Top-K 计算、历史回填策略或写入路径。新增接口必须复用现有 `qe_archive.run` 与 `run_evaluation*` 权威表，不新增 DDL：
+
+1. `GET /api/v1/qe-archive/operator-options/runs`：服务端 bounded 搜索归档 Run；支持名称/描述关键词、run type、模型、标签期限和完成/归档日期，单页 `limit <= 50`，返回内部 `value` 与中文业务标签/日期/类型元数据。UI 不显示或允许输入 `value`。
+2. `GET /api/v1/qe-archive/analytics/long-trend-options`：按当前 canonical evaluation 聚合 task、outcome snapshot 与 sector 选项；支持关键词、task、snapshot、as-of 日期和类型过滤，单类 `limit <= 50`。snapshot 标签至少显示数据类型、覆盖截止日/as-of 和关联评价数；task/sector 以业务名称优先，缺名称时使用类型、模型、日期组合，不回退为人工 ID 文本框。
+3. Run 质量核对、同 Vintage 对比和 L2 sector filter 都使用业务搜索选择器；唯一候选自动选中，多候选按日期倒序。请求仍提交 canonical ID，不接受自由文本 ID、路径或 node override。
+4. Top-K 主榜、质量卡和晋升软门使用统一中文状态投影。空 `topk_source` 不得被前端补成 `pred_label_artifacts`；缺失显示“历史 Run 未保存可连接的预测与标签制品”，同时说明既有收益/IC 仍可用、恢复后可重算。页面展示当前查询样本 `ok/missing` 数，避免 Calmar 头部旧 Run 被误读为全库状态。
+5. 操作员视图不得渲染 `<pre>` raw JSON、`JSON.stringify` 输出或原始 payload。内部 reason/status 通过固定业务词典翻译；未知值显示“暂未识别的系统状态”并写入客户端诊断日志，不把技术值直接暴露给用户。
+6. Playwright 对任务/快照/板块/Run 的搜索选择、无 ID 文本框、无 raw JSON、Top-K 局部缺失说明、同-vintage 参数和无写副作用做直接断言；成功运行显式保存关键截图并由 CI/Validation Center artifact 引用。当前 3000 live runtime visual 仍作为独立状态。
+
 ### 12.3 Phase 3–5 开发就绪性审计（2026-07-29）
 
 审计结论更新为 `SINGLE_CANARY_DATA_PATH_VERIFIED_PHASE4_PR2875_UI_SLICE_SOURCE_CI_MERGED_RUNTIME_API_VERIFIED_FRONTEND_VISUAL_PENDING`。这表示 Phase 3 单 canary 链保持闭合，PR #2875 的 Loop/Archive UI slice 已通过详细设计第三审与源码 CI、完成合入，并在用户重启后通过后端 OpenAPI 与固定历史回执的只读 API 回读；它不表示前端逐控件可视验收、任务创建 profile、历史输入预览、其余 R8B、历史批量补算或中断恢复已经完成，也不是科研审批、方向门禁、未来服务控制或生产 DDL 授权。
@@ -992,6 +1008,10 @@ completed Recorder
 | F-022 | signal→fill/exit evidence bridge | `backend/tests/unified_engine/test_qe_long_trend_evaluation_core.py`：entry/exit、trade 唯一归属、数量/时点矛盾与阻断损失 | core_normalized_entry_exit_bridge_verified | none |
 | F-023 | staged delivery truth | `backend/tests/unified_engine/test_qe_long_trend_phase3_api.py` 与 live preview GET 独立列出 2 个 dataset、9 个 artifact；feature identity、orders、trades 显式 `available=false`、typed reason 与 3 条 data action，8 个可用输入继续保留 | phase4_input_preview_live_api_verified | none |
 | F-024 | platform delivery status only | `backend/tests/unified_engine/test_qe_long_trend_phase3_api.py`、`frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts` 与 live GET 验证 `technical_readiness_only=true`、`research_gate=false`、`ready_for_node=false`；7 个 side-effect flags 全 false，`SELECT count(*)` readback 前后保持 17 evaluation/2,004 metric/6 artifact | phase4_input_preview_live_api_verified | none |
+| F-025 | bounded operator options + business search selectors；ID 仅作隐藏 value | `python -m pytest backend/tests/qe_archive/test_qe_archive_operator_options.py backend/tests/unified_engine/test_qe_long_trend_phase3_api.py -q -p no:cacheprovider` -> 21 passed；`frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts` 在 PR #2964 CI `30598333361` 断言无自由文本 ID 并通过 | controlled_chromium_verified | none |
+| F-026 | QE Archive/F-014 business projection；禁止 raw JSON/技术枚举 | 定向 TypeScript/ESLint -> 0 error；`frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts` 在 PR #2964 CI `30598333361` 断言无 `<pre>`/JSON payload、使用中文业务组件并通过 | controlled_chromium_verified | none |
+| F-027 | Top-K coverage/status/error/action projection | `frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts` 断言不补造 source、不把首条 missing 冒充整体状态；8001 只读基线为前 100 条 92 ok / 8 missing / 92 joined nonzero；artifact 截图显示“数据完整”“完整 1 / 缺失 1”且无逐字换行 | controlled_chromium_and_readonly_data_verified | none |
+| F-028 | controlled Chromium success screenshots + HTML artifact | `frontend/tests/quantevolver/qe_long_trend_evaluation.spec.ts` 由 `.github/workflows/test.yml` 在 PR #2964 CI `30598333361` 执行并上传 `frontend-ui-evidence-30598333361`，内含 `playwright-results-f014-phase4/qe-archive-human-search.png` 与 `playwright-report/index.html` | controlled_chromium_artifact_verified | none |
 
 ## 18. DESIGN-COMPLIANCE-001
 
@@ -1011,6 +1031,10 @@ completed Recorder
 - [x] `no_silent_error / v1.19 current-process correction`：feature snapshot identity、orders、trades 分别返回 typed reason 与 data action；`ready_for_node=false` 不被改写为成功，浏览器不可用不被 HTTP 200 或 mock 冒充，历史进程时间也不再冒充当前身份。
 - [x] `no_business_semantic_drift / v1.19 current-process correction`：明确区分 2026-07-30 历史观察、2026-07-31 外部重启后的当前进程与“本次文档任务未执行进程控制”；只读 GET 再次确认七项 side-effect flags 全 false，未创建评价、worker、CAS 或 DB 行。
 - [x] `no_unrequested_gate_or_approval / v1.19 current-process correction`：`technical_readiness_only=true`、`research_gate=false`；输入缺口生成数据行动项但不关闭科研方向，也未增加人工审批或 restart gate。
+- [x] `no_simplified_delivery / v1.21 human-search acceptance`：Run/Task/snapshot/sector 搜索、raw JSON 清除、Top-K 真实覆盖说明与流水线截图均有实现和 Chromium 证据；当前 3000 runtime visual 仍单列，不以受控 CI 冒充生产运行态验收。
+- [x] `no_silent_error / v1.21 human-search acceptance`：保留 92 ok / 8 missing 的真实局部分布；缺失具有业务原因和恢复行动，未知状态不显示技术值，也不填默认 source/0 值伪造结果；Playwright 直接断言并截图。
+- [x] `no_business_semantic_drift / v1.21 human-search acceptance`：canonical ID、同-vintage、bounded query、Top-K 前向计算和历史回填策略保持不变；新增 options 全部只读且不新增 DDL/写入，四组 QE 后端门禁通过。
+- [x] `no_unrequested_gate_or_approval / v1.21 human-search acceptance`：选择器与缺失说明只改善操作面，不增加审批、RBAC、确认文本、研究准入或方向阻断；CI 只验证源码，不新增生产发布门禁。
 - [x] Phase 1 数据集、预测、evaluation context 与 receipt 使用同一 deterministic identity；feature/outcome 关系和输入 null 均进入身份。
 - [x] Phase 2 的 control migration、QE-only CAS、worker、资源恢复和真实 R8B 6/6 canary 已实现并验证。
 - [x] Phase 3 的 metric/artifact migration、公共 API/MCP、snapshot resolver、事务 writer 与 validation ownership 已实现并通过 102 项专属测试；Phase 2 回归 122 项通过。
