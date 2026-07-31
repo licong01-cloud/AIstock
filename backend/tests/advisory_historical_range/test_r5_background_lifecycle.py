@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -13,12 +13,14 @@ from backend.services.advisory_historical_range.dataset_bridge import (
 from backend.services.advisory_historical_range.models import (
     REASON_DATASET_BRIDGE_VALID_EMPTY,
     REASON_REPOSITORY_CONFLICT,
+    REASON_ROW_VERSION_CONFLICT,
     HistoricalRangeArtifactKind,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeBackgroundDispatchFailureV1,
     HistoricalRangeBridgeResultStatus,
     HistoricalRangeContractError,
     HistoricalRangeDatasetBridgeReceiptV1,
+    HistoricalRangeOperationStatus,
 )
 from backend.services.advisory_historical_range.service import ResponseBoundHistoricalRangeDispatcher
 from backend.services.advisory_historical_range.repository import (
@@ -449,7 +451,11 @@ class _BridgeParentRepository:
         self.transitions.append(kwargs)
         row = self.query.operation
         assert kwargs["operation_id"] == row["operation_id"]
-        assert kwargs["expected_row_version"] == row["row_version"]
+        if kwargs["expected_row_version"] != row["row_version"]:
+            raise HistoricalRangeContractError(
+                REASON_ROW_VERSION_CONFLICT,
+                "operation row_version differs from the expected value",
+            )
         row["row_version"] += 1
         row["status"] = kwargs["target_status"].value
         for key in (
@@ -583,10 +589,34 @@ def test_bridge_dispatcher_closes_parent_from_authoritative_child_receipt(child_
 
     assert [item["target_status"].value for item in repository.transitions] == [
         "RUNNING",
+        "RUNNING",
+        "RUNNING",
         expected_parent_status,
     ]
+    claim, child_heartbeat, receipt_heartbeat, final = repository.transitions
+    assert child_heartbeat["attempt_no"] == claim["attempt_no"]
+    assert child_heartbeat["worker_id"] == claim["worker_id"]
+    assert child_heartbeat["lease_token"] == claim["lease_token"]
+    assert child_heartbeat["fencing_token"] == claim["fencing_token"]
+    assert child_heartbeat["stable_keyset_cursor_json"] == {
+        "phase": "CHILD_TERMINAL"
+    }
+    assert child_heartbeat["lease_expires_at"] > claim["lease_expires_at"]
+    assert receipt_heartbeat["attempt_no"] == claim["attempt_no"]
+    assert receipt_heartbeat["worker_id"] == claim["worker_id"]
+    assert receipt_heartbeat["lease_token"] == claim["lease_token"]
+    assert receipt_heartbeat["fencing_token"] == claim["fencing_token"]
+    assert receipt_heartbeat["stable_keyset_cursor_json"] == {
+        "phase": "PARENT_RECEIPT_PUBLISHED"
+    }
+    assert (
+        receipt_heartbeat["lease_expires_at"]
+        > child_heartbeat["lease_expires_at"]
+    )
+    assert child_heartbeat["expected_row_version"] == 2
+    assert receipt_heartbeat["expected_row_version"] == 3
+    assert final["expected_row_version"] == 4
     assert bridge.published_parent.operation_id == "ahrop_parent"
-    final = repository.transitions[-1]
     assert final["attempt"].operation_id == "ahrop_parent"
     assert final["attempt"].status == expected_parent_status
     assert final["result_ref"] == (bridge.parent_ref if expected_parent_status in {"COMPLETED", "FAILED"} else None)
@@ -619,6 +649,58 @@ def test_bridge_dispatcher_reclaims_expired_parent_with_durable_attempt() -> Non
     assert claim["expired_attempt"].status == "RETRYABLE_FAILED"
     assert claim["expired_attempt"].attempt_receipt_ref == bridge.expired_parent_receipts[0][1]
     assert repository.transitions[-1]["target_status"].value == "COMPLETED"
+
+
+def test_bridge_parent_stale_worker_cannot_finish_after_higher_fencing_takeover() -> None:
+    runtime, repository, bridge = _bridge_runtime(
+        HistoricalRangeBridgeResultStatus.SEALED
+    )
+    dispatcher = ResponseBoundHistoricalRangeDispatcher(runtime_factory=lambda: runtime)
+    request = SimpleNamespace(request_hash="a" * 64)
+    claimed = dispatcher._claim_bridge_parent(
+        runtime=runtime,
+        operation=runtime.query.get_operation_internal("ahrop_parent"),
+        request=request,
+        resolved_request_hash="d" * 64,
+        worker_id="original-worker",
+    )
+    repository.transition_operation(
+        operation_id="ahrop_parent",
+        expected_row_version=claimed["row_version"],
+        target_status=HistoricalRangeOperationStatus.RUNNING,
+        attempt_no=2,
+        worker_id="takeover-worker",
+        lease_token=uuid4().hex,
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=30),
+        fencing_token=2,
+    )
+    parent_receipt = HistoricalRangeDatasetBridgeReceiptV1.model_validate(
+        {
+            **bridge.child_receipt.model_dump(
+                mode="json", exclude={"receipt_hash"}
+            ),
+            "operation_id": "ahrop_parent",
+        }
+    )
+
+    with pytest.raises(
+        HistoricalRangeContractError,
+        match="row_version differs",
+    ) as stale_finish:
+        dispatcher._finish_bridge_parent(
+            runtime=runtime,
+            operation=claimed,
+            request=request,
+            receipt=parent_receipt,
+            receipt_ref=bridge.parent_ref,
+            target_status=HistoricalRangeOperationStatus.COMPLETED,
+            error_json=None,
+        )
+
+    assert stale_finish.value.reason_code == REASON_ROW_VERSION_CONFLICT
+    assert runtime.query.operation["status"] == "RUNNING"
+    assert runtime.query.operation["attempt_no"] == 2
+    assert runtime.query.operation["fencing_token"] == 2
 
 
 def test_bridge_dispatcher_records_unexpected_child_failure_on_parent() -> None:

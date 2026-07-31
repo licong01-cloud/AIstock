@@ -55,6 +55,8 @@ from .runtime_factories import HistoricalRangeOutcomeCommandPlan
 
 LOGGER = logging.getLogger(__name__)
 
+_BRIDGE_PARENT_LEASE_DURATION = timedelta(minutes=30)
+
 
 class BackgroundTaskRegistrar(Protocol):
     def add_task(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> None: ...
@@ -333,11 +335,21 @@ class ResponseBoundHistoricalRangeDispatcher:
                 resolved_request_hash=resolved_request_hash,
                 worker_id=worker_id,
             )
+            claimed = self._heartbeat_bridge_parent(
+                runtime=runtime,
+                operation=claimed,
+                phase="CHILD_TERMINAL",
+            )
             parent_receipt, parent_receipt_ref = runtime.bridge.publish_parent_receipt(
                 operation_id=operation_id,
                 child_receipt=child_receipt,
                 child_receipt_ref=child_receipt_ref,
                 resolved_request_hash=resolved_request_hash,
+            )
+            claimed = self._heartbeat_bridge_parent(
+                runtime=runtime,
+                operation=claimed,
+                phase="PARENT_RECEIPT_PUBLISHED",
             )
             target_status = _bridge_parent_operation_status(parent_receipt.result_status)
             error_json = (
@@ -444,10 +456,31 @@ class ResponseBoundHistoricalRangeDispatcher:
             attempt_no=int(operation.get("attempt_no") or 0) + 1,
             worker_id=worker_id,
             lease_token=uuid4().hex,
-            lease_expires_at=datetime.now(UTC) + timedelta(minutes=30),
+            lease_expires_at=datetime.now(UTC) + _BRIDGE_PARENT_LEASE_DURATION,
             fencing_token=int(operation.get("fencing_token") or 0) + 1,
             started_at=datetime.now(UTC),
             expired_attempt=expired_attempt,
+        )
+
+    @staticmethod
+    def _heartbeat_bridge_parent(
+        *,
+        runtime: HistoricalRangeRuntime,
+        operation: Mapping[str, Any],
+        phase: str,
+    ) -> dict[str, Any]:
+        """Extend the exact parent claim before authoritative closure work."""
+
+        return runtime.repository.transition_operation(
+            operation_id=str(operation["operation_id"]),
+            expected_row_version=int(operation["row_version"]),
+            target_status=HistoricalRangeOperationStatus.RUNNING,
+            attempt_no=int(operation["attempt_no"]),
+            worker_id=str(operation["worker_id"]),
+            lease_token=str(operation["lease_token"]),
+            lease_expires_at=datetime.now(UTC) + _BRIDGE_PARENT_LEASE_DURATION,
+            fencing_token=int(operation["fencing_token"]),
+            stable_keyset_cursor_json={"phase": phase},
         )
 
     @staticmethod
