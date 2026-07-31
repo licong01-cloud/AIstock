@@ -1,7 +1,7 @@
 # AIstock 项目开发规范 v1.5
 
 > 版本：1.5
-> 更新日期：2026-07-18
+> 更新日期：2026-07-31
 > 状态：唯一人类可读开发规范
 > 权威文件：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 > 机器派生目录：`docs/standards/aistock_development_standard_v1.5_20260523.yaml`
@@ -224,6 +224,21 @@ RD-Agent 源码合入与运行部署是两个独立结果。部署只接受已�
 RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE workspace、日志、scheduler JSONL、MLflow、registry、cache、history、artifact CAS 和 QELT outbox；源码/release 目录只保留 Git 管理的代码、模板和 manifest。生产运行缺少显式 `RDAGENT_STATE_ROOT` 或状态路径落入源码/release 目录时阻断启动，不使用 repo-relative 或 `Path.cwd()` 静默回退。
 
 每次部署生成独立 receipt，至少记录 repository、merge SHA、tree hash、manifest hash、release path、node、时间、执行者、部署前后运行路径和 rollback target。源码合入、release 构建、部署、重启、运行验证和回滚分别报告；回滚通过不可变 release 指针切换，不修改 release 内容，也不新增数据库导出、备份、研究审批或业务门禁。
+
+<a id="rule-tool-rtk-001"></a>
+### 6.20 [TOOL-RTK-001] RTK 输出压缩
+
+交互开发窗口在 RTK 可用且支持目标子命令时，优先使用 `rtk git`、`rtk rg`、`rtk pytest`、`rtk nox`、`rtk npm` 等包装降低命令输出和上下文消耗。`Get-Content`、`Test-Path`、PowerShell 控制语句或 RTK 不支持的调用允许直接执行，并记录基于能力缺失的回退原因；RTK 缺失、不支持或未受信任时任务继续，`rtk trust` 只在用户明确授权后执行。CI 使用原始确定性命令，不要求安装 RTK。workflow 仅在调用方已提供 telemetry 时记录 `rtk_used/version/fallback`；telemetry 缺失时直接记录 `not_recorded`，不增加探测命令。
+
+<a id="rule-backend-restart-ownership-001"></a>
+### 6.21 [BACKEND-RESTART-OWNERSHIP-001] 后端重启所有权
+
+用户后端的启动、停止和重启默认且持续归用户所有。BUG 修复、feature 实现、验证委派、CI、合入、close-sync、aftercare 或 cleanup 均不构成进程控制授权；Codex、Claude、Cursor、CLI、子代理、Validation Center 和其他窗口的后端进程控制权限保持为 `false`。只有用户针对本次任务和明确 target 单独授权时才可执行。runner-owned 临时后端仅能在隔离端口、显式生命周期标记和本次验证范围内由 runner 管理。frontend 激活、客户端 reload、数据库迁移与后端重启分别建模和报告。
+
+<a id="rule-bug-restart-effective-001"></a>
+### 6.22 [BUG-RESTART-EFFECTIVE-001] BUG 重启后立即生效
+
+所有影响 backend、worker 或 scheduler 运行时的 BUG 修复必须写入 Git 管理的持久来源或受控 migration/config；只依赖当前进程 monkey patch、热加载、手工缓存或未追踪文件的实现记为失败。task card 通过 changed-file ownership 生成 lazy `runtime_contract`；无法可靠分类时使用 `runtime_impact=unknown` 并 fail closed。PR 前必须证明 fresh process 可加载修复；合入后由 workflow 输出 catalog target、operator runbook、预期 identity 和只读 smoke 引用。用户完成重启后运行 `post-restart-verify`，通过 runtime identity、API/业务 smoke 以及需要时的 DB readback 后才能 close-sync 为 verified。等待用户重启期间状态为 `fixed_source_pending_user_restart`；源码合入和已授权的 source cleanup 可独立完成，并分别保留其真实状态。runtime target catalog 缺失、冲突或 probe 不完整时显式阻断验证。
 
 ## 7. 上下文、批处理和生产依赖
 

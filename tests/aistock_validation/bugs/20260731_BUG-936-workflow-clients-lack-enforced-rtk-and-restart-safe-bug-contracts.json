@@ -546,7 +546,7 @@
   "last_seen_at": "2026-07-31T13:11:54.346442Z",
   "module": "validation.guardrails",
   "non_goals": [
-    "Do not restart production runtime services without explicit approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -559,6 +559,16 @@
     "validation_catalog_integrity"
   ],
   "risk_area": "bug",
+  "runtime_contract": {
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "runtime_impact": "none",
+    "backend_restart_owner": "user",
+    "target_id": null,
+    "target_ids": [],
+    "persistence_basis": "not_required",
+    "fresh_process_evidence": [],
+    "post_restart_effective_gate": "not_required"
+  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",

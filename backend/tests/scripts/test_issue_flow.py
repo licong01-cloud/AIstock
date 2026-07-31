@@ -209,7 +209,10 @@ def test_context_pack_records_token_budget_and_rejects_ambiguous_inputs(tmp_path
     assert pack["token_budget"]["full_docs_allowed"] is False
     assert pack["token_budget"]["target_tokens"] == 12000
     assert pack["standards_refs"] == [
-        "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001"
+        "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-tool-rtk-001",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-backend-restart-ownership-001",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001",
     ]
 
     assert flow.main(["context-pack"]) == 2
@@ -220,7 +223,13 @@ def test_development_standard_is_single_authority_for_workflow_clients() -> None
     authority = "docs/standards/aistock_development_standard_v1.5_20260523.md"
     standard = Path(authority).read_text(encoding="utf-8")
 
-    assert flow.STANDARD_REFS == [f"{authority}#CONTEXT-BUDGET-001"]
+    assert flow.STANDARD_REFS == [
+        f"{authority}#CONTEXT-BUDGET-001",
+        f"{authority}#rule-tool-rtk-001",
+        f"{authority}#rule-backend-restart-ownership-001",
+        f"{authority}#rule-bug-restart-effective-001",
+    ]
+    assert "fixed_source_pending_user_restart" in flow.VALID_BUG_STATUSES
     design_compliance_lines = [
         line
         for line in standard.splitlines()

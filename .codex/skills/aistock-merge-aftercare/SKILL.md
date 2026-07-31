@@ -26,6 +26,9 @@ Use the RD-Agent section when source merge, immutable release, deployment, resta
 
 ## Aftercare
 
+- Source merge, source cleanup, backend restart, post-restart verification and BUG close-sync are independent states. Source cleanup does not wait for a user restart, but cleanup still requires its own authorization.
+- Backend restart remains user-owned even when merge/finalizer/aftercare was authorized. Emit the catalog target and operator runbook reference; do not execute process control without explicit authorization for that target.
+- A runtime BUG remains `fixed_source_pending_user_restart` until `post-restart-verify` produces a passed identity and smoke receipt. Do not close its GitHub Issue or report runtime verified before that receipt is supplied to close-sync.
 - Run close-sync/finalizer for BUG PRs.
 - Run `python scripts/aistock_issue_workflow.py install-client --apply` when `.codex/**`, `.claude/**`, or workflow client files changed.
 - Apply committed production DDL only when the user authorized merge and DDL is required; otherwise report `production_ddl_gate=noop` or `pending`.
