@@ -439,6 +439,7 @@ def _process(monkeypatch, process_identity: str, *, failed_treatment_seed: int |
     ] + [_attempt(subject.CONTROL_ROLE, seed, process_identity) for seed in range(42, 50)]
     return subject.build_process_receipt(
         process_identity=process_identity,
+        producer_commit="1" * 40,
         attempts=attempts,
         treatment_source_identities=treatment,
         control_source_identities=control,
@@ -460,6 +461,7 @@ def test_process_runner_never_early_stops_after_a_failed_attempt(monkeypatch):
         control_item=_series(subject.CONTROL_SECTOR, inactive_value=7.0),
         preprocess=_preprocess(),
         process_identity="process-a",
+        producer_commit="1" * 40,
         numeric_environment={"environment": "fixed"},
         treatment_source_identities=treatment,
         control_source_identities=control,
@@ -493,6 +495,7 @@ def test_process_runner_validates_all_frozen_control_authority_before_first_fit(
             control_item=_series(subject.CONTROL_SECTOR, inactive_value=7.0),
             preprocess=_preprocess(),
             process_identity="process-a",
+            producer_commit="1" * 40,
             numeric_environment={"environment": "fixed"},
             treatment_source_identities=treatment,
             control_source_identities=control,
@@ -515,6 +518,7 @@ def test_process_receipt_rejects_self_consistent_attempt_with_forbidden_side_eff
     with pytest.raises(subject.D1InactiveDimensionError, match="attempt receipt identity"):
         subject.build_process_receipt(
             process_identity="process-a",
+            producer_commit="1" * 40,
             attempts=attempts,
             treatment_source_identities=treatment,
             control_source_identities=control,
@@ -522,8 +526,8 @@ def test_process_receipt_rejects_self_consistent_attempt_with_forbidden_side_eff
 
 
 def test_controlled_report_separates_diagnostic_completion_mechanism_and_d5_readiness(monkeypatch):
-    first = _process(monkeypatch, "process-a")
-    second = _process(monkeypatch, "process-b")
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
 
     report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
 
@@ -552,14 +556,15 @@ def test_controlled_report_keeps_downstream_failure_reason_without_rejecting_the
         ] + [_attempt(subject.CONTROL_ROLE, seed, process_identity) for seed in range(42, 50)]
         return subject.build_process_receipt(
             process_identity=process_identity,
+            producer_commit="1" * 40,
             attempts=attempts,
             treatment_source_identities=treatment,
             control_source_identities=control,
         )
 
     report = subject.build_controlled_refit_report(
-        process("process-a"),
-        process("process-b"),
+        process("fresh_process_1"),
+        process("fresh_process_2"),
         producer_commit="1" * 40,
     )
 
@@ -570,10 +575,10 @@ def test_controlled_report_keeps_downstream_failure_reason_without_rejecting_the
 
 
 def test_controlled_report_rejects_projection_mechanism_without_hiding_other_attempts(monkeypatch):
-    first = _process(monkeypatch, "process-a", failed_treatment_seed=45)
-    second = _process(monkeypatch, "process-b", failed_treatment_seed=45)
+    first = _process(monkeypatch, "fresh_process_1", failed_treatment_seed=45)
+    second = _process(monkeypatch, "fresh_process_2", failed_treatment_seed=45)
 
-    report = subject.build_controlled_refit_report(first, second, producer_commit="2" * 40)
+    report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
 
     assert report["status"] == "diagnostic_complete"
     assert report["mechanism_assessment"] == "constant_dimension_mechanism_rejected"
@@ -583,13 +588,13 @@ def test_controlled_report_rejects_projection_mechanism_without_hiding_other_att
 
 
 def test_repeat_mismatch_is_inconclusive_not_fake_success(monkeypatch):
-    first = _process(monkeypatch, "process-a")
-    second = _process(monkeypatch, "process-b")
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
     second["comparable_payload_sha256"] = "0" * 64
     body = {key: value for key, value in second.items() if key != "process_receipt_sha256"}
     second["process_receipt_sha256"] = canonical_sha256(body)
 
-    report = subject.build_controlled_refit_report(first, second, producer_commit="3" * 40)
+    report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
 
     assert report["status"] == "diagnostic_incomplete"
     assert report["mechanism_assessment"] == "inconclusive"
@@ -597,21 +602,36 @@ def test_repeat_mismatch_is_inconclusive_not_fake_success(monkeypatch):
     assert "hmm_risk_model_inactive_dimension_repeat_mismatch" in report["mechanism_assessment_reason_codes"]
 
 
+def test_self_consistent_process_schema_drift_is_inconclusive_not_mechanism_success(monkeypatch):
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
+    first["schema_version"] = "tampered_process_schema_v999"
+    body = {key: value for key, value in first.items() if key != "process_receipt_sha256"}
+    first["process_receipt_sha256"] = canonical_sha256(body)
+
+    report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_incomplete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["d5_compatibility_evidence_ready"] is False
+    assert "hmm_risk_model_inactive_dimension_contract_invalid" in report["mechanism_assessment_reason_codes"]
+
+
 def test_controlled_report_rejects_self_consistent_process_with_forbidden_side_effect(monkeypatch):
-    first = _process(monkeypatch, "process-a")
-    second = _process(monkeypatch, "process-b")
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
     first["model_write_performed"] = True
     body = {key: value for key, value in first.items() if key != "process_receipt_sha256"}
     first["process_receipt_sha256"] = canonical_sha256(body)
 
     with pytest.raises(subject.D1InactiveDimensionError, match="forbidden side-effect"):
-        subject.build_controlled_refit_report(first, second, producer_commit="3" * 40)
+        subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
 
 
 def test_writer_is_immutable_and_canonical_readback_is_verified(tmp_path, monkeypatch):
-    first = _process(monkeypatch, "process-a")
-    second = _process(monkeypatch, "process-b")
-    report = subject.build_controlled_refit_report(first, second, producer_commit="4" * 40)
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
+    report = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
     target = tmp_path / "d1.json"
 
     identity = subject.write_controlled_refit_report(target, report)
@@ -623,5 +643,31 @@ def test_writer_is_immutable_and_canonical_readback_is_verified(tmp_path, monkey
         subject.write_controlled_refit_report(target, report)
 
     invalid = {**report, "receipt_sha256": "0" * 64}
-    with pytest.raises(subject.D1InactiveDimensionError, match="receipt is invalid"):
+    with pytest.raises(subject.D1InactiveDimensionError, match="report readback differs"):
         subject.write_controlled_refit_report(tmp_path / "invalid.json", invalid)
+
+
+def test_report_writer_rejects_self_consistent_fake_success(monkeypatch, tmp_path):
+    report = subject.build_controlled_refit_report(
+        _process(monkeypatch, "fresh_process_1"),
+        _process(monkeypatch, "fresh_process_2"),
+        producer_commit="1" * 40,
+    )
+    report["d5_compatibility_evidence_ready"] = False
+    body = {key: value for key, value in report.items() if key != "receipt_sha256"}
+    report["receipt_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="report readback differs"):
+        subject.write_controlled_refit_report(tmp_path / "fake-success.json", report)
+
+
+def test_controlled_report_requires_approved_fresh_process_identities(monkeypatch):
+    report = subject.build_controlled_refit_report(
+        _process(monkeypatch, "process-a"),
+        _process(monkeypatch, "process-b"),
+        producer_commit="1" * 40,
+    )
+
+    assert report["status"] == "diagnostic_incomplete"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert "hmm_risk_model_inactive_dimension_contract_invalid" in report["mechanism_assessment_reason_codes"]

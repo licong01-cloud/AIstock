@@ -2948,6 +2948,9 @@ selection、model/READY、数据库、依赖或runtime动作。
 - **审核修复**：`RESOLVED`。所有control frozen hash在首fit前预校验；attempt持久化numeric environment、期望/实际control hash；
   treatment/control train-input manifest与批准profile逐项绑定；父进程拒绝即使canonical hash自洽但携带selection/model/READY/DB/runtime
   side effect的child payload；report保留全部downstream D4 typed failure，不以机制支持吞掉失败；writer在落盘前校验内部receipt。
+  首轮正式审核后又固定三份批准输入artifact canonical hash、clean producer commit及child source authority，限制report为repo外显式artifact root，
+  并在第二child或parent finalize失败时保留已完成process与typed failure receipt，不伪造未知fit数量。第二轮审核进一步要求
+  `fresh_process_1/2`精确identity、process/report/failure writer-readback同一重建authority，并拒绝仅重算顶层hash的伪成功报告。
   report明确`d3_d4_descriptive_contracts_applied=true`与`formal_model_set_acceptance_performed=false`，不使用含糊成功语义。
 
 综合审核结论：`PASS_D1_B_P1_SOURCE_COMPLETE_CONTROLLED_REFIT_NOT_EXECUTED`。本结论不表示32 fits、selection、D6、model/READY、

@@ -78,6 +78,8 @@ from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
     FEATURE_DEFINITION_SHA256 as B3_D1_FEATURE_DEFINITION_SHA256,
     PREPROCESS_IDENTITY_SHA256 as B3_D1_PREPROCESS_IDENTITY_SHA256,
     REPORT_SCHEMA_VERSION as B3_D1_REPORT_SCHEMA_VERSION,
+    REMEDIATION_REPORT_SHA256 as B3_D1_REMEDIATION_REPORT_SHA256,
+    SOURCE_AUTHORITY as B3_D1_SOURCE_AUTHORITY,
     TREATMENT_PROFILE_RECEIPT_SHA256 as B3_D1_TREATMENT_PROFILE_RECEIPT_SHA256,
     TREATMENT_SECTOR as B3_D1_TREATMENT_SECTOR,
     TREATMENT_SOURCE_SET_SHA256 as B3_D1_TREATMENT_SOURCE_SET_SHA256,
@@ -85,6 +87,7 @@ from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
     build_controlled_refit_report as build_b3_d1_controlled_refit_report,
     run_controlled_process as run_b3_d1_controlled_process,
     validate_source_identity_set as validate_b3_d1_source_identity_set,
+    validate_process_receipt as validate_b3_d1_process_receipt,
     write_controlled_refit_report as write_b3_d1_controlled_refit_report,
 )
 from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
@@ -2224,6 +2227,11 @@ def _b3_d1_frozen_authority(
 
     validate_b3_remediation_authorities(formal_report, blocker_report)
     _require_canonical_receipt(remediation_report, label="D1-B remediation diagnostic")
+    if canonical_sha256(remediation_report) != B3_D1_REMEDIATION_REPORT_SHA256:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B remediation report differs from the approved canonical artifact",
+        )
     projection = build_b3_remediation_projection(blocker_report)
     if (
         remediation_report.get("train_projection_sha256") != projection.get("projection_sha256")
@@ -2406,6 +2414,7 @@ def prepare_b3_d1_controlled_pass(
     *,
     db_prefix: str,
     process_identity: str,
+    producer_commit: str,
 ) -> dict[str, Any]:
     """Run one 16-attempt D1-B process after all frozen authorities close."""
 
@@ -2413,6 +2422,12 @@ def prepare_b3_d1_controlled_pass(
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_contract_invalid",
             "D1-B child process identity is invalid",
+        )
+    current_commit = _formal_producer_commit()
+    if current_commit != producer_commit:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B child producer commit differs from the parent authority",
         )
     authority = _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report)
     current_environment = c008_b3_diag04_fixed_numeric_environment()
@@ -2440,16 +2455,23 @@ def prepare_b3_d1_controlled_pass(
             "hmm_risk_model_inactive_dimension_authority_mismatch",
             "D1-B treatment/control train inputs are missing",
         )
-    return run_b3_d1_controlled_process(
+    receipt = run_b3_d1_controlled_process(
         treatment_item=series[B3_D1_TREATMENT_SECTOR],
         control_item=series[B3_D1_CONTROL_SECTOR],
         preprocess=authority["preprocess"],
         process_identity=process_identity,
+        producer_commit=current_commit,
         numeric_environment=current_environment,
         treatment_source_identities=authority["treatment_source_identities"],
         control_source_identities=authority["control_source_identities"],
         frozen_control_hashes=authority["frozen_control_hashes"],
     )
+    if _formal_producer_commit() != current_commit:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B producer source changed during the child process",
+        )
+    return receipt
 
 
 def _b3_d1_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
@@ -2472,11 +2494,18 @@ def _b3_d1_child_command(args: argparse.Namespace, process_identity: str) -> lis
         str(Path(args.b3_remediation_report).resolve()),
         "--b3-process-identity",
         process_identity,
+        "--b3-d1-producer-commit",
+        str(args.b3_d1_producer_commit),
         "--_b3-d1-controlled-child",
     ]
 
 
-def _parse_b3_d1_child_payload(payload: bytes, *, process_identity: str) -> dict[str, Any]:
+def _parse_b3_d1_child_payload(
+    payload: bytes,
+    *,
+    process_identity: str,
+    producer_commit: str,
+) -> dict[str, Any]:
     try:
         value = json.loads(payload.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -2496,12 +2525,109 @@ def _parse_b3_d1_child_payload(payload: bytes, *, process_identity: str) -> dict
             "hmm_risk_model_inactive_dimension_contract_invalid",
             f"D1-B {process_identity} receipt identity is invalid",
         )
-    return value
+    return validate_b3_d1_process_receipt(
+        value,
+        expected_process_identity=process_identity,
+        expected_producer_commit=producer_commit,
+    )
+
+
+class B3D1ControlledProcessError(D1InactiveDimensionError):
+    def __init__(
+        self,
+        reason_code: str,
+        message: str,
+        *,
+        completed_processes: list[dict[str, Any]],
+        failed_process_receipt: dict[str, Any],
+    ) -> None:
+        super().__init__(reason_code, message)
+        self.completed_processes = [dict(value) for value in completed_processes]
+        self.failed_process_receipt = dict(failed_process_receipt)
+
+
+def _resolve_b3_d1_report_path(args: argparse.Namespace) -> Path:
+    artifact_root = Path(args.output_root).resolve()
+    report_path = Path(args.b3_d1_controlled_refit_output).resolve()
+    try:
+        artifact_root.relative_to(ROOT)
+    except ValueError:
+        pass
+    else:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1-B artifact root must be outside the repository",
+        )
+    try:
+        report_path.relative_to(artifact_root)
+    except ValueError as exc:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1-B report path must be contained by the explicit artifact root",
+        ) from exc
+    if report_path == artifact_root:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1-B report path must identify a file below the artifact root",
+        )
+    return report_path
+
+
+def _b3_d1_child_failure_receipt(
+    *,
+    process_identity: str,
+    producer_commit: str,
+    returncode: int | None,
+    stdout: bytes,
+    stderr: bytes,
+    fit_budget_completion_unknown: bool,
+    error: BaseException | None = None,
+) -> dict[str, Any]:
+    decoded = stderr.decode("utf-8", errors="replace").strip()
+    parsed: dict[str, Any] = {}
+    if decoded:
+        try:
+            candidate = json.loads(decoded.splitlines()[-1])
+            if isinstance(candidate, dict):
+                parsed = candidate
+        except json.JSONDecodeError:
+            parsed = {}
+    reason_code = str(
+        parsed.get("reason_code")
+        or getattr(error, "reason_code", None)
+        or "hmm_risk_model_inactive_dimension_contract_invalid"
+    )
+    message = str(parsed.get("error") or error or decoded[-4000:] or "D1-B child failed without error text")[-4000:]
+    body = {
+        "schema_version": "hmm_risk_c008_b3_d1_child_failure_receipt_v1",
+        "status": "failed",
+        "process_identity": process_identity,
+        "producer_commit": producer_commit,
+        "source_authority": dict(B3_D1_SOURCE_AUTHORITY),
+        "returncode": returncode,
+        "reason_code": reason_code,
+        "error_type": str(parsed.get("error_type") or (type(error).__name__ if error else "child_process_error"))[:256],
+        "error": message,
+        "stdout_byte_count": len(stdout),
+        "stdout_sha256": sha256_bytes(stdout),
+        "stderr_byte_count": len(stderr),
+        "stderr_sha256": sha256_bytes(stderr),
+        "fit_budget_completion_unknown": fit_budget_completion_unknown,
+        "selection_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
     """Run exactly two fresh 16-attempt processes; never select or write models."""
 
+    _resolve_b3_d1_report_path(args)
+    producer_commit = _formal_producer_commit()
+    args.b3_d1_producer_commit = producer_commit
     formal_report = _load_json_mapping(Path(args.b3_formal_report).resolve(), label="formal B3 report")
     blocker_report = _load_json_mapping(Path(args.b3_blocker_report).resolve(), label="formal blocker report")
     remediation_report = _load_json_mapping(Path(args.b3_remediation_report).resolve(), label="remediation report")
@@ -2517,21 +2643,89 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
         environment[key] = "1"
     processes: list[dict[str, Any]] = []
     for process_identity in ("fresh_process_1", "fresh_process_2"):
-        completed = subprocess.run(
-            _b3_d1_child_command(args, process_identity),
-            check=False,
-            capture_output=True,
-            env=environment,
-            timeout=7200,
-        )
-        if completed.returncode != 0:
-            error = completed.stderr.decode("utf-8", errors="replace")[-4000:]
-            raise D1InactiveDimensionError(
-                "hmm_risk_model_inactive_dimension_contract_invalid",
-                f"D1-B {process_identity} failed returncode={completed.returncode}: {error}",
+        try:
+            completed = subprocess.run(
+                _b3_d1_child_command(args, process_identity),
+                check=False,
+                capture_output=True,
+                env=environment,
+                timeout=7200,
             )
-        processes.append(_parse_b3_d1_child_payload(completed.stdout, process_identity=process_identity))
-    return build_b3_d1_controlled_refit_report(processes[0], processes[1], producer_commit=_git_commit())
+        except (OSError, subprocess.SubprocessError) as exc:
+            failure = _b3_d1_child_failure_receipt(
+                process_identity=process_identity,
+                producer_commit=producer_commit,
+                returncode=None,
+                stdout=b"",
+                stderr=b"",
+                fit_budget_completion_unknown=False,
+                error=exc,
+            )
+            raise B3D1ControlledProcessError(
+                failure["reason_code"],
+                failure["error"],
+                completed_processes=processes,
+                failed_process_receipt=failure,
+            ) from exc
+        if completed.returncode != 0:
+            failure = _b3_d1_child_failure_receipt(
+                process_identity=process_identity,
+                producer_commit=producer_commit,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                fit_budget_completion_unknown=True,
+            )
+            raise B3D1ControlledProcessError(
+                failure["reason_code"],
+                failure["error"],
+                completed_processes=processes,
+                failed_process_receipt=failure,
+            )
+        try:
+            process = _parse_b3_d1_child_payload(
+                completed.stdout, process_identity=process_identity, producer_commit=producer_commit
+            )
+        except D1InactiveDimensionError as exc:
+            failure = _b3_d1_child_failure_receipt(
+                process_identity=process_identity,
+                producer_commit=producer_commit,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                fit_budget_completion_unknown=True,
+                error=exc,
+            )
+            raise B3D1ControlledProcessError(
+                exc.reason_code,
+                str(exc),
+                completed_processes=processes,
+                failed_process_receipt=failure,
+            ) from exc
+        processes.append(process)
+    try:
+        if _formal_producer_commit() != producer_commit:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                "D1-B producer source changed across fresh processes",
+            )
+        return build_b3_d1_controlled_refit_report(processes[0], processes[1], producer_commit=producer_commit)
+    except Exception as exc:
+        failure = _b3_d1_child_failure_receipt(
+            process_identity="parent_finalize",
+            producer_commit=producer_commit,
+            returncode=None,
+            stdout=b"",
+            stderr=b"",
+            fit_budget_completion_unknown=False,
+            error=exc,
+        )
+        raise B3D1ControlledProcessError(
+            str(getattr(exc, "reason_code", "hmm_risk_model_inactive_dimension_authority_mismatch")),
+            str(exc),
+            completed_processes=processes,
+            failed_process_receipt=failure,
+        ) from exc
 
 
 def _b3_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
@@ -2844,6 +3038,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--_b3-blocker-diag01-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-d1-controlled-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--b3-process-identity", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--b3-d1-producer-commit", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-formal-report", help="Approved immutable formal B3 preparation report.")
     parser.add_argument("--b3-blocker-report", help="Approved immutable C-008-B3-FORMAL-BLOCKER-DIAG-01 report.")
     parser.add_argument("--b3-remediation-report", help="Approved immutable C-008-B3-REMEDIATION-DIAG-02 report.")
@@ -2888,8 +3083,15 @@ def main() -> int:
                 raise StateModelSetError("blocker target identity is not valid for the D1-B controlled diagnostic")
             if d1_child and args.b3_process_identity not in {"fresh_process_1", "fresh_process_2"}:
                 raise StateModelSetError("D1-B controlled child process identity is invalid")
+            if d1_child and (
+                len(args.b3_d1_producer_commit) != 40
+                or any(character not in "0123456789abcdef" for character in args.b3_d1_producer_commit)
+            ):
+                raise StateModelSetError("D1-B controlled child producer commit is invalid")
             if d1_parent and args.b3_process_identity:
                 raise StateModelSetError("D1-B controlled parent must not declare a child process identity")
+            if d1_parent and args.b3_d1_producer_commit:
+                raise StateModelSetError("D1-B controlled parent must not declare a child producer commit")
         elif blocker_parent or blocker_child:
             if not blocker_formal_report:
                 raise StateModelSetError("--b3-formal-report is required for the blocker diagnostic")
@@ -3038,6 +3240,7 @@ def main() -> int:
                 remediation_report,
                 db_prefix=str(args.db_env_prefix),
                 process_identity=str(args.b3_process_identity),
+                producer_commit=str(args.b3_d1_producer_commit),
             )
             sys.stdout.buffer.write(canonical_json_bytes(report))
             return 0
@@ -3084,14 +3287,24 @@ def main() -> int:
             print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
             return 0 if report["status"] == "READY" else 1
         if d1_parent:
-            report_path = Path(d1_output).resolve()
+            report_path = _resolve_b3_d1_report_path(args)
             try:
                 report = run_b3_d1_controlled_repeated(args)
             except Exception as exc:
+                completed_processes = [
+                    dict(value) for value in getattr(exc, "completed_processes", []) if isinstance(value, dict)
+                ]
+                failed_process_receipt = getattr(exc, "failed_process_receipt", None)
+                known_attempt_count = sum(int(value.get("attempt_count") or 0) for value in completed_processes)
+                accepted_producer_commit = str(getattr(args, "b3_d1_producer_commit", "") or "")
+                producer_authority_accepted = len(accepted_producer_commit) == 40
+                producer_commit = accepted_producer_commit if producer_authority_accepted else _git_commit()
                 failure_body = {
                     "schema_version": B3_D1_REPORT_SCHEMA_VERSION,
                     "diagnostic_contract": "C-008-B3-REMEDIATION-D1-B-REFIT-01",
-                    "producer_commit": _git_commit(),
+                    "producer_commit": producer_commit,
+                    "producer_authority_accepted": producer_authority_accepted,
+                    "source_authority": dict(B3_D1_SOURCE_AUTHORITY),
                     "status": "diagnostic_failed",
                     "mechanism_assessment": "inconclusive",
                     "mechanism_assessment_reason_codes": [
@@ -3106,10 +3319,18 @@ def main() -> int:
                     "error_type": type(exc).__name__,
                     "error": str(exc)[-4000:],
                     "d5_compatibility_evidence_ready": False,
-                    "process_receipts": [],
+                    "process_receipts": completed_processes,
+                    "completed_process_count": len(completed_processes),
+                    "failed_process_receipt": (
+                        dict(failed_process_receipt) if isinstance(failed_process_receipt, dict) else None
+                    ),
                     "canonical_payload_bitwise_equal": False,
-                    "attempt_count": None,
-                    "fit_budget_completion_unknown": True,
+                    "attempt_count": known_attempt_count,
+                    "fit_budget_completion_unknown": (
+                        bool(failed_process_receipt.get("fit_budget_completion_unknown"))
+                        if isinstance(failed_process_receipt, dict)
+                        else False
+                    ),
                     "selection_performed": False,
                     "d3_d4_descriptive_contracts_applied": False,
                     "formal_model_set_acceptance_performed": False,
@@ -3314,6 +3535,9 @@ def main() -> int:
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
+        reason_code = getattr(exc, "reason_code", None)
+        if reason_code:
+            error["reason_code"] = str(reason_code)
         print(json.dumps(error, ensure_ascii=False, sort_keys=True), file=sys.stderr)
         return 1
     print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))

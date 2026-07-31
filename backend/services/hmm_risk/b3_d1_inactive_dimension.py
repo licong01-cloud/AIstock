@@ -45,6 +45,14 @@ CONTROL_SOURCE_SET_SHA256 = "905d97c7987896e854c905a831be33f2732b6d35dd56bedf825
 CONTROL_TRAIN_INPUT_MANIFEST_SHA256 = "63fad3c2f7e1ec7c2855685bcaaa74974f08c182246ed34c211f77a954da156e"
 PREPROCESS_IDENTITY_SHA256 = "cd7d759178449c7ec9bda7d1fbad0969a55cc1756361a0d70936f226909ab976"
 FEATURE_DEFINITION_SHA256 = "0445f91a5587dddb85e93fa5d08897ba967d41f10819e65eeb13a0353fac9aca"
+FORMAL_REPORT_SHA256 = "e7992f87fb555eb26d6c2ef1ad9d45863954edd83fbfcc39f5ae01765cf3939f"
+BLOCKER_REPORT_SHA256 = "10287e845f07bf3d9c15a68e5d09ad14e54613348824ac2af568f0244a1cffe8"
+REMEDIATION_REPORT_SHA256 = "48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58"
+SOURCE_AUTHORITY = {
+    "formal_report_sha256": FORMAL_REPORT_SHA256,
+    "blocker_report_sha256": BLOCKER_REPORT_SHA256,
+    "remediation_report_sha256": REMEDIATION_REPORT_SHA256,
+}
 
 _D1_REJECTION_REASONS = frozenset(
     {
@@ -82,6 +90,16 @@ def _require_identity(actual: Any, expected: str, field: str) -> str:
             "hmm_risk_model_inactive_dimension_authority_mismatch",
             f"{field} does not match the approved D1 authority",
             evidence={"field": field, "actual": identity, "expected": expected},
+        )
+    return identity
+
+
+def _require_commit(value: Any, field: str) -> str:
+    identity = str(value or "").lower()
+    if len(identity) != 40 or any(character not in "0123456789abcdef" for character in identity):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            f"{field} must be a 40-character lowercase Git SHA",
         )
     return identity
 
@@ -504,6 +522,7 @@ def run_controlled_process(
     control_item: B3TrainOnlySeries,
     preprocess: Mapping[str, Any],
     process_identity: str,
+    producer_commit: str,
     numeric_environment: Mapping[str, Any],
     treatment_source_identities: Sequence[Mapping[str, Any]],
     control_source_identities: Sequence[Mapping[str, Any]],
@@ -578,6 +597,7 @@ def run_controlled_process(
         )
     return build_process_receipt(
         process_identity=process_identity,
+        producer_commit=producer_commit,
         attempts=attempts,
         treatment_source_identities=treatment_sources,
         control_source_identities=control_sources,
@@ -587,10 +607,12 @@ def run_controlled_process(
 def build_process_receipt(
     *,
     process_identity: str,
+    producer_commit: str,
     attempts: Sequence[Mapping[str, Any]],
     treatment_source_identities: Sequence[Mapping[str, Any]],
     control_source_identities: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    normalized_commit = _require_commit(producer_commit, "producer_commit")
     treatment_sources = validate_source_identity_set(
         treatment_source_identities, expected_sha256=TREATMENT_SOURCE_SET_SHA256
     )
@@ -683,6 +705,8 @@ def build_process_receipt(
         "schema_version": PROCESS_SCHEMA_VERSION,
         "algorithm_version": ALGORITHM_VERSION,
         "process_identity": process_identity,
+        "producer_commit": normalized_commit,
+        "source_authority": dict(SOURCE_AUTHORITY),
         "attempts": ordered,
         "attempt_count": len(ordered),
         "terminal_attempt_count": sum(value.get("status") in {"fit_completed", "fit_failed"} for value in ordered),
@@ -701,21 +725,64 @@ def build_process_receipt(
     return {**body, "process_receipt_sha256": canonical_sha256(body)}
 
 
+def validate_process_receipt(
+    value: Mapping[str, Any],
+    *,
+    expected_process_identity: str,
+    expected_producer_commit: str,
+) -> dict[str, Any]:
+    """Rebuild a child receipt with the writer authority before the parent trusts it."""
+
+    normalized = dict(value)
+    if (
+        normalized.get("schema_version") != PROCESS_SCHEMA_VERSION
+        or normalized.get("algorithm_version") != ALGORITHM_VERSION
+        or normalized.get("process_identity") != expected_process_identity
+        or normalized.get("producer_commit") != _require_commit(expected_producer_commit, "expected_producer_commit")
+        or normalized.get("source_authority") != SOURCE_AUTHORITY
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 process authority fields are invalid",
+        )
+    attempts = normalized.get("attempts")
+    treatment_sources = normalized.get("treatment_source_identities")
+    control_sources = normalized.get("control_source_identities")
+    if (
+        not isinstance(attempts, list)
+        or not isinstance(treatment_sources, list)
+        or not isinstance(control_sources, list)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 process receipt collections are invalid",
+        )
+    rebuilt = build_process_receipt(
+        process_identity=expected_process_identity,
+        producer_commit=expected_producer_commit,
+        attempts=attempts,
+        treatment_source_identities=treatment_sources,
+        control_source_identities=control_sources,
+    )
+    if rebuilt != normalized:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 child process readback differs from the process writer authority",
+        )
+    return normalized
+
+
 def build_controlled_refit_report(
     first: Mapping[str, Any],
     second: Mapping[str, Any],
     *,
     producer_commit: str,
 ) -> dict[str, Any]:
-    normalized_commit = str(producer_commit or "").lower()
-    if len(normalized_commit) != 40 or any(character not in "0123456789abcdef" for character in normalized_commit):
-        raise D1InactiveDimensionError(
-            "hmm_risk_model_inactive_dimension_authority_mismatch",
-            "D1 producer_commit must be a 40-character lowercase Git SHA",
-        )
+    normalized_commit = _require_commit(producer_commit, "producer_commit")
     reasons: list[str] = []
     processes = [dict(first), dict(second)]
-    for process in processes:
+    expected_process_identities = ("fresh_process_1", "fresh_process_2")
+    for process, expected_process_identity in zip(processes, expected_process_identities, strict=True):
         if any(
             process.get(field) is not False
             for field in (
@@ -730,6 +797,14 @@ def build_controlled_refit_report(
                 "hmm_risk_model_inactive_dimension_contract_invalid",
                 "D1 process receipt contains a forbidden side-effect flag",
             )
+        try:
+            validate_process_receipt(
+                process,
+                expected_process_identity=expected_process_identity,
+                expected_producer_commit=normalized_commit,
+            )
+        except D1InactiveDimensionError as exc:
+            reasons.append(exc.reason_code)
         receipt = str(process.get("process_receipt_sha256") or "")
         body = {key: value for key, value in process.items() if key != "process_receipt_sha256"}
         process_attempts = list(process.get("attempts") or ())
@@ -744,8 +819,8 @@ def build_controlled_refit_report(
             or process.get("comparable_payload_sha256") != canonical_sha256(comparable_attempts)
         ):
             reasons.append("hmm_risk_model_inactive_dimension_attempt_set_incomplete")
-    process_identities = [str(value.get("process_identity") or "") for value in processes]
-    if len(set(process_identities)) != 2 or any(not value for value in process_identities):
+    process_identities = tuple(str(value.get("process_identity") or "") for value in processes)
+    if process_identities != expected_process_identities:
         reasons.append("hmm_risk_model_inactive_dimension_repeat_mismatch")
     repeat_equal = first.get("comparable_payload_sha256") == second.get("comparable_payload_sha256")
     if not repeat_equal:
@@ -779,6 +854,7 @@ def build_controlled_refit_report(
         "schema_version": REPORT_SCHEMA_VERSION,
         "diagnostic_contract": "C-008-B3-REMEDIATION-D1-B-REFIT-01",
         "producer_commit": normalized_commit,
+        "source_authority": dict(SOURCE_AUTHORITY),
         "status": "diagnostic_complete" if not reasons else "diagnostic_incomplete",
         "mechanism_assessment": mechanism,
         "mechanism_assessment_reason_codes": sorted(set(reasons) | all_attempt_reasons),
@@ -798,16 +874,163 @@ def build_controlled_refit_report(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
-def write_controlled_refit_report(path: Path, report: Mapping[str, Any]) -> str:
-    target = Path(path)
+def validate_controlled_refit_report(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Use the report writer authority for durable success/incomplete readback."""
+
+    normalized = dict(report)
+    if (
+        normalized.get("schema_version") != REPORT_SCHEMA_VERSION
+        or normalized.get("diagnostic_contract") != "C-008-B3-REMEDIATION-D1-B-REFIT-01"
+        or normalized.get("status") not in {"diagnostic_complete", "diagnostic_incomplete"}
+        or normalized.get("source_authority") != SOURCE_AUTHORITY
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 controlled-refit report authority fields are invalid",
+        )
+    processes = normalized.get("process_receipts")
+    if (
+        not isinstance(processes, list)
+        or len(processes) != 2
+        or any(not isinstance(value, Mapping) for value in processes)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 controlled-refit report must contain exactly two process receipts",
+        )
+    rebuilt = build_controlled_refit_report(
+        processes[0],
+        processes[1],
+        producer_commit=_require_commit(normalized.get("producer_commit"), "producer_commit"),
+    )
+    if rebuilt != normalized:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 controlled-refit report readback differs from the report writer authority",
+        )
+    return normalized
+
+
+def validate_controlled_process_failure_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    expected_process_identity: str,
+    expected_producer_commit: str,
+) -> dict[str, Any]:
+    normalized = dict(receipt)
+    identity = str(normalized.get("receipt_sha256") or "")
+    body = {key: value for key, value in normalized.items() if key != "receipt_sha256"}
+    required_false_flags = (
+        "selection_performed",
+        "model_write_performed",
+        "ready_artifact_write_performed",
+        "database_write_performed",
+        "runtime_action_performed",
+    )
+    if (
+        normalized.get("schema_version") != "hmm_risk_c008_b3_d1_child_failure_receipt_v1"
+        or normalized.get("status") != "failed"
+        or normalized.get("process_identity") != expected_process_identity
+        or normalized.get("producer_commit") != _require_commit(expected_producer_commit, "expected_producer_commit")
+        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or not str(normalized.get("reason_code") or "").strip()
+        or normalized.get("fit_budget_completion_unknown") not in {True, False}
+        or any(normalized.get(field) is not False for field in required_false_flags)
+        or identity != canonical_sha256(body)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 controlled-process failure receipt is invalid",
+        )
+    for prefix in ("stdout", "stderr"):
+        count = normalized.get(f"{prefix}_byte_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_contract_invalid",
+                f"D1 controlled-process {prefix} byte count is invalid",
+            )
+        _require_sha256(normalized.get(f"{prefix}_sha256"), f"{prefix}_sha256")
+    return normalized
+
+
+def _validate_controlled_refit_failure_report(report: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(report)
     receipt = str(normalized.get("receipt_sha256") or "")
     body = {key: value for key, value in normalized.items() if key != "receipt_sha256"}
-    if receipt != canonical_sha256(body):
+    required_false_flags = (
+        "selection_performed",
+        "formal_model_set_acceptance_performed",
+        "hard_semantic_authority_changed",
+        "model_write_performed",
+        "ready_artifact_write_performed",
+        "database_write_performed",
+        "runtime_action_performed",
+    )
+    if (
+        normalized.get("schema_version") != REPORT_SCHEMA_VERSION
+        or normalized.get("diagnostic_contract") != "C-008-B3-REMEDIATION-D1-B-REFIT-01"
+        or normalized.get("status") != "diagnostic_failed"
+        or normalized.get("mechanism_assessment") != "inconclusive"
+        or normalized.get("d5_compatibility_evidence_ready") is not False
+        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or any(normalized.get(field) is not False for field in required_false_flags)
+        or receipt != canonical_sha256(body)
+    ):
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_contract_invalid",
-            "D1 controlled-refit report receipt is invalid",
+            "D1 controlled-refit failure report authority fields are invalid",
         )
+    _require_commit(normalized.get("producer_commit"), "producer_commit")
+    reasons = normalized.get("mechanism_assessment_reason_codes")
+    completed = normalized.get("process_receipts")
+    failed = normalized.get("failed_process_receipt")
+    if (
+        not isinstance(reasons, list)
+        or not reasons
+        or not isinstance(completed, list)
+        or any(not isinstance(value, Mapping) for value in completed)
+        or len(completed) > 2
+        or normalized.get("completed_process_count") != len(completed)
+        or normalized.get("attempt_count") != sum(int(value.get("attempt_count") or 0) for value in completed)
+        or (failed is not None and not isinstance(failed, Mapping))
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 controlled-refit failure evidence is invalid",
+        )
+    for index, process in enumerate(completed, start=1):
+        validate_process_receipt(
+            process,
+            expected_process_identity=f"fresh_process_{index}",
+            expected_producer_commit=str(normalized["producer_commit"]),
+        )
+    if failed is not None:
+        expected_failure_identity = f"fresh_process_{len(completed) + 1}" if len(completed) < 2 else "parent_finalize"
+        validate_controlled_process_failure_receipt(
+            failed,
+            expected_process_identity=expected_failure_identity,
+            expected_producer_commit=str(normalized["producer_commit"]),
+        )
+        if normalized.get("fit_budget_completion_unknown") is not failed.get("fit_budget_completion_unknown"):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_contract_invalid",
+                "D1 controlled-refit failure completion state is inconsistent",
+            )
+    elif completed or normalized.get("fit_budget_completion_unknown") is not False:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 controlled-refit failure is missing its process failure evidence",
+        )
+    return normalized
+
+
+def write_controlled_refit_report(path: Path, report: Mapping[str, Any]) -> str:
+    target = Path(path)
+    normalized = dict(report)
+    if normalized.get("status") == "diagnostic_failed":
+        _validate_controlled_refit_failure_report(normalized)
+    else:
+        validate_controlled_refit_report(normalized)
     payload = canonical_json_bytes(normalized) + b"\n"
     identity = canonical_sha256(normalized)
     target.parent.mkdir(parents=True, exist_ok=True)

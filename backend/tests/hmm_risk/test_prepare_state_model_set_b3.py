@@ -1437,11 +1437,13 @@ def _d1_args(tmp_path) -> SimpleNamespace:
     values = _remediation_args(tmp_path)
     remediation = tmp_path / "source-remediation.json"
     remediation.write_text("{}", encoding="utf-8")
+    artifact_root = tmp_path / "model-sets"
     values.b3_remediation_diag02_output = None
-    values.b3_d1_controlled_refit_output = str(tmp_path / "d1-controlled-refit.json")
+    values.b3_d1_controlled_refit_output = str(artifact_root / "d1-controlled-refit.json")
     values.b3_remediation_report = str(remediation)
     values._b3_d1_controlled_child = False
     values.b3_process_identity = ""
+    values.b3_d1_producer_commit = ""
     values.c009_stock_fact_preflight_output = None
     values.c010_observation_eligibility_output = None
     return values
@@ -1457,6 +1459,15 @@ def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_thread
     args = _d1_args(tmp_path)
     monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
     monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *args: {})
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_parse_b3_d1_child_payload",
+        lambda payload, process_identity, producer_commit: {
+            "process_identity": process_identity,
+            "producer_commit": producer_commit,
+        },
+    )
     calls: list[tuple[str, dict[str, str]]] = []
 
     def fake_run(command, *, check, capture_output, env, timeout):
@@ -1488,7 +1499,6 @@ def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_thread
             "producer_commit": producer_commit,
         },
     )
-    monkeypatch.setattr(subject, "_git_commit", lambda: "d" * 40)
 
     report = subject.run_b3_d1_controlled_repeated(args)
 
@@ -1499,10 +1509,16 @@ def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_thread
     assert report == {"first": "fresh_process_1", "second": "fresh_process_2", "producer_commit": "d" * 40}
 
 
-def test_d1_controlled_child_payload_must_be_canonical_and_bound_to_process_identity() -> None:
+def test_d1_controlled_child_payload_must_be_canonical_and_bound_to_process_identity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        subject,
+        "validate_b3_d1_process_receipt",
+        lambda value, expected_process_identity, expected_producer_commit: value,
+    )
     parsed = subject._parse_b3_d1_child_payload(
         _d1_process_payload("fresh_process_1"),
         process_identity="fresh_process_1",
+        producer_commit="d" * 40,
     )
     assert parsed["process_identity"] == "fresh_process_1"
 
@@ -1510,11 +1526,13 @@ def test_d1_controlled_child_payload_must_be_canonical_and_bound_to_process_iden
         subject._parse_b3_d1_child_payload(
             _d1_process_payload("fresh_process_2"),
             process_identity="fresh_process_1",
+            producer_commit="d" * 40,
         )
     with pytest.raises(StateModelSetError, match="canonical JSON"):
         subject._parse_b3_d1_child_payload(
             _d1_process_payload("fresh_process_1") + b"\n",
             process_identity="fresh_process_1",
+            producer_commit="d" * 40,
         )
 
 
@@ -1542,9 +1560,16 @@ def test_main_d1_controlled_mode_persists_diagnostic_without_selection_or_model_
     monkeypatch.setattr(subject, "_load_request", lambda path: _request())
     monkeypatch.setattr(subject, "run_b3_d1_controlled_repeated", lambda value: report)
 
+    def persist_validated_report(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return subject.canonical_sha256(value)
+
+    monkeypatch.setattr(subject, "write_b3_d1_controlled_refit_report", persist_validated_report)
+
     assert subject.main() == 0
 
-    persisted = json.loads((tmp_path / "d1-controlled-refit.json").read_text(encoding="utf-8"))
+    persisted = json.loads((tmp_path / "model-sets" / "d1-controlled-refit.json").read_text(encoding="utf-8"))
     receipt = json.loads(capsys.readouterr().out)
     assert persisted == report
     assert receipt["attempt_count"] == 32
@@ -1561,25 +1586,156 @@ def test_main_d1_controlled_mode_persists_typed_failure_without_fake_attempt_cou
     monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
     monkeypatch.setattr(subject, "_load_request", lambda path: _request())
     monkeypatch.setattr(subject, "_git_commit", lambda: "d" * 40)
+    child_failure = subject._b3_d1_child_failure_receipt(
+        process_identity="fresh_process_1",
+        producer_commit="d" * 40,
+        returncode=1,
+        stdout=b"",
+        stderr=b"",
+        fit_budget_completion_unknown=True,
+        error=subject.D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "frozen authority drift",
+        ),
+    )
     monkeypatch.setattr(
         subject,
         "run_b3_d1_controlled_repeated",
         lambda value: (_ for _ in ()).throw(
-            subject.D1InactiveDimensionError(
+            subject.B3D1ControlledProcessError(
                 "hmm_risk_model_inactive_dimension_authority_mismatch",
                 "frozen authority drift",
+                completed_processes=[],
+                failed_process_receipt=child_failure,
             )
         ),
     )
 
     assert subject.main() == 1
 
-    persisted = json.loads((tmp_path / "d1-controlled-refit.json").read_text(encoding="utf-8"))
+    persisted = json.loads((tmp_path / "model-sets" / "d1-controlled-refit.json").read_text(encoding="utf-8"))
     assert persisted["status"] == "diagnostic_failed"
     assert persisted["mechanism_assessment"] == "inconclusive"
     assert persisted["mechanism_assessment_reason_codes"] == ["hmm_risk_model_inactive_dimension_authority_mismatch"]
-    assert persisted["attempt_count"] is None
+    assert persisted["attempt_count"] == 0
+    assert persisted["completed_process_count"] == 0
+    assert persisted["process_receipts"] == []
+    assert persisted["failed_process_receipt"] == child_failure
+    assert persisted["producer_authority_accepted"] is False
+    assert persisted["source_authority"] == subject.B3_D1_SOURCE_AUTHORITY
     assert persisted["fit_budget_completion_unknown"] is True
     assert persisted["selection_performed"] is False
     assert persisted["ready_artifact_write_performed"] is False
     assert "frozen authority drift" in capsys.readouterr().err
+
+
+def test_d1_frozen_authority_rejects_rehashed_nonapproved_remediation_before_projection(monkeypatch) -> None:
+    body = {"formal_source_commit": "0" * 40}
+    remediation = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+    monkeypatch.setattr(subject, "validate_b3_remediation_authorities", lambda formal, blocker: None)
+
+    with pytest.raises(StateModelSetError, match="approved canonical artifact"):
+        subject._b3_d1_frozen_authority({}, {}, remediation)
+
+
+def test_d1_report_path_must_be_repo_external_and_contained_by_artifact_root(tmp_path) -> None:
+    args = _d1_args(tmp_path)
+    assert subject._resolve_b3_d1_report_path(args) == (tmp_path / "model-sets" / "d1-controlled-refit.json").resolve()
+
+    args.b3_d1_controlled_refit_output = str(tmp_path / "outside.json")
+    with pytest.raises(StateModelSetError, match="contained"):
+        subject._resolve_b3_d1_report_path(args)
+
+    args.output_root = str(subject.ROOT / "tmp" / "d1-artifacts")
+    args.b3_d1_controlled_refit_output = str(subject.ROOT / "tmp" / "d1-artifacts" / "report.json")
+    with pytest.raises(StateModelSetError, match="outside the repository"):
+        subject._resolve_b3_d1_report_path(args)
+
+
+def test_d1_second_child_failure_preserves_first_process_and_typed_reason(monkeypatch, tmp_path) -> None:
+    args = _d1_args(tmp_path)
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
+    monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *values: {})
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_parse_b3_d1_child_payload",
+        lambda payload, process_identity, producer_commit: {
+            "process_identity": process_identity,
+            "producer_commit": producer_commit,
+            "attempt_count": 16,
+        },
+    )
+    calls = 0
+
+    def fake_run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(returncode=0, stdout=b"{}", stderr=b"")
+        error = {
+            "schema_version": "hmm_risk_state_model_set_preparation_error_v1",
+            "status": "failed",
+            "error_type": "D1InactiveDimensionError",
+            "error": "numeric environment drift",
+            "reason_code": "hmm_risk_model_inactive_dimension_authority_mismatch",
+        }
+        return SimpleNamespace(returncode=1, stdout=b"", stderr=json.dumps(error).encode("utf-8"))
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+
+    with pytest.raises(subject.B3D1ControlledProcessError) as captured:
+        subject.run_b3_d1_controlled_repeated(args)
+
+    assert captured.value.reason_code == "hmm_risk_model_inactive_dimension_authority_mismatch"
+    assert captured.value.completed_processes == [
+        {"process_identity": "fresh_process_1", "producer_commit": "d" * 40, "attempt_count": 16}
+    ]
+    assert captured.value.failed_process_receipt["process_identity"] == "fresh_process_2"
+    assert captured.value.failed_process_receipt["producer_commit"] == "d" * 40
+    assert captured.value.failed_process_receipt["source_authority"] == subject.B3_D1_SOURCE_AUTHORITY
+    assert captured.value.failed_process_receipt["reason_code"] == (
+        "hmm_risk_model_inactive_dimension_authority_mismatch"
+    )
+
+
+def test_d1_parent_finalize_failure_preserves_both_completed_processes(monkeypatch, tmp_path) -> None:
+    args = _d1_args(tmp_path)
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
+    monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *values: {})
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_parse_b3_d1_child_payload",
+        lambda payload, process_identity, producer_commit: {
+            "process_identity": process_identity,
+            "producer_commit": producer_commit,
+            "attempt_count": 16,
+        },
+    )
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=b"{}", stderr=b""),
+    )
+    monkeypatch.setattr(
+        subject,
+        "build_b3_d1_controlled_refit_report",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subject.D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_contract_invalid",
+                "parent readback mismatch",
+            )
+        ),
+    )
+
+    with pytest.raises(subject.B3D1ControlledProcessError) as captured:
+        subject.run_b3_d1_controlled_repeated(args)
+
+    assert len(captured.value.completed_processes) == 2
+    assert [value["process_identity"] for value in captured.value.completed_processes] == [
+        "fresh_process_1",
+        "fresh_process_2",
+    ]
+    assert captured.value.failed_process_receipt["process_identity"] == "parent_finalize"
+    assert captured.value.failed_process_receipt["fit_budget_completion_unknown"] is False
