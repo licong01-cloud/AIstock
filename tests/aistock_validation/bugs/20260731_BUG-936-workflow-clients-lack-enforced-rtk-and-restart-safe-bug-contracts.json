@@ -37,7 +37,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-936",
-  "closed_at": null,
+  "closed_at": "2026-07-31T13:54:11Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -539,8 +539,8 @@
   },
   "first_seen_at": "2026-07-31T13:11:54.346442Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "191fdb905adf2ea7313fef315ba3d2a729138404",
+  "fixed_at": "2026-07-31T13:55:47.325109Z",
   "github_issue_number": 2982,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2982",
   "last_seen_at": "2026-07-31T13:11:54.346442Z",
@@ -548,6 +548,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2986",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -560,18 +561,20 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "runtime_impact": "none",
     "backend_restart_owner": "user",
-    "target_id": null,
-    "target_ids": [],
-    "persistence_basis": "not_required",
     "fresh_process_evidence": [],
-    "post_restart_effective_gate": "not_required"
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation.guardrails"
   ],
@@ -580,6 +583,11 @@
     "fingerprint": "f917d1115ad9ac0e38bed324",
     "source_event_id": "FE-20260731-f917d1115ad9"
   },
+  "validation_evidence": [
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s guardrail_changed_files -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
