@@ -1,8 +1,8 @@
 # QE Sector-Risk Overlay F2 设计
 
-> 文档状态：`implementation_merged_runtime_active_artifact_built_bug881_retry_selection_fix_in_review`
+> 文档状态：`implementation_merged_runtime_active_artifact_built_formal_4_policy_8_child_submitted_in_progress`
 > Feature tier：`F2`
-> 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.12
+> 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.24
 > 范围：仅限 QE 研究；不接入 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 或生产交易。
 
 ## 1. Background / 背景
@@ -213,6 +213,7 @@ sector_risk_overlay_action_log: str
 - 源代码合入、后端重启、风险制品生成和 R13A 启动分别报告。
 - PR #2754、BUG-871 已合入，用户已完成后端重启，正式不可变风险制品已经生成。BUG-872 补齐精确 child 选择前不提交会自动膨胀 LOO 的错误 R13A 请求。
 - BUG-872 激活后先提交一个 `include_baseline=true/include_loo=false` 的两-child wiring canary，再按四个 policy run 提交 8 个正式 child；canary 只验证 wiring，不形成 Alpha 结论。
+- 2026-07-31 已按冻结合同提交四个正式 run：`macb_idem_fd513f8f…` none、`macb_idem_5445a95e…` entry_gate、`macb_idem_ef4430e2…` bounded_de_risk、`macb_idem_57af2233…` exit_reentry。每个 child plan 均精确为 `baseline:lgbm_g14_fp_h60 + scheme:equal`，无 LOO，共 8 个真实 CPU child；当前仍在运行，不提前形成 Alpha 结论。
 - 回滚停止创建新 overlay child，保留已生成 artifact、action ledger、run/child/attempt 和结果；代码按 PR revert，不删除研究记录。
 - 默认策略 hook 为 no-op，关闭 overlay 后必须恢复原有订单语义。
 
@@ -224,7 +225,7 @@ production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
 runtime_restart = active_from_pr_2754
 qe_artifact_build = formal_built_oos_20240701_20260629_v1
-r13a_experiment = canary_backtest_complete_terminal_persistence_and_reconciliation_bug888_bug889_in_fix
+r13a_experiment = formal_4_policy_8_child_submitted_in_progress
 non_qe_impact = prohibited
 ```
 
@@ -273,6 +274,8 @@ BUG-884 小文本字节保真补证（2026-07-27）：BUG-881/883 合入并重�
 BUG-887 CAS 符号链接校验补证（2026-07-27）：BUG-884 合入并重启后的第二次 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T094355341843Z_f3477c00` 再次准确规划两个 child，且 `small_text` 文件 `conf.yaml` 已按 manifest 的 157647 字节进入远端 workspace，证明 CRLF 字节保真修复生效。两个 child 随后均在首个 CAS-backed 文件 `aistock_models/__init__.py` 的 size 校验终止：manifest 期望 578，`stat -c %s` 返回 103。只读远端核验确认 103 是符号链接文本自身长度；`readlink` 指向 SHA 命名的正确 CAS 对象，`stat -Lc %s` 返回目标文件 578 字节，且 `sha256sum` 通过链接得到 manifest SHA。运行时校验必须使用解引用语义读取目标大小，同时继续对目标内容执行 SHA256；不得移除 size/SHA 校验、把 CAS 文件复制回 workspace，或以失败后降级路径继续回测。该 run 仅作为基础架构失败证据，不作 Alpha 判断；修复合入并重启后仍只重试同一原始 2-child canary。
 
 BUG-888 Recorder 固化配置身份补证（2026-07-28）：BUG-887 合入并重启后的 exact-snapshot retry `macb_453ca2d0c5b21b40_20240701_20260629_20260727T115722735654Z_6584f87f` 已使 baseline 与 equal 两个 child 完成全部 `483/483` 回测日和 `PortAnaRecord`，随后在 Recorder 固化阶段因完整 Qlib 配置同时包含顶层 `port_analysis_config` YAML anchor 定义及 `task.record[].kwargs.config` 执行引用，被旧递归扫描误判为两个可执行 overlay strategy。固化器改为优先解析 Qlib 实际执行的 `task.record` 子树；只有该权威执行路径不存在时才兼容扫描旧式直接策略配置。存在两个真实可执行 portfolio record 时仍显式失败，不按相同 class/kwargs 静默去重。定向回归覆盖真实 anchor/record 双路径和双 record 冲突；修复不改变回测指标、策略参数、风险动作或非 QE 模块。
+
+正式 MA-E01/R13A 启动 receipt（2026-07-31）：只读核验确认 BUG-888/889 后的 none canary `macb_453ca2d0c5b21b40_20240701_20260629_20260728T021052319863Z_00cf02ce` 已 `succeeded`，equal CAGR/Sharpe/Calmar 为 `74.47%/1.9224/3.5544`。随后通过既有 durable API 提交四个正式 policy run；四者共享 roster/OOS/费用/执行配置，唯一策略差异为冻结 policy mode 和 state multipliers。提交未执行 DDL、历史回填、服务启停或非 QE 动作。当前只确认 run/child plan 与运行状态，terminal metrics、动作 ledger、成本/换手、false early-exit 和重入延迟尚待回读。
 
 ## 12. DESIGN-COMPLIANCE-001
 
