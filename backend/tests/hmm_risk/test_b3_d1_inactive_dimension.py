@@ -501,6 +501,26 @@ def test_process_runner_validates_all_frozen_control_authority_before_first_fit(
     assert calls == []
 
 
+def test_process_receipt_rejects_self_consistent_attempt_with_forbidden_side_effect(monkeypatch):
+    treatment, control = _install_authority(monkeypatch)
+    attempts = [
+        _attempt(role, seed, "process-a")
+        for seed in range(42, 50)
+        for role in (subject.TREATMENT_ROLE, subject.CONTROL_ROLE)
+    ]
+    attempts[0]["selection_performed"] = True
+    body = {key: value for key, value in attempts[0].items() if key != "attempt_receipt_sha256"}
+    attempts[0]["attempt_receipt_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="attempt receipt identity"):
+        subject.build_process_receipt(
+            process_identity="process-a",
+            attempts=attempts,
+            treatment_source_identities=treatment,
+            control_source_identities=control,
+        )
+
+
 def test_controlled_report_separates_diagnostic_completion_mechanism_and_d5_readiness(monkeypatch):
     first = _process(monkeypatch, "process-a")
     second = _process(monkeypatch, "process-b")
@@ -577,6 +597,17 @@ def test_repeat_mismatch_is_inconclusive_not_fake_success(monkeypatch):
     assert "hmm_risk_model_inactive_dimension_repeat_mismatch" in report["mechanism_assessment_reason_codes"]
 
 
+def test_controlled_report_rejects_self_consistent_process_with_forbidden_side_effect(monkeypatch):
+    first = _process(monkeypatch, "process-a")
+    second = _process(monkeypatch, "process-b")
+    first["model_write_performed"] = True
+    body = {key: value for key, value in first.items() if key != "process_receipt_sha256"}
+    first["process_receipt_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="forbidden side-effect"):
+        subject.build_controlled_refit_report(first, second, producer_commit="3" * 40)
+
+
 def test_writer_is_immutable_and_canonical_readback_is_verified(tmp_path, monkeypatch):
     first = _process(monkeypatch, "process-a")
     second = _process(monkeypatch, "process-b")
@@ -590,3 +621,7 @@ def test_writer_is_immutable_and_canonical_readback_is_verified(tmp_path, monkey
     target.write_text("{}\n", encoding="utf-8")
     with pytest.raises(subject.D1InactiveDimensionError, match="collision"):
         subject.write_controlled_refit_report(target, report)
+
+    invalid = {**report, "receipt_sha256": "0" * 64}
+    with pytest.raises(subject.D1InactiveDimensionError, match="receipt is invalid"):
+        subject.write_controlled_refit_report(tmp_path / "invalid.json", invalid)

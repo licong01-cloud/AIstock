@@ -611,16 +611,61 @@ def build_process_receipt(
     for attempt in ordered:
         receipt = str(attempt.get("attempt_receipt_sha256") or "")
         body = {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
-        source = source_by_key[(str(attempt.get("role")), int(attempt.get("seed", -1)))]
+        role = str(attempt.get("role"))
+        seed = int(attempt.get("seed", -1))
+        source = source_by_key[(role, seed)]
+        expected_sector = TREATMENT_SECTOR if role == TREATMENT_ROLE else CONTROL_SECTOR
+        status = attempt.get("status")
+        failure_reasons = attempt.get("failure_reason_codes")
+        numeric_environment = attempt.get("numeric_environment")
         if (
             attempt.get("process_identity") != process_identity
             or canonical_sha256(body) != receipt
             or attempt.get("diagnostic_entry_sha256") != source["diagnostic_entry_sha256"]
             or attempt.get("source_entry_receipt_sha256") != source["source_entry_receipt_sha256"]
+            or attempt.get("schema_version") != ATTEMPT_SCHEMA_VERSION
+            or attempt.get("algorithm_version") != ALGORITHM_VERSION
+            or attempt.get("family") != "autocycle_all_core"
+            or attempt.get("level") != "L2"
+            or attempt.get("sector_code") != expected_sector
+            or status not in {"fit_completed", "fit_failed"}
+            or attempt.get("fit_status") != ("accepted" if status == "fit_completed" else "failed")
+            or not isinstance(failure_reasons, list)
+            or (status == "fit_completed" and (failure_reasons or attempt.get("failure_stage") is not None))
+            or (status == "fit_failed" and not failure_reasons)
+            or not isinstance(numeric_environment, Mapping)
+            or attempt.get("numeric_environment_sha256") != canonical_sha256(dict(numeric_environment))
+            or any(
+                attempt.get(field) is not False
+                for field in (
+                    "validation_accessed",
+                    "future_utility_accessed",
+                    "semantic_labelability_accessed",
+                    "d6_status_accessed",
+                    "selection_performed",
+                    "model_write_performed",
+                    "ready_artifact_write_performed",
+                    "database_write_performed",
+                    "runtime_action_performed",
+                )
+            )
         ):
             raise D1InactiveDimensionError(
                 "hmm_risk_model_inactive_dimension_contract_invalid",
                 "D1 attempt receipt identity mismatch",
+            )
+        if status == "fit_completed" and (
+            not isinstance(attempt.get("projection_receipt"), Mapping)
+            or not isinstance(attempt.get("parameter_payload"), Mapping)
+            or not isinstance(attempt.get("initialization_evidence"), Mapping)
+            or not isinstance(attempt.get("monitor_evidence"), Mapping)
+            or not isinstance(attempt.get("likelihood"), Mapping)
+            or not isinstance(attempt.get("covariance"), Mapping)
+            or not isinstance(attempt.get("train_occupancy"), Mapping)
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_contract_invalid",
+                "D1 completed attempt evidence is incomplete",
             )
     comparable_attempts = [
         {key: value for key, value in attempt.items() if key not in {"process_identity", "attempt_receipt_sha256"}}
@@ -650,6 +695,8 @@ def build_process_receipt(
         "selection_performed": False,
         "model_write_performed": False,
         "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
     }
     return {**body, "process_receipt_sha256": canonical_sha256(body)}
 
@@ -669,6 +716,20 @@ def build_controlled_refit_report(
     reasons: list[str] = []
     processes = [dict(first), dict(second)]
     for process in processes:
+        if any(
+            process.get(field) is not False
+            for field in (
+                "selection_performed",
+                "model_write_performed",
+                "ready_artifact_write_performed",
+                "database_write_performed",
+                "runtime_action_performed",
+            )
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_contract_invalid",
+                "D1 process receipt contains a forbidden side-effect flag",
+            )
         receipt = str(process.get("process_receipt_sha256") or "")
         body = {key: value for key, value in process.items() if key != "process_receipt_sha256"}
         process_attempts = list(process.get("attempts") or ())
@@ -739,8 +800,16 @@ def build_controlled_refit_report(
 
 def write_controlled_refit_report(path: Path, report: Mapping[str, Any]) -> str:
     target = Path(path)
-    payload = canonical_json_bytes(dict(report)) + b"\n"
-    identity = canonical_sha256(dict(report))
+    normalized = dict(report)
+    receipt = str(normalized.get("receipt_sha256") or "")
+    body = {key: value for key, value in normalized.items() if key != "receipt_sha256"}
+    if receipt != canonical_sha256(body):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1 controlled-refit report receipt is invalid",
+        )
+    payload = canonical_json_bytes(normalized) + b"\n"
+    identity = canonical_sha256(normalized)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         if target.read_bytes() != payload:
