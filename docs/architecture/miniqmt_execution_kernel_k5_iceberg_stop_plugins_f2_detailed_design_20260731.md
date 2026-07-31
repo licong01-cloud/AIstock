@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K5 Iceberg/Stop Plugin 扩展 F2 详细设计
 
-> Feature tier：`F2`。文档状态：`implementation_pr_open_pending_required_ci`；K5 implementation=`implemented_verified_local_pr_2978_pending_required_ci`，source merge=`pending_pr_2978`。
+> Feature tier：`F2`。文档状态：`implemented_verified + merged`；K5 implementation=`implemented_verified + merged`，source merge=`merged_pr_2978`。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -455,7 +455,7 @@ DEV测试只使用现有DEV配置和disposable schema，不执行新DDL：
 - `service_restart`
 - `runtime_activation`
 
-本地implementation已完成定向/DEV/coverage/模块计划验证；PR、required CI与source merge尚未发生。全部生产与运行门禁仍为`noop`。
+K5 implementation已通过PR #2978 / merge `4bf54cf2090d37552cbbebdffbbf4a9b9011c85d`合入；final required CI run `30640380170`全绿。全部生产与运行门禁仍为`noop`，产品runtime未切换。
 
 ## 14. Design Acceptance Index / 设计验收索引
 
@@ -485,7 +485,7 @@ DEV测试只使用现有DEV配置和disposable schema，不执行新DDL：
 | `F-097` | §8 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k5_adapter_lifecycle.py` final=`15 passed`，Stop完整向量闭合 | implemented_verified_local | none |
 | `F-098` | §9–§11 | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_vnpy_k5_shadow_postgres.py -q`=`1 passed`；public K2 transition在lifecycle direct覆盖 | implemented_verified_local | none |
 | `F-099` | §12 | coverage aggregate=`38 passed` + manifest focused=`4 passed`；`python -m nox -s miniqmt_execution_runtime_l2`=`1127 passed,31 skipped`；`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；四模块line/branch均达标 | implemented_verified_local | none |
-| `F-100` | §13 | artifact: `docs/architecture/miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md`、父蓝图、统一蓝图；PR #2978 已开放，required CI/merge/aftercare 与生产/runtime状态继续分离 | implemented_verified_local | none |
+| `F-100` | §13 | artifact: `docs/architecture/miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md`、父蓝图、统一蓝图；PR #2978 / merge `4bf54cf2`、final required CI run `30640380170`，source/production/runtime状态继续分离 | implemented_verified | none |
 
 ## 16. Formal Design Review and DESIGN-COMPLIANCE-001 / 正式设计审核
 
@@ -513,7 +513,7 @@ DEV测试只使用现有DEV配置和disposable schema，不执行新DDL：
 20. **pure factory probe为检查`ExecutionAlgoPluginV2`反向import `kernel_delivery`，违反K1 import-boundary**：未放宽denylist；将原Protocol原样迁至既有`plugin_registry.py` process-binding authority，kernel保持re-export兼容，conformance与kernel共用同一runtime-checkable SPI，direct import-boundary与registry矩阵证明无第二Protocol或产品依赖。
 21. **新增模块总coverage达标但branch coverage不足**：未使用pragma/skip/降低阈值；删除JSON Schema之后重复且不可达的config数值检查，保留schema唯一authority，并补public literal-drift、hash-correct readback drift、wrong-manifest与non-object negative paths。最终四个K5新模块line/branch均达到`>=80/>=70`。
 
-22. **K4/K5 authority 曾受 Python minor version 与 checkout path 污染**：PR #2978 initial required CI run `30630489853` 在 Linux/Python 3.12 以 `MINIQMT_VNPY_FACADE_BINDING_INVALID` fail loud，Windows/Python 3.13 本地此前通过。根因有两项：Python 3.13 `ast.dump()` 默认省略 empty fields，而 3.12 保留；source executor signature 又直接序列化 `WindowsPath/PosixPath` 与绝对 worktree 路径。现统一使用 Python 3.12 full-field AST shape，并将 executor signature 固定为 parameter name/kind/annotation、required/default 与 repo-relative Path 的 canonical payload；不得以更新 literals 掩盖 fresh authority drift。Windows/Python 3.13 direct K5 matrix=`12 passed`，Linux/Python 3.12 exact authority matrix=`3 passed`，两端 fresh Iceberg/Stop binding 完全相同；source merge 仍为 `pending_pr_2978`，等待新 required CI。
+22. **K4/K5 authority 曾受 Python minor version 与 checkout path 污染**：PR #2978 initial required CI run `30630489853` 在 Linux/Python 3.12 以 `MINIQMT_VNPY_FACADE_BINDING_INVALID` fail loud，Windows/Python 3.13 本地此前通过。根因有两项：Python 3.13 `ast.dump()` 默认省略 empty fields，而 3.12 保留；source executor signature 又直接序列化 `WindowsPath/PosixPath` 与绝对 worktree 路径。现统一使用 Python 3.12 full-field AST shape，并将 executor signature 固定为 parameter name/kind/annotation、required/default 与 repo-relative Path 的 canonical payload；不得以更新 literals 掩盖 fresh authority drift。Windows/Python 3.13 direct K5 matrix=`12 passed`，Linux/Python 3.12 exact authority matrix=`3 passed`，两端 fresh Iceberg/Stop binding完全相同；final required CI run `30640380170`全绿，source merge=`merged_pr_2978`。
 
 ### 16.2 Mandatory review result
 
@@ -527,12 +527,12 @@ DEV测试只使用现有DEV配置和disposable schema，不执行新DDL：
 ## 17. Phase and Production State / 阶段与生产状态
 
 - K1/K2/K3/K4 overall：`implemented_verified + merged`。
-- K5 detailed design：`implementation_pr_open_pending_required_ci`。
-- K5 implementation：`implemented_verified_local_pr_2978_pending_required_ci`。
+- K5 detailed design：`implemented_verified + merged`。
+- K5 implementation：`implemented_verified + merged`。
 - K6：`not_started`。
 - Product runtime：未切换，现有产品route不变。
 - `design_source_merge=merged_pr_2968`；merge commit=`1e739dce8a5a18d9e9e4c16027801a7a81e34384`。
-- `implementation_source_merge=pending_pr_2978`；实现主体 commit=`09e0755b`。
+- `implementation_source_merge=merged_pr_2978`；final source HEAD=`894c22ffbfbd0ee1b42d1bffacc4b222c3da4970`；merge commit=`4bf54cf2090d37552cbbebdffbbf4a9b9011c85d`。
 - `close_sync=not_applicable_feature`。
 - `production_ddl_gate=noop`。
 - `production_dml_gate=noop`。
