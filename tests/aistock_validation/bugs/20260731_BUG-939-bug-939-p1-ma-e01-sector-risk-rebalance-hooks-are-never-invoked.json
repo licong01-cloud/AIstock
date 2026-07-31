@@ -2,6 +2,7 @@
   "actual": "Formal MA-E01 8/8 trial completed, but action ledgers contain only ENTRY_BLOCK and MISSING_ARTIFACT_ROW; DE_RISK_SELL, EXIT and REENTRY_BUY are zero because the selected parent strategy never invokes the overlay rebalance hooks. Restore bounded de-risk, exit and reentry execution, retain fail-fast and missing-row neutrality, and rerun the same candidate.",
   "allowed_write_scope": [
     "backend/services/quantevolver/config_composer.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "scripts/qe_sector_risk_overlay_strategy.py",
     "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
     "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
@@ -36,6 +37,7 @@
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/config_composer.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "scripts/qe_sector_risk_overlay_strategy.py",
       "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
       "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py"
@@ -51,6 +53,7 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/config_composer.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "scripts/qe_sector_risk_overlay_strategy.py",
       "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
       "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py"
@@ -81,11 +84,15 @@
     "backend_restart_required": true,
     "business_smoke_ref": "GET http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/{run_id} plus fixed-candidate action-ledger readback",
     "database_readback_ref": "noop:no_database_change",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh Python process imported ConfigComposer helper contract and verified dedicated V2/Capacity/overlay modules are present -> PASS",
+      "python fresh-process ConfigComposer helper contract import -> PASS"
+    ],
     "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
-    "operator_runbook_ref": "docs/standards/aistock_runtime_targets_v1.yaml#backend-main",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -104,6 +111,14 @@
     "fingerprint": "a9066be0d3040ca2f8853f65",
     "source_event_id": "FE-20260731-a9066be0d304"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_sector_risk_overlay_config.py backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py -q -> 11 passed",
+    "python -m nox -s qe_sector_risk_overlay_backend -> 46 passed",
+    "fresh Python process imported ConfigComposer helper contract -> PASS",
+    "python -m nox -s guardrail_changed_files -> staged files 2/2 mapped, 0 blocking findings",
+    "python -m nox -s l0 -> passed, 0 new blocking findings",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14/14"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

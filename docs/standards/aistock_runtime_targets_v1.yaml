@@ -10,6 +10,7 @@ targets:
     runtime_kind: backend
     source_globs:
       - backend/**/*.py
+      - scripts/qe_sector_risk_overlay_strategy.py
       - requirements*.txt
       - pyproject.toml
     production_port: 8001
