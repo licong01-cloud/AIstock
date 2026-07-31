@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K6 产品切换与旧路线退役 F2 详细设计
 
-> Feature tier：`F2`。文档状态：`design_ready_local_pending_pr`；K6 implementation=`not_started`。
+> Feature tier：`F2`。文档状态：`design_ready + merged`；design source PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`；K6 implementation=`not_started`。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -575,8 +575,8 @@ K6 implementation完成定义：K6-A/B/C/D全部 `implemented_verified + merged`
 当前状态：
 
 - K1/K2/K3/K4/K5 overall：`implemented_verified + merged`。
-- K6 detailed design：`design_ready_local_pending_pr`。
+- K6 detailed design：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）。
 - K6-A/B/C/D implementation：`not_started`。
 - product runtime：`not_switched`。
-- `source_merge=pending_pr`；`close_sync=not_applicable_feature`；root sync/cleanup未执行。
+- `source_merge=merged_pr_2993`；`close_sync=not_applicable_feature`；state-sync/root sync/cleanup分别记录。
 - production DDL/DML/dependency/config/binding/broker/restart/runtime activation/normal trading day observation：全部 `noop/not_run`。
