@@ -1619,6 +1619,148 @@ implementation ready。
 正reference prior仍属于另一个模型机制，不得与inactive dimension捆绑实施。该推荐是待用户确认的设计决策，不是新增模型gate、
 自动淘汰feature或人工runtime审批；在获批前不实施B3、不运行新fit、不选择seed、不生成model/READY。
 
+#### I. C-008-B3-REMEDIATION-D1：sector-local 常量维模型 identity 精确设计
+
+状态：`PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`。本节只形成精确设计选项与受控 refit 合同；不表示用户已选择
+方案、不修改源码、不运行 HMM、不执行 D5/D6、不生成 model/READY。权威证据仅为 REMEDIATION-DIAG-02 producer
+`b2456424b859f1635635129aa6a826a677f4fdec`、canonical `48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58`。
+
+**1. 决策对象与非目标。** 当前唯一允许进入D1决策的identity固定为：
+
+```text
+family=autocycle_all_core
+level=L2
+sector_code=801207.SI
+feature_index=19
+feature_name=sf_dispersion_5d_neg
+approved_family_feature_count=20
+raw_variance_ddof0=0
+preprocessed_variance_ddof0=0
+all_raw_values_exact_zero=true
+unique_finite_value_count=1
+```
+
+D1不把“任意低方差”“任意常量”“任意初始化失败”扩大为同一合同。非零常量、近零但非零variance、source/provenance不闭合、
+non-finite、preprocess单独制造常量或新增profile命中时均保持fail closed，并要求新的evidence/design版本。D1不处理3个singleton
+KMeans failure，不修改KMeans cluster count、EM、likelihood tolerance、covariance bound/prior、transition/dwell、D4-03、D5或D6；
+不删除global 20-feature业务合同，不把该sector从family中排除，也不扩大seed grid。
+
+**2. 精确选项。**
+
+- `C-008-B3-REMEDIATION-D1-A`：保持现有fail-closed。优点是model identity、D5 score与runtime parser完全不变；代价是
+  `autocycle_all_core:L2/801207.SI`在当前冻结数据和8个restart上持续无法进入fit，family仍blocked。该方案没有伪成功，
+  但无法验证常量维显式投影是否能保留其余19维信息。
+- `C-008-B3-REMEDIATION-D1-B`：采用显式inactive-dimension model identity。推荐为
+  `RECOMMENDED_PENDING_USER_APPROVAL`，但只授权后述controlled-refit，不授权formal grid。该方案保持完整20-feature observation与
+  preprocess contract，在model likelihood之前使用显式、hashed projection选择19个active dimensions；不加noise/floor，
+  不伪造inactive covariance，不把hidden-state或hard semantic语义改为soft authority。
+
+D1-B的主要false-accept风险是：19维模型可能在train numeric contract上通过，但被排除的feature在未来重新出现信息量；因此model
+identity必须永久记录inactive维，runtime不得动态激活。主要false-reject风险是：严格exact-zero allowlist只修复当前已证明identity，
+不会自动处理未来其他真实常量维。该保守边界用于保持因果可归因，不是研究方向淘汰gate。
+
+**3. D1-B projection 算法。** 算法版本固定为`hmm_risk_c008_b3_d1_inactive_dimension_v1`：
+
+1. 从冻结train input构造完整20维C-order little-endian float64矩阵`X_raw`，验证shape、feature order、dates、dataset/mapping/calendar、
+   direct-L2与C-010 formula/provenance identity；任何non-finite或hash漂移失败。
+2. 使用既有批准的`autocycle_all_core` full-20 preprocess identity计算`X_pre20`；不得先删除第20维再重新估计winsor/center/scale。
+3. exact-zero资格要求index 19的raw与preprocessed向量均finite、variance_ddof0精确为0、unique bit-pattern count为1、所有raw值
+   精确等于`+0.0|-0.0`，且profile/formula/provenance hashes与DIAG-02 exact receipt一致。`-0.0`只在value identity归一为`+0.0`，
+   raw bytes/hash仍保留原值。
+4. `inactive_feature_indices=[19]`；`active_feature_indices=[0..18]`。`active_feature_mask`固定为长度20的JSON boolean list，
+   list index等于approved feature index，0..18为true、19为false；不得使用实现相关bit-endian整数。令`P`为按该固定顺序抽取column的20→19 projection，
+   `X_active=X_pre20[:,active_feature_indices]`。禁止PCA、feature reorder、imputation、noise、epsilon variance、dynamic mask或per-seed mask。
+5. KMeans/HMM只接收`X_active`，参数shape按19维验证；startprob/transmat与D3-02-B初始化语义不变。fit后仍禁止projection/clip。
+6. 没有inactive feature的control profile通过同一代码路径，固定`active_feature_indices=[0..19]`且`P=identity20`；其既有model
+   parameter bytes、likelihood history与D3/D4 evidence必须与冻结control receipt bitwise一致，排除通用路径回归。
+
+projection receipt至少包含full/active/inactive feature names与indices、20位mask、mask canonical hash、projection algorithm/version、
+full preprocess identity/hash、raw/preprocessed inactive vector hashes、exact-zero evidence、source profile receipt、projected matrix shape/hash、
+dataset/mapping/calendar/formula/provenance hashes和`dynamic_activation=false`。任一字段缺失或不一致不得默认为identity projection。
+
+**4. Artifact 与 parser/runtime 契约。** D1-B未来model entry schema使用
+`hmm_risk_b3_inactive_dimension_model_entry_v1`，并同时保存：
+
+- global `feature_names`仍为批准的20维顺序；`feature_count=20`；
+- `likelihood_feature_count=19`、active/inactive lists、projection receipt/hash；
+- 3×19 means/covariance与19维KMeans center/initial covariance；不得保存伪造的第20维mean/covariance；
+- full preprocess参数及其20维identity；parser先执行full preprocess再project；
+- algorithm/model identity必须覆盖D1版本、projection hash、active dimension count、producer/dependency/numeric-environment identity；
+- inference输入仍必须提供完整20维finite observation。inactive feature在该model lifetime内永不参与likelihood；即使未来值变为非零，
+  也不得动态激活或改shape。该值及`inactive_feature_observed_non_zero`只进入可审计diagnostic receipt，不成为未批准的runtime gate；
+  下一次训练是否重新激活只能由新model identity和当次train evidence决定。
+
+parser遇到unknown projection version、mask/hash漂移、20维输入缺失、active参数shape不是3×19、full preprocess identity不一致或
+inactive model缺projection receipt时，使用`hmm_risk_model_inactive_dimension_contract_invalid`失败；不得fallback为20维、补0参数、
+复制相邻feature或回退上一model。API/UI未来只在真实model进入上游F-013后展示full/active count、inactive feature与原因，不在本D1
+controlled-refit阶段增加runtime endpoint或UI。
+
+**5. D4 与 hard semantic边界。** controlled-refit仍计算现有D3/D4 train evidence，但不应用新的正式acceptance：
+
+- D4-01 history/tolerance、D4-02-A dynamic bounds/M-step residual与D4-03-B hard structure公式保持原值；
+- covariance/reference/anomaly只对19个active dimensions计算，inactive维不计入“accepted”、不生成covariance，也不得用exact-zero
+  evidence覆盖active维D4 failure；
+- full20 observation/preprocess/projection evidence是独立`projection_status`，不推导fit/convergence/covariance/occupancy accepted；
+- hard hidden-state assignment、future utility、fading/neutral/trending mapping均不在controlled-refit输入中，B2继续NOT_APPROVED。
+
+未来formal grid若采用D1-B，`801207.SI`的D5 sector score分母存在必须单独确认的comparability问题：既有批准公式为
+`LL_final/(N*d_family)`且autocycle family的`d_family=20`；改为`d_effective=19`会改变D5合同，继续使用20又可能使19维likelihood与
+其他20维sector不可直接比较。因此登记`C-008-B3-REMEDIATION-D1-D5-COMPAT-01=PROPOSED_PENDING_EVIDENCE_AND_USER_DECISION`。
+controlled-refit固定`selection_performed=false`，不得通过本节私自选择19或20、不得执行D5，也不得因该gap把局部fit写成
+implementation ready。
+
+**6. Controlled refit 精确合同。** 仅当用户选择D1-B并单独批准该执行后，允许运行
+`hmm_risk_c008_b3_d1_controlled_refit_v1`：
+
+- 冻结dataset/mapping/C-010 policy、train window、seeds 42..49、Conda AIstock dependency与单线程数值环境不变；
+- 每个fresh process运行16 fits：treatment=`autocycle_all_core:L2/801207.SI` 8 seeds，control=
+  `autocycle_all_core:L2/801011.SI` 8 seeds；两个fresh processes合计32 fits；不early stop、不扩大grid；
+- treatment profile receipt固定为`36cc1afd004796ce3458ab7090010abd07ddd94807d2701318e39d6d80f84e3d`，其按seed排序的
+  8-entry source identity set hash固定为`d75e40d3cd82cf232d9e7633bd982eb4189e7fc625d43c2f91f7d010cb7530fb`；control profile
+  receipt固定为`9e372d3bde299533fbbf28dee81f1cfc9bb614677f34f78fa49fd82230864929`，对应8-entry set hash固定为
+  `905d97c7987896e854c905a831be33f2732b6d35dd56bedf82571caec2fa2d06`；两者preprocess identity均为
+  `cd7d759178449c7ec9bda7d1fbad0969a55cc1756361a0d70936f226909ab976`，feature definition identity均为
+  `0445f91a5587dddb85e93fa5d08897ba967d41f10819e65eeb13a0353fac9aca`；
+- treatment使用固定19维projection；control使用identity20。control必须与blocker diagnostic中同identity的8个冻结model/training
+  payload按allowlisted canonical bytes逐项bitwise一致；wrapper新增projection字段单独hash，不得污染旧payload比较；
+- 两fresh-process的treatment与control canonical payload必须分别bitwise一致；allclose只用于mismatch diagnosis，不代替hash equality；
+- treatment逐seed保存initialization、monitor/history、D4-01/D4-02/D4-03 descriptive states、parameter/projection hashes与完整raw evidence；
+  不执行D5/D6，不读取validation/future utility，不生成model/READY；
+- 即使8/8 treatment完成fit或通过既有D4，也只形成`diagnostic_complete`，不证明131/131、family candidate或READY；任一fit失败
+  仍完整保留其stage/reason，禁止换seed、加floor或扩大范围。
+
+计算预算固定为32 fits；不运行legacy、L1、其他L2 sector或5184-fit grid。输出repo外append-only artifact，schema为
+`hmm_risk_c008_b3_d1_controlled_refit_report_v1`，使用不可覆盖发布、canonical readback和完整side-effect flags。
+
+**7. 稳定失败语义。** 至少包括：
+
+- `hmm_risk_model_inactive_dimension_authority_mismatch`；
+- `hmm_risk_model_inactive_dimension_not_exact_zero`；
+- `hmm_risk_model_inactive_dimension_preprocess_mismatch`；
+- `hmm_risk_model_inactive_dimension_projection_invalid`；
+- `hmm_risk_model_inactive_dimension_contract_invalid`；
+- `hmm_risk_model_inactive_dimension_parameter_shape_invalid`；
+- `hmm_risk_model_inactive_dimension_control_drift`；
+- `hmm_risk_model_inactive_dimension_repeat_mismatch`；
+- `hmm_risk_model_inactive_dimension_d5_comparability_unresolved`；
+- 既有最具体的initialization/monitor/likelihood/covariance/train-structure reason codes。
+
+不得把exact-zero写成普通missing data，不得把projection失败压缩成generic fit failure，也不得把control drift或repeat mismatch降级为warning。
+
+**8. 验证计划与可合入边界。** 未来D1-B源码PR至少验证：
+
+- exact allowlist、raw/preprocessed zero、`-0.0`、nonzero constant、near-zero、non-finite、source/hash drift正反例；
+- full20 preprocess先于projection；active order/mask/hash固定；no-inactive control为identity20；
+- KMeans/HMM只接收19维，model参数shape为3×19，inactive维无伪参数；
+- parser/replay对unknown version、mask/shape/preprocess drift fail closed；runtime不动态激活inactive维；
+- control payload bitwise相等、双fresh-process bitwise相等；32-fit budget与no-early-stop；
+- D4各状态独立，0 D5/D6/validation/future utility/model/READY/DB/runtime write；
+- changed-file ownership、`hmm_risk_backend` required plan、F2 validator、scope、Ruff/compile与`git diff --check`。
+
+D1详细设计只有在用户明确选择A或B并批准相应精确合同后才能从proposed转为design-ready。选择B也只使controlled-refit
+implementation-ready；D5 comparability未闭合前仍禁止formal grid/selection/model/READY。该限制是既有D5业务语义的准确边界，
+不是新增runtime人工审批。
+
 ### 4.4 InputManifest
 
 `hmm_risk_input_manifest_v1` 至少包含：
@@ -2347,7 +2489,9 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-FORMAL-BLOCKER-DIAG-01 | 是否按 formal rejection summaries 对全部 blocker pair 与 deterministic controls 执行两 fresh-process 定向根因诊断 | `VERIFIED_DIAGNOSTIC_COMPLETE_NO_SELECTION_NO_READY` | producer `ac3687c2…`；artifact canonical `10287e84…cffe8`；150 rejected+24 controls、348/348 fits、3-entry D6 no-refit replay闭合，两次payload hash bitwise相同；不选择seed、不改阈值/authority、不写model/READY/DB/runtime |
 | C-008-B3-REMEDIATION-DESIGN | blocker diagnostic后 initialization/likelihood/covariance/train structure/D6 temporal evidence 的模型修订合同 | `PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY` | 诊断证明多阶段、多family/level根因；尚不足以批准具体模型、optimizer、prior、transition/dwell或threshold。五类合同必须分别给出精确公式、成本、false accept/reject与验收证据后由用户确认 |
 | C-008-B3-REMEDIATION-DIAG-02 | 是否在模型修订前执行324-profile variance provenance与163-entry likelihood/covariance/structure no-fit重聚合 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_DIAGNOSTIC_EXECUTED_NO_MODEL_DECISION` | producer `b2456424…fdec`；canonical `48157a42…bb58`；324/324 profiles、163 completed entries、11 initialization sources闭合；唯一zero-variance profile为autocycle L2 `801207.SI/sf_dispersion_5d_neg`且preprocess前后均为0；46个completed entry有train-structure failure、4个sector identity跨8 seed持续失败；6个常量相关向量组显式insufficient。未运行HMM、未访问validation、未执行selection/acceptance、未写model/READY/DB/runtime |
-| C-008-B3-REMEDIATION-D1 | `801207.SI/sf_dispersion_5d_neg`真实sector-local常量维应保持fail-closed还是采用显式inactive-dimension model identity | `PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY` | 必须保持20维feature contract的可审计projection与逐sector active/inactive mask/hash，定义trainer/artifact/parser/runtime兼容、controlled-refit和false accept/reject；不得静默drop feature、增加floor/噪声、改covariance/EM/transition阈值或与positive prior捆绑实施 |
+| C-008-B3-REMEDIATION-D1 | `801207.SI/sf_dispersion_5d_neg`真实sector-local常量维应保持fail-closed还是采用显式inactive-dimension model identity | `PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY` | A保持fail-closed；B显式20→19 inactive-dimension identity，为唯一推荐但仍待用户批准。B保持full20 observation/preprocess，likelihood只用固定active indices；不静默drop、加floor/噪声或动态激活，不与positive prior捆绑 |
+| C-008-B3-REMEDIATION-D1-B-REFIT-01 | 若选择B，是否按固定treatment/control执行双fresh-process controlled refit | `PROPOSED_PENDING_USER_APPROVAL_NOT_EXECUTED` | 每process固定801207 treatment 8 seeds + 801011 identity20 control 8 seeds，两process共32 fits；control旧payload与两次repeat均须bitwise一致；0 D5/D6/validation/model/READY/DB/runtime，局部通过不推导family candidate |
+| C-008-B3-REMEDIATION-D1-D5-COMPAT-01 | inactive dimension后D5 `LL/(N*d_family)`分母与跨sector score如何保持批准语义 | `PROPOSED_PENDING_EVIDENCE_AND_USER_DECISION` | 19会改变已批准D5，20可能产生跨sector偏置；D1 controlled refit不得选择其一或执行D5。该项闭合前禁止formal grid/selection/model/READY |
 
 C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准并回填本文；它们不是运行时人工审批。
 C-006-A 已于 2026-07-23 获用户明确批准并回填本文；它不新增运行时审批或第二套股票池。
@@ -2637,6 +2781,27 @@ selection、D6、model/READY、数据库或runtime动作。
 - **交付状态分离**：源码producer已提交、repo外artifact已生成并通过canonical readback；design回填不等于PR已合入，PR合入不等于
   dependency/DDL/DML/runtime已激活。本执行的这些生产gate与runtime动作均为noop。
 
+### 23.5 C-008-B3-REMEDIATION-D1 正式设计审核
+
+- **完整性审核**：`PASS_FOR_USER_DECISION_NOT_IMPLEMENTATION_READY`。A/B选项、exact allowlist、20→19 projection、full preprocess先行、
+  artifact/parser/runtime、D4独立状态、32-fit treatment/control、reason codes与验证矩阵均已定义；没有把“drop一列”冒充完整实现。
+- **D5兼容缺口**：`BLOCKED_EXPLICITLY_NOT_SILENT`。审核确认inactive dimension会使`d_family=20`与`d_effective=19`产生真实score
+  comparability决策；设计已拆出`D1-D5-COMPAT-01`，controlled-refit固定0 selection。未由实现默认选择19或20，也未把局部fit
+  改写为full-grid ready。
+- **禁止简化/子集/POC**：`PASS`。D1有意只隔离一个模型机制，但同时覆盖treatment全部8 seeds、同family/level全部8 control seeds、
+  双fresh-process identity与未来parser/runtime完整契约；它不是autocycle-only交付或family READY声明。
+- **禁止静默错误**：`PASS`。近零、非零常量、non-finite、source/profile/preprocess/mask/shape/hash drift、control drift和repeat mismatch
+  均fail closed；没有noise/floor、伪inactive covariance、identity fallback或dynamic activation。
+- **禁止业务逻辑迁移**：`PASS`。global 20-feature observation/preprocess contract、两个family、31/131完整性、hard semantic authority、
+  D3/D4 thresholds与D6保持不变；B2仍NOT_APPROVED。runtime对inactive维的“不参与likelihood”由model identity显式持久化，不是隐藏fallback。
+- **禁止未经确认的门禁和审批**：`PASS`。A/B、controlled-refit和D5 comparability均保持proposed；未增加runtime人工确认、feature
+  淘汰审批或研究准入gate。exact allowlist是本次证据范围，不是动态业务门禁。
+- **因果可区分性**：`PASS`。identity20 control必须与旧payload bitwise一致；treatment只改变projection，禁止同时改EM/covariance/
+  transition/threshold。即使treatment通过，也只证明该mechanism可进入下一项设计证据，不证明family candidate或READY。
+
+综合审核结论：`PASS_PROPOSED_D1_B_CONTROLLED_REFIT_DESIGN_PENDING_USER_DECISION_D5_COMPAT_BLOCKED`。唯一推荐为D1-B，
+但用户尚未批准A/B选择、32-fit执行或D5 score语义；因此不得实施源码、运行fit或进入formal grid。
+
 ## 24. 当前完成状态与下一步
 
 本文件已闭合 C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、C-008-B3-STRUCTURAL-A、
@@ -2667,9 +2832,8 @@ formal input/policy 已验证，F-011-B/C/D 分别 blocked 于 D3/D4、D5/D6 与
 4个跨8-seed persistent sector identity与6个statistic-insufficient groups均保留exact evidence。执行没有HMM refit、validation、
 acceptance、selection、threshold/authority变更、model/READY、数据库或runtime动作。
 
-下一步不是再次运行完整5184 grid，也不是直接修改阈值或模型。唯一推荐为先编写并审核
-`C-008-B3-REMEDIATION-D1`精确设计：只决定真实sector-local常量维应继续fail-closed还是采用显式inactive-dimension model identity；
-不得同时修改EM、likelihood、covariance、transition/dwell、D4-03或D6合同。D1当前为
-`PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`；在其精确公式、artifact/parser/runtime兼容、controlled-refit和
-false accept/reject获用户批准前，不实施B3、不运行新fit、不选择seed、不生成model/READY。当前revision的DDL/DML、依赖、runtime、
-数据库、model/READY与客户端同步均为`noop`，PR merge仍等待用户单独确认。
+下一步不是再次运行完整5184 grid，也不是直接修改阈值或模型。`C-008-B3-REMEDIATION-D1`精确设计与正式审核已完成，当前等待用户
+在A“保持fail-closed”与B“显式inactive-dimension identity”之间决策；唯一推荐为B。若选择B，还需用户单独批准32-fit
+controlled-refit；该执行固定0 D5/D6/validation/model/READY。D5的19/20维score comparability继续由
+`D1-D5-COMPAT-01`显式blocked，不能由实现猜测。在A/B与controlled-refit取得批准前，不实施B3、不运行新fit、不选择seed、
+不生成model/READY。当前revision的DDL/DML、依赖、runtime、数据库、model/READY与客户端同步均为`noop`，PR merge仍等待用户单独确认。
