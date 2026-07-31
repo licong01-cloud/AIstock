@@ -11,6 +11,7 @@
     ".github/workflows/pr-quality.yml",
     ".github/workflows/semgrep.yml",
     ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260731_BUG-933-upgrade-github-actions-to-native-node-24-runtimes.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -46,7 +47,8 @@
       ".github/workflows/nightly.yml",
       ".github/workflows/pr-quality.yml",
       ".github/workflows/semgrep.yml",
-      ".github/workflows/test.yml"
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ],
     "ownership": {
       "changed_files": [
@@ -59,7 +61,8 @@
         ".github/workflows/nightly.yml",
         ".github/workflows/pr-quality.yml",
         ".github/workflows/semgrep.yml",
-        ".github/workflows/test.yml"
+        ".github/workflows/test.yml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
       ],
       "impacted_modules": [
         "validation.guardrails",
@@ -137,6 +140,13 @@
           "primary_module": "validation.guardrails",
           "risk_level": "high",
           "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
         }
       ],
       "risk_levels": ["high"],
@@ -150,7 +160,8 @@
         ".github/workflows/nightly.yml",
         ".github/workflows/pr-quality.yml",
         ".github/workflows/semgrep.yml",
-        ".github/workflows/test.yml"
+        ".github/workflows/test.yml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
       ],
       "unmatched_files": []
     },
@@ -165,7 +176,8 @@
       ".github/workflows/nightly.yml",
       ".github/workflows/pr-quality.yml",
       ".github/workflows/semgrep.yml",
-      ".github/workflows/test.yml"
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ]
   },
   "first_seen_at": "2026-07-31T02:11:25.075675Z",

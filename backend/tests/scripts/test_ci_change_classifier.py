@@ -1108,7 +1108,7 @@ def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
     assert "issues" not in guardrail.get("permissions", {})
     assert "workflow_run:" not in guardrail_text
     assert "github.rest.issues" not in guardrail_text
-    assert "actions/upload-artifact@v4" in guardrail_text
+    assert "actions/upload-artifact@v6" in guardrail_text
 
 
 def test_allocator_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
