@@ -348,7 +348,7 @@ jobs:
 
       - name: Upload frontend UI acceptance evidence
         if: always() && needs.classify-changes.outputs.frontend_test_targets != '[]'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: frontend-ui-evidence-${{ github.run_id }}
           path: |
