@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-937",
-  "closed_at": "2026-07-31T14:13:40Z",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -25,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260731-eaf45a7653e4",
       "timestamp": "2026-07-31T14:04:35.308258Z"
+    },
+    {
+      "action": "reopen_after_completion_audit",
+      "actor": "codex",
+      "note": "BUG-938 audit proved the real runbook existence acceptance was not implemented; reopen until the shared workflow repair merges and close-sync completes.",
+      "timestamp": "2026-07-31T18:44:16.0290252Z"
     }
   ],
   "evidence_uris": [
@@ -137,8 +143,8 @@
   },
   "first_seen_at": "2026-07-31T14:04:35.308265Z",
   "fix_branch": null,
-  "fix_commit": "b4f3643a2bdb13431e8a3034c5806ac8532606ab",
-  "fixed_at": "2026-07-31T14:14:47.521337Z",
+  "fix_commit": null,
+  "fixed_at": null,
   "github_issue_number": 2988,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2988",
   "last_seen_at": "2026-07-31T14:04:35.308265Z",
@@ -146,7 +152,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2989",
+  "pr_url": null,
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -170,7 +176,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "in_progress",
   "suspected_modules": [
     "validation.guardrails"
   ],

@@ -27,7 +27,7 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 
 ## Implement
 
-- Read the compact task-card `runtime_contract`. `runtime_impact=unknown` is fail-closed. Backend/worker/scheduler fixes must persist in tracked source/config/migration and include fresh-process load evidence before PR readiness.
+- Read the compact task-card `runtime_contract`. Actual changed-file/catalog inference cannot be downgraded by BUG metadata; unknown, conflicting, missing-runbook and multi-target contracts fail closed. Backend/worker/scheduler fixes use the single-issue lane, persist in tracked source/config/migration, and record fresh-process evidence in BUG JSON and PR body before PR readiness.
 - User backend start/stop/restart is never authorized by this skill or any workflow stage. Only the user may perform it unless the user separately authorizes this window for the current target.
 - BUG metadata and GitHub linkage use the workflow. A required scope expansion updates the issue record in the task worktree before implementation continues.
 - Ordinary BUGs use targeted snippets and ownership/catalog data; cited designs and T3 tasks add the relevant design acceptance items.
@@ -47,5 +47,5 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 2. Create the PR with `run --mode pr --validation-evidence "<command> -> passed" --push --create-pr`.
 3. Workflow/client changes add `workflow-smoke --changed-file <path> --module validation`.
 4. Merge aftercare uses `merge-finalizer` or `aistock-merge-aftercare`.
-5. For a runtime BUG, use the compact restart fields by default; `restart-plan` only expands catalog/runbook refs. After the user restarts, run `post-restart-verify --bug-id BUG-XXX --target <target> --expected-identity <merge-sha>`, then persist its ignored receipt with `close-sync --bug-id BUG-XXX --pr-url <source-pr> --validation-evidence "<command> -> passed" --post-restart-receipt <receipt> --create-registry-worktree --apply --create-pr`.
+5. For a runtime BUG, source PRs use `Refs`, the GitHub Issue remains open, and `finish-batch`/`close-sync-batch` are forbidden. `restart-plan` only expands the existing repo runbook and catalog target. After the user restarts, run `post-restart-verify --bug-id BUG-XXX --target <target> --expected-identity <merge-sha>` and pass its complete digest-bound receipt to `close-sync --bug-id BUG-XXX --pr-url <source-pr> --validation-evidence "<command> -> passed" --post-restart-receipt <receipt> --create-registry-worktree --apply --create-pr`.
 6. Report branch, PR, commit, changed files, direct validation, production gates, delegated/nightly plans, runtime identity, post-restart gate and runtime/DB impact.

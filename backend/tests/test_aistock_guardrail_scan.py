@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -104,11 +105,24 @@ def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     assert runtime_catalog["targets"]["backend-main"]["isolated_validation_ports"] == [8011, 8012]
 
 
-def test_scanner_blocks_user_backend_process_control_in_client_workflow(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Restart-Service backend-api\n",
+        "python scripts/_restart_backend.py\n",
+        "python backend/main.py\n",
+        "uvicorn backend.main:app --port " + str(8000 + 1) + "\n",
+        "sc.exe stop backend-api\n",
+    ],
+)
+def test_scanner_blocks_user_backend_process_control_in_client_workflow(
+    tmp_path: Path,
+    command: str,
+) -> None:
     scanner = _load_module()
     command_file = tmp_path / ".claude" / "commands" / "unsafe.md"
     command_file.parent.mkdir(parents=True)
-    command_file.write_text("Restart-Service backend-api\n", encoding="utf-8")
+    command_file.write_text(command, encoding="utf-8")
 
     catalog = scanner.load_catalog(CATALOG_PATH)
     findings = scanner.scan_files([command_file], rules=scanner.compile_rules(catalog), root=tmp_path)
