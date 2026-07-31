@@ -944,6 +944,74 @@ def _blocker_args(tmp_path) -> SimpleNamespace:
     )
 
 
+def _remediation_args(tmp_path) -> SimpleNamespace:
+    formal = tmp_path / "formal.json"
+    blocker = tmp_path / "blocker.json"
+    formal.write_text("{}", encoding="utf-8")
+    blocker.write_text("{}", encoding="utf-8")
+    return SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_preflight_output=None,
+        b3_request_candidate_output=None,
+        b3_blocker_diagnostic_output=None,
+        b3_remediation_diag02_output=str(tmp_path / "remediation.json"),
+        b3_formal_report=str(formal),
+        b3_blocker_report=str(blocker),
+        b3_target_manifest_sha256="",
+        _b3_blocker_diag01_child=False,
+        _c008_b3_diag02_child=False,
+        _c008_b3_diag04_child=False,
+        _b3_child=False,
+        b3_preparation_output=None,
+        c008_b3_diag04_output=None,
+        c008_b3_diag02_output=None,
+        c008_diagnostic_output=None,
+        c008_b1_diagnostic_output=None,
+    )
+
+
+def test_main_remediation_diag02_persists_no_fit_receipt(monkeypatch, tmp_path, capsys) -> None:
+    args = _remediation_args(tmp_path)
+    body = {
+        "schema_version": "hmm_risk_c008_b3_remediation_diag02_v1",
+        "status": "diagnostic_complete",
+        "diagnostic_contract": "C-008-B3-REMEDIATION-DIAG-02",
+        "profile_manifest": {"profile_count": 324},
+        "completed_entry_analysis": {"entry_count": 163},
+        "initialization_source_evidence": {"entry_count": 11},
+        "hmm_refit_performed": False,
+        "selection_performed": False,
+        "validation_accessed": False,
+        "formal_acceptance_reexecuted": False,
+        "threshold_changed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    report = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+    monkeypatch.setattr(subject, "parse_args", lambda: args)
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
+    monkeypatch.setattr(subject, "prepare_b3_remediation_diag02", lambda *a, **k: report)
+
+    assert subject.main() == 0
+
+    persisted = json.loads((tmp_path / "remediation.json").read_text(encoding="utf-8"))
+    receipt = json.loads(capsys.readouterr().out)
+    assert persisted == report
+    assert receipt["profile_count"] == 324
+    assert receipt["completed_entry_count"] == 163
+    assert receipt["initialization_failure_count"] == 11
+    assert receipt["hmm_refit_performed"] is False
+    assert receipt["validation_accessed"] is False
+    assert receipt["ready_artifact_write_performed"] is False
+
+
 def _blocker_numeric_environment(*, thread_pools=None) -> dict:
     return {
         "schema_version": "hmm_risk_c008_b3_diag04_numeric_environment_v1",
