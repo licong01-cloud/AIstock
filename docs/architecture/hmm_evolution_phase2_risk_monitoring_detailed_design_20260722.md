@@ -2946,6 +2946,8 @@ selection、model/READY、数据库、依赖或runtime动作。
 - **禁止未经确认的门禁和审批**：`PASS`。没有新增runtime人工确认或研究准入；源码只使P2可执行，32 fits、D5兼容、正式grid和
   PR merge继续独立报告。
 - **审核修复**：`RESOLVED`。所有control frozen hash在首fit前预校验；attempt持久化numeric environment、期望/实际control hash；
+  treatment/control train-input manifest与批准profile逐项绑定；父进程拒绝即使canonical hash自洽但携带selection/model/READY/DB/runtime
+  side effect的child payload；report保留全部downstream D4 typed failure，不以机制支持吞掉失败；writer在落盘前校验内部receipt。
   report明确`d3_d4_descriptive_contracts_applied=true`与`formal_model_set_acceptance_performed=false`，不使用含糊成功语义。
 
 综合审核结论：`PASS_D1_B_P1_SOURCE_COMPLETE_CONTROLLED_REFIT_NOT_EXECUTED`。本结论不表示32 fits、selection、D6、model/READY、
