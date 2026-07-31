@@ -6,7 +6,7 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C、K2 overall与K3 overall均为`implemented_verified + merged`。K4-A已通过PR #2883 / merge `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda`完成`implemented_verified_contract_slice + merged`；K4-B已通过PR #2953 / merge `cbb5f12871f41d1fd529a9a98e8811484eac8ba0`完成`implemented_verified + merged`，K4 overall=`implemented_verified + merged`，K5/K6=`not_started`；现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C、K2 overall与K3 overall均为`implemented_verified + merged`。K4-A已通过PR #2883 / merge `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda`完成`implemented_verified_contract_slice + merged`；K4-B已通过PR #2953 / merge `cbb5f12871f41d1fd529a9a98e8811484eac8ba0`完成`implemented_verified + merged`，K4 overall=`implemented_verified + merged`。K5下位详细设计[`miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md`](miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md)为`design_ready`，K5 implementation=`not_started`；K6=`not_started`。现有产品runtime未切换，production/runtime gates均为`noop`。
 >
 > K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B、K2-C和K2-D均为`implemented_verified + merged`，K2 overall=`implemented_verified + merged`。K2-D direct outbox/diagnostics/ops=`111 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；required CI run `30269640126` 全绿。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
@@ -16,7 +16,7 @@
 
 ## 0. Executive Decision / 核心决策
 
-K1、K2、K3 overall均保持`implemented_verified + merged`。K4-A为`implemented_verified_contract_slice + merged`；K4-B正式审核补修已完成本地direct/DEV/MiniQMT/Paper/coverage/L0/registry/F2及required CI run `30573914476`闭环，并通过PR #2953 / merge `cbb5f12871f41d1fd529a9a98e8811484eac8ba0`合入，K4 overall=`implemented_verified + merged`。K5/K6=`not_started`，产品runtime未切换，production gates保持`noop`。
+K1、K2、K3 overall均保持`implemented_verified + merged`。K4-A为`implemented_verified_contract_slice + merged`；K4-B正式审核补修已完成本地direct/DEV/MiniQMT/Paper/coverage/L0/registry/F2及required CI run `30573914476`闭环，并通过PR #2953 / merge `cbb5f12871f41d1fd529a9a98e8811484eac8ba0`合入，K4 overall=`implemented_verified + merged`。K5 detailed design=`design_ready`、implementation=`not_started`；K6=`not_started`。产品runtime未切换，production gates保持`noop`。
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -600,7 +600,7 @@ K4必须在existing creation/delivery invocation中提供唯一显式optional fa
 
 该 optional seam 在 K4/K5 仍为 shadow-only。现有 `ExecutionProjectionSetV1` 每个 projection type 只允许一个 ref，而upstream `cancel_all()`可在一次callback产生多个command；现有OMS/risk receipt又按单child/command闭合。因此K4/K5必须完整保留多command collector/characterization trace，却不得复用第一条receipt、丢弃后续command、固定PASS或把多command送入V1 materializer。existing materializer只验证exact单command broker-neutral shadow authority且`dispatch_attempt=0/broker_called=false`。K4 conformance对pure plugin使用`NOT_APPLICABLE_PURE_PLUGIN`，K5 adapter最多使用`SHADOW_ONLY_K2_V1`；V1不提供product disposition。generic per-command product authority aggregate、writer/readback、projection hash、同步reject返回语义和restart/reconcile闭环属于K6 cutover的独立F2前置；K6必须定义新的versioned product command-authority receipt且product root拒绝所有K4/K5 V1 receipt。这不是人工gate，也不允许K4预先发明平行DB/schema/route。
 
-K4 current catalog没有façade-backed descriptor：current-three保持K3 pure binding，Iceberg/Stop归K5。K4可用production constructors构建strict test-only closed candidate覆盖adapter seam，但不得写入catalog/creation binding/DB或把它当成registered runtime evidence；K4完成还必须由真实current-three conformance、pinned Iceberg/Stop characterization及DEV read-only证据共同闭合。K5交付首个真实registered shadow adapter，仍不修改kernel。
+K4 current catalog没有façade-backed descriptor：current-three保持K3 pure binding，Iceberg/Stop归K5。K4可用production constructors构建strict test-only closed candidate覆盖adapter seam，但不得写入catalog/creation binding/DB或把它当成registered runtime evidence；K4完成还必须由真实current-three conformance、pinned Iceberg/Stop characterization及DEV read-only证据共同闭合。K4 source manifest中Iceberg/Stop的`CHARACTERIZATION_ONLY_K5`必须保持为不可改写的source provenance/lifecycle metadata；K5以`VNPY_COMPAT` descriptor、exact K1 creation binding和code-owned/fresh-equal V2 binding建立首个真实registered shadow adapter，二者不矛盾且均不表示产品激活。K5仍不修改kernel或K4 source manifest。
 
 通用adapter必须实现constructor/start exactly once、每delivery由durable state经`__new__`+exact mapping恢复、callback once、state extract/schema validation和collector freeze；Python algorithm object不得跨delivery持久化。`facade_contract_sha256`必须同时绑定K1 pinned surface、K4 method/DTO/state mapping以及live callable/signature/canonical-LF source identity，writer/readback独立重算，不能以固定hash或characterization-only自证。
 
@@ -824,8 +824,12 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 
 ### K5：Iceberg/Stop 扩展性验收
 
-- 只新增Iceberg/Stop plugin/manifest/algorithm binding/state codec/tests，复用K4通用adapter和K2 shadow invocation seam，不修改kernel；产品activation与generic per-command authority仍由K6拥有；
-- 验证不同 timer/tick/order lifecycle；
+- 实施级合同：[`miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md`](miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md)，当前`design_ready`、implementation=`not_started`；
+- 新增Iceberg/Stop plugin/manifest/algorithm binding/state codec/tests，复用K4通用adapter和K2 shadow invocation seam，不修改kernel；产品activation与generic per-command authority仍由K6拥有；
+- K4现有V2 conformance builder仍硬编码current-three，因此K5允许一次窄幅内部重构：提取由K4原writer/readback与K5 exact full-five writer/readback共享的pure evaluator；既有receipt/set schema/hash与K4 current-three输出保持不变，不接受caller supplied set/mode/disposition，也不创建平行authority；
+- K5 code-owned shadow catalog固定exact current-three + Iceberg + Stop并zero-partial publication；产品composition root不引用该catalog，“registered”不等于产品激活；
+- K5新增repo-owned `k5_binding_authority.py`，以既有`VnpyFacadeAlgorithmBindingV2`保存exact Iceberg/Stop immutable canonical literals，factory在既有config-only SPI内只做pure strict read；full-five candidate发布前必须通过K4 fresh five-algo authority重新生成binding并与literal逐字段相等，禁止隐藏global、每次factory subprocess、静态PASSED或previous/latest fallback；
+- 验证Iceberg exchange-active TIMER + sequence-cutoff native B0 quote、cancel后pointer立即清空但cancel-pending mapping保留、cancel ACK前resubmit、旧terminal callback清空新pointer及`traded >= target`；验证Stop native TICK + exactly-once trigger及`traded == target`。`< / == / >`均有直接向量，K2非法overfill在plugin transition前typed拒绝而不改source operator；完整保留多command trace，existing K2 V1无法表达时typed拒绝materialization，不丢command、不假成功；
 - 预计 1–2 PR，6–9 人日。
 
 ### K6：旧 helper 退役、生产迁移与真实 SIM
@@ -1036,6 +1040,16 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-088` | current-three复用K3 parity，Iceberg/Stop source-isolated characterization-only，Iceberg TIMER lineage、K5边界与确定性输入完整 |
 | `F-089` | typed error、concurrency/retry/restart、diagnostics/cardinality/retention、无人工门禁与无previous/latest fallback完整 |
 | `F-090` | K4 direct/negative/integration/fresh-process/coverage/routing/F2/rollout/rollback/生产状态分离可执行 |
+| `F-091` | K5 current facts、K1-K4复用、K5/K6边界、信号/执行隔离和禁止kernel/product-route改动完整 |
+| `F-092` | Iceberg/Stop exact plugin identity、manifest、config、source attribution、event/capability合同及K4 `CHARACTERIZATION_ONLY_K5`到K1 shadow registration桥接可直接实施 |
+| `F-093` | K4 conformance hardcode缺口以前后一致的单一pure evaluator闭合，source disposition保持不变，无平行schema/receipt/任意plugin-set authority |
+| `F-094` | code-owned exact V2 binding literal、fresh sealed K4 binding equality与exact full-five descriptor/catalog/compatibility/creation/conformance composition、zero-partial publication和fresh-process readback完整 |
+| `F-095` | config-only factory的唯一binding authority、constructor、strict config/state codec、restore/active-order/lineage closure完整，Iceberg pointer与cancel-pending mappings不混同 |
+| `F-096` | Iceberg exchange-active TIMER、sequence-cutoff native B0 quote、cancel-pending resubmit/late callback、exact `traded >= target`、restart/multi-command语义精确 |
+| `F-097` | Stop native TICK、signed price_add、limit bound、exactly-once trigger、exact `traded == target`、ORDER/TRADE/restart语义精确 |
+| `F-098` | K2 shadow invocation、transaction/retry/concurrency/failure/diagnostics/metrics/retention完整且无人工门禁 |
+| `F-099` | direct/negative/DEV PostgreSQL/fresh-process/coverage/changed-files routing/F2验收可执行 |
+| `F-100` | source rollout/rollback、K6 prerequisite与source/production/runtime状态分离完整 |
 
 ## 18. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1048,7 +1062,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-047` | §5.7-§6.3、§10；target repository/outbox/dispatcher | target `backend/tests/miniqmt_execution_runtime/test_command_outbox_repository.py` stale DISPATCHING/null truth/callback-before-ACK/no-resubmit；`backend/tests/miniqmt_execution_runtime/test_algo_delivery_repository.py` | design_ready | none |
 | `F-048` | §8；target `backend/execution_algos/vnpy_compat/` | target `backend/tests/miniqmt_execution_runtime/test_vnpy_compat_facade.py` pinned method signature/return/error/DTO characterization for all registered plugins | design_ready | none |
 | `F-049` | §7.2、§12 K3；K3 detailed design §1–§15 current-three plugins/ALGO_LOCAL parity/policy-state-dependent-BUY inventory | artifact: `docs/architecture/miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md`；target `backend/tests/miniqmt_execution_runtime/test_current_three_kernel_parity.py`；existing `backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_parity_sniper.py` | design_ready | none |
-| `F-050` | §7.3、§12 K5；Iceberg/Stop manifests/plugins | target `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_extensibility.py` | design_ready | none |
+| `F-050` | §7.3、§12 K5；K5 detailed design §0–§13 exact Iceberg/Stop manifests/plugins/full-five shadow catalog | target `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_extensibility.py`、`test_vnpy_k5_adapter_lifecycle.py`、`test_vnpy_k5_shadow_postgres.py` | design_ready | none |
 | `F-051` | §6、§11、§13.3；runtime/repository/OMS/diagnostics | target `backend/tests/miniqmt_execution_runtime/test_plugin_restart_recovery.py`；`backend/tests/miniqmt_execution_runtime/test_plugin_multi_slot_concurrency.py`；plugin failure/active-child cancel/SKIPPED chain direct tests | design_ready | none |
 | `F-052` | §10、§12 K6、§14、§16 | target `backend/tests/miniqmt_execution_runtime/test_algo_plugin_migration_postgres.py`；artifact: `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md` | design_ready | none |
 | `F-053` | K1 detailed design §3；K1-A/B/C shadow modules 与 source-isolated/standard package import boundary；same-package transitive helper closure、single parent/worker authority、bounded repo-relative `PluginImportBoundaryReceiptV2` | `backend/tests/miniqmt_execution_runtime/test_plugin_import_boundaries.py` = 65 passed；新增 helper SQLite、time/random/datetime、`sys.modules`、nested forbidden owner、cycle 与 root-independent identity RED/GREEN；既有 raw FileIO、external dependency、malformed carrier、truncation 和 standard package evidence 保持通过；implementation `52e1c5a2`，CI run `30119335529` green | implemented_verified | none |
@@ -1089,18 +1103,28 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-088` | K4 detailed design §3.2、§6.3、§10、§12 | artifact: `backend/execution_algos/vnpy_compat/characterization_artifacts/facade_characterization_vectors_v2.json`；`backend/tests/miniqmt_execution_runtime/test_current_three_plugin_manifests.py::test_source_attribution_hash_is_checkout_eol_independent`、`backend/tests/miniqmt_execution_runtime/test_algo_plugin_registry.py::test_registry_callable_source_hash_is_checkout_eol_independent`、`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py` | implemented_verified | none |
 | `F-089` | K4 detailed design §13–§17 | `backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py::test_trace_collector_preserves_primary_failure_when_reason_code_property_breaks`、`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_source_execution_v2.py::test_exception_summary_sanitizes_before_bounded_truncation`、`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_conformance_authority_v2.py::test_k3_preflight_failure_records_active_characterization_failure`、`backend/tests/miniqmt_execution_runtime/test_vnpy_facade_diagnostics.py::test_characterization_success_does_not_clear_active_failure_before_conformance` | implemented_verified | none |
 | `F-090` | K4 detailed design §18–§20 | 非DB direct=`202 passed,1 skipped`；DEV=`2 passed`；coverage八核心line/branch均`>=80/>=70`；`python -m nox -s miniqmt_execution_runtime_l2`=`1099 passed,30 skipped`；`python -m nox -s paper_v2_backend`=`1050 passed,2 skipped,2 xfailed`；`python -m nox -s l0`、`python -m nox -s validation_module_registry_l0`及三份F2 validator通过 | implemented_verified | none |
+| `F-091` | K5 detailed design §0–§3 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k5_scope_boundaries.py` import/no-diff/algo-branch checks | design_ready | none |
+| `F-092` | K5 detailed design §4 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k5_plugin_manifests.py` exact identity/config/source/event/capability + K4 disposition/K1 registration bridge matrix | design_ready | none |
+| `F-093` | K5 detailed design §2.3、§4.6、§5.3 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k5_facade_conformance.py` K4 byte/disposition parity + full-five bridge + forged/partial negatives | design_ready | none |
+| `F-094` | K5 detailed design §5 | `backend/tests/miniqmt_execution_runtime/test_vnpy_plugin_extensibility.py`、`test_vnpy_k5_facade_conformance.py` code-owned/fresh V2 binding equality、catalog/creation/fresh-process closure | design_ready | none |
+| `F-095` | K5 detailed design §5.2、§5.4、§6 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k5_plugin_manifests.py`、`test_vnpy_k5_adapter_lifecycle.py` config-only factory/no-hidden-authority/config/state/pointer/mapping/restore corruption matrix | design_ready | none |
+| `F-096` | K5 detailed design §7 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k5_adapter_lifecycle.py` Iceberg interval/tick cutoff/cancel-pending resubmit/late-old-terminal/`< == >` traded/restart/multi-command vectors | design_ready | none |
+| `F-097` | K5 detailed design §8 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k5_adapter_lifecycle.py` Stop BUY/SELL/limit/exactly-once/`< == >` traded/order/restart vectors | design_ready | none |
+| `F-098` | K5 detailed design §9–§11 | `backend/tests/miniqmt_execution_runtime/test_vnpy_k5_shadow_postgres.py` real K2 seam/retry/concurrency/no-broker；diagnostics direct tests | design_ready | none |
+| `F-099` | K5 detailed design §12 | `python -m pytest backend/tests/miniqmt_execution_runtime/test_vnpy_k5_plugin_manifests.py backend/tests/miniqmt_execution_runtime/test_vnpy_k5_facade_conformance.py backend/tests/miniqmt_execution_runtime/test_vnpy_k5_adapter_lifecycle.py backend/tests/miniqmt_execution_runtime/test_vnpy_k5_scope_boundaries.py -q`；coverage `>=80/70`；classifier-selected plans；L0/registry/F2 | design_ready | none |
+| `F-100` | K5 detailed design §13 | artifact: `docs/architecture/miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md`；PR/CI/readback/rollback与source/production/runtime gate-separated report | design_ready | none |
 
 ## 19. DESIGN-COMPLIANCE-001 / 设计复核
 
 | control | result | evidence |
 | --- | --- | --- |
-| no simplified delivery | pass | K4-B已交付V2 full executable input/full actual trace/fresh source readback、sealed authority、same-transaction repository read与DEV zero-write；多command trace不截断、V1 observation不能冒充PASSED，无placeholder、partial或第二route |
+| no simplified delivery | pass | K4-B已交付V2 full executable input/full actual trace/fresh source readback、sealed authority、same-transaction repository read与DEV zero-write；K5设计补足code-owned/fresh-equal V2 binding authority和config-only factory闭包；多command trace不截断、V1 observation不能冒充PASSED，无placeholder、partial或第二route |
 | no silent error | pass | K3 strict callback/outcome保持；K4 V1永不PASSED，spawn/trace/receipt/claimed-delivery/repository drift fail loud；not-running/missing/rounded-zero/TICK unavailable分别产生typed diagnostic，pure-shadow或K2-V1-shadow receipt不能冒充product command authority PASSED |
-| no business semantic drift | pass | K3 predecessor/TWAP/cancel语义保持；K4 Iceberg TIMER消费durable sequence-cutoff B0 TICK、active-child clean前不伪造terminal、config不擅自收紧source semantics；signal/target/方向数量/B0/OMS/Gateway不变 |
+| no business semantic drift | pass | K3 predecessor/TWAP/cancel语义保持；K5精确保留Iceberg cancel-pending/pointer/迟到callback及`>=`、Stop `==`，并继续消费durable sequence-cutoff native B0 TICK；config不擅自收紧source semantics，signal/target/方向数量/B0/OMS/Gateway不变 |
 | no unauthorized gates | pass | route-independent catalog和per-route receipt保持；K4 conformance/disposition是code integrity contract而非人工run gate，current-three pure path不因set存在而切换；不新增RBAC、审批、acknowledge、confirm-run、人工恢复或永久enable flag |
 | no parallel product route | pass | 在现有`MiniQMTExecutionRuntime`/K2 creation+delivery中增加optional adapter seam；无第二runtime/repository/dispatcher/Gateway，current-three factory和legacy产品route均不改变 |
-| K5/K6 boundary | pass | K5只做Iceberg/Stop adapter plugin的shadow验收且不改kernel；generic per-command product authority aggregate、writer/readback与cutover由K6独立F2关闭，K4/K5不伪造产品PASSED |
-| production state separation | pass | K2/K3/K4 overall=`implemented_verified + merged`；K4-A=`implemented_verified_contract_slice + merged`，K4-B=`implemented_verified + merged`；K5/K6未开始，产品runtime未切换，DDL/DML/dependency/config/binding/broker/restart/runtime activation全部为`noop` |
+| K5/K6 boundary | pass | K5只做Iceberg/Stop adapter plugin的shadow验收且不改kernel；K4 conformance仅抽取同一pure evaluator并保持current-three writer/hash不变；generic per-command product authority aggregate、writer/readback与cutover由K6独立F2关闭，K4/K5不伪造产品PASSED |
+| production state separation | pass | K2/K3/K4 overall=`implemented_verified + merged`；K4-A=`implemented_verified_contract_slice + merged`，K4-B=`implemented_verified + merged`；K5 detailed design=`design_ready`而implementation=`not_started`，K6未开始；产品runtime未切换，DDL/DML/dependency/config/binding/broker/restart/runtime activation全部为`noop` |
 
 ## 20. Definition of Done / 完成定义
 
