@@ -382,7 +382,7 @@ test("QE Archive uses business search selectors, one outcome vintage and readabl
   await expect(page.getByTestId("qe-long-trend-archive-comparison")).toBeVisible();
   await expect(page.getByTestId("qe-archive-quality-run-search")).toHaveAttribute("placeholder", /任务名称/);
   await expect(page.getByText("Run ID", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("1 完整 / 1 缺失", { exact: true })).toBeVisible();
+  await expect(page.getByText("完整 1 / 缺失 1", { exact: true })).toBeVisible();
   await expect(page.getByText("数据完整", { exact: true })).toBeVisible();
   await expect(page.getByText("pred_label_artifacts", { exact: true })).toHaveCount(0);
   await expect(page.getByText("missing_forward_only", { exact: true })).toHaveCount(0);
