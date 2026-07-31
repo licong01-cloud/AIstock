@@ -1,11 +1,11 @@
 # Advisory Phase 1R 历史范围研究与新策略上线前验证 F2 详细设计
 
 > 日期：2026-07-19
-> 修订日期：2026-07-27
+> 修订日期：2026-07-31
 > 文档类型：F2 实施级详细设计，`docs-fast-new`
 > 父级权威：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父级验收映射：父蓝图 Phase 1R 的五项稳定验收要求
-> 当前状态：`phase1r_complete_runtime_e2e_accepted`；R1-R3 已完成 contracts、候选计算、历史 PIT adapter、逐日列表执行和单/原生多 Alpha 15 日 E2E。R4 已完成 DEV/production schema、32,549 条 outcome、4 个 summary、source correction、retrospective SEALED snapshot 和 exact retry。R5 已由 PR `#2809` 合入 typed API/UI 与 legacy cutover，并在 2026-07-31 使用生产 batch `ahrb_dccde5770463663ecbde96fbe304cd26` 完成 post-restart Dataset Bridge、父级双 heartbeat、`SEALED`、相同幂等键 `NOT_SCHEDULED` 重放及桌面/移动真实 UI readback。Phase 1R 已闭合；Phase 0B 模型价值审计和后续模型能力仍是独立未完成阶段
+> 当前状态：`r1_through_r4_complete_r5_source_merged_runtime_partial`；R1-R3 已完成 contracts、候选计算、历史 PIT adapter、逐日列表执行和单/原生多 Alpha 15 日 E2E。R4 已完成 DEV/production schema、32,549 条 outcome、4 个 summary、source correction、retrospective SEALED snapshot 和 exact retry。R5 已由 PR `#2809` 合入 typed API/UI 与 legacy cutover，并在 2026-07-31 使用生产 batch `ahrb_dccde5770463663ecbde96fbe304cd26` 完成 post-restart Dataset Bridge、父级 heartbeat、`SEALED`、相同幂等键 `NOT_SCHEDULED` 重放及两 viewport UI readback；但该 batch 的 CREATE/RESUME 早于 R5 合入，三 viewport 持久截图、完整 R5 API/UI 双 Alpha E2E 和历史 PARTIAL batch 可恢复性尚未闭合，因此 Phase 1R 不得声明完成。Phase 0B 可基于既有 R4 SEALED snapshot 独立开展，不以 R5 UI 验收作为新增研究门禁
 > 研究边界：学术历史研究，`execution_prohibited=true`，不产生订单、仓位或交易执行输入
 
 ## 1. 背景与设计结论
@@ -1090,7 +1090,7 @@ frontend/tests/paper-v2-advisory-historical-range-ui.spec.ts
 - task API、frontend contracts、历史验证 tab。
 - 真实 API/UI E2E。
 - legacy replay 卡片退出主流程，但不物理删除旧 API/数据。
-- 当前交付状态：源码、production runtime mutation、exact retry、单/原生多 Alpha readback 与桌面/移动 UI 已验收；权威 receipt 见 R5 子设计第 24 节。
+- 当前交付状态：源码、production Dataset Bridge、exact retry、单/原生多 Alpha 既有事实 readback 与两 viewport UI 已验证；完整 R5 create/resume 命令链、三 viewport 持久 UI 证据和历史 PARTIAL batch 可恢复性仍为明确缺口，权威部分回执见 `tests/aistock_validation/history/advisory/20260731_phase1r_r5_runtime_partial_receipt.md`。
 
 每个批次必须完整实现其设计范围，不得用 placeholder、mock-only、同步单日循环或静态页面冒充完成。
 
@@ -1329,6 +1329,7 @@ production_runtime_activation = none
 - [x] `decision_price_truth`：T+1 实际价格只追加 execution/outcome，不阻断或改写 T 日 action/list。
 - [x] `bounded_list_truth`：显式 action、替换预算、hash chain 和 active count。
 - [x] `state_reporting_truth`：设计、实现、DDL、DEV、production、runtime、outcome maturity 分开。
+- [ ] `r5_runtime_acceptance_truth`：R5 完整 create/resume/query/outcome/summary/bridge 双 Alpha E2E、三 viewport 持久 UI 证据和历史 PARTIAL batch 可恢复性尚未闭合；父级完成项保持 `incomplete_dependency`。
 
 ## 25. 退出条件与下一阶段
 
@@ -1342,4 +1343,4 @@ production_runtime_activation = none
 6. 无额外门禁、审批、角色、package 二次验证、回测数据或交易依赖。
 7. F2 validator、结构/引用/重复检查和 `git diff --check` 通过。
 
-R1-R5 已完成源码合入、DEV/production schema、真实历史业务、typed API/UI、legacy cutover、单/原生多 Alpha、错误状态、lease、exact retry 和隔离验收，Phase 1R 完成。下一阶段进入 Phase 0B 基线质量与可建模性审计；不得把 Phase 1R 的历史 Outcome 或 retrospective snapshot 冒充已经训练、校准或启用的模型能力。
+R1-R4 已完成源码合入、DEV/production schema 与真实历史业务验收；R5 源码、typed API/UI、legacy cutover、Dataset Bridge、lease、exact retry 和既有 batch readback 已验证，但 R5 完整 runtime E2E 与父级完成项仍按 R5 子设计第 24.6 节保持未完成，Phase 1R 不得声明完整验收。Phase 0B 基线质量与可建模性设计或只读审计可基于既有 R4 SEALED snapshot 独立进行，不以 R5 产品 E2E 为新门禁；同时不得把历史 Outcome 或 retrospective snapshot 冒充已经训练、校准或启用的模型能力。

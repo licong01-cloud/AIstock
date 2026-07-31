@@ -5,7 +5,8 @@
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父设计：`docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`
 > 上游交付：R1 contracts/schema/repository、R2 candidate adapter、R3 ordered day executor、R4 outcome/summary/retrospective SEALED bridge
-> 当前状态：`implementation_and_runtime_e2e_verified`
+> 修订日期：2026-07-31
+> 当前状态：`implementation_verified_runtime_bridge_ui_readback_partial_f760`；R5 源码与静态/变更模块验证已完成，生产 Dataset Bridge、lease、exact retry 和既有 batch 的 UI readback 已验证；F-760 要求的 R5 API create/resume/query/outcome/summary/bridge 双 Alpha 完整 E2E、三 viewport 持久截图和历史 PARTIAL batch 可恢复性仍未闭合，F-763 不得声明完成
 > 研究边界：`HISTORICAL_RANGE_RESEARCH`、`RETROSPECTIVE_RESEARCH_ONLY`、`execution_prohibited=true`
 
 ## 1. 背景与当前事实
@@ -794,10 +795,10 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 | F-757 | no DDL；R1-R4 execution algorithms 不变；共享 operation 状态机仅 additive 增加 typed pre-claim `QUEUED -> RETRYABLE_FAILED`，不伪造 attempt | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `git diff --check` | verified | none |
 | F-758 | READ ONLY REPEATABLE READ queries and resource-specific keysets | `backend/tests/advisory_historical_range/test_r5_query_repository.py` | verified | none |
 | F-759 | responsive evidence UI and typed Dataset bridge receipt readback | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` covers SEALED/VALID_EMPTY and 375/768/1440 widths | verified | none |
-| F-760 | 单 Alpha 与原生多 Alpha 共存的真实 API/UI E2E | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts`；artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 第 24 节；生产 batch `ahrb_dccde5770463663ecbde96fbe304cd26` 与 operation `ahrop_c8a5b7e09cc1edae2ea43f208ab2e26b` | verified_runtime_e2e | none |
+| F-760 | 单 Alpha 与原生多 Alpha 共存的真实 API/UI E2E | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts`；validation-receipt: `tests/aistock_validation/history/advisory/20260731_phase1r_r5_runtime_partial_receipt.md`；生产 batch `ahrb_dccde5770463663ecbde96fbe304cd26` 与 operation `ahrop_c8a5b7e09cc1edae2ea43f208ab2e26b` | incomplete_user_acknowledged | 用户明确批准按正式审核结论记录该未完成状态，但未批准把缺口视为完成：已证明既有双 Program batch 的 bridge、exact retry 和两 viewport 只读 UI；尚未证明 R5 合入后的 create/resume 完整命令链，未保存三 viewport 持久截图，且旧 PARTIAL batch 的 artifact root 不匹配使其当前不可恢复 |
 | F-761 | `scripts/aistock_feature_workflow.py` and this reconciled matrix | validation-receipt: `aistock_feature_workflow F2` final local gate | verified | none |
 | F-762 | this design and PR acceptance evidence | artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` | verified | none |
-| F-763 | parent design plus this matrix | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`；artifact: `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 第 24 节；F-740-F-762 | verified_phase1r_complete | none |
+| F-763 | parent design plus this matrix | artifact: `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`；validation-receipt: `tests/aistock_validation/history/advisory/20260731_phase1r_r5_runtime_partial_receipt.md`；F-740-F-762 | incomplete_dependency_user_acknowledged | 用户明确批准按正式审核结论记录该未完成状态，但未批准把缺口视为完成：F-760 尚未闭合，Phase 1R 不得声明完整验收；该缺口不阻断基于既有 R4 SEALED snapshot 独立开展 Phase 0B 设计或只读分析 |
 
 ## 21. DESIGN-COMPLIANCE-001 设计复核
 
@@ -850,25 +851,26 @@ PASS_DESIGN。没有角色、审批、双人复核、package 二次验证、最�
 
 ### 22.3 审核结论
 
-- 禁止简化版：PASS。API、command、query、UI、legacy cutover 和真实 E2E 均为必交付范围。
-- 禁止静默错误：PASS。HTTP、background operation、lease expiry、parser、polling 和 UI error state 均有权威可见路径。
-- 业务逻辑与蓝图一致：PASS。没有改变 R1-R4 算法、数据身份、Program/package 关系或隔离边界。
-- 禁止未经确认的门禁审批：PASS。未增加审批、角色、策略包复检、最新日、候选数、日期跨度或模型能力门禁。
+- 禁止简化版：`PASS_DESIGN / PARTIAL_DELIVERY`。API、command、query、UI、legacy cutover 和真实 E2E 均为必交付范围；F-760 未闭合前不得把 bridge + readback 子集声明为完整交付。
+- 禁止静默错误：`PASS_DESIGN / PARTIAL_RUNTIME_EVIDENCE`。HTTP、background operation、lease expiry、parser、polling 和 UI error state 均有权威可见路径；历史 PARTIAL batch 的 root mismatch 已在第 24.4 节显式记录，但 UI recoverable 投影仍待修正或正式定义退役语义。
+- 业务逻辑与蓝图一致：`PASS_SOURCE_DESIGN / PARTIAL_ACCEPTANCE`。没有改变 R1-R4 算法、数据身份、Program/package 关系或隔离边界；验收状态已恢复为设计要求的完整 create/resume 链路，未用既有 batch readback 替代。
+- 禁止未经确认的门禁审批：`PASS`。未增加审批、角色、策略包复检、最新日、候选数、日期跨度或模型能力门禁；Phase 0B 可基于既有 R4 SEALED snapshot 独立推进。
 
 ## 23. 当前结论
 
-R5 源码已按 R5-A 至 R5-D 落地，并通过变更模块、直接依赖、TypeScript、Playwright、所有权、guardrail、静态合同和真实 runtime E2E。实现保持 R1-R4、Selection、当前 Advisory、Paper、Simulation、QE/Qlib/QMT 隔离；没有 DDL、角色、审批或额外业务门禁。生产 runtime 仅在用户完成服务重启后执行显式历史研究命令，未建立 scheduler 或自动运行入口。
+R5 源码已按 R5-A 至 R5-D 落地，并通过变更模块、直接依赖、TypeScript、Playwright、所有权、guardrail 和静态合同。生产 runtime 已证明既有双 Program batch 的 Dataset Bridge、父级 heartbeat、exact retry 和桌面/移动只读 UI readback。实现保持 R1-R4、Selection、当前 Advisory、Paper、Simulation、QE/Qlib/QMT 隔离；没有 DDL、角色、审批或额外业务门禁。生产 runtime 仅在用户完成服务重启后执行显式历史研究命令，未建立 scheduler 或自动运行入口。
 
-F-760 与 F-763 已由第 24 节真实证据闭合。R5 和 Phase 1R 可以声明完成；该结论严格限定于历史范围研究、Outcome/Summary、retrospective bridge、API/UI 和 legacy 主流程 cutover，不包含 Phase 0B、模型训练、Top5 重排、预期收益、持股周期或买入/止盈/止损区间能力。
+F-760 与 F-763 尚未闭合。现有权威 batch 的 CREATE/RESUME 均发生在 R5 PR `#2809` 合入前，第 24 节不能证明 R5 API 的 create/resume 命令链；现有 UI 记录也没有保存第 16.3 节要求的三个 viewport 持久截图和 failed-request 分类。R5 可以声明“源码完成、bridge/exact retry/UI readback 已验证”，但不得声明完整 runtime E2E 或 Phase 1R 完成。Phase 0B 可基于既有 R4 SEALED snapshot 独立开展设计与只读审计，不以 F-760 完成为新增业务门禁，也不得反向把 Phase 0B 结果冒充 R5 验收。
 
-## 24. 2026-07-31 Runtime E2E 验收
+## 24. 2026-07-31 Runtime 部分验收
 
 ### 24.1 权威输入与业务范围
 
 - 生产历史 batch：`ahrb_dccde5770463663ecbde96fbe304cd26`。
 - 两个独立 Program：一个 `single_alpha`、一个原生 `multi_alpha` 父包；各完成 15 个交易日，共 30/30 package-day，0 个失败日。
+- 该 batch 创建于 `2026-07-23T05:06:02+08:00`，CREATE 与 RESUME 操作均早于 R5 PR `#2809` 在 `2026-07-28T02:13:11Z` 的合入时间；因此它只可证明 R3/R4 历史业务事实和 R5 查询/bridge 消费兼容性，不可证明 R5 create/resume API E2E。
 - Dataset Bridge 请求范围：两个 run、`requested_horizons=[1]`、`requested_maturity_statuses=[COMPLETE]`、batch row version `57`。
-- 七个显式 runtime roots 由已有冻结 artifact、calculation-evidence、policy-component 与 dataset CAS 身份反查闭合；数据库连接继续使用 `.env` 的既有 `TDX_DB_*`，未猜测 DSN。
+- 七个显式 runtime roots 由已有冻结 artifact、calculation-evidence、policy-component 与 dataset CAS 身份反查闭合；当前 historical-range artifact root identity 为 `fb75ee85a2cc431cb5a6b2deee0f74ebd13153540ec0698dd938c3a46ac3d70b`，数据库连接继续使用 `.env` 的既有 `TDX_DB_*`，未猜测 DSN。
 
 ### 24.2 Bridge、lease 与 exact retry
 
@@ -880,11 +882,24 @@ F-760 与 F-763 已由第 24 节真实证据闭合。R5 和 Phase 1R 可以声�
 ### 24.3 数据幂等与 UI readback
 
 - Outcome `32,549`、Summary `4`、Observation `673`、Label `2,686` 在执行前后不变；新显式 bridge 命令形成一个新的内容闭合 Build/Snapshot，最终为 Build `6`、Snapshot `4`、blob ref `96`，没有重复信号或标签事实。
-- 真实页面从 `http://127.0.0.1:3000/paper-v2/advisory?view=historical-range` 读取同一生产 batch；1440x900 与 375x812 均显示单/多 Alpha、`SEALED` 和 `advsnap_9faa542fd165be6131715125`，console error 为 0，document body overflow 为 false。
+- 真实页面从 `http://127.0.0.1:3000/paper-v2/advisory?view=historical-range` 读取同一生产 batch；1440x900 与 375x812 均显示单/多 Alpha、`SEALED` 和 `advsnap_9faa542fd165be6131715125`，console error 为 0，document body overflow 为 false。该观察没有保留可独立复核的 screenshot artifact，未覆盖 768x1024，也没有持久化 failed-request 分类，因此只能记为 `partial_ui_readback`。
 - batch 中 2026-07-25 形成的一条既有 `REFRESH_OUTCOMES/QUEUED` operation 未由本轮创建、修改或伪造终态；它作为独立历史诊断事实保留，不改变本轮 bridge 验收结论。
 
-### 24.4 生产影响边界
+### 24.4 历史 PARTIAL batch 可恢复性限制
+
+- 生产查询仍可见 `ahrb_babd6ee056575e324d5c7e9186667942`：状态 `PARTIAL`、`recoverable_program_count=1`、冻结 artifact root identity `31103a3c0ef28a71c7b539805f8dc4d3f9a84d88e76e1a0e4ad582c43bebbc3d`。
+- 当前配置 root identity 为 `fb75ee85a2cc431cb5a6b2deee0f74ebd13153540ec0698dd938c3a46ac3d70b`；`HistoricalRangeExecutor._load_sealed_r3_batch` 对不一致身份显式返回 `ADVISORY_HR_ARTIFACT_ROOT_MISMATCH`。因此该 batch 当前虽然被投影为 recoverable，实际不能由当前 composition resume。
+- 在正式确定“支持历史多 root 解析”或“把该旧 batch 标记为已退役/不可恢复”的业务语义前，不得把页面恢复能力声明为全量验收。该限制是显式功能缺口，不新增人工审批或运行门禁，也不影响当前 root 下合法 batch 的 query/bridge。
+
+### 24.5 生产影响边界
 
 - `production_ddl_gate=noop`；无 DDL、依赖安装、Selection/Paper/Simulation/QE/QMT 写入或交易能力变化。
 - 生产 DML 仅来自用户授权的显式 R5 Dataset Bridge operation 及其正式 R4 retrospective Build/Snapshot 状态机。
 - Phase 0B 和后续模型阶段仍未启动，不得从本节推导任何用户可见模型 capability。
+
+### 24.6 剩余验收
+
+1. 使用 R5 合入后的 API 为单 Alpha 与原生多 Alpha 分别形成真实 create/resume/query/outcome/summary/bridge receipt；可以在一个多 Program batch 中执行，但必须逐 Program 保留独立证据。
+2. 从 UI 发起或消费同一组 R5 操作并完成结果 readback，保留 375x812、768x1024、1440x900 三个 viewport 的 screenshot/trace、console、failed request 与 overflow 证据。
+3. 解决第 24.4 节历史 PARTIAL batch 的可恢复性语义，并验证页面不会把实际不可恢复对象展示为可恢复。
+4. 将上述证据写入独立 validation receipt 后，才可把 F-760 更新为 `verified_runtime_e2e`、F-763 更新为 `verified_phase1r_complete`。
