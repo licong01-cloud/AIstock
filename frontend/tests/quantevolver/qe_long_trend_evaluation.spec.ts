@@ -164,7 +164,7 @@ test("completed QE Loop restores long-trend DB state and posts the single idempo
             dimension_json: { slice: "all_oos", horizon: 60, k: null, barrier: null },
             value_num: 0.1234,
             value_json: { icir: 0.5 },
-            quality_flag: "complete",
+            quality_flag: "ok",
           },
           {
             evaluation_metric_id: 2,

@@ -285,17 +285,17 @@ function TopKQualityCards({ rows }: { rows: TopKQualityItem[] }) {
   }
   return (
     <div className="pv2-readable-list">
-      <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="topk_return@20" value={formatSignedPct(current.topk_return_20)} hint={`@50 ${formatSignedPct(current.topk_return_50)}`} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
-        <MetricCard label="Hit Rate@20" value={formatPct(current.topk_hit_rate_20)} hint={`@50 ${formatPct(current.topk_hit_rate_50)}`} tone="info" />
-        <MetricCard label="@20-@50 Decay" value={formatSignedPct(current.topk_decay)} hint="rank<=20 均值 - rank<=50 均值" tone="neutral" />
-        <MetricCard label="Within RankIC" value={formatNumber(current.within_portfolio_rankic, 4)} hint={current.topk_rank_direction || "rank 1=best"} tone="neutral" />
+      <div className="pv2-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+        <MetricCard label="Top20 平均收益" value={formatSignedPct(current.topk_return_20)} hint={`Top50 ${formatSignedPct(current.topk_return_50)}`} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
+        <MetricCard label="Top20 命中率" value={formatPct(current.topk_hit_rate_20)} hint={`Top50 ${formatPct(current.topk_hit_rate_50)}`} tone="info" />
+        <MetricCard label="头部收益差" value={formatSignedPct(current.topk_decay)} hint="Top20 均值减 Top50 均值" tone="neutral" />
+        <MetricCard label="组合内 RankIC" value={formatNumber(current.within_portfolio_rankic, 4)} hint="预测排名 1 为最佳" tone="neutral" />
       </div>
-      <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="Dispersion@20" value={formatPct(current.topk_dispersion_20)} hint="Top20 realized return std" />
+      <div className="pv2-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+        <MetricCard label="Top20 离散度" value={formatPct(current.topk_dispersion_20)} hint="实际收益标准差" />
         <MetricCard label="覆盖交易日" value={formatCompact(current.topk_date_count || 0, 0)} hint={`joined ${formatCompact(current.topk_joined_observation_count || 0, 0)}`} />
-        <MetricCard label="Top-K 状态" value={topkStatusLabel(current.topk_quality_status)} hint={topkSourceLabel(current.topk_source)} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
-        <MetricCard label="当前批次覆盖" value={`${completeCount} 完整 / ${missingCount} 缺失`} hint="缺失不会伪装成成功，也不会用 SQL 推导替代原始证据" tone={missingCount ? "warning" : "success"} />
+        <MetricCard label="Top-K 证据" value={topkStatusLabel(current.topk_quality_status)} hint={topkSourceLabel(current.topk_source)} tone={current.topk_quality_status === "ok" ? "success" : "warning"} />
+        <MetricCard label="当前样本覆盖" value={`完整 ${completeCount} / 缺失 ${missingCount}`} hint="不以零值或 SQL 推导替代缺失证据" tone={missingCount ? "warning" : "success"} />
       </div>
       {current.topk_quality_status !== "ok" ? <div className="pv2-help" data-topk-reason="historical_artifact_missing" style={{ color: "#b45309" }}>缺失原因：{topkMissingReason(current.topk_quality_status)} 下一步：恢复该实验的预测与标签制品后执行受控重算。</div> : null}
     </div>
