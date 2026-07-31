@@ -381,7 +381,7 @@ jobs:
         run: go test ./...
 
   workflow-validation-tests:
-    name: Workflow validation fast lane
+    name: Workflow validation fast lane (no user-backend process control)
     needs: [classify-changes, static-gate]
     if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
     runs-on: ubuntu-latest
@@ -403,7 +403,10 @@ jobs:
       - name: Run focused workflow validation tests
         env:
           WORKFLOW_TEST_TARGETS: ${{ needs.classify-changes.outputs.workflow_test_targets }}
+          AISTOCK_RUNNER_PROCESS_OWNERSHIP: runner_owned_isolated_only
+          AISTOCK_USER_BACKEND_PROCESS_CONTROL: forbidden
         run: |
+          test "${AISTOCK_USER_BACKEND_PROCESS_CONTROL}" = "forbidden"
           python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' > workflow_test_targets.txt
           mapfile -t workflow_test_targets < workflow_test_targets.txt
           python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider

@@ -6,10 +6,13 @@ import json
 import sys
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
 CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.yaml"
+RUNTIME_TARGET_CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
 
 
 def _load_module():
@@ -31,6 +34,7 @@ def test_catalog_loads_and_compiles_regex_rules() -> None:
     assert "ARCH-WSL-001" in rule_ids
     assert "ERR-FALLBACK-001" in rule_ids
     assert "MEMORY-DATAFRAME-001" in rule_ids
+    assert "BACKEND-RESTART-OWNERSHIP-001" in rule_ids
     assert "DB-COMMENT-001" not in rule_ids  # external checker, not regex scanner scope
 
 
@@ -78,6 +82,38 @@ def test_rdagent_release_identity_control_is_fail_closed() -> None:
         "rollback_target",
         "no_source_overlay",
     } <= set(control["required_evidence"])
+
+
+def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
+    scanner = _load_module()
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    controls = {item["control_id"]: item for item in catalog["manual_review_controls"]}
+
+    assert controls["BACKEND-RESTART-OWNERSHIP-001"]["failure_policy"] == (
+        "block_process_control_and_runtime_verified_claims"
+    )
+    assert controls["BUG-RESTART-EFFECTIVE-001"]["failure_policy"] == (
+        "block_issue_close_sync_and_verified_claims"
+    )
+
+    runtime_catalog = yaml.safe_load(RUNTIME_TARGET_CATALOG_PATH.read_text(encoding="utf-8"))
+    assert runtime_catalog["schema_version"] == "aistock_runtime_target_catalog_v1"
+    assert runtime_catalog["policy"]["backend_restart_owner"] == "user"
+    assert runtime_catalog["policy"]["post_restart_verify_mode"] == "read_only"
+    assert runtime_catalog["targets"]["backend-main"]["production_port"] == 8001
+    assert runtime_catalog["targets"]["backend-main"]["isolated_validation_ports"] == [8011, 8012]
+
+
+def test_scanner_blocks_user_backend_process_control_in_client_workflow(tmp_path: Path) -> None:
+    scanner = _load_module()
+    command_file = tmp_path / ".claude" / "commands" / "unsafe.md"
+    command_file.parent.mkdir(parents=True)
+    command_file.write_text("Restart-Service backend-api\n", encoding="utf-8")
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    findings = scanner.scan_files([command_file], rules=scanner.compile_rules(catalog), root=tmp_path)
+
+    assert any(finding.rule_id == "BACKEND-RESTART-OWNERSHIP-001" for finding in findings)
 
 
 def test_scanner_detects_silent_fallback_in_runtime_code(tmp_path: Path) -> None:

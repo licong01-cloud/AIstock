@@ -1138,6 +1138,15 @@ rules:
     layer: docs
     risk_level: medium
     ownership_reason: Standards documents define enforced development guardrails.
+  - rule_id: runtime_target_catalog
+    priority: 110
+    include:
+      - docs/standards/aistock_runtime_targets_v1.yaml
+    primary_module: validation.guardrails
+    impact_modules: [validation.module_quality, validation.runner]
+    layer: workflow
+    risk_level: high
+    ownership_reason: Runtime target identity, user-owned restart policy, and read-only post-restart probes are fail-closed workflow contracts.
   - rule_id: docs_analysis
     priority: 50
     include:

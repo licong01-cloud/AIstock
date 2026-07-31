@@ -26,10 +26,13 @@ Use this as the lightweight entry for broad or unclear AIstock work. The sole de
 ## Execution Boundaries
 
 - Load one selected lane plus its task card and direct artifacts.
+- Prefer RTK for supported high-output interactive commands; use direct commands for unsupported PowerShell/file operations and record the capability fallback. RTK is never a gate and no window may run `rtk trust` on its own.
+- Every user backend has `backend_restart_owner=user`. No lane, delegation, merge, aftercare, or cleanup grants start/stop/restart authority; only explicit authorization for the current target does.
 - Read-only requests remain diagnostic and return evidence without repository or runtime mutation.
 - Ordinary BUG work uses the Context Pack; design documents are added when cited by the issue/user or when T3 classification requires them.
 - Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) use a registered BUG/feature/docs workflow.
 - Temporary exchange notes use `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
 - BUG fixes select the smallest safe pre-merge gate and delegate broad daily regression to Validation Center/CI/nightly.
+- Runtime BUGs use the task card's lazy `runtime_contract`; `unknown` blocks completion, while frontend activation, client reload, database migration, and backend restart remain separate states.
 
 Report the selected lane, then continue when execution is requested.

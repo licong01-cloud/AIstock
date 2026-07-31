@@ -11,6 +11,7 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 
 ## Context
 
+- Prefer RTK for supported high-output interactive commands; capability fallback is allowed, RTK is not a gate, and no window may run `rtk trust` on its own.
 - Read project rules once, then use this skill, `task-card.md`, the compact Context Pack and direct code references.
 - After compaction/restart, run `resume` and use the Context Resume Digest hashes.
 - Machine JSON supports failure diagnosis and state recovery; normal execution uses compact Markdown/stdout artifacts.
@@ -26,6 +27,8 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 
 ## Implement
 
+- Read the compact task-card `runtime_contract`. `runtime_impact=unknown` is fail-closed. Backend/worker/scheduler fixes must persist in tracked source/config/migration and include fresh-process load evidence before PR readiness.
+- User backend start/stop/restart is never authorized by this skill or any workflow stage. Only the user may perform it unless the user separately authorizes this window for the current target.
 - BUG metadata and GitHub linkage use the workflow. A required scope expansion updates the issue record in the task worktree before implementation continues.
 - Ordinary BUGs use targeted snippets and ownership/catalog data; cited designs and T3 tasks add the relevant design acceptance items.
 - Production merge, services, DB writes and DDL execute only under explicit user authorization and report separately from source completion.
@@ -44,4 +47,5 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 2. Create the PR with `run --mode pr --validation-evidence "<command> -> passed" --push --create-pr`.
 3. Workflow/client changes add `workflow-smoke --changed-file <path> --module validation`.
 4. Merge aftercare uses `merge-finalizer` or `aistock-merge-aftercare`.
-5. Report branch, PR, commit, changed files, direct validation, production gates, delegated/nightly plans and runtime/DB impact.
+5. For a runtime BUG, use the compact restart fields by default; `restart-plan` only expands catalog/runbook refs. After the user restarts, run `post-restart-verify --bug-id BUG-XXX --target <target> --expected-identity <merge-sha>` and pass its ignored receipt to close-sync.
+6. Report branch, PR, commit, changed files, direct validation, production gates, delegated/nightly plans, runtime identity, post-restart gate and runtime/DB impact.

@@ -11,6 +11,7 @@ Use this skill only after the task is confirmed as new feature delivery or archi
 
 ## Context Budget
 
+- Prefer RTK for supported high-output interactive commands; unsupported calls use direct fallback, RTK is never a gate, and no window may self-authorize `rtk trust`.
 - Read project rules once, then this skill plus the approved Feature Card/design.
 - Use `Design Acceptance Index` ids after the first design read; do not repeatedly load the full design.
 - Do not read BUG workflow, docs workflow, quickstarts, archived standards, or unrelated module designs.
@@ -26,6 +27,7 @@ Use this skill only after the task is confirmed as new feature delivery or archi
 
 ## Local Gate And Delegation
 
+- Feature validation, merge, delegation and aftercare never authorize start/stop/restart of a user backend. Runtime-affecting delivery must persist across restart, prove fresh-process loading, and remain pending until the user's restart is followed by read-only identity and business smoke verification.
 - Codex keeps the minimal local gate: changed-file lint/compile, direct contract or fix-point tests, `git diff --check`, scope check, and production gates.
 - Delegate broad UI/API/business-flow, cross-module, LLM design-drift, and long-running validation through `aistock-validation-delegation` or nightly; consume compact receipts first.
 - Immediate deep validation remains only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.

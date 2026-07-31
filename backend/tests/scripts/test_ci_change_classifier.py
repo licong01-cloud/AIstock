@@ -79,6 +79,31 @@ def test_workflow_change_with_bug_metadata_uses_workflow_lane(tmp_path: Path) ->
     assert payload["workflow_validation_required"] is True
 
 
+def test_standard_skill_workflow_and_runtime_catalog_stay_in_focused_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "docs/standards/aistock_development_standard_v1.5_20260523.md",
+            "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+            "docs/standards/aistock_runtime_targets_v1.yaml",
+            ".codex/skills/fix-aistock-issue/SKILL.md",
+            ".claude/commands/fix-aistock-issue.md",
+            "scripts/aistock_issue_workflow.py",
+            "scripts/aistock_guardrail_scan.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["workflow_validation_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["frontend_required"] is False
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/test_aistock_guardrail_scan.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_issue_flow.py",
+    ]
+
+
 def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) -> None:
     advisory_payload = classifier.classify_changed_files(
         [

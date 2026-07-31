@@ -1,0 +1,52 @@
+schema_version: aistock_runtime_target_catalog_v1
+updated_at: "2026-07-31"
+policy:
+  backend_restart_owner: user
+  process_control_default: forbidden_without_explicit_target_authorization
+  post_restart_verify_mode: read_only
+  tracked_artifact_writes: forbidden
+targets:
+  backend-main:
+    runtime_kind: backend
+    source_globs:
+      - backend/**/*.py
+      - requirements*.txt
+      - pyproject.toml
+    production_port: 8001
+    isolated_validation_ports: [8011, 8012]
+    operator_runbook_ref: docs/operations/backend_runtime_runbook.md
+    expected_identity_ref: merged_commit
+    probes:
+      health_ref: http://127.0.0.1:8001/health
+      identity_ref: bug_record.runtime_contract.identity_ref
+      business_smoke_ref: bug_record.runtime_contract.business_smoke_ref
+      database_readback_ref: bug_record.runtime_contract.database_readback_ref
+    startup_budget_seconds: 120
+  tdx-go-backend:
+    runtime_kind: backend
+    source_globs:
+      - tdx-api-main/**/*.go
+    production_port: 19080
+    isolated_validation_ports: [19081, 19082]
+    operator_runbook_ref: docs/operations/tdx_runtime_runbook.md
+    expected_identity_ref: merged_commit
+    probes:
+      health_ref: bug_record.runtime_contract.health_ref
+      identity_ref: bug_record.runtime_contract.identity_ref
+      business_smoke_ref: bug_record.runtime_contract.business_smoke_ref
+      database_readback_ref: bug_record.runtime_contract.database_readback_ref
+    startup_budget_seconds: 120
+  worker-scheduler:
+    runtime_kind: worker_scheduler
+    source_globs:
+      - backend/services/rdagent_scheduler*.py
+      - backend/services/**/*worker*.py
+      - scripts/**/*scheduler*.py
+    operator_runbook_ref: docs/operations/worker_scheduler_runtime_runbook.md
+    expected_identity_ref: merged_commit
+    probes:
+      health_ref: bug_record.runtime_contract.health_ref
+      identity_ref: bug_record.runtime_contract.identity_ref
+      business_smoke_ref: bug_record.runtime_contract.business_smoke_ref
+      database_readback_ref: bug_record.runtime_contract.database_readback_ref
+    startup_budget_seconds: 180

@@ -58,6 +58,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - T0/T1 BUG, docs, cleanup, merge, and read-only tasks use compact context packs, task cards, ownership catalogs, CodeGraph/UA refs, and narrow code snippets instead of full standards.
 - After context compaction or client restart, use `resume` plus `task-card.md` Context Resume Digest hashes; do not re-read skills, project memory, standards README, quickstart, or RTK unless a digest changed, state is missing, or the user explicitly asks.
 - Keep code exploration bounded: use precise `rg`, avoid reprinting the same source range, and pause to summarize before broad scans when exploratory commands exceed the soft budget.
+- In interactive windows, prefer RTK wrappers for supported high-output commands. Use direct commands for unsupported PowerShell/file operations, record capability fallback when relevant, never self-authorize `rtk trust`, and do not make RTK availability or telemetry a gate. CI uses original deterministic commands.
 
 
 ## Feature Workflow Rules
@@ -76,6 +77,8 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Developer-client workflow entrypoints are synced by `python scripts/aistock_issue_workflow.py install-client --apply`; after `.codex/**` or `.claude/**` changes, run it after merge before old client windows rely on the new wrappers.
 - `scripts/issue_flow.py` is a lower-level helper, not the default entrypoint.
 - New BUG records must stay synchronized with GitHub Issues; a BUG JSON without `github_issue_number` and `github_issue_url` is only a triage draft and must not be merged into `main`.
+- Task cards carry a lazy runtime contract. `runtime_impact=unknown` fails closed; backend/worker/scheduler fixes require persistent-source plus fresh-process evidence before PR readiness, then remain `fixed_source_pending_user_restart` until the user's restart is followed by `post-restart-verify` identity and business-smoke evidence.
+- `restart-plan` expands only runtime catalog and operator-runbook references. `post-restart-verify` is read-only against runtime/API/DB and writes only ignored workflow receipts; pass the receipt to close-sync to persist final BUG/GitHub state.
 - Fix work must respect `allowed_write_scope`. If the fix requires files outside scope, stop and update scope before editing further.
 - Same-module issues may use one batch worktree only when module, risk, write scope, and validation chain are compatible. Each issue still needs independent evidence and closure mapping.
 - Do not close issues until validation evidence and production gates are recorded.
@@ -92,10 +95,11 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 ## Production Safety Gates
 
-- Do not start, stop, or restart production backend `8001`, frontend `3000`, TDX `19080`, or another concrete program unless the user explicitly authorizes that program.
+- Do not start, stop, or restart any user backend unless the user explicitly authorizes this window for that concrete target. BUG repair, validation, delegation, merge, finalizer, aftercare, cleanup, or prior authorization for another target does not transfer process-control authority. Runner-owned temporary processes are permitted only when explicitly marked and isolated on validation ports.
 - Database DDL and DML must first be validated in the existing DEV database. Production DDL/DML requires explicit authorization for the specific production target; report DEV validation, production authorization, migration execution, and readback verification as separate states.
 - Local validation ports are owned by `noxfile.py`, environment variables, and the active standard; use the workflow-provided defaults instead of hardcoding ad hoc ports here.
 - Runtime activation and code merge are separate steps.
+- Source merge, source cleanup, backend restart, post-restart verification, frontend activation, client reload, database migration and BUG close-sync are separate states. Source cleanup does not wait for a user restart but retains its own authorization boundary.
 - Authorization to merge a PR or branch covers the source merge and required source/metadata synchronization only. It does not authorize production DDL/DML, dependency installation, runtime activation, program control, or deletion of files, worktrees, or branches; report each state separately and request target-specific authorization where required.
 - Every completion report must state:
   - `production_ddl_gate`: `noop`, `applied_and_verified`, or `pending`.

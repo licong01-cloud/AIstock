@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import platform
 import re
 import shutil
 import stat
@@ -13,9 +14,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUGS_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
@@ -65,6 +70,10 @@ COMMITTABLE_BUG_REGISTRY_PATHS = (
 )
 FAST_PATH_TIER_ORDER = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
 VALIDATION_RECEIPT_SCHEMA = "aistock_validation_receipt_v1"
+RUNTIME_CONTRACT_SCHEMA = "aistock_bug_runtime_contract_v1"
+RUNTIME_VERIFY_RECEIPT_SCHEMA = "aistock_post_restart_verify_receipt_v1"
+RUNTIME_TARGET_CATALOG = REPO_ROOT / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
+RUNTIME_IMPACTS = {"none", "frontend", "client", "database", "backend", "worker_scheduler", "unknown"}
 VALIDATION_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
 VALIDATION_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -450,8 +459,18 @@ def _build_validation_receipts(
     evidence: Iterable[str],
     *,
     root: Path,
+    changed_files: Iterable[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     commit = _git(["rev-parse", "HEAD"], cwd=root, check=False).strip() or "unknown"
+    environment_identity = {
+        "os": os.name,
+        "platform": platform.system().lower(),
+        "python": platform.python_version(),
+        "executable": Path(sys.executable).name,
+    }
+    changed_files_digest = hashlib.sha256(
+        "\n".join(sorted(str(item).replace("\\", "/") for item in changed_files or [])).encode("utf-8")
+    ).hexdigest()
     receipts: list[dict[str, Any]] = []
     errors: list[str] = []
     for raw_item in evidence:
@@ -477,12 +496,24 @@ def _build_validation_receipts(
         if not evidence_kind:
             errors.append(f"validation command is not allowlisted: {command}")
             continue
-        normalized = f"{commit}\n{command}\n{result}\n{evidence_kind}\n{plan}"
+        identity_inputs = {
+            "commit": commit,
+            "changed_files_digest": changed_files_digest,
+            "command": command,
+            "result": result,
+            "evidence_kind": evidence_kind,
+            "plan": plan or None,
+            "environment": environment_identity,
+        }
+        normalized = json.dumps(identity_inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         receipts.append(
             {
                 "schema_version": VALIDATION_RECEIPT_SCHEMA,
                 "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
+                "reuse_key": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
                 "commit": commit,
+                "changed_files_digest": changed_files_digest,
+                "environment_identity": environment_identity,
                 "command": command,
                 "result": result,
                 "status": "passed",
@@ -761,6 +792,10 @@ def _compact_finish(value: Any) -> dict[str, Any] | None:
         "state_path",
         "events_path",
         "artifact_policy",
+        "backend_restart",
+        "post_restart_effective_gate",
+        "runtime_identity_match",
+        "next_user_action",
         "error",
     )
     if "validation_evidence" in value:
@@ -811,6 +846,9 @@ def _compact_postmortem(value: Any) -> dict[str, Any] | None:
         "production_gates",
         "postmortem_md_path",
         "postmortem_json_path",
+        "waiting_for_user_restart_minutes",
+        "backend_restart_owner",
+        "tool_telemetry_policy",
     )
     if isinstance(value.get("state"), dict):
         compact["state"] = _pick(value["state"], "state", "branch", "worktree", "pr_url", "commit", "next_actions")
@@ -1051,6 +1089,18 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact["blocking"] = payload.get("blocking")
     if payload.get("warnings"):
         compact["warnings_count"] = len(payload.get("warnings") or [])
+    for key in (
+        "backend_restart",
+        "post_restart_effective_gate",
+        "runtime_identity_match",
+        "next_user_action",
+        "target_id",
+        "operator_runbook_ref",
+        "process_control_performed",
+        "receipt_path",
+    ):
+        if key in payload:
+            compact[key] = payload.get(key)
     if "ui_intake_hints" in payload and isinstance(payload.get("ui_intake_hints"), dict):
         compact["ui_intake_hints"] = _pick(
             payload["ui_intake_hints"],
@@ -1478,6 +1528,303 @@ def _repo_rel(path: Path, root: Path | None = None) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except Exception:
         return str(path).replace("\\", "/")
+
+
+def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
+    if not path.exists():
+        raise WorkflowError(f"runtime target catalog is missing: {_repo_rel(path, root)}")
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if payload.get("schema_version") != "aistock_runtime_target_catalog_v1":
+        raise WorkflowError("runtime target catalog schema_version must be aistock_runtime_target_catalog_v1")
+    targets = payload.get("targets")
+    if not isinstance(targets, dict) or not targets:
+        raise WorkflowError("runtime target catalog targets must be a non-empty mapping")
+    seen_ports: dict[int, str] = {}
+    for target_id, target in targets.items():
+        if not isinstance(target, dict):
+            raise WorkflowError(f"runtime target {target_id} must be a mapping")
+        for field in ("runtime_kind", "source_globs", "operator_runbook_ref", "expected_identity_ref", "probes"):
+            if not target.get(field):
+                raise WorkflowError(f"runtime target {target_id} is missing {field}")
+        port = target.get("production_port")
+        if port is not None:
+            port = int(port)
+            if port in seen_ports:
+                raise WorkflowError(f"runtime target production_port conflict: {port} ({seen_ports[port]}, {target_id})")
+            seen_ports[port] = str(target_id)
+    return payload
+
+
+def _classify_runtime_impact(changed_files: Iterable[str]) -> dict[str, Any]:
+    normalized = sorted({str(item).replace("\\", "/").lstrip("./") for item in changed_files if str(item).strip()})
+    impacts: set[str] = set()
+    runtime_files: list[str] = []
+    target_ids: set[str] = set()
+    known_non_runtime_prefixes = (
+        ".codex/",
+        ".claude/",
+        ".github/",
+        "backend/tests/",
+        "docs/",
+        "frontend/tests/",
+        "tests/",
+    )
+    known_non_runtime_files = {
+        "scripts/aistock_issue_workflow.py",
+        "scripts/issue_flow.py",
+        "scripts/aistock_guardrail_scan.py",
+        "scripts/ci_change_classifier.py",
+        "noxfile.py",
+    }
+    for path in normalized:
+        lower = path.lower()
+        if path in known_non_runtime_files or lower.startswith(known_non_runtime_prefixes):
+            impacts.add("none")
+        elif lower.startswith("tdx-api-main/") and lower.endswith(".go"):
+            impacts.add("backend")
+            runtime_files.append(path)
+            target_ids.add("tdx-go-backend")
+        elif lower.startswith("backend/") and lower.endswith(".py"):
+            if "scheduler" in lower or "worker" in lower:
+                impacts.add("worker_scheduler")
+                target_ids.add("worker-scheduler")
+            else:
+                impacts.add("backend")
+                target_ids.add("backend-main")
+            runtime_files.append(path)
+        elif lower.startswith("frontend/src/"):
+            impacts.add("frontend")
+        elif lower.startswith(("migrations/", "backend/migrations/")) or lower.endswith(".sql"):
+            impacts.add("database")
+        elif lower.endswith((".md", ".json", ".yaml", ".yml")):
+            impacts.add("none")
+        else:
+            impacts.add("unknown")
+    effective = "none"
+    for candidate in ("unknown", "worker_scheduler", "backend", "database", "frontend", "client"):
+        if candidate in impacts:
+            effective = candidate
+            break
+    return {
+        "runtime_impact": effective,
+        "observed_impacts": sorted(impacts),
+        "runtime_files": runtime_files,
+        "target_ids": sorted(target_ids),
+    }
+
+
+def _resolve_runtime_ref(value: Any, explicit: dict[str, Any]) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    marker = "bug_record.runtime_contract."
+    if text.startswith(marker):
+        replacement = explicit.get(text[len(marker):])
+        return str(replacement).strip() if replacement else None
+    return text
+
+
+def build_runtime_contract(
+    *,
+    record: dict[str, Any],
+    changed_files: Iterable[str],
+    root: Path | None = None,
+    fresh_process_evidence: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    inferred = _classify_runtime_impact(changed_files)
+    explicit = record.get("runtime_contract") if isinstance(record.get("runtime_contract"), dict) else {}
+    runtime_impact = str(explicit.get("runtime_impact") or inferred["runtime_impact"])
+    if runtime_impact not in RUNTIME_IMPACTS:
+        runtime_impact = "unknown"
+    target_ids = flow._unique_strings(flow._as_list(explicit.get("target_ids")) + inferred["target_ids"])
+    target_id = str(explicit.get("target_id") or (target_ids[0] if len(target_ids) == 1 else "")).strip() or None
+    backend_restart_required = runtime_impact in {"backend", "worker_scheduler"}
+    blocking: list[str] = []
+    target: dict[str, Any] | None = None
+    catalog_ref = _repo_rel(root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml", root)
+    if backend_restart_required:
+        try:
+            catalog = _load_runtime_target_catalog(root)
+            raw_target = (catalog.get("targets") or {}).get(target_id)
+            if not isinstance(raw_target, dict):
+                blocking.append(f"runtime target is missing or ambiguous: {target_id or target_ids or 'none'}")
+            else:
+                probes = raw_target.get("probes") if isinstance(raw_target.get("probes"), dict) else {}
+                target = {
+                    **raw_target,
+                    "target_id": target_id,
+                    "probes": {key: _resolve_runtime_ref(value, explicit) for key, value in probes.items()},
+                }
+                for field in ("health_ref", "identity_ref", "business_smoke_ref"):
+                    if not target["probes"].get(field):
+                        blocking.append(f"runtime target {target_id} probe is incomplete: {field}")
+        except WorkflowError as exc:
+            blocking.append(str(exc))
+        if not explicit:
+            blocking.append("legacy or runtime BUG requires an explicit runtime_contract schema upgrade")
+    elif runtime_impact == "unknown":
+        blocking.append("runtime_impact is unknown and cannot be treated as none")
+    persistence_basis = str(explicit.get("persistence_basis") or ("git_tracked_source" if backend_restart_required else "not_required"))
+    observed_fresh_process_evidence = flow._unique_strings(
+        flow._as_list(explicit.get("fresh_process_evidence")) + list(fresh_process_evidence or [])
+    )
+    if backend_restart_required and persistence_basis in {"", "unknown", "not_required"}:
+        blocking.append("persistent fix basis is missing")
+    if backend_restart_required and not observed_fresh_process_evidence:
+        blocking.append("fresh-process load evidence is missing")
+    post_restart_gate = str(explicit.get("post_restart_effective_gate") or (
+        "pending_user_restart" if backend_restart_required else "not_required"
+    ))
+    return {
+        "schema_version": RUNTIME_CONTRACT_SCHEMA,
+        "runtime_impact": runtime_impact,
+        "runtime_contract_source": "explicit" if explicit else "inferred",
+        "backend_restart_required": backend_restart_required,
+        "backend_restart_owner": "user",
+        "target_id": target_id,
+        "target_ids": target_ids,
+        "catalog_ref": catalog_ref,
+        "operator_runbook_ref": (target or {}).get("operator_runbook_ref"),
+        "expected_identity_ref": (target or {}).get("expected_identity_ref"),
+        "persistence_basis": persistence_basis,
+        "fresh_process_evidence": observed_fresh_process_evidence,
+        "post_restart_effective_gate": post_restart_gate,
+        "runtime_identity_match": str(explicit.get("runtime_identity_match") or (
+            "pending" if backend_restart_required else "not_required"
+        )),
+        "activation_states": {
+            "backend_restart": "pending_user_action" if backend_restart_required else "not_required",
+            "frontend_activation": "required" if runtime_impact == "frontend" else "not_required",
+            "client_reload": "required" if runtime_impact == "client" else "not_required",
+            "database_migration": "required" if runtime_impact == "database" else "not_required",
+        },
+        "target": target,
+        "blocking": flow._unique_strings(blocking),
+        "pre_pr_ready": not blocking,
+    }
+
+
+def build_restart_plan(*, bug_id: str | None, issue_json: str | None) -> dict[str, Any]:
+    record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
+    canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
+    contract = build_runtime_contract(
+        record=record,
+        changed_files=flow._as_list(record.get("allowed_write_scope")),
+        fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
+        if isinstance(record.get("runtime_contract"), dict)
+        else [],
+    )
+    blocking = list(contract.get("blocking") or [])
+    return {
+        "schema_version": "aistock_backend_restart_plan_v1",
+        "generated_at": _utc_now(),
+        "bug_id": canonical_bug_id,
+        "workflow_gate": "operator_action_required" if contract.get("backend_restart_required") and not blocking else (
+            "not_required" if not contract.get("backend_restart_required") and not blocking else "blocked"
+        ),
+        "backend_restart_owner": "user",
+        "process_control_performed": False,
+        "target_id": contract.get("target_id"),
+        "catalog_ref": contract.get("catalog_ref"),
+        "operator_runbook_ref": contract.get("operator_runbook_ref"),
+        "expected_identity_ref": contract.get("expected_identity_ref"),
+        "post_restart_smoke_ref": ((contract.get("target") or {}).get("probes") or {}).get("business_smoke_ref"),
+        "blocking": blocking,
+        "next_user_action": "restart the catalog target, then run post-restart-verify" if not blocking and contract.get("backend_restart_required") else None,
+        "runtime_contract": contract,
+    }
+
+
+def _read_only_http_probe(name: str, url: str, *, timeout_seconds: float = 15.0) -> dict[str, Any]:
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        return {"name": name, "url": url, "status": "blocked", "error": "probe ref must be an http(s) read-only endpoint"}
+    request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/plain,*/*"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read(1024 * 1024)
+            status_code = int(getattr(response, "status", 200))
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"name": name, "url": url, "status": "failed", "error": str(exc)}
+    return {
+        "name": name,
+        "url": url,
+        "status": "passed" if 200 <= status_code < 400 else "failed",
+        "status_code": status_code,
+        "response_sha256": hashlib.sha256(body).hexdigest(),
+        "response_preview": body[:512].decode("utf-8", errors="replace"),
+    }
+
+
+def build_post_restart_verify(
+    *,
+    bug_id: str | None,
+    issue_json: str | None,
+    target_id: str,
+    expected_identity: str | None,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
+    canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
+    contract = build_runtime_contract(
+        record=record,
+        changed_files=flow._as_list(record.get("allowed_write_scope")),
+        fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
+        if isinstance(record.get("runtime_contract"), dict)
+        else [],
+    )
+    blocking = list(contract.get("blocking") or [])
+    if contract.get("target_id") != target_id:
+        blocking.append(f"target mismatch: contract={contract.get('target_id')} requested={target_id}")
+    expected = str(expected_identity or record.get("fix_commit") or record.get("merge_commit") or "").strip()
+    if not expected:
+        blocking.append("expected merged runtime identity is required")
+    probes = ((contract.get("target") or {}).get("probes") or {}) if isinstance(contract.get("target"), dict) else {}
+    results: list[dict[str, Any]] = []
+    if not blocking:
+        for name in ("health_ref", "identity_ref", "business_smoke_ref"):
+            results.append(_read_only_http_probe(name, str(probes[name]), timeout_seconds=timeout_seconds))
+        database_ref = probes.get("database_readback_ref")
+        if database_ref and str(database_ref).lower() != "not_required":
+            results.append(_read_only_http_probe("database_readback_ref", str(database_ref), timeout_seconds=timeout_seconds))
+    identity_result = next((item for item in results if item.get("name") == "identity_ref"), {})
+    identity_match = bool(expected and expected in str(identity_result.get("response_preview") or ""))
+    if results and not identity_match:
+        blocking.append("runtime identity response does not contain the expected merged identity")
+    failed_probes = [item.get("name") for item in results if item.get("status") != "passed"]
+    if failed_probes:
+        blocking.append(f"post-restart read-only probes failed: {failed_probes}")
+    passed = not blocking and bool(results)
+    receipt_path = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id / "post-restart-verify.json"
+    payload = {
+        "schema_version": RUNTIME_VERIFY_RECEIPT_SCHEMA,
+        "generated_at": _utc_now(),
+        "bug_id": canonical_bug_id,
+        "target_id": target_id,
+        "mode": "read_only",
+        "process_control_performed": False,
+        "tracked_files_written": False,
+        "expected_identity": expected or None,
+        "runtime_identity_match": identity_match,
+        "post_restart_effective_gate": "passed" if passed else "failed",
+        "workflow_gate": "verified" if passed else "blocked",
+        "probes": results,
+        "blocking": flow._unique_strings(blocking),
+        "receipt_path": _repo_rel(receipt_path),
+    }
+    _write_json(receipt_path, payload)
+    _write_state(
+        canonical_bug_id,
+        state="runtime_verified" if passed else "fixed_source_pending_user_restart",
+        post_restart_effective_gate=payload["post_restart_effective_gate"],
+        runtime_identity_match=identity_match,
+        post_restart_receipt=_repo_rel(receipt_path),
+        next_actions=["run_close_sync_with_post_restart_receipt"] if passed else ["user_restart_then_rerun_post_restart_verify"],
+        stop_reason=None if passed else "; ".join(payload["blocking"]),
+    )
+    return payload
 
 
 def _git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
@@ -4143,6 +4490,25 @@ def build_submit_bug_plan(
         record.setdefault("production_frontend_dependency_gate", "noop")
         record.setdefault("production_backend_dependency_gate", "noop")
         record["file_scope_contract"] = scope_file_contract
+        runtime_inference = _classify_runtime_impact(scope_files)
+        record["runtime_contract"] = {
+            "schema_version": RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": runtime_inference["runtime_impact"],
+            "backend_restart_owner": "user",
+            "target_id": runtime_inference["target_ids"][0] if len(runtime_inference["target_ids"]) == 1 else None,
+            "target_ids": runtime_inference["target_ids"],
+            "persistence_basis": (
+                "git_tracked_source"
+                if runtime_inference["runtime_impact"] in {"backend", "worker_scheduler"}
+                else "not_required"
+            ),
+            "fresh_process_evidence": [],
+            "post_restart_effective_gate": (
+                "pending_user_restart"
+                if runtime_inference["runtime_impact"] in {"backend", "worker_scheduler"}
+                else "not_required"
+            ),
+        }
         if github_issue_extra_sections:
             record["github_issue_extra_sections"] = [str(section) for section in github_issue_extra_sections if str(section or "").strip()]
         ui_hints = _ui_intake_hints(
@@ -4597,6 +4963,11 @@ def build_task_card(
     validation = fix_ready.get("validation_selection") if isinstance(fix_ready.get("validation_selection"), dict) else {}
     code_intel = _compact_code_intelligence_for_task_card(code_intelligence_summary)
     verification_budget = record.get("verification_budget") if isinstance(record.get("verification_budget"), dict) else _verification_budget_for_record(record)
+    runtime_contract = build_runtime_contract(
+        record=record,
+        changed_files=fix_ready.get("allowed_write_scope") or [],
+        root=root,
+    )
     return {
         "schema_version": "aistock_agent_task_card_v1",
         "generated_at": _utc_now(),
@@ -4636,6 +5007,20 @@ def build_task_card(
         "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
         "recommended_verification": fix_ready.get("recommended_verification") or validation.get("recommended_plans") or [],
         "production_gates": validation.get("production_gates") or _production_gates_payload(),
+        "runtime_contract": _pick(
+            runtime_contract,
+            "schema_version",
+            "runtime_impact",
+            "backend_restart_required",
+            "backend_restart_owner",
+            "target_id",
+            "catalog_ref",
+            "operator_runbook_ref",
+            "post_restart_effective_gate",
+            "runtime_identity_match",
+            "activation_states",
+            "blocking",
+        ),
         "verification_budget": verification_budget,
         "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
         "context_resume_digest": _workflow_context_resume_digest(
@@ -4664,6 +5049,9 @@ def build_task_card(
             "stop and summarize before more search if exploration commands exceed the soft budget",
             "after a test failure, rerun the failed nodeid or pytest --lf before any broader suite",
             "run the final related small matrix at most once; delegate broad/deep validation to VC/CI/nightly",
+            "prefer RTK for supported high-output interactive commands; record capability fallback and never make RTK a gate",
+            "never start, stop, or restart a user backend without explicit authorization for the current target",
+            "for backend/worker/scheduler fixes, attach persistent-source and fresh-process evidence before PR readiness",
             "edit only files under allowed_write_scope or stop for scope expansion",
             "run finish --plan-only before reporting the issue fixed",
         ],
@@ -4688,6 +5076,7 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
     resume_validation = (
         resume_digest.get("validation_loop_budget") if isinstance(resume_digest.get("validation_loop_budget"), dict) else {}
     )
+    runtime_contract = task_card.get("runtime_contract") if isinstance(task_card.get("runtime_contract"), dict) else {}
     lines = [
         f"# AIstock Agent Task Card {task_card.get('bug_id')}",
         "",
@@ -4711,6 +5100,16 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         "",
         "## Required Verification",
         *[f"- `{item}`" for item in task_card.get("required_verification") or ["l0"]],
+        "",
+        "## Runtime Contract",
+        f"- runtime_impact: `{runtime_contract.get('runtime_impact') or 'unknown'}`",
+        f"- backend_restart_required: `{str(bool(runtime_contract.get('backend_restart_required'))).lower()}`",
+        f"- backend_restart_owner: `{runtime_contract.get('backend_restart_owner') or 'user'}`",
+        f"- target_id: `{runtime_contract.get('target_id') or 'none'}`",
+        f"- catalog_ref: `{runtime_contract.get('catalog_ref') or 'none'}`",
+        f"- operator_runbook_ref: `{runtime_contract.get('operator_runbook_ref') or 'none'}`",
+        f"- post_restart_effective_gate: `{runtime_contract.get('post_restart_effective_gate') or 'unknown'}`",
+        *[f"- blocking: {item}" for item in runtime_contract.get("blocking") or []],
         "",
         "## Verification Budget",
         f"- budget: `{budget.get('budget') or 'not_recorded'}`",
@@ -5933,6 +6332,7 @@ def build_finish_plan(
     validation_evidence: list[str],
     plan_only: bool,
     allow_missing_evidence: bool,
+    fresh_process_evidence: list[str] | None = None,
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
@@ -5953,7 +6353,11 @@ def build_finish_plan(
     if codegraph_tests:
         validation["codegraph_suggested_tests"] = codegraph_tests
     raw_evidence = [item for item in validation_evidence if item.strip()]
-    validation_receipts, validation_evidence_errors = _build_validation_receipts(raw_evidence, root=REPO_ROOT)
+    validation_receipts, validation_evidence_errors = _build_validation_receipts(
+        raw_evidence,
+        root=REPO_ROOT,
+        changed_files=changed,
+    )
     validation_receipt_plan_coverage = _validation_receipt_plan_coverage(
         validation=validation,
         receipts=validation_receipts,
@@ -5961,6 +6365,14 @@ def build_finish_plan(
     if validation_receipts:
         validation_evidence_errors.extend(_validation_receipt_plan_errors(validation_receipt_plan_coverage))
     evidence = [_render_validation_receipt(receipt) for receipt in validation_receipts]
+    runtime_contract = build_runtime_contract(
+        record=record,
+        changed_files=changed,
+        root=REPO_ROOT,
+        fresh_process_evidence=fresh_process_evidence or [],
+    )
+    runtime_errors = list(runtime_contract.get("blocking") or [])
+    validation_evidence_errors.extend(runtime_errors)
     closure_ready = bool(evidence) and not validation_evidence_errors
     draft_ready = (
         (plan_only or (allow_missing_evidence and not evidence))
@@ -5981,6 +6393,7 @@ def build_finish_plan(
             "validation_receipts": validation_receipts,
             "validation_evidence_errors": validation_evidence_errors,
             "validation_receipt_plan_coverage": validation_receipt_plan_coverage,
+            "runtime_contract": runtime_contract,
             "closure_ready": closure_ready,
             "draft_ready": draft_ready,
             "code_intelligence": _compact_code_intelligence_for_finish(code_intelligence_summary, codegraph_tests),
@@ -6009,6 +6422,18 @@ def build_finish_plan(
             }
         ),
         production_gates=validation.get("production_gates") or {},
+        runtime_contract=_pick(
+            runtime_contract,
+            "runtime_impact",
+            "backend_restart_required",
+            "backend_restart_owner",
+            "target_id",
+            "catalog_ref",
+            "operator_runbook_ref",
+            "post_restart_effective_gate",
+            "runtime_identity_match",
+            "blocking",
+        ),
         code_intelligence={
             "status": code_intelligence_summary.get("status"),
             "context_ref": code_intelligence_summary.get("context_ref"),
@@ -6047,6 +6472,20 @@ def build_finish_plan(
         "recommended_verification": validation.get("recommended_plans") or [],
         "deferred_nightly_plans": validation.get("deferred_nightly_plans") or [],
         "production_gates": validation.get("production_gates") or {},
+        "runtime_contract": runtime_contract,
+        "backend_restart": {
+            "required": runtime_contract.get("backend_restart_required"),
+            "owner": runtime_contract.get("backend_restart_owner"),
+            "target_id": runtime_contract.get("target_id"),
+            "operator_runbook_ref": runtime_contract.get("operator_runbook_ref"),
+        },
+        "post_restart_effective_gate": runtime_contract.get("post_restart_effective_gate"),
+        "runtime_identity_match": runtime_contract.get("runtime_identity_match"),
+        "next_user_action": (
+            "after merge, restart the catalog target and run post-restart-verify"
+            if runtime_contract.get("backend_restart_required") and not runtime_errors
+            else None
+        ),
         "scope_check": pr_quality.get("scope_check"),
         "code_intelligence": {
             "status": code_intelligence_summary.get("status"),
@@ -7388,6 +7827,17 @@ def build_postmortem_plan(
     h6_summary = _h6_summary(timing, context_metrics, artifact_metrics)
     h7_code_intelligence = _code_intelligence_readiness(state.get("code_intelligence") or {})
     code_intelligence_efficiency = _code_intelligence_efficiency_summary(state.get("code_intelligence") or {})
+    waiting_for_user_restart_minutes: float | None = None
+    wait_started: datetime | None = None
+    for event in events:
+        event_name = str(event.get("event") or "")
+        event_time = _parse_utc_timestamp(str(event.get("timestamp") or ""))
+        if event_name in {"source_fixed_runtime_pending", "state:fixed_source_pending_user_restart"} and event_time:
+            wait_started = event_time
+        elif event_name in {"state:runtime_verified", "post_restart_verify"} and wait_started and event_time:
+            waiting_for_user_restart_minutes = round(max(0.0, (event_time - wait_started).total_seconds()) / 60.0, 3)
+            break
+    tool_telemetry = state.get("tool_telemetry") if isinstance(state.get("tool_telemetry"), dict) else None
     payload = {
         "schema_version": "aistock_issue_workflow_postmortem_v1",
         "generated_at": _utc_now(),
@@ -7427,6 +7877,10 @@ def build_postmortem_plan(
             "top_phase": h6_summary.get("top_phase"),
         },
         "production_gates": state.get("production_gates") or {},
+        "waiting_for_user_restart_minutes": waiting_for_user_restart_minutes,
+        "backend_restart_owner": "user",
+        "tool_telemetry": tool_telemetry,
+        "tool_telemetry_policy": "optional_no_probe" if tool_telemetry is None else "caller_supplied",
         "recent_events": events[-20:],
     }
     if embedded_pre_cleanup_fallback:
@@ -10598,6 +11052,7 @@ def build_merge_finalizer_plan(
 
     cleanup_complete = bool(cleanup_plan and cleanup_plan.get("workflow_gate") == "cleanup_done")
     close_sync_persisted = close_sync_pr_merge.get("workflow_gate") in {"merged", "already_merged"}
+    runtime_pending = close_sync.get("workflow_gate") == "fixed_source_pending_user_restart"
     close_sync_cleanup_complete = (
         close_sync_cleanup_plan is None or close_sync_cleanup_plan.get("workflow_gate") == "cleanup_done"
     )
@@ -10605,7 +11060,11 @@ def build_merge_finalizer_plan(
     payload.update(
         {
             "workflow_gate": "blocked" if final_blocking else (
-                "complete" if cleanup_complete and close_sync_persisted and close_sync_cleanup_complete else "close_sync_persisted"
+                "fixed_source_pending_user_restart"
+                if runtime_pending
+                else (
+                    "complete" if cleanup_complete and close_sync_persisted and close_sync_cleanup_complete else "close_sync_persisted"
+                )
             ),
             "blocking": final_blocking,
             "source_pr_check": source_pr_check,
@@ -10638,6 +11097,10 @@ def build_merge_finalizer_plan(
         )
     if close_sync_pr_merge.get("workflow_gate") == "ready_for_merge":
         payload["next_actions"].append("merge_close_sync_pr_after_checks_are_green")
+    if runtime_pending:
+        payload["next_actions"].extend(
+            ["user_restart_catalog_target", "run_post_restart_verify", "rerun_close_sync_with_post_restart_receipt"]
+        )
     if cleanup_plan is None and source_branch:
         payload["next_actions"].append("run_cleanup_after_merge")
     if cleanup_plan and cleanup_plan.get("workflow_gate") == "ready_for_cleanup":
@@ -10654,7 +11117,11 @@ def build_merge_finalizer_plan(
     for state_bug_id in canonical_bug_ids:
         _write_state(
             state_bug_id,
-            state="complete" if payload["workflow_gate"] == "complete" else "close_synced",
+            state=(
+                "complete"
+                if payload["workflow_gate"] == "complete"
+                else ("fixed_source_pending_user_restart" if runtime_pending else "close_synced")
+            ),
             pr_url=source_pr_url,
             commit=merge_commit,
             close_sync=close_sync,
@@ -10857,6 +11324,7 @@ def build_close_sync_plan(
     skip_github_check: bool = False,
     create_registry_worktree: bool = False,
     allow_current_worktree: bool = False,
+    post_restart_receipt: str | None = None,
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
@@ -10866,6 +11334,43 @@ def build_close_sync_plan(
         raise WorkflowError(f"{canonical_bug_id} has invalid status for close/sync: {status!r}")
     evidence = [item for item in validation_evidence or [] if item.strip()]
     gates = production_gates or _production_gates_payload()
+    runtime_contract = build_runtime_contract(
+        record=record,
+        changed_files=flow._as_list(record.get("allowed_write_scope")),
+        fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
+        if isinstance(record.get("runtime_contract"), dict)
+        else [],
+    )
+    runtime_receipt: dict[str, Any] | None = None
+    runtime_receipt_errors: list[str] = []
+    if post_restart_receipt:
+        receipt_path = Path(post_restart_receipt)
+        if not receipt_path.is_absolute():
+            receipt_path = REPO_ROOT / receipt_path
+        if not receipt_path.exists():
+            runtime_receipt_errors.append(f"post-restart receipt not found: {receipt_path}")
+        else:
+            runtime_receipt = _load_json(receipt_path)
+            if runtime_receipt.get("schema_version") != RUNTIME_VERIFY_RECEIPT_SCHEMA:
+                runtime_receipt_errors.append("post-restart receipt schema mismatch")
+            if str(runtime_receipt.get("bug_id") or "").upper() != canonical_bug_id:
+                runtime_receipt_errors.append("post-restart receipt BUG id mismatch")
+            if runtime_receipt.get("target_id") != runtime_contract.get("target_id"):
+                runtime_receipt_errors.append("post-restart receipt target mismatch")
+            if runtime_receipt.get("post_restart_effective_gate") != "passed":
+                runtime_receipt_errors.append("post-restart receipt gate is not passed")
+            if runtime_receipt.get("runtime_identity_match") is not True:
+                runtime_receipt_errors.append("post-restart receipt runtime identity did not match")
+            if not str(runtime_receipt.get("expected_identity") or "").strip():
+                runtime_receipt_errors.append("post-restart receipt expected identity is missing")
+            if merge_commit and str(runtime_receipt.get("expected_identity") or "").strip() != str(merge_commit).strip():
+                runtime_receipt_errors.append("post-restart receipt expected identity does not match merge commit")
+            if runtime_receipt.get("process_control_performed") is not False:
+                runtime_receipt_errors.append("post-restart receipt must not include process control")
+    runtime_gate_passed = bool(
+        not runtime_contract.get("backend_restart_required")
+        or (runtime_receipt and not runtime_receipt_errors)
+    )
     registry_worktree_plan = _maybe_create_close_sync_worktree(
         bug_id=canonical_bug_id,
         create=create_registry_worktree,
@@ -10884,6 +11389,8 @@ def build_close_sync_plan(
         raise WorkflowError("; ".join(apply_guard["blocking"]))
     output_dir = close_sync_root / WORKFLOW_ROOT / canonical_bug_id
     workflow_gate = "ready_for_apply" if pr_url and evidence else ("missing_validation_evidence" if pr_url else "missing_pr_url")
+    if pr_url and evidence and runtime_contract.get("backend_restart_required") and not runtime_gate_passed:
+        workflow_gate = "fixed_source_pending_user_restart"
     payload = {
         "schema_version": "aistock_issue_workflow_close_sync_v1",
         "generated_at": _utc_now(),
@@ -10900,6 +11407,18 @@ def build_close_sync_plan(
         "merge_commit": merge_commit,
         "validation_evidence": evidence,
         "production_gates": gates,
+        "backend_restart": {
+            "required": runtime_contract.get("backend_restart_required"),
+            "owner": "user",
+            "target_id": runtime_contract.get("target_id"),
+            "operator_runbook_ref": runtime_contract.get("operator_runbook_ref"),
+        },
+        "post_restart_effective_gate": "passed" if runtime_gate_passed else "pending_user_restart",
+        "runtime_identity_match": (
+            True if runtime_gate_passed and runtime_contract.get("backend_restart_required") else "not_required"
+        ),
+        "post_restart_receipt": post_restart_receipt,
+        "post_restart_receipt_errors": runtime_receipt_errors,
         "dry_run": not apply,
         "workflow_gate": workflow_gate,
         "required_checks": [
@@ -10907,6 +11426,7 @@ def build_close_sync_plan(
             "validation_evidence_attached",
             "BUG_JSON_and_GitHub_issue_status_aligned",
             "production_gates_reported",
+            "post_restart_runtime_identity_and_smoke_verified_when_backend_restart_required",
         ],
         "next_agent_steps": [
             "verify_closure_requirements_item_by_item",
@@ -10925,11 +11445,24 @@ def build_close_sync_plan(
         pr_check = _verify_pr_merged(pr_url, skip_github_check=skip_github_check)
         merge_commit = merge_commit or _merge_commit_from_pr_check(pr_check)
         closed_at = _closed_at_from_pr_check(pr_check)
+        if (
+            runtime_contract.get("backend_restart_required")
+            and runtime_receipt
+            and str(runtime_receipt.get("expected_identity") or "").strip() != str(merge_commit or "").strip()
+        ):
+            runtime_receipt_errors.append("post-restart receipt expected identity does not match verified PR merge commit")
+            runtime_gate_passed = False
+            payload["post_restart_effective_gate"] = "pending_user_restart"
+            payload["runtime_identity_match"] = False
+            payload["post_restart_receipt_errors"] = flow._unique_strings(runtime_receipt_errors)
         updated = dict(record)
+        runtime_pending = bool(runtime_contract.get("backend_restart_required") and not runtime_gate_passed)
         updated.update(
             {
-                "status": "fixed",
-                "closed_at": closed_at,
+                "status": "fixed_source_pending_user_restart" if runtime_pending else (
+                    "verified" if runtime_contract.get("backend_restart_required") else "fixed"
+                ),
+                "closed_at": None if runtime_pending else closed_at,
                 "fixed_at": _utc_now(),
                 "fix_commit": merge_commit,
                 "pr_url": pr_url,
@@ -10937,26 +11470,44 @@ def build_close_sync_plan(
                 **gates,
             }
         )
+        updated_runtime = dict(updated.get("runtime_contract") or {})
+        updated_runtime.update(
+            {
+                "backend_restart_owner": "user",
+                "post_restart_effective_gate": "pending_user_restart" if runtime_pending else (
+                    "passed" if runtime_contract.get("backend_restart_required") else "not_required"
+                ),
+                "runtime_identity_match": False if runtime_pending else (
+                    True if runtime_contract.get("backend_restart_required") else "not_required"
+                ),
+                "post_restart_receipt_ref": post_restart_receipt,
+            }
+        )
+        updated["runtime_contract"] = updated_runtime
         _write_json(source_path, updated)
         evidence_payload = {
             **payload,
-            "workflow_gate": "close_synced",
+            "workflow_gate": "fixed_source_pending_user_restart" if runtime_pending else "close_synced",
             "dry_run": False,
             "pr_check": pr_check,
             "merge_commit": merge_commit,
             "updated_bug_json": _repo_rel(source_path, close_sync_root),
         }
         github_sync = (
-            {"status": "skipped_github_check_disabled"}
-            if skip_github_check
-            else _sync_github_issue_after_close(updated, evidence_payload, root=close_sync_root)
+            {"status": "skipped_runtime_pending_user_restart"}
+            if runtime_pending
+            else (
+                {"status": "skipped_github_check_disabled"}
+                if skip_github_check
+                else _sync_github_issue_after_close(updated, evidence_payload, root=close_sync_root)
+            )
         )
         evidence_payload["github_issue_sync"] = github_sync
         _write_json(output_dir / "close-sync-evidence.json", evidence_payload)
         timing = _workflow_timing_summary(canonical_bug_id, root=close_sync_root)
         _write_state(
             canonical_bug_id,
-            state="close_synced",
+            state="fixed_source_pending_user_restart" if runtime_pending else "close_synced",
             root=close_sync_root,
             pr_url=pr_url,
             commit=merge_commit,
@@ -10964,12 +11515,18 @@ def build_close_sync_plan(
             production_gates=gates,
             github_issue_sync=github_sync,
             timing_summary=timing,
-            next_actions=["sync_local_main", "cleanup_after_merge"],
+            post_restart_effective_gate=updated_runtime["post_restart_effective_gate"],
+            runtime_identity_match=updated_runtime["runtime_identity_match"],
+            next_actions=(
+                ["user_restart_catalog_target", "run_post_restart_verify", "rerun_close_sync_with_receipt", "source_cleanup_independent"]
+                if runtime_pending
+                else ["sync_local_main", "cleanup_after_merge"]
+            ),
         )
         _append_event(
             canonical_bug_id,
-            event="close_sync_apply",
-            state="close_synced",
+            event="close_sync_apply" if not runtime_pending else "source_fixed_runtime_pending",
+            state="close_synced" if not runtime_pending else "fixed_source_pending_user_restart",
             root=close_sync_root,
             duration_seconds=time.monotonic() - started,
             evidence={
@@ -11405,9 +11962,28 @@ def cmd_finish(args: argparse.Namespace) -> int:
         validation_evidence=list(args.validation_evidence or []),
         plan_only=args.plan_only,
         allow_missing_evidence=args.allow_missing_evidence,
+        fresh_process_evidence=list(args.fresh_process_evidence or []),
     )
     _emit_args(payload, args)
     return 0 if payload.get("closure_ready") or payload.get("draft_ready") else 2
+
+
+def cmd_restart_plan(args: argparse.Namespace) -> int:
+    payload = build_restart_plan(bug_id=args.bug_id, issue_json=args.issue_json)
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"operator_action_required", "not_required"} else 2
+
+
+def cmd_post_restart_verify(args: argparse.Namespace) -> int:
+    payload = build_post_restart_verify(
+        bug_id=args.bug_id,
+        issue_json=args.issue_json,
+        target_id=args.target,
+        expected_identity=args.expected_identity,
+        timeout_seconds=args.timeout_seconds,
+    )
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") == "verified" else 2
 
 
 def cmd_triage_p0(args: argparse.Namespace) -> int:
@@ -11706,9 +12282,10 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
         skip_github_check=args.skip_github_check,
         create_registry_worktree=args.create_registry_worktree,
         allow_current_worktree=args.allow_current_worktree,
+        post_restart_receipt=args.post_restart_receipt,
     )
     _emit_args(payload, args)
-    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced"} else 2
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced", "fixed_source_pending_user_restart"} else 2
 
 
 def cmd_close_sync_batch(args: argparse.Namespace) -> int:
@@ -12047,10 +12624,36 @@ def build_parser() -> argparse.ArgumentParser:
     finish.add_argument("--base", default="origin/main")
     finish.add_argument("--head", default="HEAD")
     finish.add_argument("--validation-evidence", action="append")
+    finish.add_argument(
+        "--fresh-process-evidence",
+        action="append",
+        help="Evidence that an isolated fresh process loaded the persistent runtime fix; does not authorize user-backend restart.",
+    )
     finish.add_argument("--plan-only", action="store_true")
     finish.add_argument("--allow-missing-evidence", action="store_true")
     add_output_options(finish)
     finish.set_defaults(func=cmd_finish)
+
+    restart_plan = sub.add_parser(
+        "restart-plan",
+        help="Expand runtime target and operator runbook references without performing process control.",
+    )
+    restart_plan.add_argument("--bug-id")
+    restart_plan.add_argument("--issue-json")
+    add_output_options(restart_plan)
+    restart_plan.set_defaults(func=cmd_restart_plan)
+
+    post_restart_verify = sub.add_parser(
+        "post-restart-verify",
+        help="Run read-only runtime/API/DB probes after the user restarts a backend target.",
+    )
+    post_restart_verify.add_argument("--bug-id")
+    post_restart_verify.add_argument("--issue-json")
+    post_restart_verify.add_argument("--target", required=True)
+    post_restart_verify.add_argument("--expected-identity")
+    post_restart_verify.add_argument("--timeout-seconds", type=float, default=15.0)
+    add_output_options(post_restart_verify)
+    post_restart_verify.set_defaults(func=cmd_post_restart_verify)
 
     triage = sub.add_parser("triage-p0", help="List and group open/in-progress P0 BUG records.")
     triage.add_argument("--include-fixed", action="store_true")
@@ -12127,6 +12730,10 @@ def build_parser() -> argparse.ArgumentParser:
     close.add_argument("--apply", action="store_true")
     close.add_argument("--allow-missing-linkage", action="store_true")
     close.add_argument("--validation-evidence", action="append")
+    close.add_argument(
+        "--post-restart-receipt",
+        help="Ignored workflow receipt produced by post-restart-verify; required to close a runtime BUG after user restart.",
+    )
     close.add_argument("--merge-commit")
     close.add_argument("--production-ddl-gate", default="noop")
     close.add_argument("--production-frontend-dependency-gate", default="noop")

@@ -601,7 +601,7 @@ modules:
     parent_module: validation
     module_type: cross_cutting
     risk_level: high
-    description: Development standards guardrails, design-compliance review controls, changed-file gates, and baseline scans.
+    description: Development standards guardrails, design-compliance review controls, RTK/restart ownership contracts, runtime-target checks, changed-file gates, and baseline scans.
     description_zh: 覆盖开发规范 guardrail、设计方案完整实现复核、变更文件扫描、基线问题识别和高风险规则阻断。
     test_plans:
       required_on_change: [l0, guardrail_changed_files]

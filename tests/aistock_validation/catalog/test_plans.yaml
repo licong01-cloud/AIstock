@@ -138,7 +138,7 @@ plans:
     max_duration_seconds: 300
     evidence_kinds: [pytest]
   - plan_key: guardrail_changed_files
-    title: Development guardrail staged/changed files gate
+    title: Development guardrail and unauthorized backend process-control changed-files gate
     module: development_guardrails
     level: L0
     command_key: nox_guardrail_changed_files
