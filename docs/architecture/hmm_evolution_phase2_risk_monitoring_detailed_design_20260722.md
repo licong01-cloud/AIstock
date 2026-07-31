@@ -1476,7 +1476,7 @@ remediation decision 独立提交详细设计和用户确认，不能在实现�
 
 #### H. C-008-B3-REMEDIATION-DIAG-02：模型修订前证据闭合设计
 
-状态：`PROPOSED_PENDING_USER_APPROVAL_NOT_STARTED`。该项不批准任何模型修订；它在不运行 HMM 的前提下补齐两个会直接
+状态：`PROPOSED_PENDING_USER_APPROVAL_NOT_STARTED`。该项不批准任何模型修订；它在不运行 HMM 的前提下补齐会直接
 影响方案选择的证据缺口，避免同时修改 initialization、EM、covariance 与 transition 后无法识别真实因果。
 
 **1. initialization failure 分层事实。** 11个 failure 不是同一根因：
@@ -1494,26 +1494,49 @@ remediation decision 独立提交详细设计和用户确认，不能在实现�
 
 - approved feature name/order、raw float64 observation hash、row count、unique finite value count；
 - `min/max/mean/var_ddof0`、zero/non-positive/non-finite分类；
+- ordered train dates必须严格递增、`max_date<=approved train_end`，且profile的dataset/mapping/calendar/direct-level/input hashes
+  必须与formal train authority一致；不得读取semantic manifest或validation rows补足profile；
 - 对zero variance保存全部值是否exact zero、公式component hash、preprocess前后variance与source/provenance receipt；
 - 按family/level/feature聚合positive variance的count、min和固定分位数
   `q=[0,0.01,0.05,0.25,0.50,0.75,0.95,0.99,1]`，但不据此生成floor或acceptance threshold；
 - 324/324 profile、7/20维shape和formal train manifest identity任一不闭合即diagnostic failed，不静默跳过profile/feature。
 
+数值算法必须唯一：输入先验证为C-order little-endian float64且全部finite；`-0.0`在value identity中规范化为`+0.0`，
+但raw observation hash仍保留原始float64 bytes；unique count按规范化后的float64 bit pattern计算。mean使用`math.fsum(x)/N`，
+variance使用`math.fsum((x-mean)^2)/N`。positive variance按数值升序排列；对分位点`q`，令
+`h=(n-1)q`、`i=floor(h)`、`j=ceil(h)`，结果为`x_i+(h-i)*(x_j-x_i)`，`n=1`时返回唯一值。
+`n=0`时该family/level/feature distribution固定为`insufficient_evidence`、quantiles固定为null并保留count=0；它不覆盖逐profile
+zero-variance evidence，也不得生成floor。
+不得由NumPy/SciPy默认quantile method、普通`sum`或set/hash随机顺序补全算法。
+
 该证据用于区分：公式/样本域内真实常量、preprocess制造常量、source/provenance缺陷。若发现source或公式实现不符合已批准
 C-010 identity，必须单独登记BUG；若确认为真实常量，再由后续用户决策在“保持fail-closed”“显式inactive-dimension model identity”
 与“正reference prior”之间选择。后两项都会改变D3/model identity，不能在diagnostic脚本中默认采用。
 
-**3. likelihood 与 covariance fixed-point coupling。** 只回读本次artifact中163个fit-completed entry，不refit。逐entry重聚合：
+**3. likelihood 与 covariance fixed-point association。** 只使用本次artifact中163个fit-completed entry的train-only
+allowlisted projection，不refit。163条必须显式分层为139个`role=rejected`和24个`role=control`，不能把targeted sample
+描述为formal universe的随机或代表性样本。逐entry重聚合：
 
 - terminal/non-terminal delta、relative delta、iteration与D4-01-A signed distance；
 - D4-02-A `M-step relative residual`、dynamic-bound slack与anomaly mask；
-- likelihood failed/accepted-with-warning/accepted 与 covariance bounds/M-step residual 的2×N交叉矩阵；
-- 全体以及每个family/level分别保存 Pearson/Spearman 描述性统计，并保留逐entry raw pair list/hash；有效pair少于3、任一向量
-  为常量或含non-finite时显式 `insufficient_evidence`，不得伪造0 correlation。
+- cross matrix的row固定为likelihood
+  `accepted|accepted_with_warning|failed|insufficient_evidence`，column固定为covariance
+  `accepted|failed_bounds_only|failed_mstep_only|failed_bounds_and_mstep|invalid|insufficient_evidence`；每格保存count和ordered
+  entry identity/hash，不得使用“2×N”或实现自行合并状态；
+- correlation的`x`固定为每个entry最后一个comparable delta的`relative`；`y`分别固定为
+  `mstep_max_abs_relative_residual`、`covariance_min_lower_slack`、`covariance_min_upper_slack`和total anomaly cell count，
+  四组统计不得互相替代；
+- 分组固定为overall、每个`family/level`、每个`role`及每个`family/level/role`；每组保存role composition、ordered raw
+  `(entry_identity,x,y)` list/hash。有效pair少于3或任一向量为常量时，单组显式`insufficient_evidence`；任一raw pair
+  含non-finite则该group和顶层均以`hmm_risk_remediation_diag_numeric_non_finite`失败，不得降级为insufficient、伪造0
+  correlation或使其他组静默消失；
+- Pearson固定为centered-product numerator除以两个centered-square sum平方根；Spearman先按数值升序、ties取1-based average rank，
+  再对rank执行同一Pearson公式。所有accumulation使用`math.fsum`，不计算p-value、显著性或自动decision threshold。
 
 当前29个likelihood failure全部是terminal negative且低于已批准`-2e-5`边界，没有non-terminal negative；这只支持检查
-“hmmlearn终止步与final fixed-point residual是否耦合”，不支持放宽D4-01-A。若耦合证据成立，后续优先设计可回滚、可审计的
-monotonic EM/step-damping候选；若不成立，再独立设计covariance parameterization/prior。任何候选都必须使用新algorithm identity，
+“hmmlearn终止步与final fixed-point residual是否存在描述性关联”，不支持因果结论、放宽D4-01-A或自动选择EM/covariance方向。
+任何observed association都只能形成后续controlled-refit设计的输入；monotonic EM/step-damping或covariance
+parameterization/prior必须另立精确decision、保留current-profile control并取得用户确认。任何候选都必须使用新algorithm identity，
 禁止把negative step从history中删除或把post-fit参数投影成通过。
 
 **4. train-structure evidence重聚合。** 对163个completed entry回读D4-03 signed distance与完整hard sequence，按state和
@@ -1525,12 +1548,50 @@ D4-03-B、删除低频state或将soft posterior转为authority。
 temporal evidence failure；不得对其他seed/sector批量执行D6来挑选会通过validation的模型。只有未来经批准的train-only模型机制
 完成并经D5冻结新的selected identity后，才按现有D6-01-B执行唯一正式validation。
 
-**6. artifact与完成语义。** 唯一候选schema为 `hmm_risk_c008_b3_remediation_diag02_v1`，repo外append-only写入；绑定formal、
-blocker diagnostic、324-profile manifest和numeric environment SHA-256。顶层固定
+**6. train-only projection。** blocker artifact的完整bytes/canonical hash只用于authority验证；计算输入必须重新构造并hash
+allowlisted projection：`schema_version/diagnostic_contract/diagnostic_producer_commit/formal_authority/numeric_environment/`
+`numeric_environment_sha256/targeted_evidence`。projection不得包含`d6_replay`、semantic receipt、validation observation、future
+utility或semantic mapping；每个targeted entry只允许identity、role、train input hash、formal failed stages、training receipt、
+signed distances、hard train sequence和no-access/no-write flags。发现非allowlisted payload、entry自身
+`validation_accessed!=false`或`future_utility_accessed!=false`时，整个diagnostic以
+`hmm_risk_remediation_diag_train_projection_invalid`失败。读取完整artifact bytes以核验authority不等同于消费validation；
+`validation_accessed=false`只允许在上述projection hash与field-access audit同时成立时写入。
+
+**7. artifact、错误合同与完成语义。** 唯一候选schema为 `hmm_risk_c008_b3_remediation_diag02_v1`，repo外append-only写入。
+顶层必须包含：producer/source commit、formal/blocker canonical hashes、train projection hash、numeric environment hash、324-profile
+manifest/hash、variance evidence、11-entry initialization failure source evidence/hash、163-entry role-stratified association/structure
+evidence、section statuses、reason arrays、canonical receipt hash和全部side-effect flags。11-entry evidence必须保持8个persistent
+zero-variance与3个singleton cluster的exact identity/counts并引用原diagnostic entry/source receipt hash，不得重新运行KMeans或用324-profile
+variance替代singleton证据。顶层`status`只允许`diagnostic_complete|failed`；各统计group允许
+`complete|insufficient_evidence|failed`，但不得用group insufficient伪造数值或把必需raw evidence缺失降级为insufficient。
+
+稳定reason codes至少包括：
+
+- `hmm_risk_remediation_diag_authority_mismatch`；
+- `hmm_risk_remediation_diag_train_projection_invalid`；
+- `hmm_risk_remediation_diag_profile_manifest_incomplete`；
+- `hmm_risk_remediation_diag_profile_temporal_boundary_invalid`；
+- `hmm_risk_remediation_diag_variance_evidence_invalid`；
+- `hmm_risk_remediation_diag_initialization_source_mismatch`；
+- `hmm_risk_remediation_diag_statistic_insufficient`（仅group status，不使raw evidence缺失通过）；
+- `hmm_risk_remediation_diag_statistic_evidence_invalid`；
+- `hmm_risk_remediation_diag_numeric_non_finite`；
+- `hmm_risk_remediation_diag_artifact_collision`；
+- `hmm_risk_remediation_diag_artifact_write_failed`；
+- `hmm_risk_remediation_diag_readback_mismatch`。
+
+写入前目标已存在时只允许canonical-identical readback，否则collision fail；先写同目录唯一temporary file、flush/fsync、canonical
+readback通过后atomic rename，失败不得保留可被解析为complete的目标。顶层固定
 `hmm_refit_performed=false/selection_performed=false/validation_accessed=false/formal_acceptance_reexecuted=false/`
 `threshold_changed=false/model_write_performed=false/ready_artifact_write_performed=false/database_write_performed=false/`
-`runtime_action_performed=false`。只有324 profile、163 completed-entry coupling/structure evidence和全部canonical readback闭合时才可
-`diagnostic_complete`；该状态仍不使任何remediation implementation ready。
+`runtime_action_performed=false`。只有324/324 profile、11/11 initialization source evidence、139 rejected+24 control
+completed-entry evidence、全部必需cross-matrix/raw pair/structure evidence、projection boundary和canonical readback闭合时才可
+`diagnostic_complete`；该状态仍不使任何remediation
+implementation ready。
+
+**8. 计算预算。** 精确预算为324个train-profile单次scan、163个既有entry重聚合、0 KMeans、0 HMM fit、0 D5/D6。
+实现必须逐profile streaming，内存上限为一个最大profile的`rows*feature_count` float64 matrix加固定聚合器，不得把324个matrix
+同时常驻内存或复制为第二套dataset。输入只读、artifact repo外append-only；数据库写入、依赖安装、服务控制与runtime action均为0。
 
 唯一推荐顺序为先执行本no-fit诊断，再基于其结果提交最小的一项模型机制候选，不并行改变多个D3/D4/D5/D6合同。
 该推荐当前仍为待用户确认的diagnostic decision，不是新增模型gate或人工runtime审批。
@@ -2338,7 +2399,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 | signed-distance evidence 被反向用于放宽阈值或 validation 选 seed | DIAG-01 只计算批准边界距离且固定 `acceptance_decision_reexecuted=false`；D4 refit看不到validation/future utility，D6只replay既有selected seed且禁止reselection；任何模型/阈值变更另立精确decision并取得用户确认 |
 | 变长history/run tree的路径差异被误报为全部证据缺失 | 区分comparison的`missing_evidence_entry_count`与entry直接`missing_evidence`；前者只说明rejected/control numeric leaf路径不对称，只有后者可声明stage evidence不可用，禁止用null/default/control补齐 |
 | persistent zero variance 被当成普通seed failure | DIAG-01已固定`autocycle_all_core:L2/801207.SI/sf_dispersion_5d_neg`跨8个seed为exact-zero reference variance；DIAG-02先查公式/source/preprocess provenance，禁止扩大seed、静默加floor或删除feature |
-| 同时修改initialization、EM、covariance和transition导致因果不可归因 | DIAG-02先做no-fit full-profile与fixed-point coupling重聚合；后续每次只提交最小model mechanism候选，保留current control和完整raw receipt，不以多改动后的局部成功宣称根因闭合 |
+| 同时修改initialization、EM、covariance和transition导致因果不可归因 | DIAG-02先做no-fit full-profile与fixed-point association重聚合，且明确association不构成因果；后续每次只提交最小model mechanism候选，保留current control和完整raw receipt，不以多改动后的局部成功宣称根因闭合 |
 | 批量replay D6形成validation-driven model选择 | DIAG-02禁止新增validation访问；现有3-entry只解释已冻结selected identity。未来仅在train-only D5冻结新identity后执行唯一D6，失败不得reselection |
 | autocycle-only 冒充两-family 完成 | F-011-D 要求所有已批准 family 完整；legacy 缺失时保持 blocked |
 | 历史 mapping 的 industry/index code 双表示被随机选行 | classify 唯一规范化；等价 source rows 全量留 hash，非等价多映射 fail loud；禁止 `DISTINCT ON` |
@@ -2514,19 +2575,29 @@ diagnostic evidence的准确回填，不批准任何remediation实现、模型�
 
 ### 23.4 C-008-B3-REMEDIATION-DIAG-02 正式设计审核
 
-- **禁止简化/子集/POC**：`PASS_PROPOSED_DESIGN_COMPLETE`。设计覆盖formal四个family/level的324个唯一train profile、
-  blocker artifact中全部163个completed entry以及11个initialization failure；没有只处理`801207.SI`或单一covariance reason。
-- **禁止静默错误**：`PASS_PROPOSED_DESIGN_COMPLETE`。zero/non-positive/non-finite、formula/source/preprocess provenance、
-  相关统计样本不足/常量向量、profile/hash缺失均有fail-closed语义；不会用0 correlation、variance floor或control evidence伪造完成。
-- **禁止业务逻辑迁移**：`PASS_PROPOSED_DESIGN_COMPLETE`。no-fit诊断不改变7/20维feature、D3-D6、hard authority、seed schedule、
-  family/sector、selection或validation；inactive dimension、positive prior和model structure都只列为后续用户决策，不在诊断中采用。
-- **禁止未经确认的门禁和审批**：`PASS_PROPOSED_DESIGN_COMPLETE`。分位数、correlation和cross-matrix只作描述性evidence，
-  不成为acceptance；DIAG-02保持pending，未新增runtime人工确认或research方向淘汰流程。
-- **因果可区分性**：`PASS`。先区分persistent zero variance与seed-specific singleton，再检查terminal likelihood和M-step residual
-  coupling，最后重聚合hard-structure persistence；这一顺序避免同时修改多个mechanism造成不可归因结果。
+- **第二次审核修复**：`RESOLVED`。已补齐train-only allowlisted projection/hash，明确完整artifact authority hash不等同于消费其中
+  validation payload；`d6_replay`、semantic/utility/validation字段不得进入DIAG-02计算输入。
+- **第二次审核修复**：`RESOLVED`。已把模糊的`2×N`改为固定likelihood/covariance status matrix，固定四组correlation scalar、
+  overall/family/level/role分层、Pearson/Spearman/tie/quantile/float64算法和insufficient语义。
+- **第二次审核修复**：`RESOLVED`。描述性association不再推导因果或自动选择monotonic EM/covariance方向；任何model mechanism
+  必须进入新的controlled-refit design decision，保留current-profile control。
+- **第二次审核修复**：`RESOLVED`。schema已补齐section status、stable reason codes、collision、temporary write、fsync、atomic rename与
+  canonical readback；group insufficient不能覆盖raw evidence缺失。
+- **禁止简化/子集/POC**：`PASS_REPAIRED_PROPOSED_DESIGN_COMPLETE`。覆盖formal四个family/level的324个唯一train profile、
+  139 rejected+24 control completed entry以及11个initialization failure；没有只处理`801207.SI`或单一covariance reason。
+- **禁止静默错误**：`PASS_REPAIRED_PROPOSED_DESIGN_COMPLETE`。zero/non-positive/non-finite、formula/source/preprocess provenance、
+  projection越界、统计不足、profile/hash缺失、collision/readback均有typed fail-closed语义；不会用0 correlation、variance floor、
+  validation payload或control evidence伪造完成。
+- **禁止业务逻辑迁移**：`PASS_REPAIRED_PROPOSED_DESIGN_COMPLETE`。no-fit诊断不改变7/20维feature、D3-D6、hard authority、seed
+  schedule、family/sector、selection或validation；inactive dimension、positive prior和model structure都只列为后续用户决策。
+- **禁止未经确认的门禁和审批**：`PASS_REPAIRED_PROPOSED_DESIGN_COMPLETE`。分位数、association和cross-matrix只作描述性
+  evidence，不成为acceptance或因果决策；DIAG-02保持pending，未新增runtime人工确认或research方向淘汰流程。
+- **因果可区分性**：`PASS_REPAIRED`。先区分persistent zero variance与seed-specific singleton，再按role/family/level观察
+  terminal likelihood和M-step residual association，最后重聚合hard-structure persistence；不从targeted sample外推formal universe。
 
-综合审核结论：`PASS_PROPOSED_DIAGNOSTIC_DESIGN_PENDING_USER_APPROVAL`。该结论表示设计完整且可供用户决策，不表示DIAG-02
-已获批准或已执行，更不授权任何HMM refit、remediation实现、正式grid、selection、D6、model/READY、数据库或runtime动作。
+综合审核结论：`PASS_REPAIRED_PROPOSED_DIAGNOSTIC_DESIGN_PENDING_USER_APPROVAL`。第二次审核的五项阻塞缺口均已修复；
+该结论表示设计完整且可供用户决策，不表示DIAG-02已获批准或已执行，更不授权任何HMM refit、remediation实现、正式grid、
+selection、D6、model/READY、数据库或runtime动作。
 
 ## 24. 当前完成状态与下一步
 
