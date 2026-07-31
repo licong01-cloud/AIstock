@@ -19,7 +19,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-938",
-  "closed_at": "2026-07-31T19:11:20Z",
+  "closed_at": "2026-07-31T19:19:56Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -258,8 +258,8 @@
   },
   "first_seen_at": "2026-07-31T18:28:30.325598Z",
   "fix_branch": null,
-  "fix_commit": "b82fd400170d9a53c0a75de6e5dd4b521230ff0a",
-  "fixed_at": "2026-07-31T19:12:33.613369Z",
+  "fix_commit": "201498c113672c5c40fec1205b27c06d7eca3bb2",
+  "fixed_at": "2026-07-31T19:19:56Z",
   "github_issue_number": 2996,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2996",
   "last_seen_at": "2026-07-31T18:28:30.325598Z",
@@ -267,7 +267,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2999",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3000",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
