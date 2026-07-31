@@ -80,10 +80,12 @@ from .facade_projection import (
 from .locked_surface import PINNED_SOURCE_ROOT
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     hash_hex_v1,
+    json_safe_evidence_v1,
     thaw_json_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_registry import (
     CompatibilityStatusV1,
+    ExecutionAlgoPluginV2,
     PluginCatalogRuntimeV2,
     PluginRouteCompatibilityReceiptV1,
     callable_ref_v1,
@@ -2175,7 +2177,91 @@ def build_vnpy_facade_algorithm_bindings_v2(
     return tuple(sorted(bindings, key=lambda item: item.algo_code))
 
 
-def build_vnpy_facade_conformance_set_v2(
+def _probe_catalog_factory_v2(
+    *,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    descriptor: Any,
+    characterization: VnpyFacadeAlgorithmCharacterizationReceiptV2,
+    binding: VnpyFacadeAlgorithmBindingV2,
+    facade_backed: bool,
+) -> None:
+    """Execute the catalog-bound validator and factory before PASSED publication."""
+
+    validator = catalog_runtime.process_bindings.resolve(descriptor.config_validator_binding_id)
+    factory = catalog_runtime.process_bindings.resolve(descriptor.factory_binding_id)
+    if validator is None or factory is None:
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+            "conformance factory probe requires exact catalog process bindings",
+            context={
+                "plugin_key": descriptor.plugin_key.canonical_payload_v1(),
+                "factory_binding_id": descriptor.factory_binding_id,
+                "config_validator_binding_id": descriptor.config_validator_binding_id,
+                "factory_present": factory is not None,
+                "config_validator_present": validator is not None,
+            },
+        )
+    probe_config = thaw_json_v1(characterization.canonical_factory_probe_config)
+    try:
+        validated = validator(descriptor.manifest, probe_config)
+        if thaw_json_v1(validated) != probe_config:
+            raise ValueError("catalog-bound config validator changed the canonical probe config")
+        first = factory(probe_config)
+        second = factory(probe_config)
+    except VnpyFacadeContractError:
+        raise
+    except Exception as exc:
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+            "catalog-bound factory probe failed",
+            context={
+                "plugin_key": descriptor.plugin_key.canonical_payload_v1(),
+                "factory_binding_id": descriptor.factory_binding_id,
+                "error": json_safe_evidence_v1(exc),
+            },
+        ) from exc
+    if first is second:
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+            "catalog-bound factory returned shared mutable plugin state",
+            context={"plugin_key": descriptor.plugin_key.canonical_payload_v1()},
+        )
+    if facade_backed:
+        valid = type(first) is VnpyFacadeBackedPluginAdapterV1 and type(second) is VnpyFacadeBackedPluginAdapterV1
+        if valid:
+            first_binding, first_class_ref = first.conformance_runtime_binding_readback_v1()
+            second_binding, second_class_ref = second.conformance_runtime_binding_readback_v1()
+            valid = (
+                first.manifest == descriptor.manifest
+                and second.manifest == descriptor.manifest
+                and first_binding == binding
+                and second_binding == binding
+                and first_class_ref == binding.class_ref
+                and second_class_ref == binding.class_ref
+            )
+    else:
+        valid = (
+            isinstance(first, ExecutionAlgoPluginV2)
+            and isinstance(second, ExecutionAlgoPluginV2)
+            and not isinstance(first, VnpyFacadeBackedPluginAdapterV1)
+            and not isinstance(second, VnpyFacadeBackedPluginAdapterV1)
+            and first.manifest == descriptor.manifest
+            and second.manifest == descriptor.manifest
+        )
+    if not valid:
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+            "catalog-bound factory probe does not close over its exact runtime disposition",
+            context={
+                "plugin_key": descriptor.plugin_key.canonical_payload_v1(),
+                "facade_backed": facade_backed,
+                "first_type": f"{type(first).__module__}.{type(first).__qualname__}",
+                "second_type": f"{type(second).__module__}.{type(second).__qualname__}",
+            },
+        )
+
+
+def _build_vnpy_facade_conformance_set_v2(
     *,
     catalog_runtime: PluginCatalogRuntimeV2,
     gateway_catalog: GatewayCapabilityCatalogV1,
@@ -2183,24 +2269,34 @@ def build_vnpy_facade_conformance_set_v2(
     source_manifest: VnpyFacadeSourceManifestV1,
     characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
     algorithm_bindings_v2: tuple[VnpyFacadeAlgorithmBindingV2, ...],
+    expected_algo_codes: tuple[str, ...],
+    facade_backed_algo_codes: frozenset[str],
 ) -> VnpyFacadeConformanceSetV2:
     if not isinstance(catalog_runtime, PluginCatalogRuntimeV2):
         raise TypeError("catalog_runtime must be PluginCatalogRuntimeV2")
     strict_gateway = GatewayCapabilityCatalogV1.model_validate(gateway_catalog.model_dump(mode="python"), strict=True)
     if not isinstance(characterization_authority_v2, VnpyFacadeCharacterizationAuthorityV2):
         raise TypeError("characterization_authority_v2 must be sealed V2 characterization authority")
+    if (
+        type(expected_algo_codes) is not tuple
+        or not expected_algo_codes
+        or tuple(sorted(expected_algo_codes)) != expected_algo_codes
+        or len(expected_algo_codes) != len(set(expected_algo_codes))
+        or not facade_backed_algo_codes.issubset(set(expected_algo_codes))
+    ):
+        raise TypeError("conformance evaluator expected algorithm/disposition authority is invalid")
     bindings = tuple(sorted(algorithm_bindings_v2, key=lambda item: item.algo_code))
     if len(bindings) != len({item.algo_code for item in bindings}):
         raise ValueError("algorithm_bindings_v2 must be unique by algo_code")
     binding_by_algo = {item.algo_code: item for item in bindings}
     snapshot = catalog_runtime.snapshot
     descriptors = tuple(item for item in snapshot.registration_descriptors if item.manifest.required_facade_methods)
-    expected_algos = tuple(sorted(item.manifest.algo_code for item in descriptors))
-    if expected_algos != ("BEST_LIMIT_MINIQMT", "SNIPER_MINIQMT", "TWAP_LITE_MINIQMT"):
+    actual_algo_codes = tuple(sorted(item.manifest.algo_code for item in descriptors))
+    if actual_algo_codes != expected_algo_codes:
         raise VnpyFacadeContractError(
             "MINIQMT_VNPY_FACADE_CONFORMANCE_RECEIPT_INVALID",
-            "K4-B current catalog facade descriptor set differs from current-three authority",
-            context={"actual_algo_codes": list(expected_algos)},
+            "facade descriptor set differs from its exact conformance authority",
+            context={"expected_algo_codes": list(expected_algo_codes), "actual_algo_codes": list(actual_algo_codes)},
         )
     k1_by_key = {item.plugin_key: item for item in snapshot.pinned_compatibility_receipts}
     receipts: list[VnpyFacadeConformanceReceiptV2] = []
@@ -2218,6 +2314,13 @@ def build_vnpy_facade_conformance_set_v2(
                 "current-three descriptor lacks K1 or K4 algorithm authority",
                 context={"plugin_key": plugin_key.canonical_payload_v1()},
             )
+        _probe_catalog_factory_v2(
+            catalog_runtime=catalog_runtime,
+            descriptor=descriptor,
+            characterization=characterization,
+            binding=binding,
+            facade_backed=manifest.algo_code in facade_backed_algo_codes,
+        )
         route = PluginRouteCompatibilityReceiptV1.create(
             catalog_snapshot=snapshot,
             plugin_key=plugin_key,
@@ -2236,13 +2339,23 @@ def build_vnpy_facade_conformance_set_v2(
                 )
                 for item in route.ordered_failures
             )
+        runtime_disposition = (
+            VnpyFacadeRuntimeBindingDispositionV1.FACADE_BACKED_ADAPTER
+            if manifest.algo_code in facade_backed_algo_codes
+            else VnpyFacadeRuntimeBindingDispositionV1.PURE_PLUGIN_SHADOW_CONFORMANCE
+        )
+        command_disposition = (
+            VnpyFacadeCommandAuthorityDispositionV1.SHADOW_ONLY_K2_V1
+            if manifest.algo_code in facade_backed_algo_codes
+            else VnpyFacadeCommandAuthorityDispositionV1.NOT_APPLICABLE_PURE_PLUGIN
+        )
         receipt = VnpyFacadeConformanceReceiptV2.create(
             plugin_id=manifest.plugin_id,
             plugin_version=manifest.plugin_version,
             algo_code=manifest.algo_code,
             manifest_sha256=manifest.manifest_sha256,
-            runtime_binding_disposition=VnpyFacadeRuntimeBindingDispositionV1.PURE_PLUGIN_SHADOW_CONFORMANCE,
-            command_authority_disposition=VnpyFacadeCommandAuthorityDispositionV1.NOT_APPLICABLE_PURE_PLUGIN,
+            runtime_binding_disposition=runtime_disposition,
+            command_authority_disposition=command_disposition,
             pinned_compatibility_receipt_sha256=k1.receipt_sha256,
             requirement_sha256=k1.requirement_sha256,
             surface_sha256=k1.surface_sha256,
@@ -2275,14 +2388,14 @@ def build_vnpy_facade_conformance_set_v2(
                 source_execution_set_sha256=execution_set.execution_set_sha256,
                 algorithm_characterization_receipt_v2_sha256=characterization.receipt_sha256,
                 algorithm_binding_sha256=binding.binding_sha256,
-                runtime_binding_disposition=VnpyFacadeRuntimeBindingDispositionV1.PURE_PLUGIN_SHADOW_CONFORMANCE,
-                command_authority_disposition=VnpyFacadeCommandAuthorityDispositionV1.NOT_APPLICABLE_PURE_PLUGIN,
+                runtime_binding_disposition=runtime_disposition,
+                command_authority_disposition=command_disposition,
             )
         )
     if any(item.status is not VnpyFacadeCompatibilityStatusV1.PASSED for item in receipts):
         raise VnpyFacadeContractError(
             "MINIQMT_VNPY_FACADE_CONFORMANCE_RECEIPT_INVALID",
-            "current-three V2 conformance contains route or component failures; no partial set is published",
+            "facade conformance contains route or component failures; no partial set is published",
             context={
                 "failed_plugins": [
                     item.plugin_id for item in receipts if item.status is not VnpyFacadeCompatibilityStatusV1.PASSED
@@ -2308,7 +2421,53 @@ def build_vnpy_facade_conformance_set_v2(
     )
 
 
-def validate_vnpy_facade_conformance_set_against_authority_v2(
+def build_vnpy_facade_conformance_set_v2(
+    *,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+    algorithm_bindings_v2: tuple[VnpyFacadeAlgorithmBindingV2, ...],
+) -> VnpyFacadeConformanceSetV2:
+    """K4 writer: retain the exact current-three pure-plugin semantics."""
+
+    return _build_vnpy_facade_conformance_set_v2(
+        catalog_runtime=catalog_runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization_authority_v2,
+        algorithm_bindings_v2=algorithm_bindings_v2,
+        expected_algo_codes=("BEST_LIMIT_MINIQMT", "SNIPER_MINIQMT", "TWAP_LITE_MINIQMT"),
+        facade_backed_algo_codes=frozenset(),
+    )
+
+
+def build_vnpy_facade_full_five_conformance_set_v2(
+    *,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+    algorithm_bindings_v2: tuple[VnpyFacadeAlgorithmBindingV2, ...],
+) -> VnpyFacadeConformanceSetV2:
+    """K5 writer: one full-five set with only Iceberg and Stop facade-backed."""
+
+    return _build_vnpy_facade_conformance_set_v2(
+        catalog_runtime=catalog_runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization_authority_v2,
+        algorithm_bindings_v2=algorithm_bindings_v2,
+        expected_algo_codes=("BEST_LIMIT_MINIQMT", "ICEBERG", "SNIPER_MINIQMT", "STOP", "TWAP_LITE_MINIQMT"),
+        facade_backed_algo_codes=frozenset({"ICEBERG", "STOP"}),
+    )
+
+
+def _validate_vnpy_facade_conformance_set_against_authority_v2(
     *,
     conformance_set: VnpyFacadeConformanceSetV2,
     catalog_runtime: PluginCatalogRuntimeV2,
@@ -2316,6 +2475,8 @@ def validate_vnpy_facade_conformance_set_against_authority_v2(
     facade_contract: VnpyFacadeContractV1,
     source_manifest: VnpyFacadeSourceManifestV1,
     characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+    expected_algo_codes: tuple[str, ...],
+    facade_backed_algo_codes: frozenset[str],
 ) -> VnpyFacadeConformanceAuthorityV2:
     supplied = VnpyFacadeConformanceSetV2.model_validate(conformance_set.model_dump(mode="python"), strict=True)
     if not isinstance(characterization_authority_v2, VnpyFacadeCharacterizationAuthorityV2):
@@ -2326,13 +2487,15 @@ def validate_vnpy_facade_conformance_set_against_authority_v2(
         facade_contract=facade_contract,
         source_manifest=source_manifest,
     )
-    expected = build_vnpy_facade_conformance_set_v2(
+    expected = _build_vnpy_facade_conformance_set_v2(
         catalog_runtime=catalog_runtime,
         gateway_catalog=gateway_catalog,
         facade_contract=facade_contract,
         source_manifest=source_manifest,
         characterization_authority_v2=characterization,
         algorithm_bindings_v2=bindings,
+        expected_algo_codes=expected_algo_codes,
+        facade_backed_algo_codes=facade_backed_algo_codes,
     )
     if supplied != expected:
         raise VnpyFacadeContractError(
@@ -2376,6 +2539,52 @@ def validate_vnpy_facade_conformance_set_against_authority_v2(
     )
 
 
+def validate_vnpy_facade_conformance_set_against_authority_v2(
+    *,
+    conformance_set: VnpyFacadeConformanceSetV2,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+) -> VnpyFacadeConformanceAuthorityV2:
+    """K4 readback: retain the exact current-three pure-plugin authority."""
+
+    return _validate_vnpy_facade_conformance_set_against_authority_v2(
+        conformance_set=conformance_set,
+        catalog_runtime=catalog_runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization_authority_v2,
+        expected_algo_codes=("BEST_LIMIT_MINIQMT", "SNIPER_MINIQMT", "TWAP_LITE_MINIQMT"),
+        facade_backed_algo_codes=frozenset(),
+    )
+
+
+def validate_vnpy_facade_full_five_conformance_set_against_authority_v2(
+    *,
+    conformance_set: VnpyFacadeConformanceSetV2,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+) -> VnpyFacadeConformanceAuthorityV2:
+    """K5 readback: strict full-five source/catalog/gateway authority."""
+
+    return _validate_vnpy_facade_conformance_set_against_authority_v2(
+        conformance_set=conformance_set,
+        catalog_runtime=catalog_runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization_authority_v2,
+        expected_algo_codes=("BEST_LIMIT_MINIQMT", "ICEBERG", "SNIPER_MINIQMT", "STOP", "TWAP_LITE_MINIQMT"),
+        facade_backed_algo_codes=frozenset({"ICEBERG", "STOP"}),
+    )
+
+
 __all__ = [
     "VnpyFacadeCharacterizationAuthorityV2",
     "VnpyFacadeDeterministicUniformV1",
@@ -2388,6 +2597,7 @@ __all__ = [
     "build_vnpy_facade_characterization_receipt_v1",
     "build_vnpy_facade_conformance_set_v1",
     "build_vnpy_facade_conformance_set_v2",
+    "build_vnpy_facade_full_five_conformance_set_v2",
     "build_vnpy_facade_isolated_module_bindings_v1",
     "build_vnpy_facade_contract_v1",
     "build_vnpy_facade_implementation_bindings_v1",
@@ -2407,4 +2617,5 @@ __all__ = [
     "readback_vnpy_facade_terminal_mappings_v1",
     "validate_vnpy_facade_characterization_authority_v2",
     "validate_vnpy_facade_conformance_set_against_authority_v2",
+    "validate_vnpy_facade_full_five_conformance_set_against_authority_v2",
 ]
