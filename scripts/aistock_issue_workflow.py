@@ -3228,6 +3228,38 @@ def _git_worktree_add_new_branch(
     _git(["worktree", "add", "-b", branch, str(worktree), base], cwd=cwd)
 
 
+def _refresh_reused_close_sync_worktree(
+    *,
+    worktree: Path,
+    branch: str,
+    label: str,
+) -> tuple[dict[str, Any], str]:
+    git = _git_snapshot(worktree)
+    if not git.get("ok"):
+        raise WorkflowError(f"target {label} worktree is not a git checkout: {worktree}")
+    if git.get("dirty"):
+        raise WorkflowError(f"target {label} worktree is dirty: {worktree}")
+    if git.get("branch") != branch:
+        raise WorkflowError(
+            f"target {label} worktree branch mismatch: expected={branch} actual={git.get('branch')}"
+        )
+    head = str(git.get("head") or "")
+    origin_main = str(git.get("origin_main") or "")
+    if not head or not origin_main or head == origin_main:
+        return git, "current"
+    behind = _run_command(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=worktree)
+    if behind.get("ok"):
+        _git(["merge", "--ff-only", "origin/main"], cwd=worktree)
+        refreshed = _git_snapshot(worktree)
+        if refreshed.get("head") != refreshed.get("origin_main"):
+            raise WorkflowError(f"target {label} worktree is stale after fast-forward: {worktree}")
+        return refreshed, "fast_forwarded"
+    ahead = _run_command(["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"], cwd=worktree)
+    if ahead.get("ok"):
+        return git, "ahead_with_task_commits"
+    raise WorkflowError(f"target {label} worktree diverged from origin/main: {worktree}")
+
+
 def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: bool) -> dict[str, Any]:
     branch, worktree = _close_sync_worktree_names(bug_id=bug_id)
     plan = {
@@ -3241,29 +3273,26 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
         return plan
     _git(["fetch", "origin", "main"])
     if worktree.exists():
-        git = _git_snapshot(worktree)
-        if not git.get("ok"):
-            raise WorkflowError(f"target close-sync worktree is not a git checkout: {worktree}")
-        if git.get("dirty"):
-            raise WorkflowError(f"target close-sync worktree is dirty: {worktree}")
-        if git.get("branch") != branch:
-            raise WorkflowError(
-                f"target close-sync worktree branch mismatch: expected={branch} actual={git.get('branch')}"
-            )
-        if git.get("head") and git.get("origin_main") and git.get("head") != git.get("origin_main"):
-            _git(["merge", "--ff-only", "origin/main"], cwd=worktree)
-            git = _git_snapshot(worktree)
-            if git.get("head") != git.get("origin_main"):
-                raise WorkflowError(f"target close-sync worktree is stale after fast-forward: {worktree}")
+        git, relation = _refresh_reused_close_sync_worktree(
+            worktree=worktree,
+            branch=branch,
+            label="close-sync",
+        )
+        if relation == "fast_forwarded":
             plan["fast_forwarded"] = True
+        elif relation == "ahead_with_task_commits":
+            plan["ahead_with_task_commits"] = True
         plan["reused"] = True
         plan["git"] = git
         return plan
     if _git_ref_exists(branch):
         _git(["worktree", "add", str(worktree), branch])
-        git = _git_snapshot(worktree)
-        if git.get("head") != git.get("origin_main"):
-            _git(["merge", "--ff-only", "origin/main"], cwd=worktree)
+        _git_state, relation = _refresh_reused_close_sync_worktree(
+            worktree=worktree,
+            branch=branch,
+            label="close-sync",
+        )
+        plan[relation] = True
         plan["reused_branch"] = True
     else:
         _git_worktree_add_new_branch(worktree=worktree, branch=branch)
@@ -3290,29 +3319,26 @@ def _maybe_create_close_sync_batch_worktree(
         return plan
     _git(["fetch", "origin", "main"])
     if worktree.exists():
-        git = _git_snapshot(worktree)
-        if not git.get("ok"):
-            raise WorkflowError(f"target close-sync batch worktree is not a git checkout: {worktree}")
-        if git.get("dirty"):
-            raise WorkflowError(f"target close-sync batch worktree is dirty: {worktree}")
-        if git.get("branch") != branch:
-            raise WorkflowError(
-                f"target close-sync batch worktree branch mismatch: expected={branch} actual={git.get('branch')}"
-            )
-        if git.get("head") and git.get("origin_main") and git.get("head") != git.get("origin_main"):
-            _git(["merge", "--ff-only", "origin/main"], cwd=worktree)
-            git = _git_snapshot(worktree)
-            if git.get("head") != git.get("origin_main"):
-                raise WorkflowError(f"target close-sync batch worktree is stale after fast-forward: {worktree}")
+        git, relation = _refresh_reused_close_sync_worktree(
+            worktree=worktree,
+            branch=branch,
+            label="close-sync batch",
+        )
+        if relation == "fast_forwarded":
             plan["fast_forwarded"] = True
+        elif relation == "ahead_with_task_commits":
+            plan["ahead_with_task_commits"] = True
         plan["reused"] = True
         plan["git"] = git
         return plan
     if _git_ref_exists(branch):
         _git(["worktree", "add", str(worktree), branch])
-        git = _git_snapshot(worktree)
-        if git.get("head") != git.get("origin_main"):
-            _git(["merge", "--ff-only", "origin/main"], cwd=worktree)
+        _git_state, relation = _refresh_reused_close_sync_worktree(
+            worktree=worktree,
+            branch=branch,
+            label="close-sync batch",
+        )
+        plan[relation] = True
         plan["reused_branch"] = True
     else:
         _git_worktree_add_new_branch(worktree=worktree, branch=branch)
