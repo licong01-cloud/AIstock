@@ -7,7 +7,6 @@ repository, network client, broker, subprocess, or wall-clock owner.
 from __future__ import annotations
 
 import hashlib
-import inspect
 import math
 from collections.abc import Sequence
 from datetime import datetime
@@ -47,6 +46,7 @@ from .facade_adapter import state_mapping_set_sha256_v1
 from .facade_characterization import (
     PINNED_SOURCE_ROOT,
     VnpyFacadeDeterministicUniformV1,
+    _facade_callable_signature_payload_v1,
     build_vnpy_facade_state_mappings_v1,
     build_vnpy_facade_terminal_mappings_v1,
     load_pinned_vnpy_algorithm_classes_v1,
@@ -119,6 +119,19 @@ def _canonical_module_sha256_v1() -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _source_executor_signature_payload_v1() -> dict[str, Any]:
+    repository_root = Path(__file__).resolve().parents[3]
+    return {
+        "callable_ref": (
+            "backend.execution_algos.vnpy_compat.facade_source_execution:execute_vnpy_facade_source_vectors_v1"
+        ),
+        **_facade_callable_signature_payload_v1(
+            execute_vnpy_facade_source_vectors_v1,
+            root=repository_root,
+        ),
+    }
+
+
 def build_vnpy_facade_source_executor_binding_v1(
     *,
     source_manifest: VnpyFacadeSourceManifestV1,
@@ -130,13 +143,7 @@ def build_vnpy_facade_source_executor_binding_v1(
         raise TypeError("source_manifest must be VnpyFacadeSourceManifestV1")
     if not isinstance(facade_contract, VnpyFacadeContractV1):
         raise TypeError("facade_contract must be VnpyFacadeContractV1")
-    signature = inspect.signature(execute_vnpy_facade_source_vectors_v1)
-    signature_payload = {
-        "callable_ref": (
-            "backend.execution_algos.vnpy_compat.facade_source_execution:execute_vnpy_facade_source_vectors_v1"
-        ),
-        "signature": str(signature),
-    }
+    signature_payload = _source_executor_signature_payload_v1()
     return VnpyFacadeSourceExecutorBindingV1.create(
         executor_ref=signature_payload["callable_ref"],
         executor_signature_sha256=hash_hex_v1("miniqmt_vnpy_facade_source_executor_signature_v1", signature_payload),

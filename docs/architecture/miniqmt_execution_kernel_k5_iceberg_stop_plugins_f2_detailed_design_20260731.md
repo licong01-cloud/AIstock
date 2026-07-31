@@ -513,6 +513,8 @@ DEV测试只使用现有DEV配置和disposable schema，不执行新DDL：
 20. **pure factory probe为检查`ExecutionAlgoPluginV2`反向import `kernel_delivery`，违反K1 import-boundary**：未放宽denylist；将原Protocol原样迁至既有`plugin_registry.py` process-binding authority，kernel保持re-export兼容，conformance与kernel共用同一runtime-checkable SPI，direct import-boundary与registry矩阵证明无第二Protocol或产品依赖。
 21. **新增模块总coverage达标但branch coverage不足**：未使用pragma/skip/降低阈值；删除JSON Schema之后重复且不可达的config数值检查，保留schema唯一authority，并补public literal-drift、hash-correct readback drift、wrong-manifest与non-object negative paths。最终四个K5新模块line/branch均达到`>=80/>=70`。
 
+22. **K4/K5 authority 曾受 Python minor version 与 checkout path 污染**：PR #2978 initial required CI run `30630489853` 在 Linux/Python 3.12 以 `MINIQMT_VNPY_FACADE_BINDING_INVALID` fail loud，Windows/Python 3.13 本地此前通过。根因有两项：Python 3.13 `ast.dump()` 默认省略 empty fields，而 3.12 保留；source executor signature 又直接序列化 `WindowsPath/PosixPath` 与绝对 worktree 路径。现统一使用 Python 3.12 full-field AST shape，并将 executor signature 固定为 parameter name/kind/annotation、required/default 与 repo-relative Path 的 canonical payload；不得以更新 literals 掩盖 fresh authority drift。Windows/Python 3.13 direct K5 matrix=`12 passed`，Linux/Python 3.12 exact authority matrix=`3 passed`，两端 fresh Iceberg/Stop binding 完全相同；source merge 仍为 `pending_pr_2978`，等待新 required CI。
+
 ### 16.2 Mandatory review result
 
 | DESIGN-COMPLIANCE-001 item | result | evidence |

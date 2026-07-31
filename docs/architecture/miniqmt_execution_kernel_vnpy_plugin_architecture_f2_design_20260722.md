@@ -1117,6 +1117,8 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-099` | K5 detailed design §12 | coverage aggregate=`38 passed`；`python -m nox -s miniqmt_execution_runtime_l2`=`1127/31`；`python -m nox -s paper_v2_backend`=`1050/2/2` | implemented_verified_local | none |
 | `F-100` | K5 detailed design §13 | artifact: K5 detailed design、父蓝图、统一蓝图；PR #2978 已开放，required CI/merge/aftercare 与生产/runtime状态分离 | implemented_verified_local | none |
 
+PR #2978 initial required CI run `30630489853` 进一步暴露 K4/K5 code-owned authority 的跨 Python/平台确定性缺口：Python 3.12/3.13 `ast.dump()` empty-field 默认值不同，source executor signature 还包含绝对 checkout 路径和 `WindowsPath/PosixPath`。修复后的唯一 authority 使用 Python 3.12 full-field AST canonical shape，以及 repo-relative、结构化 parameter/default/annotation signature payload；fresh binding 在 Windows/Python 3.13 与 Linux/Python 3.12 完全一致。新增 public composition-path tests 分别为本机 K5 direct=`12 passed`、Linux/Python 3.12 exact authority=`3 passed`；不得以固定 literals、installed/latest 或平台 fallback 规避 drift。PR、required CI、merge 与产品 runtime 状态继续分离，当前仍为 `pending_pr_2978`。
+
 ## 19. DESIGN-COMPLIANCE-001 / 设计复核
 
 | control | result | evidence |

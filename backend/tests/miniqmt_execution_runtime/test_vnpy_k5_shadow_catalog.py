@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import ast
+
 import pytest
 
 import backend.services.miniqmt_execution_runtime.k5_shadow_catalog as shadow_module
+from backend.execution_algos.vnpy_compat.facade_characterization import _stable_ast_dump_v1
 from backend.execution_algos.vnpy_compat.facade_contracts import VnpyFacadeContractError
+from backend.execution_algos.vnpy_compat.facade_source_execution import _source_executor_signature_payload_v1
 from backend.services.miniqmt_execution_runtime.k5_shadow_catalog import (
     build_k5_shadow_catalog_runtime_v1,
     readback_k5_shadow_conformance_set_v1,
@@ -17,6 +21,32 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     OrderTypeV1,
     SessionPhaseV1,
 )
+
+
+def test_k4_ast_authority_preserves_python_312_empty_field_shape() -> None:
+    function = ast.parse("def exact(value):\n    return callback()\n").body[0]
+    assert isinstance(function, ast.FunctionDef)
+    assert _stable_ast_dump_v1(function.args) == (
+        "arguments(posonlyargs=[], args=[arg(arg='value')], kwonlyargs=[], kw_defaults=[], defaults=[])"
+    )
+    returned = function.body[0]
+    assert isinstance(returned, ast.Return)
+    assert _stable_ast_dump_v1(returned.value) == "Call(func=Name(id='callback', ctx=Load()), args=[], keywords=[])"
+
+
+def test_k4_source_executor_signature_authority_is_repo_relative_and_platform_neutral() -> None:
+    payload = _source_executor_signature_payload_v1()
+
+    assert payload["callable_ref"] == (
+        "backend.execution_algos.vnpy_compat.facade_source_execution:execute_vnpy_facade_source_vectors_v1"
+    )
+    source_root = next(item for item in payload["parameters"] if item["name"] == "source_root")
+    assert source_root["default"] == {
+        "required": False,
+        "repo_relative_path": "backend/execution_algos/vnpy_compat/pinned_source",
+    }
+    assert "WindowsPath" not in repr(payload)
+    assert "PosixPath" not in repr(payload)
 
 
 def _gateway(route_id: str = "route.k5.shadow.test") -> GatewayCapabilityCatalogV1:

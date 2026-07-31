@@ -109,6 +109,19 @@ _VECTOR_ARTIFACT_REPO_PATH = (
 _VECTOR_ARTIFACT_PATH = (
     Path(__file__).resolve().parent / "characterization_artifacts" / ("facade_characterization_vectors_v2.json")
 )
+_AST_DUMP_SUPPORTS_SHOW_EMPTY = "show_empty" in inspect.signature(ast.dump).parameters
+
+
+def _stable_ast_dump_v1(node: ast.AST, *, annotate_fields: bool = True) -> str:
+    """Render one AST with the Python 3.12 full-field shape on every runtime."""
+
+    kwargs: dict[str, Any] = {
+        "annotate_fields": annotate_fields,
+        "include_attributes": False,
+    }
+    if _AST_DUMP_SUPPORTS_SHOW_EMPTY:
+        kwargs["show_empty"] = True
+    return ast.dump(node, **kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,7 +603,7 @@ def _constructor_assignments_v1(class_node: ast.ClassDef) -> dict[str, tuple[str
         elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Attribute):
             target = node.targets[0]
         if target is not None and isinstance(target.value, ast.Name) and target.value.id == "self":
-            expression = ast.dump(node.value, include_attributes=False)
+            expression = _stable_ast_dump_v1(node.value)
             existing = result.get(target.attr)
             if annotation != "Any":
                 if existing is not None and existing[0] != "Any" and existing[0] != annotation:
@@ -1302,7 +1315,7 @@ def _annotation_token_v1(value: Any) -> str | None:
     return rendered
 
 
-def _facade_callable_signature_sha256_v1(value: Any, *, root: Path) -> str:
+def _facade_callable_signature_payload_v1(value: Any, *, root: Path) -> dict[str, Any]:
     signature = inspect.signature(value, eval_str=False)
     parameters: list[dict[str, Any]] = []
     for parameter in signature.parameters.values():
@@ -1327,12 +1340,16 @@ def _facade_callable_signature_sha256_v1(value: Any, *, root: Path) -> str:
                 "annotation": _annotation_token_v1(parameter.annotation),
             }
         )
+    return {
+        "parameters": parameters,
+        "return_annotation": _annotation_token_v1(signature.return_annotation),
+    }
+
+
+def _facade_callable_signature_sha256_v1(value: Any, *, root: Path) -> str:
     return hash_hex_v1(
         "miniqmt_vnpy_facade_callable_signature_v1",
-        {
-            "parameters": parameters,
-            "return_annotation": _annotation_token_v1(signature.return_annotation),
-        },
+        _facade_callable_signature_payload_v1(value, root=root),
     )
 
 
@@ -1416,8 +1433,8 @@ def _template_helper_ref_sha256_v1(
         {
             "source_sha256": "b21fa36a8a2c347ab92379df1cd9f81ec69bc922233ec4096d75dbbade7454b8",
             "method_name": method_name,
-            "signature": ast.dump(method.args, annotate_fields=True, include_attributes=False),
-            "body": [ast.dump(item, annotate_fields=True, include_attributes=False) for item in method.body],
+            "signature": _stable_ast_dump_v1(method.args),
+            "body": [_stable_ast_dump_v1(item) for item in method.body],
         },
     )
 
@@ -2142,12 +2159,11 @@ def build_vnpy_facade_algorithm_bindings_v2(
             "vararg": None if constructor.args.vararg is None else constructor.args.vararg.arg,
             "kwonly": [item.arg for item in constructor.args.kwonlyargs],
             "kwarg": None if constructor.args.kwarg is None else constructor.args.kwarg.arg,
-            "defaults": [ast.dump(item, include_attributes=False) for item in constructor.args.defaults],
+            "defaults": [_stable_ast_dump_v1(item) for item in constructor.args.defaults],
             "kw_defaults": [
-                None if item is None else ast.dump(item, include_attributes=False)
-                for item in constructor.args.kw_defaults
+                None if item is None else _stable_ast_dump_v1(item) for item in constructor.args.kw_defaults
             ],
-            "returns": None if constructor.returns is None else ast.dump(constructor.returns, include_attributes=False),
+            "returns": None if constructor.returns is None else _stable_ast_dump_v1(constructor.returns),
         }
         execution_set = characterization_authority_v2.execution_set_for_algo_v2(receipt.algo_code)
         bindings.append(
@@ -2160,7 +2176,7 @@ def build_vnpy_facade_algorithm_bindings_v2(
                 ),
                 constructor_body_sha256=hash_hex_v1(
                     "miniqmt_vnpy_facade_constructor_body_v1",
-                    [ast.dump(item, include_attributes=False) for item in constructor.body],
+                    [_stable_ast_dump_v1(item) for item in constructor.body],
                 ),
                 state_mapping_set_sha256=state_mapping_set_sha256_v1(
                     tuple(item for item in state_mappings if item.algo_code == receipt.algo_code)
