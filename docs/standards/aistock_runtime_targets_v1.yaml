@@ -14,10 +14,11 @@ targets:
       - pyproject.toml
     production_port: 8001
     isolated_validation_ports: [8011, 8012]
+    probe_origins: [http://127.0.0.1:8001, http://localhost:8001]
     operator_runbook_ref: bug_record.runtime_contract.operator_runbook_ref
     expected_identity_ref: merged_commit
     probes:
-      health_ref: http://127.0.0.1:8001/health
+      health_ref: http://127.0.0.1:8001/api/v1/health
       identity_ref: bug_record.runtime_contract.identity_ref
       business_smoke_ref: bug_record.runtime_contract.business_smoke_ref
       database_readback_ref: bug_record.runtime_contract.database_readback_ref
@@ -28,6 +29,7 @@ targets:
       - tdx-api-main/**/*.go
     production_port: 19080
     isolated_validation_ports: [19081, 19082]
+    probe_origins: [http://127.0.0.1:19080, http://localhost:19080]
     operator_runbook_ref: bug_record.runtime_contract.operator_runbook_ref
     expected_identity_ref: merged_commit
     probes:
@@ -42,6 +44,7 @@ targets:
       - backend/services/rdagent_scheduler*.py
       - backend/services/**/*worker*.py
       - scripts/**/*scheduler*.py
+    probe_origins: [http://127.0.0.1:8001, http://localhost:8001]
     operator_runbook_ref: bug_record.runtime_contract.operator_runbook_ref
     expected_identity_ref: merged_commit
     probes:

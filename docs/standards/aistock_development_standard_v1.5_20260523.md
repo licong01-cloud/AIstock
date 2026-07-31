@@ -1,7 +1,7 @@
 # AIstock 项目开发规范 v1.5
 
 > 版本：1.5
-> 更新日期：2026-07-31
+> 更新日期：2026-08-01
 > 状态：唯一人类可读开发规范
 > 权威文件：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 > 机器派生目录：`docs/standards/aistock_development_standard_v1.5_20260523.yaml`
@@ -233,12 +233,12 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 <a id="rule-backend-restart-ownership-001"></a>
 ### 6.21 [BACKEND-RESTART-OWNERSHIP-001] 后端重启所有权
 
-用户后端的启动、停止和重启默认且持续归用户所有。BUG 修复、feature 实现、验证委派、CI、合入、close-sync、aftercare 或 cleanup 均不构成进程控制授权；Codex、Claude、Cursor、CLI、子代理、Validation Center 和其他窗口的后端进程控制权限保持为 `false`。只有用户针对本次任务和明确 target 单独授权时才可执行。runner-owned 临时后端仅能在隔离端口、显式生命周期标记和本次验证范围内由 runner 管理。frontend 激活、客户端 reload、数据库迁移与后端重启分别建模和报告。
+用户后端的启动、停止和重启默认且持续归用户所有。BUG 修复、feature 实现、验证委派、CI、合入、close-sync、aftercare 或 cleanup 均不构成进程控制授权；Codex、Claude、Cursor、CLI、子代理、Validation Center 和其他窗口的后端进程控制权限保持为 `false`。只有用户针对本次任务和明确 target 单独授权时才可执行。issue workflow 的统一 subprocess 入口必须拒绝用户后端进程控制命令，changed-file guardrail 同时扫描直接命令和 restart helper 调用；workflow 只输出 catalog runbook，不消费重启授权。runner-owned 临时后端仅能在隔离端口、显式生命周期标记和本次验证范围内由 runner 管理。frontend 激活、客户端 reload、数据库迁移与后端重启分别建模和报告。
 
 <a id="rule-bug-restart-effective-001"></a>
 ### 6.22 [BUG-RESTART-EFFECTIVE-001] BUG 重启后立即生效
 
-所有影响 backend、worker 或 scheduler 运行时的 BUG 修复必须写入 Git 管理的持久来源或受控 migration/config；只依赖当前进程 monkey patch、热加载、手工缓存或未追踪文件的实现记为失败。task card 通过 changed-file ownership 生成 lazy `runtime_contract`；无法可靠分类时使用 `runtime_impact=unknown` 并 fail closed。PR 前必须证明 fresh process 可加载修复；合入后由 workflow 输出 catalog target、operator runbook、预期 identity 和只读 smoke 引用。用户完成重启后运行 `post-restart-verify`，通过 runtime identity、API/业务 smoke 以及需要时的 DB readback 后才能 close-sync 为 verified。等待用户重启期间状态为 `fixed_source_pending_user_restart`；源码合入和已授权的 source cleanup 可独立完成，并分别保留其真实状态。runtime target catalog 缺失、冲突或 probe 不完整时显式阻断验证。
+所有影响 backend、worker 或 scheduler 运行时的 BUG 修复必须写入 Git 管理的持久来源或受控 migration/config；只依赖当前进程 monkey patch、热加载、手工缓存或未追踪文件的实现记为失败。task card 通过实际 changed files 和 runtime target catalog 的 `source_globs` 生成 lazy `runtime_contract`；显式字段只能补充或加强推断，不能降级实际影响，schema、target 集、持久化类型和位于 `docs/operations/` 的真实 runbook 不一致时 fail closed。当前单 receipt 模型遇到多 runtime target 或 runtime BUG batch 时要求拆分为单 BUG 流程。PR 前 fresh-process 证据写入 BUG JSON 和 PR body；runtime 源码 PR 只使用 `Refs` 并保持 Issue 打开。合入后由 workflow 输出 catalog target、operator runbook、预期 identity 和只读 smoke 引用。用户完成重启后运行 `post-restart-verify`；probe 必须限定在 catalog origin，receipt 不保存响应正文，并绑定 runtime contract、catalog、完整 health/identity/业务 smoke 以及需要时的 DB readback digest，close-sync 逐项验证后才能标记 verified。等待用户重启期间状态为 `fixed_source_pending_user_restart`、`runtime_identity_match=pending`，GitHub Issue 保持打开；源码合入和已授权的 source cleanup 可独立完成，并分别保留其真实状态。runtime target catalog 缺失、冲突、probe/receipt 不完整或 close-sync worktree 未同步最新 `origin/main` 时显式阻断验证。
 
 ## 7. 上下文、批处理和生产依赖
 

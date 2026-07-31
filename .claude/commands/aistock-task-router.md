@@ -28,6 +28,6 @@ Use this as Claude Code's lightweight entry for broad or unclear AIstock work. T
 - Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) use a registered BUG/feature/docs workflow.
 - Temporary exchange notes use `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
 - BUG fixes select the smallest safe pre-merge gate and delegate broad daily regression to Validation Center/CI/nightly.
-- Runtime BUGs use the lazy task-card contract; `runtime_impact=unknown` fails closed and frontend/client/database/backend activation states remain separate.
+- Runtime BUGs use the lazy task-card contract; changed-file inference cannot be downgraded, unknown/conflict/multi-target fails closed, runtime BUG batches are rejected, and frontend/client/database/backend activation states remain separate.
 
 Report the selected lane, then continue when execution is requested.

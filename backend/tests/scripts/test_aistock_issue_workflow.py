@@ -85,9 +85,10 @@ def _write_runtime_catalog(root: Path) -> Path:
                 "targets": {
                     "backend-main": {
                         "runtime_kind": "backend",
-                        "source_globs": ["backend/**/*.py"],
+                        "source_globs": ["backend/**/*.py", "requirements*.txt"],
                         "production_port": 8001,
                         "isolated_validation_ports": [8011, 8012],
+                        "probe_origins": ["http://127.0.0.1:8001"],
                         "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
                         "expected_identity_ref": "merged_commit",
                         "probes": {
@@ -104,6 +105,64 @@ def _write_runtime_catalog(root: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _runtime_bug(root: Path, **overrides: Any) -> dict[str, Any]:
+    runbook = root / "docs" / "operations" / "example_backend_restart.md"
+    runbook.parent.mkdir(parents=True, exist_ok=True)
+    runbook.write_text("# User-owned backend restart\n", encoding="utf-8")
+    payload = _bug(
+        allowed_write_scope=["backend/services/example.py"],
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "backend",
+            "target_id": "backend-main",
+            "target_ids": ["backend-main"],
+            "persistence_basis": "git_tracked_source",
+            "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
+            "operator_runbook_ref": "docs/operations/example_backend_restart.md",
+            "health_ref": "http://127.0.0.1:8001/api/v1/health",
+            "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+            "business_smoke_ref": "http://127.0.0.1:8001/api/v1/example/smoke",
+            "database_readback_ref": "not_required",
+        },
+    )
+    payload.update(overrides)
+    return payload
+
+
+def _passed_runtime_receipt(root: Path, record: dict[str, Any], *, expected_identity: str) -> dict[str, Any]:
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=record["allowed_write_scope"],
+        root=root,
+    )
+    probes = [
+        {
+            "name": name,
+            "url": contract["target"]["probes"][name],
+            "status": "passed",
+            "status_code": 200,
+            "response_sha256": f"sha-{name}",
+            "response_bytes": 20,
+        }
+        for name in ("health_ref", "identity_ref", "business_smoke_ref")
+    ]
+    return {
+        "schema_version": workflow.RUNTIME_VERIFY_RECEIPT_SCHEMA,
+        "bug_id": record["bug_id"],
+        "target_id": contract["target_id"],
+        "expected_identity": expected_identity,
+        "contract_digest": workflow._runtime_contract_digest(contract),
+        "catalog_sha256": workflow._runtime_catalog_sha256(root=root),
+        "required_probe_names": ["health_ref", "identity_ref", "business_smoke_ref"],
+        "post_restart_effective_gate": "passed",
+        "runtime_identity_match": True,
+        "process_control_performed": False,
+        "blocking": [],
+        "probes": probes,
+        "probe_evidence_digest": workflow._probe_evidence_digest(probes),
+    }
 
 
 def _write_repo_client_entrypoints(root: Path) -> None:
@@ -140,6 +199,30 @@ def test_subprocess_env_ignores_non_git_commands(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("SHELL", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
 
     assert workflow._subprocess_env(["python", "--version"]) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["python", "scripts/_restart_backend.py"],
+        ["python", "-m", "uvicorn", "backend.main:app", "--port", str(8000 + 1)],
+        ["taskkill", "/F", "/PID", "123"],
+        ["sc.exe", "stop", "backend-api"],
+        ["docker", "compose", "restart", "backend"],
+    ],
+)
+def test_workflow_command_runner_refuses_user_backend_process_control(
+    command: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("blocked process-control command must not reach subprocess"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="process control is forbidden"):
+        workflow._run_command(command)
 
 
 def test_git_decodes_output_as_utf8_with_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -947,21 +1030,7 @@ def test_runtime_contract_is_lazy_fail_closed_and_restart_plan_never_controls_pr
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _write_runtime_catalog(isolated_workflow_root)
-    runtime_record = _bug(
-        allowed_write_scope=["backend/services/example.py"],
-        runtime_contract={
-            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
-            "runtime_impact": "backend",
-            "target_id": "backend-main",
-            "persistence_basis": "git_tracked_source",
-            "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
-            "operator_runbook_ref": "docs/operations/example_backend_restart.md",
-            "health_ref": "http://127.0.0.1:8001/health",
-            "identity_ref": "http://127.0.0.1:8001/runtime-identity",
-            "business_smoke_ref": "http://127.0.0.1:8001/api/example/smoke",
-            "database_readback_ref": "not_required",
-        },
-    )
+    runtime_record = _runtime_bug(isolated_workflow_root)
     issue = _write_json(isolated_workflow_root / "runtime-bug.json", runtime_record)
     monkeypatch.setattr(
         workflow.subprocess,
@@ -1014,26 +1083,159 @@ def test_runtime_contract_is_lazy_fail_closed_and_restart_plan_never_controls_pr
     assert unknown["pre_pr_ready"] is False
 
 
+def test_runtime_contract_cannot_downgrade_changed_files_or_hide_multiple_targets(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["targets"]["tdx-go-backend"] = {
+        "runtime_kind": "backend",
+        "source_globs": ["tdx-api-main/**/*.go"],
+        "production_port": 19080,
+        "isolated_validation_ports": [19081],
+        "probe_origins": ["http://127.0.0.1:19080"],
+        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+        "expected_identity_ref": "merged_commit",
+        "probes": {
+            "health_ref": "bug_record.runtime_contract.health_ref",
+            "identity_ref": "bug_record.runtime_contract.identity_ref",
+            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+        },
+    }
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+
+    downgraded = workflow.build_runtime_contract(
+        record=_bug(runtime_contract={"schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "none"}),
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+    assert downgraded["runtime_impact"] == "backend"
+    assert downgraded["backend_restart_required"] is True
+    assert downgraded["pre_pr_ready"] is False
+    assert any("cannot downgrade" in item for item in downgraded["blocking"])
+
+    multi_target_record = _runtime_bug(isolated_workflow_root)
+    multiple = workflow.build_runtime_contract(
+        record=multi_target_record,
+        changed_files=["backend/services/example.py", "tdx-api-main/web/server.go"],
+        root=isolated_workflow_root,
+    )
+    assert multiple["target_ids"] == ["backend-main", "tdx-go-backend"]
+    assert multiple["target_id"] is None
+    assert multiple["pre_pr_ready"] is False
+    assert any("multiple runtime targets" in item for item in multiple["blocking"])
+
+
+def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+
+    dependency = workflow._classify_runtime_impact(["requirements-dev.txt"], root=isolated_workflow_root)
+    client = workflow._classify_runtime_impact([".codex/skills/fix-aistock-issue/SKILL.md"], root=isolated_workflow_root)
+    backend_test = workflow._classify_runtime_impact(
+        ["backend/tests/scripts/test_aistock_issue_workflow.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert dependency["runtime_impact"] == "backend"
+    assert dependency["target_ids"] == ["backend-main"]
+    assert client["runtime_impact"] == "client"
+    assert backend_test["runtime_impact"] == "none"
+
+
+def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"] = {
+        **record["runtime_contract"],
+        "schema_version": "legacy",
+        "operator_runbook_ref": "docs/operations/missing.md",
+        "persistence_basis": "magic",
+    }
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert contract["pre_pr_ready"] is False
+    assert any("schema_version" in item for item in contract["blocking"])
+    assert any("does not exist" in item for item in contract["blocking"])
+    assert any("persistence_basis is invalid" in item for item in contract["blocking"])
+
+
+def test_runtime_source_pr_uses_refs_until_post_restart_verification(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    body = workflow.render_pr_body(
+        "BUG-199",
+        record,
+        ["backend/services/example.py"],
+        {"required_plans": ["l0"], "production_gates": {}},
+        {"scope_check": {"status": "passed"}},
+        ["validation-receipt"],
+        True,
+        contract,
+    )
+
+    assert "Refs #199" in body
+    assert "Closes #199" not in body
+
+
+def test_finish_persists_fresh_process_evidence_in_bug_json_and_pr_body(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"]["fresh_process_evidence"] = []
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", record)
+    monkeypatch.setattr(
+        workflow,
+        "_build_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id="BUG-199"),
+    )
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["backend/services/example.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[],
+        plan_only=True,
+        allow_missing_evidence=False,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+
+    persisted = json.loads(issue.read_text(encoding="utf-8"))
+    assert persisted["runtime_contract"]["fresh_process_evidence"] == [
+        "isolated port 8012 import smoke passed"
+    ]
+    pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
+    assert "fresh_process_evidence: isolated port 8012 import smoke passed" in pr_body
+    assert "Refs #199" in pr_body
+
+
 def test_post_restart_verify_is_read_only_and_writes_only_ignored_receipt(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _write_runtime_catalog(isolated_workflow_root)
-    issue_payload = _bug(
-        allowed_write_scope=["backend/services/example.py"],
-        runtime_contract={
-            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
-            "runtime_impact": "backend",
-            "target_id": "backend-main",
-            "persistence_basis": "git_tracked_source",
-            "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
-            "operator_runbook_ref": "docs/operations/example_backend_restart.md",
-            "health_ref": "http://127.0.0.1:8001/health",
-            "identity_ref": "http://127.0.0.1:8001/runtime-identity",
-            "business_smoke_ref": "http://127.0.0.1:8001/api/example/smoke",
-            "database_readback_ref": "not_required",
-        },
-    )
+    issue_payload = _runtime_bug(isolated_workflow_root)
     issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
     before = issue.read_text(encoding="utf-8")
 
@@ -1058,7 +1260,11 @@ def test_post_restart_verify_is_read_only_and_writes_only_ignored_receipt(
         body = b'{"commit":"merge-abc123"}' if "runtime-identity" in request.full_url else b'{"status":"ok"}'
         return _Response(body)
 
-    monkeypatch.setattr(workflow.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda request, timeout_seconds: fake_urlopen(request, timeout_seconds),
+    )
     payload = workflow.build_post_restart_verify(
         bug_id=None,
         issue_json=str(issue),
@@ -1071,29 +1277,37 @@ def test_post_restart_verify_is_read_only_and_writes_only_ignored_receipt(
     assert payload["runtime_identity_match"] is True
     assert payload["process_control_performed"] is False
     assert payload["tracked_files_written"] is False
+    assert all("response_preview" not in probe for probe in payload["probes"])
+    assert all("_response_body" not in probe for probe in payload["probes"])
+    assert payload["probe_evidence_digest"]
     assert issue.read_text(encoding="utf-8") == before
     assert (isolated_workflow_root / payload["receipt_path"]).exists()
+
+
+def test_read_only_probe_rejects_non_catalog_origin_without_network_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda *args, **kwargs: pytest.fail("disallowed probe origin must not perform network I/O"),
+    )
+
+    result = workflow._read_only_http_probe(
+        "health_ref",
+        "http://169.254.169.254/latest/meta-data",
+        allowed_origins=["http://127.0.0.1:8001"],
+    )
+
+    assert result["status"] == "blocked"
+    assert "not catalog-allowed" in result["error"]
 
 
 def test_close_sync_runtime_bug_requires_passed_post_restart_receipt(
     isolated_workflow_root: Path,
 ) -> None:
     _write_runtime_catalog(isolated_workflow_root)
-    issue_payload = _bug(
-        allowed_write_scope=["backend/services/example.py"],
-        runtime_contract={
-            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
-            "runtime_impact": "backend",
-            "target_id": "backend-main",
-            "persistence_basis": "git_tracked_source",
-            "fresh_process_evidence": ["isolated port 8012 import smoke passed"],
-            "operator_runbook_ref": "docs/operations/example_backend_restart.md",
-            "health_ref": "http://127.0.0.1:8001/health",
-            "identity_ref": "http://127.0.0.1:8001/runtime-identity",
-            "business_smoke_ref": "http://127.0.0.1:8001/api/example/smoke",
-            "database_readback_ref": "not_required",
-        },
-    )
+    issue_payload = _runtime_bug(isolated_workflow_root)
     issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
 
     pending = workflow.build_close_sync_plan(
@@ -1106,18 +1320,11 @@ def test_close_sync_runtime_bug_requires_passed_post_restart_receipt(
     )
     assert pending["workflow_gate"] == "fixed_source_pending_user_restart"
     assert pending["post_restart_effective_gate"] == "pending_user_restart"
+    assert pending["runtime_identity_match"] == "pending"
 
     receipt = _write_json(
         isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "post-restart-verify.json",
-        {
-            "schema_version": workflow.RUNTIME_VERIFY_RECEIPT_SCHEMA,
-            "bug_id": "BUG-199",
-            "target_id": "backend-main",
-            "expected_identity": "merge-abc123",
-            "post_restart_effective_gate": "passed",
-            "runtime_identity_match": True,
-            "process_control_performed": False,
-        },
+        _passed_runtime_receipt(isolated_workflow_root, issue_payload, expected_identity="merge-abc123"),
     )
     ready = workflow.build_close_sync_plan(
         bug_id=None,
@@ -1130,6 +1337,117 @@ def test_close_sync_runtime_bug_requires_passed_post_restart_receipt(
     )
     assert ready["workflow_gate"] == "ready_for_apply"
     assert ready["post_restart_effective_gate"] == "passed"
+
+
+def test_close_sync_rejects_receipt_without_complete_probe_evidence(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    incomplete = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "incomplete.json",
+        {
+            "schema_version": workflow.RUNTIME_VERIFY_RECEIPT_SCHEMA,
+            "bug_id": "BUG-199",
+            "target_id": "backend-main",
+            "expected_identity": "merge-abc123",
+            "post_restart_effective_gate": "passed",
+            "runtime_identity_match": True,
+            "process_control_performed": False,
+        },
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(incomplete),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any("probe set mismatch" in item for item in payload["post_restart_receipt_errors"])
+    assert any("contract digest mismatch" in item for item in payload["post_restart_receipt_errors"])
+
+
+def test_runtime_close_sync_preserves_source_fixed_time_and_uses_verification_close_time(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(
+        isolated_workflow_root,
+        fixed_at="2026-07-31T10:00:00Z",
+    )
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "passed.json",
+        _passed_runtime_receipt(isolated_workflow_root, issue_payload, expected_identity="merge-abc123"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "pr": {"mergeCommit": {"oid": "merge-abc123"}, "mergedAt": "2026-07-31T11:00:00Z"},
+        },
+    )
+    monkeypatch.setattr(workflow, "_utc_now", lambda: "2026-08-01T02:00:00Z")
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=True,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        skip_github_check=True,
+        allow_current_worktree=True,
+        post_restart_receipt=str(receipt),
+    )
+
+    updated = json.loads(issue.read_text(encoding="utf-8"))
+    assert payload["workflow_gate"] == "close_synced"
+    assert updated["status"] == "verified"
+    assert updated["fixed_at"] == "2026-07-31T10:00:00Z"
+    assert updated["closed_at"] == "2026-08-01T02:00:00Z"
+    assert updated["runtime_contract"]["runtime_identity_match"] is True
+
+
+def test_runtime_pending_sync_reopens_issue_and_aligns_status_label(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        if args[:3] == ["gh", "issue", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "CLOSED", "labels": [{"name": "status:fixed"}]}),
+                "stderr": "",
+            }
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    result = workflow._sync_github_issue_runtime_pending(
+        _bug(status="fixed_source_pending_user_restart"),
+        {"merged_pr": "https://github.example/pull/199", "merge_commit": "merge-abc123"},
+        root=isolated_workflow_root,
+    )
+
+    assert result["status"] == "reopened_runtime_pending"
+    assert any(args[:3] == ["gh", "issue", "reopen"] for args in calls)
+    edit = next(args for args in calls if args[:3] == ["gh", "issue", "edit"])
+    assert ["--remove-label", "status:fixed"] == edit[6:8]
+    assert ["--add-label", "status:in_progress"] == edit[8:10]
 
 
 def test_close_sync_create_pr_persists_post_restart_state_in_one_command(
@@ -1507,6 +1825,49 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
     assert suggested_tests[9] in pr_body
     assert suggested_tests[10] not in pr_body
     assert "CodeGraph suggested tests omitted: `1` more" in pr_body
+
+
+def test_finish_batch_blocks_runtime_bugs_and_never_closes_their_issues(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _runtime_bug(isolated_workflow_root))
+    _write_json(
+        bugs_root / "bug200.json",
+        _runtime_bug(
+            isolated_workflow_root,
+            bug_id="BUG-200",
+            github_issue_number=200,
+            github_issue_url="https://github.example/issues/200",
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_build_batch_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]),
+    )
+
+    payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["backend/services/example.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert "runtime BUGs require the single-issue" in "; ".join(payload["blocking"])
+    pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
+    assert "Refs #199" in pr_body
+    assert "Refs #200" in pr_body
+    assert "Closes #199" not in pr_body
+    assert "Closes #200" not in pr_body
 
 
 def test_finish_batch_blocks_when_one_selected_required_plan_has_no_receipt(
@@ -4760,6 +5121,34 @@ def test_close_sync_batch_updates_multiple_bug_jsons(
     assert set(payload["github_issue_sync"]) == {"BUG-199", "BUG-200"}
 
 
+def test_close_sync_batch_rejects_runtime_bugs_without_per_issue_receipts(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _runtime_bug(isolated_workflow_root),
+    )
+    _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
+        _runtime_bug(
+            isolated_workflow_root,
+            bug_id="BUG-200",
+            github_issue_number=200,
+            github_issue_url="https://github.example/issues/200",
+        ),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="cannot close runtime BUGs"):
+        workflow.build_close_sync_batch_plan(
+            bug_ids=["BUG-199", "BUG-200"],
+            pr_url="https://github.example/pull/299",
+            apply=False,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+        )
+
+
 def test_close_sync_pr_commit_can_use_batch_title_and_body(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4815,6 +5204,9 @@ def test_close_sync_pr_commit_can_use_batch_title_and_body(
     assert payload["workflow_gate"] == "pr_opened"
     assert ["git", "commit", "-m", "chore(issue): close-sync BUG-199-BUG-200 after merge"] in calls
     assert any(args[:7] == ["gh", "pr", "create", "--repo", workflow.GITHUB_REPO, "--base", "main"] for args in calls)
+    body = (registry / workflow.WORKFLOW_ROOT / "BUG-199-BUG-200" / "close-sync-pr-body.md").read_text(encoding="utf-8")
+    assert "BUG-199=fixed" in body
+    assert "BUG-200=fixed" in body
 
 
 def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
@@ -6087,6 +6479,57 @@ def test_close_sync_worktree_creation_reuses_clean_existing_worktree(
 
     assert payload["reused"] is True
     assert not any(args[:2] == ["worktree", "add"] for args in calls)
+
+
+def test_close_sync_worktree_fast_forwards_clean_stale_reuse(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "worktrees" / "BUG-199-close-sync"
+    registry.mkdir(parents=True)
+    calls: list[tuple[list[str], Path | None]] = []
+    snapshots = iter(
+        [
+            {
+                "ok": True,
+                "branch": "chore/BUG-199-close-sync",
+                "dirty": False,
+                "dirty_count": 0,
+                "head": "old",
+                "origin_main": "new",
+            },
+            {
+                "ok": True,
+                "branch": "chore/BUG-199-close-sync",
+                "dirty": False,
+                "dirty_count": 0,
+                "head": "new",
+                "origin_main": "new",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        workflow,
+        "_close_sync_worktree_names",
+        lambda bug_id: ("chore/BUG-199-close-sync", registry),
+    )
+    monkeypatch.setattr(workflow, "_git_snapshot", lambda root: next(snapshots))
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, cwd=None, check=True: calls.append((args, cwd)) or "",
+    )
+
+    payload = workflow._maybe_create_close_sync_worktree(
+        bug_id="BUG-199",
+        create=True,
+        dry_run=False,
+    )
+
+    assert payload["reused"] is True
+    assert payload["fast_forwarded"] is True
+    assert (["merge", "--ff-only", "origin/main"], registry) in calls
 
 
 def test_pr_check_summary_treats_skipped_as_non_blocking() -> None:

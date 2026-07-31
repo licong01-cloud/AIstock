@@ -1,79 +1,88 @@
 {
-  "actual": "Merged workflow accepts missing runbook paths and requires manual Git assembly after post-restart verification.",
+  "actual": "Current batch/single workflows can close or verify runtime BUGs without the required user restart and complete post-restart evidence; BUG-937 was closed without its real-runbook acceptance.",
   "allowed_write_scope": [
-    "docs/standards/aistock_runtime_targets_v1.yaml",
     "scripts/aistock_issue_workflow.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".codex/skills/aistock-merge-aftercare/SKILL.md",
+    ".codex/skills/aistock-task-router/SKILL.md",
     ".claude/commands/fix-aistock-issue.md",
+    ".claude/commands/aistock-merge-aftercare.md",
+    ".claude/commands/aistock-task-router.md",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/test_aistock_guardrail_scan.py",
     "tests/aistock_validation/bugs/20260731_BUG-937-restart-runbook-refs-and-post-restart-close-sync-persistence-are-incompl.json",
+    "tests/aistock_validation/bugs/20260731_BUG-938-runtime-bug-restart-gates-can-be-bypassed-or-falsely-verified.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-937",
+  "bug_id": "BUG-938",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-31T14:04:35.308265Z",
-  "description": "Merged workflow accepts missing runbook paths and requires manual Git assembly after post-restart verification.",
+  "created_at": "2026-07-31T18:28:30.325598Z",
+  "description": "Current batch/single workflows can close or verify runtime BUGs without the required user restart and complete post-restart evidence; BUG-937 was closed without its real-runbook acceptance.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260731-eaf45a7653e4",
-      "timestamp": "2026-07-31T14:04:35.308258Z"
-    },
-    {
-      "action": "reopen_after_completion_audit",
-      "actor": "codex",
-      "note": "BUG-938 audit proved the real runbook existence acceptance was not implemented; reopen until the shared workflow repair merges and close-sync completes.",
-      "timestamp": "2026-07-31T18:44:16.0290252Z"
+      "note": "Promoted from IC-20260731-1412c1f6421a",
+      "timestamp": "2026-07-31T18:28:30.325595Z"
     }
   ],
   "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/issues/2988"
+    "2026-08-01 comprehensive audit of b3ff6794..2204c0f3"
   ],
-  "expected": "Runtime catalog refs fail closed unless a real BUG-provided runbook exists, and close-sync can create the follow-up state PR from a passed post-restart receipt.",
+  "expected": "Every runtime BUG path fails closed, keeps issues open until user restart verification, validates durable contract and probe evidence, preserves correct state chronology, and prevents workflow-owned user-backend process control.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "docs/standards/aistock_runtime_targets_v1.yaml",
       "scripts/aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       ".codex/skills/fix-aistock-issue/SKILL.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".codex/skills/aistock-task-router/SKILL.md",
       ".claude/commands/fix-aistock-issue.md",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ".claude/commands/aistock-merge-aftercare.md",
+      ".claude/commands/aistock-task-router.md",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/test_aistock_guardrail_scan.py",
+      "tests/aistock_validation/bugs/20260731_BUG-937-restart-runbook-refs-and-post-restart-close-sync-persistence-are-incompl.json"
     ],
     "ownership": {
       "changed_files": [
-        "docs/standards/aistock_runtime_targets_v1.yaml",
         "scripts/aistock_issue_workflow.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
         ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".codex/skills/aistock-task-router/SKILL.md",
         ".claude/commands/fix-aistock-issue.md",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        ".claude/commands/aistock-merge-aftercare.md",
+        ".claude/commands/aistock-task-router.md",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/test_aistock_guardrail_scan.py",
+        "tests/aistock_validation/bugs/20260731_BUG-937-restart-runbook-refs-and-post-restart-close-sync-persistence-are-incompl.json"
       ],
       "impacted_modules": [
         "validation.guardrails",
-        "validation.module_quality",
-        "validation.runner",
         "validation.center",
+        "validation.runner",
+        "validation.module_quality",
         "docs.standards",
         "tests.backend",
-        "validation.coverage"
+        "validation.coverage",
+        "tests.validation_history"
       ],
       "matched_rules": [
-        {
-          "file": "docs/standards/aistock_runtime_targets_v1.yaml",
-          "impact_modules": [
-            "validation.module_quality",
-            "validation.runner"
-          ],
-          "primary_module": "validation.guardrails",
-          "risk_level": "high",
-          "rule_id": "runtime_target_catalog"
-        },
         {
           "file": "scripts/aistock_issue_workflow.py",
           "impact_modules": [
@@ -86,6 +95,34 @@
           "rule_id": "validation_scripts"
         },
         {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.md",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_runtime_targets_v1.yaml",
+          "impact_modules": [
+            "validation.module_quality",
+            "validation.runner"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "runtime_target_catalog"
+        },
+        {
           "file": ".codex/skills/fix-aistock-issue/SKILL.md",
           "impact_modules": [
             "validation.guardrails",
@@ -96,7 +133,47 @@
           "rule_id": "codex_project_instructions"
         },
         {
+          "file": ".codex/skills/aistock-merge-aftercare/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".codex/skills/aistock-task-router/SKILL.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
           "file": ".claude/commands/fix-aistock-issue.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-merge-aftercare.md",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": ".claude/commands/aistock-task-router.md",
           "impact_modules": [
             "validation.guardrails",
             "validation.module_quality"
@@ -117,6 +194,28 @@
           "primary_module": "tests.backend",
           "risk_level": "medium",
           "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "backend/tests/test_aistock_guardrail_scan.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "tests/aistock_validation/bugs/20260731_BUG-937-restart-runbook-refs-and-post-restart-close-sync-persistence-are-incompl.json",
+          "impact_modules": [
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_bug_registry"
         }
       ],
       "risk_levels": [
@@ -124,41 +223,57 @@
         "medium"
       ],
       "suggested_scope": [
-        "docs/standards/aistock_runtime_targets_v1.yaml",
         "scripts/aistock_issue_workflow.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+        "docs/standards/aistock_runtime_targets_v1.yaml",
         ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".codex/skills/aistock-task-router/SKILL.md",
         ".claude/commands/fix-aistock-issue.md",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        ".claude/commands/aistock-merge-aftercare.md",
+        ".claude/commands/aistock-task-router.md",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/test_aistock_guardrail_scan.py",
+        "tests/aistock_validation/bugs/20260731_BUG-937-restart-runbook-refs-and-post-restart-close-sync-persistence-are-incompl.json"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "docs/standards/aistock_runtime_targets_v1.yaml",
       "scripts/aistock_issue_workflow.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       ".codex/skills/fix-aistock-issue/SKILL.md",
+      ".codex/skills/aistock-merge-aftercare/SKILL.md",
+      ".codex/skills/aistock-task-router/SKILL.md",
       ".claude/commands/fix-aistock-issue.md",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ".claude/commands/aistock-merge-aftercare.md",
+      ".claude/commands/aistock-task-router.md",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "backend/tests/test_aistock_guardrail_scan.py",
+      "tests/aistock_validation/bugs/20260731_BUG-937-restart-runbook-refs-and-post-restart-close-sync-persistence-are-incompl.json"
     ]
   },
-  "first_seen_at": "2026-07-31T14:04:35.308265Z",
+  "first_seen_at": "2026-07-31T18:28:30.325598Z",
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
-  "github_issue_number": 2988,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2988",
-  "last_seen_at": "2026-07-31T14:04:35.308265Z",
-  "module": "validation.guardrails",
+  "github_issue_number": 2996,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2996",
+  "last_seen_at": "2026-07-31T18:28:30.325598Z",
+  "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": null,
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "Test-Path docs/operations/backend_runtime_runbook.md",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/test_aistock_guardrail_scan.py -q -p no:cacheprovider",
   "required_verification": [
     "l0",
+    "validation_module_registry_l0",
     "guardrail_changed_files"
   ],
   "risk_area": "bug",
@@ -167,29 +282,22 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "not_required",
-    "runtime_impact": "none",
+    "runtime_impact": "client",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P1",
-  "status": "in_progress",
+  "severity": "P0",
+  "status": "open",
   "suspected_modules": [
-    "validation.guardrails"
+    "validation"
   ],
-  "title": "Restart runbook refs and post-restart close-sync persistence are incomplete",
+  "title": "Runtime BUG restart gates can be bypassed or falsely verified",
   "trigger_condition": {
-    "fingerprint": "eaf45a7653e456a7b6a78ff7",
-    "source_event_id": "FE-20260731-eaf45a7653e4"
+    "fingerprint": "1412c1f6421a7e71a933a711",
+    "source_event_id": "FE-20260731-1412c1f6421a"
   },
-  "validation_evidence": [
-    "nox -s l0 -> passed",
-    "nox -s validation_module_registry_l0 -> passed",
-    "nox -s guardrail_changed_files -> passed"
-  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -226,6 +334,7 @@
     ],
     "premerge_required_plans": [
       "l0",
+      "validation_module_registry_l0",
       "guardrail_changed_files"
     ],
     "schema_version": "aistock_verification_budget_v1",
@@ -281,6 +390,7 @@
       ],
       "premerge_required_plans": [
         "l0",
+        "validation_module_registry_l0",
         "guardrail_changed_files"
       ],
       "schema_version": "aistock_verification_budget_v1",
