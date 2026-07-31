@@ -1656,8 +1656,11 @@ def build_runtime_contract(
                 target = {
                     **raw_target,
                     "target_id": target_id,
+                    "operator_runbook_ref": _resolve_runtime_ref(raw_target.get("operator_runbook_ref"), explicit),
                     "probes": {key: _resolve_runtime_ref(value, explicit) for key, value in probes.items()},
                 }
+                if not target.get("operator_runbook_ref"):
+                    blocking.append(f"runtime target {target_id} operator runbook ref is incomplete")
                 for field in ("health_ref", "identity_ref", "business_smoke_ref"):
                     if not target["probes"].get(field):
                         blocking.append(f"runtime target {target_id} probe is incomplete: {field}")
@@ -12270,6 +12273,8 @@ def cmd_watch_ci(args: argparse.Namespace) -> int:
 
 
 def cmd_close_sync(args: argparse.Namespace) -> int:
+    if args.create_pr and not args.apply:
+        raise WorkflowError("close-sync --create-pr requires --apply")
     payload = build_close_sync_plan(
         bug_id=args.bug_id,
         issue_json=args.issue_json,
@@ -12284,6 +12289,12 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
         allow_current_worktree=args.allow_current_worktree,
         post_restart_receipt=args.post_restart_receipt,
     )
+    if args.create_pr:
+        payload["close_sync_commit"] = _maybe_commit_and_pr_close_sync(
+            bug_id=str(payload.get("bug_id") or args.bug_id or "").upper(),
+            close_sync=payload,
+            validation_evidence=list(args.validation_evidence or []),
+        )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced", "fixed_source_pending_user_restart"} else 2
 
@@ -12740,6 +12751,11 @@ def build_parser() -> argparse.ArgumentParser:
     close.add_argument("--production-backend-dependency-gate", default="noop")
     close.add_argument("--skip-github-check", action="store_true")
     close.add_argument("--create-registry-worktree", action="store_true")
+    close.add_argument(
+        "--create-pr",
+        action="store_true",
+        help="After --apply, commit the close-sync BUG metadata, push its registry branch, and create or reuse the follow-up PR.",
+    )
     close.add_argument(
         "--allow-current-worktree",
         action="store_true",

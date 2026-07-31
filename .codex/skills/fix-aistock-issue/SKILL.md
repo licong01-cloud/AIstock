@@ -47,5 +47,5 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 2. Create the PR with `run --mode pr --validation-evidence "<command> -> passed" --push --create-pr`.
 3. Workflow/client changes add `workflow-smoke --changed-file <path> --module validation`.
 4. Merge aftercare uses `merge-finalizer` or `aistock-merge-aftercare`.
-5. For a runtime BUG, use the compact restart fields by default; `restart-plan` only expands catalog/runbook refs. After the user restarts, run `post-restart-verify --bug-id BUG-XXX --target <target> --expected-identity <merge-sha>` and pass its ignored receipt to close-sync.
+5. For a runtime BUG, use the compact restart fields by default; `restart-plan` only expands catalog/runbook refs. After the user restarts, run `post-restart-verify --bug-id BUG-XXX --target <target> --expected-identity <merge-sha>`, then persist its ignored receipt with `close-sync --bug-id BUG-XXX --pr-url <source-pr> --validation-evidence "<command> -> passed" --post-restart-receipt <receipt> --create-registry-worktree --apply --create-pr`.
 6. Report branch, PR, commit, changed files, direct validation, production gates, delegated/nightly plans, runtime identity, post-restart gate and runtime/DB impact.
