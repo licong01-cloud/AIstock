@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from typing import Any, Callable, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Protocol, Sequence
 
 from backend.execution_algos.vnpy_compat.facade_adapter import VnpyFacadeBackedPluginAdapterV1
 from backend.execution_algos.vnpy_compat.facade_contracts import (
@@ -60,6 +60,7 @@ from .plugin_contracts import (
 )
 from .plugin_registry import (
     CompatibilityStatusV1,
+    ExecutionAlgoPluginV2,
     PluginCatalogRuntimeV2,
     PluginCatalogSnapshotV1,
     PluginKeyV1,
@@ -84,23 +85,6 @@ class KernelPluginInvocationError(RuntimeError):
         self.context = json_safe_evidence_v1(context)
         self.broker_called = broker_called
         super().__init__(message)
-
-
-@runtime_checkable
-class ExecutionAlgoPluginV2(Protocol):
-    manifest: ExecutionAlgoPluginManifestV2
-
-    def initialize(self, context: AlgoStartContextV1) -> AlgoInitializationV1: ...
-
-    def restore_state(self, snapshot: AlgoStateSnapshotV2) -> AlgoStateSnapshotV2: ...
-
-    def transition(
-        self,
-        *,
-        state: AlgoStateSnapshotV2,
-        event: RuntimeEventEnvelopeV2,
-        services: AlgoReadOnlyServicesV1,
-    ) -> AlgoTransitionV1: ...
 
 
 @dataclass(frozen=True)
@@ -879,6 +863,16 @@ def _invocation_error(
     return KernelPluginInvocationError(reason_code, message, context=evidence, broker_called=False)
 
 
+def _facade_exception_context_v1(exc: VnpyFacadeContractError) -> dict[str, Any]:
+    """Render facade evidence without allowing its carrier type to mask it."""
+
+    try:
+        context = thaw_json_v1(exc.context)
+    except TypeError:
+        context = json_safe_evidence_v1(exc.context)
+    return context if type(context) is dict else {"facade_context": context}
+
+
 def resolve_plugin_for_restore_v1(
     *,
     catalog_runtime: PluginCatalogRuntimeV2,
@@ -1012,7 +1006,7 @@ def invoke_plugin_initialize_v1(
             exc.reason_code,
             exc.message,
             stage="PLUGIN_INITIALIZE_FACADE",
-            **thaw_json_v1(exc.context),
+            **_facade_exception_context_v1(exc),
         ) from exc
     except Exception as exc:
         if is_facade_adapter:
@@ -1167,7 +1161,7 @@ def invoke_plugin_transition_v1(
             exc.reason_code,
             exc.message,
             stage="PLUGIN_TRANSITION_FACADE",
-            **thaw_json_v1(exc.context),
+            **_facade_exception_context_v1(exc),
         ) from exc
     except Exception as exc:
         if is_facade_adapter:

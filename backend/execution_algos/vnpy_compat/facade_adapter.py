@@ -6,11 +6,13 @@ import inspect
 import json
 import math
 from enum import Enum
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     canonical_decimal_string_v1,
     hash_hex_v1,
+    json_safe_evidence_v1,
     thaw_json_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
@@ -30,6 +32,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     KernelOrderEventPayloadV1,
     KernelOrderReconcileEventPayloadV1,
     KernelTradeEventPayloadV1,
+    MiniQMTPluginContractError,
     NormalizedOrderStatusV1,
     RuntimeEventEnvelopeV2,
     SideV1,
@@ -140,6 +143,7 @@ class VnpyFacadeBackedPluginAdapterV1:
         "_algorithm_binding",
         "_algorithm_class",
         "_state_mappings",
+        "_source_setting_builder",
         "_terminal_mappings",
         "_sealed",
         "manifest",
@@ -158,6 +162,7 @@ class VnpyFacadeBackedPluginAdapterV1:
         algorithm_binding: VnpyFacadeAlgorithmBindingV1 | VnpyFacadeAlgorithmBindingV2,
         state_mappings: tuple[VnpyFacadeStateFieldMappingV1, ...],
         terminal_mappings: tuple[VnpyFacadeTerminalMappingV1, ...],
+        source_setting_builder: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         if not inspect.isclass(algorithm_class):
             raise TypeError("algorithm_class must be a class")
@@ -181,12 +186,25 @@ class VnpyFacadeBackedPluginAdapterV1:
             raise _binding_error("state mapping set conflicts with algorithm binding")
         if terminal_mapping_set_sha256_v1(terminal_mappings) != algorithm_binding.terminal_mapping_set_sha256:
             raise _binding_error("terminal mapping set conflicts with algorithm binding")
+        if source_setting_builder is not None and not callable(source_setting_builder):
+            raise TypeError("source_setting_builder must be callable or None")
         self.manifest = manifest
         self._algorithm_class = algorithm_class
         self._algorithm_binding = algorithm_binding
         self._state_mappings = state_mappings
+        self._source_setting_builder = source_setting_builder
         self._terminal_mappings = terminal_mappings
         self._sealed = True
+
+    def conformance_runtime_binding_readback_v1(
+        self,
+    ) -> tuple[VnpyFacadeAlgorithmBindingV1 | VnpyFacadeAlgorithmBindingV2, str]:
+        """Expose immutable binding identity without leaking mutable runtime state."""
+
+        return (
+            self._algorithm_binding,
+            f"{self._algorithm_class.__module__}:{self._algorithm_class.__qualname__}",
+        )
 
     def initialize(self, context: AlgoStartContextV1) -> AlgoInitializationV1:
         raise _binding_error(
@@ -226,7 +244,7 @@ class VnpyFacadeBackedPluginAdapterV1:
             invocation_input.transition_id,
         )
         facade = VnpyAlgoEngineFacadeV1.create(invocation_input, collector)
-        config = thaw_json_v1(context.plugin_config)
+        config = self._source_setting_v1(thaw_json_v1(context.plugin_config))
         try:
             algorithm = self._algorithm_class(
                 facade,
@@ -347,7 +365,7 @@ class VnpyFacadeBackedPluginAdapterV1:
             invocation_input.transition_id,
         )
         facade = VnpyAlgoEngineFacadeV1.create(invocation_input, collector)
-        config = thaw_json_v1(context.plugin_config)
+        config = self._source_setting_v1(thaw_json_v1(context.plugin_config))
         try:
             algorithm = self._algorithm_class(
                 facade,
@@ -455,6 +473,45 @@ class VnpyFacadeBackedPluginAdapterV1:
                 invocation_input.algo_instance.active_child_closure_status,
             ),
         )
+
+    def _source_setting_v1(self, canonical_config: Any) -> dict[str, Any]:
+        """Construct one pinned-source setting mapping without defaults or cache.
+
+        K5 Stop's durable canonical decimal is deliberately a string while the
+        upstream class performs floating arithmetic.  Its process-local builder
+        is therefore explicit and revalidates the canonical input.  Existing
+        adapters retain the exact identity mapping.
+        """
+
+        if type(canonical_config) is not dict:
+            raise _binding_error(
+                "facade initialization config must be a strict object",
+                actual_type=type(canonical_config).__name__,
+            )
+        if self._source_setting_builder is None:
+            return dict(canonical_config)
+        try:
+            setting = self._source_setting_builder(canonical_config)
+        except VnpyFacadeContractError:
+            raise
+        except MiniQMTPluginContractError as exc:
+            raise _binding_error(
+                "facade source-setting config authority rejected its input",
+                source_reason_code=exc.reason_code.value,
+                source_context=json_safe_evidence_v1(exc.context),
+            ) from exc
+        except Exception as exc:
+            raise _binding_error(
+                "facade source-setting construction failed",
+                error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
+                error=json_safe_evidence_v1(exc),
+            ) from exc
+        if type(setting) is not dict:
+            raise _binding_error(
+                "facade source-setting builder returned a non-object",
+                actual_type=type(setting).__name__,
+            )
+        return setting
 
     def restore_algorithm_v1(
         self,
@@ -1147,6 +1204,11 @@ class VnpyFacadeBackedPluginAdapterV1:
             raise TypeError("active_child_closure_status must be ActiveChildClosureStatusV1")
         if envelope.ordered_active_orders:
             return None
+        effective_child_closure = (
+            ActiveChildClosureStatusV1.CLEAN
+            if active_child_closure_status is ActiveChildClosureStatusV1.NOT_APPLICABLE
+            else active_child_closure_status
+        )
         traded = float(envelope.traded_volume_decimal)
         target = float(envelope.target_volume_decimal)
         for mapping in self._terminal_mappings:
@@ -1156,7 +1218,7 @@ class VnpyFacadeBackedPluginAdapterV1:
                 continue
             if mapping.trigger_event_type not in {"ANY", event.event_type.value}:
                 continue
-            if mapping.required_active_child_closure != active_child_closure_status.value:
+            if mapping.required_active_child_closure != effective_child_closure.value:
                 continue
             relation = "FULL" if traded >= target else "RESIDUAL"
             if mapping.traded_relation not in {"ANY", relation}:
@@ -1223,6 +1285,19 @@ class VnpyFacadeBackedPluginAdapterV1:
                 runtime_binding_disposition=receipt.runtime_binding_disposition.value,
                 command_authority_disposition=receipt.command_authority_disposition.value,
             )
+        exact_binding_mapping_closure = (
+            receipt.state_mapping_set_sha256 == self._algorithm_binding.state_mapping_set_sha256
+            and receipt.terminal_mapping_set_sha256 == self._algorithm_binding.terminal_mapping_set_sha256
+        )
+        # K4's pre-K5 single-plugin V2 receipt carrier bound these fields to
+        # its one global set. Preserve that already-published shape exactly;
+        # a full-five K5 set must instead close to the adapter's per-algorithm
+        # binding and cannot enter this compatibility branch.
+        legacy_single_plugin_mapping_closure = (
+            len(conformance_set.ordered_receipts) == 1
+            and receipt.state_mapping_set_sha256 == conformance_set.state_mapping_set_sha256
+            and receipt.terminal_mapping_set_sha256 == conformance_set.terminal_mapping_set_sha256
+        )
         if (
             receipt.algo_code != self.manifest.algo_code
             or receipt.manifest_sha256 != self.manifest.manifest_sha256
@@ -1231,8 +1306,7 @@ class VnpyFacadeBackedPluginAdapterV1:
             != self._algorithm_binding.characterization_receipt_sha256
             or receipt.source_executor_binding_sha256 != self._algorithm_binding.source_executor_binding_sha256
             or receipt.source_execution_set_sha256 != self._algorithm_binding.source_execution_set_sha256
-            or receipt.state_mapping_set_sha256 != conformance_set.state_mapping_set_sha256
-            or receipt.terminal_mapping_set_sha256 != conformance_set.terminal_mapping_set_sha256
+            or not (exact_binding_mapping_closure or legacy_single_plugin_mapping_closure)
             or receipt.source_executor_binding_sha256 != conformance_set.source_executor_binding_sha256
         ):
             raise _binding_error(

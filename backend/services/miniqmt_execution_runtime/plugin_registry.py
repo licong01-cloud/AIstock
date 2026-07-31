@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal, Self
+from typing import Any, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import StrictBool, ValidationError, model_validator
 
@@ -21,6 +21,11 @@ from .plugin_canonical import (
     thaw_json_v1,
 )
 from .plugin_contracts import (
+    AlgoInitializationV1,
+    AlgoReadOnlyServicesV1,
+    AlgoStartContextV1,
+    AlgoStateSnapshotV2,
+    AlgoTransitionV1,
     ExecutionAlgoPluginManifestV2,
     FrozenJsonFieldV1,
     FrozenJsonObjectFieldV1,
@@ -29,9 +34,30 @@ from .plugin_contracts import (
     IdentityV1,
     MiniQMTPluginContractError,
     MiniQMTPluginReasonCode,
+    RuntimeEventEnvelopeV2,
     Sha256V1,
     compatibility_component_hashes_v1,
 )
+
+
+@runtime_checkable
+class ExecutionAlgoPluginV2(Protocol):
+    """Pure process-binding SPI shared by catalog conformance and K2 invocation."""
+
+    manifest: ExecutionAlgoPluginManifestV2
+
+    def initialize(self, context: AlgoStartContextV1) -> AlgoInitializationV1: ...
+
+    def restore_state(self, snapshot: AlgoStateSnapshotV2) -> AlgoStateSnapshotV2: ...
+
+    def transition(
+        self,
+        *,
+        state: AlgoStateSnapshotV2,
+        event: RuntimeEventEnvelopeV2,
+        services: AlgoReadOnlyServicesV1,
+    ) -> AlgoTransitionV1: ...
+
 
 _MAX_BUILD_FAILURES = 256
 _CALLABLE_REF_SEPARATOR = ":"
