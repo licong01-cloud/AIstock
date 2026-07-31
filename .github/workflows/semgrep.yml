@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -52,7 +52,7 @@ jobs:
 
       - name: Set up Python 3.12
         if: steps.fast_lane.outputs.docs_lite != '1' && steps.fast_lane.outputs.registry_sync != '1'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload Semgrep report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: semgrep-${{ github.run_id }}
           path: tmp/validation/semgrep/

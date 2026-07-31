@@ -1,6 +1,16 @@
 {
   "actual": "GitHub Actions workflows still reference Node 20-based checkout, artifact, setup, github-script, and CodeQL actions. GitHub currently forces Node 24 and emits deprecation annotations. Upgrade all affected workflow references to the first native Node 24 major versions while preserving workflow behavior, then validate Nightly, CodeGraph, CI, and CodeQL contracts.",
   "allowed_write_scope": [
+    ".github/workflows/code-intelligence-refresh.yml",
+    ".github/workflows/codeql.yml",
+    ".github/workflows/dependency-update-validate.yml",
+    ".github/workflows/issue-auto-link.yml",
+    ".github/workflows/issue-on-guardrail-fail.yml",
+    ".github/workflows/issue-on-test-fail.yml",
+    ".github/workflows/nightly.yml",
+    ".github/workflows/pr-quality.yml",
+    ".github/workflows/semgrep.yml",
+    ".github/workflows/test.yml",
     "tests/aistock_validation/bugs/20260731_BUG-933-upgrade-github-actions-to-native-node-24-runtimes.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -26,17 +36,137 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/issue-auto-link.yml",
+      ".github/workflows/issue-on-guardrail-fail.yml",
+      ".github/workflows/issue-on-test-fail.yml",
+      ".github/workflows/nightly.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/test.yml"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        ".github/workflows/code-intelligence-refresh.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/dependency-update-validate.yml",
+        ".github/workflows/issue-auto-link.yml",
+        ".github/workflows/issue-on-guardrail-fail.yml",
+        ".github/workflows/issue-on-test-fail.yml",
+        ".github/workflows/nightly.yml",
+        ".github/workflows/pr-quality.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/test.yml"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "platform.config",
+        "validation.center",
+        "validation.runner"
+      ],
+      "matched_rules": [
+        {
+          "file": ".github/workflows/code-intelligence-refresh.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/codeql.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/dependency-update-validate.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/issue-auto-link.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/issue-on-guardrail-fail.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/issue-on-test-fail.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/nightly.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/pr-quality.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/semgrep.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/test.yml",
+          "impact_modules": ["platform.config", "validation.center", "validation.runner"],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        }
+      ],
+      "risk_levels": ["high"],
+      "suggested_scope": [
+        ".github/workflows/code-intelligence-refresh.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/dependency-update-validate.yml",
+        ".github/workflows/issue-auto-link.yml",
+        ".github/workflows/issue-on-guardrail-fail.yml",
+        ".github/workflows/issue-on-test-fail.yml",
+        ".github/workflows/nightly.yml",
+        ".github/workflows/pr-quality.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/test.yml"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/issue-auto-link.yml",
+      ".github/workflows/issue-on-guardrail-fail.yml",
+      ".github/workflows/issue-on-test-fail.yml",
+      ".github/workflows/nightly.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/test.yml"
+    ]
   },
   "first_seen_at": "2026-07-31T02:11:25.075675Z",
   "fix_branch": null,

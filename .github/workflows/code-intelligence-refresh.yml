@@ -157,7 +157,7 @@ jobs:
 
       - name: Upload refresh evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: code-intelligence-refresh-${{ github.run_id }}
           path: tmp/validation/code-intelligence/${{ github.run_id }}/
