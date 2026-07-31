@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v2.13
+> **版本**: v2.14
 > **日期**: 2026-07-16  
 > **修订日期**: 2026-07-31
-> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活。Phase 2 的数据/PIT/observation政策、D3-D7精确合同和Slice 0 model-preparation源码均已完成；固定单线程Conda `AIstock`环境已完成两次fresh-process正式制备，共`5184/5184` fits。D5仅选出`legacy_covfix:L1/seed=43`，该level在D6因`801980.SI` temporal evidence失败，其余三个family/level无eligible candidate；两family均blocked、READY=0。随后`C-008-B3-FORMAL-BLOCKER-DIAG-01`完成348/348 targeted fits与3-entry D6 no-refit replay；下一项`C-008-B3-REMEDIATION-DIAG-02`仍为待用户确认的no-fit提案。F-011为`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE`，F-012为`DESIGN_READY_USER_APPROVED`，F-013为`PENDING_UPSTREAM_MODEL_SET`；generator/job/API/UI/runtime未完成。Phase 3只有跨阶段方向，仍待独立实现级F2设计；Phase 4+仍待独立设计。按Design Acceptance Matrix的17个独立验收行（F-001～F-016，另含F-010A）严格计数，当前完成`11/17=64.71%`，不把设计批准、局部源码或diagnostic completion算作完整交付。Gate truth：既有`hmm_evolution_v1/v2/v3` production `applied_and_verified`；本次docs-only修订的production DDL/dependency/runtime gates均为`noop`（§13）
+> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活。Phase 2 的数据/PIT/observation政策、D3-D7精确合同和Slice 0 model-preparation源码均已完成；固定单线程Conda `AIstock`环境已完成两次fresh-process正式制备，共`5184/5184` fits。D5仅选出`legacy_covfix:L1/seed=43`，该level在D6因`801980.SI` temporal evidence失败，其余三个family/level无eligible candidate；两family均blocked、READY=0。随后`C-008-B3-FORMAL-BLOCKER-DIAG-01`完成348/348 targeted fits与3-entry D6 no-refit replay；`C-008-B3-REMEDIATION-DIAG-02`又完成324/324 train profiles、163/163 completed entries与11/11 initialization sources的no-fit闭合，canonical=`48157a42…bb58`。当前`C-008-B3-REMEDIATION-D1`精确设计已完成并正式审核，A/B选择、32-fit controlled-refit与D5 19/20维comparability仍为proposed，禁止实现或执行。F-011为`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE`，F-012为`DESIGN_READY_USER_APPROVED`，F-013为`PENDING_UPSTREAM_MODEL_SET`；generator/job/API/UI/runtime未完成。Phase 3只有跨阶段方向，仍待独立实现级F2设计；Phase 4+仍待独立设计。按Design Acceptance Matrix的17个独立验收行（F-001～F-016，另含F-010A）严格计数，当前完成`11/17=64.71%`，不把设计批准、局部源码或diagnostic completion算作完整交付。Gate truth：既有`hmm_evolution_v1/v2/v3` production `applied_and_verified`；本次docs-only修订的production DDL/dependency/runtime gates均为`noop`（§13）
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -364,10 +364,15 @@ blocked，model/READY、database与runtime write/action均为false。
 `10287e845f07bf3d9c15a68e5d09ad14e54613348824ac2af568f0244a1cffe8`。证据证明blocker跨initialization、likelihood、
 covariance与train structure，不支持只换seed、只放宽阈值、排除family/sector或使用validation reselect。
 
-F-011当前为`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE`。下一步提案
-`C-008-B3-REMEDIATION-DIAG-02`只扫描324个train profile并重聚合163个既有fit entry，0 KMeans、0 HMM fit、
-0 D5/D6且不访问validation；该提案尚未获用户执行确认，不构成新gate或implementation完成。F-012保持设计批准，F-013
-继续等待完整READY model set；generator/job/API/UI/runtime均未实施。
+`C-008-B3-REMEDIATION-DIAG-02`已按批准合同完成：producer=`b2456424b859f1635635129aa6a826a677f4fdec`、canonical=
+`48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58`；324/324 train profiles、163/163 completed entries与
+11/11 initialization sources闭合，0 HMM refit/D5/D6/validation/model/READY/DB/runtime。证据只确认唯一zero-variance profile、
+46个train-structure failed entries、4个跨8-seed persistent sector identity与6个statistic-insufficient groups，不批准模型修订。
+
+F-011当前为`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE`。下一步D1设计在A保持
+fail-closed与B显式inactive-dimension identity之间推荐B，但A/B、32-fit treatment/control执行和D5 19/20维score comparability均
+`PROPOSED_PENDING_USER_APPROVAL`。D1已定义mixed-dimension model-set、parser/runtime receipt和controlled-refit结果分类，但不构成
+implementation ready。F-012保持设计批准，F-013继续等待完整READY model set；generator/job/API/UI/runtime均未实施。
 
 **数据库 Schema**：父设计不复制一份可能漂移的简化 DDL。唯一 implementation-level schema contract 位于
 Phase 2 详细设计 §8，精确定义 `daily_generation_run`、`sector_state_timeline`、`daily_alert`、`risk_event`、
@@ -838,7 +843,7 @@ docs/
    BUG-788、BUG-798、BUG-800 和 BUG-804 补齐源 loop 股票池 ∩ QE ST-PIT universe、全股票收益证据、
    逐日状态、内容校验重放和 pre-ST-PIT allowlisted compatibility；F-007/F-009 已验证。
 6. **P1-C API/UI（外部验收已完成）**：F-010 API/UI、worker CLI/service 和 BUG-742～BUG-748 审计修复已实现；schema v2 worker、10-case、10/9 候选性能、进程中断 fail-closed 与显式 retry receipt 已完成；2026-07-22 严格冷热缓存分段 timing/RSS benchmark matrix、真实 UI/Playwright 18 场景与 worker bounded soak 全部完成（Phase 1 详细设计 §17.4.6）。
-7. **P2 风险分析**：独立F2详细设计、数据/PIT/observation政策和Slice 0 model-preparation源码已完成；正式5184-fit grid、D5/D6与targeted blocker diagnostic均已执行但fail closed，READY=0。当前先等待用户决定`C-008-B3-REMEDIATION-DIAG-02` no-fit证据闭合提案；证据完成后每次只设计/验证一个最小model mechanism，不并行修改initialization/EM/covariance/transition，不触碰旧gate或交易provider接线。只有完整两family L1/L2 READY后才进入generator/job/API/UI slices；每个PR合入仍须用户逐PR确认。
+7. **P2 风险分析**：独立F2详细设计、数据/PIT/observation政策和Slice 0 model-preparation源码已完成；正式5184-fit grid、D5/D6、targeted blocker diagnostic与no-fit REMEDIATION-DIAG-02均已执行但fail closed，READY=0。当前等待用户决定D1-A/B；唯一推荐D1-B的下一验证是固定801207 treatment与801011 control的双fresh-process共32 fits，仍为0 D5/D6/validation/model/READY。D5 19/20维score comparability保持独立blocked；不得由实现猜测。只有完整两family L1/L2 READY后才进入generator/job/API/UI slices；每个PR合入仍须用户逐PR确认。
 8. **P3 研究训练**：F-014 research-only rolling candidate 与 F-015 manual-first/automation boundary 只有跨阶段方向；必须先建立独立实现级 F2 设计、Design Acceptance Index 和验证矩阵。自动调度仍未批准，不得直接进入代码或复用旧 production training tick。
 
 每个实现 PR 只承担一个可验证 slice，并在 PR body 中列设计项、实现引用、验证证据、生产门禁与未批准缺口；
@@ -846,8 +851,9 @@ slice 不得被误报为整个 Phase 完成。Phase 0 BUG 修复走 issue workfl
 branch/commit/push/PR/CI 可按流程继续，但所有 PR 必须在 merge 前停止，并取得用户对该 PR 的明确确认；不得自动合入或执行 merge-aftercare。
 
 本文对 Phase 2/3 给出跨阶段权威边界和已确认 UI 契约。Phase 2 从属详细设计只有明确标记为
-用户已批准的精确条目可进入实现；F-011的D3-D7与Slice 0源码已完成，但formal acceptance与两family READY仍blocked，
-未获确认的remediation/DIAG-02不得进入实现。Phase 3仍须独立
+用户已批准的精确条目可进入实现；F-011的D3-D7与Slice 0源码已完成，但formal acceptance与两family READY仍blocked。
+REMEDIATION-DIAG-02已执行且仅形成诊断证据；D1-A/B、32-fit controlled-refit与D5 comparability未获确认，不得进入实现或执行。
+Phase 3仍须独立
 实现级详细设计。开始对应代码前必须先具备对应 F2 validator PASS 与正式审核结论；这是
 DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产品审批流。
 
@@ -885,7 +891,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | Phase 2 F2详细设计 §4～§9；`backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`；`scripts/hmm_risk/prepare_state_model_set.py` | formal artifact `F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_e2c01bae_bug912/b3_formal_preparation.json` canonical `e7992f87…39f`；blocker diagnostic `F:/Dev/AIstock_artifacts/hmm_risk/b3_blocker_diag01_20260731_ac3687c2/blocker_diagnostic.json` canonical `10287e84…cffe8`；`backend/tests/hmm_risk/{test_b3_training,test_b3_acceptance}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE | 两family blocked、READY=0；150 rejected pair根因跨initialization/likelihood/covariance/train structure。DIAG-02仍待用户确认，禁止自动改阈值/模型、扩大seed、排除family/sector或重跑完整grid |
+| F-011 | Phase 2 F2详细设计 §4～§9；`backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_remediation_diagnostic,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`；`scripts/hmm_risk/prepare_state_model_set.py` | formal artifact canonical `e7992f87…39f`；blocker diagnostic canonical `10287e84…cffe8`；remediation DIAG-02 canonical `48157a42…bb58`；`backend/tests/hmm_risk/{test_b3_training,test_b3_acceptance,test_b3_remediation_diagnostic}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE | 两family blocked、READY=0；DIAG-02已闭合324 profiles/163 completed/11 initialization sources但未批准模型。D1-A/B、32-fit controlled-refit与D5 19/20 score comparability仍pending，禁止自动改模型/阈值、扩大seed、排除family/sector或重跑完整grid |
 | F-012 | Phase 2 F2 详细设计 §14：advisory-only service boundary | `backend/tests/hmm_risk/test_isolation.py`（目标路径，断言 Selection/Paper/QMT 无写入） | DESIGN_READY_USER_APPROVED | 用户明确批准 legacy producer/consumer 冻结与 advisory-only 隔离；源码与结果证据待实现 PR 回填 |
 | F-013 | Phase 2 F2 详细设计 §9～§11：C-003-A report + `/hmm-risk` 默认首页 | `backend/tests/hmm_risk/test_retrospective_report.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts`（目标路径：L1/L2/7 日 heatmap、固定详情、预警、renderer/error、report denominator） | USER_APPROVED_PENDING_UPSTREAM_MODEL_SET | 用户明确批准 API/UI 合同；真实验收依赖 F-011 READY model set，源码未实施 |
 | F-014 | 本文 Phase 3 UI/隔离方向；research-only rolling candidate + `/hmm-research-training` | `backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts`（目标路径，尚未建立） | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 用户批准跨阶段方向；不得从父蓝图直接编码，身份、训练任务、artifact、状态机、API/UI 和验证合同待独立设计 |
@@ -947,6 +953,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v2.14 | 2026-07-31 | 同步Phase 2 REMEDIATION-DIAG-02正式执行：producer `b2456424…`、canonical `48157a42…bb58`、324/324 profiles、163/163 completed entries与11/11 initialization sources闭合，0 HMM refit/D5/D6/model/READY/DB/runtime。登记D1-A/B精确设计、mixed-dimension level/family artifact、runtime inactive-observation receipt、32-fit controlled-refit结果分类与D5 19/20维comparability blocker；A/B和执行均未获批准。F-011与严格进度仍为blocked和`11/17=64.71%`，不把diagnostic/design completion计为交付。本次仅文档修订，DDL/DML/dependency/runtime均noop。 |
 | v2.13 | 2026-07-31 | 同步Phase 2最新权威状态：D3-D7精确合同、C-009/C-010输入政策与Slice 0源码已完成；formal producer `e2c01bae…`完成5184/5184 fits但两family blocked、READY=0；blocker diagnostic producer `ac3687c2…`完成348/348 targeted fits与3-entry D6 replay。F-011更新为source implemented/formal executed/diagnosed/blocked，F-012保持design ready，F-013保持upstream pending；登记`C-008-B3-REMEDIATION-DIAG-02`为待用户确认的no-fit提案。修复F-002、Phase 1收官状态与F-011/F-012/F-013状态枚举过期，并区分Phase 1 production activation dependency gate与Phase 2 controlled-training依赖事实；按矩阵17个独立验收行记录严格进度`11/17=64.71%`。本次仅文档状态同步，DDL/DML/dependency/runtime均noop。 |
 | v2.12 | 2026-07-25 | 同步 Phase 2 C-008-B3 最新权威状态：回填 STRUCTURAL-A、D3-01-A、D3-02-B、固定环境 D5-02-B、D7-01-A、DIAG-02 与 D4-02-DIAG-03；登记 DIAG-03 否定统一 `[1e-4,200]` zero-anomaly covariance 候选但未批准替代阈值；F-011 修正为 blocked、F-013 修正为 upstream pending。同步 Phase 3 父蓝图与实现就绪边界：F-014 等待独立实现级 F2 设计，F-015 自动调度未批准，防止从父蓝图直接编码。无源码、DDL、依赖或 runtime 变化。 |
 | v2.11 | 2026-07-22 | 回填用户批准 C-001-A/C-002-A/C-003-A：17 个 candidate 明确分为 13 个 direct state producer（两个 L2 model SHA）与 4 个 coefficient-only non-state producer；采用成对独立 direct L1/L2 `hmm_risk_state_model_set_v1`，禁止 posterior aggregation；批准 5/10/20 连续回溯证据、5D excess q20 次级 oracle、90% coverage 与 OPPORTUNITY 单列；F-011～F-013 更新为 `DESIGN_READY_USER_APPROVED`。Phase 2 源码、DDL、UI、runtime 仍未实施。 |
