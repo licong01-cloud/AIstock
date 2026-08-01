@@ -1138,11 +1138,22 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["backend/tests/scripts/test_aistock_issue_workflow.py"],
         root=isolated_workflow_root,
     )
+    offline_hmm_preparation = workflow._classify_runtime_impact(
+        ["scripts/hmm_risk/prepare_state_model_set.py"],
+        root=isolated_workflow_root,
+    )
+    unmapped_script = workflow._classify_runtime_impact(
+        ["scripts/hmm_risk/unmapped_runtime_candidate.py"],
+        root=isolated_workflow_root,
+    )
 
     assert dependency["runtime_impact"] == "backend"
     assert dependency["target_ids"] == ["backend-main"]
     assert client["runtime_impact"] == "client"
     assert backend_test["runtime_impact"] == "none"
+    assert offline_hmm_preparation["runtime_impact"] == "none"
+    assert offline_hmm_preparation["runtime_files"] == []
+    assert unmapped_script["runtime_impact"] == "unknown"
 
 
 def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
