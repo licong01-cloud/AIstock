@@ -209,6 +209,48 @@
     "C-010-A5 design-only stage: rtk nox -s validation_module_registry_l0 -> PASS, 8 tests passed and 14/14 catalog files mapped",
     "C-010-A5 design-only stage: git diff --check origin/main...HEAD -> PASS; no source implementation, HMM fit, selection, model/READY, database write, or runtime action was performed"
   ],
+  "validation_receipts": [
+    {
+      "command": "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2",
+      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
+      "evidence_kind": "feature_validation",
+      "plan": "hmm_phase2_f2_design",
+      "receipt_id": "3d54a3aa0354a15b",
+      "result": "passed, 3 design items, 8 matrix rows, 0 warnings",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "rtk nox -s l0",
+      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "3aeb0a8fc44618d7",
+      "result": "passed, blocking=0",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "rtk nox -s validation_module_registry_l0",
+      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "4acb895ebf4c4374",
+      "result": "passed, 8 tests and 14/14 mapped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check origin/main...HEAD",
+      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
+      "evidence_kind": "diff_check",
+      "plan": "git_diff_check",
+      "receipt_id": "e2a087fbadc6a5e4",
+      "result": "passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
