@@ -1,0 +1,217 @@
+{
+  "actual": "Formal MA-E01 8/8 trial completed, but action ledgers contain only ENTRY_BLOCK and MISSING_ARTIFACT_ROW; DE_RISK_SELL, EXIT and REENTRY_BUY are zero because the selected parent strategy never invokes the overlay rebalance hooks. Restore bounded de-risk, exit and reentry execution, retain fail-fast and missing-row neutrality, and rerun the same candidate.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "scripts/qe_sector_risk_overlay_strategy.py",
+    "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+    "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+    "tests/aistock_validation/bugs/20260731_BUG-939-bug-939-p1-ma-e01-sector-risk-rebalance-hooks-are-never-invoked.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-939",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-31T18:52:19.935074Z",
+  "description": "Formal MA-E01 8/8 trial completed, but action ledgers contain only ENTRY_BLOCK and MISSING_ARTIFACT_ROW; DE_RISK_SELL, EXIT and REENTRY_BUY are zero because the selected parent strategy never invokes the overlay rebalance hooks. Restore bounded de-risk, exit and reentry execution, retain fail-fast and missing-row neutrality, and rerun the same candidate.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260731-a9066be0d304",
+      "timestamp": "2026-07-31T18:52:19.935068Z"
+    }
+  ],
+  "evidence_uris": [
+    "run:macb_453ca2d0c5b21b40_20240701_20260629_20260731T142938839142Z_9b38b8a9",
+    "run:macb_453ca2d0c5b21b40_20240701_20260629_20260731T142941112119Z_3472053c",
+    "run:macb_453ca2d0c5b21b40_20240701_20260629_20260731T142943759279Z_de19936b"
+  ],
+  "expected": "Every sector-overlay materialization carries the dedicated ScoreWeighted V2 parent modules that invoke target-weight and additional-rebalance hooks. bounded_de_risk and exit_reentry must emit auditable DE_RISK_SELL/EXIT/REENTRY_BUY decisions when triggered, and must fail closed at strategy construction if the required parent hooks are absent.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/qe_sector_risk_overlay_strategy.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+      "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py"
+    ],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/qe_sector_risk_overlay_strategy.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+      "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py"
+    ]
+  },
+  "first_seen_at": "2026-07-31T18:52:19.935074Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2997,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2997",
+  "last_seen_at": "2026-07-31T18:52:19.935074Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run the frozen MA-E01 bounded_de_risk or exit_reentry pred-backtest and inspect qe_sector_risk_overlay_actions.jsonl; the affected runtime emits ENTRY_BLOCK/MISSING_ARTIFACT_ROW only because custom_strategy.ScoreWeightedTopkStrategyV2 does not invoke the overlay rebalance hooks.",
+  "required_verification": [
+    "l0",
+    "qe_sector_risk_overlay_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "GET http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/{run_id} plus fixed-candidate action-ledger readback",
+    "database_readback_ref": "noop:no_database_change",
+    "fresh_process_evidence": [
+      "fresh Python process imported ConfigComposer helper contract and verified dedicated V2/Capacity/overlay modules are present -> PASS",
+      "python fresh-process ConfigComposer helper contract import -> PASS"
+    ],
+    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "BUG-939 P1: MA-E01 sector-risk rebalance hooks are never invoked",
+  "trigger_condition": {
+    "fingerprint": "a9066be0d3040ca2f8853f65",
+    "source_event_id": "FE-20260731-a9066be0d304"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_sector_risk_overlay_config.py backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py -q -> 11 passed",
+    "python -m nox -s qe_sector_risk_overlay_backend -> 46 passed",
+    "fresh Python process imported ConfigComposer helper contract -> PASS",
+    "python -m nox -s guardrail_changed_files -> staged files 2/2 mapped, 0 blocking findings",
+    "python -m nox -s l0 -> passed, 0 new blocking findings",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14/14"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

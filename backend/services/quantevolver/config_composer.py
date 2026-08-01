@@ -431,6 +431,26 @@ RISK_POLICY_FILE = "qe_event_risk_policy.json"
 SECTOR_RISK_OVERLAY_MANIFEST_FILE = "qe_sector_risk_overlay_manifest.json"
 SECTOR_RISK_OVERLAY_DATA_FILE = "qe_sector_risk_overlay.parquet"
 SECTOR_RISK_OVERLAY_ACTION_LOG = "qe_sector_risk_overlay_actions.jsonl"
+
+QE_STRATEGY_RUNTIME_HELPER_FILES = (
+    "qe_board_lot_exchange.py",
+    "qe_suspend_filter.py",
+    "qe_event_risk_policy.py",
+    "qe_suspend_filter_strategy.py",
+    "qe_suspend_filter_score_weighted_strategy.py",
+    "score_weighted_strategy_v2.py",
+    "score_weighted_strategy_v2_capacity_v1.py",
+    "qe_sector_risk_overlay.py",
+    "qe_sector_risk_overlay_strategy.py",
+    "qe_sector_risk_overlay_artifacts.py",
+)
+
+QE_MINUTE_RUNTIME_HELPER_FILES = (
+    "tail_twap_v25_strategy.py",
+    "tail_twap_v25_1_strategy.py",
+    "close_execution_strategy.py",
+    *QE_STRATEGY_RUNTIME_HELPER_FILES,
+)
 PRECOMPUTED_HMM_COEFF_JSON_PARAM = "_precomputed_hmm_coefficients_json"
 QE_LOCAL_STRATEGY_ROOTS = [
     AISTOCK_PROJECT_ROOT / "backend" / "rebalance_strategies",
@@ -1823,7 +1843,7 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
+            for helper_name in QE_MINUTE_RUNTIME_HELPER_FILES:
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
@@ -1831,7 +1851,7 @@ class ConfigComposer:
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
+        for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES:
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)
@@ -2237,7 +2257,7 @@ class ConfigComposer:
             v24_path = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_path.exists():
                 experiment_files["tail_twap_v24_strategy.py"] = v24_path.read_text(encoding="utf-8")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
+            for helper_name in QE_MINUTE_RUNTIME_HELPER_FILES:
                 helper_path = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_path.exists():
                     experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -2248,7 +2268,7 @@ class ConfigComposer:
                 experiment_files["benchmark_sh000300.parquet.b64"] = base64.b64encode(
                     bench_path.read_bytes()
                 ).decode("ascii")
-        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
+        for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES:
             helper_path = scripts_dir / helper_name
             if helper_path.exists():
                 experiment_files[helper_name] = helper_path.read_text(encoding="utf-8")
@@ -2952,14 +2972,14 @@ class ConfigComposer:
             v24_src = scripts_dir / "tail_twap_v24_strategy.py"
             if v24_src.exists():
                 shutil.copy2(v24_src, exp_dir / "tail_twap_v24_strategy.py")
-            for helper_name in ("tail_twap_v25_strategy.py", "tail_twap_v25_1_strategy.py", "qe_board_lot_exchange.py", "close_execution_strategy.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
+            for helper_name in QE_MINUTE_RUNTIME_HELPER_FILES:
                 helper_src = self._resolve_qe_helper_asset(scripts_dir, helper_name)
                 if helper_src.exists():
                     shutil.copy2(helper_src, exp_dir / helper_name)
             bench_src = scripts_dir / "benchmark_sh000300.parquet"
             if bench_src.exists():
                 shutil.copy2(bench_src, exp_dir / "benchmark_sh000300.parquet")
-        for helper_name in ("qe_board_lot_exchange.py", "qe_suspend_filter.py", "qe_event_risk_policy.py", "qe_suspend_filter_strategy.py", "qe_suspend_filter_score_weighted_strategy.py", "qe_sector_risk_overlay.py", "qe_sector_risk_overlay_strategy.py", "qe_sector_risk_overlay_artifacts.py"):
+        for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES:
             helper_src = scripts_dir / helper_name
             if helper_src.exists():
                 shutil.copy2(helper_src, exp_dir / helper_name)

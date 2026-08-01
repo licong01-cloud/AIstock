@@ -8,11 +8,9 @@ from pathlib import Path
 from qlib.backtest.decision import Order, OrderDir
 
 from qe_sector_risk_overlay import QESectorRiskOverlayPolicy
-from qe_suspend_filter_score_weighted_strategy import (
-    _SuspendFilterScoreWeightedMixin,
-    ScoreWeightedTopkStrategyV2,
-    ScoreWeightedTopkStrategyV2CapacityV1,
-)
+from qe_suspend_filter_score_weighted_strategy import _SuspendFilterScoreWeightedMixin
+from score_weighted_strategy_v2 import ScoreWeightedTopkStrategyV2
+from score_weighted_strategy_v2_capacity_v1 import ScoreWeightedTopkStrategyV2CapacityV1
 
 
 class _QESectorRiskOverlayMixin:
@@ -57,6 +55,24 @@ class _QESectorRiskOverlayMixin:
         self._qe_sector_risk_missing_action_keys = set()
         self._qe_sector_risk_last_multiplier = {}
         self._qe_sector_risk_base_weights = {}
+        if self._qe_sector_risk_policy.enabled and self._qe_sector_risk_policy.mode in {
+            "bounded_de_risk",
+            "exit_reentry",
+        }:
+            parent = super(_QESectorRiskOverlayMixin, self)
+            missing_hooks = [
+                name
+                for name in (
+                    "_adjust_target_weight_map",
+                    "_build_additional_rebalance_orders",
+                )
+                if not callable(getattr(parent, name, None))
+            ]
+            if missing_hooks:
+                raise RuntimeError(
+                    "QE sector-risk overlay parent strategy is missing required rebalance hooks: "
+                    + ", ".join(missing_hooks)
+                )
 
     def _record_sector_risk_action(self, payload):
         if not self._qe_sector_risk_policy.enabled:

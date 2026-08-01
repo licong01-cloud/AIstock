@@ -7,6 +7,8 @@ import pandas as pd
 import pytest
 
 from backend.services.quantevolver.config_composer import (
+    QE_MINUTE_RUNTIME_HELPER_FILES,
+    QE_STRATEGY_RUNTIME_HELPER_FILES,
     SECTOR_RISK_OVERLAY_ACTION_LOG,
     SECTOR_RISK_OVERLAY_DATA_FILE,
     SECTOR_RISK_OVERLAY_MANIFEST_FILE,
@@ -73,6 +75,16 @@ def test_prepare_packages_verified_artifacts_and_runtime_names(tmp_path) -> None
     assert params["sector_risk_overlay_manifest_file"] == SECTOR_RISK_OVERLAY_MANIFEST_FILE
     assert params["sector_risk_overlay_data_file"] == SECTOR_RISK_OVERLAY_DATA_FILE
     assert params["sector_risk_overlay_action_log"] == SECTOR_RISK_OVERLAY_ACTION_LOG
+
+
+def test_qe_materialization_includes_rebalance_hook_parent_modules() -> None:
+    required = {
+        "score_weighted_strategy_v2.py",
+        "score_weighted_strategy_v2_capacity_v1.py",
+        "qe_sector_risk_overlay_strategy.py",
+    }
+    assert required <= set(QE_STRATEGY_RUNTIME_HELPER_FILES)
+    assert required <= set(QE_MINUTE_RUNTIME_HELPER_FILES)
 
 
 def test_prepare_rejects_runtime_hash_drift(tmp_path) -> None:
