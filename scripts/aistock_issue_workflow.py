@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import fnmatch
 import hashlib
 import io
 import json
@@ -15,6 +16,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1545,7 +1547,7 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
     for target_id, target in targets.items():
         if not isinstance(target, dict):
             raise WorkflowError(f"runtime target {target_id} must be a mapping")
-        for field in ("runtime_kind", "source_globs", "operator_runbook_ref", "expected_identity_ref", "probes"):
+        for field in ("runtime_kind", "source_globs", "operator_runbook_ref", "expected_identity_ref", "probe_origins", "probes"):
             if not target.get(field):
                 raise WorkflowError(f"runtime target {target_id} is missing {field}")
         port = target.get("production_port")
@@ -1557,14 +1559,31 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
     return payload
 
 
-def _classify_runtime_impact(changed_files: Iterable[str]) -> dict[str, Any]:
-    normalized = sorted({str(item).replace("\\", "/").lstrip("./") for item in changed_files if str(item).strip()})
+def _runtime_glob_matches(path: str, pattern: str) -> bool:
+    candidates = {pattern}
+    current = pattern
+    while "**/" in current:
+        current = current.replace("**/", "", 1)
+        candidates.add(current)
+    return any(fnmatch.fnmatchcase(path, candidate) for candidate in candidates)
+
+
+def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None = None) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    normalized = sorted(
+        {
+            str(item).replace("\\", "/").removeprefix("./")
+            for item in changed_files
+            if str(item).strip()
+        }
+    )
     impacts: set[str] = set()
     runtime_files: list[str] = []
     target_ids: set[str] = set()
+    catalog_targets: dict[str, Any] = {}
+    with contextlib.suppress(WorkflowError):
+        catalog_targets = (_load_runtime_target_catalog(root).get("targets") or {})
     known_non_runtime_prefixes = (
-        ".codex/",
-        ".claude/",
         ".github/",
         "backend/tests/",
         "docs/",
@@ -1580,8 +1599,29 @@ def _classify_runtime_impact(changed_files: Iterable[str]) -> dict[str, Any]:
     }
     for path in normalized:
         lower = path.lower()
+        if lower.startswith((".codex/", ".claude/")):
+            impacts.add("client")
+            continue
         if path in known_non_runtime_files or lower.startswith(known_non_runtime_prefixes):
             impacts.add("none")
+            continue
+        matched_targets: list[tuple[str, str]] = []
+        for catalog_target_id, catalog_target in catalog_targets.items():
+            if not isinstance(catalog_target, dict):
+                continue
+            if any(
+                _runtime_glob_matches(path, str(pattern))
+                for pattern in flow._as_list(catalog_target.get("source_globs"))
+            ):
+                matched_targets.append((str(catalog_target_id), str(catalog_target.get("runtime_kind") or "unknown")))
+        worker_matches = [item for item in matched_targets if item[1] == "worker_scheduler"]
+        if worker_matches:
+            matched_targets = worker_matches
+        if matched_targets:
+            runtime_files.append(path)
+            for catalog_target_id, runtime_kind in matched_targets:
+                target_ids.add(catalog_target_id)
+                impacts.add(runtime_kind if runtime_kind in RUNTIME_IMPACTS else "unknown")
         elif lower.startswith("tdx-api-main/") and lower.endswith(".go"):
             impacts.add("backend")
             runtime_files.append(path)
@@ -1594,7 +1634,7 @@ def _classify_runtime_impact(changed_files: Iterable[str]) -> dict[str, Any]:
                 impacts.add("backend")
                 target_ids.add("backend-main")
             runtime_files.append(path)
-        elif lower.startswith("frontend/src/"):
+        elif lower.startswith(("frontend/src/", "frontend/app/", "frontend/pages/", "frontend/components/", "frontend/lib/")):
             impacts.add("frontend")
         elif lower.startswith(("migrations/", "backend/migrations/")) or lower.endswith(".sql"):
             impacts.add("database")
@@ -1626,6 +1666,46 @@ def _resolve_runtime_ref(value: Any, explicit: dict[str, Any]) -> str | None:
     return text
 
 
+def _validate_operator_runbook_ref(value: str | None, *, root: Path) -> str | None:
+    text = str(value or "").strip().replace("\\", "/")
+    if not text:
+        return "operator runbook ref is incomplete"
+    candidate = Path(text)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return f"operator runbook ref must be a repository-relative docs/operations file: {text}"
+    if not text.startswith("docs/operations/"):
+        return f"operator runbook ref must be under docs/operations: {text}"
+    resolved = (root / candidate).resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError:
+        return f"operator runbook ref escapes repository root: {text}"
+    if not resolved.is_file():
+        return f"operator runbook ref does not exist: {text}"
+    return None
+
+
+def _runtime_contract_digest(contract: dict[str, Any]) -> str:
+    target = contract.get("target") if isinstance(contract.get("target"), dict) else {}
+    payload = {
+        "schema_version": contract.get("schema_version"),
+        "runtime_impact": contract.get("runtime_impact"),
+        "target_id": contract.get("target_id"),
+        "target_ids": contract.get("target_ids") or [],
+        "catalog_ref": contract.get("catalog_ref"),
+        "operator_runbook_ref": contract.get("operator_runbook_ref"),
+        "expected_identity_ref": contract.get("expected_identity_ref"),
+        "probe_origins": target.get("probe_origins") or [],
+        "probes": target.get("probes") or {},
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _runtime_catalog_sha256(*, root: Path) -> str:
+    return hashlib.sha256((root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml").read_bytes()).hexdigest()
+
+
 def build_runtime_contract(
     *,
     record: dict[str, Any],
@@ -1634,15 +1714,48 @@ def build_runtime_contract(
     fresh_process_evidence: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    inferred = _classify_runtime_impact(changed_files)
+    inferred = _classify_runtime_impact(changed_files, root=root)
     explicit = record.get("runtime_contract") if isinstance(record.get("runtime_contract"), dict) else {}
-    runtime_impact = str(explicit.get("runtime_impact") or inferred["runtime_impact"])
+    blocking: list[str] = []
+    explicit_impact = str(explicit.get("runtime_impact") or "").strip()
+    inferred_impact = str(inferred["runtime_impact"])
+    if explicit and explicit.get("schema_version") != RUNTIME_CONTRACT_SCHEMA:
+        blocking.append(f"runtime_contract schema_version must be {RUNTIME_CONTRACT_SCHEMA}")
+    if explicit_impact and explicit_impact not in RUNTIME_IMPACTS:
+        blocking.append(f"runtime_contract runtime_impact is invalid: {explicit_impact}")
+        explicit_impact = "unknown"
+    runtime_impact = explicit_impact or inferred_impact
+    if inferred_impact != "none" and explicit_impact == "none":
+        blocking.append(
+            f"runtime_contract cannot downgrade inferred runtime impact: explicit=none inferred={inferred_impact}"
+        )
+        runtime_impact = inferred_impact
+    elif inferred_impact != "none" and explicit_impact and explicit_impact != inferred_impact:
+        blocking.append(
+            "runtime_contract impact conflicts with changed-file inference: "
+            f"explicit={explicit_impact} inferred={inferred_impact}"
+        )
+        runtime_impact = "unknown"
     if runtime_impact not in RUNTIME_IMPACTS:
         runtime_impact = "unknown"
-    target_ids = flow._unique_strings(flow._as_list(explicit.get("target_ids")) + inferred["target_ids"])
-    target_id = str(explicit.get("target_id") or (target_ids[0] if len(target_ids) == 1 else "")).strip() or None
-    backend_restart_required = runtime_impact in {"backend", "worker_scheduler"}
-    blocking: list[str] = []
+    explicit_target_ids = flow._unique_strings(
+        flow._as_list(explicit.get("target_ids")) + flow._as_list(explicit.get("target_id"))
+    )
+    inferred_target_ids = flow._unique_strings(inferred["target_ids"])
+    target_ids = flow._unique_strings(explicit_target_ids + inferred_target_ids)
+    if inferred_target_ids and explicit_target_ids and set(explicit_target_ids) != set(inferred_target_ids):
+        blocking.append(
+            "runtime_contract target set conflicts with changed-file inference: "
+            f"explicit={explicit_target_ids} inferred={inferred_target_ids}"
+        )
+    target_id = target_ids[0] if len(target_ids) == 1 else None
+    inferred_backend_restart = inferred_impact in {"backend", "worker_scheduler"}
+    backend_restart_required = inferred_backend_restart or runtime_impact in {"backend", "worker_scheduler"}
+    if backend_restart_required and len(target_ids) > 1:
+        blocking.append(
+            "multiple runtime targets require separate BUGs and post-restart receipts: "
+            + ", ".join(target_ids)
+        )
     target: dict[str, Any] | None = None
     catalog_ref = _repo_rel(root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml", root)
     if backend_restart_required:
@@ -1661,6 +1774,10 @@ def build_runtime_contract(
                 }
                 if not target.get("operator_runbook_ref"):
                     blocking.append(f"runtime target {target_id} operator runbook ref is incomplete")
+                else:
+                    runbook_error = _validate_operator_runbook_ref(target.get("operator_runbook_ref"), root=root)
+                    if runbook_error:
+                        blocking.append(f"runtime target {target_id} {runbook_error}")
                 for field in ("health_ref", "identity_ref", "business_smoke_ref"):
                     if not target["probes"].get(field):
                         blocking.append(f"runtime target {target_id} probe is incomplete: {field}")
@@ -1671,6 +1788,9 @@ def build_runtime_contract(
     elif runtime_impact == "unknown":
         blocking.append("runtime_impact is unknown and cannot be treated as none")
     persistence_basis = str(explicit.get("persistence_basis") or ("git_tracked_source" if backend_restart_required else "not_required"))
+    valid_persistence_basis = {"git_tracked_source", "controlled_migration", "controlled_config", "not_required"}
+    if persistence_basis not in valid_persistence_basis:
+        blocking.append(f"runtime_contract persistence_basis is invalid: {persistence_basis}")
     observed_fresh_process_evidence = flow._unique_strings(
         flow._as_list(explicit.get("fresh_process_evidence")) + list(fresh_process_evidence or [])
     )
@@ -1741,12 +1861,46 @@ def build_restart_plan(*, bug_id: str | None, issue_json: str | None) -> dict[st
     }
 
 
-def _read_only_http_probe(name: str, url: str, *, timeout_seconds: float = 15.0) -> dict[str, Any]:
-    if not re.match(r"^https?://", url, re.IGNORECASE):
-        return {"name": name, "url": url, "status": "blocked", "error": "probe ref must be an http(s) read-only endpoint"}
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        return None
+
+
+def _open_read_only_url(request: urllib.request.Request, *, timeout_seconds: float) -> Any:
+    return urllib.request.build_opener(_NoRedirectHandler()).open(request, timeout=timeout_seconds)
+
+
+def _normalized_http_origin(url: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return None
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+    host = parsed.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{parsed.scheme}://{host}:{port}"
+
+
+def _read_only_http_probe(
+    name: str,
+    url: str,
+    *,
+    allowed_origins: Iterable[str],
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    origin = _normalized_http_origin(url)
+    allowed = {_normalized_http_origin(item) for item in allowed_origins}
+    allowed.discard(None)
+    if origin is None:
+        return {"name": name, "url": url, "status": "blocked", "error": "probe ref must be an http(s) read-only endpoint without credentials"}
+    if origin not in allowed:
+        return {"name": name, "url": url, "status": "blocked", "error": f"probe origin is not catalog-allowed: {origin}"}
     request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/plain,*/*"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with _open_read_only_url(request, timeout_seconds=timeout_seconds) as response:
             body = response.read(1024 * 1024)
             status_code = int(getattr(response, "status", 200))
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -1757,8 +1911,47 @@ def _read_only_http_probe(name: str, url: str, *, timeout_seconds: float = 15.0)
         "status": "passed" if 200 <= status_code < 400 else "failed",
         "status_code": status_code,
         "response_sha256": hashlib.sha256(body).hexdigest(),
-        "response_preview": body[:512].decode("utf-8", errors="replace"),
+        "response_bytes": len(body),
+        "_response_body": body.decode("utf-8", errors="replace"),
     }
+
+
+def _identity_values(body: str) -> set[str]:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return {body.strip()} if body.strip() else set()
+    values: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if str(key).lower() in {"commit", "commit_sha", "git_sha", "identity", "merge_commit", "sha", "version"}:
+                    if isinstance(item, (str, int)):
+                        values.add(str(item).strip())
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(payload)
+    return {item for item in values if item}
+
+
+def _probe_evidence_digest(results: list[dict[str, Any]]) -> str:
+    payload = [
+        {
+            "name": item.get("name"),
+            "url": item.get("url"),
+            "status": item.get("status"),
+            "status_code": item.get("status_code"),
+            "response_sha256": item.get("response_sha256"),
+            "response_bytes": item.get("response_bytes"),
+        }
+        for item in results
+    ]
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def build_post_restart_verify(
@@ -1785,21 +1978,40 @@ def build_post_restart_verify(
     if not expected:
         blocking.append("expected merged runtime identity is required")
     probes = ((contract.get("target") or {}).get("probes") or {}) if isinstance(contract.get("target"), dict) else {}
+    allowed_origins = flow._as_list((contract.get("target") or {}).get("probe_origins")) if isinstance(contract.get("target"), dict) else []
     results: list[dict[str, Any]] = []
     if not blocking:
         for name in ("health_ref", "identity_ref", "business_smoke_ref"):
-            results.append(_read_only_http_probe(name, str(probes[name]), timeout_seconds=timeout_seconds))
+            results.append(
+                _read_only_http_probe(
+                    name,
+                    str(probes[name]),
+                    allowed_origins=allowed_origins,
+                    timeout_seconds=timeout_seconds,
+                )
+            )
         database_ref = probes.get("database_readback_ref")
         if database_ref and str(database_ref).lower() != "not_required":
-            results.append(_read_only_http_probe("database_readback_ref", str(database_ref), timeout_seconds=timeout_seconds))
+            results.append(
+                _read_only_http_probe(
+                    "database_readback_ref",
+                    str(database_ref),
+                    allowed_origins=allowed_origins,
+                    timeout_seconds=timeout_seconds,
+                )
+            )
     identity_result = next((item for item in results if item.get("name") == "identity_ref"), {})
-    identity_match = bool(expected and expected in str(identity_result.get("response_preview") or ""))
+    identity_match = bool(expected and expected in _identity_values(str(identity_result.get("_response_body") or "")))
     if results and not identity_match:
         blocking.append("runtime identity response does not contain the expected merged identity")
     failed_probes = [item.get("name") for item in results if item.get("status") != "passed"]
     if failed_probes:
         blocking.append(f"post-restart read-only probes failed: {failed_probes}")
     passed = not blocking and bool(results)
+    sanitized_results = [{key: value for key, value in item.items() if key != "_response_body"} for item in results]
+    required_probe_names = ["health_ref", "identity_ref", "business_smoke_ref"]
+    if probes.get("database_readback_ref") and str(probes.get("database_readback_ref")).lower() != "not_required":
+        required_probe_names.append("database_readback_ref")
     receipt_path = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id / "post-restart-verify.json"
     payload = {
         "schema_version": RUNTIME_VERIFY_RECEIPT_SCHEMA,
@@ -1810,10 +2022,14 @@ def build_post_restart_verify(
         "process_control_performed": False,
         "tracked_files_written": False,
         "expected_identity": expected or None,
+        "contract_digest": _runtime_contract_digest(contract),
+        "catalog_sha256": _runtime_catalog_sha256(root=REPO_ROOT),
+        "required_probe_names": required_probe_names,
         "runtime_identity_match": identity_match,
         "post_restart_effective_gate": "passed" if passed else "failed",
         "workflow_gate": "verified" if passed else "blocked",
-        "probes": results,
+        "probes": sanitized_results,
+        "probe_evidence_digest": _probe_evidence_digest(sanitized_results),
         "blocking": flow._unique_strings(blocking),
         "receipt_path": _repo_rel(receipt_path),
     }
@@ -1847,8 +2063,52 @@ def _git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
     return proc.stdout.strip()
 
 
+def _assert_no_user_backend_process_control(args: list[str]) -> None:
+    if not args:
+        return
+    executable = Path(str(args[0])).name.lower()
+    lowered = [str(item).strip().lower().replace("\\", "/") for item in args]
+    command = " ".join(lowered)
+    blocked = False
+    if executable in {"taskkill", "taskkill.exe"}:
+        blocked = True
+    elif executable in {"sc", "sc.exe", "net", "net.exe"} and any(
+        action in lowered[1:3] for action in {"start", "stop", "restart"}
+    ):
+        blocked = True
+    elif executable in {"systemctl", "docker"} and any(
+        action in lowered[1:3] for action in {"start", "stop", "restart", "kill"}
+    ):
+        blocked = True
+    elif executable in {"python", "python.exe", "py", "py.exe"} and (
+        any(item.endswith("scripts/_restart_backend.py") for item in lowered[1:])
+        or any(item.endswith("backend/main.py") for item in lowered[1:])
+        or ("-m" in lowered and "uvicorn" in lowered and "backend.main:app" in command)
+    ):
+        blocked = True
+    elif executable in {"uvicorn", "uvicorn.exe"} and "backend.main:app" in command:
+        blocked = True
+    elif executable in {"powershell", "powershell.exe", "pwsh", "pwsh.exe", "cmd", "cmd.exe"}:
+        shell_process_control_tokens = (
+            "restart" + "-service",
+            "stop" + "-process",
+            "start" + "-process",
+            "task" + "kill",
+            "scripts/_restart_" + "backend.py",
+            "uvicorn " + "backend.main:app",
+            "python " + "backend/main.py",
+            "python.exe " + "backend/main.py",
+        )
+        blocked = any(token in command for token in shell_process_control_tokens)
+    if blocked:
+        raise WorkflowError(
+            "workflow-owned user backend process control is forbidden; emit the catalog runbook and wait for the user"
+        )
+
+
 def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
     cwd = cwd or REPO_ROOT
+    _assert_no_user_backend_process_control(args)
     try:
         proc = subprocess.run(
             args,
@@ -2968,6 +3228,38 @@ def _git_worktree_add_new_branch(
     _git(["worktree", "add", "-b", branch, str(worktree), base], cwd=cwd)
 
 
+def _refresh_reused_close_sync_worktree(
+    *,
+    worktree: Path,
+    branch: str,
+    label: str,
+) -> tuple[dict[str, Any], str]:
+    git = _git_snapshot(worktree)
+    if not git.get("ok"):
+        raise WorkflowError(f"target {label} worktree is not a git checkout: {worktree}")
+    if git.get("dirty"):
+        raise WorkflowError(f"target {label} worktree is dirty: {worktree}")
+    if git.get("branch") != branch:
+        raise WorkflowError(
+            f"target {label} worktree branch mismatch: expected={branch} actual={git.get('branch')}"
+        )
+    head = str(git.get("head") or "")
+    origin_main = str(git.get("origin_main") or "")
+    if not head or not origin_main or head == origin_main:
+        return git, "current"
+    behind = _run_command(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=worktree)
+    if behind.get("ok"):
+        _git(["merge", "--ff-only", "origin/main"], cwd=worktree)
+        refreshed = _git_snapshot(worktree)
+        if refreshed.get("head") != refreshed.get("origin_main"):
+            raise WorkflowError(f"target {label} worktree is stale after fast-forward: {worktree}")
+        return refreshed, "fast_forwarded"
+    ahead = _run_command(["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"], cwd=worktree)
+    if ahead.get("ok"):
+        return git, "ahead_with_task_commits"
+    raise WorkflowError(f"target {label} worktree diverged from origin/main: {worktree}")
+
+
 def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: bool) -> dict[str, Any]:
     branch, worktree = _close_sync_worktree_names(bug_id=bug_id)
     plan = {
@@ -2981,16 +3273,26 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
         return plan
     _git(["fetch", "origin", "main"])
     if worktree.exists():
-        git = _git_snapshot(worktree)
-        if not git.get("ok"):
-            raise WorkflowError(f"target close-sync worktree is not a git checkout: {worktree}")
-        if git.get("dirty"):
-            raise WorkflowError(f"target close-sync worktree is dirty: {worktree}")
+        git, relation = _refresh_reused_close_sync_worktree(
+            worktree=worktree,
+            branch=branch,
+            label="close-sync",
+        )
+        if relation == "fast_forwarded":
+            plan["fast_forwarded"] = True
+        elif relation == "ahead_with_task_commits":
+            plan["ahead_with_task_commits"] = True
         plan["reused"] = True
         plan["git"] = git
         return plan
     if _git_ref_exists(branch):
         _git(["worktree", "add", str(worktree), branch])
+        _git_state, relation = _refresh_reused_close_sync_worktree(
+            worktree=worktree,
+            branch=branch,
+            label="close-sync",
+        )
+        plan[relation] = True
         plan["reused_branch"] = True
     else:
         _git_worktree_add_new_branch(worktree=worktree, branch=branch)
@@ -3017,16 +3319,26 @@ def _maybe_create_close_sync_batch_worktree(
         return plan
     _git(["fetch", "origin", "main"])
     if worktree.exists():
-        git = _git_snapshot(worktree)
-        if not git.get("ok"):
-            raise WorkflowError(f"target close-sync batch worktree is not a git checkout: {worktree}")
-        if git.get("dirty"):
-            raise WorkflowError(f"target close-sync batch worktree is dirty: {worktree}")
+        git, relation = _refresh_reused_close_sync_worktree(
+            worktree=worktree,
+            branch=branch,
+            label="close-sync batch",
+        )
+        if relation == "fast_forwarded":
+            plan["fast_forwarded"] = True
+        elif relation == "ahead_with_task_commits":
+            plan["ahead_with_task_commits"] = True
         plan["reused"] = True
         plan["git"] = git
         return plan
     if _git_ref_exists(branch):
         _git(["worktree", "add", str(worktree), branch])
+        _git_state, relation = _refresh_reused_close_sync_worktree(
+            worktree=worktree,
+            branch=branch,
+            label="close-sync batch",
+        )
+        plan[relation] = True
         plan["reused_branch"] = True
     else:
         _git_worktree_add_new_branch(worktree=worktree, branch=branch)
@@ -6376,6 +6688,24 @@ def build_finish_plan(
     )
     runtime_errors = list(runtime_contract.get("blocking") or [])
     validation_evidence_errors.extend(runtime_errors)
+    if runtime_contract.get("backend_restart_required") and fresh_process_evidence and not runtime_errors:
+        persisted_runtime = dict(record.get("runtime_contract") or {})
+        persisted_runtime.update(
+            {
+                "schema_version": RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": runtime_contract.get("runtime_impact"),
+                "backend_restart_owner": "user",
+                "target_id": runtime_contract.get("target_id"),
+                "target_ids": runtime_contract.get("target_ids") or [],
+                "persistence_basis": runtime_contract.get("persistence_basis"),
+                "fresh_process_evidence": runtime_contract.get("fresh_process_evidence") or [],
+                "post_restart_effective_gate": runtime_contract.get("post_restart_effective_gate"),
+                "runtime_identity_match": runtime_contract.get("runtime_identity_match"),
+            }
+        )
+        if persisted_runtime != record.get("runtime_contract"):
+            record = {**record, "runtime_contract": persisted_runtime}
+            _write_json(source_path, record)
     closure_ready = bool(evidence) and not validation_evidence_errors
     draft_ready = (
         (plan_only or (allow_missing_evidence and not evidence))
@@ -6383,7 +6713,16 @@ def build_finish_plan(
     )
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
     pr_body_path = output_dir / "pr-body.md"
-    pr_body = render_pr_body(canonical_bug_id, record, changed, validation, pr_quality, evidence, closure_ready)
+    pr_body = render_pr_body(
+        canonical_bug_id,
+        record,
+        changed,
+        validation,
+        pr_quality,
+        evidence,
+        closure_ready,
+        runtime_contract,
+    )
     finish_plan_path = output_dir / "finish-plan.json"
     persist_finish_plan = _workflow_artifacts_enabled() or not closure_ready
     if persist_finish_plan:
@@ -6433,6 +6772,8 @@ def build_finish_plan(
             "target_id",
             "catalog_ref",
             "operator_runbook_ref",
+            "persistence_basis",
+            "fresh_process_evidence",
             "post_restart_effective_gate",
             "runtime_identity_match",
             "blocking",
@@ -6638,9 +6979,11 @@ def render_pr_body(
     pr_quality: dict[str, Any],
     evidence: list[str],
     closure_ready: bool,
+    runtime_contract: dict[str, Any] | None = None,
 ) -> str:
     gates = validation.get("production_gates") or {}
     code_intel = validation.get("h7_code_intelligence") or {}
+    runtime_contract = runtime_contract or {}
     lines = [
         f"## {bug_id} issue workflow summary",
         "",
@@ -6672,7 +7015,22 @@ def render_pr_body(
         f"- production_frontend_dependency_gate: `{gates.get('frontend_dependency', 'noop')}`",
         f"- production_backend_dependency_gate: `{gates.get('backend_dependency', 'noop')}`",
         "",
-        f"Closes #{record.get('github_issue_number')}" if record.get("github_issue_number") else "",
+        "## Runtime contract",
+        f"- runtime_impact: `{runtime_contract.get('runtime_impact') or 'unknown'}`",
+        f"- backend_restart_required: `{str(bool(runtime_contract.get('backend_restart_required'))).lower()}`",
+        f"- backend_restart_owner: `{runtime_contract.get('backend_restart_owner') or 'user'}`",
+        f"- target_ids: `{', '.join(runtime_contract.get('target_ids') or []) or 'none'}`",
+        f"- persistence_basis: `{runtime_contract.get('persistence_basis') or 'unknown'}`",
+        f"- post_restart_effective_gate: `{runtime_contract.get('post_restart_effective_gate') or 'unknown'}`",
+        *[f"- fresh_process_evidence: {item}" for item in runtime_contract.get("fresh_process_evidence") or ["not_required"]],
+        "",
+        (
+            f"Refs #{record.get('github_issue_number')}"
+            if (runtime_contract or {}).get("backend_restart_required")
+            else f"Closes #{record.get('github_issue_number')}"
+        )
+        if record.get("github_issue_number")
+        else "",
     ]
     return "\n".join(line for line in lines if line is not None)
 
@@ -7055,6 +7413,7 @@ def render_batch_pr_body(
     commit_map: dict[str, str],
     code_intelligence_summary: dict[str, Any],
     closure_ready: bool,
+    runtime_contracts: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     gates = validation.get("production_gates") or {}
     codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
@@ -7101,7 +7460,16 @@ def render_batch_pr_body(
         requirements = flow._unique_strings(flow._as_list(record.get("closure_requirements"))) or ["Fix issue-specific behavior."]
         lines.append(f"- `{bug_id}`")
         lines.extend(f"  - {item}" for item in requirements)
-    closing = [f"Closes #{record.get('github_issue_number')}" for record in records if record.get("github_issue_number")]
+    runtime_contracts = runtime_contracts or {}
+    closing = [
+        (
+            f"Refs #{record.get('github_issue_number')}"
+            if (runtime_contracts.get(str(record.get("bug_id"))) or {}).get("backend_restart_required")
+            else f"Closes #{record.get('github_issue_number')}"
+        )
+        for record in records
+        if record.get("github_issue_number")
+    ]
     if closing:
         lines.extend(["", *closing])
     return "\n".join(lines)
@@ -7158,6 +7526,27 @@ def build_finish_batch_plan(
     if validation_receipts:
         validation_evidence_errors.extend(_validation_receipt_plan_errors(validation_receipt_plan_coverage))
     evidence = [_render_validation_receipt(receipt) for receipt in validation_receipts]
+    runtime_contracts = {
+        str(record.get("bug_id")): build_runtime_contract(
+            record=record,
+            changed_files=changed,
+            root=REPO_ROOT,
+            fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
+            if isinstance(record.get("runtime_contract"), dict)
+            else [],
+        )
+        for record in records
+    }
+    runtime_batch_bug_ids = sorted(
+        bug_id
+        for bug_id, contract in runtime_contracts.items()
+        if contract.get("backend_restart_required")
+    )
+    if runtime_batch_bug_ids:
+        selector_blocking.append(
+            "runtime BUGs require the single-issue finish and post-restart receipt workflow: "
+            + ", ".join(runtime_batch_bug_ids)
+        )
     closure_ready = (
         bool(evidence)
         and not selector_blocking
@@ -7193,6 +7582,7 @@ def build_finish_batch_plan(
         "closure_ready": closure_ready,
         "draft_ready": draft_ready,
         "production_gates": validation.get("production_gates") or {},
+        "runtime_contracts": runtime_contracts,
         "blocking": selector_blocking,
     }
     _write_json(output_dir / "finish-plan.json", finish_plan)
@@ -7209,6 +7599,7 @@ def build_finish_batch_plan(
             commit_map,
             code_intelligence_summary,
             closure_ready,
+            runtime_contracts,
         ),
     )
     next_state = "validation_passed" if closure_ready else ("validation_planned" if draft_ready else "blocked")
@@ -9940,7 +10331,7 @@ def _sync_github_issue_after_close(
         "",
         f"- PR: {evidence_payload.get('merged_pr') or 'n/a'}",
         f"- Merge commit: `{evidence_payload.get('merge_commit') or 'unknown'}`",
-        "- BUG JSON status: `fixed`",
+        f"- BUG JSON status: `{record.get('status') or 'unknown'}`",
         "- Note: this PR persists registry close-sync metadata; final completion requires this PR to merge into `origin/main`.",
         "",
         "Validation evidence:",
@@ -9968,6 +10359,76 @@ def _sync_github_issue_after_close(
         "label_sync": _pick(label_sync, "ok", "returncode", "skipped", "removed_labels", "added_labels"),
         "comment_path": _repo_rel(tmp_comment, root),
     }
+
+
+def _sync_github_issue_runtime_pending(
+    record: dict[str, Any],
+    evidence_payload: dict[str, Any],
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    issue_number = record.get("github_issue_number")
+    if not issue_number:
+        return {"status": "skipped_missing_issue_number"}
+    comment_path = root / WORKFLOW_ROOT / str(record.get("bug_id") or issue_number) / "github-runtime-pending-comment.md"
+    _write_text(
+        comment_path,
+        "\n".join(
+            [
+                f"Source fix merged for `{record.get('bug_id')}`; runtime verification remains pending user restart.",
+                "",
+                f"- Source PR: {evidence_payload.get('merged_pr') or 'n/a'}",
+                f"- Merge commit: `{evidence_payload.get('merge_commit') or 'unknown'}`",
+                "- BUG JSON status: `fixed_source_pending_user_restart`",
+                "- Backend restart owner: `user`",
+            ]
+        )
+        + "\n",
+    )
+    view = _run_command(
+        ["gh", "issue", "view", str(issue_number), "--repo", GITHUB_REPO, "--json", "state,labels"],
+        cwd=root,
+        timeout=60,
+    )
+    try:
+        issue_view = json.loads(str(view.get("stdout") or "{}")) if view.get("ok") else {}
+    except json.JSONDecodeError:
+        issue_view = {}
+    reopen = (
+        {"ok": True, "stdout": "already open", "stderr": ""}
+        if issue_view.get("state") == "OPEN"
+        else _run_command(["gh", "issue", "reopen", str(issue_number), "--repo", GITHUB_REPO], cwd=root, timeout=60)
+    )
+    comment = _run_command(
+        ["gh", "issue", "comment", str(issue_number), "--repo", GITHUB_REPO, "--body-file", str(comment_path)],
+        cwd=root,
+        timeout=60,
+    )
+    current_labels = {
+        str(item.get("name"))
+        for item in issue_view.get("labels") or []
+        if isinstance(item, dict) and item.get("name")
+    }
+    label_args = ["gh", "issue", "edit", str(issue_number), "--repo", GITHUB_REPO]
+    for label in ("status:fixed", "status:verified"):
+        if label in current_labels:
+            label_args.extend(["--remove-label", label])
+    if "status:in_progress" not in current_labels:
+        label_args.extend(["--add-label", "status:in_progress"])
+    labels = (
+        {"ok": True, "stdout": "labels already aligned", "stderr": ""}
+        if len(label_args) == 6
+        else _run_command(label_args, cwd=root, timeout=60)
+    )
+    if not reopen.get("ok") or not comment.get("ok") or not labels.get("ok"):
+        raise WorkflowError(
+            reopen.get("stderr")
+            or comment.get("stderr")
+            or labels.get("stderr")
+            or "failed to keep runtime-pending GitHub Issue open"
+        )
+    return {"status": "reopened_runtime_pending", "issue_number": issue_number}
 
 
 def _production_gates_payload(args: argparse.Namespace | None = None) -> dict[str, str]:
@@ -10177,13 +10638,24 @@ def _maybe_commit_and_pr_close_sync(
         raise WorkflowError(push.get("stderr") or push.get("stdout") or "close-sync git push failed")
 
     body_path = root / WORKFLOW_ROOT / label / "close-sync-pr-body.md"
+    status_rows: list[str] = []
+    for changed_file in changed_files:
+        candidate = root / changed_file
+        if not candidate.is_file():
+            continue
+        with contextlib.suppress(OSError, json.JSONDecodeError, WorkflowError):
+            changed_record = _load_json(candidate)
+            status_rows.append(
+                f"{changed_record.get('bug_id') or candidate.stem}={changed_record.get('status') or 'unknown'}"
+            )
+    status_summary = ", ".join(status_rows) or "unknown"
     body_lines = [
         f"## {title_label} close-sync",
         "",
         f"- Source PR: {close_sync.get('merged_pr') or 'n/a'}",
         f"- Merge commit: `{close_sync.get('merge_commit') or 'unknown'}`",
         f"- BUG IDs: `{', '.join(bug_ids)}`",
-        "- BUG JSON status: `fixed`",
+        f"- BUG JSON status: `{status_summary}`",
         "- Note: this PR persists registry close-sync metadata; final completion requires this PR to merge into `origin/main`.",
         "",
         "## Validation",
@@ -11344,6 +11816,9 @@ def build_close_sync_plan(
         if isinstance(record.get("runtime_contract"), dict)
         else [],
     )
+    runtime_contract_errors = list(runtime_contract.get("blocking") or [])
+    if apply and runtime_contract_errors:
+        raise WorkflowError("runtime contract blocks close-sync: " + "; ".join(runtime_contract_errors))
     runtime_receipt: dict[str, Any] | None = None
     runtime_receipt_errors: list[str] = []
     if post_restart_receipt:
@@ -11370,9 +11845,39 @@ def build_close_sync_plan(
                 runtime_receipt_errors.append("post-restart receipt expected identity does not match merge commit")
             if runtime_receipt.get("process_control_performed") is not False:
                 runtime_receipt_errors.append("post-restart receipt must not include process control")
+            if runtime_receipt.get("blocking"):
+                runtime_receipt_errors.append("post-restart receipt contains blocking findings")
+            if runtime_receipt.get("contract_digest") != _runtime_contract_digest(runtime_contract):
+                runtime_receipt_errors.append("post-restart receipt runtime contract digest mismatch")
+            if runtime_receipt.get("catalog_sha256") != _runtime_catalog_sha256(root=REPO_ROOT):
+                runtime_receipt_errors.append("post-restart receipt runtime catalog digest mismatch")
+            receipt_probes = runtime_receipt.get("probes") if isinstance(runtime_receipt.get("probes"), list) else []
+            required_probe_names = ["health_ref", "identity_ref", "business_smoke_ref"]
+            contract_database_ref = (((runtime_contract.get("target") or {}).get("probes") or {}).get("database_readback_ref"))
+            if contract_database_ref and str(contract_database_ref).lower() != "not_required":
+                required_probe_names.append("database_readback_ref")
+            observed_probe_names = [str(item.get("name")) for item in receipt_probes if isinstance(item, dict)]
+            if sorted(observed_probe_names) != sorted(required_probe_names):
+                runtime_receipt_errors.append(
+                    "post-restart receipt probe set mismatch: "
+                    f"expected={required_probe_names} observed={observed_probe_names}"
+                )
+            for probe in receipt_probes:
+                if not isinstance(probe, dict):
+                    runtime_receipt_errors.append("post-restart receipt contains an invalid probe entry")
+                    continue
+                if probe.get("status") != "passed" or not str(probe.get("response_sha256") or "").strip():
+                    runtime_receipt_errors.append(f"post-restart receipt probe is incomplete or failed: {probe.get('name')}")
+                if "response_preview" in probe or "_response_body" in probe:
+                    runtime_receipt_errors.append(f"post-restart receipt probe leaks response content: {probe.get('name')}")
+            if runtime_receipt.get("probe_evidence_digest") != _probe_evidence_digest(receipt_probes):
+                runtime_receipt_errors.append("post-restart receipt probe evidence digest mismatch")
     runtime_gate_passed = bool(
-        not runtime_contract.get("backend_restart_required")
-        or (runtime_receipt and not runtime_receipt_errors)
+        not runtime_contract_errors
+        and (
+            not runtime_contract.get("backend_restart_required")
+            or (runtime_receipt and not runtime_receipt_errors)
+        )
     )
     registry_worktree_plan = _maybe_create_close_sync_worktree(
         bug_id=canonical_bug_id,
@@ -11392,7 +11897,9 @@ def build_close_sync_plan(
         raise WorkflowError("; ".join(apply_guard["blocking"]))
     output_dir = close_sync_root / WORKFLOW_ROOT / canonical_bug_id
     workflow_gate = "ready_for_apply" if pr_url and evidence else ("missing_validation_evidence" if pr_url else "missing_pr_url")
-    if pr_url and evidence and runtime_contract.get("backend_restart_required") and not runtime_gate_passed:
+    if runtime_contract_errors:
+        workflow_gate = "blocked_runtime_contract"
+    elif pr_url and evidence and runtime_contract.get("backend_restart_required") and not runtime_gate_passed:
         workflow_gate = "fixed_source_pending_user_restart"
     payload = {
         "schema_version": "aistock_issue_workflow_close_sync_v1",
@@ -11418,10 +11925,13 @@ def build_close_sync_plan(
         },
         "post_restart_effective_gate": "passed" if runtime_gate_passed else "pending_user_restart",
         "runtime_identity_match": (
-            True if runtime_gate_passed and runtime_contract.get("backend_restart_required") else "not_required"
+            True
+            if runtime_gate_passed and runtime_contract.get("backend_restart_required")
+            else ("pending" if runtime_contract.get("backend_restart_required") else "not_required")
         ),
         "post_restart_receipt": post_restart_receipt,
         "post_restart_receipt_errors": runtime_receipt_errors,
+        "runtime_contract_errors": runtime_contract_errors,
         "dry_run": not apply,
         "workflow_gate": workflow_gate,
         "required_checks": [
@@ -11460,13 +11970,19 @@ def build_close_sync_plan(
             payload["post_restart_receipt_errors"] = flow._unique_strings(runtime_receipt_errors)
         updated = dict(record)
         runtime_pending = bool(runtime_contract.get("backend_restart_required") and not runtime_gate_passed)
+        source_fixed_at = record.get("fixed_at") or closed_at or _utc_now()
+        issue_closed_at = (
+            None
+            if runtime_pending
+            else (_utc_now() if runtime_contract.get("backend_restart_required") else closed_at)
+        )
         updated.update(
             {
                 "status": "fixed_source_pending_user_restart" if runtime_pending else (
                     "verified" if runtime_contract.get("backend_restart_required") else "fixed"
                 ),
-                "closed_at": None if runtime_pending else closed_at,
-                "fixed_at": _utc_now(),
+                "closed_at": issue_closed_at,
+                "fixed_at": source_fixed_at,
                 "fix_commit": merge_commit,
                 "pr_url": pr_url,
                 "validation_evidence": evidence,
@@ -11480,7 +11996,7 @@ def build_close_sync_plan(
                 "post_restart_effective_gate": "pending_user_restart" if runtime_pending else (
                     "passed" if runtime_contract.get("backend_restart_required") else "not_required"
                 ),
-                "runtime_identity_match": False if runtime_pending else (
+                "runtime_identity_match": "pending" if runtime_pending else (
                     True if runtime_contract.get("backend_restart_required") else "not_required"
                 ),
                 "post_restart_receipt_ref": post_restart_receipt,
@@ -11497,7 +12013,11 @@ def build_close_sync_plan(
             "updated_bug_json": _repo_rel(source_path, close_sync_root),
         }
         github_sync = (
-            {"status": "skipped_runtime_pending_user_restart"}
+            (
+                {"status": "skipped_github_check_disabled"}
+                if skip_github_check
+                else _sync_github_issue_runtime_pending(updated, evidence_payload, root=close_sync_root)
+            )
             if runtime_pending
             else (
                 {"status": "skipped_github_check_disabled"}
@@ -11571,6 +12091,36 @@ def build_close_sync_batch_plan(
             raise WorkflowError(f"{item} has invalid status for close/sync: {status!r}")
         records.append({"bug_id": item, "record": record, "source_path": source_path, "missing_github_linkage": missing})
         source_paths.append(source_path)
+    runtime_contracts = {
+        row["bug_id"]: build_runtime_contract(
+            record=row["record"],
+            changed_files=flow._as_list(row["record"].get("allowed_write_scope")),
+            root=REPO_ROOT,
+            fresh_process_evidence=flow._as_list((row["record"].get("runtime_contract") or {}).get("fresh_process_evidence"))
+            if isinstance(row["record"].get("runtime_contract"), dict)
+            else [],
+        )
+        for row in records
+    }
+    runtime_contract_errors = {
+        bug_id: list(contract.get("blocking") or [])
+        for bug_id, contract in runtime_contracts.items()
+        if contract.get("blocking")
+    }
+    if runtime_contract_errors:
+        detail = "; ".join(
+            f"{bug_id}: {', '.join(errors)}"
+            for bug_id, errors in sorted(runtime_contract_errors.items())
+        )
+        raise WorkflowError("runtime contracts block close-sync-batch: " + detail)
+    runtime_batch_bug_ids = [
+        bug_id for bug_id, contract in runtime_contracts.items() if contract.get("backend_restart_required")
+    ]
+    if runtime_batch_bug_ids:
+        raise WorkflowError(
+            "close-sync-batch cannot close runtime BUGs; use per-issue post-restart receipts: "
+            + ", ".join(runtime_batch_bug_ids)
+        )
     registry_worktree_plan = _maybe_create_close_sync_batch_worktree(
         bug_ids=canonical_bug_ids,
         create=create_registry_worktree,
