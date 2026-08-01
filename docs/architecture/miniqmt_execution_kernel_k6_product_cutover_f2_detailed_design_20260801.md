@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K6 产品切换与旧路线退役 F2 详细设计
 
-> Feature tier：`F2`。文档状态：`design_ready + merged`；design source PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`；K6-A=`implemented_verified + merged`、PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，K6-B/C/D=`not_started`，K6 overall=`implementation_in_progress`。
+> Feature tier：`F2`。原 design source 已通过 PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a` 合入，K6-A 已通过 PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401` 完成 `implemented_verified + merged`。2026-08-02 implementation-readiness revision=`design_revision_ready_pending_source_merge`：实施优先级固定为 `K6-C0/C1 -> K6-B -> K6-D`；K6-C/B/D 仍为 `not_started`，K6 overall=`implementation_in_progress`，不得把本次设计修订记为代码实现。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -15,10 +15,10 @@ K6 是 MiniQMT execution-kernel 重构的唯一产品切换阶段。它不再增
 固定决策如下：
 
 1. 产品 route 只能是 `KERNEL_V2`；同一 runtime、binding、trade date 不允许 legacy 与 K6 同时拥有 broker side effect。不存在 fallback、双写、影子 broker submit 或失败后转回旧 route。
-2. K6 新增的 durable fact 仅用于填补两个现有缺口：dependent-BUY coordination owner，以及 transition 级 generic per-command product authority aggregate。K2 已存在的 event、delivery、transition、command outbox、mapping、child、dispatch attempt、callback 与 reconciliation 表全部复用，禁止平行 schema 或第二套 outbox。
+2. K6 新增的 durable fact 仅用于填补两个现有缺口：dependent-BUY coordination owner，以及 transition 级 generic per-command product authority aggregate。每个 authority item 必须持久化完整 strict `BrokerCommandV2`，不能只存 payload hash；K2 已存在的 event、delivery、transition、command outbox、mapping、child、dispatch attempt、callback 与 reconciliation 表全部复用，禁止平行 event/transition/schema 或第二套 outbox。
 3. dependent-BUY coordinator 是执行协调器，不是算法 plugin。它只消费冻结的 BUY/SELL parent 关系、已持久化的 SELL ORDER/TRADE、`qmt_strategy_ledger.virtual_account.cash`、ACCOUNT projection 和 EOD/session fact；不得读取信号、重新选股、重新做策略包完整性校验或估算卖出款。
-4. BUY 释放必须在单一事务内完成：锁定 coordination 与 ledger authority，记录 trigger/ledger observation/decision，创建 K2 release event/transition/command authority，并写入现有 K2 outbox。事务失败不返回成功；commit-unknown 只能通过独立 readback 判定结果，不能重发。
-5. 一次 transition 的 0..N commands 使用一个 `ProductCommandAuthoritySetV2`；每个 command 都有独立 authority item，按 `effect_ordinal, command_id` 排序。product materializer 必须拒绝 K4/K5 V1 shadow receipt、缺项、重复、乱序、hash-correct drift 和单 command receipt 冒充多 command closure。
+4. dependent-BUY 的原始 command、transition 与 deterministic command identity 在 K6-C 首次 product transaction 中冻结；WAIT 期间只存在 `DEFERRED_DEPENDENT_BUY` mapping/child，不存在 outbox。BUY 释放必须在单一事务内锁定 coordination、deferred mapping、ledger authority 与 exact authority item，记录 trigger/ledger observation/decision，并为同一 command identity 创建现有 K2 outbox；不得另造 release event/transition/command。事务失败不返回成功；commit-unknown 只能通过独立 readback 判定结果，不能重发。
+5. 一次 transition 的 0..N commands 使用一个 `ProductCommandAuthoritySetV3`；每个 command 都有独立 authority item，按 `effect_ordinal, command_id` 排序，并携带 hash-closed `command_json`。K6-A 的 hash-only `ProductCommandAuthoritySetV2/ItemV2` 保持可读但禁止进入产品 root；product materializer还必须拒绝K4/K5 V1 shadow receipt、缺项、重复、乱序、hash-correct drift、payload/hash不一致和单command receipt冒充multi-command closure。
 6. 切换不在活跃实例上做原地转换。旧 route 实例只允许按旧版本 drain 到终态；切换点之后创建的新实例只走 K6。若无法确定 route owner，则 fail loud 且 broker_called=false。
 7. rollback 不得把已有 K6 durable state 交给 legacy。源代码或部署回滚只能回到最后一个仍理解 K6 schema/receipt 的版本，或先让 K6 实例 drain；不能删除含 durable rows 的表，也不能绕过 fencing。
 8. 本设计不增加 RBAC、人工审批、manual acknowledge、manual recovery、人工 stop gate 或额外业务准入门禁。必要的数据源、broker capability、session、ledger 和 authority 校验属于真实运行合同，失败必须可见且按 binding/runtime 隔离。
@@ -60,7 +60,7 @@ K6 的输入边界从已冻结 execution plan/parent intent 开始。它不导�
 | vn.py façade/DTO/effect/state envelope | K4 | product adapter 复用，不另建 runtime/OMS/Gateway |
 | broker order/trade/cash fact | `qmt_strategy_ledger` + K2 callback/reconcile | cash 只读 `virtual_account.cash`；order/trade 用 durable lineage |
 | dependent-BUY legacy行为 | `runtime.py`、`client.py`、`order_service.py` | K6 用独立 coordinator 取代直提/metadata retry；不进入 plugin |
-| product command authority | K4/K5 只有 V1 shadow single-command seam | K6 新增 V2 aggregate；V1 永不用于 product |
+| product command authority | K4/K5 只有 V1 shadow single-command seam | K6-C0 新增 V3 aggregate；K4/K5 V1 与 K6-A hash-only V2 永不用于 product |
 | product route owner | 当前 legacy product route | K6 以 durable cutover receipt 形成新实例唯一 owner |
 
 当前两个实现阻断必须同时闭合：
@@ -77,7 +77,7 @@ K6 的输入边界从已冻结 execution plan/parent intent 开始。它不导�
 | `kernel_product_contracts.py` | K6 strict carriers、canonical hash、state transitions | DB、broker、algorithm branches |
 | `kernel_product_repository.py` | coordination/product authority transaction、strict readback | signal/selection、Gateway call |
 | `kernel_dependent_buy.py` | trigger evaluation、ledger observation、release decision | algorithm state、cash estimate、direct broker submit |
-| `kernel_product_materializer.py` | V2 aggregate validation、K2 mapping/outbox materialization | V1 fallback、partial materialization |
+| `kernel_product_materializer.py` | V3 aggregate validation、K2 mapping/outbox materialization | V1/V2 fallback、partial materialization |
 | `kernel_product_cutover.py` | route-owner receipt、新实例 selection、legacy drain inventory | manual approval、dual route |
 | `kernel_delivery.py` / `kernel_materializer.py` | 只增加 generic K6 invocation seam | algo-code switch、parallel outbox |
 | `kernel_diagnostics.py` | read-only K6 state/lineage projection | state mutation、acknowledge |
@@ -89,7 +89,7 @@ K6 的输入边界从已冻结 execution plan/parent intent 开始。它不导�
 
 dependent-BUY 侧为：
 
-`SELL durable facts + ACCOUNT/session/EOD + qmt_strategy ledger cash -> coordinator -> release decision -> K2 event/transition/V2 authority/outbox`。
+`SELL durable facts + ACCOUNT/session/EOD + qmt_strategy ledger cash -> coordinator -> release decision -> original K2 transition/V3 authority/same-command outbox`。
 
 任何反向依赖（plugin 导入 coordinator、Gateway 导入 signal、legacy helper 调用 K6 后再 fallback）均不允许。
 
@@ -99,90 +99,162 @@ dependent-BUY 侧为：
 
 ### 4.1 Dependent-BUY carriers
 
-`DependentBuySellDependencyV1`：
+K6-A 的 V1 carrier 只保存分离的 trade/cash hash tuple，无法从 hash 自身证明 broker trade id 排序；`virtual_account` 也没有可作为业务合同的 `row_version`。因此 product root 不得继续使用这两个自证字段。K6-C0 先增加下列 V2 authority；V1 仅保留历史 source compatibility，K6-D 产品 route 必须拒绝 V1，不允许静默升级或从 hash 猜测缺失 identity。
 
-- `schema_version=miniqmt_dependent_buy_sell_dependency_v1`
+`DependentBuySettledProceedsRefV2`：
+
+- `schema_version=miniqmt_dependent_buy_settled_proceeds_ref_v2`
+- `broker_trade_id,qmt_trade_ledger_id,qmt_trade_fact_sha256,cash_ledger_id,cash_ledger_sequence,cash_ledger_fact_sha256`
+- `strategy_id,runtime_id,trade_date,sell_parent_intent_id`
+- `proceeds_ref_sha256=hash_hex_v1("miniqmt_dependent_buy_settled_proceeds_ref_v2", preceding fields)`
+
+同一 SELL dependency 的 proceeds refs 必须按 `(broker_trade_id,cash_ledger_sequence,cash_ledger_id)` 排序且 identity 唯一；trade/cash 必须一项一项闭合，不能再维护两个只靠位置关联的 hash tuple。
+
+每个dependency最多4096个settled proceeds refs；超限为typed authority failure，不截断、不只取最新值。coordination仍最多256个SELL dependencies。
+
+`DependentBuySellDependencyV2`：
+
+- `schema_version=miniqmt_dependent_buy_sell_dependency_v2`
 - `sell_parent_intent_id`、`sell_algo_instance_id`、`strategy_id`、`runtime_id`
 - `required_terminal_policy=TRADE_SETTLED_OR_ORDER_TERMINAL`
-- `latest_order_fact_ref`、`settled_trade_fact_refs`（按 broker trade id 排序、唯一）
-- `settled_cash_ledger_refs`（与 trade refs 一一闭合）
+- `latest_order_fact_id,latest_order_fact_sha256`
+- `ordered_settled_proceeds_refs: tuple[DependentBuySettledProceedsRefV2,...]`
 - `dependency_status in OPEN|PROCEEDS_SETTLED|TERMINAL_WITHOUT_SUFFICIENT_PROCEEDS`
-- `dependency_sha256=hash_hex_v1("miniqmt_dependent_buy_sell_dependency_v1", preceding fields)`
+- `dependency_sha256=hash_hex_v1("miniqmt_dependent_buy_sell_dependency_v2", preceding fields)`
 
 `DependentBuyTriggerEventRefV1`：`runtime_id,event_id,event_type,event_sequence,source_fact_type,source_fact_id,source_fact_sha256,observed_at_utc,trigger_ref_sha256`。事件类型只允许 `SELL_TRADE_SETTLED|SELL_ORDER_TERMINAL|ACCOUNT_REFRESHED|SESSION_EOD`，按 `(event_sequence,event_id)` 唯一排序。
 
-`DependentBuyLedgerObservationV1`：
+`DependentBuyLedgerObservationV2`：
 
+- `schema_version=miniqmt_dependent_buy_ledger_observation_v2`
 - `strategy_id,runtime_id,trade_date`
 - `ledger_authority_source=qmt_strategy_ledger.virtual_account.cash`
-- `virtual_account_id,ledger_row_version,ledger_as_of_utc`
+- `virtual_account_id,virtual_account_updated_at_utc,latest_cash_ledger_sequence,ledger_as_of_utc`
 - `available_cash,required_cash,cash_shortfall`
-- `ordered_settled_trade_refs,ordered_cash_ledger_refs`
+- `ordered_settled_proceeds_refs`
 - `freshness_session_authority_sha256`
-- `observation_sha256=hash_hex_v1("miniqmt_dependent_buy_ledger_observation_v1", preceding fields)`
+- `ledger_revision_sha256=hash_hex_v1("miniqmt_dependent_buy_ledger_revision_v2", virtual_account identity/cash/updated_at + latest cash sequence + ordered proceeds refs)`
+- `observation_sha256=hash_hex_v1("miniqmt_dependent_buy_ledger_observation_v2", preceding fields)`
 
-`available_cash/required_cash/cash_shortfall` 为非负 canonical Decimal string，且 `cash_shortfall=max(required_cash-available_cash,0)`；writer/readback 必须重算。`ledger_as_of_utc` 不得早于本次 trigger 的已提交时间，且 trade date/session authority 必须相同；否则状态保持 waiting 或进入明确 terminal，不得估算或 fallback。
+`latest_cash_ledger_sequence` 直接来自同一锁事务内 `qmt_strategy.cash_ledger.cash_sequence` 的最大已提交值，没有 cash row 时为 `0`；不得使用 PostgreSQL `xmin`、进程内计数器或 `updated_at` 单独冒充 row version。`available_cash/required_cash/cash_shortfall` 为非负 canonical Decimal string，且 `cash_shortfall=max(required_cash-available_cash,0)`；writer/readback 必须重算。`ledger_as_of_utc` 不得早于本次 trigger 的已提交时间，且 trade date/session authority 必须相同；否则状态保持 waiting 或进入明确 terminal，不得估算或 fallback。
 
-`DependentBuyReleaseDecisionV1`：
+`DependentBuyCandidateAuthorityV2` 冻结首次 DEFER 的唯一来源：
 
-- `decision_id=hash_hex_v1("miniqmt_dependent_buy_release_decision_id_v1", coordination_id, decision_sequence, trigger_ref_sha256)`
+- `schema_version=miniqmt_dependent_buy_candidate_authority_v2`
+- owner：`runtime_id,binding_id,trade_date,strategy_id,buy_algo_instance_id,buy_parent_intent_id,command_id`
+- plan：`execution_plan_id,execution_plan_sha256,plan_parent_relation_sha256`
+- cash/session：`required_cash,virtual_account_id,session_authority_sha256`
+- `ordered_sell_dependencies: tuple[DependentBuySellDependencyV2,...]`
+- preflight：`oms_preflight_receipt_id,oms_preflight_receipt_sha256,ordered_error_codes`
+- `candidate_sha256=hash_hex_v1("miniqmt_dependent_buy_candidate_authority_v2", preceding fields)`
+
+`ordered_error_codes`必须非空、排序唯一且是`SELL_PROCEEDS_REQUIRED|ACCOUNT_GROUP_SELL_PROCEEDS_REQUIRED`的子集；plan relation必须证明BUY与全部SELL属于同一frozen plan/runtime/strategy/date。任何普通资金不足、capacity residual、risk/route/quote/package错误都不能构造candidate。candidate作为V3 evaluation evidence的nested carrier持久化，不能由K3 inventory或legacy metadata重建。
+
+`DependentBuyReleaseDecisionV2`：
+
+- `schema_version=miniqmt_dependent_buy_release_decision_v2`
+- `decision_id=hash_hex_v1("miniqmt_dependent_buy_release_decision_id_v2", coordination_id, decision_sequence, trigger_ref_sha256)`
 - `coordination_id,decision_sequence,previous_decision_sha256`
 - `decision in WAIT|RELEASE_TO_K2_OUTBOX|BLOCK|EOD_RESIDUAL`
 - `reason_code`
 - `ledger_observation_sha256`
 - `ordered_dependency_sha256s`
-- `release_event_id/release_transition_id/release_command_authority_set_sha256`：仅 RELEASE 必填
+- `release_event_id/release_transition_id/release_command_authority_set_sha256`：仅 RELEASE 必填；分别等于本次 durable trigger event、原始 deferred command transition 与其 authority set，禁止创建平行 release event/transition
 - `decided_at_utc,worker_id,process_incarnation_id,lease_epoch`
-- `decision_sha256=hash_hex_v1("miniqmt_dependent_buy_release_decision_v1", preceding fields)`
+- `decision_sha256=hash_hex_v1("miniqmt_dependent_buy_release_decision_v2", preceding fields)`
 
-`DependentBuyCoordinationV1`：
+`DependentBuyCoordinationV2`：
 
-- `schema_version=miniqmt_dependent_buy_coordination_v1`
-- `coordination_id=hash_hex_v1("miniqmt_dependent_buy_coordination_id_v1",runtime_id,buy_algo_instance_id,buy_parent_intent_id,strategy_id,trade_date)`
+- `schema_version=miniqmt_dependent_buy_coordination_v2`
+- `coordination_id=hash_hex_v1("miniqmt_dependent_buy_coordination_id_v2",runtime_id,buy_algo_instance_id,buy_parent_intent_id,strategy_id,trade_date)`
 - `runtime_id,binding_id,trade_date,strategy_id,buy_algo_instance_id,buy_parent_intent_id`
-- `required_cash,release_command_payload_sha256`
+- `required_cash,release_command_id,release_transition_id,release_command_authority_item_sha256,release_command_payload_sha256`
 - `ordered_sell_dependencies`（按 sell parent id，1..256，唯一）
 - `status in DEFERRED_WAITING_SELL_PROCEEDS|RELEASED_TO_K2_OUTBOX|BLOCKED_SELL_PROCEEDS_UNAVAILABLE|EOD_RESIDUAL`
 - `decision_sequence,last_decision_sha256,released_command_id,released_outbox_id`
 - `row_version,lease_worker_id,lease_process_incarnation_id,lease_epoch,lease_expires_at_utc`
 - `created_at_utc,updated_at_utc`
-- `coordination_sha256=hash_hex_v1("miniqmt_dependent_buy_coordination_v1", all durable business fields excluding lease timestamps and row_version)`
+- `coordination_sha256=hash_hex_v1("miniqmt_dependent_buy_coordination_v2", all durable business fields excluding lease timestamps and row_version)`
+
+`release_command_id/transition/item/payload` 必须与 K6-C 已持久化的 `DEFER_DEPENDENT_BUY` authority item 和 `command_json` 精确闭合；candidate writer 不接受 caller supplied hash-only payload。该 item 只允许 `SUBMIT_LIMIT + BUY`，且 mapping/child 已存在、outbox 不存在。
 
 durable 状态转换只允许：
 
 `DEFERRED_WAITING -> DEFERRED_WAITING|RELEASED_TO_K2_OUTBOX|BLOCKED|EOD_RESIDUAL`。后三个状态终态。`RELEASE_READY`只允许是 evaluator 在同一数据库事务内的临时判定，不是 carrier/DB status，不能 commit 成孤立状态。没有terminal reopen；`released_command_id/released_outbox_id`仅RELEASED必填并永久不可变。
 
-### 4.2 Product command authority V2
+### 4.2 Product command authority V3
 
-`ProductCommandAuthorityItemV2` 每个 transition command 恰好一项：
+`ProductCommandEvaluationEvidenceV3` 是 per-command evaluator 与 fresh-process readback 共用的完整输入，不允许只保存 hash：
 
-- `schema_version=miniqmt_product_command_authority_item_v2`
+- `schema_version=miniqmt_product_command_evaluation_evidence_v3`
+- owner：`runtime_id,algo_instance_id,event_id,delivery_id,transition_id,effect_ordinal,command_id`
+- strict carriers：`oms_preflight_receipt,mini_qmt_risk_decision_receipt,plugin_route_compatibility_receipt`
+- frozen payloads：`market_data_projection,account_projection,contract_projection,kill_switch_state`
+- `dependent_buy_candidate: DependentBuyCandidateAuthorityV2 | None`
+- 对应 projection id/version/source event/hash，以及 `execution_projection_set_sha256`
+- `evidence_sha256=hash_hex_v1("miniqmt_product_command_evaluation_evidence_v3", preceding fields)`
+
+所有nested carrier必须使用其现有strict reader重算identity/hash；四个projection payload必须与`ExecutionProjectionSetV1`的exact ref逐项闭合。candidate仅DEFER允许且必须存在，其他disposition必须为空。fresh-process evaluator只读取该evidence、strict command_json和durable catalog/creation binding，不调用OMS/risk/Gateway重新询问，也不接受caller supplied disposition。
+
+canonical JSON byte bounds固定为command_json<=16KiB、单item evaluation_evidence_json<=64KiB、authority item count<=256；超限整套fail loud，不截断业务authority、不降级为hash-only，也不拆成partial transaction。bounded diagnostic/error evidence仍按§10单独处理。
+
+`ProductCommandAuthorityItemV3` 每个 transition command 恰好一项，并作为 command payload 的唯一 product durable authority：
+
+- `schema_version=miniqmt_product_command_authority_item_v3`
 - `runtime_id,algo_instance_id,event_id,delivery_id,transition_id`
 - `effect_ordinal,command_id,command_type`
-- `command_payload_sha256,plugin_effect_sha256,execution_projection_set_sha256`
+- `command_json: BrokerCommandV2,evaluation_evidence: ProductCommandEvaluationEvidenceV3,command_payload_sha256,plugin_effect_sha256,execution_projection_set_sha256`
 - `oms_preflight_receipt_sha256,risk_decision_receipt_sha256,route_compatibility_receipt_sha256`
 - `market_data_projection_sha256,account_projection_sha256,contract_projection_sha256`
-- `disposition in MATERIALIZE|REJECT_SYNCHRONOUS`
+- `disposition in MATERIALIZE|REJECT_SYNCHRONOUS|DEFER_DEPENDENT_BUY`
 - `reject_reason_code/reject_context_sha256`：仅 REJECT 必填
-- `mapping_id,outbox_id,child_order_id`：MATERIALIZE 时 deterministic 必填；REJECT 时必须为空
-- `item_sha256=hash_hex_v1("miniqmt_product_command_authority_item_v2", preceding fields)`
+- `coordination_id`：仅 DEFER 必填
+- `mapping_id,outbox_id,child_order_id`：MATERIALIZE 全部必填；REJECT 的 SUBMIT 使用 terminal mapping/child/outbox，CANCEL 复用 active mapping/child并创建 terminal cancel outbox；DEFER 必须有 mapping/child 且 outbox 为空
+- `item_sha256=hash_hex_v1("miniqmt_product_command_authority_item_v3", preceding fields)`
 
-`ProductCommandAuthoritySetV2`：
+`command_json` 必须通过 strict `BrokerCommandV2` readback，且其 runtime/algo/event-derived transition/effect ordinal/command id/type/payload hash 与 item、evidence、transition receipt逐字段闭合。任何 hash-correct 但 command bytes、side、price、quantity、reason、metadata或evaluation evidence漂移均为 corruption；不得从plugin state、runtime JSON、installed package或caller cache重建 command/evidence。
 
-- `schema_version=miniqmt_product_command_authority_set_v2`
+`ProductCommandAuthoritySetV3`：
+
+- `schema_version=miniqmt_product_command_authority_set_v3`
 - `runtime_id,algo_instance_id,event_id,delivery_id,transition_id`
 - `catalog_sha256,creation_binding_sha256,facade_conformance_set_sha256`
 - `execution_projection_set_sha256,transition_receipt_sha256`
 - `ordered_items`：按 `(effect_ordinal,command_id)`，0..256；command 与 transition exact set-equal、顺序 canonical、无 missing/extra/duplicate
-- `materialize_count,reject_count,total_count`
-- `aggregate_disposition in ZERO_COMMAND|ALL_REJECTED|MATERIALIZE_ALL_ACCEPTED_COMMANDS|MIXED_PER_COMMAND`
-- `authority_set_sha256=hash_hex_v1("miniqmt_product_command_authority_set_v2", preceding fields)`
+- `materialize_count,reject_count,defer_count,total_count`
+- `aggregate_disposition in ZERO_COMMAND|ALL_REJECTED|ALL_DEFERRED|MATERIALIZE_ALL_ACCEPTED_COMMANDS|MIXED_PER_COMMAND`
+- `authority_set_sha256=hash_hex_v1("miniqmt_product_command_authority_set_v3", preceding fields)`
 
-zero-command 不是空 authority：必须持久化 total=0、`ZERO_COMMAND` 的 aggregate。MIXED 表示每条 command 独立被权威判定，不表示事务可以部分写入；整套 aggregate 和所有 MATERIALIZE rows 必须原子落库。任何 item 无法闭合时整套失败、broker_called=false。
+zero-command 不是空 authority：必须持久化 total=0、`ZERO_COMMAND` 的 aggregate。MIXED 表示每条 command 独立被权威判定，不表示事务可以部分写入；整套 aggregate、全部 command_json、MATERIALIZE lineage、REJECT terminal no-broker lineage与DEFER coordination/mapping/child必须原子落库。任何 item 无法闭合时整套失败、broker_called=false。
 
-`ProductCommandLifecycleProjectionV2` 为只读重建结果：逐 item 关联 `command -> mapping -> outbox -> child -> dispatch attempts -> broker order/reject -> callback/reconcile`，并包含 `lifecycle_status,last_committed_stage,broker_called,qmt_order_id,callback_watermark,reconciliation_receipt_sha256,item_projection_sha256`。集合 hash domain 为 `miniqmt_product_command_lifecycle_projection_v2`，顺序与 authority set 相同。
+三种 disposition 的业务合同固定如下：
 
-`ProductMaterializationReceiptV2`：绑定 authority set、projection set、ordered created mapping/outbox/child identities、zero-command fact、repository transaction id、commit outcome、independent readback hash。writer 只可返回 `COMMITTED_READBACK_VERIFIED`；commit-unknown 抛出 typed exception并携带 readback key，不得返回 PENDING 或假 ACK。
+| disposition | durable result | broker behavior | restart authority |
+| --- | --- | --- | --- |
+| `MATERIALIZE` | initial mapping/child + PENDING outbox | 仅 commit 后由现有 K2 worker 调 broker | item command_json + mapping/outbox/child |
+| `REJECT_SYNCHRONOUS` | SUBMIT 创建 terminal mapping/child；CANCEL 复用 active mapping/child；两者均创建 `FAILED_TERMINAL,broker_called=false` outbox 与 typed non-acceptance receipt | 永不调用 broker；现有 outcome publisher 生成 COMMAND_OUTCOME，使 plugin state按正式事件收敛 | item command_json + terminal outbox/outcome |
+| `DEFER_DEPENDENT_BUY` | 仅允许 BUY SUBMIT；创建 `DEFERRED_DEPENDENT_BUY` mapping/child 和 coordination，禁止 outbox | WAIT 期间 broker_called=false；K6-B release 后才为同一 command id 创建 PENDING outbox | item command_json + coordination + deferred mapping/child |
+
+`ProductCommandLifecycleProjectionV3` 为只读重建结果：
+
+- `schema_version=miniqmt_product_command_lifecycle_projection_v3`
+- `runtime_id,algo_instance_id,event_id,delivery_id,transition_id,authority_set_sha256`
+- `ordered_item_projections`：按 authority item 顺序逐项关联 `command -> mapping -> optional outbox -> child -> dispatch attempts -> broker order/reject -> callback/reconcile`
+- 每个 item projection 包含 `effect_ordinal,command_id,disposition,mapping_id,outbox_id,child_order_id,lifecycle_status,last_committed_stage,broker_called,qmt_order_id,callback_watermark,reconciliation_receipt_sha256,item_projection_sha256`
+- `lifecycle_status in SYNCHRONOUS_REJECTED|DEFERRED_DEPENDENT_BUY|PENDING|CLAIMED|DISPATCHING|ACKED|ACKED_REJECTED|FAILED_RETRYABLE|OUTCOME_UNKNOWN|RECONCILING|FAILED_TERMINAL`
+- `lifecycle_projection_sha256=hash_hex_v1("miniqmt_product_command_lifecycle_projection_v3", preceding fields)`
+
+DEFER 时 outbox/broker/callback 字段必须为空；REJECT 必须闭合 terminal outbox 且 `broker_called=false`。writer/readback 必须按 authority set 顺序重建，不能按数据库返回顺序或状态分组重排。
+
+`ProductMaterializationReceiptV3`：
+
+- `schema_version=miniqmt_product_materialization_receipt_v3`
+- `runtime_id,algo_instance_id,event_id,delivery_id,transition_id,authority_set_sha256,execution_projection_set_sha256`
+- 按 authority order 排列的 `ordered_mapping_ids,ordered_materialized_outbox_ids,ordered_rejected_outbox_ids,ordered_deferred_coordination_ids,ordered_child_order_ids`
+- `zero_command,repository_transaction_id,commit_outcome=COMMITTED_READBACK_VERIFIED,independent_readback_sha256`
+- `receipt_sha256=hash_hex_v1("miniqmt_product_materialization_receipt_v3", preceding fields)`
+
+每个 ordered 集合都必须由 V3 item disposition 投影，不能省略、padding 或按数据库返回顺序重排。writer 只可返回 `COMMITTED_READBACK_VERIFIED`；commit-unknown 抛 typed exception并携带 readback key，不得返回 PENDING 或假 ACK。
 
 ### 4.3 Route cutover authority
 
@@ -201,7 +273,7 @@ zero-command 不是空 authority：必须持久化 total=0、`ZERO_COMMAND` 的 
 
 ## 5. Durable Schema and Migration / 持久化 schema 与迁移
 
-K6 migration 使用 `miniqmt_execution_kernel_k6_202608xx.preflight.sql/.sql/.rollback.sql` triplet。具体日期由实施 worktree 创建时冻结。迁移只新增以下缺口，不修改 K2 既有业务含义。
+K6-A 已合入的 `miniqmt_execution_kernel_k6_20260801.preflight.sql/.sql/.rollback.sql` checksum保持不可变。K6-C0 必须新增独立 successor triplet `miniqmt_execution_kernel_k6c_202608xx.preflight.sql/.sql/.rollback.sql`，不得改写已合入 migration bytes。该 successor 只补 product implementation-readiness 缺口，不修改 K2 既有业务含义；production K6 DDL 仍为 `noop`。
 
 ### 5.1 New tables
 
@@ -209,9 +281,11 @@ K6 migration 使用 `miniqmt_execution_kernel_k6_202608xx.preflight.sql/.sql/.ro
    - PK `coordination_id`；UNIQUE `(runtime_id,buy_algo_instance_id,buy_parent_intent_id)`；composite FK 到 runtime/algo owner。
    - strict status CHECK、hash CHECK、non-negative Decimal CHECK、release identity closure CHECK、lease closure CHECK、row_version/decision_sequence positive CHECK。
    - index `(runtime_id,status,updated_at_utc,coordination_id)` 仅用于 bounded recovery；index `(strategy_id,trade_date,status)` 用于 trigger scan。
+   - K6-C0 successor 增加 `release_command_id,release_transition_id,release_command_authority_item_sha256` 与 composite/deferrable FK，V2 carrier 必须闭合到 exact DEFER item；hash-only V1 row不得进入product route。
 2. `qmt_strategy.execution_dependent_buy_dependency`
    - PK `(coordination_id,sell_parent_intent_id)`；FK coordination；FK sell algo/runtime identity。
    - UNIQUE `(coordination_id,dependency_sha256)`；status/hash/ordered-ref JSON schema fingerprint CHECK。
+   - K6-C0 successor 增加 `latest_order_fact_id,ordered_settled_proceeds_refs` JSONB 与V2 schema CHECK；product writer禁止继续写分离的 positional trade/cash tuple。
 3. `qmt_strategy.execution_dependent_buy_decision`
    - append-only PK `decision_id`；UNIQUE `(coordination_id,decision_sequence)`；self-FK predecessor；FK release transition/command/outbox when RELEASE。
    - 与同事务后建K2 transition/outbox的FK使用`DEFERRABLE INITIALLY DEFERRED`，commit前必须完整闭合；decision/status/presence/hash CHECK；数据库权限与 repository 均禁止 UPDATE/DELETE。
@@ -220,18 +294,21 @@ K6 migration 使用 `miniqmt_execution_kernel_k6_202608xx.preflight.sql/.sql/.ro
    - 保存 canonical JSON、counts、disposition、projection/transition/catalog hashes；CHECK counts 和 SHA。
 5. `qmt_strategy.execution_product_command_authority_item`
    - PK `(authority_set_sha256,effect_ordinal,command_id)`；UNIQUE `command_id`；FK aggregate、mapping/outbox/child（按 disposition 条件闭合）。
-   - 与同事务创建的mapping/outbox/child关联使用`DEFERRABLE INITIALLY DEFERRED`；CHECK disposition/reject/materialize presence、ordinal、hash；UNIQUE `(transition_id,effect_ordinal)`。
+   - K6-C0 successor 增加 non-null `command_json,evaluation_evidence_json,evaluation_evidence_sha256`与nullable `coordination_id`，并从 strict `BrokerCommandV2/ProductCommandEvaluationEvidenceV3` 重算 command/evidence/payload/owner；与同事务创建的mapping/outbox/child/coordination关联使用`DEFERRABLE INITIALLY DEFERRED`。
+   - CHECK 完整覆盖 MATERIALIZE、REJECT_SYNCHRONOUS、DEFER_DEPENDENT_BUY presence matrix、ordinal、hash；UNIQUE `(transition_id,effect_ordinal)`。DEFER仅允许BUY SUBMIT、mapping/child非空、outbox为空。
 6. `qmt_strategy.execution_product_route_cutover`
    - append-only PK `(runtime_id,binding_id,trade_date,route_epoch)`；UNIQUE `receipt_sha256`；self-FK previous receipt；route owner/new-instance sequence/hash CHECK。
 7. `qmt_strategy.execution_product_route_owner`
    - PK `(runtime_id,binding_id,trade_date)`；FK `(runtime_id,binding_id,trade_date,current_route_epoch)`与`current_receipt_sha256`到exact cutover receipt；row_version正数、owner/receipt/hash一致性CHECK。
    - new route publication在同一事务insert append-only receipt并CAS owner；owner不能从KERNEL_V2回退，数据库trigger与repository pure transition authority使用同一允许矩阵。
 
-不新增新的 event、delivery、transition、command payload、mapping、child、dispatch attempt、reconciliation、timer 或 session 表。
+K6-C0 同时以 additive successor 修改既有 K2 mapping status CHECK/trigger authority，增加 `DEFERRED_DEPENDENT_BUY` exact initial/successor状态；不得重写 K2-A migration。除此之外不新增新的 event、delivery、transition、独立 command-payload表、mapping、child、dispatch attempt、reconciliation、timer 或 session 表；完整 command 只保存在 authority item `command_json`。
 
 ### 5.2 Preflight, forward, readback and rollback
 
 Preflight 不只看名称，必须通过 `pg_catalog` 指纹核对 schema/table/column type/nullability/default、PK/UNIQUE/CHECK/FK、index method/order/predicate、function definition/language/volatility、comment 与既有 K2 dependency。若同名对象结构不同，typed fail 并终止；不得 DROP/重建或自动修正。
+
+K6-C0 successor 只允许在全部K6-A coordination/dependency/decision/authority/item/route表为零行、且不存在K6关联mapping/child/outbox时应用。发现任一V1/V2 durable row必须typed fail并报告精确table/count；不做数据回填、删除、导出、hash-only升级或默认disposition。该限制是尚未激活产品schema的版本迁移合同，不是运行时业务门禁；K6-D activation后永远不再执行此successor。
 
 Forward migration：
 
@@ -241,24 +318,18 @@ Forward migration：
 
 Production readback 由独立连接执行：核对 migration checksum、catalog fingerprint、零或合法 durable rows、K2 FK closure、writer/readback round-trip；不依赖 transaction-local object。
 
-Guarded rollback 只在所有 K6 表均为零行、无 K6 route receipt、无 K6 outbox/mapping/child lineage、无 view/function dependency 时允许 DROP。存在任一 durable fact 时 rollback 明确拒绝；不能导出后删表，也不要求数据库备份，因为 AIstock 已有独立日常备份策略。
+K6-C0 guarded rollback 只在所有 K6 authority/coordination rows为零、无 `DEFERRED_DEPENDENT_BUY` mapping、无K6关联 outbox/child、无route receipt且无view/function dependency时允许撤销新增列/constraint/status；随后 K6-A rollback仍按其原合同独立判定。存在任一 durable fact时 rollback明确拒绝；不能导出后删表，也不要求数据库备份，因为 AIstock已有独立日常备份策略。
 
 ## 6. Transactions, Single Writer, Retry and Recovery / 事务、单写者、重试与恢复
 
 ### 6.1 Lock order
 
-统一锁顺序：
+锁顺序按两个不重叠 writer phase 固定：
 
-1. route cutover owner；
-2. runtime/algo instance；
-3. dependent-BUY coordination；
-4. sorted dependencies；
-5. qmt strategy virtual account/related settled trade and cash ledger facts；
-6. event/delivery/transition；
-7. product authority set/items；
-8. mapping/child/outbox。
+- 首次 product transaction：`route owner -> runtime/algo -> event/delivery/transition -> authority set/items -> new coordination/dependencies -> mapping/child/outbox`。coordination在此阶段只能first insert，不锁定或更新既有coordination。
+- dependent-BUY trigger/release：`route owner -> runtime/algo -> existing coordination -> sorted dependencies -> virtual account + sorted trade/cash ledger -> original transition/authority item -> deferred mapping/child -> outbox`。该阶段不得修改authority item或另建transition。
 
-所有多行锁按 canonical identity 排序。任何逆序或未声明锁都在测试中注入死锁/竞争验证，不允许用无限重试掩盖。
+所有多行锁按 canonical identity 排序。两个phase唯一可能共享的mutable owner是route/runtime/algo，顺序完全相同；authority/coordination不会发生交叉更新。任何逆序、first-product更新既有coordination或release改写authority均在测试中注入死锁/竞争验证并拒绝，不允许用无限重试掩盖。
 
 ### 6.2 Fence and CAS
 
@@ -269,15 +340,17 @@ Guarded rollback 只在所有 K6 表均为零行、无 K6 route receipt、无 K6
 
 ### 6.3 Atomic release and materialization
 
-RELEASE transaction 同时完成：trigger readback、fresh ledger observation、decision append、coordination CAS、K2 event/delivery/transition、V2 authority set/items、mapping/child/outbox。任一步失败全部 rollback。broker 调用只发生在 commit 后由现有 K2 outbox worker 执行。
+首次 product transaction 同时完成：锁定 runtime/algo/delivery/transition authority，写入完整 command_json authority set/items，并按 disposition 原子创建 MATERIALIZE mapping/child/outbox、REJECT terminal no-broker lineage，或 DEFER coordination/deferred mapping/child。任何一项失败整套 rollback，不能先提交 transition 再补 authority。
 
-同步 REJECT item 写入 authority set 和 terminal product projection，但不创建 mapping/outbox/child；它返回 exact reject disposition，不调用 broker。zero-command 也写 aggregate/readback，但无 outbox。
+RELEASE transaction 不新建 command/event/transition：它锁定 original authority item、coordination、deferred mapping、sorted dependencies、virtual account/cash ledger事实，完成 trigger readback、fresh ledger observation、decision append、coordination CAS、mapping `DEFERRED_DEPENDENT_BUY -> RESERVED` exact successor及同一 command id 的 PENDING outbox first write。任一步失败全部 rollback。broker 调用只发生在 commit 后由现有 K2 outbox worker 执行。
+
+同步 REJECT item 的 terminal mapping/outbox 与 non-acceptance receipt 必须和 authority 同事务落库，`broker_called=false`；已有 outcome publisher负责后续 COMMAND_OUTCOME，不允许 product root伪造 plugin ACK。zero-command 也写 aggregate/readback，但无 item、mapping、child或outbox。
 
 ### 6.4 Commit unknown, retry and restart
 
 - commit 返回不确定时抛 `KernelRepositoryCommitUnknown` 子类，包含 deterministic readback key；调用方先用新连接 readback，确认存在则返回同一 receipt，不存在才允许按同一 identity retry。
 - retry 不增加 command、mapping、child 或 outbox；相同 identity/不同 payload typed corruption。
-- restart 从 route owner、open coordination、K2 pending outbox、callback watermark 和 reconciliation history 重建；不读取 runtime JSON 推断状态。
+- restart 从 route owner、authority item command_json、open coordination、deferred mapping、K2 pending/terminal outbox、callback watermark 和 reconciliation history 重建；不读取 runtime JSON 或进程缓存推断状态。
 - late/duplicate/out-of-order SELL/ORDER/ACCOUNT/EOD trigger 进入 identity de-dup；终态 coordination 只回读原 receipt，不 reopen。
 - OUTCOME_UNKNOWN 由现有 K2 reconciliation 闭合；不得重发非幂等 broker call，也不得把 unknown 当 rejected。
 
@@ -287,7 +360,9 @@ RELEASE transaction 同时完成：trigger readback、fresh ledger observation�
 
 只有冻结 execution plan 中明确属于同一 runtime、strategy、trade date，且 BUY 因同批 SELL 款尚未结算而收到现有 typed preflight reason 的 parent 才能创建 coordination。普通资金不足、capacity residual、risk reject、quote invalid 或 strategy package 问题不得被重新分类为 dependent-BUY。
 
-创建时必须闭合 BUY parent、所有 sell dependencies、required cash、release command payload、strategy ledger account 和 session authority。缺少或冲突时 fail loud，不写 partial coordination。K3 inventory 可用于比较 legacy parity，但不是 K6 candidate source authority。
+创建时必须闭合 BUY parent、所有 sell dependencies、required cash、`DEFER_DEPENDENT_BUY` authority item 的 strict command_json、deferred mapping/child、strategy ledger account 和 session authority。coordination 与 authority/mapping/child 必须在首次 product transaction 同时提交；缺少或冲突时 fail loud，不写 partial coordination。K3 inventory 可用于比较 legacy parity，但不是 K6 candidate source authority。
+
+deferred mapping使用`mapping_version=1,status=DEFERRED_DEPENDENT_BUY`，计入algo `active_child_count`并与plugin的COMMAND_PENDING state闭合；outbox count必须为0。release时mapping只允许变为`version+1,RESERVED`并创建row_version=1的同command PENDING outbox。BLOCK/EOD将deferred mapping推进为TERMINAL并由正式COMMAND_OUTCOME收敛plugin state；任何terminal mapping不得release或reopen。
 
 ### 7.2 Trigger evaluation
 
@@ -300,10 +375,12 @@ RELEASE transaction 同时完成：trigger readback、fresh ledger observation�
 
 SELL TRADE 必须先持久化并完成 `settle_sell_trade_cash_once` 的 authoritative cash fact，coordinator 才能观察。收到 broker callback 但 ledger cash 尚未更新时保持 WAIT，不使用成交价×数量估算。部分成交可多次触发，但每次由 trade/cash identity 去重。
 
+Trigger source contract 不允许自由文本：`SELL_TRADE_SETTLED` 只接受 strict K2 TRADE/callback-reconcile、qmt trade row与cash-ledger proceeds ref闭包；`SELL_ORDER_TERMINAL` 只接受 strict ORDER/RECONCILE terminal fact；`ACCOUNT_REFRESHED` 只接受同 strategy/date 的 account projection；`SESSION_EOD` 只接受 exchange-session EOD authority。`source_fact_type/id/sha256` 必须由各自 reader重建，caller 只能提交 trigger identity，不能提交自报 payload/hash。EOD evaluator 必须证明该 runtime 所有更小 committed event sequence 已消费或有明确 terminal disposition。
+
 ### 7.3 Release and terminal semantics
 
-- release-ready只是同一事务内 evaluator 的中间判定，数据库 CHECK 不接受该status；事务提交时必须已成为`RELEASED_TO_K2_OUTBOX`，因此不可能形成durable orphan ready row。
-- released BUY 进入与普通 command 相同的 K2 materializer/outbox/Gateway/callback/reconcile 链；不走 legacy direct submit。
+- release-ready只是同一事务内 evaluator 的中间判定，数据库 CHECK 不接受该status；事务提交时必须已成为`RELEASED_TO_K2_OUTBOX`，deferred mapping 必须成为 exact RESERVED successor且同一 command id 的 outbox 已存在，因此不可能形成durable orphan ready row。
+- released BUY 复用首次 transition 的 exact command authority，并进入与普通 command 相同的 K2 outbox/Gateway/callback/reconcile 链；不重复运行 plugin、不另造 command，也不走 legacy direct submit。
 - 一个 BUY coordination 只释放一次。重复 trigger、restart 或 EOD 回读同一 released command/outbox。
 - 依赖 SELL 全部 terminal 且 ledger shortfall 仍大于零时 BLOCK；BLOCK 不自动变成普通 BUY，也不转人工审批。
 - EOD_RESIDUAL 保存 exact cash shortfall、dependency closure 和最后 ledger observation；下一交易日不得继续释放。新交易日需要上游创建新的 parent/runtime identity。
@@ -316,21 +393,21 @@ SELL TRADE 必须先持久化并完成 `settle_sell_trade_cash_once` 的 authori
 对每个 APPLIED transition：
 
 1. strict readback catalog、creation binding、façade conformance 和 transition receipt；
-2. 读取 exact transition commands，不接受 caller supplied subset；
+2. 从 transition receipt 与 K6 authority item `command_json` 读取 exact transition commands；首次 writer 输入必须来自同一 `AlgoTransitionV1`，readback 不接受 caller supplied subset或进程缓存；
 3. 为每个 command 从同一 `ExecutionProjectionSet` 解析 contract/account/market/OMS/risk/route facts；
 4. 使用唯一 pure evaluator 生成 item disposition；
 5. 构建 aggregate 并以同一 reader 校验；
-6. 在同一 repository transaction 创建 aggregate/items 和全部 MATERIALIZE mapping/child/outbox；
-7. commit 后独立 readback 构建 `ProductMaterializationReceiptV2`。
+6. 在同一 repository transaction 创建 aggregate/items，以及全部 MATERIALIZE lineage、REJECT terminal no-broker lineage、DEFER coordination/deferred mapping/child；
+7. commit 后独立 readback 构建 `ProductMaterializationReceiptV3`。
 
 writer 与 readback 共用 pure schema/hash/evaluator，但 readback 必须从数据库事实重建，不接受 writer 返回对象或缓存。hash-correct self-consistent drift、不同 command 集合、错误 ordinal、不同 projection、不同 broker identity 都拒绝。
 
 ### 8.2 Multi-command and synchronous rejection
 
 - 多 command 不按算法特判；Iceberg cancel+submit、cancel_all 或未来 plugin 都走同一 aggregate。
-- 同步 reject 只影响其 command item，必须保留 exact OMS/risk/route reason/context。它不是 exception swallowing，也不将整个 transition伪装为成功。
+- 同步 reject 只影响其 command item，必须保留 exact OMS/risk/route reason/context，并形成 terminal `broker_called=false` K2 lineage。它不是 exception swallowing，也不将整个 transition伪装为成功。
 - repository transaction 仍原子写入完整 aggregate；若任一 accepted item 无法创建 K2 lineage，则整个 aggregate rollback。
-- `MIXED_PER_COMMAND` 表示 authority 结果混合；materializer 仍创建所有 MATERIALIZE items，REJECT items 形成 durable terminal projection。
+- `MIXED_PER_COMMAND` 表示 authority 结果混合；materializer 仍创建所有 MATERIALIZE items，REJECT items形成 durable terminal no-broker projection，DEFER items形成 durable coordination但不创建 outbox。
 - product invocation 的返回值按原 command order映射 local order id 或 typed rejection；不得只返回第一条、静默省略、重新排序或 padding。
 
 ### 8.3 Product root rejection rules
@@ -340,9 +417,28 @@ writer 与 readback 共用 pure schema/hash/evaluator，但 readback 必须从�
 - `KernelCommandLifecycleProjectionV1` 或 K4/K5 `SHADOW_ONLY_K2_V1` receipt；
 - 只有一条 item 却 transition 包含多条 command；
 - partial/previous/latest catalog、installed vn.py、legacy adapter fallback；
-- caller supplied `PASSED`、固定 ACK 或已存在 mapping 时再次 materialize；
+- caller supplied `PASSED`、固定 ACK、hash-only command、无 authority item 的 command，或已存在 non-deferred mapping 时再次 materialize；
 - broker_called=true 但缺 PRE_CALL/dispatch attempt，或 qmt order id 与 callback/reconcile 不闭合；
 - product route owner 非 KERNEL_V2、route epoch/fence stale。
+
+### 8.4 Unique evaluator and public seams
+
+唯一pure evaluator为：
+
+`evaluate_product_command_authority_v3(*, command: BrokerCommandV2, evidence: ProductCommandEvaluationEvidenceV3, catalog: PluginCatalogSnapshotV1, creation_binding: ExecutionAlgoCreationBindingV1) -> ProductCommandAuthorityItemV3`。
+
+判定优先级固定且不得按algo code分支：
+
+1. schema/hash/owner/projection/catalog/binding缺失或冲突：抛`MINIQMT_K6_PRODUCT_AUTHORITY_INVALID`，整套transaction零写入；不是REJECT item。
+2. route status非PASSED、risk action=`KILL_SWITCH`、kill-switch state非允许或OMS `REJECT`且reason不属于dependent-BUY exact set：`REJECT_SYNCHRONOUS`，保留原primary reason/context。
+3. 仅当`command_type=SUBMIT_LIMIT,side=BUY`，OMS decision=`REJECT`，error-code set非空且是`{SELL_PROCEEDS_REQUIRED,ACCOUNT_GROUP_SELL_PROCEEDS_REQUIRED}`的子集，并且`evidence.dependent_buy_candidate`从同一frozen execution plan提供完整SELL dependency closure时：`DEFER_DEPENDENT_BUY`。若candidate缺失/漂移或同时存在capacity/risk/route/quote/package等其他failure，必须REJECT或对authority corruption整套fail loud，不能DEFER。
+4. route PASSED、risk PASS、kill-switch允许、OMS PASS且所有projection exact：`MATERIALIZE`。
+
+aggregate builder为：
+
+`build_product_command_authority_set_v3(*, transition: AlgoTransitionV1, transition_receipt: AlgoTransitionReceiptV1, projection_set: ExecutionProjectionSetV1, ordered_evidence: tuple[ProductCommandEvaluationEvidenceV3,...], catalog: PluginCatalogSnapshotV1, creation_binding: ExecutionAlgoCreationBindingV1) -> ProductCommandAuthoritySetV3`。
+
+`ordered_evidence`必须与`transition.broker_commands`按ordinal/command id exact one-to-one；zero command必须传空tuple并生成ZERO_COMMAND。repository public seam为`materialize_product_transition_atomic_v3(...) -> ProductMaterializationReceiptV3`；它只接收上述strict aggregate及K2 transition write bundle，不接收caller supplied mapping/outbox subset或disposition。readback seam为`read_product_materialization_v3(authority_set_sha256) -> tuple[ProductCommandAuthoritySetV3,ProductCommandLifecycleProjectionV3,ProductMaterializationReceiptV3]`，必须使用独立连接从durable command/evidence/lineage重建并重新运行同一evaluator。
 
 ## 9. Product Cutover and Legacy Retirement / 产品切换与旧路线退役
 
@@ -424,9 +520,9 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 
 计划测试文件：
 
-- `test_kernel_product_contracts.py`：所有 carrier、identity/hash、immutability、canonical ordering、bounds、malformed JSON types。
-- `test_kernel_dependent_buy.py`：candidate、partial sell、multiple trade、fresh/stale ledger、cancel/no proceeds、EOD、late callback、restart、exactly once。
-- `test_kernel_product_authority.py`：0/1/N commands、mixed reject/materialize、wrong projection、missing/extra/duplicate、V1 reject、readback drift。
+- `test_kernel_product_contracts.py`：V2 proceeds/ledger/coordination、command_json、三种disposition、identity/hash、immutability、canonical ordering、bounds、malformed JSON types及V1 product拒绝。
+- `test_kernel_dependent_buy.py`：candidate、deferred mapping/no-outbox、partial sell、multiple trade、fresh/stale ledger revision、cancel/no proceeds、same-command release、EOD、late callback、restart、exactly once。
+- `test_kernel_product_authority.py`：0/1/N commands、mixed materialize/reject/defer、SUBMIT/CANCEL terminal reject lineage、wrong command payload/projection、missing/extra/duplicate、V1 reject、fresh-process readback drift。
 - `test_kernel_product_cutover.py`：new-instance cutoff、legacy drain、dual-route rejection、route epoch、rollback boundary、inventory completeness。
 - `test_kernel_product_diagnostics.py`：read-only, reason preservation, metrics cardinality, alert auto-clear。
 
@@ -439,13 +535,13 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 - clean first/second apply、partial/wrong catalog、function body/predicate/comment drift、independent readback。
 - rollback zero rows success；每类 durable row存在时分别拒绝。
 - concurrent trigger、duplicate callback、stale lease、wrong epoch、commit unknown、deadlock lock-order、restart reclaim。
-- atomic decision+K2 event/transition/authority/mapping/child/outbox；故障注入证明 zero partial rows。
+- atomic first product transition+command_json authority+MATERIALIZE/REJECT/DEFER lineage；atomic dependent decision+same-command outbox release；故障注入证明 zero partial rows。
 - same identity/different payload、multi-writer、read-your-own-write 与 post-commit独立 readback差异。
 
 ### 11.3 Integration, route uniqueness and business parity
 
 - 五个当前 plugin 通过同一 product aggregate/materializer，无 algo-specific kernel branch。
-- dependent-BUY release 走同一 K2 outbox，broker adapter 使用 fake recording seam only；测试不调用真实 broker。
+- dependent-BUY WAIT证明 mapping/child存在且outbox=0；release走同一command id与K2 outbox，broker adapter使用fake recording seam only；测试不调用真实broker。
 - K3 legacy behavior trace 与 K6 outcome parity：defer/release/block/EOD 的业务结果一致，但 durable owner不同。
 - 静态扫描证明 production imports/call graph无 legacy adapter/direct broker/synchronous timer/dependent-buy direct retry。
 - LocalSIM ownership/route文件 no-diff；signal/selection/target/side/quantity golden vectors no-diff。
@@ -469,26 +565,27 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 - 当前实现证据：`kernel_product_contracts.py`、`kernel_product_repository.py`、七张 additive 表及 preflight/forward/guarded-rollback migration；typed bounded strict readback、lifecycle effect ordinal、authority-derived materialization receipt、完整 trigger/strategy-ledger observation、decision/coordination deferred closure、exact current/successor lease epoch、current worker-incarnation fence、独立 `pg_catalog`/function-body readback、partial-schema fail-closed、commit-unknown、幂等重试及0/1/N mixed command lineage均已直接验证。
 - 当前验证：K6 contracts/migration/DEV repository/structure direct=`44 passed`；contracts line/branch=`90.68%/71.35%`，repository line/branch=`86.58%/70.35%`；changed-files 唯一路由模块 `miniqmt_execution_runtime_l2`=`1161 passed,39 skipped`。migration authority 为 catalog=`546a209dc2f8721ccee8b5e905117788486307147dfb4fc6bc396842f5cf84ad`、function-body=`bcb0b57b1cb425f4eb3d34b2ce5ca24c9f430986665871384482dfc056f5628a`、forward canonical-LF=`4d5b6f251c84016765ce3c061e286e172a1685cf45a2d2629a361ae471adb75f`；PR required CI 仍须在最终 source HEAD 上独立闭合，不以本地证据冒充。
 
-### K6-B — dependent-BUY coordinator
-
-- 实现 §7 trigger/state machine、ledger authority、atomic K2 release、restart/EOD。
-- 保留 legacy product path运行但 K6 coordinator只做broker-neutral DEV integration；不双写生产。
-- 预计 5–7 个开发日；依赖 K6-A。
-
 ### K6-C — generic product command authority/materializer
 
-- 实现 §8 V2 aggregate、0/1/N command、synchronous rejection、K2 outbox/callback/reconcile closure。
+- **当前第一优先级**。先完成 K6-C0 contract/migration correction：authority item strict `command_json`、`DEFER_DEPENDENT_BUY`、V2 proceeds/ledger/coordination carrier、deferred mapping status，以及 K6-A additive migration/repository 的同 authority readback；生产尚无 K6 rows，禁止以修改历史数据绕过。
+- 再完成 K6-C1 materializer：§8 V3 aggregate、0/1/N command、MATERIALIZE/REJECT/DEFER、terminal no-broker reject outcome、K2 outbox/callback/reconcile closure。
 - 五个 plugin 全部通过同一 public seam；仍不激活产品binding。
-- 预计 6–8 个开发日；依赖 K6-A，可与 K6-B 在不同文件owner下并行但最终必须联合复审。
+- 预计 8–12 个开发日；依赖 K6-A。K6-C 未完成并合入前不得把 K6-B release 标记为 implemented，也不得并行修改三份共享权威设计。
+
+### K6-B — dependent-BUY coordinator
+
+- **第二优先级**。实现 §7 trigger/state machine、ledger authority、deferred mapping -> same-command outbox atomic release、restart/EOD。
+- 保留 legacy product path运行但 K6 coordinator只做broker-neutral DEV integration；不双写生产。
+- 预计 5–7 个开发日；依赖 K6-C0/C1 source merge，不再声明可与 K6-C 并行完成。
 
 ### K6-D — cutover, retirement and runtime acceptance
 
 - 实现 §9 route owner、new-instance cutover、legacy drain、完整 retirement inventory和删除。
 - 更新 runbook/diagnostics/metrics；执行生产 migration/config/binding需分别获用户授权；服务重启由用户执行。
 - 完成正常交易日 SIM 观察与aftercare。
-- 预计 5–8 个开发日加至少 1 个正常交易日观察；依赖 K6-B/C。
+- 预计 5–8 个开发日加至少 1 个正常交易日观察；依赖 K6-C 后 K6-B 全部 source merge并完成联合复审。
 
-每个切片独立 worktree/PR/正式审核；不得把未完成后续切片伪报为 overall完成。K6 overall只有K6-D runtime acceptance闭合后才是 `implemented_verified`。
+每个切片独立 worktree/PR/正式审核；严格按 `K6-C0 -> K6-C1 -> K6-B -> K6-D` 推进。若 C0/C1 同一 PR 实现，验收矩阵仍须分别给出 contract/migration 与 materializer证据。不得把未完成后续切片伪报为 overall完成；K6 overall只有K6-D runtime acceptance闭合后才是 `implemented_verified`。
 
 ## 13. Rollout, Production Gates and State Separation / 发布、生产门禁与状态分离
 
@@ -515,16 +612,16 @@ K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding
 | design_item | acceptance |
 | --- | --- |
 | `F-101` | K6 current facts、K1–K5复用、signal/execution/LocalSIM隔离、两个真实缺口与K6/non-goal边界完整 |
-| `F-102` | dependent-BUY coordination/dependency/trigger/ledger/decision strict schema、identity/hash、状态转换和bounds可直接实施 |
-| `F-103` | dependent-BUY candidate、SELL TRADE/ORDER/ACCOUNT/EOD触发、ledger cash authority、release/block/residual/late/restart语义精确 |
-| `F-104` | generic per-command V2 item/set/lifecycle/materialization schema、0/1/N、mixed reject、V1产品拒绝和writer/readback authority闭合 |
-| `F-105` | K6 additive表、composite FK/CHECK/UNIQUE/index/comment、pg_catalog fingerprint、preflight/forward/readback/guarded rollback可执行且不复制K2表 |
-| `F-106` | single-writer、lock order、CAS/fence、atomic release/materialization、commit-unknown、retry/restart/reconcile和no-double-release完整 |
+| `F-102` | dependent-BUY V2 proceeds/dependency/trigger/ledger/decision/coordination strict schema、identity/hash、状态转换、bounds及V1 product拒绝可直接实施 |
+| `F-103` | dependent-BUY candidate、DEFER authority/mapping、SELL TRADE/ORDER/ACCOUNT/EOD触发、ledger cash authority、same-command release/block/residual/late/restart语义精确 |
+| `F-104` | generic per-command V3 command_json/item/set/lifecycle/materialization schema、0/1/N、materialize/reject/defer、K4/K5 V1与K6-A V2产品拒绝和writer/readback authority闭合 |
+| `F-105` | K6 additive表/列、deferred mapping status、composite FK/CHECK/UNIQUE/index/comment、pg_catalog fingerprint、preflight/forward/readback/guarded rollback可执行且不复制K2表 |
+| `F-106` | single-writer、lock order、CAS/fence、atomic product transaction与same-command release、commit-unknown、retry/restart/reconcile和no-double-release完整 |
 | `F-107` | route cutover receipt、新实例唯一KERNEL_V2、旧实例drain、禁止dual route/fallback及rollback边界精确 |
 | `F-108` | legacy helper/direct dependent-BUY/synchronous timer/adapter product route退役inventory、disposition与唯一route证据可执行 |
 | `F-109` | typed errors、bounded evidence、read-only diagnostics、低cardinality metrics、auto-clear alerts、retention和runbook完整且无人工门禁 |
 | `F-110` | direct/negative/DEV PostgreSQL/migration/concurrency/integration/route uniqueness/business parity/coverage/changed-files测试计划可执行 |
-| `F-111` | K6-A/B/C/D切片、依赖、工期、source/DDL/config/restart/runtime/normal-day状态分离与rollout/rollback完整 |
+| `F-111` | `K6-C0 -> K6-C1 -> K6-B -> K6-D`优先级、依赖、工期、source/DDL/config/restart/runtime/normal-day状态分离与rollout/rollback完整 |
 | `F-112` | DESIGN-COMPLIANCE-001、no simplification/silent error/business drift/unapproved gate及K6完成定义闭合 |
 
 ## 15. Design Acceptance Matrix / 设计验收矩阵
@@ -532,11 +629,11 @@ K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | `F-101` | §0–§3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` scope/owner/no-diff matrix | design_ready | none |
-| `F-102` | §4.1；`kernel_product_contracts.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py` strict/negative/typed-bounded readback、effect ordinal、authority-derived receipt matrix；final four-file direct/DEV aggregate=`44 passed`；contracts line/branch=`90.68%/71.35%` | implemented_verified_local | none |
-| `F-103` | §7 | target `backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy.py` full trigger/state/restart matrix | design_ready | none |
-| `F-104` | §4.2、§8 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py` 0/1/N, mixed, V1 reject, readback drift | design_ready | none |
-| `F-105` | §5；K6 migration triplet | `backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py` clean/reapply、zero-table stale function、catalog/function/comment drift、decision closure、partial-schema guarded rollback；DEV PostgreSQL通过；catalog/function/LF hashes=`546a209d.../bcb0b57b.../4d5b6f25...` | implemented_verified_local | none |
-| `F-106` | §6；`kernel_product_repository.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py` exact lease/current incarnation、trigger/ledger full evidence、decision-status closure、transaction/CAS/idempotency/mixed lineage/commit-unknown/readback drift；repository line/branch=`86.58%/70.35%` | implemented_verified_local | none |
+| `F-102` | §4.1；target `backend/services/miniqmt_execution_runtime/kernel_product_contracts.py` | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py -q`：V2 proceeds/ledger/coordination、V1 product reject、strict readback | design_ready | none |
+| `F-103` | §7 | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy.py -q`：candidate/defer/same-command release/full trigger/state/restart | design_ready | none |
+| `F-104` | §4.2、§8 | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py -q`：command_json、0/1/N、materialize/reject/defer、terminal no-broker outcome、V1 reject、readback drift | design_ready | none |
+| `F-105` | §5；K6-A immutable migration + K6-C0 successor triplet | target `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_k6c_migration_postgres.py -q`：command_json、coordination/item FK、deferred status、catalog/comment/readback/rollback | design_ready | none |
+| `F-106` | §6；target `backend/services/miniqmt_execution_runtime/kernel_product_repository.py` | target `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy_postgres.py -q`：atomic authority/lineage、same-command release、CAS/fence/commit-unknown/zero-partial/concurrency | design_ready | none |
 | `F-107` | §4.3、§9.1、§9.3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` owner/route-generation/drain/rollback matrix | design_ready | none |
 | `F-108` | §9.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_legacy_route_retirement.py` exact inventory + import/call-graph uniqueness | design_ready | none |
 | `F-109` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_diagnostics.py`; artifact: `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
@@ -548,11 +645,11 @@ K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding
 
 ### 16.1 Review findings closed by this design
 
-1. **K6曾只有阶段性描述，没有实施级schema**：§4已固定所有关键carrier、hash domain、排序、cardinality、状态转换和V1拒绝。
+1. **K6-A V1曾把分离hash tuple和不存在的virtual-account row_version当作足够authority**：§4.1改为V2 proceeds ref与ledger revision，并要求product root拒绝V1。
 2. **可能另建一套kernel表**：§5明确只增加coordination与product authority缺口，复用全部K2 transport/OMS lineage。
 3. **dependent-BUY可能继续估算cash或直提broker**：§7只接受qmt strategy ledger settled cash，release只能进入K2 outbox。
-4. **multi-command可能丢失或复用第一条receipt**：§8固定exact set-equal逐命令aggregate、atomic materialization与zero-command authority。
-5. **同步reject可能被异常或成功吞掉**：每个item都有durable disposition/reason，返回按原command order闭合。
+4. **multi-command可能只存command hash而无法fresh-process重建**：§4.2/§8要求每个item持久化strict command_json，并与transition receipt exact set-equal。
+5. **同步reject或defer可能让plugin state与mapping/outbox漂移**：REJECT形成terminal no-broker lineage并由正式outcome收敛；DEFER保留mapping/child且无outbox，K6-B只为同一command创建outbox。
 6. **cutover可能形成双route/fallback**：§9固定new-instance cutoff、legacy drain和不可逆route owner chain。
 7. **rollback可能把K6状态交给legacy**：§9.3明确PRE_CALL后只能兼容K6版本/drain，禁止切旧route。
 8. **迁移可能只按对象名自证**：§5.2要求pg_catalog exact fingerprint、独立readback、canonical-LF checksum和有数据拒绝rollback。
@@ -563,8 +660,8 @@ K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding
 
 | Review item | Result | Evidence |
 | --- | --- | --- |
-| no simplified/subset/POC/placeholder/mock-only completion | pass | 完整schema、DB、事务、route、测试和正常交易日验收均已设计；当前只声明design_ready |
-| no silent error/exception swallowing/fake success | pass | typed reason、bounded evidence、commit-unknown、V1 reject与independent readback明确 |
+| no simplified/subset/POC/placeholder/mock-only completion | pass | command_json、V2 ledger/proceeds、REJECT/DEFER lifecycle、same-command release、DB事务、route、测试和正常交易日验收均已设计；当前只声明design revision ready，不冒充实现 |
+| no silent error/exception swallowing/fake success | pass | typed reason、bounded evidence、terminal broker_called=false reject、commit-unknown、K4/K5 V1与K6-A V2 product reject、independent readback明确 |
 | no business semantic drift | pass | signal/selection/package/target/side/quantity/算法/LocalSIM保持不变；dependent-BUY结果语义固定 |
 | no unauthorized gate/approval/RBAC/manual acknowledge/recovery | pass | 只保留真实运行合同与分离的部署授权，alerts自动clear |
 
@@ -577,8 +674,9 @@ K6 implementation完成定义：K6-A/B/C/D全部 `implemented_verified + merged`
 当前状态：
 
 - K1/K2/K3/K4/K5 overall：`implemented_verified + merged`。
-- K6 detailed design：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）。
-- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green；K6-B/C/D：`not_started`；K6 overall：`implementation_in_progress`。
+- K6 detailed design base：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）；2026-08-02 implementation-readiness revision：`design_revision_ready_pending_source_merge`，source merge尚未发生。
+- revision review evidence：三份F2 validator=`12/12,70/70,112/112`且warnings=0；classifier=`docs_fast_update`、backend/frontend/Go plans均未选择、`unmapped_code_files=[]`；L0=0 finding；module registry=`8 passed,14/14 mapped`。
+- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green；其dependent-BUY V1与product authority V2 base不等于本修订新增的dependent-BUY V2/product authority V3。K6-C/B/D：`not_started`；下一优先级K6-C0/C1，之后K6-B；K6 overall：`implementation_in_progress`。
 - product runtime：`not_switched`。
 - `source_merge=merged_pr_2993`；`close_sync=not_applicable_feature`；state-sync/root sync/cleanup分别记录。
 - production DDL/DML/dependency/config/binding/broker/restart/runtime activation/normal trading day observation：全部 `noop/not_run`。
