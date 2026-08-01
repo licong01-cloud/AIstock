@@ -6,7 +6,7 @@
 >
 > 模拟盘唯一上位蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
 >
-> 设计基线：`main@c499276da91dcae40f0e452de11141c7b0585a1c`；K6-A 最终复审修复分支已安全包含流程基线 `origin/main@49ad6a32b9f77068696cd6add93206e996a3074f`。K1–K5 均为 `implemented_verified + merged`；K6-A source 已实现并保持 runtime inactive，产品 runtime 尚未切换；未执行生产 DDL/DML、配置、binding、broker 调用、服务控制或 runtime activation。
+> 设计基线：`main@c499276da91dcae40f0e452de11141c7b0585a1c`；K6-A 最终复审修复分支在最终 push 前必须安全包含当时最新 `origin/main`，具体 readback 在 PR/完成报告中记录，避免把易变流程 SHA 写成业务设计 authority。K1–K5 均为 `implemented_verified + merged`；K6-A source 已实现并保持 runtime inactive，产品 runtime 尚未切换；未执行生产 DDL/DML、配置、binding、broker 调用、服务控制或 runtime activation。
 
 ## 0. Executive Decision / 核心结论
 
