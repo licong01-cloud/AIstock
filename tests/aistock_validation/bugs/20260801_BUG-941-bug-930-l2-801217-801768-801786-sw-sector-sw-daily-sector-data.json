@@ -65,7 +65,8 @@
     "business_smoke_ref": "local-data manual re-run of sw_sector composite for 2026-07-31 followed by sector_data build; readback market.sector_data row count for 2026-07-31",
     "database_readback_ref": "noop:no_database_change",
     "fresh_process_evidence": [
-      "fresh Python process imported backend.services.tushare_sync_engine and verified _count_code_rows plus the empty-upstream-and-local no-op mirror branch in _sync_by_code_batched -> PASS"
+      "fresh Python process imported backend.services.tushare_sync_engine and verified _count_code_rows plus the empty-upstream-and-local no-op mirror branch in _sync_by_code_batched -> PASS",
+      "fresh Python process imported backend.services.tushare_sync_engine and verified _count_code_rows plus no-op mirror branch -> PASS"
     ],
     "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
