@@ -350,6 +350,16 @@ class TushareSyncEngine:
             conn.autocommit = previous_autocommit
         return inserted
 
+    def _count_code_rows(self, conn, spec: DatasetSpec, code_val: str) -> int:
+        """Count local rows for one BY_CODE value (empty-mirror guard)."""
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) FROM {spec.target_table} WHERE {spec.code_param_name} = %s",
+                (code_val,),
+            )
+            row = cur.fetchone()
+        return int(row[0]) if row else 0
+
     def _validate_rows_for_date(
         self,
         spec: DatasetSpec,
@@ -1329,10 +1339,26 @@ class TushareSyncEngine:
                                    f"(>= {spec.row_limit}); narrow date range and rerun")
                             self._log(conn, job_id, "error", msg)
                             raise RuntimeError(msg)
-                        # BUG-930: never mirror an empty upstream payload by
-                        # deleting local rows; a transient upstream gap would
-                        # otherwise wipe the whole code.
+                        # BUG-930: never mirror an empty upstream payload
+                        # over local rows; a transient upstream gap would
+                        # otherwise wipe the whole code. BUG-941: a code that
+                        # is empty both upstream and locally (e.g. SW2021
+                        # unpublished L2 indices such as 801217.SI/801768.SI/
+                        # 801786.SI that never had members) is a legitimate
+                        # no-op mirror and must not fail the batch.
                         if spec.replace_by_code and not rows:
+                            if self._count_code_rows(conn, spec, code_val) == 0:
+                                self._log(
+                                    conn,
+                                    job_id,
+                                    "info",
+                                    f"{spec.name} {spec.code_param_name}={code_val} "
+                                    "empty upstream and local; no-op mirror",
+                                )
+                                result.success_batches += 1
+                                if spec.batch_sleep > 0:
+                                    time.sleep(spec.batch_sleep)
+                                continue
                             raise RuntimeError(
                                 f"{spec.name} {spec.code_param_name}={code_val} returned no rows; "
                                 "refusing to mirror-delete local rows"

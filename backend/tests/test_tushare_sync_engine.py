@@ -42,6 +42,9 @@ class _FakeCursor:
     def execute(self, sql, params=None):
         self._conn.executed.append((sql, params))
 
+    def fetchone(self):
+        return self._conn.fetchone_value
+
 
 class _FakeConn:
     def __init__(self):
@@ -49,6 +52,7 @@ class _FakeConn:
         self.executed = []
         self.commits = 0
         self.rollbacks = 0
+        self.fetchone_value = (0,)
 
     def __enter__(self):
         return self
@@ -782,12 +786,30 @@ def test_by_code_batched_mirrors_payload_and_takes_down_missing_rows(monkeypatch
 def test_by_code_batched_refuses_to_mirror_empty_payload(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
+    conn.fetchone_value = (3,)  # local rows exist for the code
     _patch_by_code_loop(engine, monkeypatch, conn, ["801767.SI"], [])
 
     result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
 
     assert result.success_batches == 0
     assert result.failed_batches == 1
+    assert result.inserted_rows == 0
+    assert any(
+        "SELECT COUNT(*) FROM market.sw_index_member WHERE l2_code = %s" in sql
+        for sql, _ in conn.executed
+    )
+    assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+def test_by_code_batched_accepts_empty_payload_when_local_empty(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()  # fetchone_value defaults to (0,): no local rows
+    _patch_by_code_loop(engine, monkeypatch, conn, ["801217.SI"], [])
+
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+
+    assert result.success_batches == 1
+    assert result.failed_batches == 0
     assert result.inserted_rows == 0
     assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
 
