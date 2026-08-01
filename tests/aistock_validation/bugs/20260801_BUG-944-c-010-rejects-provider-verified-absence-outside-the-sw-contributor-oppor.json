@@ -138,7 +138,10 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "GET http://127.0.0.1:8001/api/v1/hmm-evolution/workers?limit=1 after user-owned restart, then read back the merged C-010-A5 601-day partition receipt and require P_all/P_in/P_out=502/501/1 with 002951.SZ@2023-05-22 classified as SW-domain-out",
     "fresh_process_evidence": [],
+    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and verify /api/v1/hmm-evolution/workers is present; compare loaded observation_eligibility.py and stock_fact_observation.py SHA-256 values with the merged main blobs",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
