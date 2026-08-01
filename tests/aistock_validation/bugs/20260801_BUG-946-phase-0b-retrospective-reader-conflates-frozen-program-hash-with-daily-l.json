@@ -31,7 +31,9 @@
   "evidence_uris": [
     "snapshot advsnap_9faa542fd165be6131715125 read-only catalog/lineage evidence",
     "production read-only SQL: ORDER BY payload::text raises psycopg2.errors.UndefinedColumn because payload is not materialized",
-    "production read-only evidence: one canonical signal carries one ranked candidate while the same frozen Program/date carries contiguous ranks 1..25"
+    "production read-only evidence: one canonical signal carries one ranked candidate while the same frozen Program/date carries the complete frozen ranking, including legitimate cash-slot rank gaps",
+    "repo-external Phase 0B request 950c7adc6ae03b374140dfc5b83de962bb5567d6349f38721942291453488848 completed for both 15-day targets",
+    "report semantic hash 2fb0400a25c8d0b1738901c494214de37cdd5c1436af9d6aa2cee14fafc37209 and receipt f21722c30fc9002189e81cd110d82a925083bf00a52aa4779915aeb2a9371fb0 were identical on exact retry"
   ],
   "expected": "Validate the complete daily scope set independently, bind each audit target to its authoritative historical_range_frozen_program_hash, and aggregate all 15 decision dates for the single-Alpha and native multi-Alpha packages.",
   "file_scope_contract": {

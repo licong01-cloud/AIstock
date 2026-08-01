@@ -1,8 +1,9 @@
 # AIstock Advisory Phase 0B 候选质量与可建模性审计 F1 详细设计
 
 > 日期：2026-07-31
+> 验收修订日期：2026-08-02
 > Feature tier：`F1`（单模块、只读数据分析能力）
-> 当前状态：`design_ready_pending_user_confirmation`
+> 当前状态：`implementation_and_real_15d_audit_verified_evidence_not_yet_available`
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 上游指标权威：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`
 > 数据权威：Phase 1 / Phase 1R 已 `SEALED` 的 immutable snapshot 及其 manifest、Parquet、source revision、label policy 证据
@@ -31,19 +32,21 @@ Phase 0B 不是模型训练、模型准入或运行门禁。审计发现样本�
 - `stage_candidates` 可以按 observation/stage/symbol 恢复 `alpha_raw`、`hmm_adjusted`、`risk_policy_adjusted`、`selection_effective` 的 rank、score、membership 和排除原因。
 - outcome 行保存 `projection`、`horizon_trading_days`、`maturity_status`、`outcome_event_status`、成本后收益、benchmark、MFE/MAE、持有天数和计算证据身份。
 - `read_verified_snapshot_parquet_rows()` 已执行 CAS sha256/size、Arrow schema、metadata、row count、唯一排序、partition hash 和 schema fingerprint 的全量读回校验，Phase 0B 必须复用。
-- 15 个决策交易日足以验证数据链和形成探索性点估计，不满足 Phase 0A 对正式描述性或推断性结论的样本要求，也不能替代 2/3/5 年训练 snapshot。
+- 2026-08-02 已对 `advsnap_9faa542fd165be6131715125` 中的单 Alpha 与原生多 Alpha Program 完成真实只读审计及 exact retry；两包各覆盖 15 个决策交易日。
+- 正式报告 `report_semantic_hash=2fb0400a25c8d0b1738901c494214de37cdd5c1436af9d6aa2cee14fafc37209`，completion receipt `f21722c30fc9002189e81cd110d82a925083bf00a52aa4779915aeb2a9371fb0`；首次运行与精确重试完全一致。
+- 15 日 snapshot 的候选结构完整，但 `RETURN_NET_ABSOLUTE` 成熟标签覆盖率为 `0`：原生多 Alpha 373 个候选、单 Alpha 300 个候选均无成熟收益标签。因此本轮只验证数据链、结构与 capability 分类，不能形成候选收益点估计、排名单调性、HMM/risk 增益或模型价值结论，也不能替代 2/3/5 年训练 snapshot。
 
-### 1.2 当前缺口
+### 1.2 已交付能力与当前数据缺口
 
-现有系统没有一个独立、确定性、只读的 Phase 0B 消费器把 snapshot 内四阶段候选和成熟 outcome 连接为逐 Program/策略包报告。缺失内容包括：
+独立、确定性、只读的 Phase 0B 消费器及其显式 snapshot/manifest 选择、全量校验、逐决策日等权指标、TopK/随机基线/阶段对照、逐指标 capability 状态、Recall 身份、JSON/Markdown bundle 和 exact retry 已实现并通过真实 15 日执行。
 
-- snapshot 与 manifest 的显式选择、读回和 invalidation 检查；
-- 逐决策日等权而不是逐股票行加权的指标实现；
-- Top5/Top10/候选深池/随机5与逐阶段配对比较；
-- `AVAILABLE` / `INSUFFICIENT_SAMPLE` 的逐指标证据状态；
-- strategy/conditional Recall 的精确分母和 winner identity 报告；
-- 对 HMM、risk overlay 和行业黑名单“能计算什么、不能计算什么”的明确区分；
-- 确定性 JSON/Markdown 报告与 exact retry。
+当前剩余缺口属于输入数据事实，不是审计器缺失：
+
+- 现有 snapshot 的收益 outcome 全部不可评价，不能计算候选质量、TopK、随机 5、NDCG、排名单调性或阶段收益增量；
+- HMM stage 在两包中均为 `NOT_APPLICABLE`，不能伪造 HMM 消融；
+- snapshot 不含可重建行业黑名单反事实排名的证据，只能显式返回 capability unavailable；
+- PIT eligible universe outcome 分母不可用，strategy Recall 不可计算；原生多 Alpha 的 conditional Recall 因 0 个成熟 winner event 返回 `INSUFFICIENT_SAMPLE`；
+- 下一轮必须按最小 Phase 2/3 合同生成全新的 2/3/5 年 PIT SEALED snapshot，不修复或复用历史失败 batch 来伪造标签。
 
 ## 2. Scope / 范围
 
@@ -56,7 +59,7 @@ Phase 0B 不是模型训练、模型准入或运行门禁。审计发现样本�
 5. 对每个 Program/策略包、projection、horizon、stage、K 和决策日计算覆盖率、候选质量、rank bucket、TopK、候选等权、随机5、HMM/risk 配对差和 Recall。
 6. 对行业黑名单输出真实可计算的 exclusion coverage/outcome diagnostic；只有 snapshot 存在足以重建反事实排序的正式 evidence 时才输出 blacklist counterfactual performance。
 7. 生成内容寻址的 JSON 主报告和由同一 JSON 渲染的 Markdown 摘要，写入调用方显式提供的 repo-external `--output-root`。
-8. 为现有 15 日单 Alpha 与原生多 Alpha snapshot 执行只读探索审计；样本不足项保留 observed estimate，但 conclusion 为空且状态为 `INSUFFICIENT_SAMPLE`。
+8. 为现有 15 日单 Alpha 与原生多 Alpha snapshot 执行只读探索审计；有真实可评价样本时保留 observed estimate，缺少成熟标签或输入 capability 时 observed/conclusion 保持为空并显式返回 `INPUT_CAPABILITY_NOT_AVAILABLE` 或 `INSUFFICIENT_SAMPLE`，不得填零冒充收益。
 
 ## 3. Non-Goals / 非目标
 
@@ -648,7 +651,20 @@ backend/tests/advisory_phase0b/
 | F-019 | `backend/services/advisory_phase0b/service.py`; `backend/services/advisory_phase0b/report_store.py` all-target completion receipt | `backend/tests/advisory_phase0b/test_service.py` two-snapshot atomic failure/final recheck; `backend/tests/advisory_phase0b/test_report_store.py` receipt-last/concurrent publisher cases | implementation_verified | none |
 | F-020 | `backend/services/advisory_phase0b/spool.py`; date-lazy target projection plus streaming numeric summaries | `backend/tests/advisory_phase0b/test_spool.py`; `backend/tests/advisory_phase0b/test_metrics.py`; `backend/tests/advisory_phase0b/test_audit_service.py` non-caching date projection | implementation_verified | none |
 
-矩阵中的 `design_ready` 仅表示实现合同已冻结，不表示源码或真实 15 日报告已经完成。源码合入前必须将每项更新为 direct evidence；不能用本文档自身冒充实现验收。
+矩阵中的 `implementation_verified` 表示对应源码合同与定向测试已经闭合，不表示每种经济指标都在当前 snapshot 中具有可评价输入。真实 15 日报告只证明审计链路能够完整执行并准确暴露 capability；成熟收益覆盖率为 0 的指标仍不得改写为 `AVAILABLE`。
+
+### 14.1 真实 15 日只读验收记录
+
+| 项目 | 真实证据 | 结论 |
+|---|---|---|
+| 输入快照 | `advsnap_9faa542fd165be6131715125`；1 个 SEALED snapshot；单/原生多 Alpha 各 15 个决策交易日 | PASS，显式输入且未扫描“最新”快照 |
+| 原生多 Alpha | `pkg_ma_8ec5e389fa2c5e484a1ac7e9`；`SHORT_REBOUND`；373 candidates | 审计完成；coverage `status=AVAILABLE, observed_value=0`；3 个 conditional Recall `INSUFFICIENT_SAMPLE`；67 个 input capability unavailable；package conclusion 为 null |
+| 单 Alpha | `pkg_378eb9c91e104c64935404e257e932ee`；`UNCLASSIFIED`；300 candidates | 审计完成；coverage `status=AVAILABLE, observed_value=0`；63 个 input capability unavailable；package conclusion 为 null |
+| 报告闭包 | repo-external root `F:\Dev\AIstock_artifacts\advisory_phase0b_candidate_quality_20260802_bug946_r6`；request `950c7adc6ae03b374140dfc5b83de962bb5567d6349f38721942291453488848`；report semantic `2fb0400a25c8d0b1738901c494214de37cdd5c1436af9d6aa2cee14fafc37209`；receipt `f21722c30fc9002189e81cd110d82a925083bf00a52aa4779915aeb2a9371fb0` | PASS，首次执行与 exact retry 返回相同哈希 |
+| 数据库与运行边界 | PostgreSQL 仅 `REPEATABLE READ READ ONLY`；报告写 repo-external root；无 DDL/DML、无服务启停、无 runtime activation | PASS，不影响 Advisory、Selection、Paper、模拟盘或 QE |
+| 经济结论 | 两包 `RETURN_NET_ABSOLUTE` mature coverage 均为 0；HMM、blacklist counterfactual、universe Recall 输入不足 | `NOT_YET_AVAILABLE`，不得宣称候选收益、排序有效、HMM 增益或模型就绪 |
+
+真实执行期间登记并修复 `BUG-946`：历史 Program hash 与逐日 capture scope 身份混淆、membership canonical ordering、Program/日期候选聚合以及合法冻结 rank gap 现金槽位语义。修复保留严格 lineage/manifest/identity 校验，没有放宽证据合同或增加业务门禁。
 
 ## 15. Risks / Failure Modes / 风险与失败模式
 
@@ -704,6 +720,6 @@ backend/tests/advisory_phase0b/
 
 ## 18. 下一步
 
-本文档通过用户确认后，按 §12 顺序实现 Phase 0B 只读代码并执行 §13 审核。完成代码与真实 15 日探索报告后，进入父蓝图下一项：只为超跌反弹首个重排模型设计最小 Phase 2/3 合同，再生成新的 2/3/5 年 PIT SEALED training snapshot。
+Phase 0B 只读代码、真实 15 日审计和 exact retry 已完成。当前报告证明审计链路可用，但没有成熟收益证据，不能据此选择候选深度、确认 HMM/行业效果或训练模型。
 
-在用户确认本文档前不开始源码实现；本文档提交、PR、合入也需单独遵守当前工作流授权。
+下一主线是只为首个超跌反弹重排模型完成最小 Phase 2/3 合同，随后从生产数据库按 PIT 合同生成全新的 2/3/5 年 SEALED training snapshot，再重新执行 Phase 0B/Phase 3 数据验收。旧 batch、旧 root 和失败审计请求保留为历史证据，不修复、不迁移，也不作为后续模型输入。本文档提交、PR、合入仍需遵守当前工作流，不产生额外审批或运行门禁。
