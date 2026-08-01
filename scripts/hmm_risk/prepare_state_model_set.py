@@ -1976,6 +1976,22 @@ def _validate_b3_blocker_numeric_environment(numeric_environment: dict[str, Any]
         raise StateModelSetError(f"blocker diagnostic child thread pools are not single-threaded: {non_single}")
 
 
+def _validate_b3_d1_numeric_environment_authority(
+    current_environment: dict[str, Any],
+    frozen_environment: dict[str, Any],
+) -> None:
+    """Require the same stable numeric identity without freezing dynamic library inventory."""
+
+    try:
+        _validate_b3_blocker_numeric_environment(current_environment)
+        _validate_b3_blocker_numeric_environment(frozen_environment)
+    except StateModelSetError as exc:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            f"D1-B numeric environment authority is invalid: {exc}",
+        ) from exc
+
+
 def _validate_b3_blocker_pass(value: dict[str, Any], target_manifest: dict[str, Any]) -> None:
     authority = B3_BLOCKER_FORMAL_AUTHORITY
     expected_scalars = {
@@ -2431,12 +2447,10 @@ def prepare_b3_d1_controlled_pass(
         )
     authority = _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report)
     current_environment = c008_b3_diag04_fixed_numeric_environment()
-    _validate_b3_blocker_numeric_environment(current_environment)
-    if current_environment != authority["numeric_environment"]:
-        raise D1InactiveDimensionError(
-            "hmm_risk_model_inactive_dimension_authority_mismatch",
-            "D1-B current numeric environment differs from the frozen blocker environment",
-        )
+    _validate_b3_d1_numeric_environment_authority(
+        current_environment,
+        authority["numeric_environment"],
+    )
     target_manifest = derive_b3_blocker_target_manifest(formal_report)
     inputs, _ = _load_b3_blocker_train_inputs(
         request,
