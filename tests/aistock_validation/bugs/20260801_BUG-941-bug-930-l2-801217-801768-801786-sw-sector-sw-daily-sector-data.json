@@ -61,13 +61,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "local-data manual re-run of sw_sector composite for 2026-07-31 followed by sector_data build; readback market.sector_data row count for 2026-07-31",
+    "database_readback_ref": "noop:no_database_change",
+    "fresh_process_evidence": [
+      "fresh Python process imported backend.services.tushare_sync_engine and verified _count_code_rows plus the empty-upstream-and-local no-op mirror branch in _sync_by_code_batched -> PASS"
+    ],
+    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
