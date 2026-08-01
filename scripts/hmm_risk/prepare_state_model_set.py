@@ -91,6 +91,8 @@ from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
     write_controlled_refit_report as write_b3_d1_controlled_refit_report,
 )
 from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
+    C010_APPROVED_TRAIN_TRADING_DATE_COUNT,
+    C010_APPROVED_TRAIN_TRADING_DATE_SHA256,
     C010_FORMULA_VERSION,
     C010_POLICY_VERSION,
     MIN_COVERAGE,
@@ -103,7 +105,10 @@ from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
 )
 from backend.services.hmm_risk.observation_eligibility import (  # noqa: E402
     audit_feature_mask_candidates,
+    build_expected_opportunity_receipt,
+    build_provider_absence_domain_partition,
     build_train_only_observation_eligibility,
+    canonical_authority_identity,
     load_feature_domain_direct_aggregates,
 )
 from backend.services.hmm_risk.security_identity import (  # noqa: E402
@@ -122,6 +127,7 @@ REQUEST_SCHEMA = "hmm_risk_state_model_set_preparation_request_v1"
 B3_PREFLIGHT_SCHEMA = "hmm_risk_b3_formal_preflight_v1"
 C010_FORMAL_PREFLIGHT_SCHEMA = "hmm_risk_c010_formal_preflight_v1"
 C009_STOCK_FACT_PREFLIGHT_SCHEMA = "hmm_risk_c009_stock_fact_preflight_v1"
+C010_A5_DOMAIN_PARTITION_PREFLIGHT_SCHEMA = "hmm_risk_c010_a5_domain_partition_preflight_v1"
 C010_OBSERVATION_ELIGIBILITY_SCHEMA = "hmm_risk_c010_observation_eligibility_diagnostic_v1"
 B3_TRAIN_COVERAGE_PREFLIGHT_VERSION = "hmm_risk_b3_train_coverage_preflight_set_v1"
 B3_APPROVED_FROZEN_IDENTITIES = {
@@ -500,39 +506,292 @@ def _request_train_window(request: dict[str, Any]) -> tuple[date, date]:
     return train_start, train_end
 
 
-def _c010_expected_opportunity_dates(
+def _c010_expected_opportunity_receipt(
     conn: Any,
     source_spec: StockFactSourceSpec,
     *,
+    security_identity_manifest: Any,
     train_start: date,
     train_end: date,
-) -> dict[str, tuple[date, ...]]:
+    authority_identities: list[dict[str, Any]],
+) -> dict[str, Any]:
+    alias_rows = security_identity_manifest.alias_rows("market.kline_daily_raw")
     with conn.cursor() as cursor:
         cursor.execute(
             """
-            SELECT price.ts_code,array_agg(DISTINCT price.trade_date ORDER BY price.trade_date)
-            FROM market.kline_daily_raw price
+            WITH price_alias AS (
+              SELECT canonical_ts_code,source_ts_code,effective_start::date,effective_end::date
+              FROM jsonb_to_recordset(%s::jsonb) AS item(
+                canonical_ts_code text,source_ts_code text,effective_start text,effective_end text,
+                security_identity_id text,row_hash text
+              )
+            ), price_resolved AS (
+              SELECT price.trade_date,COALESCE(alias.canonical_ts_code,price.ts_code) canonical_ts_code,
+                     price.ts_code source_ts_code
+              FROM market.kline_daily_raw price
+              LEFT JOIN price_alias alias
+                ON alias.source_ts_code=price.ts_code
+               AND price.trade_date BETWEEN alias.effective_start AND alias.effective_end
+              WHERE price.trade_date BETWEEN %s AND %s
+            ), opportunity_source AS (
+              SELECT price.canonical_ts_code,price.trade_date,price.source_ts_code,
+                     member.l1_code source_l1_code,member.l2_code source_l2_code,
+                     member.in_date,member.out_date,
+                     l1.index_code l1_code,l2.index_code l2_code
+              FROM price_resolved price
             JOIN market.stock_universe_pit_spans spans
-              ON spans.ts_code=price.ts_code AND spans.universe_key=%s
+              ON spans.ts_code=price.canonical_ts_code AND spans.universe_key=%s
              AND spans.eligible_start<=price.trade_date
              AND (spans.eligible_end IS NULL OR spans.eligible_end>=price.trade_date)
             JOIN market.sw_index_member member
-              ON member.ts_code=price.ts_code AND member.in_date<=price.trade_date
+              ON member.ts_code=price.canonical_ts_code AND member.in_date<=price.trade_date
              AND (member.out_date IS NULL OR member.out_date>=price.trade_date)
-            WHERE price.trade_date BETWEEN %s AND %s
-            GROUP BY price.ts_code
-            ORDER BY price.ts_code
+              JOIN market.sw_index_classify l1
+                ON l1.level='L1' AND member.l1_code IN (l1.index_code,l1.industry_code)
+              JOIN market.sw_index_classify l2
+                ON l2.level='L2' AND member.l2_code IN (l2.index_code,l2.industry_code)
+            ), grouped AS (
+              SELECT canonical_ts_code,trade_date,
+                     jsonb_agg(DISTINCT jsonb_build_object(
+                       'source_ts_code',source_ts_code,'source_l1_code',source_l1_code,
+                       'source_l2_code',source_l2_code,'in_date',in_date,'out_date',out_date,
+                       'l1_code',l1_code,'l2_code',l2_code
+                     )) mapping_rows
+              FROM opportunity_source
+              GROUP BY canonical_ts_code,trade_date
+            )
+            SELECT canonical_ts_code,trade_date,mapping_rows
+            FROM grouped ORDER BY canonical_ts_code,trade_date
             """,
-            (source_spec.universe_key, train_start, train_end),
+            (
+                json.dumps(alias_rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                train_start,
+                train_end,
+                source_spec.universe_key,
+            ),
         )
         rows = cursor.fetchall()
-    result = {str(symbol): tuple(dates) for symbol, dates in rows if dates}
+    result: dict[str, list[date]] = {}
+    for symbol, trade_date_value, mapping_rows in rows:
+        candidates = sorted(
+            (dict(item) for item in (mapping_rows or [])),
+            key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, default=str),
+        )
+        if len(candidates) != 1:
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: "
+                f"opportunity mapping is not unique for {symbol}/{trade_date_value}"
+            )
+        result.setdefault(str(symbol), []).append(trade_date_value)
     if not result:
         raise StateModelSetError(
             "hmm_risk_c010_expected_opportunity_missing: "
             "C-010 full-universe expected opportunity query returned no rows"
         )
-    return result
+    return build_expected_opportunity_receipt(
+        {symbol: tuple(dates) for symbol, dates in result.items()},
+        train_start=train_start,
+        train_end=train_end,
+        authority_identities=authority_identities,
+    )
+
+
+def _c010_provider_absence_partition(
+    conn: Any,
+    source_spec: StockFactSourceSpec,
+    *,
+    security_identity_manifest: Any,
+    provider_absence_manifest: Any,
+    source_state: dict[str, Any],
+    mapping_manifest: dict[str, Any],
+    train_start: date,
+    train_end: date,
+    formal_policy: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    provider_identity = canonical_authority_identity(
+        "provider_absence_manifest",
+        provider_absence_manifest.evidence(),
+    )
+    resolver_identity = canonical_authority_identity(
+        "security_source_identity_manifest",
+        security_identity_manifest.evidence(),
+    )
+    pit_identity = canonical_authority_identity(
+        "stock_universe_pit_state_and_spans",
+        {
+            "source_state": source_state,
+            "validated_status": "ready",
+            "validated_dirty": False,
+            "universe_key": source_spec.universe_key,
+            "universe_rule_version": source_spec.universe_rule_version,
+        },
+    )
+    price_identity = canonical_authority_identity(
+        "market.kline_daily_raw",
+        {
+            "dataset": "market.kline_daily_raw",
+            "column_contract_sha256": source_state["column_contract_sha256"],
+            "security_identity_manifest_sha256": security_identity_manifest.manifest_sha256,
+        },
+    )
+    sw_identity = canonical_authority_identity(
+        "sw_index_member_and_classify_mapping",
+        mapping_manifest,
+    )
+    filtered = sorted(
+        (row for row in provider_absence_manifest.rows if train_start <= row.trade_date <= train_end),
+        key=lambda row: (row.canonical_ts_code, row.trade_date),
+    )
+    requested: list[dict[str, str]] = []
+    resolver_receipts: dict[tuple[str, date], dict[str, Any]] = {}
+    for row in filtered:
+        provider_resolution = security_identity_manifest.resolve(
+            row.canonical_ts_code,
+            row.trade_date,
+            "market.moneyflow_ts",
+        )
+        price_resolution = security_identity_manifest.resolve(
+            row.canonical_ts_code,
+            row.trade_date,
+            "market.kline_daily_raw",
+        )
+        if provider_resolution.source_ts_code != row.source_ts_code:
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: provider source identity drift"
+            )
+        resolver_receipt = {
+            "security_resolver_identity_sha256": resolver_identity["identity_sha256"],
+            "provider_absence_source_resolution": provider_resolution.evidence(),
+            "price_source_resolution": price_resolution.evidence(),
+        }
+        resolver_receipts[(row.canonical_ts_code, row.trade_date)] = resolver_receipt
+        requested.append(
+            {
+                "canonical_ts_code": row.canonical_ts_code,
+                "provider_source_ts_code": row.source_ts_code,
+                "price_source_ts_code": price_resolution.source_ts_code,
+                "trade_date": row.trade_date.isoformat(),
+            }
+        )
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH requested AS (
+              SELECT canonical_ts_code,provider_source_ts_code,price_source_ts_code,trade_date::date trade_date
+              FROM jsonb_to_recordset(%s::jsonb) AS item(
+                canonical_ts_code text,provider_source_ts_code text,price_source_ts_code text,trade_date text
+              )
+            )
+            SELECT r.canonical_ts_code,r.trade_date,
+                   COALESCE((SELECT jsonb_agg(to_jsonb(spans))
+                     FROM market.stock_universe_pit_spans spans
+                     WHERE spans.ts_code=r.canonical_ts_code AND spans.universe_key=%s
+                       AND spans.eligible_start<=r.trade_date
+                       AND (spans.eligible_end IS NULL OR spans.eligible_end>=r.trade_date)), '[]'::jsonb),
+                   COALESCE((SELECT jsonb_agg(DISTINCT to_jsonb(price))
+                     FROM market.kline_daily_raw price
+                     WHERE price.ts_code IN (r.price_source_ts_code,r.canonical_ts_code)
+                       AND price.trade_date=r.trade_date), '[]'::jsonb),
+                   COALESCE((SELECT jsonb_agg(DISTINCT jsonb_build_object(
+                       'source_l1_code',member.l1_code,'source_l2_code',member.l2_code,
+                       'in_date',member.in_date,'out_date',member.out_date,
+                       'l1_code',l1.index_code,'l1_name',l1.industry_name,
+                       'l2_code',l2.index_code,'l2_name',l2.industry_name))
+                     FROM market.sw_index_member member
+                     LEFT JOIN market.sw_index_classify l1
+                       ON l1.level='L1' AND member.l1_code IN (l1.index_code,l1.industry_code)
+                     LEFT JOIN market.sw_index_classify l2
+                       ON l2.level='L2' AND member.l2_code IN (l2.index_code,l2.industry_code)
+                     WHERE member.ts_code=r.canonical_ts_code AND member.in_date<=r.trade_date
+                       AND (member.out_date IS NULL OR member.out_date>=r.trade_date)), '[]'::jsonb)
+            FROM requested r ORDER BY r.canonical_ts_code,r.trade_date
+            """,
+            (
+                json.dumps(requested, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                source_spec.universe_key,
+            ),
+        )
+        rows = cursor.fetchall()
+    if len(rows) != len(filtered):
+        raise StateModelSetError(
+            "hmm_risk_c010_provider_absence_domain_partition_invalid: predicate query cardinality mismatch"
+        )
+    predicate_evidence: dict[tuple[str, date], dict[str, Any]] = {}
+    for symbol, trade_date_value, pit_rows, price_rows, mapping_rows in rows:
+        key = (str(symbol), trade_date_value)
+        resolver_receipt = resolver_receipts[key]
+
+        def canonical_json_sort(item: Any) -> str:
+            return json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+
+        pit_candidates = sorted((dict(item) for item in (pit_rows or [])), key=canonical_json_sort)
+        price_candidates = sorted((dict(item) for item in (price_rows or [])), key=canonical_json_sort)
+        mapping_candidates = sorted((dict(item) for item in (mapping_rows or [])), key=canonical_json_sort)
+        pit_status = "available" if len(pit_candidates) == 1 else ("unavailable" if not pit_candidates else "invalid")
+        price_status = (
+            "available" if len(price_candidates) == 1 else ("unavailable" if not price_candidates else "invalid")
+        )
+        if not mapping_candidates:
+            l1_status = l2_status = "unavailable"
+        elif len(mapping_candidates) != 1:
+            l1_status = l2_status = "invalid"
+        else:
+            l1_status = "available" if mapping_candidates[0].get("l1_code") else "unavailable"
+            l2_status = "available" if mapping_candidates[0].get("l2_code") else "unavailable"
+        source_ts_code = str(resolver_receipt["provider_absence_source_resolution"]["source_ts_code"])
+        predicate_evidence[key] = {
+            "source_ts_code": source_ts_code,
+            "stable_security_identity": f"canonical:{key[0]}",
+            "security_resolver_receipt": resolver_receipt,
+            "pit_eligible": {
+                "status": pit_status,
+                "authority_receipt": {
+                    "authority_identity_sha256": pit_identity["identity_sha256"],
+                    "candidate_count": len(pit_candidates),
+                    "candidates": pit_candidates,
+                },
+            },
+            "price_authority_present": {
+                "status": price_status,
+                "authority_receipt": {
+                    "authority_identity_sha256": price_identity["identity_sha256"],
+                    "source_resolution": resolver_receipt["price_source_resolution"],
+                    "candidate_count": len(price_candidates),
+                    "candidates": price_candidates,
+                },
+            },
+            "sw_l1_identity_valid": {
+                "status": l1_status,
+                "authority_receipt": {
+                    "authority_identity_sha256": sw_identity["identity_sha256"],
+                    "level": "L1",
+                    "candidate_count": len(mapping_candidates),
+                    "candidates": mapping_candidates,
+                },
+            },
+            "sw_l2_identity_valid": {
+                "status": l2_status,
+                "authority_receipt": {
+                    "authority_identity_sha256": sw_identity["identity_sha256"],
+                    "level": "L2",
+                    "candidate_count": len(mapping_candidates),
+                    "candidates": mapping_candidates,
+                },
+            },
+        }
+    partition = build_provider_absence_domain_partition(
+        filtered,
+        predicate_evidence_by_key=predicate_evidence,
+        train_start=train_start,
+        train_end=train_end,
+        provider_absence_manifest_identity=provider_identity,
+        security_resolver_identity=resolver_identity,
+        pit_authority_identity=pit_identity,
+        price_source_identity=price_identity,
+        sw_mapping_classify_identity=sw_identity,
+        formal_policy=formal_policy,
+    )
+    return partition, [resolver_identity, pit_identity, price_identity, sw_identity]
 
 
 def _load_l1_source_inputs(
@@ -592,15 +851,29 @@ def _load_l1_source_inputs(
         c010_payload = None
         if c010_diagnostic or c010_formal:
             train_start, train_end = _request_train_window(request)
-            expected_dates = _c010_expected_opportunity_dates(
+            partition, opportunity_authorities = _c010_provider_absence_partition(
                 conn,
                 source_spec,
+                security_identity_manifest=security_identity_manifest,
+                provider_absence_manifest=provider_absence_manifest,
+                source_state=source_state,
+                mapping_manifest=mapping_manifest,
                 train_start=train_start,
                 train_end=train_end,
+                formal_policy=c010_formal,
+            )
+            expected_opportunity = _c010_expected_opportunity_receipt(
+                conn,
+                source_spec,
+                security_identity_manifest=security_identity_manifest,
+                train_start=train_start,
+                train_end=train_end,
+                authority_identities=opportunity_authorities,
             )
             eligibility = build_train_only_observation_eligibility(
                 provider_absence_manifest.rows,
-                expected_opportunity_dates_by_symbol=expected_dates,
+                expected_opportunity_receipt=expected_opportunity,
+                provider_absence_partition_receipt=partition,
                 train_start=train_start,
                 train_end=train_end,
                 minimum_availability_ratio=MIN_COVERAGE,
@@ -674,8 +947,14 @@ def _load_l1_source_inputs(
     }
     if c010_formal and c010_diagnostic_payload is not None:
         dataset_manifest["c010_feature_domain_inputs"] = {
-            "schema_version": "hmm_risk_c010_feature_domain_input_manifest_v1",
+            "schema_version": "hmm_risk_c010_feature_domain_input_manifest_v2",
             "eligibility_receipt_sha256": c010_diagnostic_payload["eligibility"]["receipt_sha256"],
+            "expected_opportunity_receipt_sha256": c010_diagnostic_payload["eligibility"][
+                "expected_opportunity_receipt_sha256"
+            ],
+            "provider_absence_partition_receipt_sha256": c010_diagnostic_payload["eligibility"][
+                "provider_absence_partition_receipt_sha256"
+            ],
             "aggregate_receipt_sha256": c010_diagnostic_payload["aggregate_evidence"]["receipt_sha256"],
             "l1_cross_section_receipt_sha256": c010_diagnostic_payload["l1_cross_section_evidence"]["receipt_sha256"],
             "l2_cross_section_receipt_sha256": c010_diagnostic_payload["l2_cross_section_evidence"]["receipt_sha256"],
@@ -878,6 +1157,10 @@ def _c010_policy_manifest(
         "moneyflow_mandatory_fields": list(feature_definitions["L1"]["moneyflow_mandatory_fields"]),
         "eligibility_receipt": eligibility,
         "eligibility_receipt_sha256": eligibility.get("receipt_sha256"),
+        "expected_opportunity_receipt": eligibility.get("expected_opportunity_receipt"),
+        "expected_opportunity_receipt_sha256": eligibility.get("expected_opportunity_receipt_sha256"),
+        "provider_absence_partition_receipt": eligibility.get("provider_absence_partition_receipt"),
+        "provider_absence_partition_receipt_sha256": eligibility.get("provider_absence_partition_receipt_sha256"),
         "eligibility_entry_count": int(eligibility.get("entry_count") or 0),
         "contributor_ledger": eligibility["entries"],
         "contributor_ledger_sha256": canonical_sha256(eligibility["entries"]),
@@ -924,12 +1207,145 @@ def _require_c010_policy_identity(request: dict[str, Any]) -> None:
         validated = validate_c010_policy_manifest(manifest)
     except StateModelSetError as exc:
         raise StateModelSetError(f"hmm_risk_c010_policy_identity_mismatch: {exc}") from exc
+    if validated.get("schema_version") != C010_POLICY_VERSION:
+        raise StateModelSetError(
+            "hmm_risk_c010_policy_identity_mismatch: new formal execution requires C-010 policy v2"
+        )
     if identity != validated.get("receipt_sha256"):
         raise StateModelSetError(
             "hmm_risk_c010_policy_identity_mismatch: formal B3 request C-010 policy identity is invalid"
         )
     if request.get("parent_frozen_identities") != B3_APPROVED_FROZEN_IDENTITIES:
         raise StateModelSetError("formal B3 request parent frozen identity is invalid")
+
+
+def prepare_c010_a5_domain_partition_preflight(
+    request_template: dict[str, Any],
+    *,
+    db_prefix: str,
+) -> dict[str, Any]:
+    """Run the approved 601-day A5 partition audit without panels, HMM fits, or state mutation."""
+
+    producer_commit = _formal_producer_commit()
+    _require_approved_b3_identities(request_template)
+    approved_request = _freeze_approved_b3_windows(request_template)
+    request = _c009_train_source_request(approved_request)
+    source = request["source"]
+    source_start = _date(source.get("source_start"), "source_start")
+    source_spec = StockFactSourceSpec(
+        universe_key=str(source.get("universe_key") or ""),
+        universe_rule_version=str(source.get("universe_rule_version") or ""),
+        source_start=source_start,
+        source_end=_date(source.get("source_end"), "source_end"),
+        circ_mv_history_start=_date(
+            source.get("circ_mv_history_start") or source_start.isoformat(),
+            "circ_mv_history_start",
+        ),
+    )
+    security_identity_manifest = _load_security_identity_manifest(source)
+    provider_absence_manifest = _load_provider_absence_manifest(source)
+    train_start, train_end = _request_train_window(request)
+    conn, db_identity = _connect_readonly(db_prefix)
+    try:
+        reader = PostgresStockFactReader(
+            conn,
+            source_spec,
+            security_identity_manifest=security_identity_manifest,
+            provider_absence_manifest=provider_absence_manifest,
+        )
+        source_state = reader.validate_source()
+        reader.load_classification_lookup()
+        reader.validate_fact_uniqueness()
+        mapping_manifest, _ = load_mapping_manifest(reader)
+        partition, opportunity_authorities = _c010_provider_absence_partition(
+            conn,
+            source_spec,
+            security_identity_manifest=security_identity_manifest,
+            provider_absence_manifest=provider_absence_manifest,
+            source_state=source_state,
+            mapping_manifest=mapping_manifest,
+            train_start=train_start,
+            train_end=train_end,
+            formal_policy=True,
+        )
+        opportunity = _c010_expected_opportunity_receipt(
+            conn,
+            source_spec,
+            security_identity_manifest=security_identity_manifest,
+            train_start=train_start,
+            train_end=train_end,
+            authority_identities=opportunity_authorities,
+        )
+        eligibility = build_train_only_observation_eligibility(
+            provider_absence_manifest.rows,
+            expected_opportunity_receipt=opportunity,
+            provider_absence_partition_receipt=partition,
+            train_start=train_start,
+            train_end=train_end,
+            minimum_availability_ratio=MIN_COVERAGE,
+        ).evidence(formal_policy=True)
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cal_date::date FROM market.trading_calendar
+                WHERE is_trading=true AND cal_date BETWEEN %s AND %s
+                ORDER BY cal_date
+                """,
+                (train_start, train_end),
+            )
+            train_dates = [row[0].isoformat() for row in cursor.fetchall()]
+    finally:
+        conn.rollback()
+        conn.close()
+    if (
+        len(train_dates) != C010_APPROVED_TRAIN_TRADING_DATE_COUNT
+        or canonical_sha256(train_dates) != C010_APPROVED_TRAIN_TRADING_DATE_SHA256
+    ):
+        raise StateModelSetError("C-010 A5 frozen 601-day calendar identity is invalid")
+    known_entries = [
+        entry
+        for entry in partition["entries"]
+        if entry["canonical_ts_code"] == "002951.SZ" and entry["trade_date"] == "2023-05-22"
+    ]
+    if (
+        len(known_entries) != 1
+        or known_entries[0]["partition"] != "out_of_domain"
+        or known_entries[0]["primary_reason_code"] != "hmm_risk_c010_sw_identity_unavailable_for_opportunity"
+        or known_entries[0]["failed_predicates"] != ["sw_l1_identity_valid", "sw_l2_identity_valid"]
+    ):
+        raise StateModelSetError(
+            "hmm_risk_c010_provider_absence_domain_partition_invalid: known 002951.SZ evidence is missing/drifted"
+        )
+    body = {
+        "schema_version": C010_A5_DOMAIN_PARTITION_PREFLIGHT_SCHEMA,
+        "status": "preflight_complete",
+        "producer_commit": producer_commit,
+        "database": db_identity,
+        "train_start": train_start.isoformat(),
+        "train_end": train_end.isoformat(),
+        "train_trading_date_count": len(train_dates),
+        "train_trading_date_sha256": canonical_sha256(train_dates),
+        "security_identity_manifest_sha256": security_identity_manifest.manifest_sha256,
+        "provider_absence_manifest_sha256": provider_absence_manifest.manifest_sha256,
+        "mapping_manifest_sha256": canonical_sha256(mapping_manifest),
+        "expected_opportunity_receipt": opportunity,
+        "expected_opportunity_receipt_sha256": opportunity["receipt_sha256"],
+        "provider_absence_partition_receipt": partition,
+        "provider_absence_partition_receipt_sha256": partition["receipt_sha256"],
+        "observation_eligibility_receipt": eligibility,
+        "observation_eligibility_receipt_sha256": eligibility["receipt_sha256"],
+        "known_sw_domain_out_key": {"canonical_ts_code": "002951.SZ", "trade_date": "2023-05-22"},
+        "known_sw_domain_out_verified": True,
+        "partition_complete": True,
+        "fit_performed": False,
+        "selection_performed": False,
+        "d6_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 def prepare_b3_preflight_candidate(request_template: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
@@ -1766,6 +2182,9 @@ def prepare_b3_single_pass(
         "calendar_manifest_hash": calendar_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
         "feature_domain_policy_sha256": recomputed_policy["receipt_sha256"],
+        "feature_domain_policy_manifest": recomputed_policy,
+        "provider_absence_partition_receipt": recomputed_policy["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": recomputed_policy["provider_absence_partition_receipt_sha256"],
         "formula_version": C010_FORMULA_VERSION,
         "level_repeats": level_repeats,
         "selection_performed": False,
@@ -2863,6 +3282,17 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         raise StateModelSetError("formal B3 fresh processes used different C-010 policy identities")
     if repeats[0]["feature_domain_policy_sha256"] != request.get("feature_domain_policy_sha256"):
         raise StateModelSetError("formal B3 fresh-process policy identity differs from request")
+    expected_partition_sha256 = request["feature_domain_policy_manifest"].get(
+        "provider_absence_partition_receipt_sha256"
+    )
+    for repeat in repeats:
+        if (
+            repeat.get("feature_domain_policy_manifest") != request["feature_domain_policy_manifest"]
+            or repeat.get("provider_absence_partition_receipt")
+            != request["feature_domain_policy_manifest"].get("provider_absence_partition_receipt")
+            or repeat.get("provider_absence_partition_receipt_sha256") != expected_partition_sha256
+        ):
+            raise StateModelSetError("formal B3 fresh-process domain-partition lineage differs from request")
     train_inputs = _load_l1_source_inputs(request, db_prefix=str(args.db_env_prefix), c010_formal=True)
     if canonical_sha256(train_inputs["dataset_manifest"]) != repeats[0]["dataset_manifest_hash"]:
         raise StateModelSetError("formal B3 D6 reload drifted from the frozen dataset manifest")
@@ -2948,6 +3378,11 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
         "l2_stock_fact_manifest_hash": repeats[0]["l2_stock_fact_manifest_hash"],
         **semantic_identities,
         "feature_domain_policy_sha256": repeats[0]["feature_domain_policy_sha256"],
+        "feature_domain_policy_manifest": request["feature_domain_policy_manifest"],
+        "provider_absence_partition_receipt": request["feature_domain_policy_manifest"][
+            "provider_absence_partition_receipt"
+        ],
+        "provider_absence_partition_receipt_sha256": expected_partition_sha256,
         "formula_version": C010_FORMULA_VERSION,
         "fresh_process_receipt_hashes": [repeat["single_pass_receipt_sha256"] for repeat in repeats],
         "selections": {f"{family}:{level}": selections[(family, level)] for family, level in sorted(selections)},
@@ -3027,6 +3462,10 @@ def parse_args() -> argparse.Namespace:
         help="Run the approved C-010 feature-domain eligibility diagnostic without activating model policy.",
     )
     diagnostic_group.add_argument(
+        "--c010-a5-domain-partition-output",
+        help="Run the approved 601-day C-010-A5 domain-partition preflight without HMM fits or writes.",
+    )
+    diagnostic_group.add_argument(
         "--b3-preparation-output",
         help="Run formal two-process B3 L1/L2 preparation and write its immutable receipt.",
     )
@@ -3067,7 +3506,8 @@ def main() -> int:
         request_path = Path(args.request).resolve()
         c009_preflight_output = getattr(args, "c009_stock_fact_preflight_output", None)
         c010_diagnostic_output = getattr(args, "c010_observation_eligibility_output", None)
-        if args.b3_preflight_output or c009_preflight_output or c010_diagnostic_output:
+        c010_a5_preflight_output = getattr(args, "c010_a5_domain_partition_output", None)
+        if args.b3_preflight_output or c009_preflight_output or c010_diagnostic_output or c010_a5_preflight_output:
             if not args.b3_request_candidate_output:
                 if args.b3_preflight_output:
                     raise StateModelSetError("--b3-request-candidate-output is required with --b3-preflight-output")
@@ -3128,6 +3568,37 @@ def main() -> int:
             raise StateModelSetError("--b3-target-manifest-sha256 is child-only")
         if blocker_child and not blocker_target_sha256:
             raise StateModelSetError("blocker diagnostic child target manifest identity is required")
+        if c010_a5_preflight_output:
+            if args.b3_request_candidate_output:
+                raise StateModelSetError(
+                    "--b3-request-candidate-output is not valid with --c010-a5-domain-partition-output"
+                )
+            report = prepare_c010_a5_domain_partition_preflight(
+                request,
+                db_prefix=str(args.db_env_prefix),
+            )
+            report_path = Path(c010_a5_preflight_output).resolve()
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            receipt = {
+                "schema_version": "hmm_risk_c010_a5_domain_partition_cli_receipt_v1",
+                "status": report["status"],
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "provider_absence_partition_receipt_sha256": report["provider_absence_partition_receipt_sha256"],
+                "p_all_entry_count": report["provider_absence_partition_receipt"]["p_all_entry_count"],
+                "p_in_entry_count": report["provider_absence_partition_receipt"]["p_in_entry_count"],
+                "p_out_entry_count": report["provider_absence_partition_receipt"]["p_out_entry_count"],
+                "known_sw_domain_out_verified": report["known_sw_domain_out_verified"],
+                "fit_performed": False,
+                "selection_performed": False,
+                "d6_performed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0
         if c010_diagnostic_output:
             if args.b3_request_candidate_output:
                 raise StateModelSetError(

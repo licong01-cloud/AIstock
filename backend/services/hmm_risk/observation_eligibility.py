@@ -5,7 +5,6 @@ from __future__ import annotations
 import heapq
 import itertools
 import math
-from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -16,17 +15,23 @@ import pandas as pd
 from .provider_absence import ProviderAbsenceEvidence
 from .state_model_set import StateModelSetError, canonical_sha256
 from .stock_fact_observation import (
+    C010_POLICY_VERSION,
+    C010_PROVIDER_ABSENCE_PARTITION_VERSION,
+    C010_EXPECTED_OPPORTUNITY_CONTRACT,
+    C010_ELIGIBILITY_RECEIPT_VERSION,
     FeatureDomainDailyAggregate,
     MIN_COVERAGE,
     MIN_TRAINING_ROWS,
     L1DailyAggregate,
     ObservationCoverageError,
     aggregate_l1_day,
+    validate_c010_expected_opportunity_receipt,
+    validate_c010_provider_absence_domain_partition,
 )
 
-ELIGIBILITY_SCHEMA = "hmm_risk_c010_train_observation_eligibility_v1"
+ELIGIBILITY_SCHEMA = C010_ELIGIBILITY_RECEIPT_VERSION
 FEATURE_MASK_SCHEMA = "hmm_risk_c010_feature_mask_candidate_set_v1"
-EXPECTED_OPPORTUNITY_CONTRACT = "hmm_risk_c010_expected_opportunity_dates_v1"
+EXPECTED_OPPORTUNITY_CONTRACT = C010_EXPECTED_OPPORTUNITY_CONTRACT
 
 MONEYFLOW_FEATURES = frozenset(
     {
@@ -130,6 +135,209 @@ def _invalid_price_domain_receipt(
     }
 
 
+def canonical_authority_identity(authority_type: str, authority: Mapping[str, Any]) -> dict[str, Any]:
+    """Wrap an existing immutable authority without inventing a second source of truth."""
+
+    normalized_type = str(authority_type or "").strip()
+    if not normalized_type or not isinstance(authority, Mapping) or not authority:
+        raise StateModelSetError("C-010 authority identity is incomplete")
+    body = {"authority_type": normalized_type, "authority": dict(authority)}
+    return {**body, "identity_sha256": canonical_sha256(body)}
+
+
+def _canonical_predicate(status: str, authority_receipt: Mapping[str, Any]) -> dict[str, Any]:
+    normalized_status = str(status or "")
+    if normalized_status not in {"available", "unavailable", "invalid"}:
+        raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: predicate status")
+    if not isinstance(authority_receipt, Mapping) or not authority_receipt:
+        raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: predicate authority")
+    authority = dict(authority_receipt)
+    body = {
+        "status": normalized_status,
+        "authority_receipt": authority,
+        "authority_receipt_sha256": canonical_sha256(authority),
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def build_expected_opportunity_receipt(
+    expected_opportunity_dates_by_symbol: Mapping[str, Sequence[date]],
+    *,
+    train_start: date,
+    train_end: date,
+    authority_identities: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Freeze the complete direct-sector opportunity ledger and its source authorities."""
+
+    if train_start > train_end:
+        raise StateModelSetError("C-010 expected-opportunity train window is invalid")
+    authorities = sorted(
+        (dict(item) for item in authority_identities), key=lambda item: str(item.get("identity_sha256"))
+    )
+    if not authorities:
+        raise StateModelSetError("C-010 expected-opportunity authorities are missing")
+    entries: list[dict[str, Any]] = []
+    keys: list[dict[str, str]] = []
+    combined_authority_sha256 = canonical_sha256(authorities)
+    normalized_symbols = sorted(str(symbol).strip() for symbol in expected_opportunity_dates_by_symbol)
+    if not normalized_symbols or "" in normalized_symbols or len(normalized_symbols) != len(set(normalized_symbols)):
+        raise StateModelSetError("hmm_risk_c010_expected_opportunity_missing: opportunity ledger is empty or invalid")
+    for symbol in normalized_symbols:
+        dates = tuple(sorted(expected_opportunity_dates_by_symbol[symbol]))
+        if (
+            not dates
+            or len(dates) != len(set(dates))
+            or any(not isinstance(item, date) or not train_start <= item <= train_end for item in dates)
+        ):
+            raise StateModelSetError(
+                f"hmm_risk_c010_expected_opportunity_missing: invalid opportunity dates for {symbol}"
+            )
+        date_strings = [item.isoformat() for item in dates]
+        entry_body = {
+            "canonical_ts_code": symbol,
+            "opportunity_dates": date_strings,
+            "opportunity_count": len(date_strings),
+            "opportunity_date_sha256": canonical_sha256(date_strings),
+            "authority_identity_sha256": combined_authority_sha256,
+        }
+        entries.append({**entry_body, "entry_sha256": canonical_sha256(entry_body)})
+        keys.extend({"canonical_ts_code": symbol, "trade_date": item} for item in date_strings)
+    body = {
+        "schema_version": EXPECTED_OPPORTUNITY_CONTRACT,
+        "train_start": train_start.isoformat(),
+        "train_end": train_end.isoformat(),
+        "authority_identities": authorities,
+        "entry_count": len(entries),
+        "opportunity_key_count": len(keys),
+        "opportunity_ordered_key_sha256": canonical_sha256(keys),
+        "entries": entries,
+    }
+    return validate_c010_expected_opportunity_receipt({**body, "receipt_sha256": canonical_sha256(body)})
+
+
+def build_provider_absence_domain_partition(
+    provider_absence_rows: Iterable[ProviderAbsenceEvidence],
+    *,
+    predicate_evidence_by_key: Mapping[tuple[str, date], Mapping[str, Any]],
+    train_start: date,
+    train_end: date,
+    provider_absence_manifest_identity: Mapping[str, Any],
+    security_resolver_identity: Mapping[str, Any],
+    pit_authority_identity: Mapping[str, Any],
+    price_source_identity: Mapping[str, Any],
+    sw_mapping_classify_identity: Mapping[str, Any],
+    formal_policy: bool,
+) -> dict[str, Any]:
+    """Partition every P_all exact key; invalid predicates fail the complete receipt."""
+
+    filtered = sorted(
+        (row for row in provider_absence_rows if train_start <= row.trade_date <= train_end),
+        key=lambda row: (row.canonical_ts_code, row.trade_date),
+    )
+    keys = [(row.canonical_ts_code, row.trade_date) for row in filtered]
+    if len(keys) != len(set(keys)) or set(keys) != set(predicate_evidence_by_key):
+        raise StateModelSetError(
+            "hmm_risk_c010_provider_absence_domain_partition_invalid: P_all predicate cardinality mismatch"
+        )
+    entries: list[dict[str, Any]] = []
+    all_keys: list[dict[str, str]] = []
+    in_keys: list[dict[str, str]] = []
+    out_keys: list[dict[str, str]] = []
+    predicate_order = (
+        "pit_eligible",
+        "price_authority_present",
+        "sw_l1_identity_valid",
+        "sw_l2_identity_valid",
+    )
+    reason_by_predicate = {
+        "pit_eligible": "hmm_risk_c010_pit_ineligible_for_opportunity",
+        "price_authority_present": "hmm_risk_c010_price_unavailable_for_opportunity",
+        "sw_l1_identity_valid": "hmm_risk_c010_sw_identity_unavailable_for_opportunity",
+        "sw_l2_identity_valid": "hmm_risk_c010_sw_identity_unavailable_for_opportunity",
+    }
+    for row in filtered:
+        evidence = predicate_evidence_by_key[(row.canonical_ts_code, row.trade_date)]
+        required_fields = {
+            "source_ts_code",
+            "stable_security_identity",
+            "security_resolver_receipt",
+            *predicate_order,
+        }
+        if set(evidence) != required_fields:
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: predicate evidence fields"
+            )
+        source_ts_code = str(evidence.get("source_ts_code") or "")
+        stable_identity = str(evidence.get("stable_security_identity") or "")
+        resolver = evidence.get("security_resolver_receipt")
+        if (
+            source_ts_code != row.source_ts_code
+            or not stable_identity
+            or not isinstance(resolver, Mapping)
+            or not resolver
+        ):
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: security resolver mismatch"
+            )
+        predicates = {
+            field: _canonical_predicate(
+                str(evidence[field].get("status") or ""), evidence[field].get("authority_receipt")
+            )
+            if isinstance(evidence[field], Mapping)
+            else _canonical_predicate("invalid", {})
+            for field in predicate_order
+        }
+        statuses = {field: str(value["status"]) for field, value in predicates.items()}
+        if "invalid" in statuses.values():
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: invalid predicate cannot become P_out"
+            )
+        failed = [field for field in predicate_order if statuses[field] == "unavailable"]
+        partition = "in_domain" if not failed else "out_of_domain"
+        primary_reason = None if not failed else reason_by_predicate[failed[0]]
+        entry_body = {
+            "canonical_ts_code": row.canonical_ts_code,
+            "source_ts_code": source_ts_code,
+            "stable_security_identity": stable_identity,
+            "trade_date": row.trade_date.isoformat(),
+            "provider_row_hash": row.row_hash,
+            "security_resolver_receipt": dict(resolver),
+            "security_resolver_receipt_sha256": canonical_sha256(dict(resolver)),
+            **predicates,
+            "failed_predicates": failed,
+            "partition": partition,
+            "primary_reason_code": primary_reason,
+            "policy_version": C010_POLICY_VERSION,
+        }
+        entries.append({**entry_body, "entry_sha256": canonical_sha256(entry_body)})
+        key_body = {"canonical_ts_code": row.canonical_ts_code, "trade_date": row.trade_date.isoformat()}
+        all_keys.append(key_body)
+        (in_keys if partition == "in_domain" else out_keys).append(key_body)
+    body = {
+        "schema_version": C010_PROVIDER_ABSENCE_PARTITION_VERSION,
+        "contract_version": C010_PROVIDER_ABSENCE_PARTITION_VERSION,
+        "policy_version": C010_POLICY_VERSION,
+        "train_start": train_start.isoformat(),
+        "train_end": train_end.isoformat(),
+        "provider_absence_manifest_identity": dict(provider_absence_manifest_identity),
+        "security_resolver_identity": dict(security_resolver_identity),
+        "pit_authority_identity": dict(pit_authority_identity),
+        "price_source_identity": dict(price_source_identity),
+        "sw_mapping_classify_identity": dict(sw_mapping_classify_identity),
+        "p_all_entry_count": len(all_keys),
+        "p_in_entry_count": len(in_keys),
+        "p_out_entry_count": len(out_keys),
+        "p_all_ordered_key_sha256": canonical_sha256(all_keys),
+        "p_in_ordered_key_sha256": canonical_sha256(in_keys),
+        "p_out_ordered_key_sha256": canonical_sha256(out_keys),
+        "entries": entries,
+        "partition_complete": True,
+        "diagnostic_only": not formal_policy,
+        "formal_policy_activated": formal_policy,
+    }
+    return validate_c010_provider_absence_domain_partition({**body, "receipt_sha256": canonical_sha256(body)})
+
+
 @dataclass(frozen=True)
 class ContributorEligibility:
     canonical_ts_code: str
@@ -139,6 +347,7 @@ class ContributorEligibility:
     availability_ratio: float
     moneyflow_contributor_eligible: bool
     provider_absence_key_sha256: str
+    p_in_date_sha256: str
 
     def evidence(self) -> dict[str, Any]:
         body = {
@@ -150,6 +359,7 @@ class ContributorEligibility:
             "availability_ratio": self.availability_ratio,
             "moneyflow_contributor_eligible": self.moneyflow_contributor_eligible,
             "provider_absence_key_sha256": self.provider_absence_key_sha256,
+            "p_in_date_sha256": self.p_in_date_sha256,
         }
         return {**body, "entry_sha256": canonical_sha256(body)}
 
@@ -160,6 +370,8 @@ class ObservationEligibility:
     train_end: date
     minimum_availability_ratio: float
     entries: tuple[ContributorEligibility, ...]
+    expected_opportunity_receipt: dict[str, Any]
+    provider_absence_partition_receipt: dict[str, Any]
 
     @property
     def excluded_moneyflow_symbols(self) -> frozenset[str]:
@@ -179,6 +391,10 @@ class ObservationEligibility:
             "entry_count": len(self.entries),
             "entries": [entry.evidence() for entry in self.entries],
             "excluded_moneyflow_symbols": sorted(self.excluded_moneyflow_symbols),
+            "expected_opportunity_receipt": self.expected_opportunity_receipt,
+            "expected_opportunity_receipt_sha256": self.expected_opportunity_receipt["receipt_sha256"],
+            "provider_absence_partition_receipt": self.provider_absence_partition_receipt,
+            "provider_absence_partition_receipt_sha256": self.provider_absence_partition_receipt["receipt_sha256"],
             "pit_universe_changed": False,
             "selection_universe_changed": False,
             "runtime_prediction_eligibility_changed": False,
@@ -191,7 +407,8 @@ class ObservationEligibility:
 def build_train_only_observation_eligibility(
     provider_absence_rows: Iterable[ProviderAbsenceEvidence],
     *,
-    expected_opportunity_dates_by_symbol: Mapping[str, Sequence[date]],
+    expected_opportunity_receipt: Mapping[str, Any],
+    provider_absence_partition_receipt: Mapping[str, Any],
     train_start: date,
     train_end: date,
     minimum_availability_ratio: float = MIN_COVERAGE,
@@ -206,76 +423,71 @@ def build_train_only_observation_eligibility(
         raise StateModelSetError(
             "hmm_risk_c010_policy_identity_mismatch: C-010 contributor availability must remain exactly 0.90"
         )
-    filtered = [row for row in provider_absence_rows if train_start <= row.trade_date <= train_end]
-    keys = [
-        {
-            "canonical_ts_code": row.canonical_ts_code,
-            "trade_date": row.trade_date.isoformat(),
-            "row_hash": row.row_hash,
-        }
-        for row in filtered
-    ]
-    if len({(item["canonical_ts_code"], item["trade_date"]) for item in keys}) != len(keys):
-        raise StateModelSetError("C-010 provider absence keys are duplicated")
-    absence_counts = Counter(row.canonical_ts_code for row in filtered)
-    expected_symbols = {str(symbol).strip() for symbol in expected_opportunity_dates_by_symbol}
-    if not expected_symbols or "" in expected_symbols:
+    filtered = sorted(
+        (row for row in provider_absence_rows if train_start <= row.trade_date <= train_end),
+        key=lambda row: (row.canonical_ts_code, row.trade_date),
+    )
+    opportunity = validate_c010_expected_opportunity_receipt(expected_opportunity_receipt)
+    partition = validate_c010_provider_absence_domain_partition(provider_absence_partition_receipt)
+    if (
+        opportunity.get("train_start") != train_start.isoformat()
+        or opportunity.get("train_end") != train_end.isoformat()
+        or partition.get("train_start") != train_start.isoformat()
+        or partition.get("train_end") != train_end.isoformat()
+        or partition.get("formal_policy_activated") is not True
+    ):
+        raise StateModelSetError("hmm_risk_c010_contributor_receipt_mismatch: C-010 v2 authority window/mode")
+    expected_by_symbol = {
+        str(entry["canonical_ts_code"]): tuple(date.fromisoformat(item) for item in entry["opportunity_dates"])
+        for entry in opportunity["entries"]
+    }
+    partition_by_key = {
+        (str(entry["canonical_ts_code"]), date.fromisoformat(str(entry["trade_date"]))): entry
+        for entry in partition["entries"]
+    }
+    source_keys = {(row.canonical_ts_code, row.trade_date): row for row in filtered}
+    if len(source_keys) != len(filtered) or set(source_keys) != set(partition_by_key):
         raise StateModelSetError(
-            "hmm_risk_c010_expected_opportunity_missing: "
-            "C-010 full-universe expected opportunity ledger is empty or invalid"
+            "hmm_risk_c010_provider_absence_domain_partition_invalid: provider manifest/partition keys differ"
         )
-    missing_expected_symbols = sorted(set(absence_counts) - expected_symbols)
-    if missing_expected_symbols:
-        raise StateModelSetError(
-            "hmm_risk_c010_expected_opportunity_missing: "
-            f"C-010 provider-absence symbols lack expected opportunity evidence: {missing_expected_symbols}"
-        )
+    for key, row in source_keys.items():
+        if partition_by_key[key].get("provider_row_hash") != row.row_hash:
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: provider row hash drift")
+    expected_symbols = set(expected_by_symbol)
+    p_in_by_symbol: dict[str, list[date]] = {}
+    for key, entry in partition_by_key.items():
+        if entry["partition"] == "in_domain":
+            if key[0] not in expected_symbols or key[1] not in expected_by_symbol[key[0]]:
+                raise StateModelSetError(
+                    "hmm_risk_c010_provider_absence_domain_partition_invalid: P_in is outside O_sector"
+                )
+            p_in_by_symbol.setdefault(key[0], []).append(key[1])
     entries: list[ContributorEligibility] = []
     for symbol in sorted(expected_symbols):
-        expected_dates = tuple(sorted(expected_opportunity_dates_by_symbol.get(symbol, ())))
-        if not expected_dates:
-            raise StateModelSetError(
-                "hmm_risk_c010_expected_opportunity_missing: "
-                f"C-010 expected opportunity count is invalid: {symbol} expected=0 missing={absence_counts[symbol]}"
-            )
-        if len(expected_dates) != len(set(expected_dates)):
-            raise StateModelSetError(
-                f"hmm_risk_c010_contributor_receipt_mismatch: expected opportunity dates are duplicated: {symbol}"
-            )
-        if any(not isinstance(value, date) or value < train_start or value > train_end for value in expected_dates):
-            raise StateModelSetError(
-                "hmm_risk_c010_contributor_receipt_mismatch: "
-                f"expected opportunity dates are outside the train window: {symbol}"
-            )
+        expected_dates = expected_by_symbol[symbol]
         expected_date_set = frozenset(expected_dates)
-        absence_dates = frozenset(row.trade_date for row in filtered if row.canonical_ts_code == symbol)
-        unexpected_absence_dates = sorted(absence_dates - expected_date_set)
-        if unexpected_absence_dates:
-            raise StateModelSetError(
-                "hmm_risk_c010_provider_absence_outside_opportunity: "
-                f"C-010 provider absence is outside expected opportunities: {symbol} "
-                f"dates={[value.isoformat() for value in unexpected_absence_dates]}"
-            )
+        p_in_dates = tuple(sorted(p_in_by_symbol.get(symbol, ())))
+        if not set(p_in_dates).issubset(expected_date_set):
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: A_s is not a subset")
         expected = len(expected_dates)
-        missing = int(absence_counts.get(symbol, 0))
+        missing = len(p_in_dates)
         if expected <= 0 or missing > expected:
             raise StateModelSetError(
                 "hmm_risk_c010_contributor_receipt_mismatch: "
                 f"C-010 expected opportunity count is invalid: {symbol} expected={expected} missing={missing}"
             )
         availability = (expected - missing) / expected
-        symbol_keys = [item for item in keys if item["canonical_ts_code"] == symbol]
+        symbol_keys = [{"canonical_ts_code": symbol, "trade_date": value.isoformat()} for value in p_in_dates]
         entries.append(
             ContributorEligibility(
                 canonical_ts_code=symbol,
                 expected_opportunity_count=expected,
-                expected_opportunity_date_sha256=canonical_sha256(
-                    [{"canonical_ts_code": symbol, "trade_date": value.isoformat()} for value in expected_dates]
-                ),
+                expected_opportunity_date_sha256=canonical_sha256([value.isoformat() for value in expected_dates]),
                 provider_absence_count=missing,
                 availability_ratio=float(availability),
                 moneyflow_contributor_eligible=(10 * (expected - missing)) >= (9 * expected),
                 provider_absence_key_sha256=canonical_sha256(symbol_keys),
+                p_in_date_sha256=canonical_sha256([value.isoformat() for value in p_in_dates]),
             )
         )
     return ObservationEligibility(
@@ -283,6 +495,8 @@ def build_train_only_observation_eligibility(
         train_end=train_end,
         minimum_availability_ratio=minimum_availability_ratio,
         entries=tuple(entries),
+        expected_opportunity_receipt=dict(opportunity),
+        provider_absence_partition_receipt=dict(partition),
     )
 
 

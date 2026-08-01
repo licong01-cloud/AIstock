@@ -3,8 +3,10 @@
   "allowed_write_scope": [
     "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
     "backend/services/hmm_risk/observation_eligibility.py",
+    "backend/services/hmm_risk/stock_fact_observation.py",
     "scripts/hmm_risk/prepare_state_model_set.py",
     "backend/tests/hmm_risk/test_observation_eligibility.py",
+    "backend/tests/hmm_risk/test_stock_fact_observation.py",
     "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "tests/aistock_validation/bugs/20260801_BUG-944-c-010-rejects-provider-verified-absence-outside-the-sw-contributor-oppor.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
