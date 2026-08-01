@@ -184,7 +184,9 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh Python process loaded clean commit b24ce63eee07462ab484c108091822af5b24eda0; /api/v1/runtime-identity returned the same merge_commit and /api/v1/validation/plans/platform_api_backend returned plan_key=platform_api_backend, both HTTP 200; no backend process control"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/validation/plans/platform_api_backend",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -211,7 +213,7 @@
   },
   "validation_evidence": [
     "fix-point classifier: backend/routers/health.py plus backend/tests/platform_api/test_health_contract.py -> workflow_gate=passed, classification=targeted_ci_required, backend_sessions=[platform_api_backend], unmapped_code_files=[]",
-    "platform_api_backend -> 1 passed; no backend process was started",
+    "platform_api_backend -> 5 passed; no backend process was started",
     "validation_module_registry_l0 -> 8 passed and 14/14 catalog files mapped",
     "validation_catalog_integrity -> PASS with findings=0",
     "l0 -> PASS with blocking=0",
