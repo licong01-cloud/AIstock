@@ -631,6 +631,20 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def advisory_phase0b_backend(session: nox.Session) -> None:
+    """Run Phase 0B candidate-quality and direct historical-data regressions."""
+    _run_pytest(
+        session,
+        "backend/tests/advisory_phase0b",
+        "backend/tests/advisory_historical_range/test_r4_summary_service.py",
+        "backend/tests/advisory_phase1/test_phase1c3_batch_d_integrity.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def paper_v2_backend(session: nox.Session) -> None:
     """Run Paper v2, Selection Center, and shared minute-execution tests."""
     args = [
