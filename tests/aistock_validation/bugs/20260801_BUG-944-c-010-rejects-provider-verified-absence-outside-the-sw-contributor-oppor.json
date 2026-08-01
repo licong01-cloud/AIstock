@@ -203,6 +203,12 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
+  "validation_evidence": [
+    "C-010-A5 design-only stage: python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2 -> PASS, 3 design items, 8 matrix rows, 0 warnings",
+    "C-010-A5 design-only stage: rtk nox -s l0 -> PASS, blocking=0",
+    "C-010-A5 design-only stage: rtk nox -s validation_module_registry_l0 -> PASS, 8 tests passed and 14/14 catalog files mapped",
+    "C-010-A5 design-only stage: git diff --check origin/main...HEAD -> PASS; no source implementation, HMM fit, selection, model/READY, database write, or runtime action was performed"
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
