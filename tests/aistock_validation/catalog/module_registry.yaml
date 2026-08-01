@@ -8,6 +8,14 @@ modules:
     description_zh: 荐股历史范围研究的显式日期契约、独立 CAS、持久化状态和 append-only 证据，不接入交易运行时。
     test_plans:
       required_on_change: [l0, advisory_historical_range_backend]
+  - module_id: advisory.candidate_quality
+    display_name: Advisory candidate quality research
+    module_type: data_pipeline
+    risk_level: high
+    description: Research-only Phase 0B candidate-quality audit over explicit SEALED historical snapshots, isolated from selection and trading runtimes.
+    description_zh: Phase 0B 荐股候选质量研究，仅审计显式 SEALED 历史快照，并与选股和交易运行时隔离。
+    test_plans:
+      required_on_change: [l0, advisory_phase0b_backend]
   - module_id: advisory.dev_input_onboarding
     display_name: Advisory DEV input onboarding
     module_type: data_pipeline
