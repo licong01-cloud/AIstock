@@ -42,8 +42,8 @@
   },
   "first_seen_at": "2026-08-01T03:55:02.257628Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1548965ead70442228a517b3d6377b7d4bc4649a",
+  "fixed_at": "2026-08-01T05:10:54Z",
   "github_issue_number": 3007,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3007",
   "last_seen_at": "2026-08-01T03:55:02.257628Z",
@@ -51,6 +51,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3008",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -72,6 +73,7 @@
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -82,7 +84,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -91,6 +93,13 @@
     "fingerprint": "60a52931ee57cfc1a6dc4cea",
     "source_event_id": "FE-20260801-60a52931ee57"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_tushare_sync_engine.py -q -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s data_sync_autonomy_backend -> passed",
+    "PR #3008 CI all green -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
