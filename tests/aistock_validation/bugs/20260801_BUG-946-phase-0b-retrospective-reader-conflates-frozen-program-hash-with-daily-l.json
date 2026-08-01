@@ -1,7 +1,9 @@
 {
-  "actual": "The reader treats historical_range_frozen_program_hash as a daily range_lineage_scope_hash; real target closure cannot resolve.",
+  "actual": "The reader treats historical_range_frozen_program_hash as a daily range_lineage_scope_hash, has two canonical membership read defects, and the metric engine validates ranks inside each one-candidate canonical signal while rejecting legitimate frozen rank gaps instead of evaluating the complete Program/date candidate group with cash slots; the real 15-day audit cannot complete and per-signal TopK math would be incorrect.",
   "allowed_write_scope": [
+    "backend/services/advisory_phase0b/audit_service.py",
     "backend/services/advisory_phase0b/snapshot_reader.py",
+    "backend/tests/advisory_phase0b/test_audit_service.py",
     "backend/tests/advisory_phase0b/test_snapshot_reader.py",
     "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
     "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
@@ -17,7 +19,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-01T17:24:59.592663Z",
-  "description": "The reader treats historical_range_frozen_program_hash as a daily range_lineage_scope_hash; real target closure cannot resolve.",
+  "description": "The first real Phase 0B run exposed one retrospective grouping defect across the read and metric boundary: the reader conflates the stable historical_range_frozen_program_hash with per-day capture scope identities; its membership query and canonical ordering reject valid catalog data; and the metric engine treats each one-candidate canonical signal as a complete ranking group instead of combining all signals for the same frozen Program/date. The approved 15-day audit therefore cannot complete with correct TopK semantics.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -27,20 +29,26 @@
     }
   ],
   "evidence_uris": [
-    "snapshot advsnap_9faa542fd165be6131715125 read-only catalog/lineage evidence"
+    "snapshot advsnap_9faa542fd165be6131715125 read-only catalog/lineage evidence",
+    "production read-only SQL: ORDER BY payload::text raises psycopg2.errors.UndefinedColumn because payload is not materialized",
+    "production read-only evidence: one canonical signal carries one ranked candidate while the same frozen Program/date carries contiguous ranks 1..25"
   ],
   "expected": "Validate the complete daily scope set independently, bind each audit target to its authoritative historical_range_frozen_program_hash, and aggregate all 15 decision dates for the single-Alpha and native multi-Alpha packages.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "backend/services/advisory_phase0b/audit_service.py",
       "backend/services/advisory_phase0b/snapshot_reader.py",
+      "backend/tests/advisory_phase0b/test_audit_service.py",
       "backend/tests/advisory_phase0b/test_snapshot_reader.py",
       "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
       "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
     ],
     "ownership": {
       "changed_files": [
+        "backend/services/advisory_phase0b/audit_service.py",
         "backend/services/advisory_phase0b/snapshot_reader.py",
+        "backend/tests/advisory_phase0b/test_audit_service.py",
         "backend/tests/advisory_phase0b/test_snapshot_reader.py",
         "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
         "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
@@ -53,7 +61,25 @@
       ],
       "matched_rules": [
         {
+          "file": "backend/services/advisory_phase0b/audit_service.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
           "file": "backend/services/advisory_phase0b/snapshot_reader.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_audit_service.py",
           "impact_modules": [
             "advisory.historical_range"
           ],
@@ -94,7 +120,9 @@
         "low"
       ],
       "suggested_scope": [
+        "backend/services/advisory_phase0b/audit_service.py",
         "backend/services/advisory_phase0b/snapshot_reader.py",
+        "backend/tests/advisory_phase0b/test_audit_service.py",
         "backend/tests/advisory_phase0b/test_snapshot_reader.py",
         "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
         "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
@@ -103,7 +131,9 @@
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/advisory_phase0b/audit_service.py",
       "backend/services/advisory_phase0b/snapshot_reader.py",
+      "backend/tests/advisory_phase0b/test_audit_service.py",
       "backend/tests/advisory_phase0b/test_snapshot_reader.py",
       "docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md",
       "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"

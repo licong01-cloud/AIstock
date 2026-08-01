@@ -274,7 +274,10 @@ class Phase0BMetricEngine:
                 decision_date=decision_date,
                 contexts=contexts,
             )
-            return contexts
+            return self._merge_date_contexts(
+                decision_date=decision_date,
+                contexts=contexts,
+            )
 
         contexts_by_date = _LazyTargetContextMapping(
             decision_dates=decision_dates,
@@ -390,6 +393,102 @@ class Phase0BMetricEngine:
                 "target decision date has conflicting market regime evidence",
                 context={"decision_date": decision_date},
             )
+
+    @staticmethod
+    def _merge_date_contexts(
+        *,
+        decision_date: str,
+        contexts: tuple[SignalContext, ...],
+    ) -> tuple[SignalContext, ...]:
+        if not contexts:
+            return ()
+        ordered = tuple(sorted(contexts, key=lambda item: item.signal_id))
+        snapshot_ids = {item.snapshot_id for item in ordered}
+        universe_policy_hashes = {item.universe_policy_hash for item in ordered}
+        if len(snapshot_ids) != 1 or len(universe_policy_hashes) != 1:
+            raise Phase0BAuditError(
+                REASON_METRIC_REGISTRY_CONFLICT,
+                "Program/date candidate group has conflicting snapshot or universe identity",
+                context={"decision_date": decision_date},
+            )
+        stage_names = {
+            stage
+            for context in ordered
+            for stage in context.stage_capability_by_stage
+        }
+        candidates_by_stage: dict[str, tuple[dict[str, Any], ...]] = {}
+        stage_capability_by_stage: dict[str, str] = {}
+        for stage in sorted(stage_names):
+            capabilities = {
+                context.stage_capability_by_stage.get(stage) for context in ordered
+            }
+            if None in capabilities or len(capabilities) != 1:
+                raise Phase0BAuditError(
+                    REASON_METRIC_REGISTRY_CONFLICT,
+                    "Program/date candidate group has conflicting stage capability",
+                    context={"decision_date": decision_date, "stage": stage},
+                )
+            stage_capability_by_stage[stage] = str(next(iter(capabilities)))
+            rows = tuple(
+                row
+                for context in ordered
+                for row in context.candidates_by_stage.get(stage, ())
+            )
+            candidates_by_stage[stage] = tuple(
+                sorted(
+                    rows,
+                    key=lambda row: (
+                        row.get("rank") is None,
+                        int(row["rank"]) if row.get("rank") is not None else 0,
+                        str(row.get("symbol") or ""),
+                        str(row.get("stage_evidence_id") or ""),
+                    ),
+                )
+            )
+        outcomes_by_stage_symbol: dict[tuple[str, str, str, int], dict[str, Any]] = {}
+        for context in ordered:
+            for key, outcome in context.outcomes_by_stage_symbol.items():
+                if key in outcomes_by_stage_symbol:
+                    raise Phase0BAuditError(
+                        REASON_METRIC_REGISTRY_CONFLICT,
+                        "Program/date candidate group has duplicate candidate outcome identity",
+                        context={"decision_date": decision_date},
+                    )
+                outcomes_by_stage_symbol[key] = outcome
+        universe_outcomes: list[dict[str, Any]] = []
+        universe_label_ids: set[str] = set()
+        for context in ordered:
+            for outcome in context.universe_outcomes:
+                label_id = str(outcome.get("label_version_id") or "")
+                if not label_id or label_id in universe_label_ids:
+                    raise Phase0BAuditError(
+                        REASON_METRIC_REGISTRY_CONFLICT,
+                        "Program/date candidate group has invalid universe outcome identity",
+                        context={"decision_date": decision_date},
+                    )
+                universe_label_ids.add(label_id)
+                universe_outcomes.append(outcome)
+        signal_ids = tuple(item.signal_id for item in ordered)
+        scope_hashes = tuple(sorted(item.canonical_signal_scope_hash for item in ordered))
+        return (
+            SignalContext(
+                snapshot_id=next(iter(snapshot_ids)),
+                signal_id=f"date-group-{canonical_json_sha256(signal_ids)[:24]}",
+                canonical_signal_scope_hash=canonical_json_sha256(scope_hashes),
+                universe_policy_hash=next(iter(universe_policy_hashes)),
+                market_regime_at_t=ordered[0].market_regime_at_t,
+                market_regime_evidence_hash=ordered[0].market_regime_evidence_hash,
+                candidates_by_stage=candidates_by_stage,
+                stage_capability_by_stage=stage_capability_by_stage,
+                outcomes_by_stage_symbol=outcomes_by_stage_symbol,
+                universe_outcomes=tuple(
+                    sorted(
+                        universe_outcomes,
+                        key=lambda row: str(row["label_version_id"]),
+                    )
+                ),
+            ),
+        )
 
     def _evaluate_definition(
         self,
@@ -774,10 +873,10 @@ class Phase0BMetricEngine:
             if item.get("membership_status") == "INCLUDED" and item.get("rank") is not None
         )
         ranks = tuple(sorted(int(item["rank"]) for item in rows))
-        if ranks != tuple(range(1, len(ranks) + 1)):
+        if any(rank <= 0 for rank in ranks) or len(ranks) != len(set(ranks)):
             raise Phase0BAuditError(
                 REASON_METRIC_REGISTRY_CONFLICT,
-                "included stage candidate ranks must be unique and contiguous from one",
+                "included stage candidate ranks must be positive and unique",
                 context={"signal_id": context.signal_id, "stage": stage, "ranks": ranks},
             )
         output: list[CandidateOutcome] = []

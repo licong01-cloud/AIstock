@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
+from backend.services.advisory_phase1.label_policy import Projection
 from backend.services.advisory_phase0b.audit_service import (
     SUPPORTED_METRIC_IDS,
     Phase0BMetricEngine,
@@ -183,6 +184,134 @@ def _append(
         identity_fields=identity_fields,
         decision_date_field="decision_as_of_trade_date",
     )
+
+
+def _single_candidate_context(
+    *,
+    signal_id: str,
+    symbol: str,
+    rank: int,
+    stage_evidence_id: str,
+) -> SignalContext:
+    outcome = {
+        "label_version_id": f"label-{signal_id}",
+        "projection_value_decimal": "0.01",
+        "maturity_status": "MATURED",
+        "outcome_event_status": "TERMINAL",
+    }
+    return SignalContext(
+        snapshot_id="snapshot-1",
+        signal_id=signal_id,
+        canonical_signal_scope_hash=canonical_json_sha256(signal_id),
+        universe_policy_hash="c" * 64,
+        market_regime_at_t=None,
+        market_regime_evidence_hash=None,
+        candidates_by_stage={
+            "alpha_raw": (
+                {
+                    "stage_evidence_id": stage_evidence_id,
+                    "membership_status": "INCLUDED",
+                    "symbol": symbol,
+                    "rank": rank,
+                },
+            )
+        },
+        stage_capability_by_stage={"alpha_raw": "FULL"},
+        outcomes_by_stage_symbol={
+            (stage_evidence_id, symbol, "RETURN_NET_ABSOLUTE", 1): outcome
+        },
+        universe_outcomes=(),
+    )
+
+
+def test_date_context_merges_one_candidate_signals_before_topk_validation() -> None:
+    contexts = (
+        _single_candidate_context(
+            signal_id="signal-2",
+            symbol="000002.SZ",
+            rank=2,
+            stage_evidence_id="stage-2",
+        ),
+        _single_candidate_context(
+            signal_id="signal-1",
+            symbol="000001.SZ",
+            rank=1,
+            stage_evidence_id="stage-1",
+        ),
+    )
+
+    merged = Phase0BMetricEngine._merge_date_contexts(
+        decision_date="2026-07-01",
+        contexts=contexts,
+    )
+    outcomes = Phase0BMetricEngine._candidate_outcomes(
+        context=merged[0],
+        stage="alpha_raw",
+        projection=Projection.RETURN_NET_ABSOLUTE,
+        horizon=1,
+    )
+
+    assert len(merged) == 1
+    assert [(item.symbol, item.rank) for item in outcomes] == [
+        ("000001.SZ", 1),
+        ("000002.SZ", 2),
+    ]
+
+
+def test_date_context_rejects_conflicting_universe_identity() -> None:
+    first = _single_candidate_context(
+        signal_id="signal-1",
+        symbol="000001.SZ",
+        rank=1,
+        stage_evidence_id="stage-1",
+    )
+    second = _single_candidate_context(
+        signal_id="signal-2",
+        symbol="000002.SZ",
+        rank=2,
+        stage_evidence_id="stage-2",
+    )
+    second = SignalContext(
+        **{
+            **second.__dict__,
+            "universe_policy_hash": "d" * 64,
+        }
+    )
+
+    with pytest.raises(Phase0BAuditError, match="conflicting snapshot or universe"):
+        Phase0BMetricEngine._merge_date_contexts(
+            decision_date="2026-07-01",
+            contexts=(first, second),
+        )
+
+
+def test_date_context_preserves_rank_gap_for_fixed_k_cash_slot() -> None:
+    merged = Phase0BMetricEngine._merge_date_contexts(
+        decision_date="2026-07-01",
+        contexts=(
+            _single_candidate_context(
+                signal_id="signal-1",
+                symbol="000001.SZ",
+                rank=1,
+                stage_evidence_id="stage-1",
+            ),
+            _single_candidate_context(
+                signal_id="signal-3",
+                symbol="000003.SZ",
+                rank=3,
+                stage_evidence_id="stage-3",
+            ),
+        ),
+    )
+
+    outcomes = Phase0BMetricEngine._candidate_outcomes(
+        context=merged[0],
+        stage="alpha_raw",
+        projection=Projection.RETURN_NET_ABSOLUTE,
+        horizon=1,
+    )
+
+    assert [item.rank for item in outcomes] == [1, 3]
 
 
 def _populate_metric_spool(
