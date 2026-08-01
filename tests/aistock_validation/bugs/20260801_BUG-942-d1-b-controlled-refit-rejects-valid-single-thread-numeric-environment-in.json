@@ -98,7 +98,9 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
-    "runtime_impact": "unknown",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
     "target_ids": []

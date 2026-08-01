@@ -1194,6 +1194,72 @@ def test_blocker_child_rejects_non_single_thread_post_fit_pool(monkeypatch) -> N
         subject._validate_b3_blocker_pass(value, target)
 
 
+def test_d1_numeric_environment_accepts_different_single_thread_pool_inventory(monkeypatch) -> None:
+    current_environment = _blocker_numeric_environment(
+        thread_pools=[
+            {
+                "user_api": "blas",
+                "internal_api": "openblas",
+                "num_threads": 1,
+                "prefix": "libscipy_openblas",
+            }
+        ]
+    )
+    frozen_environment = _blocker_numeric_environment(
+        thread_pools=[
+            *current_environment["thread_pools"],
+            {
+                "user_api": "openmp",
+                "internal_api": "openmp",
+                "num_threads": 1,
+                "prefix": "libomp",
+            },
+        ]
+    )
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: current_environment)
+
+    subject._validate_b3_d1_numeric_environment_authority(
+        current_environment,
+        frozen_environment,
+    )
+
+
+def test_d1_numeric_environment_rejects_frozen_stable_identity_drift(monkeypatch) -> None:
+    current_environment = _blocker_numeric_environment()
+    frozen_environment = deepcopy(current_environment)
+    frozen_environment["packages"]["hmmlearn"] = "0.3.4"
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: current_environment)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="numeric environment identity is invalid") as captured:
+        subject._validate_b3_d1_numeric_environment_authority(
+            current_environment,
+            frozen_environment,
+        )
+    assert captured.value.reason_code == "hmm_risk_model_inactive_dimension_authority_mismatch"
+
+
+def test_d1_numeric_environment_rejects_non_single_thread_frozen_pool(monkeypatch) -> None:
+    current_environment = _blocker_numeric_environment()
+    frozen_environment = _blocker_numeric_environment(
+        thread_pools=[
+            {
+                "user_api": "openmp",
+                "internal_api": "openmp",
+                "num_threads": 2,
+                "prefix": "libomp",
+            }
+        ]
+    )
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: current_environment)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="thread pools are not single-threaded") as captured:
+        subject._validate_b3_d1_numeric_environment_authority(
+            current_environment,
+            frozen_environment,
+        )
+    assert captured.value.reason_code == "hmm_risk_model_inactive_dimension_authority_mismatch"
+
+
 def test_blocker_child_rejects_numeric_environment_hash_mismatch(monkeypatch) -> None:
     numeric_environment = _blocker_numeric_environment()
     monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: numeric_environment)
