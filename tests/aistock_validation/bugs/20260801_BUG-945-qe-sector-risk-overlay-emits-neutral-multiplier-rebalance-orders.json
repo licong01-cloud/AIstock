@@ -1,0 +1,259 @@
+{
+  "actual": "Each v5 child emitted about 2962-3237 actual DE_RISK_SELL orders at multiplier 1.0; annualized turnover rose from about 6.45-6.52 to 11.61-11.96 and CAGR fell materially.",
+  "allowed_write_scope": [
+    "scripts/qe_sector_risk_overlay_strategy.py",
+    "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+    "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+    "tests/aistock_validation/bugs/20260801_BUG-945-qe-sector-risk-overlay-emits-neutral-multiplier-rebalance-orders.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-945",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-01T16:39:52.587328Z",
+  "description": "Each v5 child emitted about 2962-3237 actual DE_RISK_SELL orders at multiplier 1.0; annualized turnover rose from about 6.45-6.52 to 11.61-11.96 and CAGR fell materially.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260801-403e6e5fcacb",
+      "timestamp": "2026-08-01T16:39:52.587325Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime-run:macb_idem_0f415bae09b5379d53eeb65f5dfc0ad25608be6a",
+    "runtime-run:macb_idem_7d0b307a83a318f6ae9040e340c9daf5a14e5032"
+  ],
+  "expected": "Only multiplier below 1.0 may force overlay de-risk sells; UNMAPPED/INCOMPLETE preserve original strategy behavior, and reentry evidence must not mislabel missing-state restoration as confirmed low-risk reentry.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/qe_sector_risk_overlay_strategy.py",
+      "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "scripts/qe_sector_risk_overlay_strategy.py",
+        "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
+      ],
+      "impacted_modules": [
+        "qe.sector_risk_overlay",
+        "qe.core",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.long_trend_evaluation"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/qe_sector_risk_overlay_strategy.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/qe_sector_risk_overlay_strategy.py",
+        "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/qe_sector_risk_overlay_strategy.py",
+      "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
+    ]
+  },
+  "first_seen_at": "2026-08-01T16:39:52.587328Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3021,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3021",
+  "last_seen_at": "2026-08-01T16:39:52.587328Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read qe_sector_risk_overlay_actions.jsonl for MA-E01 v5 runs macb_idem_0f415bae09b5379d53eeb65f5dfc0ad25608be6a and macb_idem_7d0b307a83a318f6ae9040e340c9daf5a14e5032; count order_generated=true DE_RISK_SELL rows grouped by target_multiplier.",
+  "required_verification": [
+    "l0",
+    "qe_sector_risk_overlay_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE sector-risk overlay emits neutral multiplier rebalance orders",
+  "trigger_condition": {
+    "fingerprint": "403e6e5fcacb865809e348d4",
+    "source_event_id": "FE-20260801-403e6e5fcacb"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_sector_risk_overlay"
+      ],
+      "plans": [
+        "qe_sector_risk_overlay_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_sector_risk_overlay"
+        ],
+        "plans": [
+          "qe_sector_risk_overlay_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
