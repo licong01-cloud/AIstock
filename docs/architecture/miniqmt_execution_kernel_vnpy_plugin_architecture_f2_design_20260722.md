@@ -6,7 +6,7 @@
 >
 > 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
 >
-> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C、K2 overall与K3 overall均为`implemented_verified + merged`。K4-A已通过PR #2883 / merge `527b2f4a58d3fe84f85c0b1f4ba2fe375d181dda`完成`implemented_verified_contract_slice + merged`；K4-B已通过PR #2953 / merge `cbb5f12871f41d1fd529a9a98e8811484eac8ba0`完成`implemented_verified + merged`，K4 overall=`implemented_verified + merged`。K5下位详细设计[`miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md`](miniqmt_execution_kernel_k5_iceberg_stop_plugins_f2_detailed_design_20260731.md)与implementation已通过PR #2978 / merge `4bf54cf2090d37552cbbebdffbbf4a9b9011c85d`完成`implemented_verified + merged`。K6下位详细设计[`miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md`](miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md)已通过PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`完成`design_ready + merged`；K6-A已通过PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`完成`implemented_verified + merged`，K6-B/C/D=`not_started`，K6 overall=`implementation_in_progress`。现有产品runtime未切换，production/runtime gates均为`noop`。
+> K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C、K2 overall与K3 overall均为`implemented_verified + merged`。K4-A已通过PR #2883完成`implemented_verified_contract_slice + merged`；K4-B已通过PR #2953完成`implemented_verified + merged`；K5 design/implementation已通过PR #2968/#2978合入。K6 base design已通过PR #2993合入，K6-A已通过PR #3004完成`implemented_verified + merged`；2026-08-02 implementation-readiness revision已通过PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7`完成`design_revision_ready + merged`，剩余优先级固定为`K6-C0/C1 -> K6-B -> K6-D`，三者仍为`not_started`，K6 overall=`implementation_in_progress`。现有产品runtime未切换，production/runtime gates均为`noop`。
 >
 > K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B、K2-C和K2-D均为`implemented_verified + merged`，K2 overall=`implemented_verified + merged`。K2-D direct outbox/diagnostics/ops=`111 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；required CI run `30269640126` 全绿。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
 >
@@ -16,7 +16,7 @@
 
 ## 0. Executive Decision / 核心决策
 
-K1、K2、K3 overall均保持`implemented_verified + merged`。K4-A为`implemented_verified_contract_slice + merged`；K4-B正式审核补修已完成本地direct/DEV/MiniQMT/Paper/coverage/L0/registry/F2及required CI run `30573914476`闭环，并通过PR #2953 / merge `cbb5f12871f41d1fd529a9a98e8811484eac8ba0`合入，K4 overall=`implemented_verified + merged`。K5 design source已通过PR #2968 / merge `1e739dce8a5a18d9e9e4c16027801a7a81e34384`合入；implementation已通过PR #2978 / merge `4bf54cf2090d37552cbbebdffbbf4a9b9011c85d`完成`implemented_verified + merged`，final required CI run `30640380170`全绿。K6详细设计已通过PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`完成`design_ready + merged`；K6-A最终复审已闭合typed bounded readback、authority-derived lifecycle/materialization identity、完整trigger/ledger evidence、decision/status与lease/current-incarnation closure、partial-schema migration/rollback fail-closed，并通过PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`完成`implemented_verified + merged`，required CI run `30687689439`全绿；K6-B/C/D=`not_started`。产品runtime未切换，production gates保持`noop`。
+K1、K2、K3 overall均保持`implemented_verified + merged`。K4-A为`implemented_verified_contract_slice + merged`；K4-B已通过PR #2953合入，K4 overall=`implemented_verified + merged`。K5 design/implementation已通过PR #2968/#2978合入。K6 base design已通过PR #2993合入；K6-A通过PR #3004完成dependent-BUY V1、hash-only product authority V2与七表repository。实施前审查确认这些版本不足以支撑fresh-process product route，故2026-08-02 revision新增dependent-BUY V2、product authority V3与successor migration，并将顺序改为`K6-C0/C1 -> K6-B -> K6-D`；三者仍为`not_started`。产品runtime未切换，production gates保持`noop`。
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -840,11 +840,11 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 实施级合同唯一来源为[`miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md`](miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md)：
 
 - K6-A实现strict contracts、additive migration和repository；只新增dependent-BUY coordination与product command authority缺口，复用K2 event/delivery/transition/mapping/child/outbox/callback/reconcile表；
-- K6-B实现独立durable dependent-BUY coordinator：qmt strategy ledger settled cash authority、SELL TRADE/ORDER terminal/ACCOUNT/EOD lineage、defer/release/block/residual、single-writer/CAS/fence、restart/no-double-release，release只进入现有K2 outbox；不得下沉进算法plugin、估算cash或直提broker；
-- K6-C关闭generic per-command V2 authority aggregate、writer/readback、execution projection hash、0/1/N command materializer、同步reject和restart/reconcile；product root明确拒绝K4/K5 V1 shadow receipt；不得按algo code分支或复用单command receipt冒充multi-command closure；
+- **第一优先级 K6-C0/C1**：先以successor migration/contract补齐strict command_json、dependent-BUY V2 proceeds/ledger/coordination、`DEFER_DEPENDENT_BUY` mapping lifecycle，再实现generic per-command V3 authority aggregate、0/1/N MATERIALIZE/REJECT/DEFER、terminal no-broker reject outcome和restart/reconcile；product root明确拒绝K4/K5 V1 shadow receipt、K6-A dependent-BUY V1和hash-only product authority V2，不得按algo code分支或复用单command receipt冒充multi-command closure；
+- **第二优先级 K6-B**：实现独立durable dependent-BUY coordinator，严格读取K6-C deferred authority item、qmt strategy ledger settled cash、SELL TRADE/ORDER terminal/ACCOUNT/EOD lineage；release只把同一 original command id 从deferred mapping原子推进到现有K2 outbox，不另造event/transition/command，不下沉进算法plugin、不估算cash或直提broker；
 - K6-D以durable route cutover receipt冻结new-instance唯一KERNEL_V2 owner，旧实例只drain；退役同步timer for-loop、legacy adapter产品调用与dependent-BUY direct retry，完成static/runtime unique-route proof；禁止dual route、legacy fallback或K6 state回交legacy；
 - 用户分别授权后才可执行production DDL/readback、config/binding与runtime activation；服务重启由用户执行；正常交易日必须覆盖single/multi、上午/午休/下午/EOD和dependent-BUY/outbox/callback/reconcile闭合；
-- source/DDL/config/binding/restart/runtime/normal-day evidence分开记录。K6-A/B/C/D预计合计21–30开发日，另加至少1个正常交易日观察；不能用观察时间或工期压缩验收范围。
+- source/DDL/config/binding/restart/runtime/normal-day evidence分开记录。剩余顺序固定为`K6-C0 -> K6-C1 -> K6-B -> K6-D`，K6-C未合入前不得宣称K6-B完整或并行修改共享蓝图；总工期按详细设计修订后的范围记录，不能用观察时间或工期压缩验收范围。
 
 总工程量：核心隔离约 45–66 人日；包含 exact façade、Iceberg/Stop、正式审计补齐的并发/失败语义与完整生产级验收约 61–90 人日。不得把估算转换为减少验收范围的理由。
 
@@ -1054,16 +1054,16 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-099` | direct/negative/DEV PostgreSQL/fresh-process/coverage/changed-files routing/F2验收可执行 |
 | `F-100` | source rollout/rollback、K6 prerequisite与source/production/runtime状态分离完整 |
 | `F-101` | K6 current facts、K1–K5复用、signal/execution/LocalSIM隔离、两个真实缺口与K6/non-goal边界完整 |
-| `F-102` | dependent-BUY coordination/dependency/trigger/ledger/decision strict schema、identity/hash、状态转换和bounds可直接实施 |
-| `F-103` | dependent-BUY candidate、SELL TRADE/ORDER/ACCOUNT/EOD触发、ledger cash authority、release/block/residual/late/restart语义精确 |
-| `F-104` | generic per-command V2 item/set/lifecycle/materialization schema、0/1/N、mixed reject、V1产品拒绝和writer/readback authority闭合 |
-| `F-105` | K6 additive表、composite FK/CHECK/UNIQUE/index/comment、pg_catalog fingerprint、preflight/forward/readback/guarded rollback可执行且不复制K2表 |
-| `F-106` | single-writer、lock order、CAS/fence、atomic release/materialization、commit-unknown、retry/restart/reconcile和no-double-release完整 |
+| `F-102` | dependent-BUY V2 proceeds/dependency/trigger/ledger/decision/coordination strict schema、identity/hash、状态转换、bounds及V1 product拒绝可直接实施 |
+| `F-103` | candidate、DEFER authority/mapping、SELL TRADE/ORDER/ACCOUNT/EOD、ledger cash authority、same-command release/block/residual/late/restart语义精确 |
+| `F-104` | generic per-command V3 command_json/item/set/lifecycle/materialization、0/1/N、materialize/reject/defer与writer/readback authority闭合 |
+| `F-105` | K6 additive表/列、deferred mapping status、composite FK/CHECK/UNIQUE/index/comment、pg_catalog fingerprint、successor migration/readback/guarded rollback完整且不复制K2表 |
+| `F-106` | single-writer、lock order、CAS/fence、atomic product transaction与same-command release、commit-unknown、retry/restart/reconcile和no-double-release完整 |
 | `F-107` | route cutover receipt、新实例唯一KERNEL_V2、旧实例drain、禁止dual route/fallback及rollback边界精确 |
 | `F-108` | legacy helper/direct dependent-BUY/synchronous timer/adapter产品route退役inventory、disposition与唯一route证据可执行 |
 | `F-109` | typed errors、bounded evidence、read-only diagnostics、低cardinality metrics、auto-clear alerts、retention和runbook完整且无人工门禁 |
 | `F-110` | direct/negative/DEV PostgreSQL/migration/concurrency/integration/route uniqueness/business parity/coverage/changed-files测试计划可执行 |
-| `F-111` | K6-A/B/C/D切片、依赖、工期、source/DDL/config/restart/runtime/normal-day状态分离与rollout/rollback完整 |
+| `F-111` | `K6-C0 -> K6-C1 -> K6-B -> K6-D`优先级、依赖、工期、source/DDL/config/restart/runtime/normal-day状态分离与rollout/rollback完整 |
 | `F-112` | DESIGN-COMPLIANCE-001、no simplification/silent error/business drift/unapproved gate及K6完成定义闭合 |
 
 ## 18. Design Acceptance Matrix / 设计验收矩阵
@@ -1129,11 +1129,11 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-099` | K5 detailed design §12 | coverage aggregate=`38 passed`；`python -m nox -s miniqmt_execution_runtime_l2`=`1127/31`；`python -m nox -s paper_v2_backend`=`1050/2/2` | implemented_verified_local | none |
 | `F-100` | K5 detailed design §13 | artifact: K5 detailed design、父蓝图、统一蓝图；PR #2978 / merge `4bf54cf2`、final required CI run `30640380170`，source/production/runtime状态分离 | implemented_verified | none |
 | `F-101` | K6 detailed design §0–§3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` scope/owner/no-diff matrix | design_ready | none |
-| `F-102` | K6 detailed design §4.1；`kernel_product_contracts.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py` strict/negative/typed-bounded readback、effect ordinal、authority-derived receipt；K6 final direct/DEV aggregate=`44 passed`；contracts line/branch=`90.68%/71.35%` | implemented_verified_local | none |
-| `F-103` | K6 detailed design §7 | target `backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy.py` full trigger/state/restart matrix | design_ready | none |
-| `F-104` | K6 detailed design §4.2、§8 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py` 0/1/N, mixed, V1 reject, readback drift | design_ready | none |
-| `F-105` | K6 detailed design §5；K6 migration triplet | `backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py` DEV PostgreSQL clean/reapply、zero-table stale function、catalog/function/comment drift、decision closure、partial-schema guarded rollback；catalog/function/LF hashes=`546a209d.../bcb0b57b.../4d5b6f25...` | implemented_verified_local | none |
-| `F-106` | K6 detailed design §6；`kernel_product_repository.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py` exact lease/current incarnation、trigger/ledger full evidence、decision-status closure、transaction/CAS/idempotency/mixed lineage/commit-unknown/readback drift；repository line/branch=`86.58%/70.35%` | implemented_verified_local | none |
+| `F-102` | K6 detailed §4.1；target `backend/services/miniqmt_execution_runtime/kernel_product_contracts.py` | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py -q` | design_ready | none |
+| `F-103` | K6 detailed §7 | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy.py -q` | design_ready | none |
+| `F-104` | K6 detailed §4.2、§8 | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py -q` | design_ready | none |
+| `F-105` | K6 detailed §5；K6-A immutable migration + K6-C0 successor | target `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_k6c_migration_postgres.py -q` | design_ready | none |
+| `F-106` | K6 detailed §6；target `backend/services/miniqmt_execution_runtime/kernel_product_repository.py` | target `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy_postgres.py -q` | design_ready | none |
 | `F-107` | K6 detailed design §4.3、§9.1、§9.3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` owner/route-generation/drain/rollback matrix | design_ready | none |
 | `F-108` | K6 detailed design §9.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_legacy_route_retirement.py` exact inventory + import/call-graph uniqueness | design_ready | none |
 | `F-109` | K6 detailed design §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_diagnostics.py`; artifact: `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
@@ -1147,13 +1147,13 @@ PR #2978 initial required CI run `30630489853` 进一步暴露 K4/K5 code-owned 
 
 | control | result | evidence |
 | --- | --- | --- |
-| no simplified delivery | pass | K4/K5 exact authority保持；K6详细设计闭合strict schema、DB/事务、dependent-BUY、0/1/N product authority、route cutover、retirement和正常交易日验收，且当前只声明design-ready，不把子集/POC/mock当实现完成 |
-| no silent error | pass | K6固定typed reason、bounded evidence、commit-unknown独立readback、V1 product拒绝、no partial materialization；既有Gateway/OMS reason不被catch-all覆盖 |
+| no simplified delivery | pass | K4/K5 exact authority保持；K6修订闭合command_json、V2 ledger/proceeds、MATERIALIZE/REJECT/DEFER、same-command release、DB事务、route cutover、retirement和正常交易日验收，且不把K6-A V1或设计修订冒充实现 |
+| no silent error | pass | K6固定typed reason、bounded evidence、terminal broker_called=false reject、commit-unknown独立readback、K4/K5 V1及K6-A V2 product拒绝、no partial materialization；既有Gateway/OMS reason不被catch-all覆盖 |
 | no business semantic drift | pass | signal/selection/package/target/side/quantity、五个算法、native B0、OMS/Gateway和LocalSIM保持不变；dependent-BUY只把既有结果语义迁入durable coordinator |
 | no unauthorized gates | pass | 只有真实session/ledger/authority/capability合同和分离的部署授权；不新增RBAC、审批、acknowledge、confirm-run、人工恢复、永久enable或stop gate |
 | no parallel product route | pass | K6只复用现有K2 transport/outbox/OMS/Gateway；cutover采用new-instance唯一KERNEL_V2与legacy drain，禁止dual route、fallback和K6 state回交legacy |
-| K5/K6 boundary | pass | K5保持shadow；K6 detailed design独立拥有dependent-BUY coordinator、generic per-command V2 authority/materializer、cutover/retirement，product root拒绝K4/K5 V1 receipt |
-| production state separation | pass | K2/K3/K4/K5 overall=`implemented_verified + merged`；K6 design=`design_ready + merged`（PR #2993 / merge `f2a7a23d`），K6-A=`implemented_verified + merged`（PR #3004 / merge `a59a9fc2`），K6-B/C/D=`not_started`；产品runtime未切换，DDL/DML/dependency/config/binding/broker/restart/runtime activation/normal-day observation全部为`noop/not_run` |
+| K5/K6 boundary | pass | K5保持shadow；K6 detailed design独立拥有dependent-BUY coordinator、generic per-command V3 authority/materializer、cutover/retirement，product root拒绝K4/K5 V1与K6-A hash-only V2 receipt |
+| production state separation | pass | K2/K3/K4/K5 overall=`implemented_verified + merged`；K6 base design与K6-A已合入，2026-08-02 implementation-readiness revision尚未source merge；K6-C/B/D=`not_started`且顺序为C0/C1->B->D；产品runtime未切换，DDL/DML/dependency/config/binding/broker/restart/runtime activation/normal-day observation全部为`noop/not_run` |
 
 ## 20. Definition of Done / 完成定义
 
