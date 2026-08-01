@@ -38,6 +38,7 @@ from backend.services.model_store import ModelStoreService, PredictionStoreError
 from backend.services.multi_alpha.combiner import CombinerLeg, MultiAlphaCombiner, MultiAlphaCombinerError
 from backend.services.multi_alpha.orthogonality import MultiAlphaOrthogonalityError, normalize_prediction_frame
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError, PanelLegSpec
+from backend.services.quantevolver.config_composer import QE_STRATEGY_RUNTIME_HELPER_FILES
 
 
 COMBINE_BACKTEST_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
@@ -65,6 +66,8 @@ DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS = 45 * 60
 DEFAULT_READ_EXP_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_RUN_TIMEOUT_GRACE_SECONDS = 5 * 60
 DEFAULT_RUNTIME_TEMPLATE_COPY_TIMEOUT_SECONDS = 15 * 60
+_AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_SECTOR_RISK_OVERLAY_MODES = frozenset({"none", "entry_gate", "bounded_de_risk", "exit_reentry"})
 RUNTIME_EXTERNAL_DATA_LINK_NAMES = frozenset(
     {
         "bak_basic.h5",
@@ -342,6 +345,11 @@ def prepare_pred_backtest_workspace(*, workspace: Path, backtest_config: Mapping
         else:
             _copy_runtime_template_native(src=src, workspace=workspace, backtest_config=backtest_config)
 
+    _refresh_sector_risk_overlay_runtime_assets(
+        workspace=workspace,
+        backtest_config=backtest_config,
+    )
+
     missing = [name for name in _required_runtime_files() if not (workspace / name).exists()]
     if missing:
         raise MultiAlphaCombineBacktestError(
@@ -397,6 +405,62 @@ def _runtime_template_source(*, backtest_config: Mapping[str, Any], workspace: P
             context={"runtime_template_dir": str(src), "workspace": str(workspace) if workspace is not None else None},
         )
     return src
+
+
+def _refresh_sector_risk_overlay_runtime_assets(
+    *,
+    workspace: Path,
+    backtest_config: Mapping[str, Any],
+) -> None:
+    """Overlay current strategy helpers after copying a frozen runtime template.
+
+    A multi-alpha retry intentionally reuses its frozen qrun template, but the
+    template is not authoritative for the strategy implementation selected by
+    the new request.  Without this post-copy overlay an old template can
+    silently replace the current sector-risk wrapper and omit its dedicated V2
+    parents.  Only sector-overlay runs take this path; other frozen runtimes are
+    left byte-for-byte unchanged.
+    """
+
+    strategy_kwargs = backtest_config.get("strategy_kwargs")
+    if not isinstance(strategy_kwargs, Mapping):
+        return
+    raw_enabled = strategy_kwargs.get("sector_risk_overlay_enabled")
+    enabled = (
+        raw_enabled
+        if isinstance(raw_enabled, bool)
+        else str(raw_enabled or "").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    mode = str(strategy_kwargs.get("sector_risk_overlay_mode") or "").strip().lower()
+    if not enabled and mode not in _SECTOR_RISK_OVERLAY_MODES - {"none"}:
+        return
+
+    scripts_dir = _AISTOCK_PROJECT_ROOT / "scripts"
+    missing = [
+        helper_name
+        for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES
+        if not (scripts_dir / helper_name).is_file()
+    ]
+    if missing:
+        raise MultiAlphaCombineBacktestError(
+            "current sector-risk runtime helper set is incomplete",
+            reason_code="pred_backtest_sector_risk_runtime_asset_missing",
+            context={
+                "workspace": str(workspace),
+                "scripts_dir": str(scripts_dir),
+                "missing": missing,
+            },
+        )
+    for helper_name in QE_STRATEGY_RUNTIME_HELPER_FILES:
+        shutil.copy2(scripts_dir / helper_name, workspace / helper_name)
+    logger.info(
+        "Refreshed sector-risk pred-backtest runtime helpers",
+        extra={
+            "workspace": str(workspace),
+            "mode": mode or None,
+            "helper_files": list(QE_STRATEGY_RUNTIME_HELPER_FILES),
+        },
+    )
 
 
 def _required_runtime_files() -> tuple[str, ...]:

@@ -290,6 +290,62 @@ def test_prepare_runtime_template_routes_unreadable_wsl_link_through_wsl_copy(
     assert (workspace / "bak_basic.h5").read_text(encoding="utf-8") == "test stand-in"
 
 
+def test_prepare_runtime_template_refreshes_current_sector_overlay_helpers(tmp_path: Path) -> None:
+    template = _runtime_template(tmp_path)
+    stale_wrapper = "from qe_suspend_filter_score_weighted_strategy import ScoreWeightedTopkStrategyV2\n"
+    (template / "qe_sector_risk_overlay_strategy.py").write_text(stale_wrapper, encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    combine_backtest_module.prepare_pred_backtest_workspace(
+        workspace=workspace,
+        backtest_config={
+            "runtime_template_dir": str(template),
+            "strategy_kwargs": {
+                "sector_risk_overlay_enabled": True,
+                "sector_risk_overlay_mode": "bounded_de_risk",
+            },
+        },
+    )
+
+    scripts_dir = combine_backtest_module._AISTOCK_PROJECT_ROOT / "scripts"
+    for helper_name in combine_backtest_module.QE_STRATEGY_RUNTIME_HELPER_FILES:
+        assert (workspace / helper_name).read_bytes() == (scripts_dir / helper_name).read_bytes()
+    wrapper = (workspace / "qe_sector_risk_overlay_strategy.py").read_text(encoding="utf-8")
+    assert "from score_weighted_strategy_v2 import ScoreWeightedTopkStrategyV2" in wrapper
+    assert "from score_weighted_strategy_v2_capacity_v1 import" in wrapper
+    assert wrapper != stale_wrapper
+
+
+def test_prepare_runtime_template_fails_closed_when_current_overlay_helper_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    template = _runtime_template(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(
+        combine_backtest_module,
+        "QE_STRATEGY_RUNTIME_HELPER_FILES",
+        (*combine_backtest_module.QE_STRATEGY_RUNTIME_HELPER_FILES, "missing_overlay_parent.py"),
+    )
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        combine_backtest_module.prepare_pred_backtest_workspace(
+            workspace=workspace,
+            backtest_config={
+                "runtime_template_dir": str(template),
+                "strategy_kwargs": {
+                    "sector_risk_overlay_enabled": True,
+                    "sector_risk_overlay_mode": "exit_reentry",
+                },
+            },
+        )
+
+    assert excinfo.value.reason_code == "pred_backtest_sector_risk_runtime_asset_missing"
+    assert excinfo.value.context["missing"] == ["missing_overlay_parent.py"]
+
+
 def test_default_local_pred_backtest_commands_use_configured_wsl_on_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
