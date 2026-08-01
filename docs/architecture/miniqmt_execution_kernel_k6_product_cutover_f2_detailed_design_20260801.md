@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K6 产品切换与旧路线退役 F2 详细设计
 
-> Feature tier：`F2`。原 design source 已通过 PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a` 合入，K6-A 已通过 PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401` 完成 `implemented_verified + merged`。2026-08-02 implementation-readiness revision=`design_revision_ready_pending_source_merge`：实施优先级固定为 `K6-C0/C1 -> K6-B -> K6-D`；K6-C/B/D 仍为 `not_started`，K6 overall=`implementation_in_progress`，不得把本次设计修订记为代码实现。
+> Feature tier：`F2`。原 design source 已通过 PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a` 合入，K6-A 已通过 PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401` 完成 `implemented_verified + merged`。2026-08-02 implementation-readiness revision 已通过 PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7` 完成 `design_revision_ready + merged`：实施优先级固定为 `K6-C0/C1 -> K6-B -> K6-D`；K6-C/B/D 仍为 `not_started`，K6 overall=`implementation_in_progress`，不得把本次设计修订记为代码实现。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -674,9 +674,9 @@ K6 implementation完成定义：K6-A/B/C/D全部 `implemented_verified + merged`
 当前状态：
 
 - K1/K2/K3/K4/K5 overall：`implemented_verified + merged`。
-- K6 detailed design base：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）；2026-08-02 implementation-readiness revision：`design_revision_ready_pending_source_merge`，source merge尚未发生。
+- K6 detailed design base：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）；2026-08-02 implementation-readiness revision：`design_revision_ready + merged`（PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7`）。
 - revision review evidence：三份F2 validator=`12/12,70/70,112/112`且warnings=0；classifier=`docs_fast_update`、backend/frontend/Go plans均未选择、`unmapped_code_files=[]`；L0=0 finding；module registry=`8 passed,14/14 mapped`。
 - K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green；其dependent-BUY V1与product authority V2 base不等于本修订新增的dependent-BUY V2/product authority V3。K6-C/B/D：`not_started`；下一优先级K6-C0/C1，之后K6-B；K6 overall：`implementation_in_progress`。
 - product runtime：`not_switched`。
-- `source_merge=merged_pr_2993`；`close_sync=not_applicable_feature`；state-sync/root sync/cleanup分别记录。
+- `base_design_source_merge=merged_pr_2993`；`revision_source_merge=merged_pr_3024`；`close_sync=not_applicable_feature`；state-sync/root sync/cleanup分别记录。
 - production DDL/DML/dependency/config/binding/broker/restart/runtime activation/normal trading day observation：全部 `noop/not_run`。
