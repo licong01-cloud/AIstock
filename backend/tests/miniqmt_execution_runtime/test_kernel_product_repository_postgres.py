@@ -14,6 +14,8 @@ from backend.services.miniqmt_execution_runtime.kernel_product_contracts import 
     DependentBuyReleaseDecisionV1,
     DependentBuySellDependencyV1,
     DependentBuyDependencyStatusV1,
+    DependentBuyTriggerEventRefV1,
+    DependentBuyTriggerTypeV1,
     ProductCommandAuthorityItemV2,
     ProductCommandAuthoritySetV2,
     ProductCommandDispositionV2,
@@ -65,6 +67,7 @@ def _coordination(
     last_decision_sha256: str | None = None,
     row_version: int = 1,
     leased: bool = False,
+    lease_epoch: int = 1,
 ) -> DependentBuyCoordinationV1:
     return DependentBuyCoordinationV1.create(
         runtime_id="runtime_constraints",
@@ -84,26 +87,48 @@ def _coordination(
         row_version=row_version,
         lease_worker_id="worker_k6" if leased else None,
         lease_process_incarnation_id="process_k6" if leased else None,
-        lease_epoch=1 if leased else 0,
+        lease_epoch=lease_epoch if leased else 0,
         lease_expires_at_utc=NOW + timedelta(minutes=1) if leased else None,
         created_at_utc=NOW,
         updated_at_utc=NOW + timedelta(seconds=row_version - 1),
     )
 
 
-def _ledger() -> DependentBuyLedgerObservationV1:
+def _ledger(
+    *,
+    runtime_id: str = "runtime_constraints",
+    required_cash: str = "800",
+    ledger_as_of_utc: datetime = NOW,
+    trade_refs: tuple[str, ...] = (),
+    cash_refs: tuple[str, ...] = (),
+) -> DependentBuyLedgerObservationV1:
     return DependentBuyLedgerObservationV1.create(
-        runtime_id="runtime_constraints",
+        runtime_id=runtime_id,
         strategy_id="strategy_k6",
         trade_date="2026-07-25",
         virtual_account_id="account_k6",
         ledger_row_version=1,
-        ledger_as_of_utc=NOW,
+        ledger_as_of_utc=ledger_as_of_utc,
         available_cash="100",
-        required_cash="800",
-        ordered_settled_trade_refs=(),
-        ordered_cash_ledger_refs=(),
+        required_cash=required_cash,
+        ordered_settled_trade_refs=trade_refs,
+        ordered_cash_ledger_refs=cash_refs,
         freshness_session_authority_sha256=_sha("e"),
+    )
+
+
+def _trigger(
+    *, runtime_id: str = "runtime_constraints", observed_at_utc: datetime = NOW
+) -> DependentBuyTriggerEventRefV1:
+    return DependentBuyTriggerEventRefV1.create(
+        runtime_id=runtime_id,
+        event_id="event_constraints",
+        event_type=DependentBuyTriggerTypeV1.ACCOUNT_REFRESHED,
+        event_sequence=1,
+        source_fact_type="qmt_strategy_ledger.virtual_account",
+        source_fact_id="account_k6",
+        source_fact_sha256=_sha("4"),
+        observed_at_utc=observed_at_utc,
     )
 
 
@@ -249,6 +274,7 @@ def test_k6_repository_public_surface_is_complete() -> None:
         "read_dependent_buy_coordination_v1",
         "append_dependent_buy_decision_v1",
         "read_dependent_buy_decision_v1",
+        "read_dependent_buy_decision_evidence_v1",
         "write_product_command_authority_set_v2",
         "read_product_command_authority_set_v2",
         "write_product_route_cutover_v1",
@@ -283,6 +309,8 @@ def test_k6_repository_rejects_non_carrier_writes_before_database() -> None:
         repository.append_dependent_buy_decision_v1(  # type: ignore[arg-type]
             coordination={},
             decision={},
+            trigger_ref={},
+            ledger_observation={},
         )
     with pytest.raises(TypeError, match="authority"):
         repository.write_product_command_authority_set_v2({})  # type: ignore[arg-type]
@@ -308,11 +336,12 @@ def test_k6_repository_writer_readback_cas_and_drift_on_dev_postgres() -> None:
         assert repository.read_dependent_buy_coordination_v1(initial.coordination_id) == initial
 
         ledger = _ledger()
+        trigger = _trigger()
         decision = DependentBuyReleaseDecisionV1.create(
             coordination_id=initial.coordination_id,
             decision_sequence=1,
             previous_decision_sha256=None,
-            trigger_ref_sha256=_sha("1"),
+            trigger_ref_sha256=trigger.trigger_ref_sha256,
             decision=DependentBuyDecisionV1.WAIT,
             reason_code="MINIQMT_K6_COORDINATION_CASH_STILL_INSUFFICIENT",
             ledger_observation_sha256=ledger.observation_sha256,
@@ -328,10 +357,25 @@ def test_k6_repository_writer_readback_cas_and_drift_on_dev_postgres() -> None:
             row_version=2,
             leased=True,
         )
-        result = repository.append_dependent_buy_decision_v1(coordination=successor, decision=decision)
+        result = repository.append_dependent_buy_decision_v1(
+            coordination=successor,
+            decision=decision,
+            trigger_ref=trigger,
+            ledger_observation=ledger,
+        )
         assert result["coordination"] == successor
         assert result["decision"] == decision
-        assert repository.append_dependent_buy_decision_v1(coordination=successor, decision=decision) == result
+        assert result["trigger_ref"] == trigger
+        assert result["ledger_observation"] == ledger
+        assert (
+            repository.append_dependent_buy_decision_v1(
+                coordination=successor,
+                decision=decision,
+                trigger_ref=trigger,
+                ledger_observation=ledger,
+            )
+            == result
+        )
 
         authority = _mixed_authority()
         assert repository.write_product_command_authority_set_v2(authority) == authority
@@ -398,6 +442,184 @@ def test_k6_repository_writer_readback_cas_and_drift_on_dev_postgres() -> None:
             repository.read_product_route_owner_v1(
                 runtime_id="runtime_constraints", binding_id="binding_k6", trade_date="2026-07-25"
             )
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_k6_repository_rejects_decision_status_drift_and_forged_lease_epoch_on_dev_postgres() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K6 DEV PostgreSQL fixture")
+    schema = _fixture_schema().replace("k2a_", "k6fence_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            _seed_schema(cur, schema)
+        repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+        initial = _coordination()
+        repository.write_dependent_buy_coordination_v1(initial)
+        trigger = _trigger()
+        ledger = _ledger()
+
+        blocked_decision = DependentBuyReleaseDecisionV1.create(
+            coordination_id=initial.coordination_id,
+            decision_sequence=1,
+            previous_decision_sha256=None,
+            trigger_ref_sha256=trigger.trigger_ref_sha256,
+            decision=DependentBuyDecisionV1.BLOCK,
+            reason_code="MINIQMT_K6_COORDINATION_PROCEEDS_UNAVAILABLE",
+            ledger_observation_sha256=ledger.observation_sha256,
+            ordered_dependency_sha256s=(_dependency().dependency_sha256,),
+            decided_at_utc=NOW,
+            worker_id="worker_k6",
+            process_incarnation_id="process_k6",
+            lease_epoch=1,
+        )
+        waiting_successor = _coordination(
+            decision_sequence=1,
+            last_decision_sha256=blocked_decision.decision_sha256,
+            row_version=2,
+            leased=True,
+        )
+        with pytest.raises(KernelRepositoryConflict, match="decision kind"):
+            repository.append_dependent_buy_decision_v1(
+                coordination=waiting_successor,
+                decision=blocked_decision,
+                trigger_ref=trigger,
+                ledger_observation=ledger,
+            )
+
+        forged_epoch_decision = DependentBuyReleaseDecisionV1.create(
+            coordination_id=initial.coordination_id,
+            decision_sequence=1,
+            previous_decision_sha256=None,
+            trigger_ref_sha256=trigger.trigger_ref_sha256,
+            decision=DependentBuyDecisionV1.WAIT,
+            reason_code="MINIQMT_K6_COORDINATION_CASH_STILL_INSUFFICIENT",
+            ledger_observation_sha256=ledger.observation_sha256,
+            ordered_dependency_sha256s=(_dependency().dependency_sha256,),
+            decided_at_utc=NOW,
+            worker_id="worker_k6",
+            process_incarnation_id="process_k6",
+            lease_epoch=7,
+        )
+        forged_successor = _coordination(
+            decision_sequence=1,
+            last_decision_sha256=forged_epoch_decision.decision_sha256,
+            row_version=2,
+            leased=True,
+            lease_epoch=7,
+        )
+        with pytest.raises(KernelRepositoryConflict, match="first coordination lease epoch"):
+            repository.append_dependent_buy_decision_v1(
+                coordination=forged_successor,
+                decision=forged_epoch_decision,
+                trigger_ref=trigger,
+                ledger_observation=ledger,
+            )
+        assert repository.read_dependent_buy_coordination_v1(initial.coordination_id) == initial
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_k6_repository_rejects_incomplete_trigger_and_ledger_evidence_on_dev_postgres() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K6 DEV PostgreSQL fixture")
+    schema = _fixture_schema().replace("k2a_", "k6evidence_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            _seed_schema(cur, schema)
+        repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+        initial = _coordination()
+        repository.write_dependent_buy_coordination_v1(initial)
+        valid_trigger = _trigger()
+        valid_ledger = _ledger()
+
+        def decision_for(
+            trigger_ref: DependentBuyTriggerEventRefV1,
+            ledger_observation: DependentBuyLedgerObservationV1,
+            *,
+            trigger_sha256: str | None = None,
+            ledger_sha256: str | None = None,
+        ) -> DependentBuyReleaseDecisionV1:
+            return DependentBuyReleaseDecisionV1.create(
+                coordination_id=initial.coordination_id,
+                decision_sequence=1,
+                previous_decision_sha256=None,
+                trigger_ref_sha256=trigger_sha256 or trigger_ref.trigger_ref_sha256,
+                decision=DependentBuyDecisionV1.WAIT,
+                reason_code="MINIQMT_K6_COORDINATION_CASH_STILL_INSUFFICIENT",
+                ledger_observation_sha256=ledger_sha256 or ledger_observation.observation_sha256,
+                ordered_dependency_sha256s=(_dependency().dependency_sha256,),
+                decided_at_utc=NOW,
+                worker_id="worker_k6",
+                process_incarnation_id="process_k6",
+                lease_epoch=1,
+            )
+
+        wrong_runtime_trigger = _trigger(runtime_id="runtime_other")
+        wrong_runtime_ledger = _ledger(runtime_id="runtime_other")
+        stale_ledger = _ledger(ledger_as_of_utc=NOW - timedelta(seconds=1))
+        wrong_refs_ledger = _ledger(trade_refs=(_sha("5"),), cash_refs=(_sha("6"),))
+        cases = (
+            (
+                decision_for(valid_trigger, valid_ledger, trigger_sha256=_sha("7")),
+                valid_trigger,
+                valid_ledger,
+                "trigger reference",
+            ),
+            (
+                decision_for(valid_trigger, valid_ledger, ledger_sha256=_sha("8")),
+                valid_trigger,
+                valid_ledger,
+                "ledger hash",
+            ),
+            (
+                decision_for(wrong_runtime_trigger, valid_ledger),
+                wrong_runtime_trigger,
+                valid_ledger,
+                "trigger runtime",
+            ),
+            (
+                decision_for(valid_trigger, wrong_runtime_ledger),
+                valid_trigger,
+                wrong_runtime_ledger,
+                "ledger owner",
+            ),
+            (
+                decision_for(valid_trigger, stale_ledger),
+                valid_trigger,
+                stale_ledger,
+                "predates trigger",
+            ),
+            (
+                decision_for(valid_trigger, wrong_refs_ledger),
+                valid_trigger,
+                wrong_refs_ledger,
+                "settled facts",
+            ),
+        )
+        for decision, trigger_ref, ledger_observation, message in cases:
+            successor = _coordination(
+                decision_sequence=1,
+                last_decision_sha256=decision.decision_sha256,
+                row_version=2,
+                leased=True,
+            )
+            with pytest.raises(KernelRepositoryConflict, match=message):
+                repository.append_dependent_buy_decision_v1(
+                    coordination=successor,
+                    decision=decision,
+                    trigger_ref=trigger_ref,
+                    ledger_observation=ledger_observation,
+                )
+        assert repository.read_dependent_buy_coordination_v1(initial.coordination_id) == initial
     finally:
         with conn.cursor() as cur:
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")

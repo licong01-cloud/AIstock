@@ -15,6 +15,7 @@ from backend.services.miniqmt_execution_runtime.kernel_product_contracts import 
     DependentBuySellDependencyV1,
     DependentBuyTriggerEventRefV1,
     DependentBuyTriggerTypeV1,
+    KernelProductContractError,
     ProductCommandAggregateDispositionV2,
     ProductCommandAuthorityItemV2,
     ProductCommandAuthoritySetV2,
@@ -26,6 +27,8 @@ from backend.services.miniqmt_execution_runtime.kernel_product_contracts import 
     ProductRouteCutoverReceiptV1,
     ProductRouteOwnerV1,
     ProductRouteOwnerKindV1,
+    hash_hex_v1,
+    validate_kernel_product_payload_v1,
 )
 
 
@@ -237,42 +240,111 @@ def test_product_command_item_rejects_fake_materialization_and_reject_carriers()
 
 
 def test_product_lifecycle_and_materialization_receipts_are_factory_hash_closed() -> None:
+    authority_item = _authority_item(ordinal=0, command_id="command_k6")
+    authority = ProductCommandAuthoritySetV2.create(
+        runtime_id="runtime_k6",
+        algo_instance_id="algo_buy",
+        event_id="event_k6",
+        delivery_id="delivery_k6",
+        transition_id="transition_k6",
+        catalog_sha256=_sha("b"),
+        creation_binding_sha256=_sha("c"),
+        facade_conformance_set_sha256=_sha("d"),
+        execution_projection_set_sha256=_sha("4"),
+        transition_receipt_sha256=_sha("e"),
+        ordered_items=(authority_item,),
+    )
     item = ProductCommandLifecycleProjectionItemV2.create(
-        authority_item_sha256=_sha("a"),
+        authority_item_sha256=authority_item.item_sha256,
+        effect_ordinal=0,
         command_id="command_k6",
-        mapping_id="mapping_k6",
+        mapping_id="mapping_command_k6",
         outbox_id="command_k6",
-        child_order_id="child_k6",
+        child_order_id="child_command_k6",
         lifecycle_status=ProductLifecycleStatusV2.PENDING,
         last_committed_stage="K2_OUTBOX_COMMITTED",
     )
     projection = ProductCommandLifecycleProjectionV2.create(
-        authority_set_sha256=_sha("b"),
+        authority_set_sha256=authority.authority_set_sha256,
         ordered_items=(item,),
     )
+    projection.validate_against_authority_v2(authority)
     receipt = ProductMaterializationReceiptV2.create(
-        authority_set_sha256=_sha("b"),
-        execution_projection_set_sha256=_sha("c"),
-        ordered_mapping_ids=("mapping_k6",),
-        ordered_outbox_ids=("command_k6",),
-        ordered_child_order_ids=("child_k6",),
-        zero_command=False,
+        authority=authority,
         repository_transaction_id="tx_k6",
         independent_readback_sha256=_sha("d"),
     )
+    receipt.validate_against_authority_v2(authority)
     assert ProductCommandLifecycleProjectionV2.model_validate_json(projection.model_dump_json()) == projection
     assert ProductMaterializationReceiptV2.model_validate_json(receipt.model_dump_json()) == receipt
-    with pytest.raises(ValidationError, match="unique"):
-        ProductMaterializationReceiptV2.create(
-            authority_set_sha256=_sha("b"),
-            execution_projection_set_sha256=_sha("c"),
-            ordered_mapping_ids=("mapping_k6", "mapping_k6"),
-            ordered_outbox_ids=("command_a", "command_b"),
-            ordered_child_order_ids=("child_a", "child_b"),
-            zero_command=False,
-            repository_transaction_id="tx_k6",
-            independent_readback_sha256=_sha("d"),
+
+
+def test_product_lifecycle_and_materialization_reject_cross_permutation() -> None:
+    authority_items = (
+        _authority_item(ordinal=0, command_id="command_a"),
+        _authority_item(ordinal=1, command_id="command_b"),
+    )
+    authority = ProductCommandAuthoritySetV2.create(
+        runtime_id="runtime_k6",
+        algo_instance_id="algo_buy",
+        event_id="event_k6",
+        delivery_id="delivery_k6",
+        transition_id="transition_k6",
+        catalog_sha256=_sha("b"),
+        creation_binding_sha256=_sha("c"),
+        facade_conformance_set_sha256=_sha("d"),
+        execution_projection_set_sha256=_sha("4"),
+        transition_receipt_sha256=_sha("e"),
+        ordered_items=authority_items,
+    )
+    reversed_items = tuple(
+        ProductCommandLifecycleProjectionItemV2.create(
+            authority_item_sha256=item.item_sha256,
+            effect_ordinal=item.effect_ordinal,
+            command_id=item.command_id,
+            mapping_id=item.mapping_id,
+            outbox_id=item.outbox_id,
+            child_order_id=item.child_order_id,
+            lifecycle_status=ProductLifecycleStatusV2.PENDING,
+            last_committed_stage="K2_OUTBOX_COMMITTED",
         )
+        for item in reversed(authority_items)
+    )
+    with pytest.raises(ValidationError, match="contiguous authority ordinals"):
+        ProductCommandLifecycleProjectionV2.create(
+            authority_set_sha256=authority.authority_set_sha256,
+            ordered_items=reversed_items,
+        )
+    receipt = ProductMaterializationReceiptV2.create(
+        authority=authority,
+        repository_transaction_id="tx_k6",
+        independent_readback_sha256=_sha("d"),
+    )
+    forged = ProductMaterializationReceiptV2(
+        **receipt.model_dump(exclude={"ordered_outbox_ids", "receipt_sha256"}),
+        ordered_outbox_ids=tuple(reversed(receipt.ordered_outbox_ids)),
+        receipt_sha256=hash_hex_v1(
+            "miniqmt_product_materialization_receipt_v2",
+            receipt.model_dump(exclude={"ordered_outbox_ids", "receipt_sha256"})
+            | {"ordered_outbox_ids": tuple(reversed(receipt.ordered_outbox_ids))},
+        ),
+    )
+    with pytest.raises(KernelProductContractError) as exc_info:
+        forged.validate_against_authority_v2(authority)
+    assert exc_info.value.reason_code == "MINIQMT_K6_PRODUCT_MATERIALIZATION_IDENTITY_DRIFT"
+
+
+def test_durable_contract_readback_uses_bounded_typed_failure() -> None:
+    with pytest.raises(KernelProductContractError) as exc_info:
+        validate_kernel_product_payload_v1(
+            ProductRouteOwnerV1,
+            {"schema_version": "wrong", "runtime_id": []},
+            stage="REVIEW_READBACK",
+        )
+    assert exc_info.value.reason_code == "MINIQMT_K6_CONTRACT_INVALID"
+    assert exc_info.value.context["stage"] == "REVIEW_READBACK"
+    assert exc_info.value.context["failure_count"] >= 1
+    assert len(exc_info.value.context["failures"]) <= 256
 
 
 def test_route_receipt_and_owner_use_immutable_receipt_plus_cas_pointer() -> None:
@@ -399,6 +471,7 @@ def test_k6_product_projection_and_route_negative_matrix_is_fail_loud() -> None:
     with pytest.raises(ValidationError, match="materialized.*identities"):
         ProductCommandLifecycleProjectionItemV2.create(
             authority_item_sha256=_sha("a"),
+            effect_ordinal=0,
             command_id="cmd_a",
             lifecycle_status=ProductLifecycleStatusV2.PENDING,
             last_committed_stage="K2_OUTBOX_COMMITTED",
@@ -406,6 +479,7 @@ def test_k6_product_projection_and_route_negative_matrix_is_fail_loud() -> None:
     with pytest.raises(ValidationError, match="ACKED"):
         ProductCommandLifecycleProjectionItemV2.create(
             authority_item_sha256=_sha("a"),
+            effect_ordinal=0,
             command_id="cmd_a",
             mapping_id="mapping_a",
             outbox_id="cmd_a",
@@ -414,17 +488,11 @@ def test_k6_product_projection_and_route_negative_matrix_is_fail_loud() -> None:
             last_committed_stage="BROKER_CALLBACK",
             broker_called=False,
         )
-    with pytest.raises(TypeError, match="repository-owned"):
+    with pytest.raises(TypeError, match="authority"):
         ProductMaterializationReceiptV2.create(
-            authority_set_sha256=_sha("b"),
-            execution_projection_set_sha256=_sha("c"),
-            ordered_mapping_ids=(),
-            ordered_outbox_ids=(),
-            ordered_child_order_ids=(),
-            zero_command=True,
+            authority={},  # type: ignore[arg-type]
             repository_transaction_id="tx_k6",
             independent_readback_sha256=_sha("d"),
-            commit_outcome="PENDING",
         )
     receipt = ProductRouteCutoverReceiptV1.create(
         runtime_id="runtime_k6",

@@ -6,26 +6,30 @@ materialize commands, select a product route, or call a broker.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 import hashlib
 from typing import Any
 
 import psycopg2.extras
 
 from .kernel_product_contracts import (
+    DependentBuyCoordinationStatusV1,
     DependentBuyCoordinationV1,
+    DependentBuyDecisionV1,
+    DependentBuyLedgerObservationV1,
     DependentBuyReleaseDecisionV1,
+    DependentBuyTriggerEventRefV1,
     ProductCommandAuthorityItemV2,
     ProductCommandAuthoritySetV2,
     ProductRouteCutoverReceiptV1,
     ProductRouteOwnerKindV1,
     ProductRouteOwnerV1,
+    validate_kernel_product_payload_v1,
 )
 from .kernel_repository_common import (
     KernelRepositoryConflict,
     KernelRepositorySchemaError,
     _json,
-    _model_from_json,
     _row_json,
 )
 from .kernel_repository_projection import _assert_scalar_columns
@@ -40,8 +44,8 @@ K6_TABLES = (
     "execution_product_route_cutover",
     "execution_product_route_owner",
 )
-K6_CATALOG_SHA256 = "f9985b5c93aae9655d78179cf39e9ffd840ba095d1a91a6a34d0186beafbf198"
-K6_CATALOG_FUNCTION_BODY_SHA256 = "02b6e4ba5fb9accc6f01848b61a21f728f3b37c37862978db5f38060e7b16129"
+K6_CATALOG_SHA256 = "546a209dc2f8721ccee8b5e905117788486307147dfb4fc6bc396842f5cf84ad"
+K6_CATALOG_FUNCTION_BODY_SHA256 = "bcb0b57b1cb425f4eb3d34b2ce5ca24c9f430986665871384482dfc056f5628a"
 
 
 def _strict_identity(value: Any, *, field_name: str) -> str:
@@ -69,6 +73,10 @@ def _strict_trade_date(value: Any) -> date:
     if parsed.isoformat() != value:
         raise ValueError("trade_date must be canonical YYYY-MM-DD")
     return parsed
+
+
+def _read_k6_model(model_type: Any, value: dict[str, Any], *, stage: str) -> Any:
+    return validate_kernel_product_payload_v1(model_type, value, stage=stage)
 
 
 _K6_CATALOG_PAYLOAD_SQL = """
@@ -126,7 +134,7 @@ WITH target_tables(relname) AS (
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
     WHERE n.nspname='qmt_strategy' AND p.proname IN (
         'miniqmt_k6_reject_immutable_mutation','miniqmt_k6_validate_route_owner',
-        'miniqmt_k6_validate_coordination_update'
+        'miniqmt_k6_validate_coordination_update','miniqmt_k6_validate_decision_closure'
     )
 ), canonical_catalog AS (
     SELECT coalesce(jsonb_agg(item ORDER BY sort_key),'[]'::jsonb)::TEXT AS payload FROM catalog_items
@@ -195,6 +203,17 @@ def _decision_projection(value: DependentBuyReleaseDecisionV1) -> dict[str, Any]
         "process_incarnation_id": value.process_incarnation_id,
         "lease_epoch": value.lease_epoch,
         "decision_sha256": value.decision_sha256,
+    }
+
+
+def _decision_evidence_projection(
+    trigger_ref: DependentBuyTriggerEventRefV1,
+    ledger_observation: DependentBuyLedgerObservationV1,
+) -> dict[str, Any]:
+    return {
+        "trigger_event_id": trigger_ref.event_id,
+        "ledger_virtual_account_id": ledger_observation.virtual_account_id,
+        "ledger_row_version": ledger_observation.ledger_row_version,
     }
 
 
@@ -300,10 +319,6 @@ class KernelProductRepositoryMixin:
                 )
                 definition_row = cur.fetchone()
         function_value = None if function_row is None else function_row["catalog_sha256"]
-        if independent != K6_CATALOG_SHA256 or function_value != independent:
-            raise KernelRepositorySchemaError(
-                f"K6 catalog fingerprint mismatch: expected={K6_CATALOG_SHA256} independent={independent} function={function_value}"
-            )
         if definition_row is None:
             raise KernelRepositorySchemaError("K6 catalog fingerprint function definition is missing")
         normalized_body = (
@@ -324,6 +339,10 @@ class KernelProductRepositoryMixin:
                 "K6 catalog fingerprint function definition drift: "
                 f"metadata={metadata} expected_body={K6_CATALOG_FUNCTION_BODY_SHA256} actual_body={body_sha256}"
             )
+        if independent != K6_CATALOG_SHA256 or function_value != independent:
+            raise KernelRepositorySchemaError(
+                f"K6 catalog fingerprint mismatch: expected={K6_CATALOG_SHA256} independent={independent} function={function_value}"
+            )
         return {table: True for table in K6_TABLES}
 
     def read_dependent_buy_coordination_v1(self, coordination_id: str) -> DependentBuyCoordinationV1:
@@ -343,10 +362,18 @@ class KernelProductRepositoryMixin:
                     (coordination_id,),
                 )
                 dependency_rows = cur.fetchall()
-        coordination = _model_from_json(DependentBuyCoordinationV1, _row_json(row, "carrier_json"))
+        coordination = _read_k6_model(
+            DependentBuyCoordinationV1,
+            _row_json(row, "carrier_json"),
+            stage="DEPENDENT_BUY_COORDINATION_READBACK",
+        )
         _assert_scalar_columns(row, _coordination_projection(coordination), carrier_name="dependent_buy_coordination")
         dependencies = tuple(
-            _model_from_json(type(coordination.ordered_sell_dependencies[0]), _row_json(item, "carrier_json"))
+            _read_k6_model(
+                type(coordination.ordered_sell_dependencies[0]),
+                _row_json(item, "carrier_json"),
+                stage="DEPENDENT_BUY_DEPENDENCY_READBACK",
+            )
             for item in dependency_rows
         )
         for item, dependency in zip(dependency_rows, dependencies, strict=True):
@@ -370,9 +397,10 @@ class KernelProductRepositoryMixin:
                 )
                 existing_coordination_row = cur.fetchone()
                 if existing_coordination_row is not None:
-                    existing_coordination = _model_from_json(
+                    existing_coordination = _read_k6_model(
                         DependentBuyCoordinationV1,
                         _row_json(existing_coordination_row, "carrier_json"),
+                        stage="DEPENDENT_BUY_COORDINATION_IDEMPOTENT_READBACK",
                     )
                     cur.execute(
                         "SELECT carrier_json FROM qmt_strategy.execution_dependent_buy_dependency "
@@ -381,7 +409,12 @@ class KernelProductRepositoryMixin:
                     )
                     dependency_model = type(coordination.ordered_sell_dependencies[0])
                     existing_dependencies = tuple(
-                        _model_from_json(dependency_model, _row_json(row, "carrier_json")) for row in cur.fetchall()
+                        _read_k6_model(
+                            dependency_model,
+                            _row_json(row, "carrier_json"),
+                            stage="DEPENDENT_BUY_DEPENDENCY_IDEMPOTENT_READBACK",
+                        )
+                        for row in cur.fetchall()
                     )
                     if (
                         existing_coordination != coordination
@@ -453,7 +486,7 @@ class KernelProductRepositoryMixin:
                 ),
             )
 
-    def read_dependent_buy_decision_v1(self, decision_id: str) -> DependentBuyReleaseDecisionV1:
+    def read_dependent_buy_decision_evidence_v1(self, decision_id: str) -> dict[str, Any]:
         decision_id = _strict_sha256(decision_id, field_name="decision_id")
         with self._connection(transaction=False) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -463,17 +496,58 @@ class KernelProductRepositoryMixin:
                 row = cur.fetchone()
         if row is None:
             raise KeyError(decision_id)
-        decision = _model_from_json(DependentBuyReleaseDecisionV1, _row_json(row, "carrier_json"))
+        decision = _read_k6_model(
+            DependentBuyReleaseDecisionV1,
+            _row_json(row, "carrier_json"),
+            stage="DEPENDENT_BUY_DECISION_READBACK",
+        )
+        trigger_ref = _read_k6_model(
+            DependentBuyTriggerEventRefV1,
+            _row_json(row, "trigger_ref_json"),
+            stage="DEPENDENT_BUY_TRIGGER_READBACK",
+        )
+        ledger_observation = _read_k6_model(
+            DependentBuyLedgerObservationV1,
+            _row_json(row, "ledger_observation_json"),
+            stage="DEPENDENT_BUY_LEDGER_OBSERVATION_READBACK",
+        )
         _assert_scalar_columns(row, _decision_projection(decision), carrier_name="dependent_buy_decision")
-        return decision
+        _assert_scalar_columns(
+            row,
+            _decision_evidence_projection(trigger_ref, ledger_observation),
+            carrier_name="dependent_buy_decision_evidence",
+        )
+        coordination = self.read_dependent_buy_coordination_v1(decision.coordination_id)
+        self._validate_dependent_buy_decision_evidence_v1(
+            coordination=coordination,
+            decision=decision,
+            trigger_ref=trigger_ref,
+            ledger_observation=ledger_observation,
+        )
+        return {
+            "decision": decision,
+            "trigger_ref": trigger_ref,
+            "ledger_observation": ledger_observation,
+        }
+
+    def read_dependent_buy_decision_v1(self, decision_id: str) -> DependentBuyReleaseDecisionV1:
+        return self.read_dependent_buy_decision_evidence_v1(decision_id)["decision"]
 
     def append_dependent_buy_decision_v1(
-        self, *, coordination: DependentBuyCoordinationV1, decision: DependentBuyReleaseDecisionV1
+        self,
+        *,
+        coordination: DependentBuyCoordinationV1,
+        decision: DependentBuyReleaseDecisionV1,
+        trigger_ref: DependentBuyTriggerEventRefV1,
+        ledger_observation: DependentBuyLedgerObservationV1,
     ) -> dict[str, Any]:
-        if not isinstance(coordination, DependentBuyCoordinationV1) or not isinstance(
-            decision, DependentBuyReleaseDecisionV1
+        if (
+            not isinstance(coordination, DependentBuyCoordinationV1)
+            or not isinstance(decision, DependentBuyReleaseDecisionV1)
+            or not isinstance(trigger_ref, DependentBuyTriggerEventRefV1)
+            or not isinstance(ledger_observation, DependentBuyLedgerObservationV1)
         ):
-            raise TypeError("coordination and decision must use strict K6 carriers")
+            raise TypeError("coordination, decision, trigger and ledger observation must use strict K6 carriers")
         with self._connection(transaction=True) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -484,34 +558,72 @@ class KernelProductRepositoryMixin:
                 row = cur.fetchone()
                 if row is None:
                     raise KeyError(coordination.coordination_id)
-                previous = _model_from_json(DependentBuyCoordinationV1, _row_json(row, "carrier_json"))
+                previous = _read_k6_model(
+                    DependentBuyCoordinationV1,
+                    _row_json(row, "carrier_json"),
+                    stage="DEPENDENT_BUY_COORDINATION_PREDECESSOR_READBACK",
+                )
                 if previous == coordination:
                     cur.execute(
-                        "SELECT carrier_json FROM qmt_strategy.execution_dependent_buy_decision WHERE decision_id=%s",
+                        "SELECT carrier_json,trigger_ref_json,ledger_observation_json "
+                        "FROM qmt_strategy.execution_dependent_buy_decision WHERE decision_id=%s",
                         (decision.decision_id,),
                     )
                     existing_decision_row = cur.fetchone()
                     existing_decision = (
                         None
                         if existing_decision_row is None
-                        else _model_from_json(
+                        else _read_k6_model(
                             DependentBuyReleaseDecisionV1,
                             _row_json(existing_decision_row, "carrier_json"),
+                            stage="DEPENDENT_BUY_DECISION_IDEMPOTENT_READBACK",
                         )
                     )
                     if existing_decision != decision:
                         raise KernelRepositoryConflict("idempotent decision retry differs from durable decision")
+                    if existing_decision_row is None:
+                        raise KernelRepositoryConflict("idempotent decision retry lacks durable evidence")
+                    existing_trigger = _read_k6_model(
+                        DependentBuyTriggerEventRefV1,
+                        _row_json(existing_decision_row, "trigger_ref_json"),
+                        stage="DEPENDENT_BUY_TRIGGER_IDEMPOTENT_READBACK",
+                    )
+                    existing_ledger = _read_k6_model(
+                        DependentBuyLedgerObservationV1,
+                        _row_json(existing_decision_row, "ledger_observation_json"),
+                        stage="DEPENDENT_BUY_LEDGER_IDEMPOTENT_READBACK",
+                    )
+                    if existing_trigger != trigger_ref or existing_ledger != ledger_observation:
+                        raise KernelRepositoryConflict("idempotent decision retry differs from durable evidence")
                     is_retry = True
                 else:
                     is_retry = False
                 if not is_retry:
                     coordination.validate_successor_v1(previous)
-                    self._append_dependent_buy_decision_with_cursor(cur, previous, coordination, decision)
-        decision_readback = self.read_dependent_buy_decision_v1(decision.decision_id)
+                    self._append_dependent_buy_decision_with_cursor(
+                        cur,
+                        previous,
+                        coordination,
+                        decision,
+                        trigger_ref,
+                        ledger_observation,
+                    )
+        evidence_readback = self.read_dependent_buy_decision_evidence_v1(decision.decision_id)
+        decision_readback = evidence_readback["decision"]
         coordination_readback = self.read_dependent_buy_coordination_v1(coordination.coordination_id)
-        if decision_readback != decision or coordination_readback != coordination:
+        if (
+            decision_readback != decision
+            or evidence_readback["trigger_ref"] != trigger_ref
+            or evidence_readback["ledger_observation"] != ledger_observation
+            or coordination_readback != coordination
+        ):
             raise KernelRepositoryConflict("dependent-BUY decision transaction post-commit readback differs")
-        return {"coordination": coordination_readback, "decision": decision_readback}
+        return {
+            "coordination": coordination_readback,
+            "decision": decision_readback,
+            "trigger_ref": evidence_readback["trigger_ref"],
+            "ledger_observation": evidence_readback["ledger_observation"],
+        }
 
     def _append_dependent_buy_decision_with_cursor(
         self,
@@ -519,6 +631,8 @@ class KernelProductRepositoryMixin:
         previous: DependentBuyCoordinationV1,
         coordination: DependentBuyCoordinationV1,
         decision: DependentBuyReleaseDecisionV1,
+        trigger_ref: DependentBuyTriggerEventRefV1,
+        ledger_observation: DependentBuyLedgerObservationV1,
     ) -> None:
         if decision.coordination_id != coordination.coordination_id:
             raise KernelRepositoryConflict("decision owner differs from coordination")
@@ -534,20 +648,57 @@ class KernelProductRepositoryMixin:
             or coordination.last_decision_sha256 != decision.decision_sha256
         ):
             raise KernelRepositoryConflict("coordination successor does not close to decision")
+        expected_status = {
+            DependentBuyDecisionV1.WAIT: DependentBuyCoordinationStatusV1.DEFERRED_WAITING_SELL_PROCEEDS,
+            DependentBuyDecisionV1.RELEASE_TO_K2_OUTBOX: DependentBuyCoordinationStatusV1.RELEASED_TO_K2_OUTBOX,
+            DependentBuyDecisionV1.BLOCK: DependentBuyCoordinationStatusV1.BLOCKED_SELL_PROCEEDS_UNAVAILABLE,
+            DependentBuyDecisionV1.EOD_RESIDUAL: DependentBuyCoordinationStatusV1.EOD_RESIDUAL,
+        }[decision.decision]
+        if coordination.status is not expected_status:
+            raise KernelRepositoryConflict("decision kind and coordination durable status differ")
         if (coordination.lease_worker_id, coordination.lease_process_incarnation_id, coordination.lease_epoch) != (
             decision.worker_id,
             decision.process_incarnation_id,
             decision.lease_epoch,
         ):
             raise KernelRepositoryConflict("decision fencing differs from coordination lease")
-        self._verify_k6_worker_cursor(cur, decision.worker_id, decision.process_incarnation_id, decision.lease_epoch)
-        projection = _decision_projection(decision)
-        columns = tuple(projection)
+        if previous.lease_epoch == 0:
+            if coordination.lease_epoch != 1:
+                raise KernelRepositoryConflict("first coordination lease epoch must be one")
+        elif coordination.lease_epoch not in {previous.lease_epoch, previous.lease_epoch + 1}:
+            raise KernelRepositoryConflict("coordination lease epoch is not current or exact successor")
+        elif coordination.lease_epoch == previous.lease_epoch and (
+            coordination.lease_worker_id,
+            coordination.lease_process_incarnation_id,
+        ) != (previous.lease_worker_id, previous.lease_process_incarnation_id):
+            raise KernelRepositoryConflict("same coordination lease epoch cannot change owner")
+        self._validate_dependent_buy_decision_evidence_v1(
+            coordination=coordination,
+            decision=decision,
+            trigger_ref=trigger_ref,
+            ledger_observation=ledger_observation,
+        )
         cur.execute(
-            f"INSERT INTO qmt_strategy.execution_dependent_buy_decision({','.join(columns)},carrier_json) "
-            f"VALUES ({','.join(['%s'] * (len(columns) + 1))}) ON CONFLICT (decision_id) DO NOTHING",
+            "SELECT runtime_id,sequence AS event_sequence FROM qmt_strategy.execution_runtime_event "
+            "WHERE event_id=%s FOR SHARE",
+            (trigger_ref.event_id,),
+        )
+        trigger_event = cur.fetchone()
+        if trigger_event is None or (
+            trigger_event["runtime_id"],
+            int(trigger_event["event_sequence"]),
+        ) != (trigger_ref.runtime_id, trigger_ref.event_sequence):
+            raise KernelRepositoryConflict("dependent-BUY trigger does not close to exact K2 runtime event")
+        self._verify_k6_worker_cursor(cur, decision.worker_id, decision.process_incarnation_id, decision.lease_epoch)
+        projection = _decision_projection(decision) | _decision_evidence_projection(trigger_ref, ledger_observation)
+        columns = (*projection, "trigger_ref_json", "ledger_observation_json", "carrier_json")
+        cur.execute(
+            f"INSERT INTO qmt_strategy.execution_dependent_buy_decision({','.join(columns)}) "
+            f"VALUES ({','.join(['%s'] * len(columns))}) ON CONFLICT (decision_id) DO NOTHING",
             (
                 *(_json(value) if key == "ordered_dependency_sha256s" else value for key, value in projection.items()),
+                _json(trigger_ref.model_dump(mode="json")),
+                _json(ledger_observation.model_dump(mode="json")),
                 _json(decision.model_dump(mode="json")),
             ),
         )
@@ -560,7 +711,11 @@ class KernelProductRepositoryMixin:
             conflict = (
                 None
                 if conflict_row is None
-                else _model_from_json(DependentBuyReleaseDecisionV1, _row_json(conflict_row, "carrier_json"))
+                else _read_k6_model(
+                    DependentBuyReleaseDecisionV1,
+                    _row_json(conflict_row, "carrier_json"),
+                    stage="DEPENDENT_BUY_DECISION_CONFLICT_READBACK",
+                )
             )
             if conflict != decision:
                 raise KernelRepositoryConflict("decision identity exists with different durable payload")
@@ -582,14 +737,69 @@ class KernelProductRepositoryMixin:
     @staticmethod
     def _verify_k6_worker_cursor(cur: Any, worker_id: str, process_id: str, lease_epoch: int) -> None:
         cur.execute(
-            "SELECT incarnation_sequence FROM qmt_strategy.execution_kernel_worker_incarnation "
-            "WHERE worker_id=%s AND process_incarnation_id=%s FOR SHARE",
+            "SELECT incarnation.incarnation_sequence FROM qmt_strategy.execution_kernel_worker_incarnation incarnation "
+            "JOIN qmt_strategy.execution_kernel_worker_epoch epoch "
+            "ON epoch.worker_id=incarnation.worker_id AND epoch.process_role=incarnation.process_role "
+            "AND epoch.incarnation_sequence=incarnation.incarnation_sequence "
+            "WHERE incarnation.worker_id=%s AND incarnation.process_incarnation_id=%s "
+            "AND incarnation.process_role='PRODUCT_COORDINATOR' FOR SHARE OF incarnation,epoch",
             (worker_id, process_id),
         )
         row = cur.fetchone()
         if row is None:
             raise KernelRepositoryConflict("dependent-BUY decision uses stale worker fencing")
-        _ = lease_epoch
+        if type(lease_epoch) is not int or lease_epoch <= 0:
+            raise KernelRepositoryConflict("dependent-BUY decision lease epoch is invalid")
+
+    @staticmethod
+    def _validate_dependent_buy_decision_evidence_v1(
+        *,
+        coordination: DependentBuyCoordinationV1,
+        decision: DependentBuyReleaseDecisionV1,
+        trigger_ref: DependentBuyTriggerEventRefV1,
+        ledger_observation: DependentBuyLedgerObservationV1,
+    ) -> None:
+        if decision.trigger_ref_sha256 != trigger_ref.trigger_ref_sha256:
+            raise KernelRepositoryConflict("decision trigger reference differs from durable trigger evidence")
+        if decision.ledger_observation_sha256 != ledger_observation.observation_sha256:
+            raise KernelRepositoryConflict("decision ledger hash differs from durable ledger evidence")
+        if trigger_ref.runtime_id != coordination.runtime_id:
+            raise KernelRepositoryConflict("decision trigger runtime differs from coordination")
+        if (
+            ledger_observation.runtime_id,
+            ledger_observation.strategy_id,
+            ledger_observation.trade_date,
+            ledger_observation.required_cash,
+        ) != (
+            coordination.runtime_id,
+            coordination.strategy_id,
+            coordination.trade_date,
+            coordination.required_cash,
+        ):
+            raise KernelRepositoryConflict("decision ledger owner or required cash differs from coordination")
+        trigger_time = datetime.fromisoformat(str(trigger_ref.observed_at_utc).replace("Z", "+00:00"))
+        ledger_time = datetime.fromisoformat(str(ledger_observation.ledger_as_of_utc).replace("Z", "+00:00"))
+        if ledger_time < trigger_time:
+            raise KernelRepositoryConflict("decision ledger observation predates trigger evidence")
+        settled_trade_refs = tuple(
+            sorted(
+                ref
+                for dependency in coordination.ordered_sell_dependencies
+                for ref in dependency.settled_trade_fact_refs
+            )
+        )
+        settled_cash_refs = tuple(
+            sorted(
+                ref
+                for dependency in coordination.ordered_sell_dependencies
+                for ref in dependency.settled_cash_ledger_refs
+            )
+        )
+        if (
+            ledger_observation.ordered_settled_trade_refs != settled_trade_refs
+            or ledger_observation.ordered_cash_ledger_refs != settled_cash_refs
+        ):
+            raise KernelRepositoryConflict("decision ledger evidence differs from dependency settled facts")
 
     def read_product_command_authority_set_v2(self, authority_set_sha256: str) -> ProductCommandAuthoritySetV2:
         authority_set_sha256 = _strict_sha256(
@@ -611,10 +821,19 @@ class KernelProductRepositoryMixin:
                     (authority_set_sha256,),
                 )
                 item_rows = cur.fetchall()
-        authority = _model_from_json(ProductCommandAuthoritySetV2, _row_json(row, "carrier_json"))
+        authority = _read_k6_model(
+            ProductCommandAuthoritySetV2,
+            _row_json(row, "carrier_json"),
+            stage="PRODUCT_COMMAND_AUTHORITY_READBACK",
+        )
         _assert_scalar_columns(row, _authority_projection(authority), carrier_name="product_command_authority")
         items = tuple(
-            _model_from_json(ProductCommandAuthorityItemV2, _row_json(item, "carrier_json")) for item in item_rows
+            _read_k6_model(
+                ProductCommandAuthorityItemV2,
+                _row_json(item, "carrier_json"),
+                stage="PRODUCT_COMMAND_AUTHORITY_ITEM_READBACK",
+            )
+            for item in item_rows
         )
         for item_row, item in zip(item_rows, items, strict=True):
             _assert_scalar_columns(
@@ -638,14 +857,22 @@ class KernelProductRepositoryMixin:
                 )
                 existing_row = cur.fetchone()
                 if existing_row is not None:
-                    existing = _model_from_json(ProductCommandAuthoritySetV2, _row_json(existing_row, "carrier_json"))
+                    existing = _read_k6_model(
+                        ProductCommandAuthoritySetV2,
+                        _row_json(existing_row, "carrier_json"),
+                        stage="PRODUCT_COMMAND_AUTHORITY_IDEMPOTENT_READBACK",
+                    )
                     cur.execute(
                         "SELECT carrier_json FROM qmt_strategy.execution_product_command_authority_item "
                         "WHERE authority_set_sha256=%s ORDER BY effect_ordinal,command_id",
                         (authority.authority_set_sha256,),
                     )
                     existing_items = tuple(
-                        _model_from_json(ProductCommandAuthorityItemV2, _row_json(row, "carrier_json"))
+                        _read_k6_model(
+                            ProductCommandAuthorityItemV2,
+                            _row_json(row, "carrier_json"),
+                            stage="PRODUCT_COMMAND_AUTHORITY_ITEM_IDEMPOTENT_READBACK",
+                        )
                         for row in cur.fetchall()
                     )
                     if existing != authority or existing_items != authority.ordered_items:
@@ -748,7 +975,11 @@ class KernelProductRepositoryMixin:
                 row = cur.fetchone()
         if row is None:
             raise KeyError(receipt_sha256)
-        receipt = _model_from_json(ProductRouteCutoverReceiptV1, _row_json(row, "carrier_json"))
+        receipt = _read_k6_model(
+            ProductRouteCutoverReceiptV1,
+            _row_json(row, "carrier_json"),
+            stage="PRODUCT_ROUTE_RECEIPT_READBACK",
+        )
         _assert_scalar_columns(row, _route_projection(receipt), carrier_name="product_route_receipt")
         return receipt
 
@@ -767,7 +998,11 @@ class KernelProductRepositoryMixin:
                 row = cur.fetchone()
         if row is None:
             raise KeyError((runtime_id, binding_id, trade_date))
-        owner = _model_from_json(ProductRouteOwnerV1, _row_json(row, "carrier_json"))
+        owner = _read_k6_model(
+            ProductRouteOwnerV1,
+            _row_json(row, "carrier_json"),
+            stage="PRODUCT_ROUTE_OWNER_READBACK",
+        )
         _assert_scalar_columns(row, _owner_projection(owner), carrier_name="product route owner")
         receipt = self._read_product_route_receipt_v1(owner.current_receipt_sha256)
         owner.validate_receipt_v1(receipt)
@@ -790,7 +1025,11 @@ class KernelProductRepositoryMixin:
                 previous_owner = (
                     None
                     if previous_row is None
-                    else _model_from_json(ProductRouteOwnerV1, _row_json(previous_row, "carrier_json"))
+                    else _read_k6_model(
+                        ProductRouteOwnerV1,
+                        _row_json(previous_row, "carrier_json"),
+                        stage="PRODUCT_ROUTE_OWNER_PREDECESSOR_READBACK",
+                    )
                 )
                 is_retry = previous_owner == owner
                 if previous_owner is None:
@@ -819,9 +1058,10 @@ class KernelProductRepositoryMixin:
                 )
                 existing_receipt_row = cur.fetchone()
                 if existing_receipt_row is not None:
-                    existing_receipt = _model_from_json(
+                    existing_receipt = _read_k6_model(
                         ProductRouteCutoverReceiptV1,
                         _row_json(existing_receipt_row, "carrier_json"),
+                        stage="PRODUCT_ROUTE_RECEIPT_IDEMPOTENT_READBACK",
                     )
                     _assert_scalar_columns(
                         existing_receipt_row,

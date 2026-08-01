@@ -7,9 +7,10 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
+import json
 from typing import Any, Literal, Self
 
-from pydantic import StrictBool, model_validator
+from pydantic import StrictBool, ValidationError, model_validator
 
 from .plugin_canonical import (
     canonical_utc_datetime_v1,
@@ -30,6 +31,7 @@ from .plugin_contracts import (
 
 MAX_DEPENDENT_BUY_DEPENDENCIES = 256
 MAX_PRODUCT_COMMANDS = 256
+MAX_CONTRACT_FAILURES = 256
 
 
 def _canonical_hash_input_v1(value: Any) -> Any:
@@ -71,6 +73,42 @@ class KernelProductContractError(ValueError):
         self.reason_code = reason_code
         self.context = json_safe_evidence_v1(context)
         super().__init__(message)
+
+
+def validate_kernel_product_payload_v1(model_type: Any, payload: dict[str, Any], *, stage: str) -> Any:
+    """Strictly read a durable K6 carrier and retain bounded typed failure evidence."""
+
+    try:
+        return model_type.model_validate_json(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    except ValidationError as exc:
+        ordered_failures = sorted(
+            (
+                {
+                    "field_path": "/".join(str(part) for part in error.get("loc", ())),
+                    "reason_code": str(error.get("type", "validation_error")),
+                    "message": str(error.get("msg", "K6 contract validation failed")),
+                }
+                for error in exc.errors(include_url=False, include_context=False, include_input=False)
+            ),
+            key=lambda item: (item["field_path"], item["reason_code"], item["message"]),
+        )
+        retained = ordered_failures[:MAX_CONTRACT_FAILURES]
+        omitted = ordered_failures[MAX_CONTRACT_FAILURES:]
+        context: dict[str, Any] = {
+            "stage": stage,
+            "model": getattr(model_type, "__name__", str(model_type)),
+            "failure_count": len(ordered_failures),
+            "failures": retained,
+            "failures_truncated": bool(omitted),
+        }
+        if omitted:
+            context["omitted_failure_count"] = len(omitted)
+            context["omitted_failure_set_sha256"] = hash_hex_v1("miniqmt_k6_omitted_contract_failure_set_v1", omitted)
+        raise KernelProductContractError(
+            "MINIQMT_K6_CONTRACT_INVALID",
+            f"{getattr(model_type, '__name__', 'K6 carrier')} strict readback failed",
+            context=context,
+        ) from exc
 
 
 class DependentBuyDependencyStatusV1(StrEnum):
@@ -665,6 +703,7 @@ class ProductCommandAuthoritySetV2(FrozenStrictModel):
 class ProductCommandLifecycleProjectionItemV2(FrozenStrictModel):
     schema_version: Literal["miniqmt_product_command_lifecycle_projection_item_v2"]
     authority_item_sha256: Sha256V1
+    effect_ordinal: NonNegativeIntV1
     command_id: IdentityV1
     mapping_id: IdentityV1 | None
     outbox_id: IdentityV1 | None
@@ -741,8 +780,12 @@ class ProductCommandLifecycleProjectionV2(FrozenStrictModel):
         if len(self.ordered_items) > MAX_PRODUCT_COMMANDS:
             raise ValueError("product lifecycle projection exceeds maximum cardinality")
         command_ids = tuple(item.command_id for item in self.ordered_items)
-        if len(set(command_ids)) != len(command_ids):
-            raise ValueError("product lifecycle projection contains duplicate command")
+        item_hashes = tuple(item.authority_item_sha256 for item in self.ordered_items)
+        ordinals = tuple(item.effect_ordinal for item in self.ordered_items)
+        if len(set(command_ids)) != len(command_ids) or len(set(item_hashes)) != len(item_hashes):
+            raise ValueError("product lifecycle projection contains duplicate command or authority item")
+        if ordinals != tuple(range(len(self.ordered_items))):
+            raise ValueError("product lifecycle projection order must follow contiguous authority ordinals")
         expected = hash_hex_v1(
             "miniqmt_product_command_lifecycle_projection_v2",
             self.canonical_payload_v1(exclude={"projection_sha256"}),
@@ -751,11 +794,35 @@ class ProductCommandLifecycleProjectionV2(FrozenStrictModel):
             raise ValueError("product command lifecycle projection hash mismatch")
         return self
 
+    def validate_against_authority_v2(self, authority: ProductCommandAuthoritySetV2) -> None:
+        if not isinstance(authority, ProductCommandAuthoritySetV2):
+            raise TypeError("authority must be ProductCommandAuthoritySetV2")
+        expected = tuple((item.effect_ordinal, item.command_id, item.item_sha256) for item in authority.ordered_items)
+        actual = tuple(
+            (item.effect_ordinal, item.command_id, item.authority_item_sha256) for item in self.ordered_items
+        )
+        if self.authority_set_sha256 != authority.authority_set_sha256 or actual != expected:
+            raise KernelProductContractError(
+                "MINIQMT_K6_PRODUCT_AUTHORITY_LIFECYCLE_ORDER_DRIFT",
+                "product lifecycle projection differs from exact authority order",
+                context={"expected": expected, "actual": actual},
+            )
+        for lifecycle, authority_item in zip(self.ordered_items, authority.ordered_items, strict=True):
+            synchronous_reject = authority_item.disposition is ProductCommandDispositionV2.REJECT_SYNCHRONOUS
+            if synchronous_reject != (lifecycle.lifecycle_status is ProductLifecycleStatusV2.SYNCHRONOUS_REJECTED):
+                raise KernelProductContractError(
+                    "MINIQMT_K6_PRODUCT_AUTHORITY_LIFECYCLE_DISPOSITION_DRIFT",
+                    "product lifecycle status differs from authority disposition",
+                    context={"command_id": authority_item.command_id},
+                )
+
 
 class ProductMaterializationReceiptV2(FrozenStrictModel):
     schema_version: Literal["miniqmt_product_materialization_receipt_v2"]
     authority_set_sha256: Sha256V1
     execution_projection_set_sha256: Sha256V1
+    ordered_authority_item_sha256s: tuple[Sha256V1, ...]
+    ordered_command_ids: tuple[IdentityV1, ...]
     ordered_mapping_ids: tuple[IdentityV1, ...]
     ordered_outbox_ids: tuple[IdentityV1, ...]
     ordered_child_order_ids: tuple[IdentityV1, ...]
@@ -766,13 +833,31 @@ class ProductMaterializationReceiptV2(FrozenStrictModel):
     receipt_sha256: Sha256V1
 
     @classmethod
-    def create(cls, **values: Any) -> Self:
-        if "commit_outcome" in values:
-            raise TypeError("commit_outcome is repository-owned and cannot be supplied")
+    def create(
+        cls,
+        *,
+        authority: ProductCommandAuthoritySetV2,
+        repository_transaction_id: str,
+        independent_readback_sha256: str,
+    ) -> Self:
+        if not isinstance(authority, ProductCommandAuthoritySetV2):
+            raise TypeError("authority must be ProductCommandAuthoritySetV2")
+        materialized = tuple(
+            item for item in authority.ordered_items if item.disposition is ProductCommandDispositionV2.MATERIALIZE
+        )
         payload = {
             "schema_version": "miniqmt_product_materialization_receipt_v2",
-            **values,
+            "authority_set_sha256": authority.authority_set_sha256,
+            "execution_projection_set_sha256": authority.execution_projection_set_sha256,
+            "ordered_authority_item_sha256s": tuple(item.item_sha256 for item in materialized),
+            "ordered_command_ids": tuple(item.command_id for item in materialized),
+            "ordered_mapping_ids": tuple(item.mapping_id for item in materialized),
+            "ordered_outbox_ids": tuple(item.outbox_id for item in materialized),
+            "ordered_child_order_ids": tuple(item.child_order_id for item in materialized),
+            "zero_command": authority.total_count == 0,
+            "repository_transaction_id": repository_transaction_id,
             "commit_outcome": ProductMaterializationCommitOutcomeV2.COMMITTED_READBACK_VERIFIED,
+            "independent_readback_sha256": independent_readback_sha256,
         }
         return cls(
             **payload,
@@ -781,10 +866,20 @@ class ProductMaterializationReceiptV2(FrozenStrictModel):
 
     @model_validator(mode="after")
     def _validate_hash(self) -> Self:
-        sizes = (len(self.ordered_mapping_ids), len(self.ordered_outbox_ids), len(self.ordered_child_order_ids))
-        if self.zero_command != (sizes == (0, 0, 0)) or len(set(sizes)) != 1:
+        sizes = (
+            len(self.ordered_authority_item_sha256s),
+            len(self.ordered_command_ids),
+            len(self.ordered_mapping_ids),
+            len(self.ordered_outbox_ids),
+            len(self.ordered_child_order_ids),
+        )
+        if len(set(sizes)) != 1 or sizes[0] > MAX_PRODUCT_COMMANDS:
             raise ValueError("materialization receipt identity sets do not close")
+        if self.zero_command and sizes[0] != 0:
+            raise ValueError("zero-command receipt cannot carry materialized identities")
         for field_name, identities in (
+            ("ordered_authority_item_sha256s", self.ordered_authority_item_sha256s),
+            ("ordered_command_ids", self.ordered_command_ids),
             ("ordered_mapping_ids", self.ordered_mapping_ids),
             ("ordered_outbox_ids", self.ordered_outbox_ids),
             ("ordered_child_order_ids", self.ordered_child_order_ids),
@@ -798,6 +893,39 @@ class ProductMaterializationReceiptV2(FrozenStrictModel):
         if self.receipt_sha256 != expected:
             raise ValueError("product materialization receipt hash mismatch")
         return self
+
+    def validate_against_authority_v2(self, authority: ProductCommandAuthoritySetV2) -> None:
+        if not isinstance(authority, ProductCommandAuthoritySetV2):
+            raise TypeError("authority must be ProductCommandAuthoritySetV2")
+        materialized = tuple(
+            item for item in authority.ordered_items if item.disposition is ProductCommandDispositionV2.MATERIALIZE
+        )
+        expected = (
+            authority.authority_set_sha256,
+            authority.execution_projection_set_sha256,
+            tuple(item.item_sha256 for item in materialized),
+            tuple(item.command_id for item in materialized),
+            tuple(item.mapping_id for item in materialized),
+            tuple(item.outbox_id for item in materialized),
+            tuple(item.child_order_id for item in materialized),
+            authority.total_count == 0,
+        )
+        actual = (
+            self.authority_set_sha256,
+            self.execution_projection_set_sha256,
+            self.ordered_authority_item_sha256s,
+            self.ordered_command_ids,
+            self.ordered_mapping_ids,
+            self.ordered_outbox_ids,
+            self.ordered_child_order_ids,
+            self.zero_command,
+        )
+        if actual != expected:
+            raise KernelProductContractError(
+                "MINIQMT_K6_PRODUCT_MATERIALIZATION_IDENTITY_DRIFT",
+                "materialization receipt differs from exact authority association",
+                context={"expected": expected, "actual": actual},
+            )
 
 
 class ProductRouteCutoverReceiptV1(FrozenStrictModel):
@@ -924,4 +1052,6 @@ __all__ = [
     "ProductRouteCutoverReceiptV1",
     "ProductRouteOwnerKindV1",
     "ProductRouteOwnerV1",
+    "hash_hex_v1",
+    "validate_kernel_product_payload_v1",
 ]

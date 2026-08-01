@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS qmt_strategy.execution_dependent_buy_coordination (
              OR (decision_sequence>0 AND last_decision_sha256 ~ '^[0-9a-f]{64}$'))
     ),
     CONSTRAINT ck_miniqmt_k6_coordination_release CHECK (
-        (status='RELEASED_TO_K2_OUTBOX' AND released_command_id IS NOT NULL AND released_outbox_id IS NOT NULL)
+        (status='RELEASED_TO_K2_OUTBOX' AND released_command_id IS NOT NULL AND released_outbox_id IS NOT NULL
+            AND released_command_id=released_outbox_id)
         OR (status<>'RELEASED_TO_K2_OUTBOX' AND released_command_id IS NULL AND released_outbox_id IS NULL)
     ),
     CONSTRAINT ck_miniqmt_k6_coordination_lease CHECK (
@@ -172,9 +173,14 @@ CREATE TABLE IF NOT EXISTS qmt_strategy.execution_dependent_buy_decision (
     decision_sequence BIGINT NOT NULL,
     previous_decision_sha256 TEXT,
     trigger_ref_sha256 TEXT NOT NULL,
+    trigger_event_id TEXT NOT NULL,
+    trigger_ref_json JSONB NOT NULL,
     decision TEXT NOT NULL,
     reason_code TEXT NOT NULL,
     ledger_observation_sha256 TEXT NOT NULL,
+    ledger_virtual_account_id TEXT NOT NULL,
+    ledger_row_version BIGINT NOT NULL,
+    ledger_observation_json JSONB NOT NULL,
     ordered_dependency_sha256s JSONB NOT NULL,
     release_event_id TEXT,
     release_transition_id TEXT,
@@ -192,6 +198,8 @@ CREATE TABLE IF NOT EXISTS qmt_strategy.execution_dependent_buy_decision (
         REFERENCES qmt_strategy.execution_dependent_buy_decision(decision_sha256),
     CONSTRAINT fk_miniqmt_k6_decision_worker FOREIGN KEY (worker_id,process_incarnation_id)
         REFERENCES qmt_strategy.execution_kernel_worker_incarnation(worker_id,process_incarnation_id),
+    CONSTRAINT fk_miniqmt_k6_decision_trigger_event FOREIGN KEY (trigger_event_id)
+        REFERENCES qmt_strategy.execution_runtime_event(event_id),
     CONSTRAINT fk_miniqmt_k6_decision_release_event FOREIGN KEY (release_event_id)
         REFERENCES qmt_strategy.execution_runtime_event(event_id) DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT fk_miniqmt_k6_decision_release_transition FOREIGN KEY (release_transition_id)
@@ -212,7 +220,10 @@ CREATE TABLE IF NOT EXISTS qmt_strategy.execution_dependent_buy_decision (
     CONSTRAINT ck_miniqmt_k6_decision_hash CHECK (
         decision_id ~ '^[0-9a-f]{64}$' AND trigger_ref_sha256 ~ '^[0-9a-f]{64}$'
         AND ledger_observation_sha256 ~ '^[0-9a-f]{64}$' AND decision_sha256 ~ '^[0-9a-f]{64}$'
-        AND lease_epoch>0 AND jsonb_typeof(ordered_dependency_sha256s)='array'
+        AND lease_epoch>0 AND ledger_row_version>0
+        AND jsonb_typeof(ordered_dependency_sha256s)='array'
+        AND jsonb_typeof(trigger_ref_json)='object'
+        AND jsonb_typeof(ledger_observation_json)='object'
     )
 );
 
@@ -302,13 +313,125 @@ COMMENT ON TABLE qmt_strategy.execution_product_command_authority_item IS 'K6 ex
 COMMENT ON TABLE qmt_strategy.execution_product_route_cutover IS 'K6 immutable route cutover receipt chain; not a manual approval record.';
 COMMENT ON TABLE qmt_strategy.execution_product_route_owner IS 'K6 CAS current route pointer; new instances have one product owner.';
 
-COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.carrier_json IS 'Strict DependentBuyCoordinationV1 writer/readback carrier.';
-COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.carrier_json IS 'Strict DependentBuySellDependencyV1 writer/readback carrier.';
-COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.carrier_json IS 'Strict DependentBuyReleaseDecisionV1 writer/readback carrier.';
-COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.carrier_json IS 'Strict ProductCommandAuthoritySetV2 writer/readback carrier.';
-COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.carrier_json IS 'Strict ProductCommandAuthorityItemV2 writer/readback carrier.';
-COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.carrier_json IS 'Strict ProductRouteCutoverReceiptV1 writer/readback carrier.';
-COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.carrier_json IS 'Strict ProductRouteOwnerV1 writer/readback carrier.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.coordination_id IS 'Deterministic K6 dependent-BUY owner SHA-256 identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.runtime_id IS 'Owning MiniQMT runtime identity from K2.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.binding_id IS 'Frozen simulation binding identity; non-null.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.trade_date IS 'Exchange trade date from K2 runtime authority.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.strategy_id IS 'Frozen strategy identity; not a package admission check.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.buy_algo_instance_id IS 'Owning durable BUY algorithm instance identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.buy_parent_intent_id IS 'Frozen BUY parent intent identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.required_cash IS 'Canonical non-negative required cash in CNY.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.release_command_payload_sha256 IS 'SHA-256 of the frozen BUY release command payload.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.status IS 'Durable K6 coordination state; transient release readiness cannot be persisted.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.decision_sequence IS 'Monotonic committed decision sequence, starting at zero.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.last_decision_sha256 IS 'Latest append-only decision SHA-256; null before first decision.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.released_command_id IS 'Exact K2 released command identity; RELEASED only.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.released_outbox_id IS 'Exact K2 outbox identity; equal to released command identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.row_version IS 'Positive optimistic-CAS row version.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.lease_worker_id IS 'Current K6 coordinator worker identity; null when unleased.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.lease_process_incarnation_id IS 'Current process incarnation identity; null when unleased.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.lease_epoch IS 'Monotonic coordination lease epoch; zero before first claim.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.lease_expires_at_utc IS 'UTC lease expiry; null when unleased.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.created_at_utc IS 'Immutable UTC creation timestamp.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.updated_at_utc IS 'Latest committed UTC state timestamp.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.carrier_json IS 'Strict miniqmt_dependent_buy_coordination_v1 JSON; repository-owned, hash/readback verified.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_coordination.coordination_sha256 IS 'Canonical durable business-field SHA-256 excluding lease and row-version facts.';
+
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.coordination_id IS 'Owning dependent-BUY coordination identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.runtime_id IS 'Owning K2 runtime identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.strategy_id IS 'Frozen strategy identity shared with coordination.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.sell_parent_intent_id IS 'Exact dependent SELL parent intent identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.sell_algo_instance_id IS 'Exact durable SELL algorithm instance identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.latest_order_fact_ref IS 'Optional SHA-256 reference to latest authoritative SELL order fact.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.settled_trade_fact_refs IS 'Ordered unique JSON array of settled SELL trade SHA-256 refs; schema v1.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.settled_cash_ledger_refs IS 'Ordered one-to-one JSON array of settled cash-ledger SHA-256 refs; schema v1.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.dependency_status IS 'OPEN, PROCEEDS_SETTLED, or terminal without sufficient proceeds.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.carrier_json IS 'Strict miniqmt_dependent_buy_sell_dependency_v1 JSON; repository-owned and readback verified.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_dependency.dependency_sha256 IS 'Canonical dependency SHA-256.';
+
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.authority_set_sha256 IS 'Canonical transition-level ProductCommandAuthoritySetV2 SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.transition_id IS 'Exact owning K2 transition identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.runtime_id IS 'Owning K2 runtime identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.algo_instance_id IS 'Owning durable algorithm instance identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.event_id IS 'Exact K2 runtime event identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.delivery_id IS 'Exact K2 delivery identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.catalog_sha256 IS 'Strict plugin catalog SHA-256 used for evaluation.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.creation_binding_sha256 IS 'Frozen algorithm creation-binding SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.facade_conformance_set_sha256 IS 'Exact vn.py facade conformance-set SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.execution_projection_set_sha256 IS 'Exact K4 execution projection-set SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.transition_receipt_sha256 IS 'Exact K2 transition receipt SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.materialize_count IS 'Number of MATERIALIZE command items.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.reject_count IS 'Number of synchronous reject command items.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.total_count IS 'Exact transition command cardinality in range 0..256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.aggregate_disposition IS 'ZERO, all rejected, all materialized, or mixed per-command disposition.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.carrier_json IS 'Strict miniqmt_product_command_authority_set_v2 JSON; repository-owned and readback verified.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority.created_at_utc IS 'Database UTC append timestamp.';
+
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.authority_set_sha256 IS 'Owning transition authority-set SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.transition_id IS 'Exact owning K2 transition identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.effect_ordinal IS 'Contiguous zero-based plugin effect ordinal.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.command_id IS 'Exact deterministic K2 command/outbox identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.disposition IS 'MATERIALIZE or REJECT_SYNCHRONOUS.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.mapping_id IS 'Exact K2 command-child mapping identity; materialized only.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.outbox_id IS 'Exact K2 outbox identity equal to command_id; materialized only.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.child_order_id IS 'Exact K2 child-order identity; materialized only.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.reject_reason_code IS 'Typed synchronous rejection reason; rejected only.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.reject_context_sha256 IS 'Bounded rejection-context SHA-256; rejected only.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.carrier_json IS 'Strict miniqmt_product_command_authority_item_v2 JSON; repository-owned and readback verified.';
+COMMENT ON COLUMN qmt_strategy.execution_product_command_authority_item.item_sha256 IS 'Canonical per-command authority SHA-256.';
+
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.decision_id IS 'Deterministic coordination/sequence/trigger decision identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.coordination_id IS 'Owning dependent-BUY coordination identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.decision_sequence IS 'Exact positive successor decision sequence.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.previous_decision_sha256 IS 'Previous append-only decision SHA-256; null for sequence one.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.trigger_ref_sha256 IS 'Canonical trigger evidence SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.trigger_event_id IS 'Exact existing K2 event identity that triggered evaluation.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.trigger_ref_json IS 'Strict miniqmt_dependent_buy_trigger_event_ref_v1 JSON; complete durable trigger evidence.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.decision IS 'WAIT, RELEASE_TO_K2_OUTBOX, BLOCK, or EOD_RESIDUAL.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.reason_code IS 'Typed K6 coordination decision reason.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.ledger_observation_sha256 IS 'Canonical ledger observation SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.ledger_virtual_account_id IS 'Authoritative strategy-ledger virtual-account identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.ledger_row_version IS 'Positive observed virtual-account row version.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.ledger_observation_json IS 'Strict miniqmt_dependent_buy_ledger_observation_v1 JSON; complete durable cash evidence.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.ordered_dependency_sha256s IS 'Ordered unique JSON array of all dependency SHA-256 identities.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.release_event_id IS 'K2 release event identity; RELEASE only.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.release_transition_id IS 'K2 release transition identity; RELEASE only.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.release_command_authority_set_sha256 IS 'K6 command-authority set SHA-256; RELEASE only.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.decided_at_utc IS 'UTC decision timestamp.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.worker_id IS 'Current PRODUCT_COORDINATOR worker identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.process_incarnation_id IS 'Current worker process incarnation identity.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.lease_epoch IS 'Exact coordination lease epoch used for this decision.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.carrier_json IS 'Strict miniqmt_dependent_buy_release_decision_v1 JSON; repository-owned and readback verified.';
+COMMENT ON COLUMN qmt_strategy.execution_dependent_buy_decision.decision_sha256 IS 'Canonical append-only decision SHA-256.';
+
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.runtime_id IS 'Owning K2 runtime identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.binding_id IS 'Frozen simulation binding identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.trade_date IS 'Exchange trade date from K2 runtime authority.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.route_epoch IS 'Strictly increasing route receipt epoch.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.route_owner IS 'LEGACY_DRAIN_ONLY or irreversible KERNEL_V2 owner.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.effective_new_instance_sequence IS 'First new algorithm-instance sequence owned by this route.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.legacy_active_instance_count IS 'Observed legacy instances still draining.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.kernel_active_instance_count IS 'Observed KERNEL_V2 active instance count.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.catalog_sha256 IS 'Exact plugin catalog SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.gateway_capability_catalog_sha256 IS 'Exact gateway capability catalog SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.exchange_session_authority_sha256 IS 'Exact exchange-session authority SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.migration_readback_sha256 IS 'Independent K6 migration readback SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.product_authority_schema_sha256 IS 'Exact K6 product-authority schema SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.previous_receipt_sha256 IS 'Previous route receipt SHA-256; null at epoch one.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.created_at_utc IS 'Immutable UTC route receipt timestamp.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.carrier_json IS 'Strict miniqmt_product_route_cutover_receipt_v1 JSON; append-only and readback verified.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_cutover.receipt_sha256 IS 'Canonical route receipt SHA-256.';
+
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.runtime_id IS 'Owning K2 runtime identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.binding_id IS 'Frozen simulation binding identity.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.trade_date IS 'Exchange trade date.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.current_route_epoch IS 'Current monotonic route epoch.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.current_receipt_sha256 IS 'Exact current immutable route receipt SHA-256.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.route_owner IS 'Current irreversible product route owner.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.effective_new_instance_sequence IS 'Current new-instance cutover sequence.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.row_version IS 'Positive optimistic-CAS owner version.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.carrier_json IS 'Strict miniqmt_product_route_owner_v1 JSON; repository-owned and readback verified.';
+COMMENT ON COLUMN qmt_strategy.execution_product_route_owner.owner_sha256 IS 'Canonical current route-owner SHA-256.';
 
 CREATE OR REPLACE FUNCTION qmt_strategy.miniqmt_k6_reject_immutable_mutation()
 RETURNS trigger
@@ -360,6 +483,17 @@ LANGUAGE plpgsql
 VOLATILE
 AS $$
 BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.status<>'DEFERRED_WAITING_SELL_PROCEEDS'
+           OR NEW.decision_sequence<>0 OR NEW.last_decision_sha256 IS NOT NULL
+           OR NEW.released_command_id IS NOT NULL OR NEW.released_outbox_id IS NOT NULL
+           OR NEW.row_version<>1 OR NEW.lease_epoch<>0
+           OR NEW.lease_worker_id IS NOT NULL OR NEW.lease_process_incarnation_id IS NOT NULL
+           OR NEW.lease_expires_at_utc IS NOT NULL THEN
+            RAISE EXCEPTION 'K6 dependent-BUY first write requires exact waiting initial state';
+        END IF;
+        RETURN NEW;
+    END IF;
     IF (NEW.coordination_id,NEW.runtime_id,NEW.binding_id,NEW.trade_date,NEW.strategy_id,
         NEW.buy_algo_instance_id,NEW.buy_parent_intent_id,NEW.required_cash,
         NEW.release_command_payload_sha256,NEW.created_at_utc)
@@ -373,8 +507,41 @@ BEGIN
         RAISE EXCEPTION 'K6 dependent-BUY terminal coordination cannot be updated';
     END IF;
     IF NEW.row_version<>OLD.row_version+1 OR NEW.decision_sequence<OLD.decision_sequence
-       OR NEW.lease_epoch<OLD.lease_epoch THEN
+       OR NEW.lease_epoch NOT IN (OLD.lease_epoch,OLD.lease_epoch+1)
+       OR (NEW.lease_epoch=OLD.lease_epoch AND
+           (NEW.lease_worker_id,NEW.lease_process_incarnation_id)
+           IS DISTINCT FROM (OLD.lease_worker_id,OLD.lease_process_incarnation_id)) THEN
         RAISE EXCEPTION 'K6 dependent-BUY coordination update is not a monotonic CAS successor';
+    END IF;
+    RETURN NEW;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION qmt_strategy.miniqmt_k6_validate_decision_closure()
+RETURNS trigger
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+    coordination_record qmt_strategy.execution_dependent_buy_coordination%ROWTYPE;
+    expected_status TEXT;
+BEGIN
+    SELECT * INTO STRICT coordination_record
+    FROM qmt_strategy.execution_dependent_buy_coordination
+    WHERE coordination_id=NEW.coordination_id;
+    expected_status := CASE NEW.decision
+        WHEN 'WAIT' THEN 'DEFERRED_WAITING_SELL_PROCEEDS'
+        WHEN 'RELEASE_TO_K2_OUTBOX' THEN 'RELEASED_TO_K2_OUTBOX'
+        WHEN 'BLOCK' THEN 'BLOCKED_SELL_PROCEEDS_UNAVAILABLE'
+        WHEN 'EOD_RESIDUAL' THEN 'EOD_RESIDUAL'
+    END;
+    IF coordination_record.decision_sequence<>NEW.decision_sequence
+       OR coordination_record.last_decision_sha256<>NEW.decision_sha256
+       OR coordination_record.status<>expected_status
+       OR (coordination_record.lease_worker_id,coordination_record.lease_process_incarnation_id,
+           coordination_record.lease_epoch)
+          IS DISTINCT FROM (NEW.worker_id,NEW.process_incarnation_id,NEW.lease_epoch) THEN
+        RAISE EXCEPTION 'K6 dependent-BUY decision does not close to coordination successor';
     END IF;
     RETURN NEW;
 END
@@ -382,7 +549,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_miniqmt_k6_coordination_cas ON qmt_strategy.execution_dependent_buy_coordination;
 CREATE TRIGGER trg_miniqmt_k6_coordination_cas
-BEFORE UPDATE ON qmt_strategy.execution_dependent_buy_coordination
+BEFORE INSERT OR UPDATE ON qmt_strategy.execution_dependent_buy_coordination
 FOR EACH ROW EXECUTE FUNCTION qmt_strategy.miniqmt_k6_validate_coordination_update();
 
 DROP TRIGGER IF EXISTS trg_miniqmt_k6_dependency_append_only ON qmt_strategy.execution_dependent_buy_dependency;
@@ -394,6 +561,12 @@ DROP TRIGGER IF EXISTS trg_miniqmt_k6_decision_append_only ON qmt_strategy.execu
 CREATE TRIGGER trg_miniqmt_k6_decision_append_only
 BEFORE UPDATE OR DELETE ON qmt_strategy.execution_dependent_buy_decision
 FOR EACH ROW EXECUTE FUNCTION qmt_strategy.miniqmt_k6_reject_immutable_mutation();
+
+DROP TRIGGER IF EXISTS trg_miniqmt_k6_decision_closure ON qmt_strategy.execution_dependent_buy_decision;
+CREATE CONSTRAINT TRIGGER trg_miniqmt_k6_decision_closure
+AFTER INSERT ON qmt_strategy.execution_dependent_buy_decision
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION qmt_strategy.miniqmt_k6_validate_decision_closure();
 
 DROP TRIGGER IF EXISTS trg_miniqmt_k6_authority_append_only ON qmt_strategy.execution_product_command_authority;
 CREATE TRIGGER trg_miniqmt_k6_authority_append_only
@@ -474,7 +647,7 @@ WITH target_tables(relname) AS (
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
     WHERE n.nspname='qmt_strategy' AND p.proname IN (
         'miniqmt_k6_reject_immutable_mutation','miniqmt_k6_validate_route_owner',
-        'miniqmt_k6_validate_coordination_update'
+        'miniqmt_k6_validate_coordination_update','miniqmt_k6_validate_decision_closure'
     )
 ), canonical_catalog AS (
     SELECT coalesce(jsonb_agg(item ORDER BY sort_key),'[]'::jsonb)::TEXT AS payload FROM catalog_items
@@ -488,15 +661,15 @@ DECLARE actual_function_body_sha256 TEXT;
 DECLARE actual_function_metadata TEXT;
 BEGIN
     SELECT qmt_strategy.miniqmt_k6_catalog_fingerprint() INTO actual_catalog_sha256;
-    IF actual_catalog_sha256 <> 'f9985b5c93aae9655d78179cf39e9ffd840ba095d1a91a6a34d0186beafbf198' THEN
-        RAISE EXCEPTION 'K6-A post-commit catalog drift: expected f9985b5c93aae9655d78179cf39e9ffd840ba095d1a91a6a34d0186beafbf198, got %', actual_catalog_sha256;
+    IF actual_catalog_sha256 <> '546a209dc2f8721ccee8b5e905117788486307147dfb4fc6bc396842f5cf84ad' THEN
+        RAISE EXCEPTION 'K6-A post-commit catalog drift: expected 546a209dc2f8721ccee8b5e905117788486307147dfb4fc6bc396842f5cf84ad, got %', actual_catalog_sha256;
     END IF;
     SELECT encode(sha256(convert_to(replace(p.prosrc,n.nspname,'<schema>'),'UTF8')),'hex'),
            l.lanname||':'||p.provolatile::TEXT||':'||p.prokind::TEXT||':'||pg_get_function_identity_arguments(p.oid)
     INTO actual_function_body_sha256,actual_function_metadata
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
     WHERE n.nspname='qmt_strategy' AND p.proname='miniqmt_k6_catalog_fingerprint';
-    IF actual_function_body_sha256 <> '02b6e4ba5fb9accc6f01848b61a21f728f3b37c37862978db5f38060e7b16129'
+    IF actual_function_body_sha256 <> 'bcb0b57b1cb425f4eb3d34b2ce5ca24c9f430986665871384482dfc056f5628a'
        OR actual_function_metadata <> 'sql:s:f:' THEN
         RAISE EXCEPTION 'K6-A catalog fingerprint function definition drift: metadata=%, body=%',
             actual_function_metadata,actual_function_body_sha256;
