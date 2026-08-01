@@ -3,12 +3,12 @@
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
 - 修订日期：2026-07-31
-- 状态：`B3_FORMAL_EXECUTED_BLOCKED_D1_B_P1_SOURCE_IMPLEMENTED_CONTROLLED_REFIT_NOT_EXECUTED`
+- 状态：`B3_FORMAL_EXECUTED_BLOCKED_D1_B_CONTROLLED_REFIT_ATTEMPTED_C010_A5_ZERO_FITS`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.16
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已按历史用户决定固化；Slice 0 B3/L2 retrain、C-009 与 C-010-FORMAL-A 源码均已合入。producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已在冻结 dataset/mapping、两个 family、seeds 42..49 和固定单线程 Conda `AIstock` 数值环境完成两次 fresh-process 正式制备，共 `5184/5184` fits；D5 已按 train-only 合同执行，未读取 validation/future utility，selection 后未 refit。正式 receipt canonical SHA-256=`e7992f87fb555eb26d6c2ef1ad9d45863954edd83fbfcc39f5ae01765cf3939f`，最终 `status=blocked`：只有 `legacy_covfix:L1` 选中 seed 43，且在 D6 因 `801980.SI` 失败；其余三个 family/level 均无 D5 eligible candidate。两 family均 blocked，`ready_artifact_write_performed=false`、model/READY 数量为0、数据库与 runtime均未变化。随后 `C-008-B3-FORMAL-BLOCKER-DIAG-01` 完成348/348 targeted fits与3-entry D6 no-refit replay；`C-008-B3-REMEDIATION-DIAG-02` 又完成324/324 train profiles、163/163 completed entries与11/11 initialization sources的no-fit闭合，producer `b2456424b859f1635635129aa6a826a677f4fdec`、canonical SHA-256=`48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58`。D1-B P1最小源码已实现并通过直接审核：exact authority、full20→19 projection、identity20 control、共享train-only HMM核心、process/report与immutable writer完整；32-fit controlled-refit和D5 19/20维comparability仍为独立pending。本次不运行fit、selection、D6、model/READY或生产动作。
+- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已按历史用户决定固化；Slice 0 B3/L2 retrain、C-009 与 C-010-FORMAL-A 源码均已合入。producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已在冻结 dataset/mapping、两个 family、seeds 42..49 和固定单线程 Conda `AIstock` 数值环境完成两次 fresh-process 正式制备，共 `5184/5184` fits；D5 已按 train-only 合同执行，未读取 validation/future utility，selection 后未 refit。正式 receipt canonical SHA-256=`e7992f87fb555eb26d6c2ef1ad9d45863954edd83fbfcc39f5ae01765cf3939f`，最终 `status=blocked`：只有 `legacy_covfix:L1` 选中 seed 43，且在 D6 因 `801980.SI` 失败；其余三个 family/level 均无 D5 eligible candidate。两 family均 blocked，`ready_artifact_write_performed=false`、model/READY 数量为0、数据库与 runtime均未变化。随后 `C-008-B3-FORMAL-BLOCKER-DIAG-01` 完成348/348 targeted fits与3-entry D6 no-refit replay；`C-008-B3-REMEDIATION-DIAG-02` 又完成324/324 train profiles、163/163 completed entries与11/11 initialization sources的no-fit闭合，producer `b2456424b859f1635635129aa6a826a677f4fdec`、canonical SHA-256=`48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58`。D1-B P1最小源码已实现并通过直接审核：exact authority、full20→19 projection、identity20 control、共享train-only HMM核心、process/report与immutable writer完整。BUG-942 合入后的 D1-B controlled-refit 在首个 fit 前由 C-010 fail closed：全市场 provider-absence manifest 含 `002951.SZ@2023-05-22`，但该证券当日虽有 PIT 与价格事实，Tushare 与本地 `sw_index_member` 均无有效申万身份，不能形成 direct L1/L2 contributor opportunity；现行实现错误要求该 absence symbol 必须具有 opportunity。BUG-944/C-010-A5 详细设计已获用户批准，源码与新601日preflight尚未实施；实际 fit 仍为0，D5/D6/selection/model/READY/数据库/runtime均未执行。
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -24,7 +24,7 @@ Phase 2 的输出是研究分析事实，不是交易门禁、可买性、调仓
 
 ### 0.2 成功边界
 
-- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 源码已实现并通过本模块 required plan。实际双 fresh-process 训练已完成 5184/5184 fits，D5/D6 已按批准合同执行但 fail closed，当前为 `FORMAL_EXECUTED_BLOCKED_NO_READY`。不得以 fit 完成、单个 `legacy_covfix:L1` selected artifact、单 family、部分 sector、historical diagnostic score、放宽阈值或 validation-picked seed 冒充完成。
+- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 源码已实现并通过本模块 required plan。历史双 fresh-process 训练已完成 5184/5184 fits，D5/D6 已按批准合同执行但 fail closed；后续 D1-B controlled-refit 已启动但在首个 fit 前由 C-010-A5 domain-partition 缺口阻断，当前为 `FORMAL_EXECUTED_BLOCKED_C010_A5_AND_MODEL_ACCEPTANCE_NO_READY`。不得以历史 fit 完成、0-fit attempt、单个 `legacy_covfix:L1` selected artifact、单 family、部分 sector、historical diagnostic score、放宽阈值或 validation-picked seed 冒充完成。
 - F-012：所有生成、查询和报告均为 advisory-only，只写 `hmm_risk.*`，不产生任何交易副作用。
 - F-013：真实 API/UI 完成 L1/L2、7 日热力图、今日预警、固定详情、状态分布、事件与回测证据。
 
@@ -869,7 +869,7 @@ candidate/model/READY、更新 snapshot/catalog、写数据库或激活 runtime�
     `9f38e61ee2c6b93795a14640adeca4f17ba22e7e2021272fbe23f37238565e3f`。5/5 opportunity hashes、排除 symbol、四项
     candidate 与最低行数均和审核修复后报告一致；所有 fit/write/action flags 继续为 `false`。
 
-##### C-010-FORMAL-A. 正式 feature-domain contributor 与逐 feature cross-section 政策（源码已实现，formal preflight pending）
+##### C-010-FORMAL-A. 正式 feature-domain contributor 与逐 feature cross-section 政策（历史 v1 已执行，A5 amendment pending）
 
 本节把已完成的 C-010 只读诊断收敛为正式训练输入合同。其 algorithm/policy version 固定为
 `hmm_risk_c010_feature_domain_policy_v1`；用户已于 2026-07-28 明确批准 C-010-A1/A2/A3/A4，当前状态为
@@ -1017,6 +1017,93 @@ moneyflow denominator；C-010-A3=逐 feature cross-section；C-010-A4=公式/政
     feature 唯一性、status/reason、四个 `0.90` authority、formula/feature order、source identities 与所有 nested canonical hash。
     自洽重算 hash 不能使缺字段、缺 identity、重复 identity、未知状态或部分 receipt set 通过。READY 必须保存完整 validated policy
     manifest；任一残缺必须在首个 fit 或 artifact write 之前 fail closed。这是批准合同的完整性修复，不增加人工审批或运行时门禁。
+
+##### C-010-A5. provider-absence 审计域与 direct-sector contributor opportunity 域分离（用户已批准设计）
+
+本节由 BUG-944 / Issue #3017 登记，用户于 2026-08-02 批准文档提交与合入，当前状态为
+`RESOLVED_USER_APPROVED_DESIGN_IMPLEMENTATION_READY`。它修复 C-010-A1 中 `A_s ⊆ O_s` 的域定义缺口；本次批准只确认详细设计并
+允许后续在独立源码阶段实施，不授权 HMM fit、D5/D6、model/READY、数据库写入或 runtime action。
+
+1. **根因与冻结事实**：D1-B controlled-refit 使用已批准的 C-010 formal request，在 `fresh_process_1`、首个 HMM fit 前以
+   `hmm_risk_c010_expected_opportunity_missing` 拒绝 `002951.SZ`。full-market provider audit 的 exact absence key 为
+   `002951.SZ@2023-05-22`；该证券当日有 authoritative price row，且位于冻结 PIT eligible span，但 Tushare
+   `index_member_all(ts_code='002951.SZ')` 与本地 `market.sw_index_member` 均只有 `2025-08-11` 起生效的成员事实，冻结 train
+   日期没有 L1/L2 申万身份。因此这不是 moneyflow/provider、price、PIT、证券代码 alias 或本地同步缺失，而是该 key 位于
+   full-market provider audit domain、却不位于 direct-sector contributor opportunity domain。禁止补造历史申万成员、用当前行业
+   回填、删除 provider-absence row 或取消 SW join 来伪造 opportunity。
+2. **两个不可混同的权威域**：`P_all` 是 immutable full-market provider-absence manifest 中落入冻结 train window 的全部 exact
+   `canonical symbol × trade_date` keys；`O_sector` 是同一 train window 内同时满足 PIT eligible、authoritative price row 存在、
+   且当日具备唯一有效 direct L1 与 direct L2 申万 identity 的 contributor opportunity keys。正式 ledger 的 availability 只对
+   `O_sector` 定义；`P_all` 不得被反向当作“每个 key 都必须属于 O_sector”的证明。两域的 source identity、window、ordered key set
+   与 canonical SHA-256 必须独立保存。
+3. **确定性分区**：对每个 `P_all` key 逐谓词审计 `pit_eligible`、`price_authority_present`、`sw_l1_identity_valid`、
+   `sw_l2_identity_valid`，形成互斥且完备的 `P_in=P_all ∩ O_sector` 与 `P_out=P_all-O_sector`。必须满足
+   `P_in ∩ P_out=∅`、`P_in ∪ P_out=P_all`、逐 key 唯一、entry count 与 ordered key hash 闭合；任一谓词缺证据、重复、hash 漂移、
+   未知状态或分区不完备均以 `hmm_risk_c010_provider_absence_domain_partition_invalid` fail closed。
+   四个 predicate 不建立新数据 authority，必须逐项复用并绑定当前 frozen request 的既有权威：
+   - `pit_eligible`：使用 request 已冻结的 `universe_key/universe_rule_version`、已通过 source validation 的 ready/non-dirty PIT state，
+     以及覆盖该日的唯一 `stock_universe_pit_spans` row；保存 state/span identity 与 hash。不得改用其他 pool、current/latest 或只看 span
+     而绕过 state/rule identity；
+   - `price_authority_present`：使用 C-009/C-010 stock-fact reader 同一 canonical security/date 对应的
+     `market.kline_daily_raw` exact row identity。该 predicate 只表示 authoritative row 是否存在；价格字段 numeric completeness 继续由
+     price-domain contract 独立判断。重复且非全字段等价、identity/date 不一致为 `invalid`，不得归类为普通 unavailable；
+   - `sw_l1_identity_valid/sw_l2_identity_valid`：必须复用 §4.3.1 A 与 mapping manifest 的同一 resolver：active
+     `sw_index_member` interval 经同 level `sw_index_classify` 规范化后形成唯一 canonical `(L1,L2)` pair。无 active source row 或任一 level
+     无 classify match 为 `unavailable`；重叠/冲突/一对多/非等价多行为空间 identity `invalid` 并使整个 partition fail closed，禁止把
+     invalid 降级为合法 `P_out`；
+   - 所有 predicate 在 join 前先应用 C-009-B 已批准的 source-specific effective-dated security identity resolver，并在 entry 中保存
+     canonical/source/stable identity 与 resolver authority hash；禁止用 provider raw code、证券名称或当前代码直接关联历史事实。
+4. **域外证据而非静默忽略**：每个 `P_out` entry 至少保存 canonical/source security identity、trade date、provider row hash、
+   PIT predicate receipt、price predicate receipt、L1/L2 SW predicate receipt、有序 `failed_predicates`、primary reason code、policy
+   version 与 entry hash。一个 key 可同时具有多个失败 predicate，全部必须保存；primary reason 只用于稳定分类，固定优先级为
+   `pit_ineligible > price_unavailable > sw_l1_unavailable > sw_l2_unavailable`，不得因选择 primary reason 丢弃其余失败事实。
+   `002951.SZ@2023-05-22` 的确定性 primary reason 为 `hmm_risk_c010_sw_identity_unavailable_for_opportunity`。未来若 predicate 表明
+   PIT 不 eligible 或 price authority 不存在，分别使用 `hmm_risk_c010_pit_ineligible_for_opportunity`、
+   `hmm_risk_c010_price_unavailable_for_opportunity`；后者不得覆盖 price-domain 自身的 missing/coverage failure，必须引用对应 typed
+   price evidence。predicate 集不完整、primary reason 与优先级不一致或无法分类时不得使用 generic out-of-domain 成功状态。
+5. **availability 与 ledger 公式**：对每个至少具有一个 `O_sector` key 的 canonical symbol，令 `O_s` 为其全部 sector opportunity
+   dates，`A_s` 仅为 `P_in` 中同 symbol 的 dates；继续要求 `A_s ⊆ O_s`，并原样执行已批准的
+   `10*(|O_s|-|A_s|) >= 9*|O_s|`。只有 `P_out`、没有任何 `O_sector` key 的 symbol 不生成 contributor eligibility entry，也不进入
+   availability numerator/denominator；其完整 `P_out` evidence 仍必须进入 policy manifest。禁止把 `P_out` 计为 available、填 0、
+   neutral、行业代理，或借此把同 symbol 在冻结 train 内较晚日期具有有效 SW identity 的 `O_sector` keys 排除。若整个 train 均无
+   `O_sector` entry、只在 validation/runtime 首次获得 SW identity，继续沿用 A1 已批准的 `train_eligibility_unavailable`，不临时重算
+   availability，也不删除证券。
+6. **业务不变量**：C-010-A5 只界定 direct L1/L2 moneyflow contributor opportunity。证券仍保留在 PIT 股票池、价格/收益事实、
+   回测、选股、实盘候选及 runtime prediction eligibility；不得因缺少历史 SW identity 删除证券，也不得为其生成虚构 sector
+   observation。C-009 source identity、C-010-A2/A3 formula/coverage、7/20 feature order、两个 family、train/validation 窗口、
+   hard semantic authority、D3-D6 与两-family READY 合取均保持不变。
+7. **policy 与 artifact lineage**：domain partition contract 候选版本固定为
+   `hmm_risk_c010_provider_absence_domain_partition_v1`；正式 policy schema 候选升级为
+   `hmm_risk_c010_feature_domain_policy_v2`，eligibility/expected-opportunity schema 分别升级为
+   `hmm_risk_c010_train_observation_eligibility_v2` 与 `hmm_risk_c010_expected_opportunity_dates_v2`。v1 request/manifest 不得仅因
+   nested hash 自洽而被解释为具有 A5 evidence。
+   - partition receipt 顶层 required fields 固定为：schema/contract/policy version、train start/end、provider-absence manifest identity、
+     security-resolver identity、PIT state/span authority identity、price source identity、SW mapping/classify identity、`P_all/P_in/P_out`
+     entry counts、三个 ordered key hashes、entry list、`partition_complete`、`diagnostic_only/formal_policy_activated` 与 receipt hash；
+   - 每个 partition entry required fields 固定为：canonical/source/stable security identity、trade date、provider row hash、四个 predicate
+     的 `available/unavailable/invalid` status、各 predicate authority receipt/hash、有序 `failed_predicates`、`in_domain/out_of_domain`
+     partition、primary reason、entry hash。unknown field、unknown enum、字段缺失、hash 自洽但 authority 不闭合均拒绝；
+   - cardinality 固定为每个 `P_all` exact key 恰好一条 entry，并满足顶层 counts、entry set、三个 key hash、disjoint/union invariants；
+     writer 与 readback validator 必须调用同一 strict validation authority；
+   - eligibility v2 在 v1 每-symbol `O_s/A_s` evidence 基础上新增 partition receipt/hash 与 `P_in` date-set hash；expected-opportunity v2
+     保存逐 symbol `O_s` dates/hash及其 frozen predicate-authority identities；policy v2 内嵌并哈希上述完整 receipts，不接受 count-only、
+     hash-only 或外部 diagnostic pointer；
+   - v1 artifact、historical formal report 与 READY reader 继续按原 schema 只读回放，不迁移、不覆盖、不伪装成 v2；A5 合入后新的
+     formal preflight/request/child/selected/READY writer 只允许 v2。任何以 v1 request 恢复新 fit 的尝试必须在首个 fit 前以
+     `hmm_risk_c010_policy_identity_mismatch` fail closed。
+   formal policy manifest、request candidate、两个 fresh-process child、D4/D5/D6 receipt、selected artifact 与任何 future READY
+   manifest 必须保存同一 `P_all/P_in/P_out` partition receipt 及 canonical SHA-256；D1-B 只能在新 formal preflight 重算并验证该
+   identity 后恢复。
+8. **验证合同**：direct fix-point 必须覆盖：全部 absence 均 in-domain；合法 SW-domain-out key；PIT-domain-out；price-domain-out 且
+   price failure 未被掩盖；同 symbol 同时具有 in/out keys；predicate 缺失/冲突；重复/漏分区/hash 漂移；out-only symbol 不进入
+   denominator；同一 frozen train 内后续具备 SW identity 的 dates 正常进入 ledger；v1 历史只读/v2 新写、writer/readback 同权威；
+   证券/PIT/runtime prediction flags 均不变。随后执行冻结 601 日 read-only formal preflight：必须完整分区冻结 manifest 的全部
+   `P_all` keys并证明分区/hash/cardinality闭合，且结果必须包含已知 `002951.SZ@2023-05-22` SW-domain-out evidence；其他
+   `P_out` 数量只能由完整审计结果确定，禁止在执行前硬编码为1或因出现额外合法域外 key 失败。在其通过前不恢复 D1-B fit。
+9. **状态边界**：本节不新增 coverage threshold、人工逐股确认、运行时 acknowledge、研究方向淘汰或发布门禁。当前 D1-B
+   report 保持 `diagnostic_failed`、fits=`0`、selection/model/READY/database/runtime actions=`false`。精确合同现已获批，后续可在
+   BUG-944 的 allowed scope 内实施并生成新的 formal policy identity；源码实现、代码 PR 合入和后续执行仍按既有边界分别报告，
+   不得把本次文档合入授权扩张为 fit、selection、数据库或 runtime 授权。
 
 ##### BUG-892. PIT entry 与 causal `circ_mv` denominator 的时间域冲突
 
@@ -1470,7 +1557,8 @@ remediation decision 独立提交详细设计和用户确认，不能在实现�
 5. D6 temporal-evidence remediation：只处理 selected `801980.SI` 的 run/transition/concentration根因；不得改变 hard semantic authority、
    使用 validation reselect、加入 neutral/index/soft fallback，或以两个 control 的通过结果覆盖 failed entry。
 
-上述五类remediation中，常量维子问题已选择D1-B设计方向；其源码与controlled-refit仍未授权，其余initialization、likelihood、
+上述五类remediation中，常量维子问题已选择D1-B设计方向；其源码随后已实现，controlled-refit也已另行获授权但在0 fits由
+C-010-A5上游数据域合同阻断，其余initialization、likelihood、
 covariance、train-structure与D6 temporal机制继续为`PROPOSED_PENDING_USER_APPROVAL_NOT_IMPLEMENTATION_READY`。F-011-B/C/D保持
 blocked，不运行新的完整grid、不产生candidate/selection/model/READY。获批后的验证也必须先执行受控诊断验证模型机制，正式grid
 仍沿用既有执行授权边界；不得把本诊断的348 fits复用为正式acceptance。
@@ -1622,7 +1710,7 @@ implementation ready。
 
 #### I. C-008-B3-REMEDIATION-D1：sector-local 常量维模型 identity 精确设计
 
-状态：`D1_B_P1_SOURCE_IMPLEMENTED_CONTROLLED_REFIT_NOT_EXECUTED`。用户已选择D1-B并明确不采用D1-A；P1最小源码已实现，
+状态（P1源码审核当时的历史边界）：`D1_B_P1_SOURCE_IMPLEMENTED_CONTROLLED_REFIT_NOT_EXECUTED`。用户已选择D1-B并明确不采用D1-A；P1最小源码已实现，
 但不授权受控refit、D5/D6或model/READY。权威输入证据仍仅为 REMEDIATION-DIAG-02 producer
 `b2456424b859f1635635129aa6a826a677f4fdec`、canonical `48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58`。
 
@@ -1836,7 +1924,8 @@ implementation ready。
 - D4各状态独立，0 D5/D6/validation/future utility/model/READY/DB/runtime write；
 - changed-file ownership、`hmm_risk_backend` required plan、F2 validator、scope、Ruff/compile与`git diff --check`。
 
-D1-B P1最小源码已实现；该状态不授权controlled-refit fit。D5 comparability未闭合前仍禁止formal grid/selection/model/READY。该限制是既有D5业务语义的准确边界，
+D1-B P1最小源码已实现；该源码状态本身不授权controlled-refit fit。用户后续独立授权的controlled-refit已启动，但在首个fit前由
+C-010-A5阻断，不能冒充32-fit完成。D5 comparability未闭合前仍禁止formal grid/selection/model/READY。该限制是既有D5业务语义的准确边界，
 不是新增runtime人工审批。
 
 **9. Evidence-first执行优先级与反过度工程边界。** 完整设计合同不删减，但实现按最短可证伪路径逐步推进；每个slice必须完整实现其
@@ -2345,6 +2434,13 @@ q20 边界相等计 adverse、OPPORTUNITY 排除、L1 constituent 缺失、跨 h
 - `hmm_risk_report_coverage_insufficient`
 - `hmm_risk_schema_drift`
 - `hmm_risk_chart_renderer_unavailable`
+- `hmm_risk_c010_expected_opportunity_missing`
+- `hmm_risk_c010_contributor_receipt_mismatch`
+- `hmm_risk_c010_policy_identity_mismatch`
+- `hmm_risk_c010_provider_absence_domain_partition_invalid`
+- `hmm_risk_c010_pit_ineligible_for_opportunity`
+- `hmm_risk_c010_price_unavailable_for_opportunity`
+- `hmm_risk_c010_sw_identity_unavailable_for_opportunity`
 
 C-008-B3 的 D4-01-A/D4-02-A/D4-03-B/D5-01-B/D6-01-B reason code 已进入批准的设计合同，但在 B3 源码实现前不代表历史 diagnostic record 已执行
 正式验收。未来实现必须使用最具体 reason code；`hmm_risk_model_likelihood_terminal_decrease_warning` 是可继续后续独立
@@ -2568,11 +2664,12 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-009-D | 三类缺口按什么顺序实现和恢复正式训练 | `PREFLIGHT_EXECUTED_BLOCKED_TRAIN_COVERAGE` | 601 日 source-only preflight 已执行且无 DB/runtime write；legacy L1 31/31、legacy L2 130/131、autocycle L1/L2 0 complete；不得训练、selection、D6 或 READY |
 | BUG-886 | provider absence 如何避免放大为无关 feature/sector 的全局 train coverage failure | `SOURCE_IMPLEMENTED_TARGETED_VALIDATION_PASSED_FORMAL_PREFLIGHT_PENDING` | 正式/诊断 schema、统一 denominator、full-universe ledger、双层 coverage、formula v2、逐 feature cross-section 与 policy lineage 已实现；历史 601 日 diagnostic report `2b1f4acc…7260` 仍只作诊断证据，新的 post-fix formal preflight 与训练继续 blocked |
 | C-010-DIAG-01 | 是否先执行 601 日 feature-domain eligibility/mask 只读诊断 | `VERIFIED_AFTER_REVIEW_FIX_NO_FIT_NO_SELECTION_NO_ARTIFACT` | 当前 source ancestry 的 clean producer report canonical `2b1f4acc…7260`；5 个 exact opportunity hashes 完整，仅排除 `689009.SH` moneyflow contribution，四项 candidate valid 且无需删 feature；旧 `ded02740…251f` 仅为 failed-review identity，`ac218d78…6b3ae` 为 pre-rebase verified evidence |
-| C-010-FORMAL-A | 是否采用 full-universe train-frozen contributor ledger、price/moneyflow 双层 coverage、同源 moneyflow denominator 与逐 feature `0.90` cross-section 的正式政策 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_FORMAL_PREFLIGHT_AND_GRID_EXECUTED` | 用户于 2026-07-28 明确批准；version=`hmm_risk_c010_feature_domain_policy_v1`。clean-main formal preflight 已通过且正式 5184 fits 已绑定 policy SHA `ae8eda5b…220d9` 完成；当前 blocker 位于 D3/D4/D6 模型验收，不是 C-010 coverage/policy pending。仍未生成 READY |
+| C-010-FORMAL-A | 是否采用 full-universe train-frozen contributor ledger、price/moneyflow 双层 coverage、同源 moneyflow denominator 与逐 feature `0.90` cross-section 的正式政策 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_FORMAL_PREFLIGHT_AND_GRID_EXECUTED` | 用户于 2026-07-28 明确批准；version=`hmm_risk_c010_feature_domain_policy_v1`。clean-main formal preflight 与正式 5184 fits 已绑定 policy SHA `ae8eda5b…220d9` 完成；该历史执行仍有效，但后续D1-B refit暴露A5 domain-partition gap，新的policy/refit在A5闭合前blocked。仍未生成READY |
 | C-010-A1 | 是否以 full-universe `O_s/A_s` ledger 冻结 train-derived moneyflow contributor eligibility | `RESOLVED_USER_APPROVED_C010_A1` | 每个 train opportunity symbol 显式入账，`A_s ⊆ O_s`，availability `>=0.90` eligible；train 后新证券保留业务/price eligibility但 moneyflow=`train_eligibility_unavailable`，不得默认 eligible或删除证券 |
 | C-010-A2 | 是否采用 price/moneyflow 两层 count+weight coverage 与同一 moneyflow contributor set 的 numerator/denominator | `RESOLVED_USER_APPROVED_C010_A2` | price denominator 不受 moneyflow exclusion影响；moneyflow expected set仅含 A1 eligible contributor，exact five fields固定，count/weight均`>=0.90`；price/moneyflow weight denominator invalid 独立 fail closed；四项 moneyflow ratio使用严格正的`moneyflow_contributor_amount`，不填值或借用`l1_amount` |
 | C-010-A3 | 是否把 exact-complete 全局传播改为按 feature domain 独立的 `0.90` cross-section | `RESOLVED_USER_APPROVED_C010_A3` | 每个 feature/date/level保存 expected/valid/missing sector set/hash及exact operator/reference；达到0.90只对valid set计算、缺失sector保持NA，不足仅该feature/date invalid；L1/L2最小valid count为28/118；reference invalid、output non-finite、pre/post mask mismatch独立fail closed，rolling不得复活当前invalid date |
 | C-010-A4 | 是否升级 formula/policy identity并以601日formal preflight绑定后续B3执行 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_FORMAL_EXECUTION_VERIFIED` | feature set/order/rolling不变；formula=`hmm_risk_l1_sector_factor_formula_v2_c010`。601日 formal preflight、request、两个 child、D4/D5/D6 receipt 已使用同一 policy identity；fit 前 coverage 条件通过。READY 因下游模型验收 blocked，不能倒推 A4 失败或重新启用 v1 |
+| C-010-A5 | 是否把 full-market provider-absence audit domain 与要求有效 direct L1/L2 SW identity 的 contributor opportunity domain 显式分区 | `RESOLVED_USER_APPROVED_DESIGN_IMPLEMENTATION_READY` | 用户于2026-08-02批准；BUG-944 证据确认 `002951.SZ@2023-05-22` 有 PIT/price、但 Tushare 与本地均无当日 SW identity。逐 key `P_all/P_in/P_out` 完备分区、typed predicate authority、v2 schema/readback与policy hash已固化，availability只对`O_sector`计算；不得伪造行业、删除absence/证券、改变PIT/runtime prediction、阈值、feature、hard semantic或D3-D6。当前fits=0，源码未实施 |
 | BUG-892 | PIT entry day 的 causal `circ_mv` 为什么形成结构性 denominator failure | `SOURCE_REVIEW_FIX_VERIFIED_DENOMINATOR_COMPLETE_DOWNSTREAM_TRAIN_COVERAGE_BLOCKED` | producer `77265dd6...` 的 601 日 no-fit receipt `7c36f228...fdd1ca`：crossing total/available/invalid=`1073/1073/0`，history start=`2020-07-30`，ordered key hash=`0b89a9d5...53c8f19`；PIT-entry denominator 根因闭合。整体 preflight 仅因既有 train observation coverage blocked（legacy L2 `801881.SI=102<120`、autocycle L2 coverage）而保持 blocked；未执行 fit/selection/D6/model/READY/DB/runtime action，且不改变 PIT、return 或 hard semantic 语义 |
 | BUG-870 | formal preflight 是否在grid前闭合四个family/level的train coverage并持久化child typed failure | `SOURCE_FIX_MERGED_CURRENT_FORMAL_PREFLIGHT_PASSED` | 完整 coverage preflight 与 typed child failure 已合入；当前 clean-main request 通过该 fail-closed gate并运行正式 grid。历史首-fit前 blocker仍保留为旧 receipt，不再代表当前执行状态 |
 | C-008-B3-D4-02-DIAG-03 | 是否仅重聚合 sector-local covariance reference 与候选 bounds sensitivity | `VERIFIED_DIAGNOSTIC_ONLY_NO_REFIT_NO_SELECTION_NO_ARTIFACT` | canonical report `22ee3536b4dc6590c27fa6c2989bc830d3d5d336e71b193fd17801d7c62a7e43`；统一 `[1e-4,200]` 被证据否定，未批准替代 bound |
@@ -2605,23 +2702,26 @@ C-008-B3-STRUCTURAL-A、DIAG-02、D3-01-A、D3-02-B、固定环境 D5-02-B、D7-
 不能倒推历史设计批准曾包含执行授权。
 DIAG-02/03/04 的 `formal_acceptance_thresholds_applied=false` 仍是硬边界，
 不得把 diagnostic completion 改写为正式 candidate acceptance。
-C-008-B3-REMEDIATION-D1-B设计方向已于2026-07-31获用户选择；该选择不包含源码、32-fit执行、D5兼容语义、正式grid、
-selection、model/READY或runtime/database动作。后续必须按§4.3.1 I.9的evidence-first顺序单独授权和报告。
+C-008-B3-REMEDIATION-D1-B设计方向已于2026-07-31获用户选择；源码与32-fit执行随后分别获得独立授权。源码已合入；32-fit
+controlled-refit在0 fits被C-010-A5阻断，未触及D5兼容语义、正式grid、selection、model/READY或runtime/database动作。后续仍必须按
+§4.3.1 I.9的evidence-first顺序单独报告，不得把执行授权扩张到未发生阶段。
 C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
 
-- F-011 parent：`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE`；C-009、BUG-892 与
+- F-011 parent：`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_BLOCKED_C010_A5_AND_MODEL_ACCEPTANCE`；C-009、BUG-892 与
   C-010-FORMAL-A 已合入并完成 clean-main 601 日 formal preflight。两 fresh-process 共 5184 fits 和 D5/D6 已执行；formal canonical
   `e7992f87…39f` 为 blocked，未生成 model/READY。targeted blocker diagnostic 已按批准合同完成，canonical
   `10287e84…cffe8`；no-fit remediation diagnostic也已完成，canonical `48157a42…bb58`。两项都只完成根因证据闭合且未重跑
-  完整 grid，Slice 1-3仍未开始。
-- F-011-A 数据/PIT/observation：`C010_FORMAL_A_PREFLIGHT_AND_FORMAL_INPUT_VERIFIED`；C-007-A 单位、PIT sector mapping、7/20 维公式、
+  完整 grid，Slice 1-3仍未开始。D1-B controlled-refit 又在0 fits暴露 C-010-A5 domain-partition 缺口；该缺口不否定历史 formal
+  execution，但阻断新 formal policy identity 与后续 refit。
+- F-011-A 数据/PIT/observation：`APPROVED_BY_USER_C010_A5_DESIGN_PENDING_IMPLEMENTATION`；C-007-A 单位、PIT sector mapping、7/20 维公式、
   hard semantic authority、120/30 行合同与既有 `0.90` coverage authority 均保留。已批准 policy 只把 full-universe train-frozen
   contributor ledger、price/moneyflow 双层 coverage、同源 moneyflow denominator 与逐 feature cross-section 形式化；它不删除证券或
   feature，不改变 validation/runtime prediction universe。A2/A3 已批准，四个 moneyflow/横截面派生 feature 的公式 identity 必须从
   v1 显式升级为 `hmm_risk_l1_sector_factor_formula_v2_c010`，不得被描述为“公式不变”。设计、源码、formal preflight 与 formal child input
-  identity 已验证；当前 blocker 不在 data/PIT/policy gate。
+  identity 已完成历史验证。BUG-944 现证明 full-market provider audit domain 与 direct-sector opportunity domain 尚未正式分离；
+  C-010-A5 设计已获批，但在源码实现并通过新601日 formal preflight前，F-011-A不得继续记为无 gap。
 - F-011-B fit/convergence/covariance/occupancy：`SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_D3_D4`；完整 grid、双 fresh-process hash、targeted diagnostic与no-fit remediation DIAG-02均已执行。
   `autocycle_all_core:L1/L2` 与 `legacy_covfix:L2` 因 initialization/likelihood/covariance/train-occupancy rejection 无 eligible candidate；
   `legacy_covfix:L1` 8 个 seed 均 D4 eligible。历史 DIAG 不反写正式 D4 acceptance。
@@ -2636,9 +2736,9 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_remediation_diagnostic,b3_d1_inactive_dimension,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal canonical `e7992f87…39f`；blocker diagnostic canonical `10287e84…cffe8`；remediation DIAG-02 canonical `48157a42…bb58`；`backend/tests/hmm_risk/{test_b3_training,test_b3_remediation_diagnostic,test_b3_d1_inactive_dimension}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE | 两 family均blocked、READY=0；D1-B P1源码已实现，32-fit仍未授权执行。下一步是受控真实训练；D5兼容决策、2096-fit受影响level重训、其余blocker与产品层依次后置，不自动改阈值或重跑完整grid |
-| F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A/C-009/C-010 contracts | `F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_e2c01bae_bug912/c010_formal_preflight.json`；`backend/tests/hmm_risk/test_stock_fact_observation.py` | APPROVED_BY_USER_C010_FORMAL_INPUT_VERIFIED | 601日 formal input与policy identity已通过并进入两个 child；当前blocker属于模型验收，不得回退到删证券/feature或填充缺失值 |
-| F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,b3_remediation_diagnostic,b3_d1_inactive_dimension,state_model_set}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal rejection summaries；blocker diagnostic canonical `10287e84…cffe8`；remediation DIAG-02 canonical `48157a42…bb58`；`backend/tests/hmm_risk/{test_b3_acceptance,test_b3_remediation_diagnostic,test_b3_d1_inactive_dimension}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_D3_D4 | D1-B P1源码已实现并保持formal v1 payload兼容；32-fit和其他remediation未执行，不能改阈值、选择seed或直接运行新formal grid |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_remediation_diagnostic,b3_d1_inactive_dimension,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal canonical `e7992f87…39f`；blocker diagnostic canonical `10287e84…cffe8`；remediation DIAG-02 canonical `48157a42…bb58`；D1-B failure receipt `15322de…12c6`；`backend/tests/hmm_risk/{test_b3_training,test_b3_remediation_diagnostic,test_b3_d1_inactive_dimension}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_BLOCKED_C010_A5_AND_MODEL_ACCEPTANCE | 两 family均blocked、READY=0；D1-B P1源码已实现，controlled-refit在0 fits暴露C-010-A5缺口。先闭合domain-partition设计/实现/601日preflight，再恢复32-fit；D5兼容、2096-fit受影响level重训与其余blocker后置，不自动改阈值或重跑完整grid |
+| F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A/C-009/C-010 contracts | artifact: `F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260801_2794e1db_bug942_c010/d1_controlled_refit.json`；`backend/tests/hmm_risk/test_observation_eligibility.py` | APPROVED_BY_USER_C010_A5_DESIGN_PENDING_IMPLEMENTATION | 历史601日formal input曾通过并进入两个child；新证据显示provider audit/out-of-sector opportunity域缺口。A5完整设计已获用户批准；源码与新preflight仍未完成，不得伪造SW、删证券/absence、填值或提前恢复fit |
+| F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,b3_remediation_diagnostic,b3_d1_inactive_dimension,state_model_set}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal rejection summaries；blocker diagnostic canonical `10287e84…cffe8`；remediation DIAG-02 canonical `48157a42…bb58`；`backend/tests/hmm_risk/{test_b3_acceptance,test_b3_remediation_diagnostic,test_b3_d1_inactive_dimension}.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_D3_D4 | D1-B P1源码已实现并保持formal v1 payload兼容；32-fit已获授权但在0 fits被上游A5阻断，故D4机制证据仍未执行。不能改阈值、选择seed或直接运行新formal grid |
 | F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal D5/D6 receipts；blocker diagnostic 3-entry replay canonical `10287e84…cffe8`；`backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_D5_D6 | selection train-only且无refit；D6失败未reselection；`801980.SI` assignment/utility有效但temporal evidence失败；B2不采用，remediation待用户批准 |
 | F-011-D two-family READY | `backend/services/hmm_risk/b3_training.py::write_b3_ready_model_set` | `F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_e2c01bae_bug912/b3_formal_preparation.json` top-level blocked/no-write receipt；`backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_BLOCKED_FORMAL_ACCEPTANCE | READY artifact数为0；四个family/level完整性未成立，禁止partial/single-family write |
 | F-011-E generator/job/revision | `backend/services/hmm_risk/{state_generator,job_service,repository}.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py` | APPROVED_BY_USER_PENDING_IMPLEMENTATION | 用户明确批准 C-008-D1：上游 READY model set 尚未形成，不推导 generator/job 已验证 |
@@ -2679,6 +2779,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 | 停牌日没有 exact daily-basic 被误判为数据丢失 | C-009-A 只允许 `<t` 且 `<=prev_market_trade_date(t)` 的最新 authoritative circ-mv；保存 source date/staleness；无 causal row fail closed，不伪造停牌日 provider row |
 | Qlib/股票层 NA 被直接送入 GaussianHMM 或被填零 | C-009-C 在 stock-fact 层保存 provider_absence NA 与完整 missing evidence；只对 finite complete rows 聚合并继续执行既有 0.90 count/weight coverage；最终 HMM matrix 拒绝 NaN/non-finite，禁止 0/前值/均值/neutral |
 | absence-only 清单冒充 full-universe contributor policy | C-010-FORMAL-A 要求每个具有 expected opportunity 的 canonical symbol 都进入 ledger；无 absence 显式记录 availability=1.0，零 opportunity、重复/越界日期和 ledger/hash 不完整均 fail closed |
+| full-market provider absence 被误要求必须具有 direct-sector opportunity | C-010-A5 候选合同把 `P_all` 按 PIT/price/SW L1/L2 predicate 完备分成 `P_in/P_out`；availability 只使用 `P_in ⊆ O_sector`。域外 key 必须保留 typed evidence/hash，禁止补造 SW identity、删除 absence、把域外计为 available或掩盖独立 price failure |
 | train contributor exclusion 在 validation/runtime 临时重算造成 train-serving drift | eligibility 只由冻结 train authority 计算一次并进入 policy hash；validation、causal replay 与 runtime feature construction 原样应用同一 ledger，证券仍保留在全部业务 universe 与 price domain |
 | 一个 sector/feature 缺失放大为全市场全部 feature 缺失 | 每个 feature 按自身 price/moneyflow domain 建 ordered valid-sector set，并以既有 0.90 authority 独立判定；不足只使该 feature/date typed invalid，禁止跨 domain 借 completeness、填值或全局吞错 |
 | partial day 冒充完整 | run terminal `partial_failed`；UI degraded 并列 missing sectors |
@@ -2806,6 +2907,31 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 综合结论：`PASS_USER_APPROVED_DESIGN_IMPLEMENTATION_READY`。C-010-A1/A2/A3/A4 的完整正式合同已获用户批准，且 formula v2、失败语义、
 exact fields、mask/rolling 与状态一致性缺口均已修复；这只表示设计可进入独立源码实现，不表示源码、601 日 formal preflight、
 5184 fits、D5/D6 或 model/READY 已完成。
+
+### 23.1.1 C-010-A5 / BUG-944 修订后正式审核
+
+- **禁止简化/子集/POC**：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX`。设计覆盖 full-market `P_all`、direct L1/L2 `O_sector`、逐 key
+  predicate、`P_in/P_out` 完备分区、同 symbol 混合 in/out、formal lineage 与601日回读；未用单股 hard-code、删除一条 manifest row、
+  去除 SW join、“允许 missing symbol”或预设 `P_out=1` 代替完整合同。601日执行必须分区全部 frozen keys，已知 key 只作为包含性断言。
+- **禁止静默错误/fail-open**：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX`。四个 predicate 已分别绑定 frozen PIT state/span、stock-fact
+  price identity、canonical SW resolver/classify 与 C-009-B security resolver；unavailable 与 invalid 分离。域外 key 保存全部 predicate
+  evidence/failed set，分区缺失、重复、冲突、unknown、hash drift、price-domain failure 与 policy identity drift 均 fail closed。
+  `P_out` 不会被计为 available、丢弃或用 default/neutral/行业代理补足。
+- **禁止业务逻辑迁移**：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX`。设计不改变 PIT/selection/runtime prediction universe、C-009 source identity、
+  C-010-A2/A3 formula、feature set/order、两个 family、train/validation、hard semantic authority、D3-D6 或 READY 条件；缺少历史 SW
+  identity 的证券只是不产生该日 direct-sector contribution，不被从其他场景删除，也不获得虚构 sector。
+- **禁止未经确认的门禁和审批**：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX`。没有新增 threshold、固定域外数量、人工逐股审批、runtime
+  acknowledge、发布门禁或研究方向淘汰；新增内容是确定性 domain/predicate 数据合同。其状态保持
+  `RESOLVED_USER_APPROVED_DESIGN_IMPLEMENTATION_READY`；批准的是确定性设计，不是 runtime 人工 gate 或本次执行授权。
+- **schema/readback 完整性**：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX`。partition/eligibility/expected-opportunity/policy v2 已固定 required
+  fields、枚举、cardinality、nested hashes、writer/readback same-authority与v1历史只读/v2新写边界；缺字段或只提供顶层hash不能通过。
+- **证据充分性**：`PASS_USER_APPROVED_FOR_IMPLEMENTATION_AFTER_REVIEW_FIX`。生产只读 DB 与 Tushare provider 对 `002951.SZ` 的成员事实一致，能够排除
+  本地同步、alias、PIT 与 price 缺失；D1-B failure receipt 证明问题发生在0 fits。代码当前的 symbol-level early stop 尚未检查其他
+  date-level域外keys，因此修订后不再预设数量；完整实际分区留给获批后的601日只读preflight。
+
+综合结论：`PASS_USER_APPROVED_DESIGN_AFTER_REVIEW_FIX_IMPLEMENTATION_READY`。第二次审核发现的数量预设、predicate authority、v2 schema
+和顶层状态缺口均已修复，用户已批准文档提交与合入。该结论只允许后续独立源码实现；本次不实施 BUG-944 源码、不恢复 D1-B fit，
+不生成新的 formal request/model/READY，也不改变数据库或 runtime。
 
 ### 23.2 C-008-B3-FORMAL-BLOCKER-DIAG-01 正式设计审核结论
 
@@ -2953,7 +3079,7 @@ selection、model/READY、数据库、依赖或runtime动作。
   `fresh_process_1/2`精确identity、process/report/failure writer-readback同一重建authority，并拒绝仅重算顶层hash的伪成功报告。
   report明确`d3_d4_descriptive_contracts_applied=true`与`formal_model_set_acceptance_performed=false`，不使用含糊成功语义。
 
-综合审核结论：`PASS_D1_B_P1_SOURCE_COMPLETE_CONTROLLED_REFIT_NOT_EXECUTED`。本结论不表示32 fits、selection、D6、model/READY、
+历史源码审核结论：`PASS_D1_B_P1_SOURCE_COMPLETE_CONTROLLED_REFIT_NOT_EXECUTED`。本结论不表示32 fits、selection、D6、model/READY、
 database或runtime已执行。
 
 ## 24. 当前完成状态与下一步
@@ -2961,8 +3087,9 @@ database或runtime已执行。
 本文件已闭合 C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、C-008-B3-STRUCTURAL-A、
 D3-01-A、D3-02-B、D3-03-A、D4-01-A、D4-02-A、D4-03-B、D5-01-B、D6-01-B、固定环境 D5-02-B、D7-01-A、
 C-008-B3-D4-L2-AUDIT-01 与受控 L2 重训设计 A，并登记 DIAG-02/03/04 historical evidence。C-008-B2 继续为
-`NOT_APPROVED`。C-009、BUG-892 和 C-010-FORMAL-A source/preflight 已完成并进入本次 formal execution；不再把 input coverage
-描述为当前 blocker。C-008-B3-REMEDIATION-DIAG-02 已按批准的 no-fit 合同完成并通过执行后正式审核。
+`NOT_APPROVED`。C-009、BUG-892 和历史 C-010-FORMAL-A v1 source/preflight 已完成并进入过正式 execution；BUG-944 新证据表明
+provider-audit/contributor-opportunity domain partition 是后续 refit 的当前上游 blocker。C-008-B3-REMEDIATION-DIAG-02 已按批准的
+no-fit 合同完成并通过执行后正式审核。
 
 正式 B3 当前状态为：
 
@@ -2974,8 +3101,8 @@ C-008-B3-D4-L2-AUDIT-01 与受控 L2 重训设计 A，并登记 DIAG-02/03/04 hi
   9/74/67 seed-sector pairs；
 - 两 family 均 `blocked`，READY artifact数为0，`model_write/ready_write/database_write/runtime_action=false`。
 
-当前 F-011 parent 为 `APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_MODEL_ACCEPTANCE`；F-011-A 的
-formal input/policy 已验证，F-011-B/C/D 分别 blocked 于 D3/D4、D5/D6 与两-family READY 合取。F-012 保持
+当前 F-011 parent 为 `APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_BLOCKED_C010_A5_AND_MODEL_ACCEPTANCE`；F-011-A 为
+`APPROVED_BY_USER_C010_A5_DESIGN_PENDING_IMPLEMENTATION`，F-011-B/C/D 分别 blocked 于尚未执行的D1-B D4机制证据、D5/D6 与两-family READY 合取。F-012 保持
 `DESIGN_READY_USER_APPROVED`，F-013 保持 `PENDING_UPSTREAM_MODEL_SET`。
 
 `C-008-B3-FORMAL-BLOCKER-DIAG-01` 已完成：producer=`ac3687c2…`、canonical=`10287e84…cffe8`、348/348 fits、
@@ -2987,8 +3114,12 @@ formal input/policy 已验证，F-011-B/C/D 分别 blocked 于 D3/D4、D5/D6 与
 acceptance、selection、threshold/authority变更、model/READY、数据库或runtime动作。
 
 用户已选择B“显式inactive-dimension identity”，A“保持fail-closed”不采用；P1最小必要模型机制源码已实现并通过正式审核，
-但不提升F-011完成计数。下一步不是再次运行完整5184 grid，而是在单独执行授权后运行P2的32-fit真实controlled-refit；该执行固定0
-D5/D6/validation/model/READY。D5的19/20维score comparability继续由`D1-D5-COMPAT-01`显式blocked，不能由实现猜测。
+但不提升F-011完成计数。BUG-942 合入后的P2 controlled-refit已按授权启动，但在 fresh-process 1、首个 fit 前由
+`hmm_risk_c010_expected_opportunity_missing` fail closed：full-market provider absence 的 `002951.SZ@2023-05-22` 没有冻结日有效
+SW identity，现行 C-010-A1 却把所有 absence symbol 强制要求为 direct-sector expected opportunity。失败 report 保持
+`diagnostic_failed`、fits=`0`、D5/D6/validation/model/READY/DB/runtime flags=`false`。BUG-944 / C-010-A5 完整 domain-partition
+设计已获用户批准并通过修订后正式审核，状态为 `RESOLVED_USER_APPROVED_DESIGN_IMPLEMENTATION_READY`；在源码修复和新601日preflight前
+不得重试32-fit。D5的19/20维score comparability继续由`D1-D5-COMPAT-01`显式blocked，不能由实现猜测。
 
 若机制证据支持且D5兼容合同获批，才实现P4正式mixed-dimension artifact/parser，并在level-local依赖不变时执行P5的
 `autocycle_all_core:L2` 2096-fit正式重训；公共KMeans/EM/covariance或算法合同变化时才允许完整5184重跑。之后依次执行D5/D6、
