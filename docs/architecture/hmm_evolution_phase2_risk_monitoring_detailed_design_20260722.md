@@ -2943,9 +2943,9 @@ lineage与顶层状态已在rebase后commit `a41d55e0…ce73`闭合；preflight 
 - **集合代数闭合**：对 frozen `P_all` 和 expected direct-sector opportunity set `O_sector`，writer/readback 同时强制
   `P_in = P_all ∩ O_sector` 与 `P_out = P_all - O_sector`。因此每个 `P_in` key 必须属于 `O_sector`，每个 `P_out` key
   必须不属于 `O_sector`；partition 完备、互斥和 cardinality 继续独立校验。
-- **运行态有效性证据**：BUG-944 改动命中 backend runtime。新增只读 `/api/v1/runtime-identity`，在进程导入时冻结 clean
-  checkout 的 exact Git SHA 和 HMM source hashes；新增 `/api/v1/runtime-contracts/hmm-risk-c010-a5` 回读 v2 合同常量及同一
-  merge SHA。identity 不可取得、tracked checkout dirty、源码 hash/常量漂移均返回非成功状态，不伪造 ready。
+- **运行态有效性证据**：BUG-944 改动命中 backend runtime。共享只读 `/api/v1/runtime-identity` 在进程导入时冻结 clean
+  checkout 的 exact Git SHA；新增 `/api/v1/runtime-contracts/hmm-risk-c010-a5` 回读 v2 合同常量及同一 merge SHA。
+  identity 不可取得、tracked checkout dirty 或已加载合同常量漂移均返回非成功状态，不伪造 ready。
 - **重启所有权和 aftercare**：`backend-main` 的启动、停止、重启完全归用户。operator runbook 只描述用户重启后的
   `post-restart-verify`、health/identity/business smoke 和 merge-SHA readback；Skill、CI、merge、close-sync 或本文均不产生
   进程控制授权。未发生 DDL/DML、HMM fit、selection、D6、model/READY 或 runtime action。

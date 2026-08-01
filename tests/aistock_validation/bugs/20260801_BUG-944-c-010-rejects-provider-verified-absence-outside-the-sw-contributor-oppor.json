@@ -9,7 +9,7 @@
     "backend/tests/hmm_risk/test_stock_fact_observation.py",
     "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "backend/routers/health.py",
-    "backend/tests/test_health.py",
+    "backend/tests/platform_api/test_hmm_risk_c010_runtime_contract.py",
     "docs/operations/backend_main_runtime_restart_runbook.md",
     "tests/aistock_validation/bugs/20260801_BUG-944-c-010-rejects-provider-verified-absence-outside-the-sw-contributor-oppor.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
