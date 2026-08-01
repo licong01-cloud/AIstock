@@ -8,6 +8,9 @@
     "backend/tests/hmm_risk/test_observation_eligibility.py",
     "backend/tests/hmm_risk/test_stock_fact_observation.py",
     "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "backend/routers/health.py",
+    "backend/tests/test_health.py",
+    "docs/operations/backend_main_runtime_restart_runbook.md",
     "tests/aistock_validation/bugs/20260801_BUG-944-c-010-rejects-provider-verified-absence-outside-the-sw-contributor-oppor.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -138,12 +141,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "GET http://127.0.0.1:8001/api/v1/hmm-evolution/workers?limit=1 after user-owned restart, then read back the merged C-010-A5 601-day partition receipt and require P_all/P_in/P_out=502/501/1 with 002951.SZ@2023-05-22 classified as SW-domain-out",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-contracts/hmm-risk-c010-a5",
     "fresh_process_evidence": [
       "Conda AIstock fresh process loaded commit 28e824fd and completed C-010-A5 read-only preflight; no backend process control; canonical=e7f7edc9fbe7f1cdb5ec739e1390fffec69a9ede6c8d719c9dda1a21df71773d"
     ],
-    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and verify /api/v1/hmm-evolution/workers is present; compare loaded observation_eligibility.py and stock_fact_observation.py SHA-256 values with the merged main blobs",
-    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_identity_match": "pending",
@@ -175,6 +178,11 @@
     "601-day read-only preflight after rebase: status=preflight_complete, P_all=502, P_in=501, P_out=1, partition_sha256=03d785347b35185fe9f9c771e0a4e69cd0deb8def31a0cb205d3ca7a86b8ead6, report_sha256=e7f7edc9fbe7f1cdb5ec739e1390fffec69a9ede6c8d719c9dda1a21df71773d",
     "C-010-A5 implementation design sync: F2 PASS, 3 design items, 8 matrix rows, 0 warnings",
     "final gates: ruff/format/py_compile PASS; l0 PASS blocking=0; validation_module_registry_l0 PASS 8 tests and 14/14 mapped; git diff --check PASS",
+    "Second formal code review fixed four P1 blockers: diagnostic/formal mode coercion, rehashed predicate status drift, P_out intersecting O_sector, and incomplete backend runtime aftercare evidence",
+    "Second-review direct matrix: 87 passed across observation eligibility, stock-fact observation, B3 preparation and runtime contract endpoints",
+    "Second-review hmm_risk_backend: 239 passed; total coverage 74.43% >= 70%",
+    "Second-review F2 PASS with 3 design items, 8 matrix rows and 0 warnings; l0 blocking=0; validation registry 8 passed and 14/14 mapped",
+    "Cross-module validation reason: backend runtime impact requires a frozen merge-SHA identity and exact HMM C-010-A5 business smoke; only direct endpoint tests were added",
     "No HMM fit, D5/D6, selection, model/READY, database write, DDL/DML, runtime action, or backend process control was performed"
   ],
   "validation_receipts": [

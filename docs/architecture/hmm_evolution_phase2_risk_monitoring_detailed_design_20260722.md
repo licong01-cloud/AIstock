@@ -2931,6 +2931,32 @@ exact fields、mask/rolling 与状态一致性缺口均已修复；这只表示�
 lineage与顶层状态已在rebase后commit `a41d55e0…ce73`闭合；preflight report canonical为`e7f7edc9…773d`。本次仍未恢复D1-B fit，
 未生成新的model/READY，也未改变数据库或runtime；源码合入仍是独立状态。
 
+### 23.1.2 C-010-A5 / BUG-944 第二轮源码审核修订
+
+- **diagnostic/formal 模式隔离**：eligibility builder 必须保留 partition receipt 的
+  `formal_policy_activated`，不得把 diagnostic-only receipt 强制提升为 formal，也不得把 formal receipt 降级为 diagnostic。
+  `evidence()` 只能回读同一模式；模式漂移以 `hmm_risk_c010_contributor_receipt_mismatch` fail closed。该修订恢复既有
+  C-010 diagnostic 路径，不改变 formal v2 的政策、阈值或业务语义。
+- **predicate same-authority 回读**：reader 不再只信任可重算的顶层 hash。PIT、price、SW L1/L2 均从 typed candidate
+  evidence 重建 `available/unavailable/invalid`，并与顶层 status、candidate count/code、resolver receipt 和 source identity
+  逐项一致；攻击者即使同时重算 nested/top-level hash，也不能把 `unavailable/P_out` 改写为 `available/P_in`。
+- **集合代数闭合**：对 frozen `P_all` 和 expected direct-sector opportunity set `O_sector`，writer/readback 同时强制
+  `P_in = P_all ∩ O_sector` 与 `P_out = P_all - O_sector`。因此每个 `P_in` key 必须属于 `O_sector`，每个 `P_out` key
+  必须不属于 `O_sector`；partition 完备、互斥和 cardinality 继续独立校验。
+- **运行态有效性证据**：BUG-944 改动命中 backend runtime。新增只读 `/api/v1/runtime-identity`，在进程导入时冻结 clean
+  checkout 的 exact Git SHA 和 HMM source hashes；新增 `/api/v1/runtime-contracts/hmm-risk-c010-a5` 回读 v2 合同常量及同一
+  merge SHA。identity 不可取得、tracked checkout dirty、源码 hash/常量漂移均返回非成功状态，不伪造 ready。
+- **重启所有权和 aftercare**：`backend-main` 的启动、停止、重启完全归用户。operator runbook 只描述用户重启后的
+  `post-restart-verify`、health/identity/business smoke 和 merge-SHA readback；Skill、CI、merge、close-sync 或本文均不产生
+  进程控制授权。未发生 DDL/DML、HMM fit、selection、D6、model/READY 或 runtime action。
+- **第二轮 DESIGN-COMPLIANCE-001**：`PASS_AFTER_REVIEW_FIX_PENDING_PR_UPDATE`。没有 single-symbol hard-code、简化子集、
+  neutral/default fallback、异常吞噬、hash-only trust、业务政策迁移或新增人工审批；新增 runtime readback 是现有
+  `BUG-RESTART-EFFECTIVE-001` 的确定性证据，不是新的研究门禁。
+
+第二轮审核修订完成后，C-010-A5 的源码状态为
+`SOURCE_FIXED_REVIEW_PASSED_PENDING_PR_UPDATE_AND_USER_MERGE_AUTHORIZATION`。运行态仍是旧进程/未验证状态；只有代码合入、
+用户完成后端重启并由 fresh-process readback 证明 exact merge SHA 后，才可将 `post_restart_effective_gate` 独立更新为通过。
+
 ### 23.2 C-008-B3-FORMAL-BLOCKER-DIAG-01 正式设计审核结论
 
 - **禁止简化/子集/POC**：`PASS_USER_APPROVED_DESIGN_COMPLETE`。设计覆盖 formal receipt 中全部150个 D4 rejected

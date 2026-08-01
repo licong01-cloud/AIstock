@@ -61,6 +61,7 @@ def _build_eligibility(
     train_end: date = date(2024, 6, 30),
     statuses: dict[tuple[str, date], dict[str, str]] | None = None,
     minimum_availability_ratio: float = 0.9,
+    formal_policy: bool = False,
 ):
     authorities = {
         "provider": _authority("provider_absence_manifest"),
@@ -72,6 +73,15 @@ def _build_eligibility(
     predicate_evidence = {}
     for row in absences:
         overrides = (statuses or {}).get((row.canonical_ts_code, row.trade_date), {})
+        predicate_statuses = {
+            name: overrides.get(name, "available")
+            for name in (
+                "pit_eligible",
+                "price_authority_present",
+                "sw_l1_identity_valid",
+                "sw_l2_identity_valid",
+            )
+        }
         resolver_receipt = {
             "security_resolver_identity_sha256": authorities["resolver"]["identity_sha256"],
             "provider_absence_source_resolution": {
@@ -85,24 +95,65 @@ def _build_eligibility(
                 "source_ts_code": row.canonical_ts_code,
             },
         }
+        pit_candidates = (
+            []
+            if predicate_statuses["pit_eligible"] == "unavailable"
+            else ([{"ts_code": row.canonical_ts_code}] * (2 if predicate_statuses["pit_eligible"] == "invalid" else 1))
+        )
+        price_candidates = (
+            []
+            if predicate_statuses["price_authority_present"] == "unavailable"
+            else (
+                [{"ts_code": row.canonical_ts_code}] * 2
+                if predicate_statuses["price_authority_present"] == "invalid"
+                else [{"ts_code": row.canonical_ts_code}]
+            )
+        )
+        if "invalid" in {
+            predicate_statuses["sw_l1_identity_valid"],
+            predicate_statuses["sw_l2_identity_valid"],
+        }:
+            sw_candidates = [{"l1_code": "801010.SI", "l2_code": "801011.SI"}] * 2
+        else:
+            sw_candidates = [
+                {
+                    "l1_code": ("801010.SI" if predicate_statuses["sw_l1_identity_valid"] == "available" else None),
+                    "l2_code": ("801011.SI" if predicate_statuses["sw_l2_identity_valid"] == "available" else None),
+                }
+            ]
+        predicate_authorities = {
+            "pit_eligible": {
+                "authority_identity_sha256": authorities["pit"]["identity_sha256"],
+                "candidate_count": len(pit_candidates),
+                "candidates": pit_candidates,
+            },
+            "price_authority_present": {
+                "authority_identity_sha256": authorities["price"]["identity_sha256"],
+                "source_resolution": resolver_receipt["price_source_resolution"],
+                "candidate_count": len(price_candidates),
+                "candidates": price_candidates,
+            },
+            "sw_l1_identity_valid": {
+                "authority_identity_sha256": authorities["sw"]["identity_sha256"],
+                "level": "L1",
+                "candidate_count": len(sw_candidates),
+                "candidates": sw_candidates,
+            },
+            "sw_l2_identity_valid": {
+                "authority_identity_sha256": authorities["sw"]["identity_sha256"],
+                "level": "L2",
+                "candidate_count": len(sw_candidates),
+                "candidates": sw_candidates,
+            },
+        }
         predicate_evidence[(row.canonical_ts_code, row.trade_date)] = {
             "source_ts_code": row.source_ts_code,
             "stable_security_identity": f"canonical:{row.canonical_ts_code}",
             "security_resolver_receipt": resolver_receipt,
             **{
                 name: {
-                    "status": overrides.get(name, "available"),
-                    "authority_receipt": {
-                        "authority_identity_sha256": authorities[
-                            {
-                                "pit_eligible": "pit",
-                                "price_authority_present": "price",
-                                "sw_l1_identity_valid": "sw",
-                                "sw_l2_identity_valid": "sw",
-                            }[name]
-                        ]["identity_sha256"],
-                        "name": name,
-                    },
+                    "status": predicate_statuses[name],
+                    "authority_receipt": predicate_authorities[name],
                 }
                 for name in (
                     "pit_eligible",
@@ -122,7 +173,7 @@ def _build_eligibility(
         pit_authority_identity=authorities["pit"],
         price_source_identity=authorities["price"],
         sw_mapping_classify_identity=authorities["sw"],
-        formal_policy=True,
+        formal_policy=formal_policy,
     )
     opportunity = build_expected_opportunity_receipt(
         expected,
@@ -190,6 +241,7 @@ def test_train_only_eligibility_uses_exact_integer_ninety_percent_boundary_and_f
         [_absence("000001.SZ", dates[0]), _absence("000002.SZ", dates[0]), _absence("000002.SZ", dates[1])],
         {"000001.SZ": dates, "000002.SZ": dates},
         train_start=start,
+        formal_policy=True,
     )
 
     by_symbol = result.moneyflow_contributor_eligibility
@@ -230,7 +282,7 @@ def test_domain_partition_keeps_same_symbol_in_and_out_keys_and_counts_only_p_in
     out_date = start + timedelta(days=1)
     result = _build_eligibility(
         [_absence("000001.SZ", in_date), _absence("000001.SZ", out_date)],
-        {"000001.SZ": (in_date, out_date)},
+        {"000001.SZ": (in_date, start + timedelta(days=2))},
         train_start=start,
         statuses={("000001.SZ", out_date): {"sw_l2_identity_valid": "unavailable"}},
     )
@@ -279,7 +331,12 @@ def test_domain_partition_invalid_predicate_fails_closed_instead_of_becoming_p_o
             [_absence("689009.SH", key_date)],
             {"000001.SZ": (key_date,)},
             train_start=date(2022, 1, 1),
-            statuses={("689009.SH", key_date): {"sw_l1_identity_valid": "invalid"}},
+            statuses={
+                ("689009.SH", key_date): {
+                    "sw_l1_identity_valid": "invalid",
+                    "sw_l2_identity_valid": "invalid",
+                }
+            },
         )
 
 
@@ -297,12 +354,74 @@ def test_domain_partition_readback_rejects_nested_hash_drift() -> None:
         validate_c010_provider_absence_domain_partition(tampered)
 
 
+def test_domain_partition_readback_rejects_rehashed_predicate_status_drift() -> None:
+    key_date = date(2022, 1, 4)
+    result = _build_eligibility(
+        [_absence("000001.SZ", key_date)],
+        {"000002.SZ": (key_date,)},
+        train_start=date(2022, 1, 1),
+        statuses={("000001.SZ", key_date): {"sw_l1_identity_valid": "unavailable"}},
+        formal_policy=True,
+    )
+    tampered = deepcopy(result.provider_absence_partition_receipt)
+    entry = tampered["entries"][0]
+    predicate = entry["sw_l1_identity_valid"]
+    predicate["status"] = "available"
+    predicate["receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in predicate.items() if key != "receipt_sha256"}
+    )
+    entry["failed_predicates"] = []
+    entry["partition"] = "in_domain"
+    entry["primary_reason_code"] = None
+    entry["entry_sha256"] = canonical_sha256({key: value for key, value in entry.items() if key != "entry_sha256"})
+    key = {"canonical_ts_code": "000001.SZ", "trade_date": key_date.isoformat()}
+    tampered["p_in_entry_count"] = 1
+    tampered["p_out_entry_count"] = 0
+    tampered["p_in_ordered_key_sha256"] = canonical_sha256([key])
+    tampered["p_out_ordered_key_sha256"] = canonical_sha256([])
+    tampered["receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in tampered.items() if key != "receipt_sha256"}
+    )
+
+    with pytest.raises(StateModelSetError, match="predicate status/evidence drift"):
+        validate_c010_provider_absence_domain_partition(tampered)
+
+
+def test_eligibility_rejects_p_out_key_that_intersects_expected_opportunity() -> None:
+    key_date = date(2022, 1, 4)
+    with pytest.raises(StateModelSetError, match="P_out intersects O_sector"):
+        _build_eligibility(
+            [_absence("000001.SZ", key_date)],
+            {"000001.SZ": (key_date,)},
+            train_start=date(2022, 1, 1),
+            statuses={("000001.SZ", key_date): {"sw_l1_identity_valid": "unavailable"}},
+        )
+
+
+def test_diagnostic_eligibility_preserves_partition_mode_and_cannot_be_promoted_to_formal() -> None:
+    key_date = date(2022, 1, 4)
+    result = _build_eligibility(
+        [_absence("000001.SZ", key_date)],
+        {"000001.SZ": (key_date,)},
+        train_start=date(2022, 1, 1),
+        formal_policy=False,
+    )
+
+    evidence = result.evidence()
+    assert evidence["diagnostic_only"] is True
+    assert evidence["formal_policy_activated"] is False
+    assert evidence["provider_absence_partition_receipt"]["formal_policy_activated"] is False
+    with pytest.raises(StateModelSetError, match="eligibility mode differs from partition mode"):
+        result.evidence(formal_policy=True)
+
+
 def test_eligibility_v2_writer_and_readback_share_authority_while_v1_remains_read_only() -> None:
     key_date = date(2022, 1, 4)
     result = _build_eligibility(
         [_absence("000001.SZ", key_date)],
         {"000001.SZ": (key_date,)},
         train_start=date(2022, 1, 1),
+        formal_policy=True,
     )
     v2 = result.evidence(formal_policy=True)
     ledger, excluded = _validate_c010_eligibility_receipt(v2, policy_version=C010_POLICY_VERSION)

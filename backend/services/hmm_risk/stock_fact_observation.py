@@ -1120,7 +1120,7 @@ def _c010_require_authority_identity(value: Any, *, label: str) -> Mapping[str, 
     return identity
 
 
-def _c010_validate_partition_predicate(value: Any, *, label: str) -> str:
+def _c010_validate_partition_predicate(value: Any, *, label: str) -> tuple[str, Mapping[str, Any]]:
     predicate = _c010_require_canonical(value, identity_field="receipt_sha256", label=label)
     if set(predicate) != {"status", "authority_receipt", "authority_receipt_sha256", "receipt_sha256"}:
         raise StateModelSetError(f"{label} fields are invalid")
@@ -1132,7 +1132,50 @@ def _c010_validate_partition_predicate(value: Any, *, label: str) -> str:
         or predicate.get("authority_receipt_sha256") != canonical_sha256(dict(authority))
     ):
         raise StateModelSetError(f"{label} semantics are invalid")
-    return status
+    return status, authority
+
+
+def _c010_expected_partition_predicate_status(
+    field: str,
+    authority: Mapping[str, Any],
+    *,
+    resolver: Mapping[str, Any],
+) -> str:
+    """Rebuild predicate status from its typed evidence instead of trusting the claimed status."""
+
+    candidates = authority.get("candidates")
+    candidate_count = authority.get("candidate_count")
+    if (
+        not isinstance(candidates, list)
+        or not isinstance(candidate_count, int)
+        or isinstance(candidate_count, bool)
+        or candidate_count != len(candidates)
+        or any(not isinstance(item, Mapping) for item in candidates)
+    ):
+        raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: predicate candidates")
+    common_fields = {"authority_identity_sha256", "candidate_count", "candidates"}
+    if field == "price_authority_present":
+        if set(authority) != common_fields | {"source_resolution"}:
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: price predicate fields")
+        if authority.get("source_resolution") != resolver.get("price_source_resolution"):
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: price resolver drift")
+    elif field in {"sw_l1_identity_valid", "sw_l2_identity_valid"}:
+        expected_level = "L1" if field == "sw_l1_identity_valid" else "L2"
+        if set(authority) != common_fields | {"level"} or authority.get("level") != expected_level:
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: SW predicate fields")
+    elif field == "pit_eligible":
+        if set(authority) != common_fields:
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: PIT predicate fields")
+    else:
+        raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: unknown predicate")
+    if field in {"pit_eligible", "price_authority_present"}:
+        return "available" if candidate_count == 1 else ("unavailable" if candidate_count == 0 else "invalid")
+    if candidate_count == 0:
+        return "unavailable"
+    if candidate_count != 1:
+        return "invalid"
+    code_field = "l1_code" if field == "sw_l1_identity_valid" else "l2_code"
+    return "available" if str(candidates[0].get(code_field) or "") else "unavailable"
 
 
 def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, Any]:
@@ -1280,10 +1323,11 @@ def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, A
             or entry.get("policy_version") != C010_POLICY_VERSION
         ):
             raise StateModelSetError("C-010 provider-absence partition entry identity is invalid")
-        statuses = {
+        predicates = {
             field: _c010_validate_partition_predicate(entry.get(field), label=f"C-010 partition {field}")
             for field in predicate_order
         }
+        statuses = {field: predicate[0] for field, predicate in predicates.items()}
         expected_predicate_authority = {
             "pit_eligible": value["pit_authority_identity"]["identity_sha256"],
             "price_authority_present": value["price_source_identity"]["identity_sha256"],
@@ -1291,11 +1335,27 @@ def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, A
             "sw_l2_identity_valid": value["sw_mapping_classify_identity"]["identity_sha256"],
         }
         if any(
-            entry[field]["authority_receipt"].get("authority_identity_sha256") != expected_predicate_authority[field]
+            predicates[field][1].get("authority_identity_sha256") != expected_predicate_authority[field]
             for field in predicate_order
         ):
             raise StateModelSetError(
                 "hmm_risk_c010_provider_absence_domain_partition_invalid: predicate authority drift"
+            )
+        rebuilt_statuses = {
+            field: _c010_expected_partition_predicate_status(field, predicates[field][1], resolver=resolver)
+            for field in predicate_order
+        }
+        if statuses != rebuilt_statuses:
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: predicate status/evidence drift"
+            )
+        if predicates["sw_l1_identity_valid"][1].get("candidate_count") != predicates["sw_l2_identity_valid"][1].get(
+            "candidate_count"
+        ) or predicates["sw_l1_identity_valid"][1].get("candidates") != predicates["sw_l2_identity_valid"][1].get(
+            "candidates"
+        ):
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: SW predicate evidence drift"
             )
         if "invalid" in statuses.values():
             raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: predicate invalid")
@@ -1530,9 +1590,19 @@ def _validate_c010_eligibility_receipt_v2(receipt: Any) -> tuple[list[dict[str, 
         str(entry["canonical_ts_code"]): tuple(entry["opportunity_dates"]) for entry in opportunity["entries"]
     }
     p_in_by_symbol: dict[str, list[str]] = {}
+    expected_keys = {
+        (symbol, opportunity_date)
+        for symbol, opportunity_dates in opportunity_by_symbol.items()
+        for opportunity_date in opportunity_dates
+    }
     for entry in partition["entries"]:
+        key = (str(entry["canonical_ts_code"]), str(entry["trade_date"]))
         if entry["partition"] == "in_domain":
-            p_in_by_symbol.setdefault(str(entry["canonical_ts_code"]), []).append(str(entry["trade_date"]))
+            if key not in expected_keys:
+                raise StateModelSetError("C-010 eligibility v2 P_in is outside O_sector")
+            p_in_by_symbol.setdefault(key[0], []).append(key[1])
+        elif key in expected_keys:
+            raise StateModelSetError("C-010 eligibility v2 P_out intersects O_sector")
     symbols: set[str] = set()
     normalized: list[dict[str, Any]] = []
     excluded: list[str] = []

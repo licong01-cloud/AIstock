@@ -372,6 +372,7 @@ class ObservationEligibility:
     entries: tuple[ContributorEligibility, ...]
     expected_opportunity_receipt: dict[str, Any]
     provider_absence_partition_receipt: dict[str, Any]
+    formal_policy_activated: bool
 
     @property
     def excluded_moneyflow_symbols(self) -> frozenset[str]:
@@ -381,7 +382,12 @@ class ObservationEligibility:
     def moneyflow_contributor_eligibility(self) -> dict[str, bool]:
         return {entry.canonical_ts_code: entry.moneyflow_contributor_eligible for entry in self.entries}
 
-    def evidence(self, *, formal_policy: bool = False) -> dict[str, Any]:
+    def evidence(self, *, formal_policy: bool | None = None) -> dict[str, Any]:
+        activated = self.formal_policy_activated if formal_policy is None else formal_policy
+        if activated is not self.formal_policy_activated:
+            raise StateModelSetError(
+                "hmm_risk_c010_contributor_receipt_mismatch: eligibility mode differs from partition mode"
+            )
         body = {
             "schema_version": ELIGIBILITY_SCHEMA,
             "train_start": self.train_start.isoformat(),
@@ -398,8 +404,8 @@ class ObservationEligibility:
             "pit_universe_changed": False,
             "selection_universe_changed": False,
             "runtime_prediction_eligibility_changed": False,
-            "diagnostic_only": not formal_policy,
-            "formal_policy_activated": formal_policy,
+            "diagnostic_only": not activated,
+            "formal_policy_activated": activated,
         }
         return {**body, "receipt_sha256": canonical_sha256(body)}
 
@@ -434,9 +440,8 @@ def build_train_only_observation_eligibility(
         or opportunity.get("train_end") != train_end.isoformat()
         or partition.get("train_start") != train_start.isoformat()
         or partition.get("train_end") != train_end.isoformat()
-        or partition.get("formal_policy_activated") is not True
     ):
-        raise StateModelSetError("hmm_risk_c010_contributor_receipt_mismatch: C-010 v2 authority window/mode")
+        raise StateModelSetError("hmm_risk_c010_contributor_receipt_mismatch: C-010 v2 authority window")
     expected_by_symbol = {
         str(entry["canonical_ts_code"]): tuple(date.fromisoformat(item) for item in entry["opportunity_dates"])
         for entry in opportunity["entries"]
@@ -454,14 +459,23 @@ def build_train_only_observation_eligibility(
         if partition_by_key[key].get("provider_row_hash") != row.row_hash:
             raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: provider row hash drift")
     expected_symbols = set(expected_by_symbol)
+    expected_keys = {
+        (symbol, opportunity_date)
+        for symbol, opportunity_dates in expected_by_symbol.items()
+        for opportunity_date in opportunity_dates
+    }
     p_in_by_symbol: dict[str, list[date]] = {}
     for key, entry in partition_by_key.items():
         if entry["partition"] == "in_domain":
-            if key[0] not in expected_symbols or key[1] not in expected_by_symbol[key[0]]:
+            if key not in expected_keys:
                 raise StateModelSetError(
                     "hmm_risk_c010_provider_absence_domain_partition_invalid: P_in is outside O_sector"
                 )
             p_in_by_symbol.setdefault(key[0], []).append(key[1])
+        elif key in expected_keys:
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: P_out intersects O_sector"
+            )
     entries: list[ContributorEligibility] = []
     for symbol in sorted(expected_symbols):
         expected_dates = expected_by_symbol[symbol]
@@ -497,6 +511,7 @@ def build_train_only_observation_eligibility(
         entries=tuple(entries),
         expected_opportunity_receipt=dict(opportunity),
         provider_absence_partition_receipt=dict(partition),
+        formal_policy_activated=bool(partition["formal_policy_activated"]),
     )
 
 
