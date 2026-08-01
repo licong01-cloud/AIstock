@@ -1595,6 +1595,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/issue_flow.py",
         "scripts/aistock_guardrail_scan.py",
         "scripts/ci_change_classifier.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
         "noxfile.py",
     }
     for path in normalized:
