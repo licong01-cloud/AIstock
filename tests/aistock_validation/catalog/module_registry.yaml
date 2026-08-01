@@ -647,6 +647,8 @@ modules:
     risk_level: high
     description: FastAPI app assembly, shared routers, middleware, and API contracts.
     description_zh: 覆盖 FastAPI 应用装配、共享路由、中间件、OpenAPI 合约和 API 运行边界。
+    test_plans:
+      required_on_change: [l0, platform_api_backend]
   - module_id: platform.db
     display_name: Platform database
     parent_module: platform
