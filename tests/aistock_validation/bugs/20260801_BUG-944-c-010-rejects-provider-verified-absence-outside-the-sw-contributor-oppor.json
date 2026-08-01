@@ -209,7 +209,13 @@
     "C-010-A5 design-only stage: python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2 -> PASS, 3 design items, 8 matrix rows, 0 warnings",
     "C-010-A5 design-only stage: rtk nox -s l0 -> PASS, blocking=0",
     "C-010-A5 design-only stage: rtk nox -s validation_module_registry_l0 -> PASS, 8 tests passed and 14/14 catalog files mapped",
-    "C-010-A5 design-only stage: git diff --check origin/main...HEAD -> PASS; no source implementation, HMM fit, selection, model/READY, database write, or runtime action was performed"
+    "C-010-A5 design-only stage: git diff --check origin/main...HEAD -> PASS; no source implementation, HMM fit, selection, model/READY, database write, or runtime action was performed",
+    "C-010-A5 source direct matrix: 79 passed covering partition, v1/v2 readback, policy lineage, known SW-domain-out and compact CLI preflight",
+    "hmm_risk_backend: 236 passed, total line/branch coverage 74.45%, required threshold 70%",
+    "601-day read-only preflight: status=preflight_complete, P_all=502, P_in=501, P_out=1, partition_sha256=03d785347b35185fe9f9c771e0a4e69cd0deb8def31a0cb205d3ca7a86b8ead6, report_sha256=983ef506fd5f672994459f43b38bd895ee08e7008c045209783d90d1dc6f6ba7",
+    "C-010-A5 implementation design sync: F2 PASS, 3 design items, 8 matrix rows, 0 warnings",
+    "final gates: ruff/format/py_compile PASS; l0 PASS blocking=0; validation_module_registry_l0 PASS 8 tests and 14/14 mapped; git diff --check PASS",
+    "No HMM fit, D5/D6, selection, model/READY, database write, DDL/DML, runtime action, or backend process control was performed"
   ],
   "validation_receipts": [
     {
@@ -249,6 +255,56 @@
       "plan": "git_diff_check",
       "receipt_id": "e2a087fbadc6a5e4",
       "result": "passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "conda run -n AIstock python -m pytest backend/tests/hmm_risk/test_observation_eligibility.py backend/tests/hmm_risk/test_stock_fact_observation.py backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -q -p no:cacheprovider",
+      "commit": "77de9d1658d17094e73e5af14d8308fd3a23c218",
+      "evidence_kind": "pytest",
+      "plan": "hmm_risk_c010_a5_fixpoint",
+      "receipt_id": "c010a5f1c7000079",
+      "result": "79 passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s hmm_risk_backend",
+      "commit": "77de9d1658d17094e73e5af14d8308fd3a23c218",
+      "evidence_kind": "nox",
+      "plan": "hmm_risk_backend",
+      "receipt_id": "c010a5be02360001",
+      "result": "236 passed; total coverage 74.45% >= 70%",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "conda run -n AIstock python scripts/hmm_risk/prepare_state_model_set.py --c010-a5-domain-partition-output <repo-external-report> ...",
+      "commit": "77de9d1658d17094e73e5af14d8308fd3a23c218",
+      "evidence_kind": "readonly_preflight",
+      "plan": "hmm_risk_c010_a5_601_day_domain_partition",
+      "receipt_id": "c010a56015020001",
+      "result": "preflight_complete; P_all=502 P_in=501 P_out=1; known 002951.SZ@2023-05-22 SW-domain-out verified; report_sha256=983ef506fd5f672994459f43b38bd895ee08e7008c045209783d90d1dc6f6ba7",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2",
+      "commit": "77de9d1658d17094e73e5af14d8308fd3a23c218",
+      "evidence_kind": "feature_validation",
+      "plan": "hmm_phase2_f2_design",
+      "receipt_id": "c010a5f200080001",
+      "result": "passed, 3 design items, 8 matrix rows, 0 warnings",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s l0 && python -m nox -s validation_module_registry_l0",
+      "commit": "77de9d1658d17094e73e5af14d8308fd3a23c218",
+      "evidence_kind": "nox",
+      "plan": "l0_and_validation_module_registry_l0",
+      "receipt_id": "c010a51000080014",
+      "result": "l0 blocking=0; registry 8 passed and 14/14 mapped",
       "schema_version": "aistock_validation_receipt_v1",
       "status": "passed"
     }
