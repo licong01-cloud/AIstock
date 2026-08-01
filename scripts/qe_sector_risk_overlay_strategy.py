@@ -214,9 +214,14 @@ class _QESectorRiskOverlayMixin:
             target_value = float(total_account_value) * base_weight * multiplier
             current_value = float(amount) * float(price)
             factor = self._get_current_factor(instrument, trade_step)
-            last_multiplier = float(self._qe_sector_risk_last_multiplier.get(instrument, 1.0))
+            # Only an order-generating overlay reduction may create later restore work.
+            # Observing a neutral/missing state alone must preserve the parent strategy.
+            applied_multiplier = self._qe_sector_risk_last_multiplier.get(instrument)
+            last_multiplier = (
+                float(applied_multiplier) if applied_multiplier is not None else None
+            )
 
-            if current_value > target_value:
+            if multiplier < 1.0 and current_value > target_value:
                 if not self._qe_sector_risk_override_hold_thresh and not self._can_sell_under_hold_thresh(
                     instrument, trade_start_time
                 ):
@@ -235,7 +240,6 @@ class _QESectorRiskOverlayMixin:
                             "reason": "hold_thresh_not_overridden",
                         }
                     )
-                    self._qe_sector_risk_last_multiplier[instrument] = multiplier
                     continue
                 target_shares = target_value / float(price)
                 target_amount = self._shares_to_adjusted_amount(target_shares, factor)
@@ -276,8 +280,12 @@ class _QESectorRiskOverlayMixin:
                         "reason": "sector_risk_target_exposure",
                     }
                 )
+                if orderable:
+                    self._qe_sector_risk_last_multiplier[instrument] = multiplier
             elif (
-                multiplier > last_multiplier
+                last_multiplier is not None
+                and multiplier > last_multiplier
+                and state in {"NORMAL", "CAUTION"}
                 and policy.entry_allowed(instrument, trade_start_time)
                 and target_value > current_value
                 and available_cash > 0
@@ -321,7 +329,8 @@ class _QESectorRiskOverlayMixin:
                         "reason": "sector_risk_reentry_confirmed",
                     }
                 )
-            self._qe_sector_risk_last_multiplier[instrument] = multiplier
+                if orderable:
+                    self._qe_sector_risk_last_multiplier[instrument] = multiplier
         self._record_missing_sector_risk_rows()
         return orders
 

@@ -131,9 +131,17 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "GET http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/{run_id} plus fixed-candidate neutral-order and reentry action-ledger readback",
+    "database_readback_ref": "noop:no_database_change",
+    "fresh_process_evidence": [
+      "fresh Python pytest process loaded the tracked sector-risk wrapper and verified NORMAL/UNMAPPED/INCOMPLETE no-order parity plus three-day confirmed reentry -> PASS"
+    ],
+    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
