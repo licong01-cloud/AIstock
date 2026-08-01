@@ -1,6 +1,8 @@
 {
   "actual": "BUG-930 为 sw_index_member 增加 replace_by_code 镜像与空载荷拒删守卫, 但 SW2021 分类表中有3个 is_pub=0 的L2指数(801217.SI 本地生活服务Ⅱ/801768.SI 社交Ⅱ/801786.SI 其他银行Ⅱ)上游 index_member_all 从来没有成员数据(稳定空), 本地同为0行。守卫将空载荷一律计为失败批次, sw_index_member init job failed(131/134), sw_sector 复合任务中止, sw_daily 子任务未执行, 2026-07-31 的 sw_daily/sw_sector target final_blocked(audit_stale), sector_data 因上游未就绪延迟重试耗尽。修正: 空载荷时先查本地该代码行数, 本地0行=合法空指数记成功(no-op镜像), 本地有行才拒删计失败。",
   "allowed_write_scope": [
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_sync_engine.py",
     "tests/aistock_validation/bugs/20260801_BUG-941-bug-930-l2-801217-801768-801786-sw-sector-sw-daily-sector-data.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "replace_by_code 空载荷守卫区分两种情形: 上游返回空且本地该代码0行(如 801217.SI/801768.SI/801786.SI 这类 SW2021 is_pub=0 且从未有成员的指数)判定为合法空指数, 记成功批次(no-op 镜像, info 日志); 上游返回空但本地有行时保持拒删并计失败批次(防上游瞬时缺口清空本地)。修复后 sw_index_member init 134/134 成功, sw_sector 复合完成, sw_daily 与 sector_data 链路恢复。合并后需对 2026-07-31 执行 sw_sector 重跑与 sector_data 补建(运行时操作, 另行授权)。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
