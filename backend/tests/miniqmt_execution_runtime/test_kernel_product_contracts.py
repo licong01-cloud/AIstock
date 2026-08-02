@@ -508,6 +508,32 @@ def _v3_item(*, disposition: ProductCommandDispositionV3, ordinal: int = 0) -> P
     )
 
 
+def _recreate_v3_item(
+    item: ProductCommandAuthorityItemV3,
+    **updates: object,
+) -> ProductCommandAuthorityItemV3:
+    values: dict[str, object] = {
+        "runtime_id": item.runtime_id,
+        "algo_instance_id": item.algo_instance_id,
+        "event_id": item.event_id,
+        "delivery_id": item.delivery_id,
+        "transition_id": item.transition_id,
+        "effect_ordinal": item.effect_ordinal,
+        "command_json": item.command_json,
+        "evaluation_evidence": item.evaluation_evidence,
+        "plugin_effect_sha256": item.plugin_effect_sha256,
+        "disposition": item.disposition,
+        "reject_reason_code": item.reject_reason_code,
+        "reject_context_sha256": item.reject_context_sha256,
+        "coordination_id": item.coordination_id,
+        "mapping_id": item.mapping_id,
+        "outbox_id": item.outbox_id,
+        "child_order_id": item.child_order_id,
+    }
+    values.update(updates)
+    return ProductCommandAuthorityItemV3.create(**values)
+
+
 def _v3_authority(items: tuple[ProductCommandAuthorityItemV3, ...]) -> ProductCommandAuthoritySetV3:
     projection_sha256 = items[0].execution_projection_set_sha256 if items else _sha("9")
     return ProductCommandAuthoritySetV3.create(
@@ -1343,6 +1369,279 @@ def test_k6c0_v3_evidence_item_lifecycle_and_receipt_negative_matrix() -> None:
     )
     with pytest.raises(KernelProductContractError, match="materialization receipt V3 differs"):
         forged.validate_against_authority_v3(authority)
+
+
+@pytest.mark.parametrize(
+    ("disposition", "updates"),
+    (
+        (ProductCommandDispositionV3.MATERIALIZE, {"mapping_id": "mapping_forged"}),
+        (ProductCommandDispositionV3.MATERIALIZE, {"child_order_id": "child_forged"}),
+        (ProductCommandDispositionV3.REJECT_SYNCHRONOUS, {"mapping_id": "mapping_forged"}),
+        (ProductCommandDispositionV3.REJECT_SYNCHRONOUS, {"child_order_id": "child_forged"}),
+        (ProductCommandDispositionV3.DEFER_DEPENDENT_BUY, {"mapping_id": "mapping_forged"}),
+        (ProductCommandDispositionV3.DEFER_DEPENDENT_BUY, {"child_order_id": "child_forged"}),
+    ),
+)
+def test_k6c0_v3_authority_item_rejects_non_deterministic_mapping_lineage(
+    disposition: ProductCommandDispositionV3,
+    updates: dict[str, str],
+) -> None:
+    item = _v3_item(disposition=disposition)
+    with pytest.raises(ValidationError, match="mapping identity"):
+        _recreate_v3_item(item, **updates)
+
+
+def test_k6c0_v3_shared_projection_ref_remains_distinct_from_per_command_oms_receipt() -> None:
+    command = _v3_command()
+    evidence = _v3_evidence(command=command, dependent=True)
+    oms_ref = next(
+        item
+        for item in evidence.execution_projection_set.ordered_projection_refs
+        if item.projection_type is KernelProjectionTypeV1.OMS_PREFLIGHT
+    )
+    assert oms_ref.payload_sha256 != evidence.oms_preflight_receipt.receipt_sha256
+    assert ProductCommandEvaluationEvidenceV3.model_validate_json(evidence.model_dump_json()) == evidence
+
+
+def test_k6c0_v3_cancel_authority_reuses_existing_mapping_lineage() -> None:
+    submit = _v3_command()
+    child_order_id = execution_child_order_id_v1(
+        command_id=submit.command_id,
+        local_vt_orderid=submit.local_vt_orderid,
+    )
+    mapping_id = command_child_mapping_id_v1(
+        command_id=submit.command_id,
+        local_vt_orderid=submit.local_vt_orderid,
+        child_order_id=child_order_id,
+    )
+    cancel = BrokerCommandV2.create(
+        command_type=BrokerCommandTypeV2.CANCEL_ORDER,
+        runtime_id=submit.runtime_id,
+        algo_instance_id=submit.algo_instance_id,
+        parent_intent_id=submit.parent_intent_id,
+        transition_id=submit.transition_id,
+        ordinal=submit.ordinal,
+        local_vt_orderid=submit.local_vt_orderid,
+        symbol=submit.symbol,
+        side=submit.side,
+        order_type=submit.order_type,
+        price_decimal=submit.price_decimal,
+        quantity=submit.quantity,
+        owned_broker_order_id="broker_existing",
+        reason_code="PLUGIN_CANCEL",
+        metadata={"submit_command_id": submit.command_id},
+    )
+    evidence = _v3_evidence(command=cancel, dependent=False)
+    item = ProductCommandAuthorityItemV3.create(
+        runtime_id=cancel.runtime_id,
+        algo_instance_id=cancel.algo_instance_id,
+        event_id="event_k6",
+        delivery_id="delivery_k6",
+        transition_id=cancel.transition_id,
+        effect_ordinal=cancel.ordinal,
+        command_json=cancel,
+        evaluation_evidence=evidence,
+        plugin_effect_sha256=_sha("e"),
+        disposition=ProductCommandDispositionV3.MATERIALIZE,
+        mapping_id=mapping_id,
+        outbox_id=cancel.command_id,
+        child_order_id=child_order_id,
+    )
+    assert (item.mapping_id, item.child_order_id) == (mapping_id, child_order_id)
+    with pytest.raises(ValidationError, match="mapping identity"):
+        _recreate_v3_item(item, mapping_id="mapping_forged")
+
+
+@pytest.mark.parametrize(
+    ("disposition", "lifecycle_status", "broker_called", "qmt_order_id", "error"),
+    (
+        (
+            ProductCommandDispositionV3.MATERIALIZE,
+            ProductLifecycleStatusV3.SYNCHRONOUS_REJECTED,
+            False,
+            None,
+            "materialized lifecycle status",
+        ),
+        (
+            ProductCommandDispositionV3.REJECT_SYNCHRONOUS,
+            ProductLifecycleStatusV3.PENDING,
+            None,
+            None,
+            "synchronous reject lifecycle",
+        ),
+        (
+            ProductCommandDispositionV3.MATERIALIZE,
+            ProductLifecycleStatusV3.PENDING,
+            True,
+            "broker_forged",
+            "pre-dispatch lifecycle",
+        ),
+        (
+            ProductCommandDispositionV3.MATERIALIZE,
+            ProductLifecycleStatusV3.ACKED_REJECTED,
+            False,
+            None,
+            "ACKED_REJECTED lifecycle",
+        ),
+        (
+            ProductCommandDispositionV3.MATERIALIZE,
+            ProductLifecycleStatusV3.ACKED_REJECTED,
+            True,
+            "broker_forged",
+            "ACKED_REJECTED lifecycle",
+        ),
+        (
+            ProductCommandDispositionV3.MATERIALIZE,
+            ProductLifecycleStatusV3.FAILED_RETRYABLE,
+            None,
+            None,
+            "FAILED_RETRYABLE lifecycle",
+        ),
+        (
+            ProductCommandDispositionV3.MATERIALIZE,
+            ProductLifecycleStatusV3.FAILED_TERMINAL,
+            False,
+            "broker_forged",
+            "accepted order identity",
+        ),
+    ),
+)
+def test_k6c0_v3_lifecycle_rejects_impossible_disposition_and_broker_facts(
+    disposition: ProductCommandDispositionV3,
+    lifecycle_status: ProductLifecycleStatusV3,
+    broker_called: bool | None,
+    qmt_order_id: str | None,
+    error: str,
+) -> None:
+    item = _v3_item(disposition=disposition)
+    with pytest.raises(ValidationError, match=error):
+        ProductCommandLifecycleProjectionItemV3.create(
+            authority_item_sha256=item.item_sha256,
+            effect_ordinal=item.effect_ordinal,
+            command_id=item.command_id,
+            disposition=item.disposition,
+            mapping_id=item.mapping_id,
+            outbox_id=item.outbox_id,
+            child_order_id=item.child_order_id,
+            lifecycle_status=lifecycle_status,
+            last_committed_stage="FORGED_STAGE",
+            broker_called=broker_called,
+            qmt_order_id=qmt_order_id,
+        )
+
+
+@pytest.mark.parametrize(
+    ("lifecycle_status", "broker_called", "error"),
+    (
+        (ProductLifecycleStatusV3.PENDING, None, "pre-dispatch lifecycle"),
+        (ProductLifecycleStatusV3.FAILED_RETRYABLE, False, "FAILED_RETRYABLE lifecycle"),
+    ),
+)
+def test_k6c0_v3_pre_call_lifecycle_rejects_reconciliation_receipt(
+    lifecycle_status: ProductLifecycleStatusV3,
+    broker_called: bool | None,
+    error: str,
+) -> None:
+    item = _v3_item(disposition=ProductCommandDispositionV3.MATERIALIZE)
+    with pytest.raises(ValidationError, match=error):
+        ProductCommandLifecycleProjectionItemV3.create(
+            authority_item_sha256=item.item_sha256,
+            effect_ordinal=item.effect_ordinal,
+            command_id=item.command_id,
+            disposition=item.disposition,
+            mapping_id=item.mapping_id,
+            outbox_id=item.outbox_id,
+            child_order_id=item.child_order_id,
+            lifecycle_status=lifecycle_status,
+            last_committed_stage="PRE_CALL",
+            broker_called=broker_called,
+            reconciliation_receipt_sha256=_sha("e"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("lifecycle_status", "broker_called", "qmt_order_id", "reconciliation_receipt_sha256"),
+    (
+        (ProductLifecycleStatusV3.PENDING, None, None, None),
+        (ProductLifecycleStatusV3.CLAIMED, None, None, None),
+        (ProductLifecycleStatusV3.DISPATCHING, None, None, None),
+        (ProductLifecycleStatusV3.ACKED, True, "broker_accepted", None),
+        (ProductLifecycleStatusV3.ACKED_REJECTED, True, None, None),
+        (ProductLifecycleStatusV3.FAILED_RETRYABLE, False, None, None),
+        (ProductLifecycleStatusV3.OUTCOME_UNKNOWN, None, None, None),
+        (ProductLifecycleStatusV3.RECONCILING, None, None, _sha("c")),
+        (ProductLifecycleStatusV3.FAILED_TERMINAL, False, None, None),
+        (ProductLifecycleStatusV3.FAILED_TERMINAL, True, "broker_accepted", _sha("d")),
+    ),
+)
+def test_k6c0_v3_materialized_lifecycle_preserves_valid_k2_status_matrix(
+    lifecycle_status: ProductLifecycleStatusV3,
+    broker_called: bool | None,
+    qmt_order_id: str | None,
+    reconciliation_receipt_sha256: str | None,
+) -> None:
+    item = _v3_item(disposition=ProductCommandDispositionV3.MATERIALIZE)
+    projected = ProductCommandLifecycleProjectionItemV3.create(
+        authority_item_sha256=item.item_sha256,
+        effect_ordinal=item.effect_ordinal,
+        command_id=item.command_id,
+        disposition=item.disposition,
+        mapping_id=item.mapping_id,
+        outbox_id=item.outbox_id,
+        child_order_id=item.child_order_id,
+        lifecycle_status=lifecycle_status,
+        last_committed_stage="K2_DURABLE_READBACK",
+        broker_called=broker_called,
+        qmt_order_id=qmt_order_id,
+        reconciliation_receipt_sha256=reconciliation_receipt_sha256,
+    )
+    assert projected.lifecycle_status is lifecycle_status
+
+
+def test_k6c0_v3_lifecycle_closes_mapping_outbox_child_to_authority_item() -> None:
+    item = _v3_item(disposition=ProductCommandDispositionV3.MATERIALIZE)
+    authority = _v3_authority((item,))
+    lifecycle_item = ProductCommandLifecycleProjectionItemV3.create(
+        authority_item_sha256=item.item_sha256,
+        effect_ordinal=item.effect_ordinal,
+        command_id=item.command_id,
+        disposition=item.disposition,
+        mapping_id="mapping_forged",
+        outbox_id=item.outbox_id,
+        child_order_id="child_forged",
+        lifecycle_status=ProductLifecycleStatusV3.PENDING,
+        last_committed_stage="PRODUCT_AUTHORITY_COMMITTED",
+        broker_called=None,
+    )
+    lifecycle = ProductCommandLifecycleProjectionV3.create(
+        runtime_id=authority.runtime_id,
+        algo_instance_id=authority.algo_instance_id,
+        event_id=authority.event_id,
+        delivery_id=authority.delivery_id,
+        transition_id=authority.transition_id,
+        authority_set_sha256=authority.authority_set_sha256,
+        ordered_item_projections=(lifecycle_item,),
+    )
+    with pytest.raises(KernelProductContractError, match="lifecycle V3 differs"):
+        lifecycle.validate_against_authority_v3(authority)
+
+
+def test_k6c0_v3_deferred_lifecycle_rejects_reconciliation_evidence() -> None:
+    item = _v3_item(disposition=ProductCommandDispositionV3.DEFER_DEPENDENT_BUY)
+    with pytest.raises(ValidationError, match="broker, callback or reconciliation"):
+        ProductCommandLifecycleProjectionItemV3.create(
+            authority_item_sha256=item.item_sha256,
+            effect_ordinal=item.effect_ordinal,
+            command_id=item.command_id,
+            disposition=item.disposition,
+            mapping_id=item.mapping_id,
+            outbox_id=None,
+            child_order_id=item.child_order_id,
+            lifecycle_status=ProductLifecycleStatusV3.DEFERRED_DEPENDENT_BUY,
+            last_committed_stage="PRODUCT_AUTHORITY_COMMITTED",
+            broker_called=None,
+            reconciliation_receipt_sha256=_sha("f"),
+        )
 
 
 def test_k6c0_v3_reader_rejects_k6a_hash_only_v2_and_full_payload_drift() -> None:

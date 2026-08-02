@@ -1658,6 +1658,49 @@ class ProductCommandAuthorityItemV3(FrozenStrictModel):
             self.contract_projection_sha256,
         ):
             raise ValueError("evaluation evidence hashes differ from authority item")
+        if command.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT:
+            expected_child_order_id = execution_child_order_id_v1(
+                command_id=command.command_id,
+                local_vt_orderid=command.local_vt_orderid,
+            )
+            expected_mapping_id = command_child_mapping_id_v1(
+                command_id=command.command_id,
+                local_vt_orderid=command.local_vt_orderid,
+                child_order_id=expected_child_order_id,
+            )
+            if (self.mapping_id, self.child_order_id) != (expected_mapping_id, expected_child_order_id):
+                raise ValueError("SUBMIT authority item mapping identity differs from deterministic command closure")
+        else:
+            metadata = thaw_json_v1(command.metadata)
+            submit_command_id = metadata.get("submit_command_id")
+            metadata_mapping_id = metadata.get("mapping_id")
+            if (submit_command_id is None) == (metadata_mapping_id is None):
+                raise ValueError("CANCEL authority requires exactly one existing mapping lineage reference")
+            if submit_command_id is not None:
+                if (
+                    type(submit_command_id) is not str
+                    or not submit_command_id
+                    or submit_command_id != submit_command_id.strip()
+                ):
+                    raise ValueError("CANCEL submit_command_id must be a canonical strict identity")
+                expected_child_order_id = execution_child_order_id_v1(
+                    command_id=submit_command_id,
+                    local_vt_orderid=command.local_vt_orderid,
+                )
+                expected_mapping_id = command_child_mapping_id_v1(
+                    command_id=submit_command_id,
+                    local_vt_orderid=command.local_vt_orderid,
+                    child_order_id=expected_child_order_id,
+                )
+                if (self.mapping_id, self.child_order_id) != (expected_mapping_id, expected_child_order_id):
+                    raise ValueError("CANCEL authority item mapping identity differs from original SUBMIT closure")
+            elif (
+                type(metadata_mapping_id) is not str
+                or not metadata_mapping_id
+                or metadata_mapping_id != metadata_mapping_id.strip()
+                or self.mapping_id != metadata_mapping_id
+            ):
+                raise ValueError("CANCEL authority item mapping identity differs from active mapping reference")
         reject = (self.reject_reason_code, self.reject_context_sha256)
         candidate = evidence.dependent_buy_candidate
         if self.disposition is ProductCommandDispositionV3.MATERIALIZE:
@@ -2067,20 +2110,69 @@ class ProductCommandLifecycleProjectionItemV3(FrozenStrictModel):
                 or self.lifecycle_status is not ProductLifecycleStatusV3.DEFERRED_DEPENDENT_BUY
             ):
                 raise ValueError("deferred lifecycle must have no outbox and exact deferred status")
-            if any(value is not None for value in (self.broker_called, self.qmt_order_id, self.callback_watermark)):
-                raise ValueError("deferred lifecycle cannot carry broker or callback facts")
+            if any(
+                value is not None
+                for value in (
+                    self.broker_called,
+                    self.qmt_order_id,
+                    self.callback_watermark,
+                    self.reconciliation_receipt_sha256,
+                )
+            ):
+                raise ValueError("deferred lifecycle cannot carry broker, callback or reconciliation facts")
         elif self.outbox_id != self.command_id:
             raise ValueError("materialized/rejected lifecycle outbox must equal command identity")
-        if self.disposition is ProductCommandDispositionV3.REJECT_SYNCHRONOUS and (
-            self.lifecycle_status is not ProductLifecycleStatusV3.SYNCHRONOUS_REJECTED
-            or self.broker_called is not False
-            or self.qmt_order_id is not None
-        ):
-            raise ValueError("synchronous reject lifecycle requires terminal no-broker evidence")
-        if self.lifecycle_status is ProductLifecycleStatusV3.ACKED and (
-            self.broker_called is not True or self.qmt_order_id is None
-        ):
-            raise ValueError("ACKED lifecycle requires broker call and qmt order identity")
+        if self.disposition is ProductCommandDispositionV3.REJECT_SYNCHRONOUS:
+            if (
+                self.lifecycle_status is not ProductLifecycleStatusV3.SYNCHRONOUS_REJECTED
+                or self.broker_called is not False
+                or any(
+                    value is not None
+                    for value in (
+                        self.qmt_order_id,
+                        self.callback_watermark,
+                        self.reconciliation_receipt_sha256,
+                    )
+                )
+            ):
+                raise ValueError("synchronous reject lifecycle requires terminal no-broker evidence")
+        elif self.disposition is ProductCommandDispositionV3.MATERIALIZE:
+            if self.lifecycle_status in {
+                ProductLifecycleStatusV3.SYNCHRONOUS_REJECTED,
+                ProductLifecycleStatusV3.DEFERRED_DEPENDENT_BUY,
+            }:
+                raise ValueError("materialized lifecycle status cannot use product-only reject/defer states")
+            if self.qmt_order_id is not None and self.broker_called is not True:
+                raise ValueError("accepted order identity requires broker_called=true")
+            if self.lifecycle_status in {
+                ProductLifecycleStatusV3.PENDING,
+                ProductLifecycleStatusV3.CLAIMED,
+                ProductLifecycleStatusV3.DISPATCHING,
+            } and (
+                self.broker_called is not None
+                or self.qmt_order_id is not None
+                or self.reconciliation_receipt_sha256 is not None
+            ):
+                raise ValueError("pre-dispatch lifecycle cannot claim broker outcome")
+            if self.lifecycle_status is ProductLifecycleStatusV3.ACKED and (
+                self.broker_called is not True or self.qmt_order_id is None
+            ):
+                raise ValueError("ACKED lifecycle requires broker call and qmt order identity")
+            if self.lifecycle_status is ProductLifecycleStatusV3.ACKED_REJECTED and (
+                self.broker_called is not True or self.qmt_order_id is not None
+            ):
+                raise ValueError("ACKED_REJECTED lifecycle requires broker call without accepted order identity")
+            if self.lifecycle_status is ProductLifecycleStatusV3.FAILED_RETRYABLE and (
+                self.broker_called is not False
+                or self.qmt_order_id is not None
+                or self.reconciliation_receipt_sha256 is not None
+            ):
+                raise ValueError("FAILED_RETRYABLE lifecycle requires pre-call failure evidence")
+            if self.lifecycle_status in {
+                ProductLifecycleStatusV3.OUTCOME_UNKNOWN,
+                ProductLifecycleStatusV3.RECONCILING,
+            } and (self.broker_called is not None or self.qmt_order_id is not None):
+                raise ValueError("unresolved lifecycle cannot claim broker outcome")
         expected = hash_hex_v1(
             "miniqmt_product_command_lifecycle_projection_item_v3",
             self.canonical_payload_v1(exclude={"item_projection_sha256"}),
@@ -2150,11 +2242,27 @@ class ProductCommandLifecycleProjectionV3(FrozenStrictModel):
             self.authority_set_sha256,
         )
         expected_items = tuple(
-            (item.effect_ordinal, item.command_id, item.disposition, item.item_sha256)
+            (
+                item.effect_ordinal,
+                item.command_id,
+                item.disposition,
+                item.item_sha256,
+                item.mapping_id,
+                item.outbox_id,
+                item.child_order_id,
+            )
             for item in authority.ordered_items
         )
         actual_items = tuple(
-            (item.effect_ordinal, item.command_id, item.disposition, item.authority_item_sha256)
+            (
+                item.effect_ordinal,
+                item.command_id,
+                item.disposition,
+                item.authority_item_sha256,
+                item.mapping_id,
+                item.outbox_id,
+                item.child_order_id,
+            )
             for item in self.ordered_item_projections
         )
         if actual_owner != expected_owner or actual_items != expected_items:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 import hashlib
 import json
 import os
@@ -29,7 +30,7 @@ K6C_PREFLIGHT = MIGRATION_ROOT / "miniqmt_execution_kernel_k6c_20260802.prefligh
 K6C_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k6c_20260802.sql"
 K6C_ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k6c_20260802.rollback.sql"
 CATALOG_SHA256 = "546a209dc2f8721ccee8b5e905117788486307147dfb4fc6bc396842f5cf84ad"
-K6C0_CATALOG_SHA256 = "841717e7c9f998e5e197048877fa854db8e7469544d6b94682f73c730a7462fe"
+K6C0_CATALOG_SHA256 = "f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d"
 
 
 def _canonical_lf_sha256(path: Path) -> str:
@@ -325,19 +326,40 @@ def test_k6c0_product_mapping_deferred_reserved_state_is_enforced_on_dev() -> No
             _apply_k2_and_k6(cur, schema)
             cur.execute(K6C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
             _insert_valid_k2_constraint_graph(cur, schema)
+            cur.execute(
+                f"SELECT mapping_created_at_utc FROM {schema}.execution_child_order "
+                "WHERE mapping_id='mapping_constraints'"
+            )
+            mapping_created_at_utc = cur.fetchone()[0]
             product_mapping = {
                 "schema_version": "miniqmt_product_command_child_mapping_v1",
                 "mapping_id": "mapping_constraints",
                 "authority_item_sha256": "b" * 64,
                 "coordination_id": "c" * 64,
                 "command_id": "command_constraints",
+                "runtime_id": "runtime_constraints",
+                "algo_instance_id": "algo_constraints",
+                "parent_intent_id": "intent_constraints",
+                "strategy_slot_id": "slot_constraints",
                 "local_vt_orderid": "local_constraints",
                 "child_order_id": "child_constraints",
                 "deterministic_client_order_ref": "client_constraints",
                 "order_remark": "client_constraints",
+                "symbol": "600000.SH",
+                "side": "BUY",
+                "requested_price_decimal": "10",
+                "requested_quantity": 100,
+                "broker_order_id": None,
+                "broker_identity_source_event_id": None,
                 "mapping_status": "DEFERRED_DEPENDENT_BUY",
                 "mapping_version": 1,
                 "payload_sha256": "a" * 64,
+                "last_order_event_id": None,
+                "last_trade_event_id": None,
+                "created_transition_id": "transition_constraints",
+                "updated_by_event_id": None,
+                "created_at_utc": mapping_created_at_utc.isoformat(),
+                "updated_at_utc": mapping_created_at_utc.isoformat(),
                 "mapping_receipt_sha256": "a" * 64,
             }
             cur.execute(
@@ -350,17 +372,41 @@ def test_k6c0_product_mapping_deferred_reserved_state_is_enforced_on_dev() -> No
                 """,
                 (json.dumps(product_mapping),),
             )
-            product_mapping.update({"mapping_status": "RESERVED", "mapping_version": 2})
+            corruptions = (
+                {"runtime_id": "runtime_forged"},
+                {"symbol": "600001.SH"},
+                {"requested_quantity": 200},
+                {"created_transition_id": "transition_forged"},
+                {"strategy_slot_id": None},
+            )
+            for corruption in corruptions:
+                corrupted = {**product_mapping, **corruption}
+                with pytest.raises(psycopg2.errors.CheckViolation):
+                    cur.execute(
+                        f"UPDATE {schema}.execution_child_order SET mapping_json=%s::jsonb "
+                        "WHERE mapping_id='mapping_constraints'",
+                        (json.dumps(corrupted),),
+                    )
+                cur.execute("ROLLBACK")
+            successor_time = mapping_created_at_utc + timedelta(seconds=1)
+            product_mapping.update(
+                {
+                    "mapping_status": "RESERVED",
+                    "mapping_version": 2,
+                    "updated_by_event_id": "event_constraints",
+                    "updated_at_utc": successor_time.isoformat(),
+                }
+            )
             cur.execute(
                 f"""
                 UPDATE {schema}.execution_child_order
                 SET mapping_status='RESERVED', mapping_version=2,
                     updated_by_event_id='event_constraints',
-                    mapping_updated_at_utc=mapping_created_at_utc + interval '1 second',
+                    mapping_updated_at_utc=%s,
                     mapping_json=%s::jsonb
                 WHERE mapping_id='mapping_constraints'
                 """,
-                (json.dumps(product_mapping),),
+                (successor_time, json.dumps(product_mapping)),
             )
             product_mapping["mapping_version"] = 3
             with pytest.raises(psycopg2.errors.CheckViolation):
