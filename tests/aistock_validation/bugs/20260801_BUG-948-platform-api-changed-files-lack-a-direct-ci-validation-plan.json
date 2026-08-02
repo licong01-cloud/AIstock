@@ -214,6 +214,13 @@
     "source_event_id": "FE-20260801-aa1bca48a7cd"
   },
   "validation_evidence": [
+    "fix-point classifier: backend/routers/health.py plus backend/tests/platform_api/test_health_contract.py -> workflow_gate=passed, classification=targeted_ci_required, backend_sessions=[platform_api_backend], unmapped_code_files=[]",
+    "platform_api_backend -> 5 passed; no backend process was started",
+    "validation_module_registry_l0 -> 8 passed and 14/14 catalog files mapped",
+    "validation_catalog_integrity -> PASS with findings=0",
+    "l0 -> PASS with blocking=0",
+    "ruff check, targeted pytest, JSON parse and git diff --check -> PASS",
+    "production_ddl_gate=noop; dependency gates=noop; runtime/database unchanged",
     "GitHub PR #3029 CI verdict -> PASS"
   ],
   "verification_budget": {
