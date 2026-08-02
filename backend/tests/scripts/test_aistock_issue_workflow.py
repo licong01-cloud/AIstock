@@ -1142,6 +1142,17 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["scripts/hmm_risk/prepare_state_model_set.py"],
         root=isolated_workflow_root,
     )
+    offline_advisory_phase0b = workflow._classify_runtime_impact(
+        ["backend/services/advisory_phase0b/audit_service.py"],
+        root=isolated_workflow_root,
+    )
+    mixed_advisory_and_backend = workflow._classify_runtime_impact(
+        [
+            "backend/services/advisory_phase0b/audit_service.py",
+            "backend/services/example.py",
+        ],
+        root=isolated_workflow_root,
+    )
     unmapped_script = workflow._classify_runtime_impact(
         ["scripts/hmm_risk/unmapped_runtime_candidate.py"],
         root=isolated_workflow_root,
@@ -1153,7 +1164,35 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert backend_test["runtime_impact"] == "none"
     assert offline_hmm_preparation["runtime_impact"] == "none"
     assert offline_hmm_preparation["runtime_files"] == []
+    assert offline_advisory_phase0b["runtime_impact"] == "none"
+    assert offline_advisory_phase0b["runtime_files"] == []
+    assert mixed_advisory_and_backend["runtime_impact"] == "backend"
+    assert mixed_advisory_and_backend["runtime_files"] == ["backend/services/example.py"]
+    assert mixed_advisory_and_backend["target_ids"] == ["backend-main"]
     assert unmapped_script["runtime_impact"] == "unknown"
+
+    offline_contract = workflow.build_runtime_contract(
+        record=_bug(
+            allowed_write_scope=[
+                "backend/services/advisory_phase0b/audit_service.py",
+                "backend/services/advisory_phase0b/snapshot_reader.py",
+            ],
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+            },
+        ),
+        changed_files=[
+            "backend/services/advisory_phase0b/audit_service.py",
+            "backend/services/advisory_phase0b/snapshot_reader.py",
+        ],
+        root=isolated_workflow_root,
+    )
+
+    assert offline_contract["runtime_impact"] == "none"
+    assert offline_contract["backend_restart_required"] is False
+    assert offline_contract["pre_pr_ready"] is True
+    assert offline_contract["blocking"] == []
 
 
 def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
