@@ -144,7 +144,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-contracts/hmm-risk-c010-a5",
     "fresh_process_evidence": [
       "Conda AIstock fresh process loaded commit 28e824fd and completed C-010-A5 read-only preflight; no backend process control; canonical=e7f7edc9fbe7f1cdb5ec739e1390fffec69a9ede6c8d719c9dda1a21df71773d",
-      "Fresh Python process loaded clean stacked commit 629fb2c2c8984960a88cd1753cd42920e3f33de6; runtime identity returned the same merge_commit and HMM C-010-A5 business smoke returned the exact v2 contract, both HTTP 200; no backend process control"
+      "Fresh Python process loaded clean post-BUG-948-main commit b498ad4b2caffde5e8aee6a40c324fbe104163d0; runtime identity returned the same merge_commit and HMM C-010-A5 business smoke returned the exact v2 contract, both HTTP 200; no backend process control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
