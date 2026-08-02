@@ -1497,6 +1497,13 @@ def test_k6c0_v3_cancel_authority_reuses_existing_mapping_lineage() -> None:
             None,
             "FAILED_RETRYABLE lifecycle",
         ),
+        (
+            ProductCommandDispositionV3.MATERIALIZE,
+            ProductLifecycleStatusV3.FAILED_TERMINAL,
+            False,
+            "broker_forged",
+            "accepted order identity",
+        ),
     ),
 )
 def test_k6c0_v3_lifecycle_rejects_impossible_disposition_and_broker_facts(
@@ -1520,6 +1527,35 @@ def test_k6c0_v3_lifecycle_rejects_impossible_disposition_and_broker_facts(
             last_committed_stage="FORGED_STAGE",
             broker_called=broker_called,
             qmt_order_id=qmt_order_id,
+        )
+
+
+@pytest.mark.parametrize(
+    ("lifecycle_status", "broker_called", "error"),
+    (
+        (ProductLifecycleStatusV3.PENDING, None, "pre-dispatch lifecycle"),
+        (ProductLifecycleStatusV3.FAILED_RETRYABLE, False, "FAILED_RETRYABLE lifecycle"),
+    ),
+)
+def test_k6c0_v3_pre_call_lifecycle_rejects_reconciliation_receipt(
+    lifecycle_status: ProductLifecycleStatusV3,
+    broker_called: bool | None,
+    error: str,
+) -> None:
+    item = _v3_item(disposition=ProductCommandDispositionV3.MATERIALIZE)
+    with pytest.raises(ValidationError, match=error):
+        ProductCommandLifecycleProjectionItemV3.create(
+            authority_item_sha256=item.item_sha256,
+            effect_ordinal=item.effect_ordinal,
+            command_id=item.command_id,
+            disposition=item.disposition,
+            mapping_id=item.mapping_id,
+            outbox_id=item.outbox_id,
+            child_order_id=item.child_order_id,
+            lifecycle_status=lifecycle_status,
+            last_committed_stage="PRE_CALL",
+            broker_called=broker_called,
+            reconciliation_receipt_sha256=_sha("e"),
         )
 
 

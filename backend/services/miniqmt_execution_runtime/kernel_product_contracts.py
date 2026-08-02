@@ -2142,11 +2142,17 @@ class ProductCommandLifecycleProjectionItemV3(FrozenStrictModel):
                 ProductLifecycleStatusV3.DEFERRED_DEPENDENT_BUY,
             }:
                 raise ValueError("materialized lifecycle status cannot use product-only reject/defer states")
+            if self.qmt_order_id is not None and self.broker_called is not True:
+                raise ValueError("accepted order identity requires broker_called=true")
             if self.lifecycle_status in {
                 ProductLifecycleStatusV3.PENDING,
                 ProductLifecycleStatusV3.CLAIMED,
                 ProductLifecycleStatusV3.DISPATCHING,
-            } and (self.broker_called is not None or self.qmt_order_id is not None):
+            } and (
+                self.broker_called is not None
+                or self.qmt_order_id is not None
+                or self.reconciliation_receipt_sha256 is not None
+            ):
                 raise ValueError("pre-dispatch lifecycle cannot claim broker outcome")
             if self.lifecycle_status is ProductLifecycleStatusV3.ACKED and (
                 self.broker_called is not True or self.qmt_order_id is None
@@ -2157,7 +2163,9 @@ class ProductCommandLifecycleProjectionItemV3(FrozenStrictModel):
             ):
                 raise ValueError("ACKED_REJECTED lifecycle requires broker call without accepted order identity")
             if self.lifecycle_status is ProductLifecycleStatusV3.FAILED_RETRYABLE and (
-                self.broker_called is not False or self.qmt_order_id is not None
+                self.broker_called is not False
+                or self.qmt_order_id is not None
+                or self.reconciliation_receipt_sha256 is not None
             ):
                 raise ValueError("FAILED_RETRYABLE lifecycle requires pre-call failure evidence")
             if self.lifecycle_status in {
