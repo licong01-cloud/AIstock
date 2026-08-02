@@ -1,6 +1,8 @@
 {
-  "actual": "BUG-941修复生效后, 2026-08-02 sw_sector复合重跑中 sw_index_member init 仍有11/134代码失败(801011/801044/801053/801074/801131/801163/801204/801219/801223/801731/801765)。事后直接调用上游 index_member_all 验证这些代码均有数据(行数与本地完全一致: 4/27/207等), 证明同步窗口内上游返回了瞬时空响应。当前 _sync_by_code_batched 中 _fetch_from_tushare 仅对异常重试3次, 空DataFrame不触发重试, 直接命中 replace_by_code 空载荷守卫判失败(守卫本身行为正确, 成功保护了本地207行等数据不被误删)。需要: 对 replace_by_code 且本地非空的代码, 空载荷判定前增加带退避的重取(如3次, 30s/60s/120s), 重取后仍空才拒删计失败; 或引入上游空响应的持续性确认机制。否则每日定时同步会持续间歇性中断 sw_sector 复合与 sector_data 链路。",
+  "actual": "根因已实证定位(2026-08-02): tushare 1.4.24 客户端 DataApi.query 中 `if res:` 对 requests.Response 求真, HTTP 状态码>=400(429限流/5xx网关错误)时 Response 为 falsy, 客户端不抛异常而是返回空 DataFrame(else: return pd.DataFrame())。因此上游服务端错误在调用侧完全不可见, 表现为\"上游返回空\"。实证: (1) 两次 sw_sector 复合重跑 member 分别失败11/134与10/134个代码且零交集, 事后验证所有失败代码上游均有数据; (2) 事故窗口(01:37-02:05)调用耗时约3.4s/次, 窗口后复现实验同样134代码仅39.9s(0.3s/次)且零瞬时空(仅3个is_pub=0合法空指数), 表明事故窗口上游服务端劣化(慢+HTTP错误), 窗口外正常; (3) 事故窗口内 tushare 零异常日志, 所有失败均为被掩盖的空响应路径。放大路径: engine._fetch_once 对 df.empty 直接 return [] 不重试(无法区分真空与 masked error); sw_index_member 命中 replace_by_code 守卫判失败致复合中止; sw_daily upsert 模式无空值守卫, 静默漏掉6个已发布指数行情, sector_data 预检 missing_sw_daily_facts=134 拒建。门禁(镜像守卫/预检)本身行为正确, 阻止了数据损坏, 非问题根源。修复方向(不是单纯加重试): 在引擎层替换/包装 tushare 调用为直连 HTTP 客户端, 对 HTTP 状态码>=400 与 code!=0 抛异常(去掩盖), 使既有3次重试对真实错误生效; 仅 code=0 且 items=[] 才认定为合法空, 流入现有守卫/no-op 逻辑; sw_daily 增加与本地历史对照的\"已发布指数全日空\"告警。",
   "allowed_write_scope": [
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_sync_engine.py",
     "tests/aistock_validation/bugs/20260802_BUG-947-sw-index-member-replace-by-code-sw-sector.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -13,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-01T17:55:37.639894Z",
-  "description": "BUG-941修复生效后, 2026-08-02 sw_sector复合重跑中 sw_index_member init 仍有11/134代码失败(801011/801044/801053/801074/801131/801163/801204/801219/801223/801731/801765)。事后直接调用上游 index_member_all 验证这些代码均有数据(行数与本地完全一致: 4/27/207等), 证明同步窗口内上游返回了瞬时空响应。当前 _sync_by_code_batched 中 _fetch_from_tushare 仅对异常重试3次, 空DataFrame不触发重试, 直接命中 replace_by_code 空载荷守卫判失败(守卫本身行为正确, 成功保护了本地207行等数据不被误删)。需要: 对 replace_by_code 且本地非空的代码, 空载荷判定前增加带退避的重取(如3次, 30s/60s/120s), 重取后仍空才拒删计失败; 或引入上游空响应的持续性确认机制。否则每日定时同步会持续间歇性中断 sw_sector 复合与 sector_data 链路。",
+  "description": "根因已实证定位(2026-08-02): tushare 1.4.24 客户端 DataApi.query 中 `if res:` 对 requests.Response 求真, HTTP 状态码>=400(429限流/5xx网关错误)时 Response 为 falsy, 客户端不抛异常而是返回空 DataFrame(else: return pd.DataFrame())。因此上游服务端错误在调用侧完全不可见, 表现为\"上游返回空\"。实证: (1) 两次 sw_sector 复合重跑 member 分别失败11/134与10/134个代码且零交集, 事后验证所有失败代码上游均有数据; (2) 事故窗口(01:37-02:05)调用耗时约3.4s/次, 窗口后复现实验同样134代码仅39.9s(0.3s/次)且零瞬时空(仅3个is_pub=0合法空指数), 表明事故窗口上游服务端劣化(慢+HTTP错误), 窗口外正常; (3) 事故窗口内 tushare 零异常日志, 所有失败均为被掩盖的空响应路径。放大路径: engine._fetch_once 对 df.empty 直接 return [] 不重试(无法区分真空与 masked error); sw_index_member 命中 replace_by_code 守卫判失败致复合中止; sw_daily upsert 模式无空值守卫, 静默漏掉6个已发布指数行情, sector_data 预检 missing_sw_daily_facts=134 拒建。门禁(镜像守卫/预检)本身行为正确, 阻止了数据损坏, 非问题根源。修复方向(不是单纯加重试): 在引擎层替换/包装 tushare 调用为直连 HTTP 客户端, 对 HTTP 状态码>=400 与 code!=0 抛异常(去掩盖), 使既有3次重试对真实错误生效; 仅 code=0 且 items=[] 才认定为合法空, 流入现有守卫/no-op 逻辑; sw_daily 增加与本地历史对照的\"已发布指数全日空\"告警。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "引擎层去掩盖: _fetch_once 不再依赖 tushare DataApi 的 falsy-Response 行为, 改用直连 HTTP 查询(同一 dataapi 端点), 对 HTTP>=400 与 code!=0 抛 TushareHttpError(含状态码/接口名), 使既有3次重试对真实上游错误生效; 仅 code=0 且 items=[] 认定合法空, 流入现有守卫/no-op 逻辑。sw_daily 等 upsert 数据集对\"本地近N日有行情但该指数全日空\"记 warning 日志(不阻断), 消除静默漏数的不可见性。既有测试全绿, 新增: HTTP 5xx 抛错并重试、code!=0 抛错、合法空保持 no-op、upsert 空载荷告警。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -58,14 +60,22 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "runtime_impact": "backend",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "backend_restart_required": true,
+    "backend_restart_owner": "user",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "fresh_process_evidence": [],
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "business_smoke_ref": "local-data manual re-run of sw_sector composite; readback market.ingestion_jobs success for sw_index_member/sw_daily children",
+    "database_readback_ref": "noop:no_database_change"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -73,7 +83,7 @@
   "suspected_modules": [
     "aistock_backend"
   ],
-  "title": "sw_index_member同步遇上游瞬时空响应无重试,replace_by_code守卫直接判失败致sw_sector复合中断",
+  "title": "tushare客户端将HTTP错误掩盖为空DataFrame: sw_index_member守卫误判/sw_daily静默漏数, sw_sector链路间歇中断",
   "trigger_condition": {
     "fingerprint": "f083ac321c8341ce09ccd477",
     "source_event_id": "FE-20260802-f083ac321c83"

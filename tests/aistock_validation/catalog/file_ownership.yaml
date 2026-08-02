@@ -1200,6 +1200,15 @@ rules:
     layer: backend_test
     risk_level: medium
     ownership_reason: Backend tests are owned by the test system and secondarily attributed by path-specific rules.
+  - rule_id: platform_api_tests
+    priority: 90
+    include:
+      - backend/tests/platform_api/**
+    primary_module: platform.api
+    impact_modules: []
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Shared Platform API tests are validated by the direct platform_api_backend plan.
   - rule_id: frontend_tests_default
     priority: 20
     include:
