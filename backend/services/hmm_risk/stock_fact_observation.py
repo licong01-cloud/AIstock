@@ -24,11 +24,15 @@ from .state_model_set import (
 OBSERVATION_VERSION = "hmm_risk_l1_stock_fact_observation_v1"
 FORMULA_VERSION = "hmm_risk_l1_sector_factor_formula_v1"
 C010_FORMULA_VERSION = "hmm_risk_l1_sector_factor_formula_v2_c010"
-C010_POLICY_VERSION = "hmm_risk_c010_feature_domain_policy_v1"
+C010_POLICY_VERSION_V1 = "hmm_risk_c010_feature_domain_policy_v1"
+C010_POLICY_VERSION = "hmm_risk_c010_feature_domain_policy_v2"
 C010_CROSS_SECTION_RECEIPT_VERSION = "hmm_risk_c010_feature_cross_section_receipt_set_v1"
 C010_AGGREGATE_RECEIPT_VERSION = "hmm_risk_c010_feature_domain_aggregate_evidence_v1"
-C010_ELIGIBILITY_RECEIPT_VERSION = "hmm_risk_c010_train_observation_eligibility_v1"
-C010_EXPECTED_OPPORTUNITY_CONTRACT = "hmm_risk_c010_expected_opportunity_dates_v1"
+C010_ELIGIBILITY_RECEIPT_VERSION_V1 = "hmm_risk_c010_train_observation_eligibility_v1"
+C010_ELIGIBILITY_RECEIPT_VERSION = "hmm_risk_c010_train_observation_eligibility_v2"
+C010_EXPECTED_OPPORTUNITY_CONTRACT_V1 = "hmm_risk_c010_expected_opportunity_dates_v1"
+C010_EXPECTED_OPPORTUNITY_CONTRACT = "hmm_risk_c010_expected_opportunity_dates_v2"
+C010_PROVIDER_ABSENCE_PARTITION_VERSION = "hmm_risk_c010_provider_absence_domain_partition_v1"
 C010_APPROVED_TRAIN_START = date(2022, 1, 1)
 C010_APPROVED_TRAIN_END = date(2024, 6, 30)
 C010_APPROVED_TRAIN_TRADING_DATE_COUNT = 601
@@ -1107,11 +1111,363 @@ def _c010_require_ordered_strings(values: Any, *, label: str, allow_empty: bool 
     return normalized
 
 
-def _validate_c010_eligibility_receipt(receipt: Any) -> tuple[list[dict[str, Any]], list[str]]:
+def _c010_require_authority_identity(value: Any, *, label: str) -> Mapping[str, Any]:
+    identity = _c010_require_canonical(value, identity_field="identity_sha256", label=label)
+    if set(identity) != {"authority_type", "authority", "identity_sha256"}:
+        raise StateModelSetError(f"{label} fields are invalid")
+    if not str(identity.get("authority_type") or "") or not isinstance(identity.get("authority"), Mapping):
+        raise StateModelSetError(f"{label} semantics are invalid")
+    return identity
+
+
+def _c010_validate_partition_predicate(value: Any, *, label: str) -> tuple[str, Mapping[str, Any]]:
+    predicate = _c010_require_canonical(value, identity_field="receipt_sha256", label=label)
+    if set(predicate) != {"status", "authority_receipt", "authority_receipt_sha256", "receipt_sha256"}:
+        raise StateModelSetError(f"{label} fields are invalid")
+    status = str(predicate.get("status") or "")
+    authority = predicate.get("authority_receipt")
+    if (
+        status not in {"available", "unavailable", "invalid"}
+        or not isinstance(authority, Mapping)
+        or predicate.get("authority_receipt_sha256") != canonical_sha256(dict(authority))
+    ):
+        raise StateModelSetError(f"{label} semantics are invalid")
+    return status, authority
+
+
+def _c010_expected_partition_predicate_status(
+    field: str,
+    authority: Mapping[str, Any],
+    *,
+    resolver: Mapping[str, Any],
+) -> str:
+    """Rebuild predicate status from its typed evidence instead of trusting the claimed status."""
+
+    candidates = authority.get("candidates")
+    candidate_count = authority.get("candidate_count")
+    if (
+        not isinstance(candidates, list)
+        or not isinstance(candidate_count, int)
+        or isinstance(candidate_count, bool)
+        or candidate_count != len(candidates)
+        or any(not isinstance(item, Mapping) for item in candidates)
+    ):
+        raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: predicate candidates")
+    common_fields = {"authority_identity_sha256", "candidate_count", "candidates"}
+    if field == "price_authority_present":
+        if set(authority) != common_fields | {"source_resolution"}:
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: price predicate fields")
+        if authority.get("source_resolution") != resolver.get("price_source_resolution"):
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: price resolver drift")
+    elif field in {"sw_l1_identity_valid", "sw_l2_identity_valid"}:
+        expected_level = "L1" if field == "sw_l1_identity_valid" else "L2"
+        if set(authority) != common_fields | {"level"} or authority.get("level") != expected_level:
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: SW predicate fields")
+    elif field == "pit_eligible":
+        if set(authority) != common_fields:
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: PIT predicate fields")
+    else:
+        raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: unknown predicate")
+    if field in {"pit_eligible", "price_authority_present"}:
+        return "available" if candidate_count == 1 else ("unavailable" if candidate_count == 0 else "invalid")
+    if candidate_count == 0:
+        return "unavailable"
+    if candidate_count != 1:
+        return "invalid"
+    code_field = "l1_code" if field == "sw_l1_identity_valid" else "l2_code"
+    return "available" if str(candidates[0].get(code_field) or "") else "unavailable"
+
+
+def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, Any]:
+    """Validate the complete P_all/P_in/P_out authority used by both writer and readback."""
+
+    value = _c010_require_canonical(
+        receipt,
+        identity_field="receipt_sha256",
+        label="C-010 provider-absence domain partition",
+    )
+    required_fields = {
+        "schema_version",
+        "contract_version",
+        "policy_version",
+        "train_start",
+        "train_end",
+        "provider_absence_manifest_identity",
+        "security_resolver_identity",
+        "pit_authority_identity",
+        "price_source_identity",
+        "sw_mapping_classify_identity",
+        "p_all_entry_count",
+        "p_in_entry_count",
+        "p_out_entry_count",
+        "p_all_ordered_key_sha256",
+        "p_in_ordered_key_sha256",
+        "p_out_ordered_key_sha256",
+        "entries",
+        "partition_complete",
+        "diagnostic_only",
+        "formal_policy_activated",
+        "receipt_sha256",
+    }
+    if set(value) != required_fields:
+        raise StateModelSetError("C-010 provider-absence domain partition fields are incomplete")
+    if (
+        value.get("schema_version") != C010_PROVIDER_ABSENCE_PARTITION_VERSION
+        or value.get("contract_version") != C010_PROVIDER_ABSENCE_PARTITION_VERSION
+        or value.get("policy_version") != C010_POLICY_VERSION
+        or value.get("partition_complete") is not True
+        or not isinstance(value.get("diagnostic_only"), bool)
+        or value.get("formal_policy_activated") is not (not value["diagnostic_only"])
+    ):
+        raise StateModelSetError("C-010 provider-absence domain partition contract is invalid")
+    try:
+        train_start = date.fromisoformat(str(value.get("train_start") or ""))
+        train_end = date.fromisoformat(str(value.get("train_end") or ""))
+    except ValueError as exc:
+        raise StateModelSetError("C-010 provider-absence partition train window is invalid") from exc
+    if train_start > train_end:
+        raise StateModelSetError("C-010 provider-absence partition train window is invalid")
+    authority_type_by_field = {
+        "provider_absence_manifest_identity": "provider_absence_manifest",
+        "security_resolver_identity": "security_source_identity_manifest",
+        "pit_authority_identity": "stock_universe_pit_state_and_spans",
+        "price_source_identity": "market.kline_daily_raw",
+        "sw_mapping_classify_identity": "sw_index_member_and_classify_mapping",
+    }
+    for field, expected_type in authority_type_by_field.items():
+        authority = _c010_require_authority_identity(value.get(field), label=f"C-010 partition {field}")
+        if authority.get("authority_type") != expected_type:
+            raise StateModelSetError(f"C-010 partition {field} authority type is invalid")
+    entries = value.get("entries")
+    if not isinstance(entries, list):
+        raise StateModelSetError("C-010 provider-absence partition entries are missing")
+    required_entry_fields = {
+        "canonical_ts_code",
+        "source_ts_code",
+        "stable_security_identity",
+        "trade_date",
+        "provider_row_hash",
+        "security_resolver_receipt",
+        "security_resolver_receipt_sha256",
+        "pit_eligible",
+        "price_authority_present",
+        "sw_l1_identity_valid",
+        "sw_l2_identity_valid",
+        "failed_predicates",
+        "partition",
+        "primary_reason_code",
+        "policy_version",
+        "entry_sha256",
+    }
+    predicate_order = (
+        "pit_eligible",
+        "price_authority_present",
+        "sw_l1_identity_valid",
+        "sw_l2_identity_valid",
+    )
+    primary_reason_by_predicate = {
+        "pit_eligible": "hmm_risk_c010_pit_ineligible_for_opportunity",
+        "price_authority_present": "hmm_risk_c010_price_unavailable_for_opportunity",
+        "sw_l1_identity_valid": "hmm_risk_c010_sw_identity_unavailable_for_opportunity",
+        "sw_l2_identity_valid": "hmm_risk_c010_sw_identity_unavailable_for_opportunity",
+    }
+    all_keys: list[dict[str, str]] = []
+    in_keys: list[dict[str, str]] = []
+    out_keys: list[dict[str, str]] = []
+    prior_key: tuple[str, str] | None = None
+    observed_keys: set[tuple[str, str]] = set()
+    for raw_entry in entries:
+        entry = _c010_require_canonical(raw_entry, identity_field="entry_sha256", label="C-010 partition entry")
+        if set(entry) != required_entry_fields:
+            raise StateModelSetError("C-010 provider-absence partition entry fields are incomplete")
+        canonical_ts_code = str(entry.get("canonical_ts_code") or "")
+        source_ts_code = str(entry.get("source_ts_code") or "")
+        trade_date_text = str(entry.get("trade_date") or "")
+        stable_identity = str(entry.get("stable_security_identity") or "")
+        key = (canonical_ts_code, trade_date_text)
+        try:
+            parsed_date = date.fromisoformat(trade_date_text)
+        except ValueError as exc:
+            raise StateModelSetError("C-010 provider-absence partition entry date is invalid") from exc
+        resolver = entry.get("security_resolver_receipt")
+        provider_resolution = (
+            resolver.get("provider_absence_source_resolution") if isinstance(resolver, Mapping) else None
+        )
+        price_resolution = resolver.get("price_source_resolution") if isinstance(resolver, Mapping) else None
+        if (
+            not canonical_ts_code
+            or not source_ts_code
+            or stable_identity != f"canonical:{canonical_ts_code}"
+            or key in observed_keys
+            or (prior_key is not None and key <= prior_key)
+            or not train_start <= parsed_date <= train_end
+            or not _c010_valid_sha256(entry.get("provider_row_hash"))
+            or not isinstance(resolver, Mapping)
+            or set(resolver)
+            != {
+                "security_resolver_identity_sha256",
+                "provider_absence_source_resolution",
+                "price_source_resolution",
+            }
+            or resolver.get("security_resolver_identity_sha256")
+            != value["security_resolver_identity"]["identity_sha256"]
+            or not isinstance(provider_resolution, Mapping)
+            or not isinstance(price_resolution, Mapping)
+            or provider_resolution.get("canonical_ts_code") != canonical_ts_code
+            or provider_resolution.get("source_ts_code") != source_ts_code
+            or provider_resolution.get("source_dataset") != "market.moneyflow_ts"
+            or price_resolution.get("canonical_ts_code") != canonical_ts_code
+            or price_resolution.get("source_dataset") != "market.kline_daily_raw"
+            or not str(price_resolution.get("source_ts_code") or "")
+            or entry.get("security_resolver_receipt_sha256") != canonical_sha256(dict(resolver))
+            or entry.get("policy_version") != C010_POLICY_VERSION
+        ):
+            raise StateModelSetError("C-010 provider-absence partition entry identity is invalid")
+        predicates = {
+            field: _c010_validate_partition_predicate(entry.get(field), label=f"C-010 partition {field}")
+            for field in predicate_order
+        }
+        statuses = {field: predicate[0] for field, predicate in predicates.items()}
+        expected_predicate_authority = {
+            "pit_eligible": value["pit_authority_identity"]["identity_sha256"],
+            "price_authority_present": value["price_source_identity"]["identity_sha256"],
+            "sw_l1_identity_valid": value["sw_mapping_classify_identity"]["identity_sha256"],
+            "sw_l2_identity_valid": value["sw_mapping_classify_identity"]["identity_sha256"],
+        }
+        if any(
+            predicates[field][1].get("authority_identity_sha256") != expected_predicate_authority[field]
+            for field in predicate_order
+        ):
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: predicate authority drift"
+            )
+        rebuilt_statuses = {
+            field: _c010_expected_partition_predicate_status(field, predicates[field][1], resolver=resolver)
+            for field in predicate_order
+        }
+        if statuses != rebuilt_statuses:
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: predicate status/evidence drift"
+            )
+        if predicates["sw_l1_identity_valid"][1].get("candidate_count") != predicates["sw_l2_identity_valid"][1].get(
+            "candidate_count"
+        ) or predicates["sw_l1_identity_valid"][1].get("candidates") != predicates["sw_l2_identity_valid"][1].get(
+            "candidates"
+        ):
+            raise StateModelSetError(
+                "hmm_risk_c010_provider_absence_domain_partition_invalid: SW predicate evidence drift"
+            )
+        if "invalid" in statuses.values():
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: predicate invalid")
+        failed = [field for field in predicate_order if statuses[field] == "unavailable"]
+        expected_partition = "in_domain" if not failed else "out_of_domain"
+        expected_primary_reason = None if not failed else primary_reason_by_predicate[failed[0]]
+        if (
+            entry.get("failed_predicates") != failed
+            or entry.get("partition") != expected_partition
+            or entry.get("primary_reason_code") != expected_primary_reason
+        ):
+            raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: classification drift")
+        observed_keys.add(key)
+        prior_key = key
+        key_body = {"canonical_ts_code": canonical_ts_code, "trade_date": trade_date_text}
+        all_keys.append(key_body)
+        (in_keys if expected_partition == "in_domain" else out_keys).append(key_body)
+    if (
+        value.get("p_all_entry_count") != len(all_keys)
+        or value.get("p_in_entry_count") != len(in_keys)
+        or value.get("p_out_entry_count") != len(out_keys)
+        or len(in_keys) + len(out_keys) != len(all_keys)
+        or value.get("p_all_ordered_key_sha256") != canonical_sha256(all_keys)
+        or value.get("p_in_ordered_key_sha256") != canonical_sha256(in_keys)
+        or value.get("p_out_ordered_key_sha256") != canonical_sha256(out_keys)
+    ):
+        raise StateModelSetError("hmm_risk_c010_provider_absence_domain_partition_invalid: cardinality/hash mismatch")
+    return dict(value)
+
+
+def validate_c010_expected_opportunity_receipt(receipt: Any) -> dict[str, Any]:
+    value = _c010_require_canonical(
+        receipt,
+        identity_field="receipt_sha256",
+        label="C-010 expected-opportunity receipt",
+    )
+    required_fields = {
+        "schema_version",
+        "train_start",
+        "train_end",
+        "authority_identities",
+        "entry_count",
+        "opportunity_key_count",
+        "opportunity_ordered_key_sha256",
+        "entries",
+        "receipt_sha256",
+    }
+    if set(value) != required_fields or value.get("schema_version") != C010_EXPECTED_OPPORTUNITY_CONTRACT:
+        raise StateModelSetError("C-010 expected-opportunity receipt fields are incomplete")
+    try:
+        train_start = date.fromisoformat(str(value.get("train_start") or ""))
+        train_end = date.fromisoformat(str(value.get("train_end") or ""))
+    except ValueError as exc:
+        raise StateModelSetError("C-010 expected-opportunity train window is invalid") from exc
+    authorities = value.get("authority_identities")
+    if not isinstance(authorities, list) or not authorities:
+        raise StateModelSetError("C-010 expected-opportunity authorities are missing")
+    authority_hashes = []
+    for authority in authorities:
+        validated = _c010_require_authority_identity(authority, label="C-010 expected-opportunity authority")
+        authority_hashes.append(str(validated["identity_sha256"]))
+    if authority_hashes != sorted(set(authority_hashes)):
+        raise StateModelSetError("C-010 expected-opportunity authorities are not canonical")
+    entries = value.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise StateModelSetError("C-010 expected-opportunity entries are missing")
+    keys: list[dict[str, str]] = []
+    prior_symbol: str | None = None
+    required_entry_fields = {
+        "canonical_ts_code",
+        "opportunity_dates",
+        "opportunity_count",
+        "opportunity_date_sha256",
+        "authority_identity_sha256",
+        "entry_sha256",
+    }
+    combined_authority_sha256 = canonical_sha256(authorities)
+    for raw_entry in entries:
+        entry = _c010_require_canonical(raw_entry, identity_field="entry_sha256", label="C-010 opportunity entry")
+        if set(entry) != required_entry_fields:
+            raise StateModelSetError("C-010 expected-opportunity entry fields are incomplete")
+        symbol = str(entry.get("canonical_ts_code") or "")
+        dates = _c010_require_ordered_strings(entry.get("opportunity_dates"), label="C-010 opportunity dates")
+        try:
+            parsed_dates = tuple(date.fromisoformat(item) for item in dates)
+        except ValueError as exc:
+            raise StateModelSetError("C-010 expected-opportunity date is invalid") from exc
+        if (
+            not symbol
+            or (prior_symbol is not None and symbol <= prior_symbol)
+            or any(not train_start <= item <= train_end for item in parsed_dates)
+            or entry.get("opportunity_count") != len(dates)
+            or entry.get("opportunity_date_sha256") != canonical_sha256(list(dates))
+            or entry.get("authority_identity_sha256") != combined_authority_sha256
+        ):
+            raise StateModelSetError("C-010 expected-opportunity entry semantics are invalid")
+        prior_symbol = symbol
+        keys.extend({"canonical_ts_code": symbol, "trade_date": item} for item in dates)
+    if (
+        value.get("entry_count") != len(entries)
+        or value.get("opportunity_key_count") != len(keys)
+        or value.get("opportunity_ordered_key_sha256") != canonical_sha256(keys)
+    ):
+        raise StateModelSetError("C-010 expected-opportunity receipt cardinality/hash mismatch")
+    return dict(value)
+
+
+def _validate_c010_eligibility_receipt_v1(receipt: Any) -> tuple[list[dict[str, Any]], list[str]]:
     value = _c010_require_canonical(receipt, identity_field="receipt_sha256", label="C-010 eligibility receipt")
     entries = value.get("entries")
     if (
-        value.get("schema_version") != C010_ELIGIBILITY_RECEIPT_VERSION
+        value.get("schema_version") != C010_ELIGIBILITY_RECEIPT_VERSION_V1
         or value.get("minimum_availability_ratio") != MIN_COVERAGE
         or value.get("availability_integer_contract") != "10*(expected-missing) >= 9*expected"
         or value.get("diagnostic_only") is not False
@@ -1157,7 +1513,7 @@ def _validate_c010_eligibility_receipt(receipt: Any) -> tuple[list[dict[str, Any
             or isinstance(missing, bool)
             or not 0 <= missing <= expected
             or not isinstance(eligible, bool)
-            or entry_value.get("expected_opportunity_contract") != C010_EXPECTED_OPPORTUNITY_CONTRACT
+            or entry_value.get("expected_opportunity_contract") != C010_EXPECTED_OPPORTUNITY_CONTRACT_V1
             or not _c010_valid_sha256(entry_value.get("expected_opportunity_date_sha256"))
             or not _c010_valid_sha256(entry_value.get("provider_absence_key_sha256"))
             or not math.isfinite(ratio)
@@ -1174,6 +1530,153 @@ def _validate_c010_eligibility_receipt(receipt: Any) -> tuple[list[dict[str, Any
     if value.get("excluded_moneyflow_symbols") != excluded:
         raise StateModelSetError("C-010 eligibility exclusion identity is invalid")
     return normalized, excluded
+
+
+def _validate_c010_eligibility_receipt_v2(receipt: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    value = _c010_require_canonical(receipt, identity_field="receipt_sha256", label="C-010 eligibility receipt")
+    required_fields = {
+        "schema_version",
+        "train_start",
+        "train_end",
+        "minimum_availability_ratio",
+        "availability_integer_contract",
+        "entry_count",
+        "entries",
+        "excluded_moneyflow_symbols",
+        "expected_opportunity_receipt",
+        "expected_opportunity_receipt_sha256",
+        "provider_absence_partition_receipt",
+        "provider_absence_partition_receipt_sha256",
+        "pit_universe_changed",
+        "selection_universe_changed",
+        "runtime_prediction_eligibility_changed",
+        "diagnostic_only",
+        "formal_policy_activated",
+        "receipt_sha256",
+    }
+    entries = value.get("entries")
+    if (
+        set(value) != required_fields
+        or value.get("schema_version") != C010_ELIGIBILITY_RECEIPT_VERSION
+        or value.get("minimum_availability_ratio") != MIN_COVERAGE
+        or value.get("availability_integer_contract") != "10*(expected-missing) >= 9*expected"
+        or value.get("diagnostic_only") is not False
+        or value.get("formal_policy_activated") is not True
+        or not isinstance(entries, list)
+        or value.get("entry_count") != len(entries)
+        or not entries
+    ):
+        raise StateModelSetError("C-010 eligibility v2 receipt contract is invalid")
+    opportunity = validate_c010_expected_opportunity_receipt(value.get("expected_opportunity_receipt"))
+    partition = validate_c010_provider_absence_domain_partition(value.get("provider_absence_partition_receipt"))
+    expected_authority_hashes = {
+        str(partition[field]["identity_sha256"])
+        for field in (
+            "security_resolver_identity",
+            "pit_authority_identity",
+            "price_source_identity",
+            "sw_mapping_classify_identity",
+        )
+    }
+    if (
+        value.get("expected_opportunity_receipt_sha256") != opportunity.get("receipt_sha256")
+        or value.get("provider_absence_partition_receipt_sha256") != partition.get("receipt_sha256")
+        or partition.get("formal_policy_activated") is not True
+        or partition.get("diagnostic_only") is not False
+        or {str(item["identity_sha256"]) for item in opportunity["authority_identities"]} != expected_authority_hashes
+    ):
+        raise StateModelSetError("C-010 eligibility v2 authority identity is invalid")
+    opportunity_by_symbol = {
+        str(entry["canonical_ts_code"]): tuple(entry["opportunity_dates"]) for entry in opportunity["entries"]
+    }
+    p_in_by_symbol: dict[str, list[str]] = {}
+    expected_keys = {
+        (symbol, opportunity_date)
+        for symbol, opportunity_dates in opportunity_by_symbol.items()
+        for opportunity_date in opportunity_dates
+    }
+    for entry in partition["entries"]:
+        key = (str(entry["canonical_ts_code"]), str(entry["trade_date"]))
+        if entry["partition"] == "in_domain":
+            if key not in expected_keys:
+                raise StateModelSetError("C-010 eligibility v2 P_in is outside O_sector")
+            p_in_by_symbol.setdefault(key[0], []).append(key[1])
+        elif key in expected_keys:
+            raise StateModelSetError("C-010 eligibility v2 P_out intersects O_sector")
+    symbols: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    excluded: list[str] = []
+    required_entry_fields = {
+        "canonical_ts_code",
+        "expected_opportunity_count",
+        "expected_opportunity_contract",
+        "expected_opportunity_date_sha256",
+        "provider_absence_count",
+        "availability_ratio",
+        "moneyflow_contributor_eligible",
+        "provider_absence_key_sha256",
+        "p_in_date_sha256",
+        "entry_sha256",
+    }
+    for raw_entry in entries:
+        entry = _c010_require_canonical(raw_entry, identity_field="entry_sha256", label="C-010 eligibility entry")
+        if set(entry) != required_entry_fields:
+            raise StateModelSetError("C-010 eligibility v2 entry fields are incomplete")
+        symbol = str(entry.get("canonical_ts_code") or "")
+        expected_dates = opportunity_by_symbol.get(symbol)
+        p_in_dates = p_in_by_symbol.get(symbol, [])
+        expected = entry.get("expected_opportunity_count")
+        missing = entry.get("provider_absence_count")
+        eligible = entry.get("moneyflow_contributor_eligible")
+        try:
+            ratio = float(entry.get("availability_ratio"))
+        except (TypeError, ValueError):
+            ratio = math.nan
+        expected_p_in_key_hash = canonical_sha256(
+            [{"canonical_ts_code": symbol, "trade_date": item} for item in p_in_dates]
+        )
+        if (
+            not symbol
+            or symbol in symbols
+            or expected_dates is None
+            or not isinstance(expected, int)
+            or isinstance(expected, bool)
+            or expected != len(expected_dates)
+            or not isinstance(missing, int)
+            or isinstance(missing, bool)
+            or missing != len(p_in_dates)
+            or any(item not in expected_dates for item in p_in_dates)
+            or not isinstance(eligible, bool)
+            or entry.get("expected_opportunity_contract") != C010_EXPECTED_OPPORTUNITY_CONTRACT
+            or entry.get("expected_opportunity_date_sha256") != canonical_sha256(list(expected_dates))
+            or entry.get("provider_absence_key_sha256") != expected_p_in_key_hash
+            or entry.get("p_in_date_sha256") != canonical_sha256(p_in_dates)
+            or not math.isfinite(ratio)
+            or ratio != (expected - missing) / expected
+            or eligible is not ((10 * (expected - missing)) >= (9 * expected))
+        ):
+            raise StateModelSetError("C-010 eligibility v2 entry semantics are invalid")
+        symbols.add(symbol)
+        normalized.append(dict(entry))
+        if not eligible:
+            excluded.append(symbol)
+    if [entry["canonical_ts_code"] for entry in normalized] != sorted(opportunity_by_symbol):
+        raise StateModelSetError("C-010 eligibility v2 entries do not cover the opportunity ledger")
+    if value.get("excluded_moneyflow_symbols") != excluded:
+        raise StateModelSetError("C-010 eligibility v2 exclusion identity is invalid")
+    return normalized, excluded
+
+
+def _validate_c010_eligibility_receipt(
+    receipt: Any,
+    *,
+    policy_version: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if policy_version == C010_POLICY_VERSION_V1:
+        return _validate_c010_eligibility_receipt_v1(receipt)
+    if policy_version == C010_POLICY_VERSION:
+        return _validate_c010_eligibility_receipt_v2(receipt)
+    raise StateModelSetError("C-010 eligibility policy version is unsupported")
 
 
 def _validate_c010_domain_receipt_set(
@@ -1364,6 +1867,7 @@ def _validate_c010_cross_section_receipt(
     *,
     level: str,
     dates: tuple[str, ...],
+    policy_version: str,
 ) -> tuple[str, ...]:
     value = _c010_require_canonical(receipt, identity_field="receipt_sha256", label=f"C-010 {level} cross-section")
     expected_count = 31 if level == "L1" else 131
@@ -1374,7 +1878,7 @@ def _validate_c010_cross_section_receipt(
     if (
         value.get("schema_version") != C010_CROSS_SECTION_RECEIPT_VERSION
         or value.get("formula_version") != C010_FORMULA_VERSION
-        or value.get("feature_domain_policy_version") != C010_POLICY_VERSION
+        or value.get("feature_domain_policy_version") != policy_version
         or value.get("direct_sector_level") != level
         or value.get("expected_sector_count") != expected_count
         or len(codes) != expected_count
@@ -1478,7 +1982,7 @@ def _validate_c010_cross_section_receipt(
     return codes
 
 
-def _validate_c010_feature_definitions(value: Mapping[str, Any]) -> None:
+def _validate_c010_feature_definitions(value: Mapping[str, Any], *, policy_version: str) -> None:
     for level in ("l1", "l2"):
         definition = value.get(f"{level}_feature_definition")
         direct_level = level.upper()
@@ -1486,7 +1990,7 @@ def _validate_c010_feature_definitions(value: Mapping[str, Any]) -> None:
         if (
             not isinstance(definition, Mapping)
             or definition.get("schema_version") != C010_FORMULA_VERSION
-            or definition.get("feature_domain_policy_version") != C010_POLICY_VERSION
+            or definition.get("feature_domain_policy_version") != policy_version
             or definition.get("diagnostic_only") is not False
             or definition.get("direct_sector_level") != direct_level
             or definition.get("cross_section_required_sector_count") != expected_count
@@ -1509,6 +2013,7 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
     """Fail closed unless a C-010 policy is complete, self-contained, and semantically readback-safe."""
 
     value = _c010_require_canonical(manifest, identity_field="receipt_sha256", label="C-010 policy manifest")
+    policy_version = str(value.get("schema_version") or "")
     required_fields = {
         "schema_version",
         "formula_version",
@@ -1555,8 +2060,19 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
         "runtime_prediction_eligibility_changed",
         "receipt_sha256",
     }
+    if policy_version == C010_POLICY_VERSION:
+        required_fields.update(
+            {
+                "expected_opportunity_receipt",
+                "expected_opportunity_receipt_sha256",
+                "provider_absence_partition_receipt",
+                "provider_absence_partition_receipt_sha256",
+            }
+        )
     if set(value) != required_fields:
         raise StateModelSetError("C-010 policy manifest fields are incomplete or unapproved")
+    if policy_version not in {C010_POLICY_VERSION_V1, C010_POLICY_VERSION}:
+        raise StateModelSetError("C-010 policy manifest version is unsupported")
     dates = _c010_require_ordered_strings(value.get("receipt_trading_dates"), label="C-010 receipt trading dates")
     try:
         parsed_dates = tuple(date.fromisoformat(item) for item in dates)
@@ -1584,8 +2100,7 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
         "autocycle_all_core": list(ALL_CORE_FEATURES),
     }
     if (
-        value.get("schema_version") != C010_POLICY_VERSION
-        or value.get("formula_version") != C010_FORMULA_VERSION
+        value.get("formula_version") != C010_FORMULA_VERSION
         or len(producer_commit) != 40
         or any(character not in "0123456789abcdef" for character in producer_commit.lower())
         or value.get("receipt_trading_date_count") != len(dates)
@@ -1609,8 +2124,10 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
         raise StateModelSetError("C-010 policy manifest fixed contract is invalid")
     if tuple(sorted(parsed_dates)) != parsed_dates or len(set(parsed_dates)) != len(parsed_dates):
         raise StateModelSetError("C-010 receipt trading dates are not strictly increasing")
-    _validate_c010_feature_definitions(value)
-    ledger, excluded = _validate_c010_eligibility_receipt(value.get("eligibility_receipt"))
+    _validate_c010_feature_definitions(value, policy_version=policy_version)
+    ledger, excluded = _validate_c010_eligibility_receipt(
+        value.get("eligibility_receipt"), policy_version=policy_version
+    )
     if (
         value["eligibility_receipt"].get("train_start") != train_start.isoformat()
         or value["eligibility_receipt"].get("train_end") != train_end.isoformat()
@@ -1625,8 +2142,41 @@ def validate_c010_policy_manifest(manifest: Any) -> dict[str, Any]:
         or value.get("excluded_moneyflow_symbol_sha256") != canonical_sha256(excluded)
     ):
         raise StateModelSetError("C-010 policy contributor ledger identity is invalid")
-    l1_codes = _validate_c010_cross_section_receipt(value.get("l1_cross_section_receipt"), level="L1", dates=dates)
-    l2_codes = _validate_c010_cross_section_receipt(value.get("l2_cross_section_receipt"), level="L2", dates=dates)
+    if policy_version == C010_POLICY_VERSION:
+        opportunity = validate_c010_expected_opportunity_receipt(value.get("expected_opportunity_receipt"))
+        partition = validate_c010_provider_absence_domain_partition(value.get("provider_absence_partition_receipt"))
+        partition_provider_authority = partition["provider_absence_manifest_identity"]["authority"]
+        partition_resolver_authority = partition["security_resolver_identity"]["authority"]
+        partition_sw_authority = partition["sw_mapping_classify_identity"]["authority"]
+        opportunity_authority_hashes = {str(item["identity_sha256"]) for item in opportunity["authority_identities"]}
+        expected_opportunity_authority_hashes = {
+            str(partition[field]["identity_sha256"])
+            for field in (
+                "security_resolver_identity",
+                "pit_authority_identity",
+                "price_source_identity",
+                "sw_mapping_classify_identity",
+            )
+        }
+        if (
+            value.get("expected_opportunity_receipt_sha256") != opportunity.get("receipt_sha256")
+            or value.get("provider_absence_partition_receipt_sha256") != partition.get("receipt_sha256")
+            or value["eligibility_receipt"].get("expected_opportunity_receipt_sha256")
+            != opportunity.get("receipt_sha256")
+            or value["eligibility_receipt"].get("provider_absence_partition_receipt_sha256")
+            != partition.get("receipt_sha256")
+            or partition_provider_authority.get("manifest_sha256") != value.get("provider_absence_manifest_sha256")
+            or partition_resolver_authority.get("manifest_sha256") != value.get("security_identity_manifest_sha256")
+            or canonical_sha256(dict(partition_sw_authority)) != value.get("mapping_manifest_hash")
+            or opportunity_authority_hashes != expected_opportunity_authority_hashes
+        ):
+            raise StateModelSetError("C-010 policy domain-partition authority identity is invalid")
+    l1_codes = _validate_c010_cross_section_receipt(
+        value.get("l1_cross_section_receipt"), level="L1", dates=dates, policy_version=policy_version
+    )
+    l2_codes = _validate_c010_cross_section_receipt(
+        value.get("l2_cross_section_receipt"), level="L2", dates=dates, policy_version=policy_version
+    )
     if value.get("l1_cross_section_receipt_sha256") != value["l1_cross_section_receipt"].get(
         "receipt_sha256"
     ) or value.get("l2_cross_section_receipt_sha256") != value["l2_cross_section_receipt"].get("receipt_sha256"):

@@ -3,9 +3,14 @@
   "allowed_write_scope": [
     "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
     "backend/services/hmm_risk/observation_eligibility.py",
+    "backend/services/hmm_risk/stock_fact_observation.py",
     "scripts/hmm_risk/prepare_state_model_set.py",
     "backend/tests/hmm_risk/test_observation_eligibility.py",
+    "backend/tests/hmm_risk/test_stock_fact_observation.py",
     "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "backend/routers/health.py",
+    "backend/tests/platform_api/test_hmm_risk_c010_runtime_contract.py",
+    "docs/operations/backend_main_runtime_restart_runbook.md",
     "tests/aistock_validation/bugs/20260801_BUG-944-c-010-rejects-provider-verified-absence-outside-the-sw-contributor-oppor.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -136,9 +141,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-contracts/hmm-risk-c010-a5",
+    "fresh_process_evidence": [
+      "Conda AIstock fresh process loaded commit 28e824fd and completed C-010-A5 read-only preflight; no backend process control; canonical=e7f7edc9fbe7f1cdb5ec739e1390fffec69a9ede6c8d719c9dda1a21df71773d",
+      "Fresh Python process loaded clean post-BUG-948-main commit b498ad4b2caffde5e8aee6a40c324fbe104163d0; runtime identity returned the same merge_commit and HMM C-010-A5 business smoke returned the exact v2 contract, both HTTP 200; no backend process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -157,6 +169,116 @@
     "fingerprint": "b738c3f30d576ab02e9bb5dc",
     "source_event_id": "FE-20260801-b738c3f30d57"
   },
+  "validation_evidence": [
+    "C-010-A5 design-only stage: python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2 -> PASS, 3 design items, 8 matrix rows, 0 warnings",
+    "C-010-A5 design-only stage: rtk nox -s l0 -> PASS, blocking=0",
+    "C-010-A5 design-only stage: rtk nox -s validation_module_registry_l0 -> PASS, 8 tests passed and 14/14 catalog files mapped",
+    "C-010-A5 design-only stage: git diff --check origin/main...HEAD -> PASS; no source implementation, HMM fit, selection, model/READY, database write, or runtime action was performed",
+    "C-010-A5 source direct matrix: 79 passed covering partition, v1/v2 readback, policy lineage, known SW-domain-out and compact CLI preflight",
+    "hmm_risk_backend: 236 passed, total line/branch coverage 74.45%, required threshold 70%",
+    "601-day read-only preflight after rebase: status=preflight_complete, P_all=502, P_in=501, P_out=1, partition_sha256=03d785347b35185fe9f9c771e0a4e69cd0deb8def31a0cb205d3ca7a86b8ead6, report_sha256=e7f7edc9fbe7f1cdb5ec739e1390fffec69a9ede6c8d719c9dda1a21df71773d",
+    "C-010-A5 implementation design sync: F2 PASS, 3 design items, 8 matrix rows, 0 warnings",
+    "final gates: ruff/format/py_compile PASS; l0 PASS blocking=0; validation_module_registry_l0 PASS 8 tests and 14/14 mapped; git diff --check PASS",
+    "Second formal code review fixed four P1 blockers: diagnostic/formal mode coercion, rehashed predicate status drift, P_out intersecting O_sector, and incomplete backend runtime aftercare evidence",
+    "Second-review final stacked direct matrix: 84 passed across observation eligibility, stock-fact observation, B3 preparation and HMM runtime contract endpoints",
+    "Second-review hmm_risk_backend: 239 passed; total coverage 74.43% >= 70%",
+    "Second-review platform_api_backend: 7 passed; generic runtime identity and HMM business smoke remain independently fail-closed",
+    "Second-review F2 PASS with 3 design items, 8 matrix rows and 0 warnings; l0 blocking=0; validation registry 8 passed and 14/14 mapped",
+    "Cross-module validation reason: backend runtime impact requires a frozen merge-SHA identity and exact HMM C-010-A5 business smoke; only direct endpoint tests were added",
+    "No HMM fit, D5/D6, selection, model/READY, database write, DDL/DML, runtime action, or backend process control was performed"
+  ],
+  "validation_receipts": [
+    {
+      "command": "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2",
+      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
+      "evidence_kind": "feature_validation",
+      "plan": "hmm_phase2_f2_design",
+      "receipt_id": "3d54a3aa0354a15b",
+      "result": "passed, 3 design items, 8 matrix rows, 0 warnings",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "rtk nox -s l0",
+      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "3aeb0a8fc44618d7",
+      "result": "passed, blocking=0",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "rtk nox -s validation_module_registry_l0",
+      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "4acb895ebf4c4374",
+      "result": "passed, 8 tests and 14/14 mapped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check origin/main...HEAD",
+      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
+      "evidence_kind": "diff_check",
+      "plan": "git_diff_check",
+      "receipt_id": "e2a087fbadc6a5e4",
+      "result": "passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "conda run -n AIstock python -m pytest backend/tests/hmm_risk/test_observation_eligibility.py backend/tests/hmm_risk/test_stock_fact_observation.py backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -q -p no:cacheprovider",
+      "commit": "a41d55e0c29606ae693c679e4092b9a37f72ce73",
+      "evidence_kind": "pytest",
+      "plan": "hmm_risk_c010_a5_fixpoint",
+      "receipt_id": "c010a5f1c7000079",
+      "result": "79 passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s hmm_risk_backend",
+      "commit": "a41d55e0c29606ae693c679e4092b9a37f72ce73",
+      "evidence_kind": "nox",
+      "plan": "hmm_risk_backend",
+      "receipt_id": "c010a5be02360001",
+      "result": "236 passed; total coverage 74.45% >= 70%",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "conda run -n AIstock python scripts/hmm_risk/prepare_state_model_set.py --c010-a5-domain-partition-output <repo-external-report> ...",
+      "commit": "28e824fd0b3b6932e793a055e04013daca90b16e",
+      "evidence_kind": "readonly_preflight",
+      "plan": "hmm_risk_c010_a5_601_day_domain_partition",
+      "receipt_id": "c010a56015020001",
+      "result": "preflight_complete; P_all=502 P_in=501 P_out=1; known 002951.SZ@2023-05-22 SW-domain-out verified; report_sha256=e7f7edc9fbe7f1cdb5ec739e1390fffec69a9ede6c8d719c9dda1a21df71773d",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2",
+      "commit": "28e824fd0b3b6932e793a055e04013daca90b16e",
+      "evidence_kind": "feature_validation",
+      "plan": "hmm_phase2_f2_design",
+      "receipt_id": "c010a5f200080001",
+      "result": "passed, 3 design items, 8 matrix rows, 0 warnings",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s l0 && python -m nox -s validation_module_registry_l0",
+      "commit": "28e824fd0b3b6932e793a055e04013daca90b16e",
+      "evidence_kind": "nox",
+      "plan": "l0_and_validation_module_registry_l0",
+      "receipt_id": "c010a51000080014",
+      "result": "l0 blocking=0; registry 8 passed and 14/14 mapped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -203,54 +325,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_evidence": [
-    "C-010-A5 design-only stage: python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2 -> PASS, 3 design items, 8 matrix rows, 0 warnings",
-    "C-010-A5 design-only stage: rtk nox -s l0 -> PASS, blocking=0",
-    "C-010-A5 design-only stage: rtk nox -s validation_module_registry_l0 -> PASS, 8 tests passed and 14/14 catalog files mapped",
-    "C-010-A5 design-only stage: git diff --check origin/main...HEAD -> PASS; no source implementation, HMM fit, selection, model/READY, database write, or runtime action was performed"
-  ],
-  "validation_receipts": [
-    {
-      "command": "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2",
-      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
-      "evidence_kind": "feature_validation",
-      "plan": "hmm_phase2_f2_design",
-      "receipt_id": "3d54a3aa0354a15b",
-      "result": "passed, 3 design items, 8 matrix rows, 0 warnings",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    },
-    {
-      "command": "rtk nox -s l0",
-      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
-      "evidence_kind": "nox",
-      "plan": "l0",
-      "receipt_id": "3aeb0a8fc44618d7",
-      "result": "passed, blocking=0",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    },
-    {
-      "command": "rtk nox -s validation_module_registry_l0",
-      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
-      "evidence_kind": "nox",
-      "plan": "validation_module_registry_l0",
-      "receipt_id": "4acb895ebf4c4374",
-      "result": "passed, 8 tests and 14/14 mapped",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    },
-    {
-      "command": "git diff --check origin/main...HEAD",
-      "commit": "f0dcf64723a581884dc86657d636caf182db03ef",
-      "evidence_kind": "diff_check",
-      "plan": "git_diff_check",
-      "receipt_id": "e2a087fbadc6a5e4",
-      "result": "passed",
-      "schema_version": "aistock_validation_receipt_v1",
-      "status": "passed"
-    }
-  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
