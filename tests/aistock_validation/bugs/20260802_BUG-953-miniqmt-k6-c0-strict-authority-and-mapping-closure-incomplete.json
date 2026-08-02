@@ -125,7 +125,9 @@
     "visual_acceptance_required": false
   },
   "validation_evidence": [
-    "PR #3048 required CI green; direct and DEV PostgreSQL matrix 91 passed; F2 validators 12/12 70/70 112/112 passed"
+    "validation-receipt: id=4faf06b832b725c6 commit=d6f3293eb6fe8ca69db5cc259276c74e61b3b639 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py -q` result=`91 passed`",
+    "validation-receipt: id=099a8a2dcd9f4362 commit=d6f3293eb6fe8ca69db5cc259276c74e61b3b639 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
+    "validation-receipt: id=44066f81b0a955f8 commit=d6f3293eb6fe8ca69db5cc259276c74e61b3b639 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed, ownership 14/14`"
   ],
   "verification_budget": {
     "budget": "deep",
