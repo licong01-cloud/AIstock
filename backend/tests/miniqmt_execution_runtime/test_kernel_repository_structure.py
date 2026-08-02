@@ -16,7 +16,7 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
 )
 
 
-_PUBLIC_SIGNATURE_SHA256 = "2536873a8fb11b9bdb38891eeec134921129b9d9bbdc07d777479b37654eb2bd"
+_PUBLIC_SIGNATURE_SHA256 = "56e18faa64db26cf073a87d0476bf24b30e1d4fb7aea4802a3c28c0d217192af"
 _PRIVATE_MODULES = (
     "backend.services.miniqmt_execution_runtime.kernel_product_repository",
     "backend.services.miniqmt_execution_runtime.kernel_repository_common",
