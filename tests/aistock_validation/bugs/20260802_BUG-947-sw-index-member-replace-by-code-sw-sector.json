@@ -70,7 +70,9 @@
     "backend_restart_owner": "user",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh Python process imported backend.services.tushare_sync_engine and verified TushareHttpError, _query_tushare_dataapi direct dataapi transport in _fetch_from_tushare, and _tushare_token helper -> PASS"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_identity_match": "pending",
     "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
