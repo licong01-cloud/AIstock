@@ -8966,6 +8966,11 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
         },
     )
     monkeypatch.setattr(
+        workflow,
+        "_github_actions_registry_pr_capability",
+        lambda: {"allowed": True, "source": "test"},
+    )
+    monkeypatch.setattr(
         workflow.ci_failure_summary,
         "summarize_actions_run",
         lambda **kwargs: summary,
