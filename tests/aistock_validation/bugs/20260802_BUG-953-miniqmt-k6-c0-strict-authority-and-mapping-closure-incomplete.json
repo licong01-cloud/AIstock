@@ -74,7 +74,9 @@
     "backend_restart_required": true,
     "business_smoke_ref": "fresh-process import and strict K6-C0 authority/lifecycle negative matrix; K6 remains shadow-only",
     "database_readback_ref": "pending separately authorized K6-C0 production DDL and catalog readback",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh Python process imported K6-C0 contracts/repository, rejected a forged SUBMIT mapping identity, and independently matched forward canonical-LF 368fc29048ac40c7a9ca32f3ca76a214af2d6ba776e52b2490226ba341fb2ab4 plus catalog f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d -> PASS"
+    ],
     "identity_ref": "GET http://127.0.0.1:8001/api/v1/runtime-identity after user-owned restart",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
