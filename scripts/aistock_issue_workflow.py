@@ -1640,6 +1640,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/aistock_issue_workflow.py",
         "scripts/issue_flow.py",
         "scripts/aistock_guardrail_scan.py",
+        "scripts/ci_failure_issue_summary.py",
         "scripts/ci_change_classifier.py",
         "scripts/hmm_risk/prepare_state_model_set.py",
         "noxfile.py",
@@ -9289,6 +9290,41 @@ def build_ci_issue_janitor_plan(
     return payload
 
 
+def _github_actions_registry_pr_capability() -> dict[str, Any]:
+    if str(os.environ.get("GITHUB_ACTIONS") or "").strip().lower() != "true":
+        return {
+            "allowed": True,
+            "source": "not_github_actions",
+            "reason": "local operator promotion uses the authenticated user capability",
+        }
+    result = _run_command(
+        ["gh", "api", f"repos/{GITHUB_REPO}/actions/permissions/workflow"],
+        timeout=30,
+    )
+    if not result.get("ok"):
+        return {
+            "allowed": False,
+            "source": "github_actions_workflow_permissions",
+            "reason": result.get("stderr") or result.get("stdout") or "workflow permission query failed",
+        }
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        return {
+            "allowed": False,
+            "source": "github_actions_workflow_permissions",
+            "reason": f"workflow permission query returned invalid JSON: {exc}",
+        }
+    allowed = payload.get("can_approve_pull_request_reviews") is True
+    return {
+        "allowed": allowed,
+        "source": "github_actions_workflow_permissions",
+        "reason": "registry PR creation is enabled" if allowed else "repository Actions cannot create or approve pull requests",
+        "default_workflow_permissions": payload.get("default_workflow_permissions"),
+        "can_approve_pull_request_reviews": payload.get("can_approve_pull_request_reviews"),
+    }
+
+
 def build_promote_ci_issue_plan(
     *,
     issue_number: int | str,
@@ -9360,6 +9396,24 @@ def build_promote_ci_issue_plan(
                 "--create-registry-worktree --apply"
             ),
         }
+    if apply and create_registry_worktree:
+        registry_pr_capability = _github_actions_registry_pr_capability()
+        if not registry_pr_capability.get("allowed"):
+            return {
+                "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+                "generated_at": _utc_now(),
+                "workflow_gate": "deferred_registry_pr_capability",
+                "dry_run": False,
+                "triage": triage,
+                "registry_pr_capability": registry_pr_capability,
+                "warnings": [
+                    "Nightly failure remains an actionable GitHub Issue; BUG allocation is deferred until a registry PR can be persisted"
+                ],
+                "next_command": (
+                    f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_number} "
+                    "--create-registry-worktree --apply"
+                ),
+            }
     summary = triage["summary"]
     suggested = triage["suggested_bug"]
     first_job = (summary.get("failed_jobs") or [{}])[0]
@@ -13214,7 +13268,12 @@ def cmd_promote_ci_issue(args: argparse.Namespace) -> int:
         create_registry_worktree=args.create_registry_worktree,
     )
     _emit_args(payload, args)
-    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "promoted", "already_linked"} else 2
+    return 0 if payload.get("workflow_gate") in {
+        "ready_for_apply",
+        "promoted",
+        "already_linked",
+        "deferred_registry_pr_capability",
+    } else 2
 
 
 def cmd_promote_nightly_candidate(args: argparse.Namespace) -> int:

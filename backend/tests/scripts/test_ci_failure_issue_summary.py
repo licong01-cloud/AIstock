@@ -423,6 +423,59 @@ def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: py
     assert artifact_payload["schema_version"] == "aistock_ci_failure_summary_v1"
 
 
+def test_nightly_cli_discovers_failed_session_results_from_sibling_artifact(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    validation_root = tmp_path / "tmp" / "validation"
+    status_path = validation_root / "nightly_failure_issue" / "nightly-status.json"
+    session_results_path = validation_root / "nightly_l3" / "session-results.json"
+    output_path = validation_root / "nightly_failure_issue" / "summary.json"
+    status_path.parent.mkdir(parents=True)
+    session_results_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "statuses": {
+                    "runnerPreflight": "success",
+                    "drSnapshot": "success",
+                    "drValidate": "success",
+                    "nightlyL3": "failure",
+                    "paperV2Live": "skipped",
+                },
+                "run_id": "9001",
+            }
+        ),
+        encoding="utf-8",
+    )
+    session_results_path.write_text(
+        json.dumps(
+            [
+                {"session": "paper_v2_l3", "result": "success"},
+                {"session": "advisory_historical_range_backend", "result": "failure"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert summary.main(
+        [
+            "--nightly-status-json",
+            str(status_path),
+            "--output",
+            str(output_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    capsys.readouterr()
+    artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert artifact_payload["nightly_failed_sessions"] == ["advisory_historical_range_backend"]
+    assert artifact_payload["failed_jobs"][0]["nox_session"] == "advisory_historical_range_backend"
+    assert artifact_payload["suspected_modules"] == ["advisory.historical_range"]
+
+
 def test_cli_persists_tmp_failure_candidate_history(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -467,7 +520,7 @@ def test_cli_persists_tmp_failure_candidate_history(
     assert "tests/aistock_validation/history" not in history_path.as_posix()
     assert history_payload["schema_version"] == "aistock_ci_failure_candidate_history_v1"
     assert history_payload["candidate"]["fingerprint"] == stdout_payload["fingerprint"]
-    assert history_payload["candidate"]["module"] == "paper_v2"
+    assert history_payload["candidate"]["module"] == "validation.runner"
     assert history_payload["run_count"] == 1
     assert history_payload["observed_run_ids"] == ["9001"]
     assert history_payload["log_policy"]["full_log_embedded"] is False
@@ -875,6 +928,12 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
             },
             "run_id": "9001",
             "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9001",
+            "nightly_session_results": [
+                {
+                    "session": "advisory_historical_range_backend",
+                    "result": "failure",
+                }
+            ],
         },
         branch="main",
         commit="abcdef1234567890",
@@ -884,11 +943,17 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
 
     assert payload["workflow"] == "AIstock Nightly L3 + DR"
     assert payload["nightly_failed_stages"] == ["nightly_l3"]
+    assert payload["nightly_failed_sessions"] == ["advisory_historical_range_backend"]
     assert payload["issue_title"].startswith("P1 Nightly failed:")
     assert payload["reproduce_command"] == "gh run view 9001 --repo licong01-cloud/AIstock"
-    assert "paper_v2" in payload["suspected_modules"]
+    assert payload["suspected_modules"] == ["advisory.historical_range"]
+    assert payload["failed_jobs"][0]["nox_session"] == "advisory_historical_range_backend"
+    assert (
+        payload["failed_jobs"][0]["command"]
+        == "python -m nox -s advisory_historical_range_backend"
+    )
     assert "noxfile.py" in payload["suspected_files"]
-    assert "scripts/aistock_data_quality_smoke.py" in payload["suspected_files"]
+    assert "tests/aistock_validation/catalog/test_plans.yaml" in payload["suspected_files"]
     assert payload["llm_triage_advice"]["workflow_gate"] in {"ready", "warning"}
     assert payload["llm_triage_advice"]["llm_invocation_evidence"]["invoked"] is False
     if not payload["llm_triage_advice"].get("fallback_used"):
@@ -1332,10 +1397,14 @@ def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
     assert "bug-promotion-status.txt" in run
     assert "gh pr create" in run
     assert "REGISTRY_PR_STATUS" in run
+    assert "PROMOTION_WORKFLOW_GATE" in run
+    assert "deferred_registry_pr_capability" in run
     assert "workflow_gate=manual_registry_pr_required" in run
     assert "GitHub Actions could not create the registry PR" in run
     assert "Registry PR status" in run
     assert "workflow_gate=promotion_failed" in run
+    assert '"body,title"' in run
+    assert '"--title"' in run
     upload_step = next(step for step in steps if step.get("name") == "Upload Nightly BUG promotion context")
     assert "nightly-bug-promotion-${{ github.run_id }}" == upload_step["with"]["name"]
     assert "bug-promotion-status.txt" in upload_step["with"]["path"]

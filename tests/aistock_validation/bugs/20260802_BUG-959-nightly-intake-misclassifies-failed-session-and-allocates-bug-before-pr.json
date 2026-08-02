@@ -4,6 +4,8 @@
     ".github/workflows/nightly.yml",
     "scripts/ci_failure_issue_summary.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
     "tests/aistock_validation/bugs/20260802_BUG-959-nightly-intake-misclassifies-failed-session-and-allocates-bug-before-pr.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -35,13 +37,17 @@
     "changed_files": [
       ".github/workflows/nightly.yml",
       "scripts/ci_failure_issue_summary.py",
-      "backend/tests/scripts/test_ci_failure_issue_summary.py"
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
     ],
     "ownership": {
       "changed_files": [
         ".github/workflows/nightly.yml",
         "scripts/ci_failure_issue_summary.py",
-        "backend/tests/scripts/test_ci_failure_issue_summary.py"
+        "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
       ],
       "impacted_modules": [
         "validation.guardrails",
@@ -87,6 +93,30 @@
           "primary_module": "tests.backend",
           "risk_level": "medium",
           "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
         }
       ],
       "risk_levels": [
@@ -96,7 +126,9 @@
       "suggested_scope": [
         ".github/workflows/nightly.yml",
         "scripts/ci_failure_issue_summary.py",
-        "backend/tests/scripts/test_ci_failure_issue_summary.py"
+        "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
       ],
       "unmatched_files": []
     },
@@ -104,7 +136,9 @@
     "scope_files": [
       ".github/workflows/nightly.yml",
       "scripts/ci_failure_issue_summary.py",
-      "backend/tests/scripts/test_ci_failure_issue_summary.py"
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
     ]
   },
   "first_seen_at": "2026-08-02T18:51:19.602816Z",
@@ -132,7 +166,7 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
-    "runtime_impact": "unknown",
+    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
     "target_ids": []

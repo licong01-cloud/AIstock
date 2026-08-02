@@ -1138,8 +1138,13 @@ jobs:
             --create-registry-worktree \
             --apply \
             --output tmp/validation/nightly_failure_issue/bug-promotion-full.json \
-            --output-format compact | tee tmp/validation/nightly_failure_issue/bug-promotion.json; then
+              --output-format compact | tee tmp/validation/nightly_failure_issue/bug-promotion.json; then
             BUG_ID="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('bug_id') or p.get('bug_id') or '')")"
+            PROMOTION_WORKFLOW_GATE="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('workflow_gate') or '')")"
+            if [ "${PROMOTION_WORKFLOW_GATE}" = "deferred_registry_pr_capability" ]; then
+              PROMOTION_GATE="deferred_registry_pr_capability"
+              echo "workflow_gate=${PROMOTION_GATE} issue=${ISSUE_NUMBER} reason=actions_cannot_persist_registry_pr" | tee -a "${PROMOTION_STATUS}"
+            fi
             if [ -n "${BUG_ID}" ]; then
               BRANCH="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_worktree_plan', {}).get('branch') or '')")"
               REGISTRY_ROOT="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_root') or '')")"
@@ -1195,12 +1200,14 @@ jobs:
           bug_path = payload.get("submit_bug", {}).get("bug_json_path") or payload.get("bug_json_path")
           branch = payload.get("submit_bug", {}).get("registry_worktree_plan", {}).get("branch")
           registry_pr_status = os.environ.get("REGISTRY_PR_STATUS") or "not_attempted"
-          body_json = subprocess.check_output(
-              ["gh", "issue", "view", issue, "--json", "body"],
+          issue_json = subprocess.check_output(
+              ["gh", "issue", "view", issue, "--json", "body,title"],
               text=True,
               encoding="utf-8",
           )
-          body = json.loads(body_json).get("body") or ""
+          issue_payload = json.loads(issue_json)
+          body = issue_payload.get("body") or ""
+          title = issue_payload.get("title") or "Nightly failure requires triage"
           replacement = f"- BUG ID: `{bug_id}` (Nightly BUG draft generated; registry branch `{branch}`; registry_pr_status=`{registry_pr_status}`; business fix still requires standard workflow)."
           body = body.replace(
               "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
@@ -1217,7 +1224,11 @@ jobs:
               )
           body_path = Path("tmp/validation/nightly_failure_issue/github-issue-body-with-bug.md")
           body_path.write_text(body, encoding="utf-8")
-          subprocess.check_call(["gh", "issue", "edit", issue, "--body-file", str(body_path)])
+          if not title.startswith(f"{bug_id} "):
+              title = f"{bug_id} {title}"
+          subprocess.check_call(
+              ["gh", "issue", "edit", issue, "--title", title, "--body-file", str(body_path)]
+          )
           PY
             fi
             echo "workflow_gate=${PROMOTION_GATE} issue=${ISSUE_NUMBER}" | tee -a "${PROMOTION_STATUS}"

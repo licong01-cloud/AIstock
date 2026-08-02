@@ -1337,20 +1337,66 @@ def _nightly_fingerprint(statuses: dict[str, str]) -> str:
     return "nightly-" + "-".join(statuses.get(key, "unknown") for key in NIGHTLY_STATUS_KEYS)
 
 
-def _nightly_job_from_statuses(statuses: dict[str, str], *, run_url: str | None = None) -> dict[str, Any]:
+def _failed_nightly_sessions(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("nightly_session_results")
+    rows = raw if isinstance(raw, list) else [raw] if isinstance(raw, dict) else []
+    return _unique(
+        [
+            str(row.get("session") or "").strip()
+            for row in rows
+            if isinstance(row, dict)
+            and _status_value(row.get("result")) in NIGHTLY_FAILURE_STATUSES
+            and str(row.get("session") or "").strip()
+        ]
+    )
+
+
+def _test_plan_module_for_nox_session(session: str) -> str | None:
+    catalog = Path(__file__).resolve().parents[1] / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
+    try:
+        lines = catalog.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    module: str | None = None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.startswith("- plan_key:"):
+            module = None
+        elif line.startswith("module:"):
+            module = line.split(":", 1)[1].strip().strip("'\"") or None
+        elif line.startswith("nox_session:"):
+            nox_session = line.split(":", 1)[1].strip().strip("'\"")
+            if nox_session == session:
+                return module
+    return None
+
+
+def _nightly_job_from_statuses(
+    statuses: dict[str, str],
+    *,
+    run_url: str | None = None,
+    failed_sessions: list[str] | None = None,
+) -> dict[str, Any]:
     failed_keys = _nightly_failed_keys(statuses)
+    failed_sessions = _unique(failed_sessions or [])
     if statuses.get("runner_preflight") == "failure":
         error = "self-hosted Windows runner unavailable"
         module = "validation"
         files = [".github/workflows/nightly.yml", "scripts/aistock_runner_health.py"]
     elif "nightly_l3" in failed_keys:
-        error = "Nightly failed: " + ", ".join(f"{key}={statuses.get(key)}" for key in failed_keys)
-        module = "paper_v2"
+        session_detail = ", ".join(f"{session}=failure" for session in failed_sessions)
+        error = "Nightly failed: " + (
+            session_detail or ", ".join(f"{key}={statuses.get(key)}" for key in failed_keys)
+        )
+        module = (
+            _test_plan_module_for_nox_session(failed_sessions[0])
+            if failed_sessions
+            else "validation.runner"
+        ) or "validation.runner"
         files = [
             ".github/workflows/nightly.yml",
             "noxfile.py",
-            "scripts/aistock_data_quality_smoke.py",
-            "scripts/aistock_validate.py",
+            "tests/aistock_validation/catalog/test_plans.yaml",
         ]
     elif failed_keys == ["code_intelligence"]:
         error = "Nightly code intelligence failed: code_intelligence=" + statuses.get("code_intelligence", "unknown")
@@ -1372,13 +1418,14 @@ def _nightly_job_from_statuses(statuses: dict[str, str], *, run_url: str | None 
     return {
         "job_name": "AIstock Nightly status",
         "job_url": run_url,
-        "failed_step": failed_keys[0] if failed_keys else "nightly_status",
-        "command": "gh run view <run-id> --workflow nightly.yml",
-        "nox_session": None,
+        "failed_step": failed_sessions[0] if failed_sessions else failed_keys[0] if failed_keys else "nightly_status",
+        "command": f"python -m nox -s {failed_sessions[0]}" if failed_sessions else "gh run view <run-id> --workflow nightly.yml",
+        "nox_session": failed_sessions[0] if failed_sessions else None,
         "pytest_summary": None,
         "failed_tests": [],
         "error_signature": error,
-        "key_log_excerpt": [f"{key}: {statuses.get(key)}" for key in NIGHTLY_STATUS_KEYS],
+        "key_log_excerpt": [f"{key}: {statuses.get(key)}" for key in NIGHTLY_STATUS_KEYS]
+        + [f"session {session}: failure" for session in failed_sessions],
         "key_log_excerpt_omitted_count": 0,
         "suspected_module": module,
         "suspected_files": files,
@@ -1505,7 +1552,12 @@ def summarize_nightly_status(
             ]
         )
     )
-    job = _nightly_job_from_statuses(statuses, run_url=effective_run_url)
+    failed_sessions = _failed_nightly_sessions(payload)
+    job = _nightly_job_from_statuses(
+        statuses,
+        run_url=effective_run_url,
+        failed_sessions=failed_sessions,
+    )
     summary = finalize_summary(
         {
             "schema_version": "aistock_ci_failure_summary_v1",
@@ -1523,6 +1575,7 @@ def summarize_nightly_status(
             "nightly_statuses": statuses,
             "nightly_fingerprint": fingerprint,
             "nightly_failed_stages": failed_keys,
+            "nightly_failed_sessions": failed_sessions,
         }
     )
     summary["fingerprint_source"] = fingerprint
@@ -2097,6 +2150,11 @@ def main(argv: list[str] | None = None) -> int:
         payload = json.loads(Path(args.nightly_status_json).read_text(encoding="utf-8-sig"))
         if not isinstance(payload, dict):
             raise SystemExit("--nightly-status-json must contain a JSON object")
+        session_results_path = Path(args.nightly_status_json).resolve().parent.parent / "nightly_l3" / "session-results.json"
+        if session_results_path.exists():
+            session_results = json.loads(session_results_path.read_text(encoding="utf-8-sig"))
+            if isinstance(session_results, (list, dict)):
+                payload["nightly_session_results"] = session_results
         summary = summarize_nightly_status(
             payload,
             repo=args.repo,
