@@ -104,9 +104,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "next scheduled kline_minute_raw incremental cycle completes auto-range without PG statement timeout; readback market.dataset_date_refresh_audit/ingestion_jobs success for kline_minute_raw",
+    "database_readback_ref": "noop:no_database_change",
+    "fresh_process_evidence": [
+      "fresh Python process imported backend.ingestion.tdx_scheduler and verified _compute_auto_range runs the refresh-audit cursor before any table scan and uses the bounded CURRENT_DATE - INTERVAL '45 days' fast path with unbounded fallback -> PASS",
+      "fresh Python process imported backend.ingestion.tdx_scheduler and verified _compute_auto_range audit-first cursor ordering plus bounded INTERVAL '45 days' fast path with unbounded fallback -> PASS"
+    ],
+    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
