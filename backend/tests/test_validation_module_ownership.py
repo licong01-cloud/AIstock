@@ -98,6 +98,17 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert hmm_frontend.ownership_status == "mapped"
     assert hmm_frontend.primary_module == "hmm.evolution"
 
+    platform_router = catalog.match_path("backend/routers/health.py")
+    assert platform_router.ownership_status == "mapped"
+    assert platform_router.primary_module == "platform.api"
+    platform_module = registry.get_module("platform.api")
+    assert platform_module is not None
+    assert "platform_api_backend" in platform_module.test_plans_required
+
+    platform_test = catalog.match_path("backend/tests/platform_api/test_health_contract.py")
+    assert platform_test.ownership_status == "mapped"
+    assert platform_test.primary_module == "platform.api"
+
     client_instruction = catalog.match_path("CLAUDE.md")
     assert client_instruction.ownership_status == "mapped"
     assert client_instruction.primary_module == "docs.standards"

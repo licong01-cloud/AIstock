@@ -2485,6 +2485,25 @@ def validation_coverage_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def platform_api_backend(session: nox.Session) -> None:
+    """Run shared Platform API contracts without starting a backend process."""
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/routers/health.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/platform_api",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def validation_module_registry_l0(session: nox.Session) -> None:
     """Validate module registry, file ownership rules, and ownership scanner."""
     scan_paths = [

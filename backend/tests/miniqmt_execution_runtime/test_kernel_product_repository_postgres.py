@@ -29,7 +29,10 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
     KernelRepositorySchemaError,
     PostgresMiniQMTKernelRepository,
 )
-from backend.tests.miniqmt_execution_runtime.test_kernel_k6_migration_postgres import _apply_k2_and_k6
+from backend.tests.miniqmt_execution_runtime.test_kernel_k6_migration_postgres import (
+    K6C_FORWARD,
+    _apply_k2_and_k6,
+)
 from backend.tests.miniqmt_execution_runtime.test_kernel_migration_postgres import (
     _dev_dsn,
     _fixture_schema,
@@ -270,6 +273,7 @@ def _seed_schema(cur: object, schema: str) -> None:
 def test_k6_repository_public_surface_is_complete() -> None:
     expected = {
         "preflight_k6_schema",
+        "preflight_k6c_schema",
         "write_dependent_buy_coordination_v1",
         "read_dependent_buy_coordination_v1",
         "append_dependent_buy_decision_v1",
@@ -667,5 +671,38 @@ def test_k6_repository_rejects_forged_catalog_function_on_dev_postgres() -> None
             repository.preflight_k6_schema()
     finally:
         with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_k6c0_repository_preflight_requires_exact_successor_catalog_on_dev_postgres() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K6-C0 DEV PostgreSQL fixture")
+    schema = _fixture_schema().replace("k2a_", "k6c0repo_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            _seed_schema(cur, schema)
+        repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+        assert repository.preflight_k6_schema()["execution_product_route_owner"] is True
+        with pytest.raises(KernelRepositorySchemaError, match="K6-C0"):
+            repository.preflight_k6c_schema()
+        with conn.cursor() as cur:
+            cur.execute(K6C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+        assert repository.preflight_schema()["schema_catalog_fingerprint"] is True
+        assert repository.preflight_k6_schema()["execution_product_route_owner"] is True
+        assert repository.preflight_k6c_schema()["k6c0_schema_catalog_fingerprint"] is True
+        with conn.cursor() as cur:
+            cur.execute(
+                f"CREATE OR REPLACE FUNCTION {schema}.miniqmt_k6c_catalog_fingerprint() "
+                "RETURNS TEXT LANGUAGE sql STABLE AS $$ "
+                "SELECT '841717e7c9f998e5e197048877fa854db8e7469544d6b94682f73c730a7462fe'::TEXT $$"
+            )
+        with pytest.raises(KernelRepositorySchemaError, match="function definition drift"):
+            repository.preflight_k6c_schema()
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         conn.close()
