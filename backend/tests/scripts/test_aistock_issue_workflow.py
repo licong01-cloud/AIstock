@@ -4131,6 +4131,11 @@ def test_submit_bug_explicit_new_id_bumps_allocator(
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
     monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_by_number",
+        lambda _issue_number: (None, ["linked GitHub Issue lookup unavailable: offline"]),
+    )
 
     payload = workflow.build_submit_bug_plan(
         title="Explicit allocator bump",
@@ -4156,6 +4161,7 @@ def test_submit_bug_explicit_new_id_bumps_allocator(
     )
 
     assert payload["bug_id"] == "BUG-137"
+    assert payload["bug_id_allocation"]["warnings"] == ["linked GitHub Issue lookup unavailable: offline"]
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
 
 
@@ -4273,6 +4279,162 @@ def test_verify_clients_workflow_only_checks_every_lane(
     assert len(payload["client_manifest"]["claude_entries"]) == len(workflow.CLIENT_CLAUDE_COMMANDS)
     assert all(item["status"] == "current" for item in payload["client_manifest"]["codex_entries"].values())
     assert all(item["status"] == "current" for item in payload["client_manifest"]["claude_entries"].values())
+
+
+def test_verify_clients_selected_lane_warns_for_unrelated_stale_entry(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    codex_home = isolated_workflow_root / "selected_codex_home"
+    workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+    )
+    (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("stale", encoding="utf-8")
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--selected-lane",
+            "issue",
+            "--codex-home",
+            str(codex_home),
+            "--skip-claude",
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["workflow_gate"] == "ready"
+    assert payload["selected_lane_keys"] == ["issue", "router"]
+    assert payload["blocking"] == []
+    assert payload["restart_recommended"] is False
+    assert any("unrelated codex lane feature is stale" in item for item in payload["warnings"])
+
+    workflow._emit(payload, output_format="summary")
+    summary = capsys.readouterr().out.strip()
+    assert "workflow_gate=ready" in summary
+    assert "lane=issue" in summary
+    assert "blocking=0" in summary
+    assert "warnings=1" in summary
+    assert "restart_recommended=false" in summary
+
+
+def test_verify_clients_selected_lane_blocks_when_selected_entry_is_stale(
+    isolated_workflow_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    codex_home = isolated_workflow_root / "blocked_codex_home"
+    workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+    )
+    (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("stale", encoding="utf-8")
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--selected-lane",
+            "feature",
+            "--codex-home",
+            str(codex_home),
+            "--skip-claude",
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 2
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["warnings"] == []
+    assert payload["restart_recommended"] is True
+    assert payload["blocking"] == ["codex lane feature is stale"]
+
+
+def test_install_client_selected_lane_is_idempotent_and_leaves_unrelated_lane_untouched(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    codex_home = isolated_workflow_root / "targeted_codex_home"
+    unrelated = codex_home / "skills" / "fix-aistock-issue" / "SKILL.md"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("preserve unrelated lane", encoding="utf-8")
+
+    first = workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert first["selected_lane_keys"] == ["feature", "router"]
+    assert first["installed_count"] == 2
+    assert unrelated.read_text(encoding="utf-8") == "preserve unrelated lane"
+    assert (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").exists()
+    assert (codex_home / "skills" / "aistock-task-router" / "SKILL.md").exists()
+
+    second = workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert second["installed_count"] == 0
+    assert second["skipped_current_count"] == 2
+    assert unrelated.read_text(encoding="utf-8") == "preserve unrelated lane"
+
+
+def test_explicit_linked_issue_reservation_uses_direct_lookup_without_global_scan(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: pytest.fail("global GitHub Issue scan must not run for explicit BUG and Issue identity"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_by_number",
+        lambda issue_number: (
+            {
+                "bug_id": "BUG-952",
+                "number": 952,
+                "kind": "github_issue",
+                "source": "https://github.com/licong01-cloud/AIstock/issues/3041",
+                "github_issue_number": int(issue_number),
+                "github_state": "OPEN",
+                "title": "BUG-952 P1: Client workflow gate",
+                "labels": [],
+            },
+            [],
+        ),
+    )
+
+    bug_id, number, report, reservation = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id="BUG-952",
+        include_github=True,
+        github_required=True,
+        allowed_github_issue_number=3041,
+    )
+    try:
+        assert bug_id == "BUG-952"
+        assert number == 952
+        assert report["github_scanned"] is False
+        assert reservation.exists()
+    finally:
+        workflow._release_bug_id_reservation(reservation)
 
 
 def test_rdagent_release_aftercare_is_part_of_every_client_and_resume_digest() -> None:

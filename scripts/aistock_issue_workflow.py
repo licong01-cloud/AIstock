@@ -1345,6 +1345,28 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact.update(_compact_promote_nightly_candidate(payload) or {})
     elif schema == "aistock_code_intelligence_client_verification_v1":
         compact.update(_compact_code_intelligence_client_verification(payload))
+    elif schema == "aistock_workflow_client_verification_v1":
+        compact.update(
+            _pick(
+                payload,
+                "selected_lane",
+                "selected_lane_keys",
+                "blocking",
+                "warnings",
+                "restart_recommended",
+            )
+        )
+    elif schema == "aistock_issue_workflow_client_install_v2":
+        compact.update(
+            _pick(
+                payload,
+                "selected_lane",
+                "selected_lane_keys",
+                "installed_count",
+                "skipped_current_count",
+                "blocking",
+            )
+        )
     elif schema.endswith("_watch_ci_v1") or schema.endswith("_check_watch_v1"):
         compact.update(_pick(payload, "pr_url", "state", "check_summary", "next_actions"))
     elif schema.endswith("_missing_bug_record_v1"):
@@ -1408,6 +1430,21 @@ def _format_summary_lines(payload: dict[str, Any], compact: dict[str, Any]) -> l
     gate = str(compact.get("workflow_gate") or payload.get("workflow_gate") or "unknown")
     bug_id = str(compact.get("bug_id") or payload.get("bug_id") or "").strip()
     prefix = f"{_short_status_word(gate)} {bug_id}".strip()
+    if schema == "aistock_workflow_client_verification_v1":
+        return [
+            (
+                f"{prefix} client-sync workflow_gate={gate} lane={compact.get('selected_lane') or 'all'} "
+                f"blocking={len(compact.get('blocking') or [])} warnings={len(compact.get('warnings') or [])} "
+                f"restart_recommended={str(bool(compact.get('restart_recommended'))).lower()}"
+            )
+        ]
+    if schema == "aistock_issue_workflow_client_install_v2":
+        return [
+            (
+                f"{prefix} client-install workflow_gate={gate} lane={compact.get('selected_lane') or 'all'} "
+                f"installed={compact.get('installed_count', 0)} skipped_current={compact.get('skipped_current_count', 0)}"
+            )
+        ]
     if schema == "aistock_issue_workflow_watch_ci_v1":
         checks = compact.get("check_summary") if isinstance(compact.get("check_summary"), dict) else payload.get("check_summary") or {}
         return [
@@ -2921,6 +2958,38 @@ def _github_bug_issue_for_id(bug_id: str, *, limit: int = 1000, timeout: int = 3
     return matches[0], warnings
 
 
+def _github_bug_issue_by_number(issue_number: int | str, *, timeout: int = 30) -> tuple[dict[str, Any] | None, list[str]]:
+    result = _run_command(
+        [
+            "gh",
+            "api",
+            f"repos/{GITHUB_REPO}/issues/{issue_number}",
+        ],
+        timeout=timeout,
+    )
+    if not result.get("ok"):
+        message = result.get("stderr") or result.get("stdout") or "gh issue view failed"
+        return None, [f"linked GitHub Issue lookup unavailable: {message}"]
+    try:
+        issue = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        return None, [f"linked GitHub Issue lookup returned invalid JSON: {exc}"]
+    if not isinstance(issue, dict) or not issue.get("number"):
+        return None, [f"linked GitHub Issue {issue_number} was not found"]
+    title = str(issue.get("title") or "")
+    bug_number = _bug_id_number(title)
+    return {
+        "bug_id": f"BUG-{bug_number:03d}" if bug_number else None,
+        "number": bug_number,
+        "kind": "github_issue",
+        "source": issue.get("html_url") or _github_issue_url(issue.get("number")),
+        "github_issue_number": issue.get("number"),
+        "github_state": issue.get("state"),
+        "title": title,
+        "labels": issue.get("labels") or [],
+    }, []
+
+
 def _bug_id_allocation_report(
     root: Path | None = None,
     *,
@@ -3017,12 +3086,28 @@ def _reserve_bug_id(
     allowed_github_issue_number: int | str | None,
 ) -> tuple[str, int, dict[str, Any], Path]:
     with _GlobalBugIdAllocatorLock():
-        report = _bug_id_allocation_report(root, include_github=include_github, github_required=github_required)
+        canonical_bug_id = (bug_id or "").strip().upper()
+        number = _bug_id_number(canonical_bug_id) if canonical_bug_id else None
+        if canonical_bug_id and (not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id)):
+            raise WorkflowError("--bug-id must match BUG-NNN when provided")
+        direct_linked_issue = bool(canonical_bug_id and allowed_github_issue_number)
+        report = _bug_id_allocation_report(
+            root,
+            include_github=include_github and not direct_linked_issue,
+            github_required=github_required and not direct_linked_issue,
+        )
+        if direct_linked_issue:
+            linked_issue, linked_warnings = _github_bug_issue_by_number(allowed_github_issue_number)
+            if (linked_warnings or linked_issue is None) and github_required:
+                raise WorkflowError("; ".join(linked_warnings or ["linked GitHub Issue lookup failed"]))
+            if linked_issue is not None and str(linked_issue.get("bug_id") or "").upper() != canonical_bug_id:
+                raise WorkflowError(
+                    f"linked GitHub Issue {allowed_github_issue_number} title does not match {canonical_bug_id}"
+                )
+            if linked_issue is not None:
+                report["sources"].append(linked_issue)
+            report["warnings"].extend(linked_warnings)
         if bug_id:
-            canonical_bug_id = bug_id.strip().upper()
-            number = _bug_id_number(canonical_bug_id)
-            if not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id):
-                raise WorkflowError("--bug-id must match BUG-NNN when provided")
             duplicates = _duplicate_bug_id_sources(
                 report,
                 canonical_bug_id,
@@ -3034,6 +3119,7 @@ def _reserve_bug_id(
         else:
             number = int(report["next_number"])
             canonical_bug_id = f"BUG-{number:03d}"
+        assert number is not None
         reservation_root = _bug_id_reservation_root()
         reservation_path = reservation_root / f"{canonical_bug_id}.json"
         if reservation_path.exists():
@@ -7737,6 +7823,81 @@ CLIENT_CLAUDE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("validation_delegation", "aistock-validation-delegation.md"),
 )
 
+CLIENT_LANE_CHOICES: tuple[str, ...] = tuple(key for key, _name in CLIENT_CODEX_SKILLS)
+
+
+def _selected_client_lane_keys(selected_lane: str | None) -> set[str]:
+    if selected_lane is None:
+        return set(CLIENT_LANE_CHOICES)
+    normalized = selected_lane.strip().lower()
+    if normalized not in CLIENT_LANE_CHOICES:
+        raise WorkflowError(
+            f"unsupported client lane {selected_lane!r}; expected one of {', '.join(CLIENT_LANE_CHOICES)}"
+        )
+    return {"router", normalized}
+
+
+class _ClientInstallLock:
+    def __init__(self, *, timeout: float = 30.0) -> None:
+        self.timeout = timeout
+        self.path = Path(
+            os.environ.get("AISTOCK_CLIENT_INSTALL_LOCK_PATH")
+            or (_default_worktree_root() / ".locks" / "client-install.lock")
+        )
+        self._fd: int | None = None
+
+    def __enter__(self) -> "_ClientInstallLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                self._fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(self._fd, f"{os.getpid()}\n{_utc_now()}\n".encode("ascii"))
+                return self
+            except FileExistsError as exc:
+                if time.monotonic() >= deadline:
+                    raise WorkflowError(f"timed out waiting for client install lock: {self.path}") from exc
+                time.sleep(0.1)
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+        with contextlib.suppress(FileNotFoundError):
+            self.path.unlink()
+
+
+def _staged_replace_tree(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=f".{target.name}.stage-", dir=target.parent))
+    backup = target.parent / f".{target.name}.backup-{os.getpid()}-{time.time_ns()}"
+    try:
+        shutil.copytree(source, stage, dirs_exist_ok=True)
+        if target.exists():
+            os.replace(target, backup)
+        os.replace(stage, target)
+    except Exception:
+        if backup.exists() and not target.exists():
+            os.replace(backup, target)
+        raise
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
+        if backup.exists():
+            shutil.rmtree(backup)
+
+
+def _staged_replace_file(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, stage_name = tempfile.mkstemp(prefix=f".{target.name}.stage-", dir=target.parent)
+    os.close(fd)
+    stage = Path(stage_name)
+    try:
+        shutil.copy2(source, stage)
+        os.replace(stage, target)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            stage.unlink()
+
 
 def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = None) -> dict[str, Any]:
     codex_home = codex_home or _codex_home()
@@ -7855,6 +8016,45 @@ def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = 
             payload[f"claude_{key}_command_status"] = claude_entries[key]["status"]
     return payload
 
+
+def _client_lane_verification(
+    manifest: dict[str, Any],
+    *,
+    selected_lane: str | None,
+    verify_codex: bool,
+    verify_claude: bool,
+) -> dict[str, Any]:
+    selected_keys = _selected_client_lane_keys(selected_lane)
+    blocking: list[str] = []
+    warnings: list[str] = []
+    checked: list[dict[str, str]] = []
+    for client, enabled, entries_key in (
+        ("codex", verify_codex, "codex_entries"),
+        ("claude", verify_claude, "claude_entries"),
+    ):
+        if not enabled:
+            continue
+        entries = manifest.get(entries_key) or {}
+        for key, entry in entries.items():
+            status = str((entry or {}).get("status") or "missing")
+            relevant = key in selected_keys
+            checked.append({"client": client, "lane": key, "status": status, "relevance": "selected" if relevant else "unrelated"})
+            if status == "current":
+                continue
+            message = f"{client} lane {key} is {status}"
+            if relevant:
+                blocking.append(message)
+            else:
+                warnings.append(f"unrelated {message}")
+    return {
+        "selected_lane": selected_lane,
+        "selected_lane_keys": sorted(selected_keys),
+        "checked": checked,
+        "blocking": blocking,
+        "warnings": warnings,
+        "ready": not blocking,
+    }
+
 def _validation_center_runtime_safety(root: Path | None = None) -> dict[str, Any]:
     root = root or REPO_ROOT
     app_path = root / "backend" / "validation_app.py"
@@ -7949,13 +8149,19 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
 
     client_manifest = _client_manifest()
     if client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
-        warnings.append("global Codex workflow skill set is missing or stale; run install-client --apply and restart old client windows")
+        warnings.append(
+            "global Codex workflow skill set is missing or stale; verify the router and selected lane for this window "
+            "before any target-scoped install"
+        )
     elif client_manifest["codex_skill_status"] == "missing_repo_skill":
         blocking.append("repo Codex workflow skill set is missing")
     if client_manifest["claude_command_status"] == "missing_repo":
         warnings.append("repo Claude Code workflow command set is missing; Claude can still call the repo CLI directly")
     elif client_manifest["claude_command_status"] in {"missing_global", "stale_global"}:
-        warnings.append("global Claude Code workflow command set is missing or stale; run install-client --apply")
+        warnings.append(
+            "global Claude Code workflow command set is missing or stale; verify the router and selected lane for this "
+            "window before any target-scoped install"
+        )
 
     code_intel = code_intelligence.build_doctor_report(REPO_ROOT, skip_external=skip_external)
     for warning in code_intel.get("warnings") or []:
@@ -8001,18 +8207,22 @@ def build_client_install_plan(
     claude_home: str | None = None,
     install_codex: bool = True,
     install_claude: bool = True,
+    selected_lane: str | None = None,
 ) -> dict[str, Any]:
     if not install_codex and not install_claude:
         raise WorkflowError("install-client requires at least one target client")
     target_home = Path(codex_home) if codex_home else _codex_home()
     target_claude_home = Path(claude_home) if claude_home else _claude_home()
+    selected_keys = _selected_client_lane_keys(selected_lane)
     source_codex_skills = [
         (key, name, REPO_ROOT / ".codex" / "skills" / name, target_home / "skills" / name)
         for key, name in CLIENT_CODEX_SKILLS
+        if key in selected_keys
     ] if install_codex else []
     source_claude_commands = [
         (key, name, REPO_ROOT / ".claude" / "commands" / name, target_claude_home / "commands" / name)
         for key, name in CLIENT_CLAUDE_COMMANDS
+        if key in selected_keys
     ] if install_claude else []
     blocking: list[str] = []
     for _key, name, source, _target in source_codex_skills:
@@ -8024,6 +8234,8 @@ def build_client_install_plan(
 
     actions: list[dict[str, Any]] = []
     for key, name, source, target in source_codex_skills:
+        source_sha = _sha256_tree(source)
+        target_sha = _sha256_tree(target)
         actions.append(
             {
                 "action": f"sync_global_codex_{key}_skill",
@@ -8031,9 +8243,14 @@ def build_client_install_plan(
                 "source": str(source),
                 "target": str(target),
                 "safe": source.exists() and not blocking,
+                "source_sha256": source_sha,
+                "target_sha256": target_sha,
+                "sync_required": source_sha != target_sha,
             }
         )
     for key, name, source, target in source_claude_commands:
+        source_sha = _sha256_file(source)
+        target_sha = _sha256_file(target)
         actions.append(
             {
                 "action": f"sync_claude_code_{key}_command",
@@ -8041,6 +8258,9 @@ def build_client_install_plan(
                 "source": str(source),
                 "target": str(target),
                 "safe": source.exists() and not blocking,
+                "source_sha256": source_sha,
+                "target_sha256": target_sha,
+                "sync_required": source_sha != target_sha,
             }
         )
 
@@ -8055,26 +8275,35 @@ def build_client_install_plan(
         "claude_home": str(target_claude_home),
         "install_codex": install_codex,
         "install_claude": install_claude,
+        "selected_lane": selected_lane,
+        "selected_lane_keys": sorted(selected_keys),
         "client_manifest_before": _client_manifest(target_home, target_claude_home),
     }
     if apply:
         if blocking:
             raise WorkflowError("; ".join(blocking))
         installed: list[dict[str, str]] = []
-        for _key, _name, source, target in source_codex_skills:
-            if target.exists():
-                shutil.rmtree(target)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, target)
-            installed.append({"target": str(target)})
-        for _key, _name, source, target in source_claude_commands:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-            installed.append({"target": str(target)})
+        skipped_current: list[dict[str, str]] = []
+        with _ClientInstallLock():
+            for key, _name, source, target in source_codex_skills:
+                if _sha256_tree(source) == _sha256_tree(target):
+                    skipped_current.append({"client": "codex", "lane": key, "target": str(target)})
+                    continue
+                _staged_replace_tree(source, target)
+                installed.append({"client": "codex", "lane": key, "target": str(target)})
+            for key, _name, source, target in source_claude_commands:
+                if _sha256_file(source) == _sha256_file(target):
+                    skipped_current.append({"client": "claude", "lane": key, "target": str(target)})
+                    continue
+                _staged_replace_file(source, target)
+                installed.append({"client": "claude", "lane": key, "target": str(target)})
+            payload["client_manifest_after"] = _client_manifest(target_home, target_claude_home)
         payload["workflow_gate"] = "installed"
         payload["dry_run"] = False
         payload["installed"] = installed
-        payload["client_manifest_after"] = _client_manifest(target_home, target_claude_home)
+        payload["skipped_current"] = skipped_current
+        payload["installed_count"] = len(installed)
+        payload["skipped_current_count"] = len(skipped_current)
     manifest_path = REPO_ROOT / WORKFLOW_ROOT / "client-manifest.json"
     _write_json(
         manifest_path,
@@ -12673,22 +12902,27 @@ def cmd_install_client(args: argparse.Namespace) -> int:
         claude_home=args.claude_home,
         install_codex=not args.skip_codex,
         install_claude=not args.skip_claude,
+        selected_lane=args.selected_lane,
     )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_install", "installed"} else 2
 
 
 def cmd_verify_clients(args: argparse.Namespace) -> int:
-    manifest = _client_manifest(
-        Path(args.codex_home) if args.codex_home else None,
-        Path(args.claude_home) if args.claude_home else None,
-    )
     if args.skip_codex and args.skip_claude:
         raise WorkflowError("verify-clients requires at least one target client")
-    workflow_clients_current = (
-        (args.skip_codex or manifest.get("codex_skill_status") == "current")
-        and (args.skip_claude or manifest.get("claude_command_status") == "current")
+    with _ClientInstallLock():
+        manifest = _client_manifest(
+            Path(args.codex_home) if args.codex_home else None,
+            Path(args.claude_home) if args.claude_home else None,
+        )
+    lane_verification = _client_lane_verification(
+        manifest,
+        selected_lane=args.selected_lane,
+        verify_codex=not args.skip_codex,
+        verify_claude=not args.skip_claude,
     )
+    workflow_clients_current = bool(lane_verification["ready"])
     if args.workflow_only:
         payload = {
             "schema_version": "aistock_workflow_client_verification_v1",
@@ -12698,6 +12932,12 @@ def cmd_verify_clients(args: argparse.Namespace) -> int:
             "claude_home": args.claude_home or str(_claude_home()),
             "verify_codex": not args.skip_codex,
             "verify_claude": not args.skip_claude,
+            "selected_lane": args.selected_lane,
+            "selected_lane_keys": lane_verification["selected_lane_keys"],
+            "blocking": lane_verification["blocking"],
+            "warnings": lane_verification["warnings"],
+            "checked": lane_verification["checked"],
+            "restart_recommended": not workflow_clients_current,
         }
         _emit_args(payload, args)
         return 0 if workflow_clients_current else 2
@@ -13025,6 +13265,7 @@ def build_parser() -> argparse.ArgumentParser:
     install_client.add_argument("--claude-home")
     install_client.add_argument("--skip-codex", action="store_true")
     install_client.add_argument("--skip-claude", action="store_true")
+    install_client.add_argument("--selected-lane", choices=CLIENT_LANE_CHOICES)
     add_output_options(install_client)
     install_client.set_defaults(func=cmd_install_client)
 
@@ -13043,6 +13284,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify_clients.add_argument("--workflow-only", action="store_true")
     verify_clients.add_argument("--skip-codex", action="store_true")
     verify_clients.add_argument("--skip-claude", action="store_true")
+    verify_clients.add_argument("--selected-lane", choices=CLIENT_LANE_CHOICES)
     verify_clients.add_argument("--output-dir")
     verify_clients.add_argument("--skip-external", action="store_true")
     verify_clients.add_argument("--output-md")
