@@ -42,8 +42,8 @@
   },
   "first_seen_at": "2026-08-01T17:55:37.639894Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c7f73e9920498f273a4c08df10d19a456122719e",
+  "fixed_at": "2026-08-02T05:17:30Z",
   "github_issue_number": 3026,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3026",
   "last_seen_at": "2026-08-01T17:55:37.639894Z",
@@ -51,6 +51,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3034",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,28 +61,29 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "runtime_impact": "backend",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ],
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
-    "persistence_basis": "git_tracked_source",
+    "backend_restart_required": true,
+    "business_smoke_ref": "local-data manual re-run of sw_sector composite; readback market.ingestion_jobs success for sw_index_member/sw_daily children",
+    "database_readback_ref": "noop:no_database_change",
     "fresh_process_evidence": [
       "fresh Python process imported backend.services.tushare_sync_engine and verified TushareHttpError, _query_tushare_dataapi direct dataapi transport in _fetch_from_tushare, and _tushare_token helper -> PASS"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
     "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
-    "business_smoke_ref": "local-data manual re-run of sw_sector composite; readback market.ingestion_jobs success for sw_index_member/sw_daily children",
-    "database_readback_ref": "noop:no_database_change"
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -90,6 +92,13 @@
     "fingerprint": "f083ac321c8341ce09ccd477",
     "source_event_id": "FE-20260802-f083ac321c83"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_tushare_sync_engine.py -q -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s data_sync_autonomy_backend -> passed",
+    "PR #3034 CI all green -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
