@@ -1,0 +1,188 @@
+{
+  "actual": "根因已实证定位(2026-08-02): tushare 1.4.24 客户端 DataApi.query 中 `if res:` 对 requests.Response 求真, HTTP 状态码>=400(429限流/5xx网关错误)时 Response 为 falsy, 客户端不抛异常而是返回空 DataFrame(else: return pd.DataFrame())。因此上游服务端错误在调用侧完全不可见, 表现为\"上游返回空\"。实证: (1) 两次 sw_sector 复合重跑 member 分别失败11/134与10/134个代码且零交集, 事后验证所有失败代码上游均有数据; (2) 事故窗口(01:37-02:05)调用耗时约3.4s/次, 窗口后复现实验同样134代码仅39.9s(0.3s/次)且零瞬时空(仅3个is_pub=0合法空指数), 表明事故窗口上游服务端劣化(慢+HTTP错误), 窗口外正常; (3) 事故窗口内 tushare 零异常日志, 所有失败均为被掩盖的空响应路径。放大路径: engine._fetch_once 对 df.empty 直接 return [] 不重试(无法区分真空与 masked error); sw_index_member 命中 replace_by_code 守卫判失败致复合中止; sw_daily upsert 模式无空值守卫, 静默漏掉6个已发布指数行情, sector_data 预检 missing_sw_daily_facts=134 拒建。门禁(镜像守卫/预检)本身行为正确, 阻止了数据损坏, 非问题根源。修复方向(不是单纯加重试): 在引擎层替换/包装 tushare 调用为直连 HTTP 客户端, 对 HTTP 状态码>=400 与 code!=0 抛异常(去掩盖), 使既有3次重试对真实错误生效; 仅 code=0 且 items=[] 才认定为合法空, 流入现有守卫/no-op 逻辑; sw_daily 增加与本地历史对照的\"已发布指数全日空\"告警。",
+  "allowed_write_scope": [
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "tests/aistock_validation/bugs/20260802_BUG-947-sw-index-member-replace-by-code-sw-sector.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-947",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-01T17:55:37.639894Z",
+  "description": "根因已实证定位(2026-08-02): tushare 1.4.24 客户端 DataApi.query 中 `if res:` 对 requests.Response 求真, HTTP 状态码>=400(429限流/5xx网关错误)时 Response 为 falsy, 客户端不抛异常而是返回空 DataFrame(else: return pd.DataFrame())。因此上游服务端错误在调用侧完全不可见, 表现为\"上游返回空\"。实证: (1) 两次 sw_sector 复合重跑 member 分别失败11/134与10/134个代码且零交集, 事后验证所有失败代码上游均有数据; (2) 事故窗口(01:37-02:05)调用耗时约3.4s/次, 窗口后复现实验同样134代码仅39.9s(0.3s/次)且零瞬时空(仅3个is_pub=0合法空指数), 表明事故窗口上游服务端劣化(慢+HTTP错误), 窗口外正常; (3) 事故窗口内 tushare 零异常日志, 所有失败均为被掩盖的空响应路径。放大路径: engine._fetch_once 对 df.empty 直接 return [] 不重试(无法区分真空与 masked error); sw_index_member 命中 replace_by_code 守卫判失败致复合中止; sw_daily upsert 模式无空值守卫, 静默漏掉6个已发布指数行情, sector_data 预检 missing_sw_daily_facts=134 拒建。门禁(镜像守卫/预检)本身行为正确, 阻止了数据损坏, 非问题根源。修复方向(不是单纯加重试): 在引擎层替换/包装 tushare 调用为直连 HTTP 客户端, 对 HTTP 状态码>=400 与 code!=0 抛异常(去掩盖), 使既有3次重试对真实错误生效; 仅 code=0 且 items=[] 才认定为合法空, 流入现有守卫/no-op 逻辑; sw_daily 增加与本地历史对照的\"已发布指数全日空\"告警。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260802-f083ac321c83",
+      "timestamp": "2026-08-01T17:55:37.639889Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "引擎层去掩盖: _fetch_once 不再依赖 tushare DataApi 的 falsy-Response 行为, 改用直连 HTTP 查询(同一 dataapi 端点), 对 HTTP>=400 与 code!=0 抛 TushareHttpError(含状态码/接口名), 使既有3次重试对真实上游错误生效; 仅 code=0 且 items=[] 认定合法空, 流入现有守卫/no-op 逻辑。sw_daily 等 upsert 数据集对\"本地近N日有行情但该指数全日空\"记 warning 日志(不阻断), 消除静默漏数的不可见性。既有测试全绿, 新增: HTTP 5xx 抛错并重试、code!=0 抛错、合法空保持 no-op、upsert 空载荷告警。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-01T17:55:37.639894Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3026,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3026",
+  "last_seen_at": "2026-08-01T17:55:37.639894Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "runtime_impact": "backend",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "backend_restart_required": true,
+    "backend_restart_owner": "user",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "fresh_process_evidence": [
+      "fresh Python process imported backend.services.tushare_sync_engine and verified TushareHttpError, _query_tushare_dataapi direct dataapi transport in _fetch_from_tushare, and _tushare_token helper -> PASS"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "business_smoke_ref": "local-data manual re-run of sw_sector composite; readback market.ingestion_jobs success for sw_index_member/sw_daily children",
+    "database_readback_ref": "noop:no_database_change"
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "tushare客户端将HTTP错误掩盖为空DataFrame: sw_index_member守卫误判/sw_daily静默漏数, sw_sector链路间歇中断",
+  "trigger_condition": {
+    "fingerprint": "f083ac321c8341ce09ccd477",
+    "source_event_id": "FE-20260802-f083ac321c83"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

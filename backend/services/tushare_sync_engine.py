@@ -90,6 +90,76 @@ def _pro_api():
     return ts.pro_api(token)
 
 
+TUSHARE_DATAAPI_URL = "http://api.waditu.com/dataapi"
+TUSHARE_HTTP_TIMEOUT_SECONDS = 30.0
+
+
+class TushareHttpError(RuntimeError):
+    """Upstream tushare dataapi returned an HTTP or protocol-level error.
+
+    tushare<=1.4.29's ``DataApi.query`` evaluates ``if res:`` on the
+    ``requests.Response`` object; a response with status >= 400 is falsy,
+    so rate limiting (429) and gateway errors (5xx) are silently converted
+    into an empty DataFrame instead of an exception (BUG-947). The sync
+    engine must never treat those failures as a legitimate empty payload,
+    so it queries the same dataapi endpoint directly and raises here.
+    """
+
+
+def _http_post(url: str, payload: Dict[str, Any], timeout: float):
+    """Isolated HTTP POST so tests can stub transport without requests."""
+    import requests
+
+    return requests.post(url, json=payload, timeout=timeout)
+
+
+def _query_tushare_dataapi(
+    api_name: str,
+    params: Dict[str, Any],
+    fields: str,
+    *,
+    token: str,
+) -> List[Dict[str, Any]]:
+    """Query the tushare dataapi endpoint without masking HTTP errors.
+
+    Returns a list of row dicts keyed by the API field names. Only a
+    protocol-level success (``code == 0``) with zero items yields an
+    empty list — a legitimately empty payload. HTTP status >= 400 and
+    ``code != 0`` raise :class:`TushareHttpError` so the caller's retry
+    loop sees real upstream failures.
+    """
+    payload = {
+        "api_name": api_name,
+        "token": token,
+        "params": params,
+        "fields": fields,
+    }
+    res = _http_post(
+        f"{TUSHARE_DATAAPI_URL}/{api_name}", payload, TUSHARE_HTTP_TIMEOUT_SECONDS
+    )
+    status_code = int(getattr(res, "status_code", 0) or 0)
+    if status_code >= 400 or status_code == 0:
+        body_preview = str(getattr(res, "text", "") or "")[:200]
+        raise TushareHttpError(
+            f"tushare {api_name} HTTP {status_code or 'unknown'}: {body_preview}"
+        )
+    try:
+        result = res.json()
+    except ValueError as exc:
+        raise TushareHttpError(
+            f"tushare {api_name} returned non-JSON body: {exc}"
+        ) from exc
+    code = result.get("code")
+    if code != 0:
+        raise TushareHttpError(
+            f"tushare {api_name} code={code}: {result.get('msg')}"
+        )
+    data = result.get("data") or {}
+    columns = list(data.get("fields") or [])
+    items = data.get("items") or []
+    return [dict(zip(columns, item)) for item in items]
+
+
 def _parse_ymd(val) -> Optional[dt.date]:
     if not val:
         return None
@@ -138,6 +208,7 @@ class TushareSyncEngine:
 
     def __init__(self, target_repository: DataSyncTargetRepository | None = None):
         self._pro = None  # lazy
+        self._tushare_token_cache: Optional[str] = None
         self._refresh_audit = DataRefreshAuditRepository()
         self._target_repo = target_repository
 
@@ -146,6 +217,15 @@ class TushareSyncEngine:
         if self._pro is None:
             self._pro = _pro_api()
         return self._pro
+
+    def _tushare_token(self) -> str:
+        """Token for direct dataapi queries (BUG-947 unmasked transport)."""
+        if self._tushare_token_cache is None:
+            token = os.getenv("TUSHARE_TOKEN")
+            if not token:
+                raise RuntimeError("TUSHARE_TOKEN not set")
+            self._tushare_token_cache = token
+        return self._tushare_token_cache
 
     # -- job tracking helpers (mirror existing script pattern) ---------------
 
@@ -252,18 +332,30 @@ class TushareSyncEngine:
             for attempt in range(3):
                 limiter.acquire()
                 try:
-                    api_fn = getattr(self.pro, spec.tushare_api)
-                    df = api_fn(**merged)
-                    if df is None or df.empty:
+                    # BUG-947: query the dataapi endpoint directly instead of
+                    # tushare's DataApi, which masks HTTP >= 400 as an empty
+                    # DataFrame. TushareHttpError now surfaces real upstream
+                    # failures to this retry loop; only a protocol-level
+                    # success with zero items returns [] (legitimate empty).
+                    api_params = {k: v for k, v in merged.items() if k != "fields"}
+                    api_rows = _query_tushare_dataapi(
+                        spec.tushare_api, api_params, fields, token=self._tushare_token()
+                    )
+                    if not api_rows:
                         return []
                     rows: List[Dict[str, Any]] = []
-                    for _, row in df.iterrows():
-                        rows.append({api_to_db.get(f, f): row.get(f) for f in api_fields})
+                    for api_row in api_rows:
+                        rows.append({api_to_db.get(f, f): api_row.get(f) for f in api_fields})
                     return rows
                 except Exception as exc:
                     last_exc = exc
                     if attempt < 2:
-                        time.sleep(2 ** attempt)
+                        if isinstance(exc, TushareHttpError):
+                            # HTTP errors (rate limit / gateway) need more
+                            # backoff than a transport hiccup: 5s, 10s.
+                            time.sleep(min(30, 5 * (2 ** attempt)))
+                        else:
+                            time.sleep(2 ** attempt)
             raise RuntimeError(f"Tushare {spec.tushare_api} failed after 3 retries: {last_exc}")
 
         if not paginated:
@@ -1367,6 +1459,20 @@ class TushareSyncEngine:
                         if spec.replace_by_code:
                             inserted = self._replace_code_batch(conn, spec, code_val, rows)
                         else:
+                            if not rows and self._count_code_rows(conn, spec, code_val) > 0:
+                                # BUG-947: upsert-mode datasets (e.g. sw_daily)
+                                # accept empty payloads silently; with the HTTP
+                                # error unmasking above a genuine empty here is
+                                # rare, so surface it for operators instead of
+                                # letting a day's data go missing unnoticed.
+                                self._log(
+                                    conn,
+                                    job_id,
+                                    "warning",
+                                    f"{spec.name} {spec.code_param_name}={code_val} "
+                                    "upstream returned no rows but local history exists; "
+                                    "verify provider publication timing",
+                                )
                             inserted = self._upsert_batch(conn, spec, rows)
                         result.inserted_rows += inserted
                         result.success_batches += 1
