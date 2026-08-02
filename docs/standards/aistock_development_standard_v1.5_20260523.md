@@ -274,8 +274,8 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 
 - `.codex/**` 或 `.claude/**` 合入后，由一个明确 owner 对列入本次任务的目标执行完整 `install-client --apply`，随后使用 `verify-clients --workflow-only` 校验全部 workflow lane；禁止多个窗口无差别重复安装。
 - 官方隔离 Codex 或单一客户端目标必须显式传入 `--codex-home <path>`/`--claude-home <path>` 和对应的 `--skip-*`。客户端 profile 只在本次任务明确列入目标时更新。
-- 在途任务仅在 `doctor` 报告客户端 stale、窗口恢复或当前 lane 需要新入口时，使用 `verify-clients --workflow-only --selected-lane <lane>` 校验 router 与当前 lane。router/当前 lane stale 才阻断；无关 lane stale 只告警并记录待同步，不得升级为全局任务门禁。
-- `install-client --selected-lane <lane>` 只同步 router 与该 lane，hash 相同时跳过，并通过跨进程锁与 staged replacement 避免并发窗口观察到部分安装。一次目标限定同步失败后停止并报告，不得循环重装。
+- 在途任务仅在 `doctor` 报告客户端 stale、窗口恢复或当前 lane 需要新入口时，使用 `verify-clients --workflow-only --selected-lane <lane>` 校验 router 与当前 lane。router/当前 lane stale 才阻断；无关 lane stale 只告警并记录待同步，禁止升级为全局任务门禁。
+- `install-client --selected-lane <lane>` 只同步 router 与该 lane，hash 相同时跳过，并通过跨进程锁与 staged replacement 避免并发窗口观察到部分安装。一次目标限定同步失败后停止并报告，禁止循环重装。
 - 同步完成且 `restart_recommended=false` 时，旧窗口重新读取 router 与当前 lane 后继续；只有 CLI 明确建议重启或客户端 UI 仍加载旧入口时才重启客户端。客户端同步不授权任何后端进程控制。
 
 ## 9. 完成报告

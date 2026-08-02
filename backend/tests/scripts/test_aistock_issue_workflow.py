@@ -4131,6 +4131,11 @@ def test_submit_bug_explicit_new_id_bumps_allocator(
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
     monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_by_number",
+        lambda _issue_number: (None, ["linked GitHub Issue lookup unavailable: offline"]),
+    )
 
     payload = workflow.build_submit_bug_plan(
         title="Explicit allocator bump",
@@ -4156,6 +4161,7 @@ def test_submit_bug_explicit_new_id_bumps_allocator(
     )
 
     assert payload["bug_id"] == "BUG-137"
+    assert payload["bug_id_allocation"]["warnings"] == ["linked GitHub Issue lookup unavailable: offline"]
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
 
 

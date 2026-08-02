@@ -3098,13 +3098,14 @@ def _reserve_bug_id(
         )
         if direct_linked_issue:
             linked_issue, linked_warnings = _github_bug_issue_by_number(allowed_github_issue_number)
-            if linked_warnings or linked_issue is None:
+            if (linked_warnings or linked_issue is None) and github_required:
                 raise WorkflowError("; ".join(linked_warnings or ["linked GitHub Issue lookup failed"]))
-            if str(linked_issue.get("bug_id") or "").upper() != canonical_bug_id:
+            if linked_issue is not None and str(linked_issue.get("bug_id") or "").upper() != canonical_bug_id:
                 raise WorkflowError(
                     f"linked GitHub Issue {allowed_github_issue_number} title does not match {canonical_bug_id}"
                 )
-            report["sources"].append(linked_issue)
+            if linked_issue is not None:
+                report["sources"].append(linked_issue)
             report["warnings"].extend(linked_warnings)
         if bug_id:
             duplicates = _duplicate_bug_id_sources(
