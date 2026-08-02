@@ -3,7 +3,7 @@
 > 日期：2026-07-10
 > 修订日期：2026-08-02
 > 文档类型：F2 顶层架构蓝图，当前修订使用 `docs-fast-update`
-> 当前状态：蓝图已形成；Phase 0A/Phase 1 历史研究、PIT 数据底座、Phase 1E/G5 源码以及 Phase 1R R1-R4 已分阶段合入。Phase 0B 真实 15 日只读审计与 exact retry 已完成：单 Alpha 和原生多 Alpha 各覆盖 15 个决策交易日，但 `RETURN_NET_ABSOLUTE` 成熟标签覆盖率均为 0，因此只证明审计链路与 capability 分类可用，候选收益、排名单调性、HMM/risk 增益和模型价值仍为 `NOT_YET_AVAILABLE`，不能把结构验收冒充经济结论。Phase 1E/O4/G5 的真实前瞻 DEV evidence 仍为 `DEFERRED_NON_BLOCKING`；R5 typed API/UI 与 legacy cutover 源码已合入，生产 Dataset Bridge、heartbeat、exact retry 和既有 batch UI readback 已验证；这些剩余验收不阻断模型主线。当前 P0 转为只建设首个超跌反弹模型所需的最小 Phase 2/3 合同，再从生产数据库按 PIT 合同生成全新的 2/3/5 年 SEALED 训练 snapshot，随后进入 Phase 3 Top20→Top5 重排；P1 依次实现预期收益与持股周期、买入/止盈/止损区间和荐股页面影子展示。旧 PARTIAL batch、旧 artifact root、历史 operation 和孤立历史产物只保留为只读事实，不迁移、不归档、不修复、不建设多 root 恢复平台，也不干扰模型主线；真实功能完成后使用当前代码、当前 root 和新的历史区间重新创建荐股任务完成端到端验证。生产历史读取与 Advisory 隔离写入不要求把生产数据复制到 DEV。根据单用户、学术研究、无实盘交易边界，不设置人工审批、角色、运行时 DDL、运行时策略包二次验证、candidate-count 运行门禁或未经确认的 canary/champion/ModelOps 前置链；不存在实盘交易执行路径
+> 当前状态：蓝图已形成；Phase 0A/Phase 1/Phase 1R 数据底座和 Phase 0B 真实 15 日只读审计已完成。15 日 snapshot 的成熟收益标签覆盖率为 0，因此经济和模型结论仍为 `NOT_YET_AVAILABLE`。首个 SHORT_REBOUND Phase 2/3 F2 详细设计已形成，当前 P0 是按其 Batch A 实现最小 style、feature/label、WSL、immutable bundle 和 reason contract，再生成覆盖 5 年训练历史及至少 300 个独立评估交易日的新 SEALED snapshot，进入 Top20→Top5 研究影子模型。旧 batch/root/orphan 只读保留且不阻断主线；不设置人工审批、角色、运行时策略包二次验证或未经确认的 canary/champion/ModelOps 前置链。
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -1155,6 +1155,7 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 ### Phase 2：首个模型所需的最小策略风格与模型合同
 
 - 当前优先级：`P0_ACTIVE`，只实现 Phase 3 首个真实模型明确需要的最小合同，不作为独立平台建设项目。
+- 权威详细设计：`docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md`，与 Phase 3 首个垂直切片共同闭合，避免先建设通用模型平台。
 - 目标：为当前超跌反弹多 Alpha 包建立最小 style profile、feature/label identity、WSL 训练输入文件、immutable model bundle 和影子推理版本合同。
 - 输入条件：Phase 1 数据契约稳定且 Phase 0B 已形成目标包/风格分类；没有正式 OOS 时，只有兼容合法 prior 才能建立 `STYLE_PRIOR + SHADOW`，否则仅允许内部 research bootstrap 且用户侧明确 `MODEL_UNAVAILABLE`。
 - 交付物：首个风格路由、训练数据/标签版本、模型制品、bundle identity、必要 reason code 和最小推理接口详细设计。
@@ -1166,6 +1167,7 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 ### Phase 3：超跌反弹候选重排影子模型
 
 - 当前优先级：`P0_FIRST_MODEL_FUNCTION`，Phase 0B 给出探索结论、最小 Phase 2 合同闭合并生成新的多年训练 snapshot 后立即实施。
+- 权威详细设计：`docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md`；首个实现固定为 SHORT_REBOUND 原生多 Alpha 父包、5 日风险感知 relevance、2/3/5 年窗口和 WSL LambdaRank 研究影子模型。
 - 目标：为当前多 Alpha 反弹包训练 LambdaRank 和风险感知 relevance 目标；用户可见收益胜率与路径分布仍由后续唯一权威 Outcome bundle 提供。
 - 输入条件：Phase 1/2 完成，现有短周期 snapshot 已完成 Phase 0B 探索，且已从生产数据库按当前 PIT/feature/label identity 生成覆盖目标 2/3/5 年窗口的新 SEALED 训练 snapshot。缺少正式 OOS/合法 prior 时允许训练 research bootstrap，但只能是 `RETROSPECTIVE_RESEARCH_ONLY + NONE`，不得声明 `RERANK_READY` 或产生用户可见模型排名。
 - 交付物：短反弹 ranking 标签、HMM/risk overlay 消融、rank score normalization、原子 bundle、`RERANK_READY(SHORT_REBOUND)` 能力和影子推理详细设计。
@@ -1343,7 +1345,7 @@ peak-before-stop path correctness
 | F-005 | §6.3、§9、Phase 0B、Phase 3、Phase 8 | 权威深池与 Recall@K；artifact: `docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md` | design_ready | none |
 | F-006 | §8.1、§8.2 | HMM 边际特征和禁止二次乘权；`backend/tests/selection_center/test_hmm_runtime.py` | design_ready | none |
 | F-007 | §8.3、§9.2 | 黑名单硬过滤；`backend/tests/selection_center/test_risk_policy.py` | design_ready | none |
-| F-008 | §10、Phase 3 | 短反弹期限和标签；artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
+| F-008 | §10、Phase 2、Phase 3 | 短反弹期限、风险感知 relevance 和 OOS 阈值；artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
 | F-009 | §10、§13、Phase 8 | 长趋势多状态和捕获率；artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
 | F-010 | §11.1、Phase 4 | 扣费后概率、分位数和校准；artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
 | F-011 | §11.2、Phase 4 | 存活与收益下分位数周期；artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
@@ -1391,8 +1393,8 @@ peak-before-stop path correctness
 3. 在开发/发布流程完成 Phase 1 migration 验证并部署 schema；运行任务不执行 DDL。
 4. Phase 1R R1-R4 已完成真实历史、Outcome/Summary、retrospective SEALED bridge、source correction 与隔离验收；R5 源码和生产 Dataset Bridge、lease、exact retry、既有 batch UI readback 已通过。旧 PARTIAL batch 和旧 root 只保留为历史事实，不再修复、迁移、归档或阻断后续研发。
 5. Phase 0B 详细设计、现有 15 日 SEALED snapshot 只读审计和 exact retry 已完成；报告准确返回成熟收益覆盖率 0、HMM/行业/Recall capability 不足和 null package conclusion，没有伪造候选深度或目标期限结论。
-6. 只实现超跌反弹重排模型所需的最小 Phase 2 合同，并按该合同从生产数据库生成新的 2/3/5 年 SEALED Parquet 训练 snapshot；该数据任务只服务首个模型，不处理旧 batch、不扩建通用平台。
-7. 在 WSL 完成 Phase 3 Top20→Top5 影子模型训练、验证和 immutable bundle；配置不改变现有荐股排名。
+6. Phase 2/3 F2 详细设计已形成，下一步按其 Batch A 实现超跌反弹重排模型所需的最小 style、feature/label、WSL、bundle 与 reason contract；不处理旧 batch、不扩建通用平台。
+7. Batch A 审核通过后，按冻结合同从生产数据库生成覆盖 5 年训练历史和至少 300 个独立评估交易日的新 SEALED Parquet snapshot 及 2/3/5 年训练视图，再在 WSL 完成 Phase 3 Top20→Top5 影子模型训练、验证和 immutable bundle；配置不改变现有荐股排名。
 8. 依次实现 Phase 4 收益/持有期和 Phase 5 买入/止盈/止损区间；每项模型独立验证，失败只关闭对应 capability。
 9. 按完成顺序发布 Phase 6 UI 影子展示，不等待所有模型同时完成。
 10. 首批真实功能完成后，使用当前代码、当前 root 和新历史区间创建新的单/原生多 Alpha 任务，完成 create/resume/query/outcome/summary/bridge、模型 readback 和三 viewport UI E2E；不恢复旧任务或处理旧产物。
