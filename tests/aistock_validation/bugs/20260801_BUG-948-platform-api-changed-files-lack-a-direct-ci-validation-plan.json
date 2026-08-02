@@ -223,6 +223,58 @@
     "production_ddl_gate=noop; dependency gates=noop; runtime/database unchanged",
     "GitHub PR #3029 CI verdict -> PASS"
   ],
+  "validation_receipts": [
+    {
+      "command": "python -m nox -s platform_api_backend",
+      "commit": "680b62f28e3f770114c25da9b329f43a2b53f384",
+      "evidence_kind": "nox",
+      "plan": "platform_api_backend",
+      "receipt_id": "305000c01fd8ae34",
+      "result": "PASS: 5 passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "680b62f28e3f770114c25da9b329f43a2b53f384",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "8724cd17d4db8ece",
+      "result": "PASS: 8 passed 14/14 mapped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s validation_catalog_integrity",
+      "commit": "680b62f28e3f770114c25da9b329f43a2b53f384",
+      "evidence_kind": "nox",
+      "plan": "validation_catalog_integrity",
+      "receipt_id": "18f265483895e283",
+      "result": "PASS: findings=0",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s l0",
+      "commit": "680b62f28e3f770114c25da9b329f43a2b53f384",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "de1f93f48a66eaff",
+      "result": "PASS: blocking=0",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "commit": "680b62f28e3f770114c25da9b329f43a2b53f384",
+      "evidence_kind": "diff_check",
+      "plan": "direct",
+      "receipt_id": "b290d3d9c769f0e6",
+      "result": "PASS",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
