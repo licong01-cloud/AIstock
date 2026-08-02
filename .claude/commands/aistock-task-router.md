@@ -21,6 +21,7 @@ Use this as Claude Code's lightweight entry for broad or unclear AIstock work. T
 ## Execution Boundaries
 
 - Load one selected lane plus its task card and direct artifacts.
+- If `doctor` reports client entry staleness, run `verify-clients --workflow-only --selected-lane <lane>` against this window's explicit client home. Only router/current-lane staleness blocks the task; unrelated lane staleness is warning-only. Do not run a broad repeated install from an active task window.
 - Prefer RTK for supported high-output interactive commands; unsupported PowerShell/file operations use direct fallback. RTK is never a gate and no window may self-authorize `rtk trust`.
 - Every user backend has `backend_restart_owner=user`; no lane, validation, merge, aftercare or cleanup grants process-control authority.
 - Read-only requests remain diagnostic and return evidence without repository or runtime mutation.

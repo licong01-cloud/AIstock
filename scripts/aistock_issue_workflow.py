@@ -1345,6 +1345,28 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact.update(_compact_promote_nightly_candidate(payload) or {})
     elif schema == "aistock_code_intelligence_client_verification_v1":
         compact.update(_compact_code_intelligence_client_verification(payload))
+    elif schema == "aistock_workflow_client_verification_v1":
+        compact.update(
+            _pick(
+                payload,
+                "selected_lane",
+                "selected_lane_keys",
+                "blocking",
+                "warnings",
+                "restart_recommended",
+            )
+        )
+    elif schema == "aistock_issue_workflow_client_install_v2":
+        compact.update(
+            _pick(
+                payload,
+                "selected_lane",
+                "selected_lane_keys",
+                "installed_count",
+                "skipped_current_count",
+                "blocking",
+            )
+        )
     elif schema.endswith("_watch_ci_v1") or schema.endswith("_check_watch_v1"):
         compact.update(_pick(payload, "pr_url", "state", "check_summary", "next_actions"))
     elif schema.endswith("_missing_bug_record_v1"):
@@ -1408,6 +1430,21 @@ def _format_summary_lines(payload: dict[str, Any], compact: dict[str, Any]) -> l
     gate = str(compact.get("workflow_gate") or payload.get("workflow_gate") or "unknown")
     bug_id = str(compact.get("bug_id") or payload.get("bug_id") or "").strip()
     prefix = f"{_short_status_word(gate)} {bug_id}".strip()
+    if schema == "aistock_workflow_client_verification_v1":
+        return [
+            (
+                f"{prefix} client-sync workflow_gate={gate} lane={compact.get('selected_lane') or 'all'} "
+                f"blocking={len(compact.get('blocking') or [])} warnings={len(compact.get('warnings') or [])} "
+                f"restart_recommended={str(bool(compact.get('restart_recommended'))).lower()}"
+            )
+        ]
+    if schema == "aistock_issue_workflow_client_install_v2":
+        return [
+            (
+                f"{prefix} client-install workflow_gate={gate} lane={compact.get('selected_lane') or 'all'} "
+                f"installed={compact.get('installed_count', 0)} skipped_current={compact.get('skipped_current_count', 0)}"
+            )
+        ]
     if schema == "aistock_issue_workflow_watch_ci_v1":
         checks = compact.get("check_summary") if isinstance(compact.get("check_summary"), dict) else payload.get("check_summary") or {}
         return [
@@ -8111,13 +8148,19 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
 
     client_manifest = _client_manifest()
     if client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
-        warnings.append("global Codex workflow skill set is missing or stale; run install-client --apply and restart old client windows")
+        warnings.append(
+            "global Codex workflow skill set is missing or stale; verify the router and selected lane for this window "
+            "before any target-scoped install"
+        )
     elif client_manifest["codex_skill_status"] == "missing_repo_skill":
         blocking.append("repo Codex workflow skill set is missing")
     if client_manifest["claude_command_status"] == "missing_repo":
         warnings.append("repo Claude Code workflow command set is missing; Claude can still call the repo CLI directly")
     elif client_manifest["claude_command_status"] in {"missing_global", "stale_global"}:
-        warnings.append("global Claude Code workflow command set is missing or stale; run install-client --apply")
+        warnings.append(
+            "global Claude Code workflow command set is missing or stale; verify the router and selected lane for this "
+            "window before any target-scoped install"
+        )
 
     code_intel = code_intelligence.build_doctor_report(REPO_ROOT, skip_external=skip_external)
     for warning in code_intel.get("warnings") or []:

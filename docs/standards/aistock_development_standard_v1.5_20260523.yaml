@@ -623,7 +623,15 @@ manual_review_controls:
   - control_id: STD-SYNC-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-std-sync-001
     severity: P1
-    title: Human-readable standard and machine-readable YAML must be updated in the same versioned change.
+    title: Human-readable standard, machine-readable YAML, and task-relevant client entrypoints stay aligned without unrelated-lane blocking or repeated broad installs.
+    required_evidence:
+      - markdown_and_yaml_updated_together
+      - full_client_hash_verification_after_entrypoint_merge
+      - selected_router_and_lane_only_block_active_task
+      - unrelated_lane_staleness_warning_only
+      - explicit_client_profile_target
+      - idempotent_lock_protected_staged_client_sync
+      - restart_only_when_recommended_or_client_ui_stale
   - control_id: FEATURE-WORKFLOW-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-feature-workflow-001
     severity: P1
