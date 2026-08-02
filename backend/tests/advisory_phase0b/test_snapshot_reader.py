@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime
 from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
@@ -247,6 +248,62 @@ def test_catalog_rejects_append_only_invalidation() -> None:
     assert captured.value.reason_code == REASON_SNAPSHOT_INVALIDATED
 
 
+class _MembershipCursor:
+    def __init__(self) -> None:
+        self.query = ""
+        self.params: object = None
+
+    def execute(self, query: str, params: object) -> None:
+        self.query = query
+        self.params = params
+
+    def fetchall(self) -> list[dict[str, Any]]:
+        return [
+            {"snapshot_id": "snapshot-1", "payload": {"member": "z-value"}},
+            {"snapshot_id": "snapshot-1", "payload": {"member": "a-value"}},
+        ]
+
+
+def test_membership_query_materializes_payload_before_canonical_ordering() -> None:
+    cursor = _MembershipCursor()
+
+    rows = PostgresPhase0BSnapshotCatalog._canonical_rows_by_snapshot(
+        cur=cursor,
+        snapshot_ids=("snapshot-1",),
+        table="app.advisory_dataset_snapshot_observation",
+    )
+
+    assert "SELECT snapshot_id, payload FROM (" in cursor.query
+    assert ") membership ORDER BY snapshot_id, payload::text" in cursor.query
+    assert cursor.params == (["snapshot-1"],)
+    assert rows == {
+        "snapshot-1": ('{"member":"a-value"}', '{"member":"z-value"}')
+    }
+
+
+class _ManifestMember:
+    def __init__(self, payload: dict[str, str]) -> None:
+        self.payload = payload
+
+    def model_dump(self, *, mode: str) -> dict[str, str]:
+        assert mode == "json"
+        return self.payload
+
+
+def test_manifest_memberships_sort_after_canonical_serialization() -> None:
+    memberships = Phase0BSnapshotReader._canonical_manifest_memberships(
+        (
+            _ManifestMember({"candidate_stage_evidence_id": "z", "label_key_hash": "a"}),
+            _ManifestMember({"candidate_stage_evidence_id": "a", "label_key_hash": "z"}),
+        )
+    )
+
+    assert memberships == (
+        '{"candidate_stage_evidence_id":"a","label_key_hash":"z"}',
+        '{"candidate_stage_evidence_id":"z","label_key_hash":"a"}',
+    )
+
+
 class _ReceiptCatalog:
     def __init__(self, result: Phase0BSnapshotCatalogReceiptV1 | Phase0BAuditError) -> None:
         self.result = result
@@ -288,3 +345,54 @@ def test_final_invalidation_is_changed_during_read_not_initial_state_error() -> 
         )
 
     assert captured.value.reason_code == REASON_SNAPSHOT_CHANGED
+
+
+class _HistoricalLineageSpool:
+    def distinct_target_lineages(
+        self, *, snapshot_id: str
+    ) -> tuple[tuple[str, str, str, None, str], ...]:
+        assert snapshot_id == "snapshot-1"
+        return (("package-1", _HASH, "multi_alpha", None, "9" * 64),)
+
+def _historical_target_entry() -> Phase0BSnapshotCatalogEntryV1:
+    entry = _entry()
+    header = entry.header_payload()
+    header["build_request_payload"] = {
+        "range_lineage_scopes": [
+            {"identity_id": "scope-day-1", "identity_hash": "1" * 64},
+            {"identity_id": "scope-day-2", "identity_hash": "2" * 64},
+        ]
+    }
+    payload = entry.model_dump(mode="python")
+    payload.update(
+        {
+            "header_payload_json": canonical_json_text(header),
+            "header_hash": canonical_json_sha256(header),
+            "catalog_content_hash": None,
+        }
+    )
+    return Phase0BSnapshotCatalogEntryV1.model_validate(payload)
+
+
+def _historical_target_request() -> Any:
+    target = SimpleNamespace(
+        snapshot_id="snapshot-1",
+        program_id="9" * 64,
+        package_id="package-1",
+        manifest_sha256=_HASH,
+        alpha_mode="multi_alpha",
+        target_hash="8" * 64,
+    )
+    return SimpleNamespace(audit_targets=(target,))
+
+
+def test_historical_target_binds_frozen_program_without_conflating_daily_scopes() -> None:
+    bindings = Phase0BSnapshotReader._verify_target_lineage(
+        request=_historical_target_request(),
+        entry=_historical_target_entry(),
+        spool=_HistoricalLineageSpool(),  # type: ignore[arg-type]
+    )
+
+    assert len(bindings) == 1
+    assert bindings[0].formal_program_id is None
+    assert bindings[0].range_program_hash == "9" * 64

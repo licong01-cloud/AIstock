@@ -532,14 +532,16 @@ class PostgresPhase0BSnapshotCatalog:
         if table not in allowed_tables:
             raise ValueError("snapshot membership table is not allowlisted")
         cur.execute(
+            "SELECT snapshot_id, payload FROM ("
             f"SELECT snapshot_id, to_jsonb(member) AS payload FROM {table} member "
-            "WHERE snapshot_id = ANY(%s) ORDER BY snapshot_id, payload::text",
+            "WHERE snapshot_id = ANY(%s)"
+            ") membership ORDER BY snapshot_id, payload::text",
             (list(snapshot_ids),),
         )
         grouped: dict[str, list[str]] = defaultdict(list)
         for row in cur.fetchall():
             grouped[str(row["snapshot_id"])].append(canonical_json_text(row["payload"]))
-        return {key: tuple(value) for key, value in grouped.items()}
+        return {key: tuple(sorted(value)) for key, value in grouped.items()}
 
     @staticmethod
     def _snapshot_file(row: Mapping[str, Any]) -> DatasetSnapshotFile:
@@ -719,19 +721,11 @@ class Phase0BSnapshotReader:
             )
         catalog_observations = self._membership_payloads(entry.observation_membership_json)
         catalog_labels = self._membership_payloads(entry.label_membership_json)
-        manifest_observations = tuple(
-            canonical_json_text(item.model_dump(mode="json"))
-            for item in sorted(
-                manifest.core.selected_observations,
-                key=lambda value: value.canonical_signal_id,
-            )
+        manifest_observations = self._canonical_manifest_memberships(
+            manifest.core.selected_observations
         )
-        manifest_labels = tuple(
-            canonical_json_text(item.model_dump(mode="json"))
-            for item in sorted(
-                manifest.core.selected_labels,
-                key=lambda value: value.label_key_hash,
-            )
+        manifest_labels = self._canonical_manifest_memberships(
+            manifest.core.selected_labels
         )
         if catalog_observations != manifest_observations or catalog_labels != manifest_labels:
             raise Phase0BAuditError(
@@ -839,6 +833,12 @@ class Phase0BSnapshotReader:
         return tuple(sorted(payloads))
 
     @staticmethod
+    def _canonical_manifest_memberships(values: tuple[Any, ...]) -> tuple[str, ...]:
+        return tuple(
+            sorted(canonical_json_text(item.model_dump(mode="json")) for item in values)
+        )
+
+    @staticmethod
     def _verify_target_lineage(
         *,
         request: Phase0BCandidateQualityAuditRequestV1,
@@ -883,7 +883,7 @@ class Phase0BSnapshotReader:
             snapshot_id=entry.snapshot_id
         ):
             if entry.lineage_identity_type == "HISTORICAL_RANGE":
-                program_id = scope_by_hash.get(str(range_program_hash or ""))
+                program_id = range_program_hash
             else:
                 program_id = formal_program_id
             if program_id is None:
@@ -927,14 +927,13 @@ class Phase0BSnapshotReader:
             for item in request.audit_targets
             if item.snapshot_id == entry.snapshot_id
         }
-        scope_hash_by_program = {value: key for key, value in scope_by_hash.items()}
         return tuple(
             Phase0BTargetProgramBindingV1(
                 target_hash=str(targets_by_lineage[lineage].target_hash),
                 formal_program_id=lineage[1]
                 if entry.lineage_identity_type != "HISTORICAL_RANGE"
                 else None,
-                range_program_hash=scope_hash_by_program.get(lineage[1])
+                range_program_hash=lineage[1]
                 if entry.lineage_identity_type == "HISTORICAL_RANGE"
                 else None,
             )
