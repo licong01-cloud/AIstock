@@ -73,3 +73,54 @@ def runtime_identity():
     """Return the Git identity frozen when this backend process imported the router."""
 
     return _require_process_runtime_identity()
+
+
+@router.get("/runtime-contracts/hmm-risk-c010-a5", summary="HMM C-010-A5 runtime contract smoke")
+def hmm_risk_c010_a5_runtime_contract():
+    """Verify that the running process can load the exact C-010-A5 contract implementation."""
+
+    identity = _require_process_runtime_identity()
+    try:
+        from backend.services.hmm_risk.stock_fact_observation import (
+            C010_ELIGIBILITY_RECEIPT_VERSION,
+            C010_EXPECTED_OPPORTUNITY_CONTRACT,
+            C010_POLICY_VERSION,
+            C010_PROVIDER_ABSENCE_PARTITION_VERSION,
+        )
+    except (ImportError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unavailable",
+                "reason_code": "HMM_RISK_C010_A5_RUNTIME_IMPORT_FAILED",
+                "message": str(exc),
+            },
+        ) from exc
+    expected = {
+        "policy_version": "hmm_risk_c010_feature_domain_policy_v2",
+        "eligibility_receipt_version": "hmm_risk_c010_train_observation_eligibility_v2",
+        "expected_opportunity_contract": "hmm_risk_c010_expected_opportunity_dates_v2",
+        "provider_absence_partition_version": "hmm_risk_c010_provider_absence_domain_partition_v1",
+    }
+    observed = {
+        "policy_version": C010_POLICY_VERSION,
+        "eligibility_receipt_version": C010_ELIGIBILITY_RECEIPT_VERSION,
+        "expected_opportunity_contract": C010_EXPECTED_OPPORTUNITY_CONTRACT,
+        "provider_absence_partition_version": C010_PROVIDER_ABSENCE_PARTITION_VERSION,
+    }
+    if observed != expected:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "invalid",
+                "reason_code": "HMM_RISK_C010_A5_RUNTIME_CONTRACT_DRIFT",
+                "expected": expected,
+                "observed": observed,
+            },
+        )
+    return {
+        "status": "ok",
+        "contract": "hmm_risk_c010_a5_runtime_contract_v1",
+        "merge_commit": identity["merge_commit"],
+        **observed,
+    }

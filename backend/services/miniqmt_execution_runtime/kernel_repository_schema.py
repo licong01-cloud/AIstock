@@ -10,7 +10,9 @@ import psycopg2.extras
 from .kernel_repository_common import KernelRepositorySchemaError
 
 
-_K2_SCHEMA_CATALOG_SHA256 = "2ae93a1e637f4232ea01fc80f7f7a4680679956cc428b12c56adb01f16efea6a"
+_K2_SCHEMA_CATALOG_SHA256_V1 = "2ae93a1e637f4232ea01fc80f7f7a4680679956cc428b12c56adb01f16efea6a"
+_K2_SCHEMA_CATALOG_SHA256_K6C0 = "673ac852d725941112752d2eb63c46342e1b53169fadfacd4664fcbb4c27634e"
+_K2_SCHEMA_CATALOG_SHA256S = frozenset({_K2_SCHEMA_CATALOG_SHA256_V1, _K2_SCHEMA_CATALOG_SHA256_K6C0})
 _K2D_SCHEMA_CATALOG_SHA256 = "f9034e9e9680a12e335c5bdc0ac06e10dda73d34c8a65128df08c26b0f93725d"
 _K2D_CATALOG_FUNCTION_BODY_SHA256 = "69bf9ce6268522052ca6ce97d9769f7377b69e130f25cb143159f7fe1109d708"
 
@@ -272,9 +274,9 @@ class KernelRepositorySchemaMixin:
                     raise
                 except psycopg2.Error as exc:
                     raise KernelRepositorySchemaError("K2 schema fingerprint authority is unavailable") from exc
-        if catalog_sha256 != _K2_SCHEMA_CATALOG_SHA256:
+        if catalog_sha256 not in _K2_SCHEMA_CATALOG_SHA256S:
             raise KernelRepositorySchemaError(
-                f"K2 schema catalog drift: expected {_K2_SCHEMA_CATALOG_SHA256}, got {catalog_sha256}"
+                f"K2 schema catalog drift: expected one of {sorted(_K2_SCHEMA_CATALOG_SHA256S)}, got {catalog_sha256}"
             )
         if k2d_catalog_sha256 != _K2D_SCHEMA_CATALOG_SHA256:
             raise KernelRepositorySchemaError(

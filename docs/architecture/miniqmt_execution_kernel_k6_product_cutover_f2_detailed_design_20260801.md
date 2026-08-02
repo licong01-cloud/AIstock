@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K6 产品切换与旧路线退役 F2 详细设计
 
-> Feature tier：`F2`。原 design source 已通过 PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a` 合入，K6-A 已通过 PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401` 完成 `implemented_verified + merged`。2026-08-02 implementation-readiness revision 已通过 PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7` 完成 `design_revision_ready + merged`：实施优先级固定为 `K6-C0/C1 -> K6-B -> K6-D`；K6-C/B/D 仍为 `not_started`，K6 overall=`implementation_in_progress`，不得把本次设计修订记为代码实现。
+> Feature tier：`F2`。原 design source 已通过 PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a` 合入，K6-A 已通过 PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401` 完成 `implemented_verified + merged`。2026-08-02 implementation-readiness revision 已通过 PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7` 完成 `design_revision_ready + merged`。K6-C0 strict contracts、successor migration与versioned repository preflight已通过 PR #3032 / merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63` 完成`implemented_verified + merged`；后续顺序仍固定为`K6-C1 -> K6-B -> K6-D`，三者均为`not_started`，K6 overall=`implementation_in_progress`。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -194,7 +194,7 @@ durable 状态转换只允许：
 - 对应 projection id/version/source event/hash，以及 `execution_projection_set_sha256`
 - `evidence_sha256=hash_hex_v1("miniqmt_product_command_evaluation_evidence_v3", preceding fields)`
 
-所有nested carrier必须使用其现有strict reader重算identity/hash；四个projection payload必须与`ExecutionProjectionSetV1`的exact ref逐项闭合。candidate仅DEFER允许且必须存在，其他disposition必须为空。fresh-process evaluator只读取该evidence、strict command_json和durable catalog/creation binding，不调用OMS/risk/Gateway重新询问，也不接受caller supplied disposition。
+所有nested carrier必须使用其现有strict reader重算identity/hash。一个transition只有一套shared `ExecutionProjectionSetV1`：它证明MARKET_DATA/ACCOUNT/CONTRACT/KILL_SWITCH及OMS/RISK/ROUTE authority的存在、版本、source event与projection-set identity；每个command自己的strict OMS/risk/route receipt则在对应`ProductCommandEvaluationEvidenceV3`中独立持久化并重算identity/hash，不要求多个command错误共享同一per-command receipt。四个frozen projection payload必须与shared set的exact ref逐项闭合。candidate仅DEFER允许且必须存在，其他disposition必须为空。fresh-process evaluator只读取该evidence、strict command_json和durable catalog/creation binding，不调用OMS/risk/Gateway重新询问，也不接受caller supplied disposition。
 
 canonical JSON byte bounds固定为command_json<=16KiB、单item evaluation_evidence_json<=64KiB、authority item count<=256；超限整套fail loud，不截断业务authority、不降级为hash-only，也不拆成partial transaction。bounded diagnostic/error evidence仍按§10单独处理。
 
@@ -273,7 +273,7 @@ DEFER 时 outbox/broker/callback 字段必须为空；REJECT 必须闭合 termin
 
 ## 5. Durable Schema and Migration / 持久化 schema 与迁移
 
-K6-A 已合入的 `miniqmt_execution_kernel_k6_20260801.preflight.sql/.sql/.rollback.sql` checksum保持不可变。K6-C0 必须新增独立 successor triplet `miniqmt_execution_kernel_k6c_202608xx.preflight.sql/.sql/.rollback.sql`，不得改写已合入 migration bytes。该 successor 只补 product implementation-readiness 缺口，不修改 K2 既有业务含义；production K6 DDL 仍为 `noop`。
+K6-A 已合入的 `miniqmt_execution_kernel_k6_20260801.preflight.sql/.sql/.rollback.sql` checksum保持不可变。K6-C0 独立 successor triplet固定为`miniqmt_execution_kernel_k6c_20260802.preflight.sql/.sql/.rollback.sql`，不得改写已合入 migration bytes。forward canonical-LF SHA-256=`782f3020a9de4917564d73626a6b099a27866a709d38ff6701f9313225bf5422`；successor catalog=`841717e7c9f998e5e197048877fa854db8e7469544d6b94682f73c730a7462fe`，迁移后的K6/K2 exact catalog分别为`6e33248ad909c59db11059f723adbe39c4c8a151c902e9af0fe0fd3637adacc9`与`673ac852d725941112752d2eb63c46342e1b53169fadfacd4664fcbb4c27634e`。successor同时以`ck_miniqmt_k6_product_mapping_state`和版本化`ck_miniqmt_k2_child_mapping_initial`闭合真实row transition，避免只改status枚举却被旧initial CHECK拒绝。该 successor 只补 product implementation-readiness 缺口，不修改 K2 既有业务含义；production K6 DDL 仍为 `noop`。
 
 ### 5.1 New tables
 
@@ -302,7 +302,7 @@ K6-A 已合入的 `miniqmt_execution_kernel_k6_20260801.preflight.sql/.sql/.roll
    - PK `(runtime_id,binding_id,trade_date)`；FK `(runtime_id,binding_id,trade_date,current_route_epoch)`与`current_receipt_sha256`到exact cutover receipt；row_version正数、owner/receipt/hash一致性CHECK。
    - new route publication在同一事务insert append-only receipt并CAS owner；owner不能从KERNEL_V2回退，数据库trigger与repository pure transition authority使用同一允许矩阵。
 
-K6-C0 同时以 additive successor 修改既有 K2 mapping status CHECK/trigger authority，增加 `DEFERRED_DEPENDENT_BUY` exact initial/successor状态；不得重写 K2-A migration。除此之外不新增新的 event、delivery、transition、独立 command-payload表、mapping、child、dispatch attempt、reconciliation、timer 或 session 表；完整 command 只保存在 authority item `command_json`。
+K6-C0 同时以 additive successor 修改既有 K2 physical mapping row 的 status CHECK/trigger authority，增加 `DEFERRED_DEPENDENT_BUY` exact initial/successor状态；不得重写 K2-A migration。Python authority由K6 product-owned `ProductCommandChildMappingV1`承载`DEFERRED_DEPENDENT_BUY -> RESERVED|TERMINAL`，使用同一`mapping_id/child_order_id/client_ref`和同一物理row，不扩大K1/K3共享`ExecutionCommandChildMappingV1`的enum或initial-state语义。K6-B在创建同command PENDING outbox时负责将product RESERVED row按显式cross-carrier closure交给既有K2 dispatch lifecycle；该handoff尚未在C0实现，不得把C0 carrier冒充为已接入worker。除此之外不新增新的 event、delivery、transition、独立 command-payload表、mapping、child、dispatch attempt、reconciliation、timer 或 session 表；完整 command 只保存在 authority item `command_json`。
 
 ### 5.2 Preflight, forward, readback and rollback
 
@@ -362,7 +362,7 @@ RELEASE transaction 不新建 command/event/transition：它锁定 original auth
 
 创建时必须闭合 BUY parent、所有 sell dependencies、required cash、`DEFER_DEPENDENT_BUY` authority item 的 strict command_json、deferred mapping/child、strategy ledger account 和 session authority。coordination 与 authority/mapping/child 必须在首次 product transaction 同时提交；缺少或冲突时 fail loud，不写 partial coordination。K3 inventory 可用于比较 legacy parity，但不是 K6 candidate source authority。
 
-deferred mapping使用`mapping_version=1,status=DEFERRED_DEPENDENT_BUY`，计入algo `active_child_count`并与plugin的COMMAND_PENDING state闭合；outbox count必须为0。release时mapping只允许变为`version+1,RESERVED`并创建row_version=1的同command PENDING outbox。BLOCK/EOD将deferred mapping推进为TERMINAL并由正式COMMAND_OUTCOME收敛plugin state；任何terminal mapping不得release或reopen。
+deferred mapping使用K6 product-owned strict carrier、`mapping_version=1,status=DEFERRED_DEPENDENT_BUY`，计入algo `active_child_count`并与plugin的COMMAND_PENDING state闭合；outbox count必须为0。该carrier闭合authority item、coordination、command、mapping/child/client-ref、价量和原transition，且broker/order/trade lineage必须为空。release时同一physical mapping row只允许变为`version=2,RESERVED`并创建row_version=1的同command PENDING outbox；BLOCK/EOD只允许变为`version=2,TERMINAL`并由正式COMMAND_OUTCOME收敛plugin state。任何terminal mapping不得release或reopen；K1/K3共享mapping carrier保持byte/enum/initial-state authority不变。
 
 ### 7.2 Trigger evaluation
 
@@ -567,8 +567,8 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 
 ### K6-C — generic product command authority/materializer
 
-- **当前第一优先级**。先完成 K6-C0 contract/migration correction：authority item strict `command_json`、`DEFER_DEPENDENT_BUY`、V2 proceeds/ledger/coordination carrier、deferred mapping status，以及 K6-A additive migration/repository 的同 authority readback；生产尚无 K6 rows，禁止以修改历史数据绕过。
-- 再完成 K6-C1 materializer：§8 V3 aggregate、0/1/N command、MATERIALIZE/REJECT/DEFER、terminal no-broker reject outcome、K2 outbox/callback/reconcile closure。
+- **K6-C0=`implemented_verified + merged`, `source_merge=merged_pr_3032`**，merge=`2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`。已完成authority item strict `command_json`、`DEFER_DEPENDENT_BUY`、V2 proceeds/ledger/coordination carrier、deferred mapping status、immutable K6-A successor migration、migration前后两个exact K2/K6 catalog authority及独立`preflight_k6c_schema()`；没有执行生产DDL或修改历史数据。
+- **下一优先级K6-C1=`not_started`**。实现§8 V3 aggregate的atomic materializer、0/1/N command、MATERIALIZE/REJECT/DEFER、terminal no-broker reject outcome与K2 outbox/callback/reconcile closure。
 - 五个 plugin 全部通过同一 public seam；仍不激活产品binding。
 - 预计 8–12 个开发日；依赖 K6-A。K6-C 未完成并合入前不得把 K6-B release 标记为 implemented，也不得并行修改三份共享权威设计。
 
@@ -629,11 +629,11 @@ K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | `F-101` | §0–§3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` scope/owner/no-diff matrix | design_ready | none |
-| `F-102` | §4.1；target `backend/services/miniqmt_execution_runtime/kernel_product_contracts.py` | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py -q`：V2 proceeds/ledger/coordination、V1 product reject、strict readback | design_ready | none |
+| `F-102` | §4.1；`backend/services/miniqmt_execution_runtime/kernel_product_contracts.py` | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py -q`：V2 proceeds/ledger/coordination、strict initial/successor、V1 product reject、strict readback | k6c0_implemented_verified | none |
 | `F-103` | §7 | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy.py -q`：candidate/defer/same-command release/full trigger/state/restart | design_ready | none |
-| `F-104` | §4.2、§8 | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py -q`：command_json、0/1/N、materialize/reject/defer、terminal no-broker outcome、V1 reject、readback drift | design_ready | none |
-| `F-105` | §5；K6-A immutable migration + K6-C0 successor triplet | target `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_k6c_migration_postgres.py -q`：command_json、coordination/item FK、deferred status、catalog/comment/readback/rollback | design_ready | none |
-| `F-106` | §6；target `backend/services/miniqmt_execution_runtime/kernel_product_repository.py` | target `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy_postgres.py -q`：atomic authority/lineage、same-command release、CAS/fence/commit-unknown/zero-partial/concurrency | design_ready | none |
+| `F-104` | §4.2、§8；V3 carriers已在`kernel_product_contracts.py`实现 | C0 command/evidence matrix：`python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py -q`；C1 target `backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py` | design_ready | none |
+| `F-105` | §5；K6-A immutable migration + `miniqmt_execution_kernel_k6c_20260802.*` | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py -q`：checksum、coordination/item FK、deferred status、catalog/comment、second apply、readback、data-guarded rollback | k6c0_implemented_verified | none |
+| `F-106` | §6；`kernel_product_repository.py` versioned preflight | C0 command：`AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py -q`；C1 target `test_kernel_dependent_buy_postgres.py` | design_ready | none |
 | `F-107` | §4.3、§9.1、§9.3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` owner/route-generation/drain/rollback matrix | design_ready | none |
 | `F-108` | §9.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_legacy_route_retirement.py` exact inventory + import/call-graph uniqueness | design_ready | none |
 | `F-109` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_diagnostics.py`; artifact: `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
@@ -676,7 +676,7 @@ K6 implementation完成定义：K6-A/B/C/D全部 `implemented_verified + merged`
 - K1/K2/K3/K4/K5 overall：`implemented_verified + merged`。
 - K6 detailed design base：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）；2026-08-02 implementation-readiness revision：`design_revision_ready + merged`（PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7`）。
 - revision review evidence：三份F2 validator=`12/12,70/70,112/112`且warnings=0；classifier=`docs_fast_update`、backend/frontend/Go plans均未选择、`unmapped_code_files=[]`；L0=0 finding；module registry=`8 passed,14/14 mapped`。
-- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green；其dependent-BUY V1与product authority V2 base不等于本修订新增的dependent-BUY V2/product authority V3。K6-C/B/D：`not_started`；下一优先级K6-C0/C1，之后K6-B；K6 overall：`implementation_in_progress`。
+- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green。K6-C0=`implemented_verified + merged`、`source_merge=merged_pr_3032`，merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`，required CI run `30732380227` green；K6-C1/K6-B/K6-D=`not_started`，下一优先级仅K6-C1；K6 overall=`implementation_in_progress`。
 - product runtime：`not_switched`。
 - `base_design_source_merge=merged_pr_2993`；`revision_source_merge=merged_pr_3024`；`close_sync=not_applicable_feature`；state-sync/root sync/cleanup分别记录。
-- production DDL/DML/dependency/config/binding/broker/restart/runtime activation/normal trading day observation：全部 `noop/not_run`。
+- production DDL=`pending_after_source_merge`且未执行；production DML/dependency/config/binding/broker/restart/runtime activation/normal trading day observation全部`noop/not_run`。
