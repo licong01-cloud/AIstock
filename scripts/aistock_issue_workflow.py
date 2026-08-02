@@ -11979,6 +11979,9 @@ def build_close_sync_plan(
             if runtime_pending
             else (_utc_now() if runtime_contract.get("backend_restart_required") else closed_at)
         )
+        durable_validation_evidence = flow._unique_strings(
+            [*flow._as_list(record.get("validation_evidence")), *evidence]
+        )
         updated.update(
             {
                 "status": "fixed_source_pending_user_restart" if runtime_pending else (
@@ -11988,7 +11991,7 @@ def build_close_sync_plan(
                 "fixed_at": source_fixed_at,
                 "fix_commit": merge_commit,
                 "pr_url": pr_url,
-                "validation_evidence": evidence,
+                "validation_evidence": durable_validation_evidence,
                 **gates,
             }
         )
@@ -12197,6 +12200,9 @@ def build_close_sync_batch_plan(
     github_syncs: dict[str, Any] = {}
     for item, record, source_path, _missing in target_pairs:
         updated = dict(record)
+        durable_validation_evidence = flow._unique_strings(
+            [*flow._as_list(record.get("validation_evidence")), *evidence]
+        )
         updated.update(
             {
                 "status": "fixed",
@@ -12204,7 +12210,7 @@ def build_close_sync_batch_plan(
                 "fixed_at": _utc_now(),
                 "fix_commit": merge_commit,
                 "pr_url": pr_url,
-                "validation_evidence": evidence,
+                "validation_evidence": durable_validation_evidence,
                 **gates,
             }
         )
