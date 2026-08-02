@@ -5163,11 +5163,21 @@ def test_close_sync_batch_updates_multiple_bug_jsons(
 ) -> None:
     bug_a = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
-        _bug(bug_id="BUG-199", github_issue_number=199, github_issue_url="https://github.example/issues/199"),
+        _bug(
+            bug_id="BUG-199",
+            github_issue_number=199,
+            github_issue_url="https://github.example/issues/199",
+            validation_evidence=["BUG-199 historical evidence", "python -m nox -s l0 -> passed"],
+        ),
     )
     bug_b = _write_json(
         isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug200.json",
-        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"),
+        _bug(
+            bug_id="BUG-200",
+            github_issue_number=200,
+            github_issue_url="https://github.example/issues/200",
+            validation_evidence=["BUG-200 historical evidence"],
+        ),
     )
     monkeypatch.setattr(
         workflow,
@@ -5199,11 +5209,20 @@ def test_close_sync_batch_updates_multiple_bug_jsons(
         "tests/aistock_validation/bugs/bug199.json",
         "tests/aistock_validation/bugs/bug200.json",
     ]
-    assert json.loads(bug_a.read_text(encoding="utf-8"))["status"] == "fixed"
+    updated_a = json.loads(bug_a.read_text(encoding="utf-8"))
+    assert updated_a["status"] == "fixed"
+    assert updated_a["validation_evidence"] == [
+        "BUG-199 historical evidence",
+        "python -m nox -s l0 -> passed",
+    ]
     updated_b = json.loads(bug_b.read_text(encoding="utf-8"))
     assert updated_b["pr_url"] == "https://github.example/pull/299"
     assert updated_b["closed_at"] == "2026-07-17T21:00:19Z"
     assert updated_b["fixed_at"]
+    assert updated_b["validation_evidence"] == [
+        "BUG-200 historical evidence",
+        "python -m nox -s l0 -> passed",
+    ]
     assert set(payload["github_issue_sync"]) == {"BUG-199", "BUG-200"}
 
 
@@ -6456,7 +6475,16 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="fixed"))
+    issue = _write_json(
+        isolated_workflow_root / "bug.json",
+        _bug(
+            status="fixed",
+            validation_evidence=[
+                "historical targeted test -> passed",
+                "python -m nox -s l0 -> passed",
+            ],
+        ),
+    )
 
     assert workflow.main(["close-sync", "--issue-json", str(issue)]) == 2
     missing_pr = json.loads(capsys.readouterr().out)
@@ -6495,6 +6523,10 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
     updated = json.loads(issue.read_text(encoding="utf-8"))
     assert updated["status"] == "fixed"
     assert updated["fix_commit"] == "abc1234"
+    assert updated["validation_evidence"] == [
+        "historical targeted test -> passed",
+        "python -m nox -s l0 -> passed",
+    ]
 
 
 def test_close_sync_apply_can_create_registry_worktree(
