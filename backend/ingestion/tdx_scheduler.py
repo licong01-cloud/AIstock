@@ -1445,9 +1445,12 @@ class TDXScheduler:
         if not table_name:
             return None, None
 
-        rows = self._fetchall(f"SELECT MAX({date_column})::date AS mx FROM {table_name}")
-        current_max: Optional[dt.date] = rows[0].get("mx") if rows and rows[0].get("mx") else None
+        current_max: Optional[dt.date] = None
         if use_refresh_audit_cursor:
+            # Audit cursor first: a successful refresh audit fully determines
+            # the cursor, so the physical MAX scan is skipped entirely
+            # (BUG-957: planning an unbounded MAX over a ~10k-chunk
+            # TimescaleDB hypertable exceeds statement_timeout).
             audit_rows = self._fetchall(
                 """
                 SELECT MAX(trade_date)::date AS mx
@@ -1460,6 +1463,19 @@ class TDXScheduler:
             audit_max = audit_rows[0].get("mx") if audit_rows else None
             if audit_max is not None:
                 current_max = audit_max
+        if current_max is None:
+            # Bounded fast path: the incremental cursor is almost always
+            # recent, so probing a trailing window prunes hypertable chunks
+            # and stays within statement_timeout (BUG-957). Fall back to the
+            # unbounded scan for bootstrap or long-stalled datasets.
+            rows = self._fetchall(
+                f"SELECT MAX({date_column})::date AS mx FROM {table_name} "
+                f"WHERE {date_column} >= CURRENT_DATE - INTERVAL '45 days'"
+            )
+            current_max = rows[0].get("mx") if rows and rows[0].get("mx") else None
+            if current_max is None:
+                rows = self._fetchall(f"SELECT MAX({date_column})::date AS mx FROM {table_name}")
+                current_max = rows[0].get("mx") if rows and rows[0].get("mx") else None
 
         if use_calendar_dates:
             latest_date: Optional[dt.date] = dt.date.today()
