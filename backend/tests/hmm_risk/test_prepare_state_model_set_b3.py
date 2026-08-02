@@ -7,6 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.services.hmm_risk.provider_absence import (
+    MONEYFLOW_DATASET,
+    MONEYFLOW_MISSING_FIELDS,
+    ProviderAbsenceEvidence,
+)
 from backend.services.hmm_risk.state_model_set import ALL_CORE_FEATURES, BASE_FEATURES, StateModelSetError
 from scripts.hmm_risk import prepare_state_model_set as subject
 
@@ -227,6 +232,218 @@ def _coverage_preflight(*, valid: bool = True, policy_sha256: str | None = None)
         "ready_artifact_write_performed": False,
     }
     return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+
+def _minimal_c010_policy() -> dict:
+    return {
+        "receipt_sha256": "f" * 64,
+        "provider_absence_partition_receipt": {"receipt_sha256": "e" * 64},
+        "provider_absence_partition_receipt_sha256": "e" * 64,
+    }
+
+
+class _C010Cursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def execute(self, query, params):
+        self.query = query
+        self.params = params
+
+    def fetchall(self):
+        return self.rows
+
+
+class _C010Connection:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def cursor(self):
+        return _C010Cursor(self.rows)
+
+
+class _C010Resolution:
+    def __init__(self, symbol: str, dataset: str):
+        self.security_identity_id = f"canonical:{symbol}"
+        self.source_ts_code = symbol
+        self._symbol = symbol
+        self._dataset = dataset
+
+    def evidence(self):
+        return {
+            "security_identity_id": self.security_identity_id,
+            "canonical_ts_code": self._symbol,
+            "source_dataset": self._dataset,
+            "source_ts_code": self.source_ts_code,
+            "resolution_kind": "canonical_same_code",
+        }
+
+
+class _C010SecurityManifest:
+    manifest_sha256 = "a" * 64
+
+    def alias_rows(self, source_dataset):
+        return []
+
+    def resolve(self, symbol, trade_date, source_dataset):
+        return _C010Resolution(symbol, source_dataset)
+
+    def evidence(self):
+        return {
+            "schema_version": "hmm_risk_security_source_identity_manifest_v1",
+            "manifest_sha256": self.manifest_sha256,
+        }
+
+
+def _c010_absence(symbol: str, trade_date_value: date) -> ProviderAbsenceEvidence:
+    body = {
+        "canonical_ts_code": symbol,
+        "source_dataset": MONEYFLOW_DATASET,
+        "source_ts_code": symbol,
+        "trade_date": trade_date_value.isoformat(),
+        "missing_fields": list(MONEYFLOW_MISSING_FIELDS),
+        "provider_audit_receipt_sha256": "b" * 64,
+    }
+    return ProviderAbsenceEvidence(
+        canonical_ts_code=symbol,
+        source_dataset=MONEYFLOW_DATASET,
+        source_ts_code=symbol,
+        trade_date=trade_date_value,
+        missing_fields=MONEYFLOW_MISSING_FIELDS,
+        provider_audit_receipt_sha256="b" * 64,
+        row_hash=subject.canonical_sha256(body),
+    )
+
+
+def test_c010_partition_keeps_known_sw_domain_out_key_without_fabricating_sector_identity() -> None:
+    trade_date_value = date(2023, 5, 22)
+    absence = _c010_absence("002951.SZ", trade_date_value)
+    provider_manifest = SimpleNamespace(
+        rows=(absence,),
+        evidence=lambda: {"schema_version": "hmm_risk_provider_absence_manifest_v1", "manifest_sha256": "b" * 64},
+    )
+    source_spec = SimpleNamespace(universe_key="frozen", universe_rule_version="rule-v1")
+    source_state = {"column_contract_sha256": "c" * 64, "source_state": "ready"}
+    rows = [
+        (
+            "002951.SZ",
+            trade_date_value,
+            [{"ts_code": "002951.SZ", "eligible_start": "2022-01-01", "eligible_end": None}],
+            [{"ts_code": "002951.SZ", "trade_date": "2023-05-22", "close_li": 12345}],
+            [],
+        )
+    ]
+
+    partition, _ = subject._c010_provider_absence_partition(
+        _C010Connection(rows),
+        source_spec,
+        security_identity_manifest=_C010SecurityManifest(),
+        provider_absence_manifest=provider_manifest,
+        source_state=source_state,
+        mapping_manifest={"schema_version": "hmm_risk_pit_mapping_manifest_v1", "source_jsonl_sha256": "d" * 64},
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+        formal_policy=True,
+    )
+
+    assert partition["p_all_entry_count"] == 1
+    assert partition["p_in_entry_count"] == 0
+    assert partition["p_out_entry_count"] == 1
+    assert partition["entries"][0]["failed_predicates"] == [
+        "sw_l1_identity_valid",
+        "sw_l2_identity_valid",
+    ]
+    assert partition["entries"][0]["primary_reason_code"] == ("hmm_risk_c010_sw_identity_unavailable_for_opportunity")
+
+
+def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping() -> None:
+    authority = subject.canonical_authority_identity("test", {"version": "v1"})
+    source_spec = SimpleNamespace(universe_key="frozen")
+    valid_mapping = {
+        "source_ts_code": "000001.SZ",
+        "source_l1_code": "801010",
+        "source_l2_code": "801011",
+        "in_date": "2020-01-01",
+        "out_date": None,
+        "l1_code": "801010.SI",
+        "l2_code": "801011.SI",
+    }
+    receipt = subject._c010_expected_opportunity_receipt(
+        _C010Connection([("000001.SZ", date(2022, 1, 4), [valid_mapping])]),
+        source_spec,
+        security_identity_manifest=_C010SecurityManifest(),
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+        authority_identities=[authority],
+    )
+    assert receipt["opportunity_key_count"] == 1
+    assert receipt["entries"][0]["opportunity_dates"] == ["2022-01-04"]
+
+    with pytest.raises(StateModelSetError, match="opportunity mapping is not unique"):
+        subject._c010_expected_opportunity_receipt(
+            _C010Connection(
+                [
+                    (
+                        "000001.SZ",
+                        date(2022, 1, 4),
+                        [valid_mapping, {**valid_mapping, "l2_code": "801012.SI"}],
+                    )
+                ]
+            ),
+            source_spec,
+            security_identity_manifest=_C010SecurityManifest(),
+            train_start=date(2022, 1, 1),
+            train_end=date(2024, 6, 30),
+            authority_identities=[authority],
+        )
+
+
+def test_main_c010_a5_preflight_writes_compact_readonly_receipt(monkeypatch, tmp_path, capsys) -> None:
+    output = tmp_path / "c010-a5-preflight.json"
+    partition = {
+        "p_all_entry_count": 502,
+        "p_in_entry_count": 501,
+        "p_out_entry_count": 1,
+    }
+    report = {
+        "status": "preflight_complete",
+        "provider_absence_partition_receipt": partition,
+        "provider_absence_partition_receipt_sha256": "a" * 64,
+        "known_sw_domain_out_verified": True,
+    }
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request_template", lambda path: _request())
+    monkeypatch.setattr(subject, "prepare_c010_a5_domain_partition_preflight", lambda request, db_prefix: report)
+    monkeypatch.setattr(subject, "_write_diagnostic_report", lambda path, value: "b" * 64)
+    monkeypatch.setattr(
+        subject,
+        "parse_args",
+        lambda: SimpleNamespace(
+            request=str(tmp_path / "request.json"),
+            env_file=str(tmp_path / "env"),
+            db_env_prefix="TDX_DB_",
+            b3_preflight_output=None,
+            c009_stock_fact_preflight_output=None,
+            c010_observation_eligibility_output=None,
+            c010_a5_domain_partition_output=str(output),
+            b3_request_candidate_output=None,
+        ),
+    )
+
+    assert subject.main() == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "preflight_complete"
+    assert receipt["p_all_entry_count"] == 502
+    assert receipt["p_out_entry_count"] == 1
+    assert receipt["known_sw_domain_out_verified"] is True
+    assert receipt["fit_performed"] is False
+    assert receipt["database_write_performed"] is False
 
 
 def test_legacy_fixed_seed_ready_writer_is_disabled() -> None:
@@ -1369,7 +1586,7 @@ def test_formal_single_pass_runs_both_families_and_levels_without_selection_or_v
         {
             "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": coverage["receipt_sha256"],
-            "feature_domain_policy_manifest": {"receipt_sha256": "f" * 64},
+            "feature_domain_policy_manifest": _minimal_c010_policy(),
             "feature_domain_policy_sha256": "f" * 64,
         }
     )
@@ -1427,7 +1644,7 @@ def test_formal_single_pass_rejects_frozen_manifest_drift(monkeypatch) -> None:
         {
             "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": "a" * 64,
-            "feature_domain_policy_manifest": {"receipt_sha256": "f" * 64},
+            "feature_domain_policy_manifest": _minimal_c010_policy(),
             "feature_domain_policy_sha256": "f" * 64,
         }
     )
@@ -1456,7 +1673,7 @@ def test_formal_single_pass_rejects_stale_train_coverage_receipt_before_fit(monk
         {
             "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": "a" * 64,
-            "feature_domain_policy_manifest": {"receipt_sha256": "f" * 64},
+            "feature_domain_policy_manifest": _minimal_c010_policy(),
             "feature_domain_policy_sha256": "f" * 64,
         }
     )
