@@ -697,7 +697,7 @@ def test_k6c0_repository_preflight_requires_exact_successor_catalog_on_dev_postg
             cur.execute(
                 f"CREATE OR REPLACE FUNCTION {schema}.miniqmt_k6c_catalog_fingerprint() "
                 "RETURNS TEXT LANGUAGE sql STABLE AS $$ "
-                "SELECT '841717e7c9f998e5e197048877fa854db8e7469544d6b94682f73c730a7462fe'::TEXT $$"
+                "SELECT 'f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d'::TEXT $$"
             )
         with pytest.raises(KernelRepositorySchemaError, match="function definition drift"):
             repository.preflight_k6c_schema()

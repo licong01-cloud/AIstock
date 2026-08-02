@@ -85,22 +85,73 @@ ALTER TABLE qmt_strategy.execution_child_order
         )
     ) NOT VALID,
     ADD CONSTRAINT ck_miniqmt_k6_product_mapping_state CHECK (
-        (mapping_status<>'DEFERRED_DEPENDENT_BUY'
-            AND (mapping_json->>'schema_version') IS DISTINCT FROM 'miniqmt_product_command_child_mapping_v1')
-        OR (
-            mapping_json->>'schema_version'='miniqmt_product_command_child_mapping_v1'
+        CASE WHEN mapping_json->>'schema_version'='miniqmt_product_command_child_mapping_v1' THEN (
+            jsonb_typeof(mapping_json)='object'
+            AND mapping_json=jsonb_build_object(
+                'schema_version','miniqmt_product_command_child_mapping_v1',
+                'mapping_id',mapping_id,
+                'authority_item_sha256',mapping_json->'authority_item_sha256',
+                'coordination_id',mapping_json->'coordination_id',
+                'command_id',command_id,
+                'runtime_id',runtime_id,
+                'algo_instance_id',algo_instance_id,
+                'parent_intent_id',parent_intent_id,
+                'strategy_slot_id',strategy_slot_id,
+                'local_vt_orderid',local_vt_orderid,
+                'child_order_id',child_order_id,
+                'deterministic_client_order_ref',deterministic_client_order_ref,
+                'order_remark',order_remark,
+                'symbol',symbol,
+                'side',side,
+                'requested_price_decimal',mapping_json->'requested_price_decimal',
+                'requested_quantity',quantity,
+                'broker_order_id',broker_order_id,
+                'broker_identity_source_event_id',broker_identity_source_event_id,
+                'mapping_status',mapping_status,
+                'mapping_version',mapping_version,
+                'payload_sha256',mapping_payload_sha256,
+                'last_order_event_id',last_order_event_id,
+                'last_trade_event_id',last_trade_event_id,
+                'created_transition_id',created_transition_id,
+                'updated_by_event_id',updated_by_event_id,
+                'created_at_utc',mapping_json->'created_at_utc',
+                'updated_at_utc',mapping_json->'updated_at_utc',
+                'mapping_receipt_sha256',mapping_receipt_sha256
+            )
+            AND mapping_json->>'schema_version'='miniqmt_product_command_child_mapping_v1'
             AND mapping_json->>'mapping_id'=mapping_id
             AND mapping_json->>'command_id'=command_id
+            AND mapping_json->>'runtime_id'=runtime_id
+            AND mapping_json->>'algo_instance_id'=algo_instance_id
+            AND mapping_json->>'parent_intent_id'=parent_intent_id
+            AND mapping_json->>'strategy_slot_id'=strategy_slot_id
             AND mapping_json->>'local_vt_orderid'=local_vt_orderid
             AND mapping_json->>'child_order_id'=child_order_id
             AND mapping_json->>'deterministic_client_order_ref'=deterministic_client_order_ref
             AND mapping_json->>'order_remark'=order_remark
+            AND mapping_json->>'symbol'=symbol
+            AND mapping_json->>'side'=side
+            AND (mapping_json->>'requested_price_decimal')::NUMERIC=price
+            AND (mapping_json->>'requested_quantity')::BIGINT=quantity
+            AND (mapping_json->>'broker_order_id') IS NOT DISTINCT FROM broker_order_id
+            AND (mapping_json->>'broker_identity_source_event_id') IS NOT DISTINCT FROM broker_identity_source_event_id
             AND mapping_json->>'mapping_status'=mapping_status
             AND mapping_json->>'mapping_version'=mapping_version::TEXT
             AND mapping_json->>'payload_sha256'=mapping_payload_sha256
             AND mapping_json->>'mapping_receipt_sha256'=mapping_receipt_sha256
+            AND jsonb_typeof(mapping_json->'authority_item_sha256')='string'
             AND mapping_json->>'authority_item_sha256' ~ '^[0-9a-f]{64}$'
+            AND jsonb_typeof(mapping_json->'coordination_id')='string'
             AND mapping_json->>'coordination_id' ~ '^[0-9a-f]{64}$'
+            AND jsonb_typeof(mapping_json->'requested_price_decimal')='string'
+            AND jsonb_typeof(mapping_json->'created_at_utc')='string'
+            AND jsonb_typeof(mapping_json->'updated_at_utc')='string'
+            AND (mapping_json->>'last_order_event_id') IS NOT DISTINCT FROM last_order_event_id
+            AND (mapping_json->>'last_trade_event_id') IS NOT DISTINCT FROM last_trade_event_id
+            AND mapping_json->>'created_transition_id'=created_transition_id
+            AND (mapping_json->>'updated_by_event_id') IS NOT DISTINCT FROM updated_by_event_id
+            AND (mapping_json->>'created_at_utc')::TIMESTAMPTZ=mapping_created_at_utc
+            AND (mapping_json->>'updated_at_utc')::TIMESTAMPTZ=mapping_updated_at_utc
             AND (
                 (mapping_status='DEFERRED_DEPENDENT_BUY' AND mapping_version=1
                     AND broker_order_id IS NULL AND broker_identity_source_event_id IS NULL
@@ -112,7 +163,7 @@ ALTER TABLE qmt_strategy.execution_child_order
                     AND last_order_event_id IS NULL AND last_trade_event_id IS NULL AND updated_by_event_id IS NOT NULL
                     AND mapping_updated_at_utc>mapping_created_at_utc)
             )
-        )
+        ) ELSE mapping_status<>'DEFERRED_DEPENDENT_BUY' END
     ) NOT VALID;
 ALTER TABLE qmt_strategy.execution_child_order
     VALIDATE CONSTRAINT ck_miniqmt_k2_child_mapping_initial;
@@ -333,8 +384,8 @@ DO $$
 DECLARE actual TEXT;
 BEGIN
     SELECT qmt_strategy.miniqmt_k6c_catalog_fingerprint() INTO actual;
-    IF actual <> '841717e7c9f998e5e197048877fa854db8e7469544d6b94682f73c730a7462fe' THEN
-        RAISE EXCEPTION 'K6-C0 post-commit catalog drift: expected 841717e7c9f998e5e197048877fa854db8e7469544d6b94682f73c730a7462fe, got %',actual;
+    IF actual <> 'f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d' THEN
+        RAISE EXCEPTION 'K6-C0 post-commit catalog drift: expected f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d, got %',actual;
     END IF;
 END $$;
 

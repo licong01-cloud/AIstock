@@ -1,8 +1,19 @@
 {
-  "actual": "PR #3032 merged K6-C0 carriers accept hash-correct shared projection receipt drift, forged mapping/child identities, impossible lifecycle state combinations, and the successor mapping CHECK accepts JSON that is not a strict ProductCommandChildMappingV1. Fix exact writer/readback identity and lifecycle closure plus database constraint/readback evidence before K6-C1 or production DDL. No signal, selection, asset, side, quantity, broker route, approval gate, fallback, or runtime activation change is authorized.",
+  "actual": "PR #3032 merged K6-C0 strict carriers accept non-deterministic SUBMIT mapping/child identities, lifecycle projections accept impossible disposition/status/broker combinations and do not close mapping/outbox/child identities to their authority items, and the successor CHECK accepts product mapping JSON whose owner, symbol, quantity and transition facts differ from the physical row.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260802_BUG-953-miniqmt-k6-c0-strict-authority-and-mapping-closure-incomplete.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/miniqmt_execution_runtime/kernel_product_contracts.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+    "backend/migrations/miniqmt_execution_kernel_k6c_20260802.sql",
+    "backend/migrations/miniqmt_execution_kernel_k6c_20260802.preflight.sql",
+    "backend/migrations/miniqmt_execution_kernel_k6c_20260802.rollback.sql",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py",
+    "docs/architecture/miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md",
+    "docs/architecture/miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-953",
@@ -13,7 +24,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-02T05:59:39.311964Z",
-  "description": "PR #3032 merged K6-C0 carriers accept hash-correct shared projection receipt drift, forged mapping/child identities, impossible lifecycle state combinations, and the successor mapping CHECK accepts JSON that is not a strict ProductCommandChildMappingV1. Fix exact writer/readback identity and lifecycle closure plus database constraint/readback evidence before K6-C1 or production DDL. No signal, selection, asset, side, quantity, broker route, approval gate, fallback, or runtime activation change is authorized.",
+  "description": "Close K6-C0 deterministic command lineage, lifecycle/authority association and physical mapping JSON/scalar parity before K6-C1 or production DDL. The shared transition ExecutionProjectionSetV1 remains intentionally distinct from per-command OMS/risk/route receipts. No signal, selection, asset, side, quantity, broker route, approval gate, fallback or runtime activation change is authorized.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -23,7 +34,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "All K6-C0 V3 command and lifecycle carriers fail loud on lineage or state drift, CANCEL reuses its existing mapping authority, and the successor database CHECK rejects any incomplete, extra or scalar-divergent ProductCommandChildMappingV1 JSON.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -50,9 +61,9 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "required_pending_user_authorization_after_source_merge",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py -q",
   "required_verification": [
     "l0",
     "miniqmt_execution_runtime_l2"
@@ -60,13 +71,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "fresh-process import and strict K6-C0 authority/lifecycle negative matrix; K6 remains shadow-only",
+    "database_readback_ref": "pending separately authorized K6-C0 production DDL and catalog readback",
     "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "identity_ref": "GET http://127.0.0.1:8001/api/v1/runtime-identity after user-owned restart",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -82,28 +101,22 @@
   "ui_intake_hints": {
     "labels": [
       "bug",
-      "ui",
+      "backend",
       "module:miniqmt_execution_runtime",
       "type:bug"
     ],
     "recommended_verification": [
       "l0"
     ],
-    "reproduce_required": true,
-    "reproduce_template": [
-      "Open the affected AIstock page/route.",
-      "Perform the visible user action that currently fails or looks wrong.",
-      "Verify the expected visible state, table, dialog, or form behavior."
-    ],
+    "reproduce_required": false,
+    "reproduce_template": [],
     "schema_version": "aistock_ui_issue_intake_hints_v1",
-    "scope_source": "inferred_from_module_route_and_changed_files",
+    "scope_source": "corrected_from_backend_contract_and_migration_changed_files",
     "ui_component_scope": [],
-    "ui_issue": true,
-    "ui_route": "/child",
-    "ui_routes": [
-      "/child"
-    ],
-    "visual_acceptance_required": true
+    "ui_issue": false,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": false
   },
   "verification_budget": {
     "budget": "deep",
@@ -208,5 +221,5 @@
       "target_cost_percent_of_legacy": "45-60%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_in_progress"
 }

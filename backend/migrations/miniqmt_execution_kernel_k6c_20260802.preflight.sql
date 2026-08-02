@@ -38,12 +38,12 @@ BEGIN
         END LOOP;
     ELSE
         SELECT qmt_strategy.miniqmt_k6c_catalog_fingerprint() INTO actual;
-        IF actual <> '841717e7c9f998e5e197048877fa854db8e7469544d6b94682f73c730a7462fe' THEN
-            RAISE EXCEPTION 'K6-C0 preflight: successor catalog drift: expected 841717e7c9f998e5e197048877fa854db8e7469544d6b94682f73c730a7462fe, got %',actual;
+        IF actual <> 'f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d' THEN
+            RAISE EXCEPTION 'K6-C0 preflight: successor catalog drift: expected f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d, got %',actual;
         END IF;
     END IF;
 END $$;
 
 SELECT 'canonical_lf_forward_sha256' AS verification,
-       '782f3020a9de4917564d73626a6b099a27866a709d38ff6701f9313225bf5422'::TEXT AS expected_migration_sha256;
+       '368fc29048ac40c7a9ca32f3ca76a214af2d6ba776e52b2490226ba341fb2ab4'::TEXT AS expected_migration_sha256;
 ROLLBACK;
