@@ -8,7 +8,9 @@ import pytest
 from backend.services.multi_alpha.durable_execution_adapter import DurablePublishedArtifacts
 from backend.services.multi_alpha.durable_orchestrator import (
     DurableBusinessResultAssembler,
+    DurableOrchestratorError,
     _parent_status,
+    _scheme_result_required,
 )
 
 
@@ -274,3 +276,46 @@ def test_zero_child_cancel_is_cancelled_not_vacuous_success() -> None:
     assert reason["reason_code"] == "operator_cancelled"
     assert reason["successful_child_count"] == 0
     assert reason["preserved_results"] is False
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["succeeded", "not_computable", "failed", "cancelled"],
+)
+def test_terminal_scheme_states_require_durable_business_evidence(status: str) -> None:
+    assert (
+        _scheme_result_required(
+            {
+                "child_id": f"scheme_{status}",
+                "child_kind": "scheme",
+                "status": status,
+            }
+        )
+        is True
+    )
+
+
+def test_preserved_unavailable_scheme_does_not_require_synthetic_business_evidence() -> None:
+    assert (
+        _scheme_result_required(
+            {
+                "child_id": "scheme_not_recovered",
+                "child_kind": "scheme",
+                "status": "not_recovered",
+            }
+        )
+        is False
+    )
+
+
+def test_non_terminal_scheme_cannot_be_silently_excluded_from_business_readback() -> None:
+    with pytest.raises(DurableOrchestratorError) as caught:
+        _scheme_result_required(
+            {
+                "child_id": "scheme_running",
+                "child_kind": "scheme",
+                "status": "running",
+            }
+        )
+
+    assert getattr(caught.value, "reason_code", None) == "multi_alpha_scheme_result_status_invalid"

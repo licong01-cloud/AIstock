@@ -2,7 +2,9 @@
   "actual": "Three parents remain cancelling or cancel_requested and append endless business_finalize_error events.",
   "allowed_write_scope": [
     "backend/services/multi_alpha/durable_orchestrator.py",
+    "backend/services/multi_alpha/durable_repository.py",
     "backend/tests/multi_alpha/test_durable_parent_finalization.py",
+    "backend/tests/multi_alpha/test_durable_repository_postgres.py",
     "tests/aistock_validation/bugs/20260802_BUG-955-multi-alpha-cancelled-scheme-children-block-parent-finalization-and-caus.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260802-a53b2114c2f1",
       "timestamp": "2026-08-02T18:09:09.446017Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "codex",
+      "note": "Root-cause review showed the atomic cancelled-scheme evidence repair belongs in durable_repository with a PostgreSQL regression; the original orchestrator-only scope could not preserve strict business readback.",
+      "timestamp": "2026-08-02T18:35:00Z"
     }
   ],
   "evidence_uris": [
@@ -32,12 +40,16 @@
     "added_files": [],
     "changed_files": [
       "backend/services/multi_alpha/durable_orchestrator.py",
-      "backend/tests/multi_alpha/test_durable_parent_finalization.py"
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_parent_finalization.py",
+      "backend/tests/multi_alpha/test_durable_repository_postgres.py"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/multi_alpha/durable_orchestrator.py",
-        "backend/tests/multi_alpha/test_durable_parent_finalization.py"
+        "backend/services/multi_alpha/durable_repository.py",
+        "backend/tests/multi_alpha/test_durable_parent_finalization.py",
+        "backend/tests/multi_alpha/test_durable_repository_postgres.py"
       ],
       "impacted_modules": [
         "qe.auto_evolution",
@@ -60,7 +72,31 @@
           "rule_id": "qe_multi_alpha_services"
         },
         {
+          "file": "backend/services/multi_alpha/durable_repository.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
           "file": "backend/tests/multi_alpha/test_durable_parent_finalization.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_repository_postgres.py",
           "impact_modules": [
             "qe.core",
             "qe.data_completeness",
@@ -77,14 +113,18 @@
       ],
       "suggested_scope": [
         "backend/services/multi_alpha/durable_orchestrator.py",
-        "backend/tests/multi_alpha/test_durable_parent_finalization.py"
+        "backend/services/multi_alpha/durable_repository.py",
+        "backend/tests/multi_alpha/test_durable_parent_finalization.py",
+        "backend/tests/multi_alpha/test_durable_repository_postgres.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/multi_alpha/durable_orchestrator.py",
-      "backend/tests/multi_alpha/test_durable_parent_finalization.py"
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_parent_finalization.py",
+      "backend/tests/multi_alpha/test_durable_repository_postgres.py"
     ]
   },
   "first_seen_at": "2026-08-02T18:09:09.446017Z",
@@ -109,9 +149,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_idem_3521a23d2d5c5c0b2397adb786a2047435347982",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Conda AIstock fresh process executed the BUG-955 parent-finalization, cancellation, restart and repository fix-point matrix -> 50 passed, 1 PostgreSQL-only test skipped because disposable test DSN was not configured",
+      "Existing aistock_dev savepoint transaction proved an incorrect expected result count rolls back the reconciled row and event to zero, then the correct contract persisted one typed skipped scheme result and one reconciliation event, finalized the parent as cancelled, and outer rollback left zero rows",
+      "Conda AIstock fresh process loaded the rebased source tree and completed the direct parent-finalization fix-point test with 12 passed",
+      "Conda AIstock fresh process loaded commit 3b617711 and direct parent-finalization test passed 12 tests"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
