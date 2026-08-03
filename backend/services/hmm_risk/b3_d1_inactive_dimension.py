@@ -16,6 +16,7 @@ from backend.services.hmm_risk.b3_training import (
     B3TrainOnlySeries,
     fit_b3_preprocessed_train_only,
     formal_b3_parameter_profile,
+    prepare_b3_preprocessed_train_only_initialization,
 )
 from backend.services.hmm_risk.state_model_set import (
     ALL_CORE_FEATURES,
@@ -44,6 +45,7 @@ REFIT02_AUTHORITY_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_current_a5_experiment_au
 REFIT02_ATTEMPT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_attempt_v3"
 REFIT02_PROCESS_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_process_v4"
 REFIT02_REPORT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_refit_report_v4"
+REFIT02_FIT_BUDGET_CONTRACT_VERSION = "hmm_risk_c008_b3_d1_refit02_fit_budget_v1"
 TREATMENT_ROLE = "treatment"
 CONTROL_ROLE = "control"
 REFIT02_TREATMENT_ROLE = "treatment_19d"
@@ -1844,26 +1846,46 @@ def fit_refit02_attempt(
     failure_reason_codes: list[str] = []
     failure_message: str | None = None
     hmm_fit_invoked = False
-    try:
-        core = fit_b3_preprocessed_train_only(item, train=projected, seed=seed)
-        hmm_fit_invoked = True
-        _validate_projected_parameter_shapes(core, feature_count=int(projected.shape[1]))
-    except D1InactiveDimensionError as exc:
-        hmm_fit_invoked = True
-        failure_stage = "parameter_shape"
-        failure_reason_codes.append(exc.reason_code)
-        failure_message = str(exc)
-    except B3TrainingStageError as exc:
-        hmm_fit_invoked = exc.stage != "initialization"
-        failure_stage = exc.stage
-        failure_reason_codes.append(exc.reason_code)
-        failure_message = str(exc)
+    initialization_evidence: Mapping[str, Any] | None = None
+    if role == REFIT02_MATCHED_NEGATIVE_ROLE:
+        try:
+            initialization_evidence = prepare_b3_preprocessed_train_only_initialization(
+                item,
+                train=projected,
+                seed=seed,
+            )
+            failure_stage = "initialization"
+            failure_reason_codes.append("hmm_risk_model_inactive_dimension_negative_control_not_reproduced")
+            failure_message = "matched negative initialization completed; HMM fit was not invoked"
+        except B3TrainingStageError as exc:
+            failure_stage = exc.stage
+            failure_reason_codes.append(exc.reason_code)
+            failure_message = str(exc)
+    else:
+        try:
+            core = fit_b3_preprocessed_train_only(item, train=projected, seed=seed)
+            hmm_fit_invoked = True
+            _validate_projected_parameter_shapes(core, feature_count=int(projected.shape[1]))
+        except D1InactiveDimensionError as exc:
+            hmm_fit_invoked = True
+            failure_stage = "parameter_shape"
+            failure_reason_codes.append(exc.reason_code)
+            failure_message = str(exc)
+        except B3TrainingStageError as exc:
+            hmm_fit_invoked = exc.stage != "initialization"
+            failure_stage = exc.stage
+            failure_reason_codes.append(exc.reason_code)
+            failure_message = str(exc)
     negative_reproduced = role == REFIT02_MATCHED_NEGATIVE_ROLE and (
         failure_stage == "initialization"
         and "hmm_risk_model_initialization_failed" in failure_reason_codes
         and hmm_fit_invoked is False
     )
-    if role == REFIT02_MATCHED_NEGATIVE_ROLE and not negative_reproduced:
+    if (
+        role == REFIT02_MATCHED_NEGATIVE_ROLE
+        and not negative_reproduced
+        and "hmm_risk_model_inactive_dimension_negative_control_not_reproduced" not in failure_reason_codes
+    ):
         failure_reason_codes.append("hmm_risk_model_inactive_dimension_negative_control_not_reproduced")
     if role == REFIT02_TREATMENT_ROLE:
         role_outcome = (
@@ -1899,6 +1921,7 @@ def fit_refit02_attempt(
         "status": "fit_completed" if core is not None and not failure_reason_codes else "fit_failed",
         "fit_status": "accepted" if core is not None and not failure_reason_codes else "failed",
         "fit_performed": hmm_fit_invoked,
+        "fit_budget_contract_version": REFIT02_FIT_BUDGET_CONTRACT_VERSION,
         "role_outcome": role_outcome,
         "negative_control_blocker_reproduced": negative_reproduced if role == REFIT02_MATCHED_NEGATIVE_ROLE else None,
         "failure_stage": failure_stage,
@@ -1910,7 +1933,7 @@ def fit_refit02_attempt(
         "parameter_payload": parameter_payload,
         "numeric_environment": dict(numeric_environment),
         "numeric_environment_sha256": canonical_sha256(dict(numeric_environment)),
-        "initialization_evidence": dict(core.initialization) if core else None,
+        "initialization_evidence": dict(core.initialization) if core else initialization_evidence,
         "monitor_evidence": dict(core.monitor_evidence) if core else None,
         "likelihood": dict(core.likelihood) if core else None,
         "covariance": dict(core.covariance) if core else None,
@@ -1968,6 +1991,7 @@ def _validate_refit02_attempt_receipt(
         or normalized.get("likelihood_feature_count") != expected_feature_count
         or normalized.get("status") not in {"fit_completed", "fit_failed"}
         or normalized.get("fit_status") not in {"accepted", "failed"}
+        or normalized.get("fit_budget_contract_version") not in {None, REFIT02_FIT_BUDGET_CONTRACT_VERSION}
         or not isinstance(normalized.get("failure_reason_codes"), list)
         or not isinstance(normalized.get("numeric_environment"), Mapping)
         or canonical_sha256(dict(normalized["numeric_environment"])) != normalized.get("numeric_environment_sha256")
@@ -2055,15 +2079,28 @@ def _validate_refit02_attempt_receipt(
             and normalized.get("failure_stage") == "initialization"
             and "hmm_risk_model_initialization_failed" in normalized["failure_reason_codes"]
         )
-        not_reproduced_contract = (
+        current_not_reproduced_contract = (
             normalized.get("negative_control_blocker_reproduced") is False
+            and normalized.get("fit_budget_contract_version") == REFIT02_FIT_BUDGET_CONTRACT_VERSION
+            and normalized.get("fit_performed") is False
+            and normalized.get("status") == "fit_failed"
+            and normalized.get("fit_status") == "failed"
+            and normalized.get("role_outcome") == "negative_control_not_reproduced"
+            and normalized.get("failure_stage") == "initialization"
+            and isinstance(normalized.get("initialization_evidence"), Mapping)
+            and "hmm_risk_model_inactive_dimension_negative_control_not_reproduced"
+            in normalized["failure_reason_codes"]
+        )
+        legacy_not_reproduced_contract = (
+            normalized.get("negative_control_blocker_reproduced") is False
+            and normalized.get("fit_budget_contract_version") is None
             and normalized.get("status") == "fit_failed"
             and normalized.get("fit_status") == "failed"
             and normalized.get("role_outcome") == "negative_control_not_reproduced"
             and "hmm_risk_model_inactive_dimension_negative_control_not_reproduced"
             in normalized["failure_reason_codes"]
         )
-        if not reproduced_contract and not not_reproduced_contract:
+        if not reproduced_contract and not current_not_reproduced_contract and not legacy_not_reproduced_contract:
             raise D1InactiveDimensionError(
                 "hmm_risk_model_inactive_dimension_contract_invalid",
                 "REFIT-02 matched negative-control evidence is internally inconsistent",
@@ -2251,13 +2288,19 @@ def run_refit02_process(
                     current_authority=authority,
                 )
             )
-    return build_refit02_process_receipt(
+    receipt = build_refit02_process_receipt(
         process_identity=process_identity,
         producer_commit=producer_commit,
         attempts=attempts,
         current_authority=authority,
         historical_reference=historical_reference,
     )
+    if receipt["actual_hmm_fit_invocation_count"] != receipt["planned_hmm_fit_count"]:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_fit_budget_exceeded",
+            "REFIT-02 actual HMM fit count differs from the approved process budget",
+        )
+    return receipt
 
 
 def build_refit02_report(

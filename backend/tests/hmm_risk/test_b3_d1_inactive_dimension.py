@@ -999,18 +999,26 @@ def _refit02_authorities(
 
 def _refit02_fit(item, *, train, seed):
     del seed
-    if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
-        raise training_subject.B3TrainingStageError(
-            "initialization",
-            "hmm_risk_model_initialization_failed",
-            ValueError("matched identity20 initialization blocker"),
-        )
     return _core(int(train.shape[1]))
+
+
+def _refit02_negative_initialization_blocker(item, *, train, seed):
+    del item, train, seed
+    raise training_subject.B3TrainingStageError(
+        "initialization",
+        "hmm_risk_model_initialization_failed",
+        ValueError("matched identity20 initialization blocker"),
+    )
 
 
 def _refit02_process(monkeypatch: pytest.MonkeyPatch, process_identity: str) -> dict:
     treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
     monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", _refit02_fit)
+    monkeypatch.setattr(
+        subject,
+        "prepare_b3_preprocessed_train_only_initialization",
+        _refit02_negative_initialization_blocker,
+    )
     return subject.run_refit02_process(
         treatment_item=treatment,
         harness_item=harness,
@@ -1156,6 +1164,11 @@ def test_refit02_v4_writer_persists_complete_two_process_diagnostic_failed_repor
         "fit_b3_preprocessed_train_only",
         lambda item, train, seed: _core(int(train.shape[1])),
     )
+    monkeypatch.setattr(
+        subject,
+        "prepare_b3_preprocessed_train_only_initialization",
+        lambda item, train, seed: {"initialization_status": "completed"},
+    )
     processes = [
         subject.run_refit02_process(
             treatment_item=treatment,
@@ -1173,6 +1186,7 @@ def test_refit02_v4_writer_persists_complete_two_process_diagnostic_failed_repor
 
     assert report["status"] == "diagnostic_failed"
     assert report["attempt_count"] == 48
+    assert report["actual_hmm_fit_invocation_count"] == 32
     assert "failed_process_receipt" not in report
     assert subject.validate_refit02_report(report) == report
     assert subject.write_controlled_refit_report(tmp_path / "diagnostic-failed.json", report) == canonical_sha256(
@@ -1185,12 +1199,6 @@ def test_refit02_downstream_d4_failure_does_not_erase_supported_dimension_mechan
 
     def fit_with_downstream_failure(item, *, train, seed):
         del seed
-        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
-            raise training_subject.B3TrainingStageError(
-                "initialization",
-                "hmm_risk_model_initialization_failed",
-                ValueError("matched identity20 initialization blocker"),
-            )
         if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 19:
             raise training_subject.B3TrainingStageError(
                 "covariance",
@@ -1200,6 +1208,11 @@ def test_refit02_downstream_d4_failure_does_not_erase_supported_dimension_mechan
         return _core(int(train.shape[1]))
 
     monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_downstream_failure)
+    monkeypatch.setattr(
+        subject,
+        "prepare_b3_preprocessed_train_only_initialization",
+        _refit02_negative_initialization_blocker,
+    )
     processes = [
         subject.run_refit02_process(
             treatment_item=treatment,
@@ -1224,10 +1237,21 @@ def test_refit02_downstream_d4_failure_does_not_erase_supported_dimension_mechan
 
 def test_refit02_negative_control_not_reproduced_is_durable_inconclusive_evidence(monkeypatch):
     treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+    fit_calls = []
+
+    def fit_without_negative(item, *, train, seed):
+        fit_calls.append((item.sector_code, int(train.shape[1]), seed))
+        return _core(int(train.shape[1]))
+
     monkeypatch.setattr(
         subject,
         "fit_b3_preprocessed_train_only",
-        lambda item, train, seed: _core(int(train.shape[1])),
+        fit_without_negative,
+    )
+    monkeypatch.setattr(
+        subject,
+        "prepare_b3_preprocessed_train_only_initialization",
+        lambda item, train, seed: {"initialization_status": "completed", "seed": seed},
     )
     process = subject.run_refit02_process(
         treatment_item=treatment,
@@ -1240,7 +1264,13 @@ def test_refit02_negative_control_not_reproduced_is_durable_inconclusive_evidenc
         historical_reference=historical,
     )
     negative = [value for value in process["attempts"] if value["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE]
+    assert process["planned_hmm_fit_count"] == 16
+    assert process["actual_hmm_fit_invocation_count"] == 16
+    assert len(fit_calls) == 16
     assert all(value["negative_control_blocker_reproduced"] is False for value in negative)
+    assert all(value["fit_performed"] is False for value in negative)
+    assert all(value["failure_stage"] == "initialization" for value in negative)
+    assert all(value["initialization_evidence"]["initialization_status"] == "completed" for value in negative)
     assert all(
         "hmm_risk_model_inactive_dimension_negative_control_not_reproduced" in value["failure_reason_codes"]
         for value in negative

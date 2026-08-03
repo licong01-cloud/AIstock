@@ -719,6 +719,44 @@ def test_formal_fit_uses_monitor_terminal_likelihood_and_never_validation(monkey
     assert entry["parameter_profile"]["numeric_contract_status"] == "USER_APPROVED_FORMAL_CONTRACT"
 
 
+def test_preprocessed_initialization_probe_uses_formal_authority_without_hmm_fit(monkeypatch) -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index * 7) for index in range(180))
+    observations = np.ones((180, 7), dtype=np.float64)
+    item = B3TrainOnlySeries(
+        sector_code="S001",
+        sector_name="Sector 1",
+        train_observations=observations,
+        train_dates=dates,
+        pit_l2_constituents=("L2-001",),
+        pit_constituent_manifest_hash="a" * 64,
+        observation_manifest_hash="b" * 64,
+        train_input_manifest=_train_manifest(dates, observations),
+    )
+    monkeypatch.setattr(training_subject, "_sector_local_reference_variance", lambda train: np.ones(7))
+    monkeypatch.setattr(
+        training_subject,
+        "_manual_b3_diag04_initialization",
+        lambda train, sector_reference_variance, random_seed: (
+            np.full(3, 1 / 3),
+            np.asarray([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]),
+            np.asarray([[-1.0] * 7, [0.0] * 7, [1.0] * 7]),
+            np.ones((3, 7)),
+            {"schema_version": "diagnostic_init", "cluster_counts": [60, 60, 60]},
+        ),
+    )
+
+    evidence = training_subject.prepare_b3_preprocessed_train_only_initialization(
+        item,
+        train=observations,
+        seed=42,
+    )
+
+    assert evidence["schema_version"] == "hmm_risk_b3_manual_initialization_v1"
+    assert evidence["contract_version"] == D3_CONTRACT_VERSION
+    assert evidence["diagnostic_source_contract"] == "diagnostic_init"
+    assert evidence["formal_initialization_contract_applied"] is True
+
+
 def _train_only_level() -> dict[str, B3TrainOnlySeries]:
     dates = tuple(date(2022, 1, 3) + timedelta(days=index * 7) for index in range(120))
     return {

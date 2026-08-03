@@ -1,6 +1,10 @@
 {
   "actual": "REFIT-02-A contract plans 48 terminal attempts but only 32 real HMM fits. Current matched_identity20_negative path calls fit_b3_preprocessed_train_only; when initialization succeeds it continues into HMM fit, so the completed two-process diagnostic recorded 48 actual fits. Negative controls must stop after the approved initialization-stage reproduction check: initialization failure records blocker reproduced, initialization success records typed blocker-not-reproduced with fit_performed=false. Treatment and harness remain the only 32 real fits. Preserve fail-closed report/readback, no D5/D6/model/READY/database/runtime actions.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+    "backend/services/hmm_risk/b3_training.py",
+    "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+    "backend/tests/hmm_risk/test_b3_training.py",
     "tests/aistock_validation/bugs/20260803_BUG-975-refit-02-negative-control-exceeds-approved-32-fit-budget.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,13 +26,20 @@
       "timestamp": "2026-08-03T19:21:12.069797Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_refit02_20260804_4127bd6a_prodread1/d1_controlled_refit.json#actual_hmm_fit_invocation_count=48"
+  ],
+  "expected": "Each fresh process keeps 24 terminal attempts but invokes HMM fit only for eight treatment and eight harness attempts. Matched negative controls execute the shared initialization contract only, persist reproduced/not-reproduced evidence with fit_performed=false, and the two-process actual fit count remains exactly 32.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
     "ownership": {
-      "changed_files": [],
+      "changed_files": [
+        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+        "backend/services/hmm_risk/b3_training.py",
+        "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+        "backend/tests/hmm_risk/test_b3_training.py"
+      ],
       "impacted_modules": [],
       "matched_rules": [],
       "risk_levels": [],
@@ -36,7 +47,12 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+      "backend/services/hmm_risk/b3_training.py",
+      "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+      "backend/tests/hmm_risk/test_b3_training.py"
+    ]
   },
   "first_seen_at": "2026-08-03T19:21:12.069801Z",
   "fix_branch": null,
@@ -52,7 +68,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Run C-008-B3-REMEDIATION-D1-B-REFIT-02-A against the frozen request and current A5 authority; the failed report records planned_hmm_fit_count=32 and actual_hmm_fit_invocation_count=48.",
   "required_verification": [
     "l0",
     "hmm_risk_backend"
