@@ -145,6 +145,115 @@ def test_scheduled_fire_proceeds_without_any_cooldown_gate():
     assert "job_id" in args[4]
 
 
+def _go_audit_sweep_scheduler(job_rows, audit_max):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    recorded = []
+
+    def _fetchall(sql, params=()):
+        if "FROM market.ingestion_jobs" in sql:
+            return job_rows
+        if "dataset_date_refresh_audit" in sql:
+            return [{"mx": audit_max}]
+        raise AssertionError(f"unexpected SQL: {sql[:80]}")
+
+    scheduler._fetchall = _fetchall
+    scheduler._record_refresh_audit_from_table_range = lambda **kwargs: recorded.append(kwargs)
+    return scheduler, recorded
+
+
+def test_go_audit_reconcile_backfills_when_audit_lags():
+    """BUG-972: router-triggered Go jobs (summary carries data_kind, not
+    dataset) must get audit rows backfilled when the audit cursor lags."""
+    job_rows = [
+        {
+            "job_id": "8d804e81-74a3-4914-9fd0-8428c822dcd3",
+            "summary": {
+                "data_kind": "kline_minute_raw",
+                "mode": "incremental",
+                "via": "go_init",
+                "start_date": "2026-08-03",
+                "end_date": "2026-08-03",
+            },
+        }
+    ]
+    scheduler, recorded = _go_audit_sweep_scheduler(job_rows, dt.date(2026, 7, 31))
+
+    scheduler._reconcile_go_job_refresh_audit()
+
+    assert len(recorded) == 1
+    call = recorded[0]
+    assert call["dataset"] == "kline_minute_raw"
+    assert call["start_date"] == dt.date(2026, 8, 3)
+    assert call["end_date"] == dt.date(2026, 8, 3)
+    assert call["data_source"] == "tdx_api"
+    assert call["job_id"] == "8d804e81-74a3-4914-9fd0-8428c822dcd3"
+
+
+def test_go_audit_reconcile_maps_daily_go_data_kind():
+    job_rows = [
+        {
+            "job_id": "56fefd4d-3e00-4865-964c-5c8ba57c21eb",
+            "summary": json.dumps(
+                {
+                    "data_kind": "kline_daily_raw_go",
+                    "via": "go_init",
+                    "start_date": "2026-08-03",
+                    "end_date": "2026-08-03",
+                }
+            ),
+        }
+    ]
+    scheduler, recorded = _go_audit_sweep_scheduler(job_rows, None)
+
+    scheduler._reconcile_go_job_refresh_audit()
+
+    assert len(recorded) == 1
+    assert recorded[0]["dataset"] == "kline_daily_raw"
+
+
+def test_go_audit_reconcile_skips_when_audit_current():
+    job_rows = [
+        {
+            "job_id": "abc",
+            "summary": {
+                "dataset": "kline_minute_raw",
+                "via": "go_init",
+                "start_date": "2026-08-03",
+                "end_date": "2026-08-03",
+            },
+        }
+    ]
+    scheduler, recorded = _go_audit_sweep_scheduler(job_rows, dt.date(2026, 8, 3))
+
+    scheduler._reconcile_go_job_refresh_audit()
+
+    assert recorded == []
+
+
+def test_go_audit_reconcile_cadence_gates_repeat_sweeps():
+    job_rows = [
+        {
+            "job_id": "abc",
+            "summary": {
+                "dataset": "kline_minute_raw",
+                "via": "go_init",
+                "start_date": "2026-08-03",
+                "end_date": "2026-08-03",
+            },
+        }
+    ]
+    scheduler, recorded = _go_audit_sweep_scheduler(job_rows, dt.date(2026, 7, 31))
+
+    scheduler._reconcile_go_job_refresh_audit()
+    assert len(recorded) == 1
+    # second sweep within the 10-minute cadence window must not touch the DB
+    scheduler._fetchall = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("cadence gate must short-circuit before any SQL")
+    )
+    scheduler._reconcile_go_job_refresh_audit()
+    assert len(recorded) == 1
+
+
 def test_success_ingestion_schedule_update_clears_previous_error():
     scheduler, calls = _scheduler_with_execute_capture()
 

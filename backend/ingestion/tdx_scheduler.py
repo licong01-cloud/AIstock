@@ -879,9 +879,94 @@ class TDXScheduler:
         except Exception:  # noqa: BLE001 - durable final targets remain available for the next sweep.
             _logger.exception("final data sync target recovery sweep failed")
         try:
+            self._reconcile_go_job_refresh_audit()
+        except Exception:  # noqa: BLE001 - audit self-heal must not block schedule refresh.
+            _logger.exception("go job refresh audit reconciliation failed")
+        try:
             self._reconcile_due_data_sync_targets()
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
+
+    def _reconcile_go_job_refresh_audit(self) -> None:
+        """Self-heal refresh-audit rows for successful Go-engine jobs (BUG-972).
+
+        The router endpoint POST /api/ingestion/incremental (and any other
+        non-scheduler trigger) hands work to the Go backend, which marks the
+        job finished asynchronously — the Python side never sees completion,
+        so no dataset_date_refresh_audit rows are written. The freshness
+        check reads from that audit table and then reports the dataset stale
+        even though the physical data is complete. The scheduled Go route
+        writes audit on its own completions; this sweep closes the gap for
+        every other trigger path by backfilling audit rows (idempotent
+        upsert) for recently succeeded Go jobs whose audit cursor lags the
+        synced range.
+        """
+        now = _now()
+        last_sweep = getattr(self, "_last_go_audit_reconcile_sweep", None)
+        if last_sweep is not None and now - last_sweep < dt.timedelta(minutes=10):
+            return
+        self._last_go_audit_reconcile_sweep = now
+        rows = self._fetchall(
+            """
+            SELECT job_id, summary
+              FROM market.ingestion_jobs
+             WHERE status = 'success'
+               AND finished_at >= NOW() - INTERVAL '3 days'
+               AND summary->>'via' = 'go_init'
+             ORDER BY finished_at DESC
+             LIMIT 50
+            """
+        )
+        for row in rows:
+            summary = row.get("summary") or {}
+            if isinstance(summary, str):
+                try:
+                    summary = json.loads(summary)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(summary, dict):
+                continue
+            dataset = str(summary.get("dataset") or "").strip().lower()
+            if not dataset:
+                # router-endpoint jobs carry data_kind instead of dataset
+                data_kind = str(summary.get("data_kind") or "").strip().lower()
+                dataset = {"kline_daily_raw_go": "kline_daily_raw"}.get(data_kind, data_kind)
+            if dataset not in _GO_INCREMENTAL_DATASETS:
+                continue
+            start_d = self._parse_cmd_date(summary.get("start_date"))
+            end_d = self._parse_cmd_date(summary.get("end_date"))
+            if start_d is None or end_d is None:
+                continue
+            audit_rows = self._fetchall(
+                """
+                SELECT MAX(trade_date)::date AS mx
+                  FROM market.dataset_date_refresh_audit
+                 WHERE dataset = %s AND status = 'success'
+                """,
+                (dataset,),
+            )
+            audit_max = audit_rows[0].get("mx") if audit_rows else None
+            if audit_max is not None and audit_max >= end_d:
+                continue
+            try:
+                self._record_refresh_audit_from_table_range(
+                    dataset=dataset,
+                    job_id=row.get("job_id"),
+                    start_date=start_d,
+                    end_date=end_d,
+                    data_source="tdx_api",
+                    metadata={"mode": "incremental", "via": "go_init", "audit_reconcile": True},
+                )
+                _logger.info(
+                    "go audit reconcile: backfilled refresh audit for %s %s→%s (job %s)",
+                    dataset, start_d, end_d, row.get("job_id"),
+                )
+            except Exception as exc:  # noqa: BLE001 - one job must not block the sweep.
+                _logger.warning(
+                    "go audit reconcile failed for %s (job %s): %s",
+                    dataset, row.get("job_id"), exc,
+                )
+
 
     def _schedule_map_for_enabled_datasets(self) -> Dict[str, Dict[str, Any]]:
         active_schedules = self._fetchall(
