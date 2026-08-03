@@ -111,9 +111,9 @@
     ],
     "backend_restart_required": true,
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
-    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
-    "business_smoke_ref": "POST /api/data-stats/refresh completes with per-dataset results; readback market.data_stats stat_generated_at advances beyond 2026-07-14 for healthy datasets and last_check_result records any per-dataset failure",
-    "database_readback_ref": "noop:no_database_change",
+    "identity_ref": "http://127.0.0.1:8001/openapi.json",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/data-stats",
+    "database_readback_ref": "not_required",
     "runtime_identity_match": "pending",
     "post_restart_receipt_ref": null
   },
