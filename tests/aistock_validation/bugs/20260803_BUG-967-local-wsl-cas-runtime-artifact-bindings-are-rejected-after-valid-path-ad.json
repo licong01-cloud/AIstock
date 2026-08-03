@@ -136,7 +136,9 @@
       "Fresh Python process loaded commit 282bd808 and completed backend/tests/test_multi_alpha_remote_dispatch.py: 43 passed, 1 skipped",
       "Fresh Python process verified loopback WSL /mnt drive CAS binding acceptance plus remote/non-WSL/non-drive /mnt fail-closed cases: 6 passed",
       "Fresh Python process compiled backend/services/multi_alpha/remote_dispatch.py and backend/tests/test_multi_alpha_remote_dispatch.py successfully",
-      "Fresh Python process loaded persistent commit 282bd808 and completed remote-dispatch matrix: 43 passed, 1 skipped"
+      "Fresh Python process loaded persistent commit 282bd808 and completed remote-dispatch matrix: 43 passed, 1 skipped",
+      "Fresh Python process loaded follow-up commit 8829b8b9 and completed durable-adapter plus remote-dispatch matrix: 60 passed, 1 skipped",
+      "Fresh Python process verified the durable submit path accepts /mnt/f CAS bindings only after propagating the resolved wsl2-5080 node: 1 passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
