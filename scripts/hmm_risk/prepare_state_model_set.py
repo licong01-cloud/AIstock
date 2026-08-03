@@ -70,6 +70,7 @@ from backend.services.hmm_risk.b3_training import (  # noqa: E402
     write_b3_ready_model_set,
 )
 from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
+    C010_A5_MAPPING_SHA256 as B3_D1_C010_A5_MAPPING_SHA256,
     C010_A5_PARTITION_SHA256 as B3_D1_C010_A5_PARTITION_SHA256,
     C010_A5_REPORT_SHA256 as B3_D1_C010_A5_REPORT_SHA256,
     CONTROL_PROFILE_RECEIPT_SHA256 as B3_D1_CONTROL_PROFILE_RECEIPT_SHA256,
@@ -86,6 +87,7 @@ from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
     TREATMENT_SECTOR as B3_D1_TREATMENT_SECTOR,
     TREATMENT_SOURCE_SET_SHA256 as B3_D1_TREATMENT_SOURCE_SET_SHA256,
     TREATMENT_TRAIN_INPUT_MANIFEST_SHA256 as B3_D1_TREATMENT_TRAIN_INPUT_MANIFEST_SHA256,
+    build_input_migration_receipt as build_b3_d1_input_migration_receipt,
     build_controlled_refit_report as build_b3_d1_controlled_refit_report,
     run_controlled_process as run_b3_d1_controlled_process,
     validate_source_identity_set as validate_b3_d1_source_identity_set,
@@ -2758,6 +2760,37 @@ def _b3_d1_frozen_authority(
             "D1-B blocker evidence is missing",
         )
 
+    frozen_model_lineage: dict[str, dict[str, str]] = {}
+    for sector in (B3_D1_TREATMENT_SECTOR, B3_D1_CONTROL_SECTOR):
+        payloads = [
+            value.get("fitted_model_payload")
+            for value in raw_evidence
+            if isinstance(value, dict)
+            and value.get("family") == "autocycle_all_core"
+            and value.get("level") == "L2"
+            and value.get("sector_code") == sector
+        ]
+        observation_hashes = {
+            str(value.get("observation_manifest_hash") or "") for value in payloads if isinstance(value, dict)
+        }
+        constituent_hashes = {
+            str(value.get("pit_constituent_manifest_hash") or "") for value in payloads if isinstance(value, dict)
+        }
+        if (
+            len(payloads) != 8
+            or len(observation_hashes) != 1
+            or len(constituent_hashes) != 1
+            or any(len(identity) != 64 for identity in observation_hashes | constituent_hashes)
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                f"D1-B frozen model input lineage is incomplete for {sector}",
+            )
+        frozen_model_lineage[sector] = {
+            "observation_manifest_hash": next(iter(observation_hashes)),
+            "pit_constituent_manifest_hash": next(iter(constituent_hashes)),
+        }
+
     def source_set(sector: str, source_role: str, expected_sha256: str) -> tuple[dict[str, Any], ...]:
         matches = [
             value
@@ -2842,6 +2875,7 @@ def _b3_d1_frozen_authority(
         "treatment_source_identities": treatment_sources,
         "control_source_identities": control_sources,
         "frozen_control_hashes": control_hashes,
+        "frozen_model_lineage": frozen_model_lineage,
         "numeric_environment": numeric_environment,
     }
 
@@ -2881,6 +2915,7 @@ def _validate_b3_d1_c010_a5_authority(report: dict[str, Any]) -> dict[str, Any]:
         or report.get("known_sw_domain_out_verified") is not True
         or report.get("train_trading_date_count") != C010_APPROVED_TRAIN_TRADING_DATE_COUNT
         or report.get("train_trading_date_sha256") != C010_APPROVED_TRAIN_TRADING_DATE_SHA256
+        or report.get("mapping_manifest_sha256") != B3_D1_C010_A5_MAPPING_SHA256
         or report.get("provider_absence_partition_receipt_sha256") != B3_D1_C010_A5_PARTITION_SHA256
         or partition.get("receipt_sha256") != B3_D1_C010_A5_PARTITION_SHA256
         or partition.get("p_all_entry_count") != 502
@@ -2944,8 +2979,7 @@ def _load_b3_d1_train_inputs(
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Reload D1 train inputs through C-010-A5 v2 while preserving the frozen v1 formal lineage."""
 
-    authority = B3_BLOCKER_FORMAL_AUTHORITY
-    historical_policy = _validate_b3_d1_historical_request_authority(request, target_manifest=target_manifest)
+    _validate_b3_d1_historical_request_authority(request, target_manifest=target_manifest)
 
     _validate_b3_d1_c010_a5_authority(c010_a5_report)
     inputs = _load_l1_source_inputs(request, db_prefix=db_prefix, c010_formal=True)
@@ -2954,20 +2988,10 @@ def _load_b3_d1_train_inputs(
         "calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
         "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
     }
-    expected_input_identities = {
-        "mapping_manifest_hash": c010_a5_report["mapping_manifest_sha256"],
-        "calendar_manifest_hash": authority["calendar_manifest_hash"],
-        "l2_stock_fact_manifest_hash": authority["l2_stock_fact_manifest_hash"],
-    }
-    for field, actual in identities.items():
-        if actual != expected_input_identities[field]:
-            raise StateModelSetError(f"D1-B frozen input drifted from {field}")
+    if identities["mapping_manifest_hash"] != c010_a5_report["mapping_manifest_sha256"]:
+        raise StateModelSetError("D1-B C-010-A5 mapping_manifest_hash drifted")
 
     current_policy = _c010_policy_manifest(inputs, request, producer_commit=producer_commit)
-    stable_historical_fields = (
-        "l2_stock_fact_manifest_hash",
-        "calendar_manifest_hash",
-    )
     a5_source_identities = {
         "mapping_manifest_hash": c010_a5_report["mapping_manifest_sha256"],
         "security_identity_manifest_sha256": c010_a5_report["security_identity_manifest_sha256"],
@@ -2975,7 +2999,6 @@ def _load_b3_d1_train_inputs(
     }
     if (
         current_policy.get("schema_version") != C010_POLICY_VERSION
-        or any(current_policy.get(field) != historical_policy.get(field) for field in stable_historical_fields)
         or any(current_policy.get(field) != expected for field, expected in a5_source_identities.items())
         or current_policy.get("provider_absence_partition_receipt")
         != c010_a5_report["provider_absence_partition_receipt"]
@@ -3023,7 +3046,7 @@ def prepare_b3_d1_controlled_pass(
         authority["numeric_environment"],
     )
     target_manifest = derive_b3_blocker_target_manifest(formal_report)
-    inputs, _ = _load_b3_d1_train_inputs(
+    inputs, input_identities = _load_b3_d1_train_inputs(
         request,
         db_prefix=db_prefix,
         target_manifest=target_manifest,
@@ -3042,6 +3065,32 @@ def prepare_b3_d1_controlled_pass(
             "hmm_risk_model_inactive_dimension_authority_mismatch",
             "D1-B treatment/control train inputs are missing",
         )
+    treatment_migration = build_b3_d1_input_migration_receipt(
+        series[B3_D1_TREATMENT_SECTOR],
+        historical_train_input_manifest=authority["profiles"][B3_D1_TREATMENT_SECTOR]["train_input_manifest"],
+        role="treatment",
+        current_policy_sha256=input_identities["c010_feature_domain_policy_sha256"],
+        producer_commit=current_commit,
+        historical_observation_manifest_hash=authority["frozen_model_lineage"][B3_D1_TREATMENT_SECTOR][
+            "observation_manifest_hash"
+        ],
+        historical_pit_constituent_manifest_hash=authority["frozen_model_lineage"][B3_D1_TREATMENT_SECTOR][
+            "pit_constituent_manifest_hash"
+        ],
+    )
+    control_migration = build_b3_d1_input_migration_receipt(
+        series[B3_D1_CONTROL_SECTOR],
+        historical_train_input_manifest=authority["profiles"][B3_D1_CONTROL_SECTOR]["train_input_manifest"],
+        role="control",
+        current_policy_sha256=input_identities["c010_feature_domain_policy_sha256"],
+        producer_commit=current_commit,
+        historical_observation_manifest_hash=authority["frozen_model_lineage"][B3_D1_CONTROL_SECTOR][
+            "observation_manifest_hash"
+        ],
+        historical_pit_constituent_manifest_hash=authority["frozen_model_lineage"][B3_D1_CONTROL_SECTOR][
+            "pit_constituent_manifest_hash"
+        ],
+    )
     receipt = run_b3_d1_controlled_process(
         treatment_item=series[B3_D1_TREATMENT_SECTOR],
         control_item=series[B3_D1_CONTROL_SECTOR],
@@ -3052,6 +3101,8 @@ def prepare_b3_d1_controlled_pass(
         treatment_source_identities=authority["treatment_source_identities"],
         control_source_identities=authority["control_source_identities"],
         frozen_control_hashes=authority["frozen_control_hashes"],
+        treatment_input_migration_receipt=treatment_migration,
+        control_input_migration_receipt=control_migration,
     )
     if _formal_producer_commit() != current_commit:
         raise D1InactiveDimensionError(

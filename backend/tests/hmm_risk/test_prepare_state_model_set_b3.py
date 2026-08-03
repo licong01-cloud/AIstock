@@ -1791,6 +1791,7 @@ def test_d1_c010_a5_authority_is_exact_and_tamper_evident(monkeypatch) -> None:
         "B3_D1_C010_A5_PARTITION_SHA256",
         report["provider_absence_partition_receipt_sha256"],
     )
+    monkeypatch.setattr(subject, "B3_D1_C010_A5_MAPPING_SHA256", report["mapping_manifest_sha256"])
 
     assert subject._validate_b3_d1_c010_a5_authority(report) == report
 

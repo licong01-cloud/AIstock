@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date, timedelta
 
 import numpy as np
@@ -59,8 +60,9 @@ def _series(sector_code: str, *, inactive_value: float = 0.0) -> B3TrainOnlySeri
         "train_dates_sha256": canonical_sha256(date_values),
         "train_observation_sha256": canonical_sha256(observations.tolist()),
         "dataset_manifest_hash": "a" * 64,
-        "mapping_manifest_hash": "b" * 64,
+        "mapping_manifest_hash": subject.C010_A5_MAPPING_SHA256,
         "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "6" * 64,
         "feature_domain_policy_sha256": "d" * 64,
     }
     return B3TrainOnlySeries(
@@ -68,7 +70,7 @@ def _series(sector_code: str, *, inactive_value: float = 0.0) -> B3TrainOnlySeri
         sector_name=sector_code,
         train_observations=observations,
         train_dates=dates,
-        pit_l2_constituents=("000001.SZ",),
+        pit_l2_constituents=(sector_code,),
         pit_constituent_manifest_hash="e" * 64,
         observation_manifest_hash="f" * 64,
         train_input_manifest=manifest,
@@ -77,6 +79,26 @@ def _series(sector_code: str, *, inactive_value: float = 0.0) -> B3TrainOnlySeri
 
 def _preprocess() -> dict[str, object]:
     return {"family": "identity", "winsor_low": None, "winsor_high": None, "center": None, "scale": None}
+
+
+def _migration_receipts(*, producer_commit: str = "1" * 40) -> dict[str, dict[str, object]]:
+    treatment = _series(subject.TREATMENT_SECTOR)
+    control = _series(subject.CONTROL_SECTOR, inactive_value=7.0)
+    return {
+        role: subject.build_input_migration_receipt(
+            item,
+            historical_train_input_manifest=item.train_input_manifest,
+            role=role,
+            current_policy_sha256=str(item.train_input_manifest["feature_domain_policy_sha256"]),
+            producer_commit=producer_commit,
+            historical_observation_manifest_hash=item.observation_manifest_hash,
+            historical_pit_constituent_manifest_hash=item.pit_constituent_manifest_hash,
+        )
+        for role, item in (
+            (subject.TREATMENT_ROLE, treatment),
+            (subject.CONTROL_ROLE, control),
+        )
+    }
 
 
 def _projection_kwargs(role: str) -> dict[str, str]:
@@ -126,6 +148,103 @@ def test_treatment_projects_full20_after_preprocess_and_never_fabricates_inactiv
     assert receipt["active_feature_mask"] == [True] * 19 + [False]
     assert receipt["dynamic_activation"] is False
     assert receipt["exact_zero_evidence"]["raw_unique_bit_pattern_count"] == 1
+
+
+def test_a5_input_migration_preserves_sector_core_and_normalizes_control_lineage(monkeypatch):
+    _install_authority(monkeypatch)
+    base = _series(subject.CONTROL_SECTOR, inactive_value=7.0)
+    historical_manifest = {
+        **dict(base.train_input_manifest),
+        "l2_stock_fact_manifest_hash": "6" * 64,
+        "formula_version": "hmm_risk_l1_sector_factor_formula_v2_c010",
+    }
+    current_manifest = {
+        **historical_manifest,
+        "dataset_manifest_hash": "7" * 64,
+        "mapping_manifest_hash": "8" * 64,
+        "calendar_manifest_hash": "9" * 64,
+        "l2_stock_fact_manifest_hash": "a" * 64,
+        "feature_domain_policy_sha256": "b" * 64,
+    }
+    monkeypatch.setattr(subject, "CONTROL_TRAIN_INPUT_MANIFEST_SHA256", canonical_sha256(historical_manifest))
+    monkeypatch.setattr(subject, "C010_A5_MAPPING_SHA256", current_manifest["mapping_manifest_hash"])
+    current = B3TrainOnlySeries(
+        sector_code=base.sector_code,
+        sector_name=base.sector_name,
+        train_observations=base.train_observations,
+        train_dates=base.train_dates,
+        pit_l2_constituents=(subject.CONTROL_SECTOR,),
+        pit_constituent_manifest_hash="c" * 64,
+        observation_manifest_hash=base.observation_manifest_hash,
+        train_input_manifest=current_manifest,
+    )
+    migration = subject.build_input_migration_receipt(
+        current,
+        historical_train_input_manifest=historical_manifest,
+        role=subject.CONTROL_ROLE,
+        current_policy_sha256=current_manifest["feature_domain_policy_sha256"],
+        producer_commit="1" * 40,
+        historical_observation_manifest_hash=base.observation_manifest_hash,
+        historical_pit_constituent_manifest_hash="d" * 64,
+    )
+
+    projected, projection = subject.build_projection(
+        current,
+        preprocess=_preprocess(),
+        role=subject.CONTROL_ROLE,
+        input_migration_receipt=migration,
+        **_projection_kwargs(subject.CONTROL_ROLE),
+    )
+
+    assert projected.shape == (120, 20)
+    assert projection["historical_train_input_manifest_sha256"] == canonical_sha256(historical_manifest)
+    assert projection["train_input_manifest_sha256"] == canonical_sha256(current_manifest)
+    assert projection["input_migration_receipt_sha256"] == migration["receipt_sha256"]
+
+    core = _core(20)
+    current_hashes = subject._legacy_compatible_hashes(
+        current,
+        preprocess=_preprocess(),
+        seed=42,
+        numeric_environment={"environment": "fixed"},
+        core=core,
+        input_migration_receipt=migration,
+    )
+    historical = B3TrainOnlySeries(
+        sector_code=base.sector_code,
+        sector_name=base.sector_name,
+        train_observations=base.train_observations,
+        train_dates=base.train_dates,
+        pit_l2_constituents=(subject.CONTROL_SECTOR,),
+        pit_constituent_manifest_hash="d" * 64,
+        observation_manifest_hash=base.observation_manifest_hash,
+        train_input_manifest=historical_manifest,
+    )
+    historical_hashes = subject._legacy_compatible_hashes(
+        historical,
+        preprocess=_preprocess(),
+        seed=42,
+        numeric_environment={"environment": "fixed"},
+        core=core,
+    )
+    assert current_hashes == historical_hashes
+
+    drifted = B3TrainOnlySeries(
+        **{
+            **current.__dict__,
+            "train_input_manifest": {**current_manifest, "train_observation_sha256": "e" * 64},
+        }
+    )
+    with pytest.raises(subject.D1InactiveDimensionError, match="dates or observations changed"):
+        subject.build_input_migration_receipt(
+            drifted,
+            historical_train_input_manifest=historical_manifest,
+            role=subject.CONTROL_ROLE,
+            current_policy_sha256=current_manifest["feature_domain_policy_sha256"],
+            producer_commit="1" * 40,
+            historical_observation_manifest_hash=base.observation_manifest_hash,
+            historical_pit_constituent_manifest_hash="d" * 64,
+        )
 
 
 def test_treatment_accepts_nonzero_constant_created_by_approved_full20_preprocess(monkeypatch):
@@ -375,6 +494,7 @@ def _attempt(
     *,
     status: str = "fit_completed",
     failure_reason: str | None = None,
+    input_migration_receipt_sha256: str | None = None,
 ) -> dict:
     failure_reasons = []
     if status != "fit_completed":
@@ -390,6 +510,7 @@ def _attempt(
         "seed": seed,
         "diagnostic_entry_sha256": canonical_sha256({"label": role, "seed": seed, "kind": "diagnostic"}),
         "source_entry_receipt_sha256": canonical_sha256({"label": role, "seed": seed, "kind": "source"}),
+        "input_migration_receipt_sha256": input_migration_receipt_sha256,
         "status": "fit_completed" if status == "fit_completed" else "fit_failed",
         "fit_status": "accepted" if status == "fit_completed" else "failed",
         "failure_stage": None
@@ -428,32 +549,50 @@ def _attempt(
 
 def _process(monkeypatch, process_identity: str, *, failed_treatment_seed: int | None = None):
     treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
     attempts = [
         _attempt(
             subject.TREATMENT_ROLE,
             seed,
             process_identity,
             status="projection_failed" if seed == failed_treatment_seed else "fit_completed",
+            input_migration_receipt_sha256=migrations[subject.TREATMENT_ROLE]["receipt_sha256"],
         )
         for seed in range(42, 50)
-    ] + [_attempt(subject.CONTROL_ROLE, seed, process_identity) for seed in range(42, 50)]
+    ] + [
+        _attempt(
+            subject.CONTROL_ROLE,
+            seed,
+            process_identity,
+            input_migration_receipt_sha256=migrations[subject.CONTROL_ROLE]["receipt_sha256"],
+        )
+        for seed in range(42, 50)
+    ]
     return subject.build_process_receipt(
         process_identity=process_identity,
         producer_commit="1" * 40,
         attempts=attempts,
         treatment_source_identities=treatment,
         control_source_identities=control,
+        input_migration_receipts=migrations,
     )
 
 
 def test_process_runner_never_early_stops_after_a_failed_attempt(monkeypatch):
     treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
     calls: list[tuple[str, int]] = []
 
     def fake_attempt(item, *, role, seed, process_identity, **kwargs):
         calls.append((role, seed))
         status = "projection_failed" if role == subject.TREATMENT_ROLE and seed == 42 else "fit_completed"
-        return _attempt(role, seed, process_identity, status=status)
+        return _attempt(
+            role,
+            seed,
+            process_identity,
+            status=status,
+            input_migration_receipt_sha256=kwargs["input_migration_receipt"]["receipt_sha256"],
+        )
 
     monkeypatch.setattr(subject, "fit_controlled_attempt", fake_attempt)
     receipt = subject.run_controlled_process(
@@ -468,6 +607,8 @@ def test_process_runner_never_early_stops_after_a_failed_attempt(monkeypatch):
         frozen_control_hashes={
             seed: {"entry_receipt_sha256": "a" * 64, "model_payload_sha256": "b" * 64} for seed in range(42, 50)
         },
+        treatment_input_migration_receipt=migrations[subject.TREATMENT_ROLE],
+        control_input_migration_receipt=migrations[subject.CONTROL_ROLE],
     )
 
     assert calls == [(role, seed) for seed in range(42, 50) for role in (subject.TREATMENT_ROLE, subject.CONTROL_ROLE)]
@@ -477,11 +618,17 @@ def test_process_runner_never_early_stops_after_a_failed_attempt(monkeypatch):
 
 def test_process_runner_validates_all_frozen_control_authority_before_first_fit(monkeypatch):
     treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
     calls: list[tuple[str, int]] = []
 
     def fake_attempt(item, *, role, seed, process_identity, **kwargs):
         calls.append((role, seed))
-        return _attempt(role, seed, process_identity)
+        return _attempt(
+            role,
+            seed,
+            process_identity,
+            input_migration_receipt_sha256=kwargs["input_migration_receipt"]["receipt_sha256"],
+        )
 
     monkeypatch.setattr(subject, "fit_controlled_attempt", fake_attempt)
     invalid_hashes = {
@@ -500,14 +647,22 @@ def test_process_runner_validates_all_frozen_control_authority_before_first_fit(
             treatment_source_identities=treatment,
             control_source_identities=control,
             frozen_control_hashes=invalid_hashes,
+            treatment_input_migration_receipt=migrations[subject.TREATMENT_ROLE],
+            control_input_migration_receipt=migrations[subject.CONTROL_ROLE],
         )
     assert calls == []
 
 
 def test_process_receipt_rejects_self_consistent_attempt_with_forbidden_side_effect(monkeypatch):
     treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
     attempts = [
-        _attempt(role, seed, "process-a")
+        _attempt(
+            role,
+            seed,
+            "process-a",
+            input_migration_receipt_sha256=migrations[role]["receipt_sha256"],
+        )
         for seed in range(42, 50)
         for role in (subject.TREATMENT_ROLE, subject.CONTROL_ROLE)
     ]
@@ -522,6 +677,37 @@ def test_process_receipt_rejects_self_consistent_attempt_with_forbidden_side_eff
             attempts=attempts,
             treatment_source_identities=treatment,
             control_source_identities=control,
+            input_migration_receipts=migrations,
+        )
+
+
+def test_process_receipt_rejects_self_consistent_input_migration_envelope_drift(monkeypatch):
+    treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
+    drifted = deepcopy(migrations[subject.TREATMENT_ROLE])
+    drifted["migrated_identity_fields"]["dataset_manifest_hash"]["current"] = "9" * 64
+    body = {key: value for key, value in drifted.items() if key != "receipt_sha256"}
+    drifted["receipt_sha256"] = canonical_sha256(body)
+    migrations[subject.TREATMENT_ROLE] = drifted
+    attempts = [
+        _attempt(
+            role,
+            seed,
+            "process-a",
+            input_migration_receipt_sha256=migrations[role]["receipt_sha256"],
+        )
+        for seed in range(42, 50)
+        for role in (subject.TREATMENT_ROLE, subject.CONTROL_ROLE)
+    ]
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="migration receipt envelope"):
+        subject.build_process_receipt(
+            process_identity="process-a",
+            producer_commit="1" * 40,
+            attempts=attempts,
+            treatment_source_identities=treatment,
+            control_source_identities=control,
+            input_migration_receipts=migrations,
         )
 
 
@@ -540,7 +726,7 @@ def test_controlled_report_separates_diagnostic_completion_mechanism_and_d5_read
     assert report["ready_artifact_write_performed"] is False
 
 
-def test_v2_writer_binds_c010_a5_and_v1_durable_readback_remains_supported(monkeypatch):
+def test_v3_writer_binds_c010_a5_mapping_and_v1_v2_durable_readback_remains_supported(monkeypatch):
     first = _process(monkeypatch, "fresh_process_1")
     second = _process(monkeypatch, "fresh_process_2")
     current = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
@@ -548,28 +734,49 @@ def test_v2_writer_binds_c010_a5_and_v1_durable_readback_remains_supported(monke
     assert current["schema_version"] == subject.REPORT_SCHEMA_VERSION
     assert current["source_authority"]["c010_a5_report_sha256"] == subject.C010_A5_REPORT_SHA256
     assert current["source_authority"]["c010_a5_partition_sha256"] == subject.C010_A5_PARTITION_SHA256
+    assert current["source_authority"]["c010_a5_mapping_sha256"] == subject.C010_A5_MAPPING_SHA256
 
-    legacy_processes = []
-    for process in (first, second):
-        legacy = dict(process)
-        legacy["schema_version"] = subject.PROCESS_SCHEMA_VERSION_V1
-        legacy["source_authority"] = dict(subject.SOURCE_AUTHORITY_V1)
-        legacy_body = {key: value for key, value in legacy.items() if key != "process_receipt_sha256"}
-        legacy["process_receipt_sha256"] = canonical_sha256(legacy_body)
-        legacy_processes.append(legacy)
-    legacy_report = subject.build_controlled_refit_report(
-        legacy_processes[0],
-        legacy_processes[1],
-        producer_commit="1" * 40,
-        _schema_version=subject.REPORT_SCHEMA_VERSION_V1,
-        _source_authority=subject.SOURCE_AUTHORITY_V1,
-    )
+    for process_schema, report_schema, source_authority in (
+        (subject.PROCESS_SCHEMA_VERSION_V1, subject.REPORT_SCHEMA_VERSION_V1, subject.SOURCE_AUTHORITY_V1),
+        (subject.PROCESS_SCHEMA_VERSION_V2, subject.REPORT_SCHEMA_VERSION_V2, subject.SOURCE_AUTHORITY_V2),
+    ):
+        legacy_processes = []
+        for process in (first, second):
+            legacy = deepcopy(process)
+            legacy["schema_version"] = process_schema
+            legacy["source_authority"] = dict(source_authority)
+            legacy.pop("input_migration_receipts", None)
+            for attempt in legacy["attempts"]:
+                attempt["schema_version"] = subject.ATTEMPT_SCHEMA_VERSION_V1
+                attempt.pop("input_migration_receipt_sha256", None)
+                attempt_body = {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+                attempt["attempt_receipt_sha256"] = canonical_sha256(attempt_body)
+            legacy_comparable = [
+                {
+                    key: value
+                    for key, value in attempt.items()
+                    if key not in {"process_identity", "attempt_receipt_sha256"}
+                }
+                for attempt in legacy["attempts"]
+            ]
+            legacy["comparable_payload_sha256"] = canonical_sha256(legacy_comparable)
+            legacy_body = {key: value for key, value in legacy.items() if key != "process_receipt_sha256"}
+            legacy["process_receipt_sha256"] = canonical_sha256(legacy_body)
+            legacy_processes.append(legacy)
+        legacy_report = subject.build_controlled_refit_report(
+            legacy_processes[0],
+            legacy_processes[1],
+            producer_commit="1" * 40,
+            _schema_version=report_schema,
+            _source_authority=source_authority,
+        )
 
-    assert subject.validate_controlled_refit_report(legacy_report) == legacy_report
+        assert subject.validate_controlled_refit_report(legacy_report) == legacy_report
 
 
 def test_controlled_report_keeps_downstream_failure_reason_without_rejecting_the_d1_mechanism(monkeypatch):
     treatment, control = _install_authority(monkeypatch)
+    migrations = _migration_receipts()
 
     def process(process_identity: str) -> dict:
         attempts = [
@@ -579,15 +786,25 @@ def test_controlled_report_keeps_downstream_failure_reason_without_rejecting_the
                 process_identity,
                 status="fit_failed" if seed == 42 else "fit_completed",
                 failure_reason=("hmm_risk_model_covariance_acceptance_failed" if seed == 42 else None),
+                input_migration_receipt_sha256=migrations[subject.TREATMENT_ROLE]["receipt_sha256"],
             )
             for seed in range(42, 50)
-        ] + [_attempt(subject.CONTROL_ROLE, seed, process_identity) for seed in range(42, 50)]
+        ] + [
+            _attempt(
+                subject.CONTROL_ROLE,
+                seed,
+                process_identity,
+                input_migration_receipt_sha256=migrations[subject.CONTROL_ROLE]["receipt_sha256"],
+            )
+            for seed in range(42, 50)
+        ]
         return subject.build_process_receipt(
             process_identity=process_identity,
             producer_commit="1" * 40,
             attempts=attempts,
             treatment_source_identities=treatment,
             control_source_identities=control,
+            input_migration_receipts=migrations,
         )
 
     report = subject.build_controlled_refit_report(
