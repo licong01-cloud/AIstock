@@ -302,11 +302,15 @@ def _apply_validation_budget(
 ) -> dict[str, Any]:
     """Keep pre-merge BUG validation narrow and move broad plans to nightly/VC."""
 
-    selected_required = _split_validation_budget_items(validation.get("required_plans") or [])
+    selected_required_items = flow._unique_strings(validation.get("required_plans") or [])
+    selected_direct = [item for item in selected_required_items if item != "l0"]
+    selected_local = selected_direct or selected_required_items
     selected_recommended = flow._unique_strings(validation.get("recommended_plans") or [])
     record_split = _split_validation_budget_items(record_required or record.get("required_verification") or [])
-    local_required = flow._unique_strings([*record_split["local"], *selected_required["local"]]) or ["l0"]
-    deferred = flow._unique_strings([*record_split["deferred"], *selected_required["deferred"]])
+    local_required = flow._unique_strings([*record_split["local"], *selected_local]) or ["l0"]
+    if any(item != "l0" for item in local_required):
+        local_required = [item for item in local_required if item != "l0"]
+    deferred = flow._unique_strings(item for item in record_split["deferred"] if item not in selected_local)
     budgeted = dict(validation)
     budgeted["required_plans"] = local_required
     budgeted["recommended_plans"] = flow._unique_strings([*selected_recommended, *deferred])
@@ -4719,7 +4723,11 @@ def _is_cleanup_fast_candidate(record: dict[str, Any]) -> bool:
     )
 
 
-def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, Any] | None = None) -> dict[str, Any]:
+def _verification_budget_for_record(
+    record: dict[str, Any],
+    ui_hints: dict[str, Any] | None = None,
+    validation_budget: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     module = _normalize_module_label(record.get("module"))
     severity = str(record.get("severity") or "").upper().split()[0] if str(record.get("severity") or "").strip() else ""
     required = [str(item) for item in flow._as_list(record.get("required_verification"))]
@@ -4745,7 +4753,13 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
         budget = "light"
         target_pct = "25-35%"
     split = _split_validation_budget_items(required)
-    deferred_modules = _deferred_modules_from_plans(module, split["deferred"])
+    if validation_budget is not None:
+        local_plans = flow._unique_strings(validation_budget.get("required_plans") or [])
+        deferred_plans = flow._unique_strings(validation_budget.get("deferred_nightly_plans") or [])
+    else:
+        local_plans = flow._unique_strings(split["local"] or ["l0"])
+        deferred_plans = flow._unique_strings(split["deferred"])
+    deferred_modules = _deferred_modules_from_plans(module, deferred_plans)
     return {
         "schema_version": "aistock_verification_budget_v1",
         "budget": budget,
@@ -4756,7 +4770,7 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
             "git diff --check",
             "production gates",
         ],
-        "premerge_required_plans": split["local"] or ["l0"],
+        "premerge_required_plans": local_plans,
         "delegated_validation": {
             "skill": "aistock-validation-delegation",
             "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate",
@@ -4774,9 +4788,9 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
             ],
         },
         "deferred_nightly_verification": {
-            "required": bool(split["deferred"]),
+            "required": bool(deferred_plans),
             "modules": [item for item in deferred_modules if item],
-            "plans": split["deferred"],
+            "plans": deferred_plans,
             "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs",
         },
     }
@@ -6786,10 +6800,11 @@ def build_start_plan(
     task_card_json_path = _task_card_json_path(canonical_bug_id, target_root)
     task_card_md_path = _task_card_md_path(canonical_bug_id, target_root)
     task_record = dict(record)
-    task_record["required_verification"] = budgeted_validation["required_plans"] + budgeted_validation.get("deferred_nightly_plans", [])
+    task_record["required_verification"] = budgeted_validation["required_plans"]
     task_record["verification_budget"] = _verification_budget_for_record(
         task_record,
         record.get("ui_intake_hints") if isinstance(record.get("ui_intake_hints"), dict) else None,
+        budgeted_validation,
     )
     task_record["workflow_efficiency_recommendations"] = {
         **(record.get("workflow_efficiency_recommendations") if isinstance(record.get("workflow_efficiency_recommendations"), dict) else {}),

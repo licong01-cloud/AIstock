@@ -637,7 +637,7 @@ def test_start_dry_run_returns_worktree_context_and_scope(isolated_workflow_root
     assert payload["worktree_plan"]["dry_run"] is True
     assert payload["worktree_plan"]["branch"].endswith(f"-{workflow._today_compact()}")
     assert payload["allowed_write_scope"] == ["scripts/aistock_issue_workflow.py"]
-    assert "l0" in payload["required_verification"]
+    assert payload["required_verification"] == ["guardrail_changed_files"]
     assert payload["next_agent_steps"][0] == "switch_to_worktree_if_created"
 
 
@@ -754,21 +754,42 @@ def test_start_validation_budget_defers_broad_required_plans(
 
     assert payload["required_verification"] == [
         "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
-        "l0",
+        "miniqmt_execution_runtime_l2",
     ]
     assert payload["deferred_nightly_plans"] == [
         "paper_v2_backend",
         "simulation_core_l2",
         "miniqmt_sim_stub_l3",
-        "miniqmt_execution_runtime_l2",
     ]
     task_card_text = (isolated_workflow_root / payload["task_card_md"]).read_text(encoding="utf-8")
     assert (
-        "deferred_nightly_plans: `paper_v2_backend, simulation_core_l2, miniqmt_sim_stub_l3, "
-        "miniqmt_execution_runtime_l2`"
+        "deferred_nightly_plans: `paper_v2_backend, simulation_core_l2, miniqmt_sim_stub_l3`"
     ) in task_card_text
     state = json.loads((isolated_workflow_root / payload["state_path"]).read_text(encoding="utf-8"))
     assert state["task_card_availability"]["available"] is True
+
+
+def test_validation_budget_keeps_changed_file_primary_module_plan_and_drops_fixed_l0() -> None:
+    budgeted = workflow._apply_validation_budget(
+        record={"required_verification": ["l0", "hmm_risk_backend"]},
+        validation={
+            "required_plans": ["l0", "hmm_risk_backend"],
+            "recommended_plans": [],
+        },
+    )
+
+    assert budgeted["required_plans"] == ["hmm_risk_backend"]
+    assert budgeted["recommended_plans"] == []
+    assert budgeted["deferred_nightly_plans"] == []
+    assert budgeted["validation_budget_gate"]["premerge_required"] == ["hmm_risk_backend"]
+    record_budget = workflow._verification_budget_for_record(
+        {"module": "hmm.risk", "required_verification": ["hmm_risk_backend"]},
+        validation_budget=budgeted,
+    )
+    assert record_budget["premerge_required_plans"] == ["hmm_risk_backend"]
+    assert record_budget["deferred_nightly_verification"]["plans"] == []
+
+
 def test_start_code_intelligence_uses_allowed_scope_when_no_changed_files(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -862,16 +883,14 @@ def test_finish_plan_selects_validation_and_requires_evidence(
         "--changed-file",
         "scripts/aistock_issue_workflow.py",
         "--validation-evidence",
-        "python -m nox -s l0 -> passed",
-        "--validation-evidence",
         "python -m nox -s guardrail_changed_files -> passed",
     ]) == 0
     ready = json.loads(capsys.readouterr().out)
     assert ready["workflow_gate"] == "ready_for_pr"
-    assert "l0" in ready["required_verification"]
+    assert ready["required_verification"] == ["guardrail_changed_files"]
     assert ready["validation_receipts"][0]["schema_version"] == "aistock_validation_receipt_v1"
     assert ready["validation_receipts"][0]["evidence_kind"] == "nox"
-    assert ready["validation_receipts"][0]["plan"] == "l0"
+    assert ready["validation_receipts"][0]["plan"] == "guardrail_changed_files"
     assert len(ready["validation_receipts"][0]["receipt_id"]) == 16
     assert "artifact_metrics" not in ready
     assert ready["artifact_policy"] == "compact_success_no_finish_plan_json"
