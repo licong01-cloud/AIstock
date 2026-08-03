@@ -2,7 +2,9 @@
   "actual": "Changed-file runtime classification treats backend/services/hmm_risk/b3_d1_inactive_dimension.py as backend runtime although its only non-test consumer is the offline scripts/hmm_risk/prepare_state_model_set.py. This creates a false backend restart/runbook gate for BUG-962. Add the exact offline module to the non-runtime catalog with targeted classifier coverage; do not change broader backend classification.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260803_BUG-965-offline-hmm-d1-module-is-misclassified-as-backend-runtime.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-965",
@@ -20,23 +22,43 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260803-f9a96f1e4990",
       "timestamp": "2026-08-03T09:32:33.277368Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scoped the fix to the runtime classifier and its direct contract test after reproducing BUG-962's false backend restart gate.",
+      "timestamp": "2026-08-03T09:45:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
+      "changed_files": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ],
+      "impacted_modules": [
+        "validation"
+      ],
       "matched_rules": [],
       "risk_levels": [],
-      "suggested_scope": [],
+      "suggested_scope": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ]
   },
   "first_seen_at": "2026-08-03T09:32:33.277372Z",
   "fix_branch": null,
@@ -185,5 +207,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }
