@@ -41,6 +41,7 @@ from backend.services.advisory_phase1.capture_foundation import (
     RetrospectiveObservationCaptureBatchRequestV1,
     RetrospectiveObservationCaptureBinding,
     REASON_CAPTURE_BATCH_CONFLICT,
+    REASON_CAPTURE_BATCH_STATE_INVALID,
     capture_request_hash,
 )
 from backend.services.advisory_phase1.dataset_build import (
@@ -373,18 +374,9 @@ class PostgresHistoricalRangeBridgeAdapters:
             }:
                 return batch
             if batch.status is CaptureBatchStatus.RUNNING:
-                if (
-                    batch.lease_expires_at is None
-                    or batch.lease_expires_at > datetime.now(UTC)
-                ):
-                    raise HistoricalRangeContractError(
-                        REASON_DATABASE_CAPACITY_EXHAUSTED,
-                        "retrospective capture batch still has an active lease",
-                    )
-                batch = self._capture_repository.expire(
-                    capture_batch_id=batch.request.capture_batch_id,
-                    expected_row_version=batch.row_version,
-                    fencing_token=batch.fencing_token,
+                batch = self._expire_capture_batch(
+                    batch=batch,
+                    active_lease_detail="retrospective capture batch still has an active lease",
                 )
             if batch.status not in {
                 CaptureBatchStatus.FAILED,
@@ -454,18 +446,9 @@ class PostgresHistoricalRangeBridgeAdapters:
         if active:
             candidate = active[0]
             if candidate.status is CaptureBatchStatus.RUNNING:
-                if (
-                    candidate.lease_expires_at is None
-                    or candidate.lease_expires_at > datetime.now(UTC)
-                ):
-                    raise HistoricalRangeContractError(
-                        REASON_DATABASE_CAPACITY_EXHAUSTED,
-                        "active capture successor still has an active lease",
-                    )
-                expired = self._capture_repository.expire(
-                    capture_batch_id=candidate.request.capture_batch_id,
-                    expected_row_version=candidate.row_version,
-                    fencing_token=candidate.fencing_token,
+                expired = self._expire_capture_batch(
+                    batch=candidate,
+                    active_lease_detail="active capture successor still has an active lease",
                 )
                 return self._recover_capture_successor(
                     request=request,
@@ -487,6 +470,28 @@ class PostgresHistoricalRangeBridgeAdapters:
             id_prefix=id_prefix,
             predecessor=chain[-1],
         )
+
+    def _expire_capture_batch(
+        self,
+        *,
+        batch: CaptureBatch,
+        active_lease_detail: str,
+    ) -> CaptureBatch:
+        """Use repository time as the single lease-expiry authority."""
+
+        try:
+            return self._capture_repository.expire(
+                capture_batch_id=batch.request.capture_batch_id,
+                expected_row_version=batch.row_version,
+                fencing_token=batch.fencing_token,
+            )
+        except SourceLedgerError as error:
+            if error.reason_code == REASON_CAPTURE_BATCH_STATE_INVALID:
+                raise HistoricalRangeContractError(
+                    REASON_DATABASE_CAPACITY_EXHAUSTED,
+                    active_lease_detail,
+                ) from error
+            raise
 
     def _recover_capture_successor(
         self,
