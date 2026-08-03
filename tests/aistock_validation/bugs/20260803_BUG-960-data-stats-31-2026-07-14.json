@@ -1,156 +1,148 @@
 {
-  "actual": "PG 日志周期性出现 statement timeout: SELECT MAX(trade_time)::date AS mx FROM market.kline_minute_raw；当次分钟线 auto-range 失败",
+  "actual": "market.data_stats 全部数据集 stat_generated_at=2026-07-14 01:40:40 冻结；overview 31 个数据集全部误标 stale；任一单表超时即整体回滚且无错误记录",
   "allowed_write_scope": [
-    "backend/ingestion/tdx_scheduler.py",
-    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-    "tests/aistock_validation/bugs/20260803_BUG-957-kline-minute-raw-max-trade-time-9984-chunk-hypertable-statement-timeout.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "backend/routers/ingestion.py",
+    "backend/tests/test_ingestion_data_stats_readiness_api.py",
+    "tests/aistock_validation/bugs/20260803_BUG-960-data-stats-31-2026-07-14.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-957",
+  "bug_id": "BUG-960",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-02T18:13:42.160115Z",
-  "description": "PG 日志周期性出现 statement timeout: SELECT MAX(trade_time)::date AS mx FROM market.kline_minute_raw；当次分钟线 auto-range 失败",
+  "created_at": "2026-08-03T01:35:20.090615Z",
+  "description": "market.data_stats 全部数据集 stat_generated_at=2026-07-14 01:40:40 冻结；overview 31 个数据集全部误标 stale；任一单表超时即整体回滚且无错误记录",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260803-d295bfb1147b",
-      "timestamp": "2026-08-02T18:13:42.160111Z"
+      "note": "Promoted from IC-20260803-0c9b506259dc",
+      "timestamp": "2026-08-03T01:35:20.090610Z"
+    },
+    {
+      "at": "2026-08-03T02:10:00Z",
+      "type": "scope_expansion",
+      "detail": "add file_ownership.yaml: CI change-classifier blocked PR with unmapped_code_files=[backend/tests/test_ingestion_data_stats_readiness_api.py]; test belongs to local_data_pipeline ownership rule"
     }
   ],
   "evidence_uris": [],
-  "expected": "分钟线增量同步每周期在 statement_timeout 内完成 auto-range 计算，游标正常推进；配置 refresh_audit 游标时不再触发表级 MAX 物理扫描",
+  "expected": "data-stats 刷新每日成功完成；单个数据集统计失败仅影响该数据集并被记录，其余数据集正常更新；overview stale 标记反映真实数据状态",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/ingestion/tdx_scheduler.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/routers/ingestion.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py"
     ],
     "ownership": {
       "changed_files": [
-        "backend/ingestion/tdx_scheduler.py",
-        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+        "backend/routers/ingestion.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py"
       ],
       "impacted_modules": [
-        "local_data",
-        "qlib_data",
-        "qe.core",
-        "paper_v2"
+        "platform.api",
+        "platform.db",
+        "tests.backend"
       ],
       "matched_rules": [
         {
-          "file": "backend/ingestion/tdx_scheduler.py",
+          "file": "backend/routers/ingestion.py",
           "impact_modules": [
-            "qlib_data",
-            "qe.core",
-            "paper_v2"
+            "platform.db"
           ],
-          "primary_module": "local_data",
+          "primary_module": "platform.api",
           "risk_level": "high",
-          "rule_id": "local_data_pipeline"
+          "rule_id": "platform_api"
         },
         {
-          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-          "impact_modules": [
-            "qlib_data",
-            "qe.core",
-            "paper_v2"
-          ],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_pipeline"
+          "file": "backend/tests/test_ingestion_data_stats_readiness_api.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
         }
       ],
       "risk_levels": [
-        "high"
+        "high",
+        "medium"
       ],
       "suggested_scope": [
-        "backend/ingestion/tdx_scheduler.py",
-        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+        "backend/routers/ingestion.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/ingestion/tdx_scheduler.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/routers/ingestion.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py"
     ]
   },
-  "first_seen_at": "2026-08-02T18:13:42.160115Z",
+  "first_seen_at": "2026-08-03T01:35:20.090615Z",
   "fix_branch": null,
-  "fix_commit": "26825be3f8a46c1e84d89ea0de217be2564bd976",
-  "fixed_at": "2026-08-02T18:55:40Z",
-  "github_issue_number": 3054,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3054",
-  "last_seen_at": "2026-08-02T18:13:42.160115Z",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3066,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3066",
+  "last_seen_at": "2026-08-03T01:35:20.090615Z",
   "module": "aistock_backend",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3056",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "对 9984-chunk 的 market.kline_minute_raw 执行 SELECT MAX(trade_time)::date AS mx FROM market.kline_minute_raw（生产规模 hypertable）",
+  "reproduce_command": "POST /api/data-stats/refresh（或计划任务触发）后查询 SELECT data_kind, stat_generated_at FROM market.data_stats ORDER BY stat_generated_at DESC——全部仍停在 2026-07-14",
   "required_verification": [
     "l0",
-    "data_sync_autonomy_backend"
+    "platform_api_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "backend_restart_required": true,
-    "business_smoke_ref": "next scheduled kline_minute_raw incremental cycle completes auto-range without PG statement timeout; readback market.dataset_date_refresh_audit/ingestion_jobs success for kline_minute_raw",
-    "database_readback_ref": "noop:no_database_change",
     "fresh_process_evidence": [
-      "fresh Python process imported backend.ingestion.tdx_scheduler and verified _compute_auto_range runs the refresh-audit cursor before any table scan and uses the bounded CURRENT_DATE - INTERVAL '45 days' fast path with unbounded fallback -> PASS",
-      "fresh Python process imported backend.ingestion.tdx_scheduler and verified _compute_auto_range audit-first cursor ordering plus bounded INTERVAL '45 days' fast path with unbounded fallback -> PASS"
+      "fresh Python process loaded backend/routers/ingestion.py by file path and verified _refresh_data_stats_backend per-dataset isolation, _refresh_one_data_stats SET statement_timeout, and _record_data_stats_refresh_failure marker -> PASS"
     ],
-    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
-    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "identity_ref": "http://127.0.0.1:8001/openapi.json",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/data-stats",
+    "database_readback_ref": "not_required",
+    "runtime_identity_match": "pending",
+    "post_restart_receipt_ref": null
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "open",
   "suspected_modules": [
     "aistock_backend"
   ],
-  "title": "kline_minute_raw 增量游标 MAX(trade_time) 在 9984-chunk hypertable 上 statement timeout，分钟线自动追赶区间计算周期性失败",
+  "title": "data-stats 刷新单事务整体回滚：任一数据集统计超时即全部回滚，31 个数据集统计缓存自 2026-07-14 起冻结",
   "trigger_condition": {
-    "fingerprint": "d295bfb1147be66a30f16509",
-    "source_event_id": "FE-20260803-d295bfb1147b"
+    "fingerprint": "0c9b506259dcc700eac20e0e",
+    "source_event_id": "FE-20260803-0c9b506259dc"
   },
-  "validation_evidence": [
-    "nox -s l0 -> passed",
-    "nox -s validation_module_registry_l0 -> passed",
-    "pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 44 passed",
-    "pytest backend/tests/test_local_data_management_facade.py backend/tests/mcp/test_local_data_module.py -q -> 55 passed"
-  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
         "aistock_backend",
-        "data_sync_autonomy"
+        "platform_api"
       ],
       "plans": [
-        "data_sync_autonomy_backend"
+        "platform_api_backend"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -205,10 +197,10 @@
       "deferred_nightly_verification": {
         "modules": [
           "aistock_backend",
-          "data_sync_autonomy"
+          "platform_api"
         ],
         "plans": [
-          "data_sync_autonomy_backend"
+          "platform_api_backend"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"

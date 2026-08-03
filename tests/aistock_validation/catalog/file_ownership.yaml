@@ -771,6 +771,7 @@ rules:
       - backend/ingestion/tdx_scheduler.py
       - backend/tests/ingestion/test_repair_minute_via_minute_api.py
       - backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py
+      - backend/tests/test_ingestion_data_stats_readiness_api.py
       - backend/data_service/**
       - backend/services/*data*.py
       - backend/routers/local_data*.py
