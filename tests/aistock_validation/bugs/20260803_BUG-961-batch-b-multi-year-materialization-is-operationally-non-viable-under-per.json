@@ -163,8 +163,8 @@
   },
   "first_seen_at": "2026-08-03T04:37:13.165535Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b43cfbd2e1f84256c1804577b187d99604008386",
+  "fixed_at": "2026-08-03T06:27:51Z",
   "github_issue_number": 3074,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3074",
   "last_seen_at": "2026-08-03T04:37:13.165535Z",
@@ -172,6 +172,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3076",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -205,7 +206,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -214,6 +215,54 @@
     "fingerprint": "917ff4eb0f929cbae0be3237",
     "source_event_id": "FE-20260803-917ff4eb0f92"
   },
+  "validation_evidence": [
+    "python -m nox -s advisory_historical_range_backend -> passed",
+    "python -m nox -s advisory_modeling_backend -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "validation_receipts": [
+    {
+      "command": "python -m nox -s advisory_historical_range_backend",
+      "commit": "0388c5fee725f7e292d10ca24f6a57e1b30d2c6c",
+      "evidence_kind": "nox",
+      "plan": "advisory_historical_range_backend",
+      "receipt_id": "54a00aceccf15b62",
+      "result": "321 passed, 5 skipped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s advisory_modeling_backend",
+      "commit": "0388c5fee725f7e292d10ca24f6a57e1b30d2c6c",
+      "evidence_kind": "nox",
+      "plan": "advisory_modeling_backend",
+      "receipt_id": "3353d402666b5e01",
+      "result": "35 passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s l0",
+      "commit": "0388c5fee725f7e292d10ca24f6a57e1b30d2c6c",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "be5bdd580da90232",
+      "result": "successful",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "0388c5fee725f7e292d10ca24f6a57e1b30d2c6c",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "b898b4c687251aae",
+      "result": "8 passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
