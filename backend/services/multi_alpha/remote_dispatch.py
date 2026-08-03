@@ -1134,13 +1134,7 @@ def _remote_wsl_command(
     runtime_artifact_bindings: Sequence[Mapping[str, Any]] = (),
     runtime_file_manifest: Mapping[str, Any] | None = None,
 ) -> str:
-    conda_env = str(backtest_config.get("remote_conda_env") or backtest_config.get("conda_env") or "").strip()
-    conda_activation = ""
-    if conda_env:
-        conda_activation = (
-            "source ~/miniconda3/etc/profile.d/conda.sh; "
-            "conda activate " + _shell_quote(conda_env) + "; "
-        )
+    conda_activation = _remote_conda_activation(node=node, backtest_config=backtest_config)
     artifact_path = _shell_quote(remote_paths["artifact_path"])
     prediction_artifact_path = _shell_quote(remote_paths["prediction_artifact_path"])
     qlib_path = _shell_quote(remote_paths["qlib_data_path"])
@@ -1155,6 +1149,8 @@ def _remote_wsl_command(
             "set -euo pipefail; ",
             workspace_cd,
             "test -f conf.yaml; test -f qrun_limit_minute.py; test -f read_exp_res.py; ",
+            env_exports,
+            conda_activation,
             "python -c \"import base64,pathlib; [p.with_suffix('').write_bytes(base64.b64decode(p.read_text())) for p in pathlib.Path('.').rglob('*.b64')]\"; ",
             runtime_artifact_links,
             runtime_empty_files,
@@ -1170,13 +1166,71 @@ def _remote_wsl_command(
             "export FACTOR_CACHE_DIR=" + factor_cache + "; ",
             "export RDAGENT_FACTOR_DATA_WSL=" + factor_cache + "; ",
             "export FACTOR_CACHE_DATA_MODE='backtest_factor_data_dir'; ",
-            env_exports,
-            conda_activation,
             "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl; ",
             "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py",
         ]
     )
     return "bash -lc " + _shell_quote(command)
+
+
+def _remote_conda_activation(
+    *,
+    node: ComputeNodeInfo | None,
+    backtest_config: Mapping[str, Any],
+) -> str:
+    conda_env = str(
+        backtest_config.get("remote_conda_env")
+        or backtest_config.get("conda_env")
+        or ""
+    ).strip()
+    conda_sh = str(backtest_config.get("remote_conda_sh") or "").strip()
+
+    if node is not None and _is_loopback_wsl_node(node):
+        conda_env = str(
+            conda_env
+            or backtest_config.get("wsl_conda_env")
+            or os.getenv("QLIB_WSL_CONDA_ENV")
+            or ""
+        ).strip()
+        conda_sh = str(
+            conda_sh
+            or backtest_config.get("wsl_conda_sh")
+            or os.getenv("QLIB_WSL_CONDA_SH")
+            or ""
+        ).strip()
+        missing = [
+            name
+            for name, value in (
+                ("QLIB_WSL_CONDA_SH", conda_sh),
+                ("QLIB_WSL_CONDA_ENV", conda_env),
+            )
+            if not value
+        ]
+        if missing:
+            raise MultiAlphaCombineBacktestError(
+                f"local WSL remote runtime configuration is missing: {missing}",
+                reason_code="remote_wsl_runtime_config_missing",
+                context={"node_id": node.node_id, "missing": missing},
+            )
+        if not _is_remote_linux_path_allowed(value=conda_sh, node=node):
+            raise MultiAlphaCombineBacktestError(
+                "local WSL conda activation script must be an absolute Linux path",
+                reason_code="remote_wsl_runtime_config_invalid",
+                context={"node_id": node.node_id, "field": "QLIB_WSL_CONDA_SH"},
+            )
+    elif not conda_env:
+        return ""
+
+    activation_script = _shell_quote(conda_sh) if conda_sh else "~/miniconda3/etc/profile.d/conda.sh"
+    return (
+        "test -f "
+        + activation_script
+        + "; source "
+        + activation_script
+        + "; conda activate "
+        + _shell_quote(conda_env)
+        + "; command -v python >/dev/null; "
+    )
 
 
 def _remote_runtime_artifact_link_commands(

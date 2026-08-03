@@ -1,6 +1,9 @@
 {
   "actual": "Two post-restart MA-E05 exact-snapshot retries successfully passed CAS path admission, created durable attempts, and reserved real QE Workspace tasks on wsl2-5080, proving BUG-963/BUG-967 effective. Both remote tasks then failed immediately with return code 127 because _remote_wsl_command invoked python without activating the configured WSL conda runtime: run.log says 'bash: python: command not found'. The loopback WSL deployment already declares QLIB_WSL_CONDA_SH and QLIB_WSL_CONDA_ENV in the canonical backend environment, while the frozen run config contains only node_id. Expected: loopback local-WSL durable dispatch consumes the explicit deployed WSL conda settings, validates them, and activates that environment before any Python command; genuine remote Linux behavior remains unchanged and missing local-WSL runtime configuration fails closed. No backend process control or database change.",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/remote_dispatch.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py",
+    "backend/tests/test_multi_alpha_remote_dispatch.py",
     "tests/aistock_validation/bugs/20260803_BUG-974-local-wsl-multi-alpha-durable-command-omits-configured-conda-runtime.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,8 +25,11 @@
       "timestamp": "2026-08-03T18:06:46.341883Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260803T172627118865Z_1a6c55b6 attempt=macba_0d281cc897eb0c56c016599e601825bf9f1db2b4750e01e660b211c605bd54ab qe_task=macb_remote_3459b1322bee_aecfff9130ea_a1 return_code=127",
+    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260803T172628379750Z_2491f875 qe_task=macb_remote_4441b7cb7939_673a6d6499ff_a1 return_code=127"
+  ],
+  "expected": "Loopback local-WSL durable dispatch activates the explicitly configured QLIB WSL conda environment before all Python commands and fails closed when that deployment contract is missing; genuine remote Linux behavior is unchanged.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -52,20 +58,33 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "GET http://127.0.0.1:9000/api/v1/qe_workspace/tasks/macb_remote_3459b1322bee_aecfff9130ea_a1/loops/Loop1/files/run.log",
   "required_verification": [
     "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_453ca2d0c5b21b40_20240701_20260629_20260803T172627118865Z_1a6c55b6",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded the changed remote_dispatch source with the canonical .env and verified rdagent-gpu activation precedes python -c.",
+      "Fresh WSL shell sourced /home/lc999/miniconda3/etc/profile.d/conda.sh, activated rdagent-gpu, and resolved Python 3.10.19 at /home/lc999/miniconda3/envs/rdagent-gpu/bin/python.",
+      "Fresh pytest process completed the durable-adapter plus remote-dispatch matrix: 63 passed, 1 skipped.",
+      "Fresh Python process loaded the persistent source and verified deployed rdagent-gpu activation precedes python -c; fresh WSL probe resolved Python 3.10.19"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -78,6 +97,17 @@
     "fingerprint": "faff7284a67cb8c894ecd810",
     "source_event_id": "FE-20260803-faff7284a67c"
   },
+  "validation_evidence": [
+    "rtk pytest three local-WSL conda command contract nodeids -q -p no:cacheprovider -> 3 passed",
+    "rtk pytest durable local-WSL submit nodeid -q -p no:cacheprovider -> 1 passed",
+    "rtk pytest backend/tests/multi_alpha/test_durable_execution_adapter.py backend/tests/test_multi_alpha_remote_dispatch.py -q -p no:cacheprovider -> 63 passed, 1 skipped",
+    "ruff check plus py_compile plus git diff --check -> passed",
+    "rtk nox -s l0 -> passed with 0 blocking findings",
+    "rtk nox -s validation_module_registry_l0 -> passed (8 tests)",
+    "rtk nox -s qe_read_backend -> passed (14 tests)",
+    "WSL deployed runtime probe -> /home/lc999/miniconda3/envs/rdagent-gpu/bin/python, Python 3.10.19",
+    "fresh Python process loaded the changed source and verified deployed rdagent-gpu activation precedes python -c with an explicit python availability probe"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
