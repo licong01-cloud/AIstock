@@ -637,7 +637,7 @@ def test_start_dry_run_returns_worktree_context_and_scope(isolated_workflow_root
     assert payload["worktree_plan"]["dry_run"] is True
     assert payload["worktree_plan"]["branch"].endswith(f"-{workflow._today_compact()}")
     assert payload["allowed_write_scope"] == ["scripts/aistock_issue_workflow.py"]
-    assert "l0" in payload["required_verification"]
+    assert payload["required_verification"] == ["guardrail_changed_files"]
     assert payload["next_agent_steps"][0] == "switch_to_worktree_if_created"
 
 
