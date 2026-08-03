@@ -13,8 +13,10 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeFrozenProgramV1,
 )
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
-from backend.services.advisory_modeling.request_builder import (
+from scripts.advisory_short_rebound_batch_b import (
     BatchBRequestBuilder,
+    _load_environment,
+    build_parser,
     publish_batch_b_request,
 )
 from backend.services.advisory_modeling.style_profile import SHORT_REBOUND_TARGET_PACKAGE_ID
@@ -23,7 +25,6 @@ from backend.services.advisory_program import (
     AdvisoryProgram,
     AdvisoryStrategyBindingVersion,
 )
-from scripts.advisory_short_rebound_batch_b import _load_environment, build_parser
 
 
 _COMMIT = "1" * 40
