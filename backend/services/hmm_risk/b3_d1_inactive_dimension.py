@@ -2507,38 +2507,51 @@ def validate_refit02_report(report: Mapping[str, Any]) -> dict[str, Any]:
             "hmm_risk_model_inactive_dimension_contract_invalid",
             "REFIT-02 report authority is invalid",
         )
+    processes = normalized.get("process_receipts")
+    preflight_failure = (
+        normalized.get("status") == "diagnostic_failed"
+        and normalized.get("current_authority") is None
+        and normalized.get("historical_reference") is None
+        and processes == []
+        and normalized.get("failed_process_receipt") is None
+    )
+    execution_failure = (
+        normalized.get("status") == "diagnostic_failed"
+        and isinstance(normalized.get("current_authority"), Mapping)
+        and isinstance(normalized.get("historical_reference"), Mapping)
+        and isinstance(normalized.get("failed_process_receipt"), Mapping)
+    )
     if normalized.get("status") == "not_applicable":
         rebuilt = build_refit02_not_applicable_report(
             dict(normalized.get("current_authority") or {}),
             dict(normalized.get("historical_reference") or {}),
             producer_commit=str(normalized.get("producer_commit") or ""),
         )
-    elif normalized.get("status") == "diagnostic_failed" and normalized.get("current_authority") is None:
+    elif preflight_failure:
         rebuilt = build_refit02_preflight_failure_report(
             producer_commit=str(normalized.get("producer_commit") or ""),
             reason_code=str((normalized.get("mechanism_assessment_reason_codes") or [""])[0]),
             error_type=str(normalized.get("error_type") or ""),
             error=str(normalized.get("error") or ""),
         )
-    elif normalized.get("status") == "diagnostic_failed" and "failed_process_receipt" in normalized:
+    elif execution_failure:
         rebuilt = build_refit02_execution_failure_report(
             producer_commit=str(normalized.get("producer_commit") or ""),
             current_authority=dict(normalized.get("current_authority") or {}),
             historical_reference=dict(normalized.get("historical_reference") or {}),
-            completed_processes=list(normalized.get("process_receipts") or ()),
+            completed_processes=list(processes or ()),
             failed_process_receipt=dict(normalized.get("failed_process_receipt") or {}),
         )
-    else:
-        processes = normalized.get("process_receipts")
-        if not isinstance(processes, list) or len(processes) != 2:
-            raise D1InactiveDimensionError(
-                "hmm_risk_model_inactive_dimension_contract_invalid",
-                "REFIT-02 report must contain exactly two process receipts",
-            )
+    elif isinstance(processes, list) and len(processes) == 2:
         rebuilt = build_refit02_report(
             processes[0],
             processes[1],
             producer_commit=str(normalized.get("producer_commit") or ""),
+        )
+    else:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "REFIT-02 report lifecycle is invalid",
         )
     if rebuilt != normalized:
         raise D1InactiveDimensionError(
