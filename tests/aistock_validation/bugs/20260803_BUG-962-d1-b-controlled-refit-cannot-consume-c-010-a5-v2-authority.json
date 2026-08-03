@@ -24,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260803-b1f0db3db01c",
       "timestamp": "2026-08-03T04:59:42.232634Z"
+    },
+    {
+      "action": "fix_validation_complete",
+      "actor": "codex",
+      "note": "D1-B now requires and canonically validates the exact C-010-A5 v2 preflight while preserving historical v1 request/readback authority; no fit, selection, model, READY, database, runtime, or process-control action was performed.",
+      "timestamp": "2026-08-03T05:34:00Z"
     }
   ],
   "evidence_uris": [
@@ -120,14 +126,14 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_impact": "backend",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ]
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -186,6 +192,17 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
+  "validation_evidence": [
+    "Conda AIstock direct D1/C-010 fix-point matrix -> 82 passed",
+    "python -m nox -s hmm_risk_backend -> 243 passed, total coverage 74.47%",
+    "system ruff check/format --check on changed Python files -> passed",
+    "Conda AIstock py_compile on changed source files -> passed",
+    "fresh Python canonical readback of C-010-A5 report -> preflight_complete, report e7f7edc9..., partition 03d78534..., counts 502/501/1",
+    "fresh Python historical formal request readback -> policy v1 ae8eda5b... accepted without relabelling",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+    "git diff --check -> passed"
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,

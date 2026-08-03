@@ -70,6 +70,8 @@ from backend.services.hmm_risk.b3_training import (  # noqa: E402
     write_b3_ready_model_set,
 )
 from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
+    C010_A5_PARTITION_SHA256 as B3_D1_C010_A5_PARTITION_SHA256,
+    C010_A5_REPORT_SHA256 as B3_D1_C010_A5_REPORT_SHA256,
     CONTROL_PROFILE_RECEIPT_SHA256 as B3_D1_CONTROL_PROFILE_RECEIPT_SHA256,
     CONTROL_SECTOR as B3_D1_CONTROL_SECTOR,
     CONTROL_SOURCE_SET_SHA256 as B3_D1_CONTROL_SOURCE_SET_SHA256,
@@ -95,6 +97,7 @@ from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
     C010_APPROVED_TRAIN_TRADING_DATE_SHA256,
     C010_FORMULA_VERSION,
     C010_POLICY_VERSION,
+    C010_POLICY_VERSION_V1,
     MIN_COVERAGE,
     OBSERVATION_VERSION,
     build_c010_feature_domain_panel,
@@ -2657,9 +2660,11 @@ def _b3_d1_frozen_authority(
     formal_report: dict[str, Any],
     blocker_report: dict[str, Any],
     remediation_report: dict[str, Any],
+    c010_a5_report: dict[str, Any],
 ) -> dict[str, Any]:
     """Validate and extract the exact D1-B treatment/control authority without fitting."""
 
+    _validate_b3_d1_c010_a5_authority(c010_a5_report)
     validate_b3_remediation_authorities(formal_report, blocker_report)
     _require_canonical_receipt(remediation_report, label="D1-B remediation diagnostic")
     if canonical_sha256(remediation_report) != B3_D1_REMEDIATION_REPORT_SHA256:
@@ -2841,11 +2846,150 @@ def _b3_d1_frozen_authority(
     }
 
 
+def _validate_b3_d1_c010_a5_authority(report: dict[str, Any]) -> dict[str, Any]:
+    """Bind D1-B to the approved C-010-A5 v2 partition without rewriting history."""
+
+    _require_canonical_receipt(report, label="D1-B C-010-A5 domain-partition preflight")
+    partition = report.get("provider_absence_partition_receipt")
+    eligibility = report.get("observation_eligibility_receipt")
+    expected_opportunity = report.get("expected_opportunity_receipt")
+    if not all(isinstance(value, dict) for value in (partition, eligibility, expected_opportunity)):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B C-010-A5 authority receipts are incomplete",
+        )
+    for label, value in (
+        ("D1-B C-010-A5 partition", partition),
+        ("D1-B C-010-A5 eligibility", eligibility),
+        ("D1-B C-010-A5 opportunity", expected_opportunity),
+    ):
+        _require_canonical_receipt(value, label=label)
+    forbidden_true_flags = (
+        "fit_performed",
+        "selection_performed",
+        "d6_performed",
+        "model_write_performed",
+        "ready_artifact_write_performed",
+        "database_write_performed",
+        "runtime_action_performed",
+    )
+    if (
+        canonical_sha256(report) != B3_D1_C010_A5_REPORT_SHA256
+        or report.get("schema_version") != C010_A5_DOMAIN_PARTITION_PREFLIGHT_SCHEMA
+        or report.get("status") != "preflight_complete"
+        or report.get("partition_complete") is not True
+        or report.get("known_sw_domain_out_verified") is not True
+        or report.get("train_trading_date_count") != C010_APPROVED_TRAIN_TRADING_DATE_COUNT
+        or report.get("train_trading_date_sha256") != C010_APPROVED_TRAIN_TRADING_DATE_SHA256
+        or report.get("provider_absence_partition_receipt_sha256") != B3_D1_C010_A5_PARTITION_SHA256
+        or partition.get("receipt_sha256") != B3_D1_C010_A5_PARTITION_SHA256
+        or partition.get("p_all_entry_count") != 502
+        or partition.get("p_in_entry_count") != 501
+        or partition.get("p_out_entry_count") != 1
+        or report.get("observation_eligibility_receipt_sha256") != eligibility.get("receipt_sha256")
+        or report.get("expected_opportunity_receipt_sha256") != expected_opportunity.get("receipt_sha256")
+        or any(report.get(field) is not False for field in forbidden_true_flags)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B C-010-A5 authority differs from the approved 601-day v2 preflight",
+        )
+    return report
+
+
+def _validate_b3_d1_historical_request_authority(
+    request: dict[str, Any],
+    *,
+    target_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the immutable v1 formal request that D1-B diagnoses; do not relabel it as v2."""
+
+    authority = B3_BLOCKER_FORMAL_AUTHORITY
+    _require_approved_b3_windows(request)
+    _require_formal_train_coverage_identity(request)
+    if request.get("parent_frozen_identities") != B3_APPROVED_FROZEN_IDENTITIES:
+        raise StateModelSetError("D1-B historical formal request parent identity is invalid")
+    for field in (
+        "producer_commit",
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+        "semantic_dataset_manifest_hash",
+        "semantic_mapping_manifest_hash",
+        "semantic_calendar_manifest_hash",
+        "semantic_l2_stock_fact_manifest_hash",
+        "feature_domain_policy_sha256",
+    ):
+        if str(request.get(field) or "") != authority[field]:
+            raise StateModelSetError(f"D1-B historical formal request {field} differs from authority")
+    historical_policy = validate_c010_policy_manifest(request.get("feature_domain_policy_manifest"))
+    if (
+        historical_policy.get("schema_version") != C010_POLICY_VERSION_V1
+        or historical_policy.get("receipt_sha256") != authority["feature_domain_policy_sha256"]
+        or historical_policy != request.get("feature_domain_policy_manifest")
+        or target_manifest.get("formal_producer_commit") != authority["producer_commit"]
+        or canonical_sha256(formal_b3_parameter_profile()) != target_manifest.get("parameter_profile_sha256")
+    ):
+        raise StateModelSetError("D1-B historical formal request authority is invalid")
+    return historical_policy
+
+
+def _load_b3_d1_train_inputs(
+    request: dict[str, Any],
+    *,
+    db_prefix: str,
+    target_manifest: dict[str, Any],
+    c010_a5_report: dict[str, Any],
+    producer_commit: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Reload D1 train inputs through C-010-A5 v2 while preserving the frozen v1 formal lineage."""
+
+    authority = B3_BLOCKER_FORMAL_AUTHORITY
+    historical_policy = _validate_b3_d1_historical_request_authority(request, target_manifest=target_manifest)
+
+    _validate_b3_d1_c010_a5_authority(c010_a5_report)
+    inputs = _load_l1_source_inputs(request, db_prefix=db_prefix, c010_formal=True)
+    identities = {
+        "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+        "calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+        "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+    }
+    for field, actual in identities.items():
+        if actual != authority[field]:
+            raise StateModelSetError(f"D1-B frozen input drifted from {field}")
+
+    current_policy = _c010_policy_manifest(inputs, request, producer_commit=producer_commit)
+    stable_source_fields = (
+        "mapping_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+        "calendar_manifest_hash",
+        "security_identity_manifest_sha256",
+        "provider_absence_manifest_sha256",
+    )
+    if (
+        current_policy.get("schema_version") != C010_POLICY_VERSION
+        or any(current_policy.get(field) != historical_policy.get(field) for field in stable_source_fields)
+        or current_policy.get("provider_absence_partition_receipt")
+        != c010_a5_report["provider_absence_partition_receipt"]
+        or current_policy.get("provider_absence_partition_receipt_sha256")
+        != c010_a5_report["provider_absence_partition_receipt_sha256"]
+        or current_policy.get("expected_opportunity_receipt") != c010_a5_report["expected_opportunity_receipt"]
+        or current_policy.get("expected_opportunity_receipt_sha256")
+        != c010_a5_report["expected_opportunity_receipt_sha256"]
+        or current_policy.get("eligibility_receipt") != c010_a5_report["observation_eligibility_receipt"]
+        or current_policy.get("eligibility_receipt_sha256") != c010_a5_report["observation_eligibility_receipt_sha256"]
+    ):
+        raise StateModelSetError("D1-B C-010-A5 v2 execution lineage drifted from the approved preflight")
+    identities["c010_feature_domain_policy_sha256"] = str(current_policy["receipt_sha256"])
+    return inputs, identities
+
+
 def prepare_b3_d1_controlled_pass(
     request: dict[str, Any],
     formal_report: dict[str, Any],
     blocker_report: dict[str, Any],
     remediation_report: dict[str, Any],
+    c010_a5_report: dict[str, Any],
     *,
     db_prefix: str,
     process_identity: str,
@@ -2864,17 +3008,19 @@ def prepare_b3_d1_controlled_pass(
             "hmm_risk_model_inactive_dimension_authority_mismatch",
             "D1-B child producer commit differs from the parent authority",
         )
-    authority = _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report)
+    authority = _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report, c010_a5_report)
     current_environment = c008_b3_diag04_fixed_numeric_environment()
     _validate_b3_d1_numeric_environment_authority(
         current_environment,
         authority["numeric_environment"],
     )
     target_manifest = derive_b3_blocker_target_manifest(formal_report)
-    inputs, _ = _load_b3_blocker_train_inputs(
+    inputs, _ = _load_b3_d1_train_inputs(
         request,
         db_prefix=db_prefix,
         target_manifest=target_manifest,
+        c010_a5_report=c010_a5_report,
+        producer_commit=current_commit,
     )
     families = [value for value in request.get("families") or () if value.get("family") == "autocycle_all_core"]
     if len(families) != 1:
@@ -2925,6 +3071,8 @@ def _b3_d1_child_command(args: argparse.Namespace, process_identity: str) -> lis
         str(Path(args.b3_blocker_report).resolve()),
         "--b3-remediation-report",
         str(Path(args.b3_remediation_report).resolve()),
+        "--c010-a5-domain-partition-report",
+        str(Path(args.c010_a5_domain_partition_report).resolve()),
         "--b3-process-identity",
         process_identity,
         "--b3-d1-producer-commit",
@@ -3064,7 +3212,11 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
     formal_report = _load_json_mapping(Path(args.b3_formal_report).resolve(), label="formal B3 report")
     blocker_report = _load_json_mapping(Path(args.b3_blocker_report).resolve(), label="formal blocker report")
     remediation_report = _load_json_mapping(Path(args.b3_remediation_report).resolve(), label="remediation report")
-    _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report)
+    c010_a5_report = _load_json_mapping(
+        Path(args.c010_a5_domain_partition_report).resolve(),
+        label="C-010-A5 domain-partition report",
+    )
+    _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report, c010_a5_report)
     environment = os.environ.copy()
     for key in (
         "OMP_NUM_THREADS",
@@ -3495,6 +3647,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--b3-formal-report", help="Approved immutable formal B3 preparation report.")
     parser.add_argument("--b3-blocker-report", help="Approved immutable C-008-B3-FORMAL-BLOCKER-DIAG-01 report.")
     parser.add_argument("--b3-remediation-report", help="Approved immutable C-008-B3-REMEDIATION-DIAG-02 report.")
+    parser.add_argument(
+        "--c010-a5-domain-partition-report",
+        help="Approved immutable C-010-A5 601-day domain-partition preflight; D1-B only.",
+    )
     parser.add_argument("--b3-target-manifest-sha256", default="", help=argparse.SUPPRESS)
     return parser.parse_args()
 
@@ -3522,16 +3678,22 @@ def main() -> int:
         blocker_formal_report = getattr(args, "b3_formal_report", None)
         remediation_blocker_report = getattr(args, "b3_blocker_report", None)
         d1_remediation_report = getattr(args, "b3_remediation_report", None)
+        d1_c010_a5_report = getattr(args, "c010_a5_domain_partition_report", None)
         blocker_target_sha256 = getattr(args, "b3_target_manifest_sha256", "")
         blocker_parent = bool(blocker_output)
         blocker_child = bool(getattr(args, "_b3_blocker_diag01_child", False))
         d1_parent = bool(d1_output)
         d1_child = bool(getattr(args, "_b3_d1_controlled_child", False))
         if d1_parent or d1_child:
-            if not blocker_formal_report or not remediation_blocker_report or not d1_remediation_report:
+            if (
+                not blocker_formal_report
+                or not remediation_blocker_report
+                or not d1_remediation_report
+                or not d1_c010_a5_report
+            ):
                 raise StateModelSetError(
-                    "--b3-formal-report, --b3-blocker-report, and --b3-remediation-report "
-                    "are required for the D1-B controlled diagnostic"
+                    "--b3-formal-report, --b3-blocker-report, --b3-remediation-report, and "
+                    "--c010-a5-domain-partition-report are required for the D1-B controlled diagnostic"
                 )
             if blocker_target_sha256:
                 raise StateModelSetError("blocker target identity is not valid for the D1-B controlled diagnostic")
@@ -3553,6 +3715,10 @@ def main() -> int:
                 raise StateModelSetError("--b3-blocker-report is only valid with --b3-remediation-diag02-output")
             if d1_remediation_report:
                 raise StateModelSetError("--b3-remediation-report is only valid with --b3-d1-controlled-refit-output")
+            if d1_c010_a5_report:
+                raise StateModelSetError(
+                    "--c010-a5-domain-partition-report is only valid with --b3-d1-controlled-refit-output"
+                )
         elif remediation_output:
             if not blocker_formal_report or not remediation_blocker_report:
                 raise StateModelSetError(
@@ -3560,9 +3726,19 @@ def main() -> int:
                 )
             if d1_remediation_report:
                 raise StateModelSetError("--b3-remediation-report is only valid with --b3-d1-controlled-refit-output")
+            if d1_c010_a5_report:
+                raise StateModelSetError(
+                    "--c010-a5-domain-partition-report is only valid with --b3-d1-controlled-refit-output"
+                )
             if blocker_target_sha256:
                 raise StateModelSetError("blocker child target identity is not valid for remediation DIAG-02")
-        elif blocker_formal_report or blocker_target_sha256 or remediation_blocker_report or d1_remediation_report:
+        elif (
+            blocker_formal_report
+            or blocker_target_sha256
+            or remediation_blocker_report
+            or d1_remediation_report
+            or d1_c010_a5_report
+        ):
             raise StateModelSetError("B3 diagnostic authority arguments require their matching diagnostic mode")
         if blocker_parent and blocker_target_sha256:
             raise StateModelSetError("--b3-target-manifest-sha256 is child-only")
@@ -3718,11 +3894,16 @@ def main() -> int:
                 Path(d1_remediation_report).resolve(),
                 label="remediation report",
             )
+            c010_a5_report = _load_json_mapping(
+                Path(d1_c010_a5_report).resolve(),
+                label="C-010-A5 domain-partition report",
+            )
             report = prepare_b3_d1_controlled_pass(
                 request,
                 formal_report,
                 blocker_report,
                 remediation_report,
+                c010_a5_report,
                 db_prefix=str(args.db_env_prefix),
                 process_identity=str(args.b3_process_identity),
                 producer_commit=str(args.b3_d1_producer_commit),

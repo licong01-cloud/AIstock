@@ -540,6 +540,34 @@ def test_controlled_report_separates_diagnostic_completion_mechanism_and_d5_read
     assert report["ready_artifact_write_performed"] is False
 
 
+def test_v2_writer_binds_c010_a5_and_v1_durable_readback_remains_supported(monkeypatch):
+    first = _process(monkeypatch, "fresh_process_1")
+    second = _process(monkeypatch, "fresh_process_2")
+    current = subject.build_controlled_refit_report(first, second, producer_commit="1" * 40)
+
+    assert current["schema_version"] == subject.REPORT_SCHEMA_VERSION
+    assert current["source_authority"]["c010_a5_report_sha256"] == subject.C010_A5_REPORT_SHA256
+    assert current["source_authority"]["c010_a5_partition_sha256"] == subject.C010_A5_PARTITION_SHA256
+
+    legacy_processes = []
+    for process in (first, second):
+        legacy = dict(process)
+        legacy["schema_version"] = subject.PROCESS_SCHEMA_VERSION_V1
+        legacy["source_authority"] = dict(subject.SOURCE_AUTHORITY_V1)
+        legacy_body = {key: value for key, value in legacy.items() if key != "process_receipt_sha256"}
+        legacy["process_receipt_sha256"] = canonical_sha256(legacy_body)
+        legacy_processes.append(legacy)
+    legacy_report = subject.build_controlled_refit_report(
+        legacy_processes[0],
+        legacy_processes[1],
+        producer_commit="1" * 40,
+        _schema_version=subject.REPORT_SCHEMA_VERSION_V1,
+        _source_authority=subject.SOURCE_AUTHORITY_V1,
+    )
+
+    assert subject.validate_controlled_refit_report(legacy_report) == legacy_report
+
+
 def test_controlled_report_keeps_downstream_failure_reason_without_rejecting_the_d1_mechanism(monkeypatch):
     treatment, control = _install_authority(monkeypatch)
 

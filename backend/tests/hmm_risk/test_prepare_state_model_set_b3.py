@@ -1720,10 +1720,13 @@ def _d1_args(tmp_path) -> SimpleNamespace:
     values = _remediation_args(tmp_path)
     remediation = tmp_path / "source-remediation.json"
     remediation.write_text("{}", encoding="utf-8")
+    c010_a5 = tmp_path / "c010-a5-domain-partition.json"
+    c010_a5.write_text("{}", encoding="utf-8")
     artifact_root = tmp_path / "model-sets"
     values.b3_remediation_diag02_output = None
     values.b3_d1_controlled_refit_output = str(artifact_root / "d1-controlled-refit.json")
     values.b3_remediation_report = str(remediation)
+    values.c010_a5_domain_partition_report = str(c010_a5)
     values._b3_d1_controlled_child = False
     values.b3_process_identity = ""
     values.b3_d1_producer_commit = ""
@@ -1736,6 +1739,107 @@ def _d1_process_payload(process_identity: str) -> bytes:
     body = {"process_identity": process_identity}
     value = {**body, "process_receipt_sha256": subject.canonical_sha256(body)}
     return subject.canonical_json_bytes(value)
+
+
+def _d1_c010_a5_report() -> dict:
+    def receipt(body: dict) -> dict:
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    partition = receipt(
+        {
+            "schema_version": "hmm_risk_c010_provider_absence_domain_partition_v1",
+            "p_all_entry_count": 502,
+            "p_in_entry_count": 501,
+            "p_out_entry_count": 1,
+        }
+    )
+    eligibility = receipt({"schema_version": "hmm_risk_c010_train_observation_eligibility_v2"})
+    opportunity = receipt({"schema_version": "hmm_risk_c010_expected_opportunity_dates_v2"})
+    body = {
+        "schema_version": subject.C010_A5_DOMAIN_PARTITION_PREFLIGHT_SCHEMA,
+        "status": "preflight_complete",
+        "producer_commit": "a" * 40,
+        "train_trading_date_count": subject.C010_APPROVED_TRAIN_TRADING_DATE_COUNT,
+        "train_trading_date_sha256": subject.C010_APPROVED_TRAIN_TRADING_DATE_SHA256,
+        "provider_absence_partition_receipt": partition,
+        "provider_absence_partition_receipt_sha256": partition["receipt_sha256"],
+        "observation_eligibility_receipt": eligibility,
+        "observation_eligibility_receipt_sha256": eligibility["receipt_sha256"],
+        "expected_opportunity_receipt": opportunity,
+        "expected_opportunity_receipt_sha256": opportunity["receipt_sha256"],
+        "known_sw_domain_out_verified": True,
+        "partition_complete": True,
+        "fit_performed": False,
+        "selection_performed": False,
+        "d6_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return receipt(body)
+
+
+def test_d1_c010_a5_authority_is_exact_and_tamper_evident(monkeypatch) -> None:
+    report = _d1_c010_a5_report()
+    monkeypatch.setattr(subject, "B3_D1_C010_A5_REPORT_SHA256", subject.canonical_sha256(report))
+    monkeypatch.setattr(
+        subject,
+        "B3_D1_C010_A5_PARTITION_SHA256",
+        report["provider_absence_partition_receipt_sha256"],
+    )
+
+    assert subject._validate_b3_d1_c010_a5_authority(report) == report
+
+    tampered = deepcopy(report)
+    tampered["partition_complete"] = False
+    tampered_body = {key: value for key, value in tampered.items() if key != "receipt_sha256"}
+    tampered["receipt_sha256"] = subject.canonical_sha256(tampered_body)
+    monkeypatch.setattr(subject, "B3_D1_C010_A5_REPORT_SHA256", subject.canonical_sha256(tampered))
+    with pytest.raises(StateModelSetError, match="approved 601-day v2 preflight"):
+        subject._validate_b3_d1_c010_a5_authority(tampered)
+
+
+def test_d1_historical_request_remains_v1_and_cannot_be_silently_relabelled(monkeypatch) -> None:
+    request = _request()
+    authority = dict(subject.B3_BLOCKER_FORMAL_AUTHORITY)
+    for field in (
+        "producer_commit",
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+        "semantic_dataset_manifest_hash",
+        "semantic_mapping_manifest_hash",
+        "semantic_calendar_manifest_hash",
+        "semantic_l2_stock_fact_manifest_hash",
+        "feature_domain_policy_sha256",
+    ):
+        request[field] = authority[field]
+    request["parent_frozen_identities"] = subject.B3_APPROVED_FROZEN_IDENTITIES
+    request["train_coverage_contract_version"] = subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION
+    request["train_coverage_receipt_sha256"] = "1" * 64
+    historical_policy = {
+        "schema_version": subject.C010_POLICY_VERSION_V1,
+        "receipt_sha256": authority["feature_domain_policy_sha256"],
+    }
+    request["feature_domain_policy_manifest"] = historical_policy
+    target_manifest = {
+        "formal_producer_commit": authority["producer_commit"],
+        "parameter_profile_sha256": subject.canonical_sha256(subject.formal_b3_parameter_profile()),
+    }
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda value: dict(value))
+
+    assert (
+        subject._validate_b3_d1_historical_request_authority(request, target_manifest=target_manifest)
+        == historical_policy
+    )
+
+    request["feature_domain_policy_manifest"] = {
+        **historical_policy,
+        "schema_version": subject.C010_POLICY_VERSION,
+    }
+    with pytest.raises(StateModelSetError, match="historical formal request authority is invalid"):
+        subject._validate_b3_d1_historical_request_authority(request, target_manifest=target_manifest)
 
 
 def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_threads(monkeypatch, tmp_path) -> None:
@@ -1755,6 +1859,9 @@ def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_thread
 
     def fake_run(command, *, check, capture_output, env, timeout):
         process_identity = command[command.index("--b3-process-identity") + 1]
+        assert command[command.index("--c010-a5-domain-partition-report") + 1] == str(
+            tmp_path / "c010-a5-domain-partition.json"
+        )
         calls.append(
             (
                 process_identity,
@@ -1861,6 +1968,17 @@ def test_main_d1_controlled_mode_persists_diagnostic_without_selection_or_model_
     assert receipt["ready_artifact_write_performed"] is False
 
 
+def test_main_d1_controlled_mode_requires_explicit_c010_a5_authority(monkeypatch, tmp_path, capsys) -> None:
+    args = _d1_args(tmp_path)
+    args.c010_a5_domain_partition_report = None
+    monkeypatch.setattr(subject, "parse_args", lambda: args)
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+
+    assert subject.main() == 1
+    assert "--c010-a5-domain-partition-report" in capsys.readouterr().err
+
+
 def test_main_d1_controlled_mode_persists_typed_failure_without_fake_attempt_count(
     monkeypatch, tmp_path, capsys
 ) -> None:
@@ -1915,10 +2033,11 @@ def test_main_d1_controlled_mode_persists_typed_failure_without_fake_attempt_cou
 def test_d1_frozen_authority_rejects_rehashed_nonapproved_remediation_before_projection(monkeypatch) -> None:
     body = {"formal_source_commit": "0" * 40}
     remediation = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+    monkeypatch.setattr(subject, "_validate_b3_d1_c010_a5_authority", lambda report: report)
     monkeypatch.setattr(subject, "validate_b3_remediation_authorities", lambda formal, blocker: None)
 
     with pytest.raises(StateModelSetError, match="approved canonical artifact"):
-        subject._b3_d1_frozen_authority({}, {}, remediation)
+        subject._b3_d1_frozen_authority({}, {}, remediation, {})
 
 
 def test_d1_report_path_must_be_repo_external_and_contained_by_artifact_root(tmp_path) -> None:

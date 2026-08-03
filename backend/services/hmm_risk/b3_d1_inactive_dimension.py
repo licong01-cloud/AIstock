@@ -29,8 +29,10 @@ from backend.services.hmm_risk.state_model_set import (
 
 ALGORITHM_VERSION = "hmm_risk_c008_b3_d1_inactive_dimension_v1"
 ATTEMPT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_attempt_v1"
-PROCESS_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_process_v1"
-REPORT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_refit_report_v1"
+PROCESS_SCHEMA_VERSION_V1 = "hmm_risk_c008_b3_d1_controlled_process_v1"
+PROCESS_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_process_v2"
+REPORT_SCHEMA_VERSION_V1 = "hmm_risk_c008_b3_d1_controlled_refit_report_v1"
+REPORT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_refit_report_v2"
 TREATMENT_ROLE = "treatment"
 CONTROL_ROLE = "control"
 TREATMENT_SECTOR = "801207.SI"
@@ -48,10 +50,17 @@ FEATURE_DEFINITION_SHA256 = "0445f91a5587dddb85e93fa5d08897ba967d41f10819e65eeb1
 FORMAL_REPORT_SHA256 = "e7992f87fb555eb26d6c2ef1ad9d45863954edd83fbfcc39f5ae01765cf3939f"
 BLOCKER_REPORT_SHA256 = "10287e845f07bf3d9c15a68e5d09ad14e54613348824ac2af568f0244a1cffe8"
 REMEDIATION_REPORT_SHA256 = "48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403edb83fc660bb58"
-SOURCE_AUTHORITY = {
+C010_A5_REPORT_SHA256 = "e7f7edc9fbe7f1cdb5ec739e1390fffec69a9ede6c8d719c9dda1a21df71773d"
+C010_A5_PARTITION_SHA256 = "03d785347b35185fe9f9c771e0a4e69cd0deb8def31a0cb205d3ca7a86b8ead6"
+SOURCE_AUTHORITY_V1 = {
     "formal_report_sha256": FORMAL_REPORT_SHA256,
     "blocker_report_sha256": BLOCKER_REPORT_SHA256,
     "remediation_report_sha256": REMEDIATION_REPORT_SHA256,
+}
+SOURCE_AUTHORITY = {
+    **SOURCE_AUTHORITY_V1,
+    "c010_a5_report_sha256": C010_A5_REPORT_SHA256,
+    "c010_a5_partition_sha256": C010_A5_PARTITION_SHA256,
 }
 
 _D1_REJECTION_REASONS = frozenset(
@@ -611,6 +620,8 @@ def build_process_receipt(
     attempts: Sequence[Mapping[str, Any]],
     treatment_source_identities: Sequence[Mapping[str, Any]],
     control_source_identities: Sequence[Mapping[str, Any]],
+    _schema_version: str = PROCESS_SCHEMA_VERSION,
+    _source_authority: Mapping[str, str] = SOURCE_AUTHORITY,
 ) -> dict[str, Any]:
     normalized_commit = _require_commit(producer_commit, "producer_commit")
     treatment_sources = validate_source_identity_set(
@@ -702,11 +713,11 @@ def build_process_receipt(
             "D1 process attempts do not share one numeric environment identity",
         )
     body = {
-        "schema_version": PROCESS_SCHEMA_VERSION,
+        "schema_version": _schema_version,
         "algorithm_version": ALGORITHM_VERSION,
         "process_identity": process_identity,
         "producer_commit": normalized_commit,
-        "source_authority": dict(SOURCE_AUTHORITY),
+        "source_authority": dict(_source_authority),
         "attempts": ordered,
         "attempt_count": len(ordered),
         "terminal_attempt_count": sum(value.get("status") in {"fit_completed", "fit_failed"} for value in ordered),
@@ -734,12 +745,14 @@ def validate_process_receipt(
     """Rebuild a child receipt with the writer authority before the parent trusts it."""
 
     normalized = dict(value)
+    schema_version = str(normalized.get("schema_version") or "")
+    source_authority = SOURCE_AUTHORITY if schema_version == PROCESS_SCHEMA_VERSION else SOURCE_AUTHORITY_V1
     if (
-        normalized.get("schema_version") != PROCESS_SCHEMA_VERSION
+        schema_version not in {PROCESS_SCHEMA_VERSION_V1, PROCESS_SCHEMA_VERSION}
         or normalized.get("algorithm_version") != ALGORITHM_VERSION
         or normalized.get("process_identity") != expected_process_identity
         or normalized.get("producer_commit") != _require_commit(expected_producer_commit, "expected_producer_commit")
-        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or normalized.get("source_authority") != source_authority
     ):
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_contract_invalid",
@@ -763,6 +776,8 @@ def validate_process_receipt(
         attempts=attempts,
         treatment_source_identities=treatment_sources,
         control_source_identities=control_sources,
+        _schema_version=schema_version,
+        _source_authority=source_authority,
     )
     if rebuilt != normalized:
         raise D1InactiveDimensionError(
@@ -777,6 +792,8 @@ def build_controlled_refit_report(
     second: Mapping[str, Any],
     *,
     producer_commit: str,
+    _schema_version: str = REPORT_SCHEMA_VERSION,
+    _source_authority: Mapping[str, str] = SOURCE_AUTHORITY,
 ) -> dict[str, Any]:
     normalized_commit = _require_commit(producer_commit, "producer_commit")
     reasons: list[str] = []
@@ -851,10 +868,10 @@ def build_controlled_refit_report(
     )
     actual_attempt_count = sum(len(process.get("attempts") or ()) for process in processes)
     body = {
-        "schema_version": REPORT_SCHEMA_VERSION,
+        "schema_version": _schema_version,
         "diagnostic_contract": "C-008-B3-REMEDIATION-D1-B-REFIT-01",
         "producer_commit": normalized_commit,
-        "source_authority": dict(SOURCE_AUTHORITY),
+        "source_authority": dict(_source_authority),
         "status": "diagnostic_complete" if not reasons else "diagnostic_incomplete",
         "mechanism_assessment": mechanism,
         "mechanism_assessment_reason_codes": sorted(set(reasons) | all_attempt_reasons),
@@ -878,11 +895,13 @@ def validate_controlled_refit_report(report: Mapping[str, Any]) -> dict[str, Any
     """Use the report writer authority for durable success/incomplete readback."""
 
     normalized = dict(report)
+    schema_version = str(normalized.get("schema_version") or "")
+    source_authority = SOURCE_AUTHORITY if schema_version == REPORT_SCHEMA_VERSION else SOURCE_AUTHORITY_V1
     if (
-        normalized.get("schema_version") != REPORT_SCHEMA_VERSION
+        schema_version not in {REPORT_SCHEMA_VERSION_V1, REPORT_SCHEMA_VERSION}
         or normalized.get("diagnostic_contract") != "C-008-B3-REMEDIATION-D1-B-REFIT-01"
         or normalized.get("status") not in {"diagnostic_complete", "diagnostic_incomplete"}
-        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or normalized.get("source_authority") != source_authority
     ):
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_contract_invalid",
@@ -902,6 +921,8 @@ def validate_controlled_refit_report(report: Mapping[str, Any]) -> dict[str, Any
         processes[0],
         processes[1],
         producer_commit=_require_commit(normalized.get("producer_commit"), "producer_commit"),
+        _schema_version=schema_version,
+        _source_authority=source_authority,
     )
     if rebuilt != normalized:
         raise D1InactiveDimensionError(
@@ -916,6 +937,7 @@ def validate_controlled_process_failure_receipt(
     *,
     expected_process_identity: str,
     expected_producer_commit: str,
+    expected_source_authority: Mapping[str, str] = SOURCE_AUTHORITY,
 ) -> dict[str, Any]:
     normalized = dict(receipt)
     identity = str(normalized.get("receipt_sha256") or "")
@@ -932,7 +954,7 @@ def validate_controlled_process_failure_receipt(
         or normalized.get("status") != "failed"
         or normalized.get("process_identity") != expected_process_identity
         or normalized.get("producer_commit") != _require_commit(expected_producer_commit, "expected_producer_commit")
-        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or normalized.get("source_authority") != dict(expected_source_authority)
         or not str(normalized.get("reason_code") or "").strip()
         or normalized.get("fit_budget_completion_unknown") not in {True, False}
         or any(normalized.get(field) is not False for field in required_false_flags)
@@ -966,13 +988,15 @@ def _validate_controlled_refit_failure_report(report: Mapping[str, Any]) -> dict
         "database_write_performed",
         "runtime_action_performed",
     )
+    schema_version = str(normalized.get("schema_version") or "")
+    source_authority = SOURCE_AUTHORITY if schema_version == REPORT_SCHEMA_VERSION else SOURCE_AUTHORITY_V1
     if (
-        normalized.get("schema_version") != REPORT_SCHEMA_VERSION
+        schema_version not in {REPORT_SCHEMA_VERSION_V1, REPORT_SCHEMA_VERSION}
         or normalized.get("diagnostic_contract") != "C-008-B3-REMEDIATION-D1-B-REFIT-01"
         or normalized.get("status") != "diagnostic_failed"
         or normalized.get("mechanism_assessment") != "inconclusive"
         or normalized.get("d5_compatibility_evidence_ready") is not False
-        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or normalized.get("source_authority") != source_authority
         or any(normalized.get(field) is not False for field in required_false_flags)
         or receipt != canonical_sha256(body)
     ):
@@ -1010,6 +1034,7 @@ def _validate_controlled_refit_failure_report(report: Mapping[str, Any]) -> dict
             failed,
             expected_process_identity=expected_failure_identity,
             expected_producer_commit=str(normalized["producer_commit"]),
+            expected_source_authority=source_authority,
         )
         if normalized.get("fit_budget_completion_unknown") is not failed.get("fit_budget_completion_unknown"):
             raise D1InactiveDimensionError(
