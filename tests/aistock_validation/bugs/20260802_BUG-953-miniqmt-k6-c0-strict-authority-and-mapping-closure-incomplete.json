@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-953",
-  "closed_at": null,
+  "closed_at": "2026-08-03T02:47:24.845930Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -62,7 +62,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3048",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py -q",
   "required_verification": [
@@ -73,19 +73,19 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "fresh-process import and strict K6-C0 authority/lifecycle negative matrix; K6 remains shadow-only",
-    "database_readback_ref": "pending separately authorized K6-C0 production DDL and catalog readback",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?limit=1",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?limit=1",
     "fresh_process_evidence": [
       "fresh Python process imported K6-C0 contracts/repository, rejected a forged SUBMIT mapping identity, and independently matched forward canonical-LF 368fc29048ac40c7a9ca32f3ca76a214af2d6ba776e52b2490226ba341fb2ab4 plus catalog f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d -> PASS",
       "fresh Python process rejected forged SUBMIT mapping identity and matched forward SHA-256 368fc29048ac40c7a9ca32f3ca76a214af2d6ba776e52b2490226ba341fb2ab4 plus catalog f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d",
       "fresh Python process rejected forged SUBMIT mapping identity and matched tracked forward/catalog authority -> passed"
     ],
-    "identity_ref": "GET http://127.0.0.1:8001/api/v1/runtime-identity after user-owned restart",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-953/post-restart-receipt.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -95,7 +95,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -127,7 +127,13 @@
   "validation_evidence": [
     "validation-receipt: id=4faf06b832b725c6 commit=d6f3293eb6fe8ca69db5cc259276c74e61b3b639 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py -q` result=`91 passed`",
     "validation-receipt: id=099a8a2dcd9f4362 commit=d6f3293eb6fe8ca69db5cc259276c74e61b3b639 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
-    "validation-receipt: id=44066f81b0a955f8 commit=d6f3293eb6fe8ca69db5cc259276c74e61b3b639 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed, ownership 14/14`"
+    "validation-receipt: id=44066f81b0a955f8 commit=d6f3293eb6fe8ca69db5cc259276c74e61b3b639 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed, ownership 14/14`",
+    "2026-08-03 production read-only K6-C0 repository preflight: PostgresMiniQMTKernelRepository.preflight_k6c_schema() returned 8/8 true including k6c0_schema_catalog_fingerprint=true; no DDL/DML executed",
+    "2026-08-03 backend-main read-only probes: health, runtime identity and simulation platform diagnostics returned HTTP 200; observed runtime identity 32c81b513226a1c6db97bf5fad5070890344acf2 is an origin/main descendant of source merge f4da00f6838f6da6344223f6bba55dfe606def3e",
+    "direct K6-C0 matrix: 91 passed",
+    "l0: passed blocking=0",
+    "module registry: 8 passed ownership 14/14",
+    "production read-only PostgresMiniQMTKernelRepository.preflight_k6c_schema: 8/8 true"
   ],
   "verification_budget": {
     "budget": "deep",
