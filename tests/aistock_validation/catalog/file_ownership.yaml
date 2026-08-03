@@ -5,6 +5,7 @@ rules:
     include:
       - backend/services/advisory_modeling/**
       - backend/tests/advisory_modeling/**
+      - scripts/advisory_short_rebound_batch_b.py
       - tests/aistock_validation/history/advisory_modeling/**
       - docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_*.md
       - docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_*.md

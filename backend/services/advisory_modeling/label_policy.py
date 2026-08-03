@@ -18,7 +18,7 @@ from backend.services.advisory_modeling.identity import (
 LABEL_POLICY_SCHEMA_VERSION = "advisory_ranking_label_policy_v1"
 LABEL_INPUT_SCHEMA_VERSION = "advisory_ranking_label_input_v1"
 LABEL_RESULT_SCHEMA_VERSION = "advisory_ranking_group_label_result_v1"
-RANKING_GROUP_IDENTITY_SCHEMA_VERSION = "advisory_ranking_group_identity_v1"
+RANKING_GROUP_IDENTITY_SCHEMA_VERSION = "advisory_ranking_group_identity_v2"
 
 
 class RankingGroupStatus(str, Enum):
@@ -90,11 +90,11 @@ class RankingGroupIdentityV1(FrozenModel):
     )
     decision_as_of_trade_date: date
     target_trade_date: date
-    canonical_signal_scope_hash: str = Field(min_length=64, max_length=64)
+    stable_signal_semantics_hash: str = Field(min_length=64, max_length=64)
     label_policy_hash: str = Field(min_length=64, max_length=64)
     group_identity_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
-    @field_validator("canonical_signal_scope_hash", "label_policy_hash", "group_identity_hash")
+    @field_validator("stable_signal_semantics_hash", "label_policy_hash", "group_identity_hash")
     @classmethod
     def _hashes(cls, value: str | None, info: Any) -> str | None:
         return validated_hash(value, field_name=info.field_name)

@@ -30,8 +30,8 @@ class MarketRegimePolicyTemplateV1(FrozenModel):
         MARKET_REGIME_TEMPLATE_SCHEMA_VERSION
     )
     policy_template_id: str = "short_rebound_market_regime_v1"
-    return_feature_id: Literal["pit_universe_equal_weight_return_20"] = (
-        "pit_universe_equal_weight_return_20"
+    return_feature_id: Literal["market_return_20_mean"] = (
+        "market_return_20_mean"
     )
     breadth_feature_id: Literal["market_breadth_above_ma20"] = "market_breadth_above_ma20"
     return_weight: Decimal = Decimal("0.5")

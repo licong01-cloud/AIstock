@@ -9,6 +9,7 @@ from backend.services.advisory_modeling.contracts import (
     select_research_configuration,
 )
 from backend.services.advisory_modeling.feature_builder import (
+    ShortReboundFeatureBuilderV1,
     ShortReboundFeatureFormulaKernelV1,
     frozen_formula_registry_v1,
 )
@@ -18,14 +19,21 @@ from backend.services.advisory_modeling.label_policy import (
 )
 from backend.services.advisory_modeling.market_regime import MarketRegimePolicyTemplateV1
 from backend.services.advisory_modeling.style_profile import StrategyStyleProfileV1
+from backend.services.advisory_modeling.training_view import (
+    DatasetBuildIntentV1,
+    DatasetBuildRequestV1,
+)
 
 __all__ = [
     "CapabilityStatus",
+    "DatasetBuildIntentV1",
+    "DatasetBuildRequestV1",
     "ExperimentRegistryV1",
     "FeatureSet",
     "LightGbmTrainingConfigV1",
     "MarketRegimePolicyTemplateV1",
     "RankingLabelPolicyV1",
+    "ShortReboundFeatureBuilderV1",
     "ShortReboundFeatureFormulaKernelV1",
     "StrategyStyleProfileV1",
     "build_ranking_labels",

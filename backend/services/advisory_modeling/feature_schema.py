@@ -37,6 +37,7 @@ REQUIRED_QUERY_TEMPLATE_IDS = (
 )
 
 REQUIRED_FORMULA_IDS = (
+    "frozen_evidence_projection_v1",
     "candidate_rank_percentile_v1",
     "candidate_score_gap_v1",
     "multi_alpha_consensus_v1",
@@ -279,3 +280,313 @@ def feature_payload_hash(payload: dict[str, Any]) -> str:
     if not payload:
         raise ValueError("feature payload must not be empty")
     return canonical_json_sha256(payload)
+
+
+def frozen_feature_schema_v1() -> FeatureSchemaV1:
+    """Return the complete SHORT_REBOUND feature row contract used by export and inference."""
+
+    definitions: list[FeatureDefinitionV1] = []
+
+    def add(
+        name: str,
+        *,
+        dtype: Literal["float64", "int64", "bool", "string", "sha256"],
+        unit: str,
+        source_role: str,
+        formula_id: str,
+        missing_policy: Literal[
+            "REQUIRED_FAIL_GROUP",
+            "NULL_WITH_INDICATOR",
+            "ZERO_IS_OBSERVED_FACT",
+            "NOT_APPLICABLE_WITH_FLAG",
+        ],
+        query_template_id: str | None = None,
+    ) -> None:
+        definitions.append(
+            FeatureDefinitionV1(
+                name=name,
+                dtype=dtype,
+                unit=unit,
+                source_role=source_role,
+                query_template_id=query_template_id,
+                formula_id=formula_id,
+                formula_version="1",
+                missing_policy=missing_policy,
+            )
+        )
+
+    for name, dtype, unit in (
+        ("industry_l2_code", "string", "code"),
+        ("industry_mapping_hash", "sha256", "sha256"),
+        ("hmm_enabled", "bool", "boolean"),
+        ("hmm_snapshot_id", "string", "identity"),
+        ("hmm_snapshot_hash", "sha256", "sha256"),
+        ("hmm_snapshot_status", "string", "status"),
+        ("hmm_freshness_trade_days", "int64", "trading_day"),
+        ("hmm_coefficient", "float64", "multiplier"),
+        ("risk_enabled", "bool", "boolean"),
+        ("risk_policy_hash", "sha256", "sha256"),
+        ("risk_can_buy", "bool", "boolean"),
+        ("risk_multiplier", "float64", "multiplier"),
+        ("risk_delta", "float64", "score"),
+        ("risk_penalty", "float64", "score"),
+        ("universe_policy_hash", "sha256", "sha256"),
+    ):
+        add(
+            name,
+            dtype=dtype,  # type: ignore[arg-type]
+            unit=unit,
+            source_role="sealed_base_snapshot",
+            formula_id="frozen_evidence_projection_v1",
+            missing_policy=(
+                "REQUIRED_FAIL_GROUP"
+                if name in {"industry_l2_code", "industry_mapping_hash", "universe_policy_hash"}
+                else "NOT_APPLICABLE_WITH_FLAG"
+            ),
+        )
+
+    stages = ("alpha_raw", "hmm_adjusted", "risk_policy_adjusted", "selection_effective")
+    for stage in stages:
+        add(
+            f"{stage}_rank",
+            dtype="int64",
+            unit="rank",
+            source_role="base_stage_evidence",
+            formula_id="frozen_evidence_projection_v1",
+            missing_policy="REQUIRED_FAIL_GROUP",
+        )
+        add(
+            f"{stage}_score",
+            dtype="float64",
+            unit="score",
+            source_role="base_stage_evidence",
+            formula_id="frozen_evidence_projection_v1",
+            missing_policy="REQUIRED_FAIL_GROUP",
+        )
+        add(
+            f"{stage}_rank_percentile",
+            dtype="float64",
+            unit="ratio",
+            source_role="base_stage_evidence",
+            formula_id="candidate_rank_percentile_v1",
+            missing_policy="REQUIRED_FAIL_GROUP",
+        )
+        for side in ("previous", "next"):
+            add(
+                f"{stage}_score_gap_{side}",
+                dtype="float64",
+                unit="score",
+                source_role="base_stage_evidence",
+                formula_id="candidate_score_gap_v1",
+                missing_policy="NULL_WITH_INDICATOR",
+            )
+            add(
+                f"{stage}_score_gap_{side}_missing",
+                dtype="bool",
+                unit="boolean",
+                source_role="base_stage_evidence",
+                formula_id="candidate_score_gap_v1",
+                missing_policy="ZERO_IS_OBSERVED_FACT",
+            )
+
+    for name, dtype, unit in (
+        ("multi_alpha_leg_count", "int64", "count"),
+        ("multi_alpha_weighted_mean", "float64", "score"),
+        ("multi_alpha_weighted_std", "float64", "score"),
+        ("multi_alpha_sign_agreement", "float64", "ratio"),
+        ("multi_alpha_max_leg_dominance", "float64", "ratio"),
+        ("multi_alpha_component_evidence_hash", "sha256", "sha256"),
+    ):
+        add(
+            name,
+            dtype=dtype,  # type: ignore[arg-type]
+            unit=unit,
+            source_role="base_component_evidence",
+            formula_id="multi_alpha_consensus_v1",
+            missing_policy="REQUIRED_FAIL_GROUP",
+        )
+
+    for horizon in (1, 3, 5, 10, 20, 60):
+        add(
+            f"return_{horizon}",
+            dtype="float64",
+            unit="decimal_return",
+            source_role="market_history",
+            query_template_id="historical_market_history_window",
+            formula_id="adjusted_return_v1",
+            missing_policy="NULL_WITH_INDICATOR",
+        )
+        add(
+            f"return_{horizon}_missing",
+            dtype="bool",
+            unit="boolean",
+            source_role="market_history",
+            query_template_id="historical_market_history_window",
+            formula_id="adjusted_return_v1",
+            missing_policy="ZERO_IS_OBSERVED_FACT",
+        )
+    for horizon in (5, 20, 60):
+        add(
+            f"realized_volatility_{horizon}",
+            dtype="float64",
+            unit="log_return_std",
+            source_role="market_history",
+            query_template_id="historical_market_history_window",
+            formula_id="realized_volatility_v1",
+            missing_policy="NULL_WITH_INDICATOR",
+        )
+        add(
+            f"realized_volatility_{horizon}_missing",
+            dtype="bool",
+            unit="boolean",
+            source_role="market_history",
+            query_template_id="historical_market_history_window",
+            formula_id="realized_volatility_v1",
+            missing_policy="ZERO_IS_OBSERVED_FACT",
+        )
+    for horizon in (20, 60):
+        for extreme in ("high", "low"):
+            add(
+                f"distance_to_{extreme}_{horizon}",
+                dtype="float64",
+                unit="ratio",
+                source_role="market_history",
+                query_template_id="historical_market_history_window",
+                formula_id="distance_to_extreme_v1",
+                missing_policy="NULL_WITH_INDICATOR",
+            )
+            add(
+                f"distance_to_{extreme}_{horizon}_missing",
+                dtype="bool",
+                unit="boolean",
+                source_role="market_history",
+                query_template_id="historical_market_history_window",
+                formula_id="distance_to_extreme_v1",
+                missing_policy="ZERO_IS_OBSERVED_FACT",
+            )
+
+    for name, unit in (
+        ("amount_mean_5", "yuan"),
+        ("amount_mean_20", "yuan"),
+        ("turnover_mean_5", "percent"),
+        ("turnover_mean_20", "percent"),
+        ("amount_to_mean_20", "ratio"),
+        ("log_amount_zscore_20", "zscore"),
+    ):
+        add(
+            name,
+            dtype="float64",
+            unit=unit,
+            source_role="liquidity_history",
+            query_template_id="historical_fundamental_moneyflow_window",
+            formula_id="liquidity_state_v1",
+            missing_policy="NULL_WITH_INDICATOR",
+        )
+    add(
+        "liquidity_missing",
+        dtype="bool",
+        unit="boolean",
+        source_role="liquidity_history",
+        query_template_id="historical_fundamental_moneyflow_window",
+        formula_id="liquidity_state_v1",
+        missing_policy="ZERO_IS_OBSERVED_FACT",
+    )
+    for name in (
+        "moneyflow_ratio_current",
+        "moneyflow_ratio_5",
+        "moneyflow_ratio_20",
+        "moneyflow_sign_consistency_20",
+    ):
+        add(
+            name,
+            dtype="float64",
+            unit="ratio",
+            source_role="moneyflow_history",
+            query_template_id="historical_fundamental_moneyflow_window",
+            formula_id="moneyflow_state_v1",
+            missing_policy="NULL_WITH_INDICATOR",
+        )
+    add(
+        "moneyflow_missing",
+        dtype="bool",
+        unit="boolean",
+        source_role="moneyflow_history",
+        query_template_id="historical_fundamental_moneyflow_window",
+        formula_id="moneyflow_state_v1",
+        missing_policy="ZERO_IS_OBSERVED_FACT",
+    )
+
+    for prefix, formula_id in (("industry", "industry_context_v1"), ("market", "market_context_v1")):
+        for name in (
+            f"{prefix}_return_5_mean",
+            f"{prefix}_return_20_mean",
+            f"{prefix}_cross_section_volatility_20",
+            f"{prefix}_breadth_above_ma20",
+            f"{prefix}_positive_moneyflow_ratio",
+            f"{prefix}_up_limit_ratio",
+            f"{prefix}_down_limit_ratio",
+        ):
+            add(
+                name,
+                dtype="float64",
+                unit="ratio",
+                source_role=f"{prefix}_context",
+                query_template_id=(
+                    "historical_industry_membership" if prefix == "industry"
+                    else "historical_pit_universe_existing_readonly"
+                ),
+                formula_id=formula_id,
+                missing_policy="REQUIRED_FAIL_GROUP",
+            )
+        add(
+            f"{prefix}_member_set_hash",
+            dtype="sha256",
+            unit="sha256",
+            source_role=f"{prefix}_context",
+            query_template_id=(
+                "historical_industry_membership" if prefix == "industry"
+                else "historical_pit_universe_existing_readonly"
+            ),
+            formula_id=formula_id,
+            missing_policy="REQUIRED_FAIL_GROUP",
+        )
+
+    for name, unit in (
+        ("candidate_count", "count"),
+        ("candidate_industry_herfindahl", "ratio"),
+        ("candidate_alpha_score_std", "score"),
+        ("candidate_hmm_score_std", "score"),
+        ("candidate_risk_score_std", "score"),
+        ("candidate_selection_score_std", "score"),
+        ("candidate_mean_leg_disagreement", "score"),
+    ):
+        add(
+            name,
+            dtype="int64" if name == "candidate_count" else "float64",
+            unit=unit,
+            source_role="candidate_group",
+            formula_id="candidate_group_context_v1",
+            missing_policy="REQUIRED_FAIL_GROUP",
+        )
+
+    return FeatureSchemaV1(
+        feature_schema_id="short-rebound-feature-schema-v1",
+        definitions=tuple(definitions),
+        required_identity_features=(
+            "industry_l2_code",
+            "industry_mapping_hash",
+            "universe_policy_hash",
+            "multi_alpha_component_evidence_hash",
+        ),
+        required_rank_features=tuple(
+            f"{stage}_{suffix}"
+            for stage in stages
+            for suffix in ("rank", "score", "rank_percentile")
+        ),
+        required_source_features=(
+            "market_member_set_hash",
+            "industry_member_set_hash",
+            "return_5",
+            "amount_mean_20",
+        ),
+    )
