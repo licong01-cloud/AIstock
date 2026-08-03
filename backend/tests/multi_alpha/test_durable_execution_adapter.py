@@ -812,7 +812,12 @@ def test_published_manifest_rejects_path_escape_before_reading_external_file(
     assert caught.value.reason_code == "multi_alpha_artifact_manifest_invalid"
 
 
-def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(tmp_path: Path) -> None:
+def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
     adapter, repository, coordinator, artifact_client, used_nodes = _adapter(tmp_path)
     materialized = adapter.materialize_child_input(
         run_id=RUN_ID,
@@ -953,7 +958,10 @@ def test_durable_submit_freezes_oversized_runtime_artifact_cas_binding(tmp_path:
 
 def test_durable_submit_allows_loopback_wsl_drive_mount_runtime_artifact(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
     artifact_store_root = "/mnt/f/Dev/RD-Agent-state/artifact_cas"
     adapter, repository, coordinator, artifact_client, _used_nodes = _adapter(
         tmp_path,
@@ -996,6 +1004,7 @@ def test_durable_submit_allows_loopback_wsl_drive_mount_runtime_artifact(
     assert artifact_client.paths[-1] == nested_runtime
     assert binding["remote_path"] == expected_remote_path
     assert expected_remote_path in payload.wsl_command
+    assert payload.wsl_command.index("conda activate") < payload.wsl_command.index("python -c")
 
 
 def test_submission_intent_is_deterministic_and_attempt_scoped(tmp_path: Path) -> None:
