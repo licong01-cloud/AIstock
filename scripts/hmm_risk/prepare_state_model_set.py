@@ -2954,21 +2954,29 @@ def _load_b3_d1_train_inputs(
         "calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
         "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
     }
+    expected_input_identities = {
+        "mapping_manifest_hash": c010_a5_report["mapping_manifest_sha256"],
+        "calendar_manifest_hash": authority["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": authority["l2_stock_fact_manifest_hash"],
+    }
     for field, actual in identities.items():
-        if actual != authority[field]:
+        if actual != expected_input_identities[field]:
             raise StateModelSetError(f"D1-B frozen input drifted from {field}")
 
     current_policy = _c010_policy_manifest(inputs, request, producer_commit=producer_commit)
-    stable_source_fields = (
-        "mapping_manifest_hash",
+    stable_historical_fields = (
         "l2_stock_fact_manifest_hash",
         "calendar_manifest_hash",
-        "security_identity_manifest_sha256",
-        "provider_absence_manifest_sha256",
     )
+    a5_source_identities = {
+        "mapping_manifest_hash": c010_a5_report["mapping_manifest_sha256"],
+        "security_identity_manifest_sha256": c010_a5_report["security_identity_manifest_sha256"],
+        "provider_absence_manifest_sha256": c010_a5_report["provider_absence_manifest_sha256"],
+    }
     if (
         current_policy.get("schema_version") != C010_POLICY_VERSION
-        or any(current_policy.get(field) != historical_policy.get(field) for field in stable_source_fields)
+        or any(current_policy.get(field) != historical_policy.get(field) for field in stable_historical_fields)
+        or any(current_policy.get(field) != expected for field, expected in a5_source_identities.items())
         or current_policy.get("provider_absence_partition_receipt")
         != c010_a5_report["provider_absence_partition_receipt"]
         or current_policy.get("provider_absence_partition_receipt_sha256")

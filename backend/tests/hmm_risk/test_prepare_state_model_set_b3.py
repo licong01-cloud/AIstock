@@ -1761,6 +1761,9 @@ def _d1_c010_a5_report() -> dict:
         "producer_commit": "a" * 40,
         "train_trading_date_count": subject.C010_APPROVED_TRAIN_TRADING_DATE_COUNT,
         "train_trading_date_sha256": subject.C010_APPROVED_TRAIN_TRADING_DATE_SHA256,
+        "mapping_manifest_sha256": "4" * 64,
+        "security_identity_manifest_sha256": "5" * 64,
+        "provider_absence_manifest_sha256": "6" * 64,
         "provider_absence_partition_receipt": partition,
         "provider_absence_partition_receipt_sha256": partition["receipt_sha256"],
         "observation_eligibility_receipt": eligibility,
@@ -1840,6 +1843,77 @@ def test_d1_historical_request_remains_v1_and_cannot_be_silently_relabelled(monk
     }
     with pytest.raises(StateModelSetError, match="historical formal request authority is invalid"):
         subject._validate_b3_d1_historical_request_authority(request, target_manifest=target_manifest)
+
+
+def test_d1_v2_migration_uses_a5_mapping_identity_and_historical_non_mapping_identities(monkeypatch) -> None:
+    request = _request()
+    a5_report = _d1_c010_a5_report()
+    mapping = {"mapping": "a5"}
+    calendar = {"calendar": "historical"}
+    l2_stock_fact = {"l2": "historical"}
+    a5_report["mapping_manifest_sha256"] = subject.canonical_sha256(mapping)
+    historical_policy = {
+        "schema_version": subject.C010_POLICY_VERSION_V1,
+        "l2_stock_fact_manifest_hash": subject.canonical_sha256(l2_stock_fact),
+        "calendar_manifest_hash": subject.canonical_sha256(calendar),
+    }
+    current_policy = {
+        "schema_version": subject.C010_POLICY_VERSION,
+        "receipt_sha256": "7" * 64,
+        "mapping_manifest_hash": a5_report["mapping_manifest_sha256"],
+        "l2_stock_fact_manifest_hash": historical_policy["l2_stock_fact_manifest_hash"],
+        "calendar_manifest_hash": historical_policy["calendar_manifest_hash"],
+        "security_identity_manifest_sha256": a5_report["security_identity_manifest_sha256"],
+        "provider_absence_manifest_sha256": a5_report["provider_absence_manifest_sha256"],
+        "provider_absence_partition_receipt": a5_report["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": a5_report["provider_absence_partition_receipt_sha256"],
+        "expected_opportunity_receipt": a5_report["expected_opportunity_receipt"],
+        "expected_opportunity_receipt_sha256": a5_report["expected_opportunity_receipt_sha256"],
+        "eligibility_receipt": a5_report["observation_eligibility_receipt"],
+        "eligibility_receipt_sha256": a5_report["observation_eligibility_receipt_sha256"],
+    }
+    authority = dict(subject.B3_BLOCKER_FORMAL_AUTHORITY)
+    authority["calendar_manifest_hash"] = historical_policy["calendar_manifest_hash"]
+    authority["l2_stock_fact_manifest_hash"] = historical_policy["l2_stock_fact_manifest_hash"]
+    monkeypatch.setattr(subject, "B3_BLOCKER_FORMAL_AUTHORITY", authority)
+    monkeypatch.setattr(
+        subject,
+        "_validate_b3_d1_historical_request_authority",
+        lambda request, target_manifest: historical_policy,
+    )
+    monkeypatch.setattr(subject, "_validate_b3_d1_c010_a5_authority", lambda report: report)
+    monkeypatch.setattr(
+        subject,
+        "_load_l1_source_inputs",
+        lambda request, db_prefix, c010_formal: {
+            "mapping_manifest": mapping,
+            "dataset_manifest": {"calendar_benchmark": calendar},
+            "l2_stock_fact_manifest": l2_stock_fact,
+        },
+    )
+    monkeypatch.setattr(subject, "_c010_policy_manifest", lambda *args, **kwargs: current_policy)
+
+    _, identities = subject._load_b3_d1_train_inputs(
+        request,
+        db_prefix="TDX_DB_",
+        target_manifest={},
+        c010_a5_report=a5_report,
+        producer_commit="8" * 40,
+    )
+
+    assert identities["mapping_manifest_hash"] == a5_report["mapping_manifest_sha256"]
+    assert identities["c010_feature_domain_policy_sha256"] == current_policy["receipt_sha256"]
+
+    drifted = deepcopy(a5_report)
+    drifted["mapping_manifest_sha256"] = "9" * 64
+    with pytest.raises(StateModelSetError, match="mapping_manifest_hash"):
+        subject._load_b3_d1_train_inputs(
+            request,
+            db_prefix="TDX_DB_",
+            target_manifest={},
+            c010_a5_report=drifted,
+            producer_commit="8" * 40,
+        )
 
 
 def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_threads(monkeypatch, tmp_path) -> None:
