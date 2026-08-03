@@ -2,7 +2,7 @@
 
 > 日期：2026-08-02
 > Feature tier：`F2`（Advisory 数据、WSL 训练、immutable bundle 与影子推理跨边界能力）
-> 当前状态：`design_reviewed_ready_for_commit_implementation_not_started`
+> 当前状态：`batch_a_contract_source_verified_batches_b_c_d_not_started`
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 上游数据合同：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`
 > 上游审计合同：`docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md`
@@ -667,31 +667,31 @@ SEALED/hash/PIT/WSL/bundle 校验是数据与程序正确性合同，不是人�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-201 | §2.2、§6.1 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
+| F-201 | `backend/services/advisory_modeling/style_profile.py` | `backend/tests/advisory_modeling/test_contracts_and_features.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
 | F-202 | §2、§3、§5.1 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md` | design_ready | none |
 | F-203 | §6.2、§6.3.1、§9 Batch B | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-204 | §6.1-§6.5 | artifact: `docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md` | design_ready | none |
-| F-205 | §6.4 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-206 | §6.3、§6.6 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
-| F-207 | §6.5 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-208 | §6.6、§6.6.2 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
+| F-204 | `backend/services/advisory_modeling/feature_schema.py`、`feature_snapshot.py` | `backend/tests/advisory_modeling/test_contracts_and_features.py`、`test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-205 | `backend/services/advisory_modeling/label_policy.py` | `backend/tests/advisory_modeling/test_contracts_and_features.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-206 | `backend/services/advisory_modeling/feature_builder.py`、`feature_schema.py` | `backend/tests/advisory_modeling/test_contracts_and_features.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-207 | `backend/services/advisory_modeling/training_view.py` | `backend/tests/advisory_modeling/test_split_experiment_regime.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-208 | `backend/services/advisory_modeling/contracts.py` | `backend/tests/advisory_modeling/test_split_experiment_regime.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
 | F-209 | §6.7 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-210 | §6.8 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-211 | §5、§6.9 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
+| F-210 | `backend/services/advisory_modeling/bundle_store.py` | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-211 | `backend/services/advisory_modeling/shadow_inference.py` | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
 | F-212 | §7.3 | artifact: `docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md` | design_ready | none |
 | F-213 | §7.1-§7.2 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
 | F-214 | §7.2 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
-| F-215 | §8、§10.4 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
+| F-215 | `backend/services/advisory_modeling/errors.py`、全部 frozen contracts | `python -m nox -s advisory_modeling_backend` | batch_a_contract_verified_remaining_batches_design_ready | none |
 | F-216 | §6.9、§10.4 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
 | F-217 | §6.1、§6.9 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
-| F-218 | §6.6、§6.8 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-219 | §5.3 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-220 | §3、§13 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-221 | §3、§9 Batch B、§13 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-222 | §5.2、§10.1 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-223 | §9、§10.4 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-224 | §6.4、§6.9 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
+| F-218 | `backend/services/advisory_modeling/contracts.py`、`bundle_store.py` | `backend/tests/advisory_modeling/test_split_experiment_regime.py`、`test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-219 | `backend/services/advisory_modeling/bundle_store.py` | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-220 | `backend/services/advisory_modeling/**` | artifact: `tests/aistock_validation/history/advisory_modeling/20260803_advisory_short_rebound_batch_a_contract_review.md` | batch_a_verified | none |
+| F-221 | Batch A source diff contains no migration/repository/runtime writes | `python -m nox -s advisory_modeling_backend` | batch_a_verified | none |
+| F-222 | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-223 | Batch A implementation and five review rounds | artifact: `tests/aistock_validation/history/advisory_modeling/20260803_advisory_short_rebound_batch_a_contract_review.md` | batch_a_verified | none |
+| F-224 | `backend/services/advisory_modeling/label_policy.py`、`shadow_inference.py` | `backend/tests/advisory_modeling/test_contracts_and_features.py`、`test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
 
 ## 15. 当前结论与下一步
 
-本设计把首个可用模型功能压缩为一个明确垂直切片，没有恢复历史数据或建设通用平台。设计合入后，代码阶段从 Batch A 开始；Batch A 审核通过后才进入新多年 snapshot 构建。任何代码合入、生产数据库读取/写入、依赖安装、服务控制或模型激活仍需按当时具体任务单独报告。
+本设计把首个可用模型功能压缩为一个明确垂直切片，没有恢复历史数据或建设通用平台。Batch A 的 style、feature/formula/query、label、split、experiment、regime、bundle、shadow-result 和 typed reason 合同已完成源码与五轮审核；它没有执行数据库读取、特征物化、WSL 训练或模型推理，因此不代表 Phase 2/3 整体完成。下一步是 Batch B 新多年 snapshot 与训练文件构建。任何代码合入、生产数据库读取/写入、依赖安装、服务控制或模型激活仍需按当时具体任务单独报告。

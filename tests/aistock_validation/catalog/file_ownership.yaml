@@ -1,5 +1,18 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: advisory_short_rebound_modeling
+    priority: 129
+    include:
+      - backend/services/advisory_modeling/**
+      - backend/tests/advisory_modeling/**
+      - tests/aistock_validation/history/advisory_modeling/**
+      - docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_*.md
+      - docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_*.md
+    primary_module: advisory.modeling
+    impact_modules: [advisory.historical_range]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Short-rebound reranker contracts, deterministic calculations, isolated artifacts, direct tests, and their design records form one bounded Advisory-only research delivery.
   - rule_id: advisory_phase0b_candidate_quality
     priority: 128
     include:

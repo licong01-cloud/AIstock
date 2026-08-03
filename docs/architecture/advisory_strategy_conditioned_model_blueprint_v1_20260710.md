@@ -1,9 +1,9 @@
 # AIstock 荐股策略条件化模型体系 F2 架构蓝图 v1
 
 > 日期：2026-07-10
-> 修订日期：2026-08-02
+> 修订日期：2026-08-03
 > 文档类型：F2 顶层架构蓝图，当前修订使用 `docs-fast-update`
-> 当前状态：蓝图已形成；Phase 0A/Phase 1/Phase 1R 数据底座和 Phase 0B 真实 15 日只读审计已完成。15 日 snapshot 的成熟收益标签覆盖率为 0，因此经济和模型结论仍为 `NOT_YET_AVAILABLE`。首个 SHORT_REBOUND Phase 2/3 F2 详细设计已形成，当前 P0 是按其 Batch A 实现最小 style、feature/label、WSL、immutable bundle 和 reason contract，再生成覆盖 5 年训练历史及至少 300 个独立评估交易日的新 SEALED snapshot，进入 Top20→Top5 研究影子模型。旧 batch/root/orphan 只读保留且不阻断主线；不设置人工审批、角色、运行时策略包二次验证或未经确认的 canary/champion/ModelOps 前置链。
+> 当前状态：蓝图已形成；Phase 0A/Phase 1/Phase 1R 数据底座和 Phase 0B 真实 15 日只读审计已完成。15 日 snapshot 的成熟收益标签覆盖率为 0，因此经济和模型结论仍为 `NOT_YET_AVAILABLE`。首个 SHORT_REBOUND Phase 2/3 F2 详细设计已形成，Batch A 最小 style、feature/formula/query、label、split、experiment、regime、immutable bundle、shadow-result 和 reason 合同已通过源码审核；当前 P0 转为 Batch B，从数据库生成覆盖 5 年训练历史及至少 300 个独立评估交易日的新 SEALED snapshot 和训练文件，再进入 WSL Top20→Top5 研究影子模型。旧 batch/root/orphan 只读保留且不阻断主线；不设置人工审批、角色、运行时策略包二次验证或未经确认的 canary/champion/ModelOps 前置链。
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -1064,7 +1064,7 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 | Phase 1R R1-R4 | 历史逐日执行、Outcome/Summary 和 retrospective bridge 已验证 | `FOUNDATION_SUFFICIENT` | 保留既有事实，不返工 |
 | Phase 1R R5 | 源码、bridge、exact retry 和既有 UI readback 已验证；完整新链路 E2E 未闭合 | `DEFERRED_PRODUCT_ACCEPTANCE` | 首批模型功能完成后用新任务验证 |
 | Phase 0B | 真实 15 日只读审计与 exact retry 已完成；两包收益证据均为 `NOT_YET_AVAILABLE` | `TECHNICAL_AUDIT_COMPLETE` | 保留报告事实；多年 snapshot 生成后重新审计经济指标 |
-| 最小 Phase 2/3 合同 | 尚未设计或实现 | `P0_ACTIVE` | 只闭合首个超跌反弹模型需要的 style、feature/label、WSL 文件、bundle 与影子推理合同 |
+| 最小 Phase 2/3 合同 | F2 设计已合入；Batch A 合同源码和五轮审核已完成，未执行数据构建、训练或推理 | `BATCH_A_SOURCE_VERIFIED` | 合入 Batch A 后进入 Batch B，多年 snapshot/训练文件不回填为本行完成证据 |
 | Phase 3 多年训练 snapshot | 尚未生成；现有数据不满足 2/3/5 年训练窗口 | `P0_FUNCTION_INPUT` | 按最小 Phase 2 合同从生产数据库生成新的 SEALED Parquet |
 | Phase 3 Top20→Top5 重排 | 尚未训练或实现 | `P0_FIRST_MODEL_FUNCTION` | WSL 训练、影子推理和对照验收 |
 | Phase 4 收益/持有期 | 尚未训练或实现 | `P1_SECOND_MODEL_FUNCTION` | Phase 3 后实现唯一 Outcome bundle |
@@ -1393,13 +1393,14 @@ peak-before-stop path correctness
 3. 在开发/发布流程完成 Phase 1 migration 验证并部署 schema；运行任务不执行 DDL。
 4. Phase 1R R1-R4 已完成真实历史、Outcome/Summary、retrospective SEALED bridge、source correction 与隔离验收；R5 源码和生产 Dataset Bridge、lease、exact retry、既有 batch UI readback 已通过。旧 PARTIAL batch 和旧 root 只保留为历史事实，不再修复、迁移、归档或阻断后续研发。
 5. Phase 0B 详细设计、现有 15 日 SEALED snapshot 只读审计和 exact retry 已完成；报告准确返回成熟收益覆盖率 0、HMM/行业/Recall capability 不足和 null package conclusion，没有伪造候选深度或目标期限结论。
-6. Phase 2/3 F2 详细设计已形成，下一步按其 Batch A 实现超跌反弹重排模型所需的最小 style、feature/label、WSL、bundle 与 reason contract；不处理旧 batch、不扩建通用平台。
-7. Batch A 审核通过后，按冻结合同从生产数据库生成覆盖 5 年训练历史和至少 300 个独立评估交易日的新 SEALED Parquet snapshot 及 2/3/5 年训练视图，再在 WSL 完成 Phase 3 Top20→Top5 影子模型训练、验证和 immutable bundle；配置不改变现有荐股排名。
-8. 依次实现 Phase 4 收益/持有期和 Phase 5 买入/止盈/止损区间；每项模型独立验证，失败只关闭对应 capability。
-9. 按完成顺序发布 Phase 6 UI 影子展示，不等待所有模型同时完成。
-10. 首批真实功能完成后，使用当前代码、当前 root 和新历史区间创建新的单/原生多 Alpha 任务，完成 create/resume/query/outcome/summary/bridge、模型 readback 和三 viewport UI E2E；不恢复旧任务或处理旧产物。
-11. 用户明确确认 Phase 7 范围后，为指定 Program 配置一个 exact immutable model bundle；该配置只影响学术研究 shortlist 展示，不产生实时建议、正式交易列表或执行输入。
-12. 如未来需要 ModelOps、自动重训或漂移治理，另行完成专项设计和用户确认；它们不作为当前模型排名启用的前置门禁。
+6. Phase 2/3 F2 详细设计已形成；Batch A 的最小 style、feature/formula/query、label、split、experiment、regime、bundle、shadow-result 与 reason contract 已完成源码和五轮审核，不处理旧 batch、不扩建通用平台。
+7. Batch A 合入后，按冻结合同从生产数据库生成覆盖 5 年训练历史和至少 300 个独立评估交易日的新 SEALED Parquet snapshot 及 2/3/5 年训练视图；该 Batch B 数据构建不执行 WSL 训练。
+8. Batch B 数据质量闭合后，在 WSL 完成 Phase 3 Top20→Top5 影子模型训练、验证和 immutable bundle；配置不改变现有荐股排名。
+9. 依次实现 Phase 4 收益/持有期和 Phase 5 买入/止盈/止损区间；每项模型独立验证，失败只关闭对应 capability。
+10. 按完成顺序发布 Phase 6 UI 影子展示，不等待所有模型同时完成。
+11. 首批真实功能完成后，使用当前代码、当前 root 和新历史区间创建新的单/原生多 Alpha 任务，完成 create/resume/query/outcome/summary/bridge、模型 readback 和三 viewport UI E2E；不恢复旧任务或处理旧产物。
+12. 用户明确确认 Phase 7 范围后，为指定 Program 配置一个 exact immutable model bundle；该配置只影响学术研究 shortlist 展示，不产生实时建议、正式交易列表或执行输入。
+13. 如未来需要 ModelOps、自动重训或漂移治理，另行完成专项设计和用户确认；它们不作为当前模型排名启用的前置门禁。
 
 每一步都可独立停止。训练任务不得自动修改 Program 当前模型配置。
 
