@@ -70,6 +70,8 @@ from backend.services.hmm_risk.b3_training import (  # noqa: E402
     write_b3_ready_model_set,
 )
 from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
+    C010_A5_LINEAGE_EXCLUDED_FIELDS as B3_D1_C010_A5_LINEAGE_EXCLUDED_FIELDS,
+    C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION as B3_D1_C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION,
     C010_A5_MAPPING_SHA256 as B3_D1_C010_A5_MAPPING_SHA256,
     C010_A5_PARTITION_SHA256 as B3_D1_C010_A5_PARTITION_SHA256,
     C010_A5_REPORT_SHA256 as B3_D1_C010_A5_REPORT_SHA256,
@@ -2208,7 +2210,7 @@ def _load_b3_blocker_train_inputs(
     *,
     db_prefix: str,
     target_manifest: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, str]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Reload the frozen formal inputs without requiring the old producer checkout."""
 
     authority = B3_BLOCKER_FORMAL_AUTHORITY
@@ -2974,6 +2976,69 @@ def _validate_b3_d1_historical_request_authority(
     return historical_policy
 
 
+def _c010_a5_semantic_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _c010_a5_semantic_payload(item)
+            for key, item in sorted(value.items())
+            if key not in B3_D1_C010_A5_LINEAGE_EXCLUDED_FIELDS
+        }
+    if isinstance(value, list):
+        return [_c010_a5_semantic_payload(item) for item in value]
+    return value
+
+
+def _build_b3_d1_c010_a5_lineage_migration_receipt(
+    current_policy: dict[str, Any],
+    c010_a5_report: dict[str, Any],
+    *,
+    producer_commit: str,
+) -> dict[str, Any]:
+    sources = {
+        "provider_absence_partition": (
+            c010_a5_report["provider_absence_partition_receipt"],
+            current_policy["provider_absence_partition_receipt"],
+        ),
+        "expected_opportunity": (
+            c010_a5_report["expected_opportunity_receipt"],
+            current_policy["expected_opportunity_receipt"],
+        ),
+        "eligibility": (
+            c010_a5_report["observation_eligibility_receipt"],
+            current_policy["eligibility_receipt"],
+        ),
+    }
+    pairs: dict[str, dict[str, str]] = {}
+    for label, (approved, current) in sources.items():
+        approved_semantic_sha256 = canonical_sha256(_c010_a5_semantic_payload(approved))
+        current_semantic_sha256 = canonical_sha256(_c010_a5_semantic_payload(current))
+        if approved_semantic_sha256 != current_semantic_sha256:
+            raise StateModelSetError(
+                f"D1-B C-010-A5 {label} business payload drifted after receipt-envelope normalization"
+            )
+        pairs[label] = {
+            "approved_receipt_sha256": str(approved["receipt_sha256"]),
+            "current_receipt_sha256": str(current["receipt_sha256"]),
+            "approved_semantic_payload_sha256": approved_semantic_sha256,
+            "current_semantic_payload_sha256": current_semantic_sha256,
+        }
+    body = {
+        "schema_version": B3_D1_C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION,
+        "producer_commit": producer_commit,
+        "source_a5_report_sha256": B3_D1_C010_A5_REPORT_SHA256,
+        "source_a5_partition_sha256": B3_D1_C010_A5_PARTITION_SHA256,
+        "status": "accepted",
+        "excluded_non_business_fields": list(B3_D1_C010_A5_LINEAGE_EXCLUDED_FIELDS),
+        "receipt_pairs": pairs,
+        "selection_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def _load_b3_d1_train_inputs(
     request: dict[str, Any],
     *,
@@ -3002,73 +3067,23 @@ def _load_b3_d1_train_inputs(
         "security_identity_manifest_sha256": c010_a5_report["security_identity_manifest_sha256"],
         "provider_absence_manifest_sha256": c010_a5_report["provider_absence_manifest_sha256"],
     }
-    expected_lineage = {
-        **a5_source_identities,
-        "provider_absence_partition_receipt_sha256": c010_a5_report["provider_absence_partition_receipt_sha256"],
-        "expected_opportunity_receipt_sha256": c010_a5_report["expected_opportunity_receipt_sha256"],
-        "eligibility_receipt_sha256": c010_a5_report["observation_eligibility_receipt_sha256"],
-    }
-    mismatches = sorted(field for field, expected in expected_lineage.items() if current_policy.get(field) != expected)
-    receipt_objects = {
-        "provider_absence_partition_receipt": (
-            current_policy.get("provider_absence_partition_receipt"),
-            c010_a5_report["provider_absence_partition_receipt"],
-        ),
-        "expected_opportunity_receipt": (
-            current_policy.get("expected_opportunity_receipt"),
-            c010_a5_report["expected_opportunity_receipt"],
-        ),
-        "eligibility_receipt": (
-            current_policy.get("eligibility_receipt"),
-            c010_a5_report["observation_eligibility_receipt"],
-        ),
-    }
-    mismatches.extend(sorted(field for field, (actual, expected) in receipt_objects.items() if actual != expected))
+    mismatches = sorted(
+        field for field, expected in a5_source_identities.items() if current_policy.get(field) != expected
+    )
     if current_policy.get("schema_version") != C010_POLICY_VERSION:
         mismatches.append("schema_version")
     if mismatches:
-
-        def first_diff_paths(actual: Any, expected: Any, *, prefix: str, limit: int = 12) -> list[str]:
-            paths: list[str] = []
-
-            def visit(left: Any, right: Any, path: str) -> None:
-                if len(paths) >= limit or left == right:
-                    return
-                if isinstance(left, dict) and isinstance(right, dict):
-                    for key in sorted(set(left) | set(right)):
-                        if len(paths) >= limit:
-                            return
-                        if key not in left or key not in right:
-                            paths.append(f"{path}.{key}:missing")
-                        else:
-                            visit(left[key], right[key], f"{path}.{key}")
-                    return
-                if isinstance(left, list) and isinstance(right, list):
-                    if len(left) != len(right):
-                        paths.append(f"{path}:length")
-                        return
-                    for index, (left_item, right_item) in enumerate(zip(left, right, strict=True)):
-                        if len(paths) >= limit:
-                            return
-                        visit(left_item, right_item, f"{path}[{index}]")
-                    return
-                paths.append(path)
-
-            visit(actual, expected, prefix)
-            return paths
-
-        diff_paths = [
-            path
-            for field, (actual, expected) in receipt_objects.items()
-            for path in first_diff_paths(actual, expected, prefix=field)
-        ][:20]
         raise StateModelSetError(
             "D1-B C-010-A5 v2 execution lineage drifted from the approved preflight: "
             + ",".join(sorted(set(mismatches)))
-            + "; diff_paths="
-            + "|".join(diff_paths)
         )
+    lineage_migration = _build_b3_d1_c010_a5_lineage_migration_receipt(
+        current_policy,
+        c010_a5_report,
+        producer_commit=producer_commit,
+    )
     identities["c010_feature_domain_policy_sha256"] = str(current_policy["receipt_sha256"])
+    identities["c010_a5_lineage_migration_receipt"] = lineage_migration
     return inputs, identities
 
 
@@ -3134,6 +3149,7 @@ def prepare_b3_d1_controlled_pass(
         historical_pit_constituent_manifest_hash=authority["frozen_model_lineage"][B3_D1_TREATMENT_SECTOR][
             "pit_constituent_manifest_hash"
         ],
+        c010_a5_lineage_migration_receipt=input_identities["c010_a5_lineage_migration_receipt"],
     )
     control_migration = build_b3_d1_input_migration_receipt(
         series[B3_D1_CONTROL_SECTOR],
@@ -3147,6 +3163,7 @@ def prepare_b3_d1_controlled_pass(
         historical_pit_constituent_manifest_hash=authority["frozen_model_lineage"][B3_D1_CONTROL_SECTOR][
             "pit_constituent_manifest_hash"
         ],
+        c010_a5_lineage_migration_receipt=input_identities["c010_a5_lineage_migration_receipt"],
     )
     receipt = run_b3_d1_controlled_process(
         treatment_item=series[B3_D1_TREATMENT_SECTOR],

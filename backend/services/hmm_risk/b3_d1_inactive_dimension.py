@@ -32,6 +32,7 @@ ATTEMPT_SCHEMA_VERSION_V1 = "hmm_risk_c008_b3_d1_controlled_attempt_v1"
 ATTEMPT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_attempt_v2"
 PROJECTION_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_projection_receipt_v2"
 INPUT_MIGRATION_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_input_migration_receipt_v1"
+C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION = "hmm_risk_c010_a5_execution_lineage_migration_v1"
 PROCESS_SCHEMA_VERSION_V1 = "hmm_risk_c008_b3_d1_controlled_process_v1"
 PROCESS_SCHEMA_VERSION_V2 = "hmm_risk_c008_b3_d1_controlled_process_v2"
 PROCESS_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_process_v3"
@@ -81,6 +82,17 @@ _MIGRATABLE_INPUT_IDENTITY_FIELDS = frozenset(
         "l2_stock_fact_manifest_hash",
         "feature_domain_policy_sha256",
     }
+)
+C010_A5_LINEAGE_EXCLUDED_FIELDS = (
+    "authority_identity_sha256",
+    "authority_receipt_sha256",
+    "entry_sha256",
+    "expected_opportunity_receipt_sha256",
+    "identity_sha256",
+    "provider_absence_partition_receipt_sha256",
+    "query_plan_contract",
+    "receipt_sha256",
+    "security_resolver_receipt_sha256",
 )
 
 _D1_REJECTION_REASONS = frozenset(
@@ -249,6 +261,7 @@ def build_input_migration_receipt(
     producer_commit: str,
     historical_observation_manifest_hash: str | None,
     historical_pit_constituent_manifest_hash: str | None,
+    c010_a5_lineage_migration_receipt: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Prove that A5 changed only global lineage fields, never D1 sector observations."""
 
@@ -283,6 +296,10 @@ def build_input_migration_receipt(
             evidence={"changed_core_fields": changed},
         )
     normalized_policy_sha256 = _require_sha256(current_policy_sha256, "current_policy_sha256")
+    lineage_migration = _validate_c010_a5_lineage_migration_envelope(
+        c010_a5_lineage_migration_receipt,
+        expected_producer_commit=producer_commit,
+    )
     historical_observation_sha256 = None
     historical_pit_sha256 = None
     if role == CONTROL_ROLE:
@@ -329,6 +346,8 @@ def build_input_migration_receipt(
         "current_train_input_manifest_sha256": canonical_sha256(current),
         "unchanged_core_manifest_sha256": canonical_sha256(current_core),
         "migrated_identity_fields": migrated_fields,
+        "c010_a5_lineage_migration_receipt": lineage_migration,
+        "c010_a5_lineage_migration_receipt_sha256": lineage_migration["receipt_sha256"],
         "historical_observation_manifest_hash": historical_observation_sha256,
         "current_observation_manifest_hash": item.observation_manifest_hash,
         "historical_pit_constituent_manifest_hash": historical_pit_sha256,
@@ -364,6 +383,7 @@ def validate_input_migration_receipt(
         producer_commit=str(normalized.get("producer_commit") or ""),
         historical_observation_manifest_hash=normalized.get("historical_observation_manifest_hash"),
         historical_pit_constituent_manifest_hash=normalized.get("historical_pit_constituent_manifest_hash"),
+        c010_a5_lineage_migration_receipt=dict(normalized.get("c010_a5_lineage_migration_receipt") or {}),
     )
     if rebuilt != normalized:
         raise D1InactiveDimensionError(
@@ -391,6 +411,7 @@ def _validate_input_migration_envelope(receipt: Mapping[str, Any], *, expected_r
         field: {"historical": historical.get(field), "current": current.get(field)}
         for field in sorted(_MIGRATABLE_INPUT_IDENTITY_FIELDS)
     }
+    lineage_migration = normalized.get("c010_a5_lineage_migration_receipt")
     if (
         normalized.get("schema_version") != INPUT_MIGRATION_SCHEMA_VERSION
         or normalized.get("algorithm_version") != ALGORITHM_VERSION
@@ -405,6 +426,8 @@ def _validate_input_migration_envelope(receipt: Mapping[str, Any], *, expected_r
         or historical_core != current_core
         or current.get("mapping_manifest_hash") != C010_A5_MAPPING_SHA256
         or normalized.get("migrated_identity_fields") != expected_migrated_fields
+        or not isinstance(lineage_migration, Mapping)
+        or normalized.get("c010_a5_lineage_migration_receipt_sha256") != (lineage_migration or {}).get("receipt_sha256")
         or normalized.get("unchanged_core_manifest_sha256") != canonical_sha256(current_core)
         or canonical_sha256(historical) != expected_historical_sha256
         or canonical_sha256(current) != normalized.get("current_train_input_manifest_sha256")
@@ -440,6 +463,10 @@ def _validate_input_migration_envelope(receipt: Mapping[str, Any], *, expected_r
             "D1 input migration receipt envelope is invalid",
         )
     _require_commit(normalized.get("producer_commit"), "producer_commit")
+    _validate_c010_a5_lineage_migration_envelope(
+        lineage_migration,
+        expected_producer_commit=str(normalized["producer_commit"]),
+    )
     for field in ("current_observation_manifest_hash", "current_pit_constituent_manifest_hash"):
         _require_sha256(normalized.get(field), field)
     if expected_role == CONTROL_ROLE:
@@ -448,6 +475,56 @@ def _validate_input_migration_envelope(receipt: Mapping[str, Any], *, expected_r
     for field in sorted(_MIGRATABLE_INPUT_IDENTITY_FIELDS):
         _require_sha256(historical.get(field), f"historical.{field}")
         _require_sha256(current.get(field), f"current.{field}")
+    return normalized
+
+
+def _validate_c010_a5_lineage_migration_envelope(
+    receipt: Mapping[str, Any],
+    *,
+    expected_producer_commit: str,
+) -> dict[str, Any]:
+    normalized = dict(receipt)
+    identity = str(normalized.get("receipt_sha256") or "")
+    body = {key: value for key, value in normalized.items() if key != "receipt_sha256"}
+    pairs = normalized.get("receipt_pairs")
+    if (
+        normalized.get("schema_version") != C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION
+        or normalized.get("producer_commit") != _require_commit(expected_producer_commit, "expected_producer_commit")
+        or normalized.get("source_a5_report_sha256") != C010_A5_REPORT_SHA256
+        or normalized.get("source_a5_partition_sha256") != C010_A5_PARTITION_SHA256
+        or normalized.get("status") != "accepted"
+        or normalized.get("excluded_non_business_fields") != list(C010_A5_LINEAGE_EXCLUDED_FIELDS)
+        or not isinstance(pairs, Mapping)
+        or set(pairs) != {"eligibility", "expected_opportunity", "provider_absence_partition"}
+        or any(
+            not isinstance(pair, Mapping)
+            or pair.get("approved_semantic_payload_sha256") != pair.get("current_semantic_payload_sha256")
+            for pair in (pairs or {}).values()
+        )
+        or any(
+            normalized.get(field) is not False
+            for field in (
+                "selection_performed",
+                "model_write_performed",
+                "ready_artifact_write_performed",
+                "database_write_performed",
+                "runtime_action_performed",
+            )
+        )
+        or identity != canonical_sha256(body)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1 C-010-A5 execution-lineage migration receipt is invalid",
+        )
+    for pair in pairs.values():
+        for field in (
+            "approved_receipt_sha256",
+            "current_receipt_sha256",
+            "approved_semantic_payload_sha256",
+            "current_semantic_payload_sha256",
+        ):
+            _require_sha256(pair.get(field), field)
     return normalized
 
 

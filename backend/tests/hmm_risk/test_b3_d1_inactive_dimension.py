@@ -81,6 +81,33 @@ def _preprocess() -> dict[str, object]:
     return {"family": "identity", "winsor_low": None, "winsor_high": None, "center": None, "scale": None}
 
 
+def _lineage_migration_receipt(*, producer_commit: str = "1" * 40) -> dict[str, object]:
+    pairs = {
+        label: {
+            "approved_receipt_sha256": canonical_sha256({"label": label, "side": "approved"}),
+            "current_receipt_sha256": canonical_sha256({"label": label, "side": "current"}),
+            "approved_semantic_payload_sha256": canonical_sha256({"label": label, "semantic": True}),
+            "current_semantic_payload_sha256": canonical_sha256({"label": label, "semantic": True}),
+        }
+        for label in ("eligibility", "expected_opportunity", "provider_absence_partition")
+    }
+    body = {
+        "schema_version": subject.C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION,
+        "producer_commit": producer_commit,
+        "source_a5_report_sha256": subject.C010_A5_REPORT_SHA256,
+        "source_a5_partition_sha256": subject.C010_A5_PARTITION_SHA256,
+        "status": "accepted",
+        "excluded_non_business_fields": list(subject.C010_A5_LINEAGE_EXCLUDED_FIELDS),
+        "receipt_pairs": pairs,
+        "selection_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def _migration_receipts(*, producer_commit: str = "1" * 40) -> dict[str, dict[str, object]]:
     treatment = _series(subject.TREATMENT_SECTOR)
     control = _series(subject.CONTROL_SECTOR, inactive_value=7.0)
@@ -97,6 +124,7 @@ def _migration_receipts(*, producer_commit: str = "1" * 40) -> dict[str, dict[st
             historical_pit_constituent_manifest_hash=(
                 item.pit_constituent_manifest_hash if role == subject.CONTROL_ROLE else None
             ),
+            c010_a5_lineage_migration_receipt=_lineage_migration_receipt(producer_commit=producer_commit),
         )
         for role, item in (
             (subject.TREATMENT_ROLE, treatment),
@@ -190,6 +218,7 @@ def test_a5_input_migration_preserves_sector_core_and_normalizes_control_lineage
         producer_commit="1" * 40,
         historical_observation_manifest_hash=base.observation_manifest_hash,
         historical_pit_constituent_manifest_hash="d" * 64,
+        c010_a5_lineage_migration_receipt=_lineage_migration_receipt(),
     )
 
     projected, projection = subject.build_projection(
@@ -248,6 +277,7 @@ def test_a5_input_migration_preserves_sector_core_and_normalizes_control_lineage
             producer_commit="1" * 40,
             historical_observation_manifest_hash=base.observation_manifest_hash,
             historical_pit_constituent_manifest_hash="d" * 64,
+            c010_a5_lineage_migration_receipt=_lineage_migration_receipt(),
         )
 
 
@@ -712,6 +742,16 @@ def test_process_receipt_rejects_self_consistent_input_migration_envelope_drift(
             treatment_source_identities=treatment,
             control_source_identities=control,
             input_migration_receipts=migrations,
+        )
+
+    lineage = _lineage_migration_receipt()
+    lineage["receipt_pairs"]["eligibility"]["current_semantic_payload_sha256"] = "9" * 64
+    lineage_body = {key: value for key, value in lineage.items() if key != "receipt_sha256"}
+    lineage["receipt_sha256"] = canonical_sha256(lineage_body)
+    with pytest.raises(subject.D1InactiveDimensionError, match="execution-lineage migration receipt"):
+        subject._validate_c010_a5_lineage_migration_envelope(
+            lineage,
+            expected_producer_commit="1" * 40,
         )
 
 
