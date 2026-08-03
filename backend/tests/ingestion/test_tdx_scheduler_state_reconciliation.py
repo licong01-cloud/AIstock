@@ -88,14 +88,14 @@ def test_schedule_hygiene_reports_without_automatic_cleanup():
     assert by_code["weekend_compensation_not_weekly"]["action"] == "align_with_canonical_saturday_schedule"
 
 
-def test_non_saturday_legacy_weekend_schedule_skips_before_claim_or_job_creation():
+def test_non_saturday_legacy_weekend_schedule_skips_before_job_creation():
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
     scheduler._weekend_compensation_due = lambda: False
     scheduler._next_run_for = lambda _schedule_id: None
     scheduler._update_ingestion_schedule = lambda *args, **kwargs: calls.append((args, kwargs))
-    scheduler._claim_scheduled_fire = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError("non-Saturday legacy cadence must stop before claiming a fire")
+    scheduler._submit_ingestion = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("non-Saturday legacy cadence must stop before job submission")
     )
 
     scheduler._scheduled_ingestion_run(
@@ -109,6 +109,40 @@ def test_non_saturday_legacy_weekend_schedule_skips_before_claim_or_job_creation
     assert calls[0][0] == ("weekend-schedule",)
     assert calls[0][1]["last_status"] == "skipped"
     assert calls[0][1]["last_error"] == "not_saturday"
+
+
+def test_scheduled_fire_proceeds_without_any_cooldown_gate():
+    """BUG-966: no default cooldown is allowed — a daily schedule must fire at
+    its due time even if it already fired hours earlier (the removed 23h DB
+    claim cooldown silently swallowed a full trading day of core syncs)."""
+    assert not hasattr(TDXScheduler, "_claim_scheduled_fire")
+    assert not hasattr(TDXScheduler, "_frequency_cooldown_seconds")
+
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    submitted = []
+    scheduler._tracker = SimpleNamespace(is_running=lambda _key: False)
+    scheduler._recent_dataset_submission_exists = lambda *_args, **_kwargs: False
+    scheduler._is_trading_day = lambda _d: True
+    scheduler._compute_auto_range = lambda _dataset: (dt.date(2026, 8, 3), dt.date(2026, 8, 3))
+    scheduler._execute = lambda *_args, **_kwargs: None
+    scheduler._submit_ingestion = lambda *args, **kwargs: submitted.append((args, kwargs))
+    scheduler._next_run_for = lambda _schedule_id: None
+    scheduler._update_ingestion_schedule = lambda *args, **kwargs: None
+
+    scheduler._scheduled_ingestion_run(
+        "daily-schedule",
+        "kline_daily_raw",
+        "incremental",
+        {"at": "16:10"},
+        "daily",
+    )
+
+    assert len(submitted) == 1
+    args, _kwargs = submitted[0]
+    assert args[:4] == ("daily-schedule", "kline_daily_raw", "incremental", "schedule")
+    assert args[4]["start_date"] == "2026-08-03"
+    assert args[4]["end_date"] == "2026-08-03"
+    assert "job_id" in args[4]
 
 
 def test_success_ingestion_schedule_update_clears_previous_error():

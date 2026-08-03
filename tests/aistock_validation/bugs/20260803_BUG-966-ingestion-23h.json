@@ -2,7 +2,9 @@
   "actual": "根因: tdx_scheduler._claim_scheduled_fire 在每次触发时以 last_run_at 写入方式认领, 日级冷却窗口23小时; 认领即消耗窗口(哪怕周日skip_non_trade空跑), 且认领失败完全静默(不建job/不写日志表/不推进next_run), 导致任务监视器表现为任务凭空消失。2026-08-03 实证: 旧后端时区偏移+7h于昨夜23:10-01:00触发日线任务并消耗认领窗口, 今日(trading_calendar确认is_trading=True)16:10/16:20/16:50/17:10/17:20/18:00全部核心数据集(kline_daily_raw/kline_minute_raw/index_daily/sw_sector/stock_moneyflow_ts/sector_data)触发被23h冷却静默拦截, 全日核心同步零执行。该机制2026-04-28由commit 75a00e7f引入, 无需求、无设计文档、无Issue依据(docs/codex_project_memory/标准全库零命中), 用户明确禁止任何默认冷却功能。防重已由两层真实机制覆盖: 进程内_tracker.is_running防并发重叠 + _recent_dataset_submission_exists做DB级60分钟queued/running与60秒success去重(多后端实例并存场景同样覆盖)。修复: 彻底删除_claim_scheduled_fire认领门与_frequency_cooldown_seconds, 保留上述两层防重。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260803_BUG-966-ingestion-23h.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-966",
@@ -20,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260803-ba8c89c24dad",
       "timestamp": "2026-08-03T09:56:25.788786Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "claude_code",
+      "note": "修复需删除 backend/ingestion/tdx_scheduler.py 中 _claim_scheduled_fire/_frequency_cooldown_seconds 及其调用点, 并同步更新 test_tdx_scheduler_state_reconciliation.py 中引用 claim 桩的测试; 用户明确授权: 禁止任何默认冷却功能",
+      "timestamp": "2026-08-03T10:04:23.192368Z"
     }
   ],
   "evidence_uris": [],
