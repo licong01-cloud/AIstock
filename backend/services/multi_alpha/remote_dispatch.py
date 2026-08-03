@@ -39,6 +39,7 @@ from backend.services.quantevolver.qe_active_execution_capacity import (
 
 _LOCAL_HOSTS = {"", "localhost", "127.0.0.1", "::1"}
 _REMOTE_TASK_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_WSL_DRIVE_MOUNT_RE = re.compile(r"^/mnt/[A-Za-z](?:/|$)")
 _CHUNK_SIZE = 1024 * 1024
 _QE_FILE_SYNC_MAX_FILE_SIZE = 10 * 1024 * 1024
 _REMOTE_SMALL_TEXT_SUFFIXES = {".csv", ".json", ".py", ".txt", ".yaml", ".yml"}
@@ -641,13 +642,33 @@ def _remote_paths(
 
 
 def _require_remote_linux_path(*, path_name: str, value: str, node: ComputeNodeInfo) -> None:
-    invalid = "\\" in value or re.match(r"^[A-Za-z]:", value) is not None or not value.startswith("/") or value.startswith("/mnt/")
+    windows_mount = value.startswith("/mnt/")
+    allowed_wsl_mount = (
+        _WSL_DRIVE_MOUNT_RE.match(value) is not None
+        and _is_loopback_wsl_node(node)
+    )
+    invalid = (
+        "\\" in value
+        or re.match(r"^[A-Za-z]:", value) is not None
+        or not value.startswith("/")
+        or (windows_mount and not allowed_wsl_mount)
+    )
     if invalid:
         raise MultiAlphaCombineBacktestError(
             f"remote {path_name} must be a node-local Linux absolute path, got: {value}",
             reason_code="remote_path_invalid",
             context={"node_id": node.node_id, "api_base_url": node.api_base_url, "path_name": path_name, "value": value},
         )
+
+
+def _is_loopback_wsl_node(node: ComputeNodeInfo) -> bool:
+    parsed = urlparse(str(node.api_base_url or ""))
+    hostname = (parsed.hostname or "").lower()
+    return (
+        node.node_id.strip().lower().startswith("wsl")
+        and parsed.scheme.lower() in {"http", "https"}
+        and hostname in (_LOCAL_HOSTS - {""})
+    )
 
 
 def _remote_task_id(*, backtest_config: Mapping[str, Any], workspace: Path) -> str:
