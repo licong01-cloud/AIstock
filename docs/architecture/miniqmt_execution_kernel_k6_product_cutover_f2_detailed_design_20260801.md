@@ -370,7 +370,7 @@ RELEASE transaction 不新建 command/event/transition：它锁定 original auth
 
 只有冻结 execution plan 中明确属于同一 runtime、strategy、trade date，且 BUY 因同批 SELL 款尚未结算而收到现有 typed preflight reason 的 parent 才能创建 coordination。普通资金不足、capacity residual、risk reject、quote invalid 或 strategy package 问题不得被重新分类为 dependent-BUY。
 
-创建时必须闭合 BUY parent、所有 sell dependencies、required cash、`DEFER_DEPENDENT_BUY` authority item 的 strict command_json、deferred mapping/child、strategy ledger account 和 session authority。coordination 与 authority/mapping/child 必须在首次 product transaction 同时提交；缺少或冲突时 fail loud，不写 partial coordination。K3 inventory 可用于比较 legacy parity，但不是 K6 candidate source authority。
+创建时必须闭合 BUY parent、所有 sell dependencies、required cash、`DEFER_DEPENDENT_BUY` authority item 的 strict command_json、deferred mapping/child、strategy ledger account 和 session authority。coordination 与 authority/mapping/child 必须在首次 product transaction 同时提交；缺少或冲突时 fail loud，不写 partial coordination。K3 inventory既不是K6 candidate source authority，也不得作为legacy parity、迁移oracle或K6-B验收输入；K6-B只接受冻结execution plan、V3 authority与K2/qmt strategy ledger durable事实。
 
 deferred mapping使用K6 product-owned strict carrier、`mapping_version=1,status=DEFERRED_DEPENDENT_BUY`，计入algo `active_child_count`并与plugin的COMMAND_PENDING state闭合；outbox count必须为0。该carrier闭合authority item、coordination、command、mapping/child/client-ref、价量和原transition，且broker/order/trade lineage必须为空。release时同一physical mapping row只允许变为`version=2,RESERVED`并创建row_version=1的同command PENDING outbox；BLOCK/EOD只允许变为`version=2,TERMINAL`并由正式COMMAND_OUTCOME收敛plugin state。任何terminal mapping不得release或reopen；K1/K3共享mapping carrier保持byte/enum/initial-state authority不变。
 
