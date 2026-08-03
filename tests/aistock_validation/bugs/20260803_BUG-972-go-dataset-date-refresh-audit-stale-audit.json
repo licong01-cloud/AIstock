@@ -54,8 +54,8 @@
   },
   "first_seen_at": "2026-08-03T15:48:52.161372Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "abad34389e3638ee07567cab1578c9cb555adcb6",
+  "fixed_at": "2026-08-03T16:49:18Z",
   "github_issue_number": 3109,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3109",
   "last_seen_at": "2026-08-03T15:48:52.161372Z",
@@ -63,6 +63,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3110",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -95,7 +96,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -104,6 +105,12 @@
     "fingerprint": "db88d36bb0baf3551374a847",
     "source_event_id": "FE-20260803-db88d36bb0ba"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 49 passed",
+    "python -m py_compile backend/ingestion/tdx_scheduler.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
