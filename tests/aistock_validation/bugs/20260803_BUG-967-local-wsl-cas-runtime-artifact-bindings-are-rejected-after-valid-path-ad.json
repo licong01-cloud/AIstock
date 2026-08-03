@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-967",
-  "closed_at": null,
+  "closed_at": "2026-08-03T17:12:16.591062Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -108,8 +108,8 @@
   },
   "first_seen_at": "2026-08-03T10:38:34.147791Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1dea9d0b55074b5165a18205d41b4a28c38052da",
+  "fixed_at": "2026-08-03T17:12:16.591038Z",
   "github_issue_number": 3092,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3092",
   "last_seen_at": "2026-08-03T12:57:23.836075Z",
@@ -117,7 +117,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": null,
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3104",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -143,9 +143,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-967/post-restart-verify.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -155,7 +155,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -170,7 +170,9 @@
     "python -m ruff check plus py_compile plus git diff --check -> passed",
     "python -m nox -s l0 -> passed (0 blocking findings)",
     "python -m nox -s validation_module_registry_l0 -> passed (8 tests)",
-    "post-restart backend-main identity and business smoke -> passed"
+    "post-restart backend-main identity and business smoke -> passed",
+    "python -m pytest backend/tests/multi_alpha/test_durable_execution_adapter.py::test_durable_submit_allows_loopback_wsl_drive_mount_runtime_artifact -q -> passed (1 durable submit case)",
+    "python -m pytest backend/tests/multi_alpha/test_durable_execution_adapter.py backend/tests/test_multi_alpha_remote_dispatch.py -q -> passed (60 passed, 1 skipped)"
   ],
   "verification_budget": {
     "budget": "standard",
