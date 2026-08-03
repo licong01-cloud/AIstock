@@ -19,6 +19,7 @@ from .kernel_product_contracts import (
     ProductCommandAuthorityItemV3,
     ProductCommandAuthoritySetV3,
     ProductCommandChildMappingV1,
+    ProductCommandChildMappingStatusV1,
     ProductCommandDispositionV3,
     ProductCommandLifecycleProjectionItemV3,
     ProductCommandLifecycleProjectionV3,
@@ -109,9 +110,16 @@ def _authority_item_projection_v3(value: ProductCommandAuthorityItemV3) -> dict[
 
 def _product_mapping_projection_v3(
     value: ExecutionCommandChildMappingV1 | ProductCommandChildMappingV1,
+    *,
+    authority_item: ProductCommandAuthorityItemV3,
 ) -> dict[str, Any]:
     projection = _mapping_scalar_projection(value)
-    projection["status"] = "REJECTED" if projection["mapping_status"] == "TERMINAL" else "SUBMITTING"
+    projection["status"] = (
+        "REJECTED"
+        if authority_item.disposition is ProductCommandDispositionV3.REJECT_SYNCHRONOUS
+        and authority_item.command_json.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT
+        else "SUBMITTING"
+    )
     return projection
 
 
@@ -139,6 +147,32 @@ def _dependency_projection_v2(value: DependentBuySellDependencyV2) -> dict[str, 
         "latest_order_fact_sha256": value.latest_order_fact_sha256,
         "ordered_settled_proceeds_refs": [item.model_dump(mode="json") for item in value.ordered_settled_proceeds_refs],
     }
+
+
+def _assert_coordination_authority_v2(
+    current: DependentBuyCoordinationV2,
+    initial: DependentBuyCoordinationV2,
+) -> None:
+    immutable_fields = (
+        "coordination_id",
+        "runtime_id",
+        "binding_id",
+        "trade_date",
+        "strategy_id",
+        "buy_algo_instance_id",
+        "buy_parent_intent_id",
+        "required_cash",
+        "release_command_id",
+        "release_transition_id",
+        "release_command_authority_item_sha256",
+        "release_command_payload_sha256",
+        "ordered_sell_dependencies",
+        "created_at_utc",
+    )
+    if any(getattr(current, field) != getattr(initial, field) for field in immutable_fields):
+        raise KernelRepositoryConflict("deferred product coordination changes immutable authority")
+    if current.row_version < initial.row_version or current.decision_sequence < initial.decision_sequence:
+        raise KernelRepositoryConflict("deferred product coordination regresses durable version authority")
 
 
 def _strict_roundtrip_v1(model_type: type[Any], value: Any, *, field_name: str) -> Any:
@@ -251,15 +285,17 @@ def _strict_transition_bundle_v1(value: KernelTransitionWriteBundleV1) -> Kernel
 
 
 def _immutable_materialization_lineage_sha256_v3(
+    authority: ProductCommandAuthoritySetV3,
     lifecycle: ProductCommandLifecycleProjectionV3,
 ) -> str:
     """Hash only the durable commit lineage, excluding later worker lifecycle state."""
 
+    lifecycle.validate_against_authority_v3(authority)
     return hash_hex_v1(
         "miniqmt_product_materialization_immutable_lineage_v3",
         [
             {
-                "authority_item_sha256": item.authority_item_sha256,
+                "authority_item_sha256": item.item_sha256,
                 "effect_ordinal": item.effect_ordinal,
                 "command_id": item.command_id,
                 "disposition": item.disposition.value,
@@ -267,7 +303,7 @@ def _immutable_materialization_lineage_sha256_v3(
                 "outbox_id": item.outbox_id,
                 "child_order_id": item.child_order_id,
             }
-            for item in lifecycle.ordered_item_projections
+            for item in authority.ordered_items
         ],
     )
 
@@ -406,6 +442,10 @@ class KernelProductMaterializationRepositoryMixin:
             previous_delivery,
             field_name="previous_delivery",
         )
+        if type(expected_delivery_row_version) is not int or expected_delivery_row_version <= 0:
+            raise ValueError("expected_delivery_row_version must be one strict positive integer")
+        if type(expected_algo_row_version) is not int or expected_algo_row_version <= 0:
+            raise ValueError("expected_algo_row_version must be one strict positive integer")
         if type(strategy_slot_id) is not str or not strategy_slot_id or strategy_slot_id != strategy_slot_id.strip():
             raise ValueError("strategy_slot_id must be a canonical strict identity")
         authority = envelope.authority_set
@@ -455,8 +495,8 @@ class KernelProductMaterializationRepositoryMixin:
         if set(base_outbox_by_command) != {item.command_id for item in authority.ordered_items}:
             raise ValueError("K2 transition bundle must carry the exact pre-product command set")
 
-        regular_mappings: list[ExecutionCommandChildMappingV1] = []
-        product_mappings: list[ProductCommandChildMappingV1] = []
+        regular_mappings: list[tuple[ExecutionCommandChildMappingV1, ProductCommandAuthorityItemV3]] = []
+        product_mappings: list[tuple[ProductCommandChildMappingV1, ProductCommandAuthorityItemV3]] = []
         outboxes: list[BrokerCommandOutboxV1] = []
         coordinations: list[DependentBuyCoordinationV2] = []
         created_at_utc = transition_bundle.after_state.updated_at_utc
@@ -487,16 +527,19 @@ class KernelProductMaterializationRepositoryMixin:
                 raise ValueError("CANCEL command cannot create a new child mapping")
             if item.disposition is ProductCommandDispositionV3.MATERIALIZE:
                 if base_mapping is not None:
-                    regular_mappings.append(base_mapping)
+                    regular_mappings.append((base_mapping, item))
                     active_new_count += 1
                 outboxes.append(base_outbox)
             elif item.disposition is ProductCommandDispositionV3.REJECT_SYNCHRONOUS:
                 if base_mapping is not None:
                     regular_mappings.append(
-                        _terminal_reject_mapping(
-                            item=item,
-                            strategy_slot_id=strategy_slot_id,
-                            created_at_utc=created_at_utc,
+                        (
+                            _terminal_reject_mapping(
+                                item=item,
+                                strategy_slot_id=strategy_slot_id,
+                                created_at_utc=created_at_utc,
+                            ),
+                            item,
                         )
                     )
                 outboxes.append(
@@ -508,10 +551,13 @@ class KernelProductMaterializationRepositoryMixin:
                 )
             else:
                 product_mappings.append(
-                    ProductCommandChildMappingV1.create_deferred(
-                        authority_item=item,
-                        strategy_slot_id=strategy_slot_id,
-                        created_at_utc=created_at_utc,
+                    (
+                        ProductCommandChildMappingV1.create_deferred(
+                            authority_item=item,
+                            strategy_slot_id=strategy_slot_id,
+                            created_at_utc=created_at_utc,
+                        ),
+                        item,
                     )
                 )
                 coordinations.append(_coordination_v2(item, created_at_utc=created_at_utc))
@@ -590,10 +636,10 @@ class KernelProductMaterializationRepositoryMixin:
                 algo_instance.validate_successor_v1(durable_algo)
                 transition_bundle.delivery.validate_successor_v1(durable_delivery)
                 self._insert_product_transition_header_with_cursor(cur, transition_bundle)
-                for mapping in regular_mappings:
-                    self._insert_product_child_with_cursor(cur, mapping)
-                for mapping in product_mappings:
-                    self._insert_product_child_with_cursor(cur, mapping)
+                for mapping, item in regular_mappings:
+                    self._insert_product_child_with_cursor(cur, mapping, authority_item=item)
+                for mapping, item in product_mappings:
+                    self._insert_product_child_with_cursor(cur, mapping, authority_item=item)
                 self._write_transition_commands_with_cursor(
                     cur,
                     transition_id=authority.transition_id,
@@ -649,7 +695,11 @@ class KernelProductMaterializationRepositoryMixin:
     def _read_product_materialization_envelope_v3(
         self, authority_set_sha256: str
     ) -> tuple[ProductCommandAuthorityEnvelopeV3, ProductCommandLifecycleProjectionV3, ProductMaterializationReceiptV3]:
-        if type(authority_set_sha256) is not str or len(authority_set_sha256) != 64:
+        if (
+            type(authority_set_sha256) is not str
+            or len(authority_set_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in authority_set_sha256)
+        ):
             raise ValueError("authority_set_sha256 must be one lowercase SHA-256")
         with self._connection(transaction=False) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -837,8 +887,6 @@ class KernelProductMaterializationRepositoryMixin:
                     ProductCommandChildMappingV1,
                     _row_json(lineage["mapping"], "mapping_json"),
                 )
-                if outbox is not None:
-                    raise KernelRepositoryConflict("deferred product authority unexpectedly has an outbox")
                 if lineage["coordination"] is None:
                     raise KernelRepositoryConflict("deferred product authority coordination is missing")
                 coordination = validate_kernel_product_payload_v1(
@@ -855,7 +903,8 @@ class KernelProductMaterializationRepositoryMixin:
                     for row in lineage["dependencies"]
                 )
                 expected_coordination = _coordination_v2(item, created_at_utc=mapping.created_at_utc)
-                if coordination != expected_coordination or dependencies != coordination.ordered_sell_dependencies:
+                _assert_coordination_authority_v2(coordination, expected_coordination)
+                if dependencies != coordination.ordered_sell_dependencies:
                     raise KernelRepositoryConflict("deferred product authority coordination/dependencies differ")
                 _assert_scalar_columns(
                     lineage["coordination"],
@@ -868,8 +917,46 @@ class KernelProductMaterializationRepositoryMixin:
                         _dependency_projection_v2(dependency),
                         carrier_name="dependent-BUY dependency V2",
                     )
-                lifecycle_status = ProductLifecycleStatusV3.DEFERRED_DEPENDENT_BUY
-                last_stage = "DEFERRED_DEPENDENT_BUY"
+                if outbox is None:
+                    if (
+                        coordination.status is DependentBuyCoordinationStatusV1.DEFERRED_WAITING_SELL_PROCEEDS
+                        and mapping.mapping_status is ProductCommandChildMappingStatusV1.DEFERRED_DEPENDENT_BUY
+                    ):
+                        lifecycle_status = ProductLifecycleStatusV3.DEFERRED_DEPENDENT_BUY
+                        broker_called = None
+                    elif (
+                        coordination.status
+                        in {
+                            DependentBuyCoordinationStatusV1.BLOCKED_SELL_PROCEEDS_UNAVAILABLE,
+                            DependentBuyCoordinationStatusV1.EOD_RESIDUAL,
+                        }
+                        and mapping.mapping_status is ProductCommandChildMappingStatusV1.TERMINAL
+                    ):
+                        lifecycle_status = ProductLifecycleStatusV3.FAILED_TERMINAL
+                        broker_called = False
+                    else:
+                        raise KernelRepositoryConflict(
+                            "deferred product coordination/mapping state lacks exact no-outbox closure"
+                        )
+                else:
+                    if (
+                        coordination.status is not DependentBuyCoordinationStatusV1.RELEASED_TO_K2_OUTBOX
+                        or mapping.mapping_status is not ProductCommandChildMappingStatusV1.RESERVED
+                        or coordination.released_command_id != item.command_id
+                        or coordination.released_outbox_id != item.command_id
+                        or outbox.command_id != item.command_id
+                    ):
+                        raise KernelRepositoryConflict(
+                            "released dependent-BUY mapping/outbox/coordination identity does not close"
+                        )
+                    _assert_scalar_columns(
+                        lineage["outbox"],
+                        _outbox_scalar_projection(outbox),
+                        carrier_name="released dependent-BUY command outbox",
+                    )
+                    lifecycle_status = _OUTBOX_TO_PRODUCT_LIFECYCLE[outbox.status]
+                    broker_called = outbox.broker_called
+                last_stage = coordination.status.value if outbox is None else outbox.status.value
             else:
                 mapping = _model_from_json(
                     ExecutionCommandChildMappingV1,
@@ -888,9 +975,10 @@ class KernelProductMaterializationRepositoryMixin:
                     else _OUTBOX_TO_PRODUCT_LIFECYCLE[outbox.status]
                 )
                 last_stage = outbox.status.value
+                broker_called = outbox.broker_called
             _assert_scalar_columns(
                 lineage["mapping"],
-                _product_mapping_projection_v3(mapping),
+                _product_mapping_projection_v3(mapping, authority_item=item),
                 carrier_name="product command-child mapping",
             )
             if (mapping.mapping_id, mapping.child_order_id) != (item.mapping_id, item.child_order_id):
@@ -908,7 +996,7 @@ class KernelProductMaterializationRepositoryMixin:
                     child_order_id=mapping.child_order_id,
                     lifecycle_status=lifecycle_status,
                     last_committed_stage=last_stage,
-                    broker_called=None if outbox is None else outbox.broker_called,
+                    broker_called=broker_called,
                     qmt_order_id=None if outbox is None else outbox.broker_order_id,
                     callback_watermark=None if outbox is None else outbox.callback_watermark_before_call,
                     reconciliation_receipt_sha256=(
@@ -932,7 +1020,7 @@ class KernelProductMaterializationRepositoryMixin:
             "miniqmt_product_materialization_independent_readback_v3",
             {
                 "authority_envelope_sha256": envelope.envelope_sha256,
-                "immutable_lineage_sha256": _immutable_materialization_lineage_sha256_v3(lifecycle),
+                "immutable_lineage_sha256": _immutable_materialization_lineage_sha256_v3(authority, lifecycle),
                 "transition_receipt_sha256": transition_receipt.receipt_sha256,
             },
         )
@@ -965,9 +1053,13 @@ class KernelProductMaterializationRepositoryMixin:
         )
 
     def _insert_product_child_with_cursor(
-        self, cur: Any, mapping: ExecutionCommandChildMappingV1 | ProductCommandChildMappingV1
+        self,
+        cur: Any,
+        mapping: ExecutionCommandChildMappingV1 | ProductCommandChildMappingV1,
+        *,
+        authority_item: ProductCommandAuthorityItemV3,
     ) -> None:
-        projection = _product_mapping_projection_v3(mapping)
+        projection = _product_mapping_projection_v3(mapping, authority_item=authority_item)
         cur.execute(
             "INSERT INTO qmt_strategy.execution_child_order("
             "child_order_id,runtime_id,algo_instance_id,parent_intent_id,strategy_slot_id,symbol,side,quantity,"

@@ -13,6 +13,7 @@ from backend.services.miniqmt_execution_runtime.kernel_product_authority import 
     bind_product_transition_receipt_v3,
     build_product_command_authority_set_v3,
     evaluate_product_command_authority_v3,
+    product_transition_commit_identity_v3,
     product_transition_commit_identity_from_authority_v3,
 )
 from backend.services.miniqmt_execution_runtime.kernel_product_contracts import (
@@ -22,6 +23,9 @@ from backend.services.miniqmt_execution_runtime.kernel_product_contracts import 
     KernelProductContractError,
     ProductCommandDispositionV3,
     ProductCommandEvaluationEvidenceV3,
+    ProductCommandLifecycleProjectionItemV3,
+    ProductCommandLifecycleProjectionV3,
+    ProductLifecycleStatusV3,
 )
 from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1, thaw_json_v1
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
@@ -719,6 +723,111 @@ def test_product_authority_builder_rejects_missing_or_reordered_evidence() -> No
             creation_binding=authority,
             timer_schedules=(),
         )
+
+
+@pytest.mark.parametrize("entrypoint", ("bind", "identity", "aggregate"))
+def test_product_authority_public_entrypoints_fail_typed_on_malformed_exact_cardinality_evidence(
+    entrypoint: str,
+) -> None:
+    authority, transition, receipt, evidence = _aggregate_fixture()
+    malformed = (object(),)
+
+    with pytest.raises(KernelProductContractError) as raised:
+        if entrypoint == "bind":
+            bind_product_transition_receipt_v3(
+                transition=transition,
+                transition_receipt=receipt,
+                ordered_evidence=malformed,  # type: ignore[arg-type]
+                timer_schedules=(),
+            )
+        elif entrypoint == "identity":
+            product_transition_commit_identity_v3(
+                transition=transition,
+                transition_receipt=receipt,
+                ordered_evidence=malformed,  # type: ignore[arg-type]
+                timer_schedules=(),
+            )
+        else:
+            build_product_command_authority_set_v3(
+                transition=transition,
+                transition_receipt=receipt,
+                projection_set=evidence.execution_projection_set,
+                ordered_evidence=malformed,  # type: ignore[arg-type]
+                catalog=authority.plugin_catalog_snapshot,
+                creation_binding=authority,
+                timer_schedules=(),
+            )
+
+    assert raised.value.context["stage"] in {
+        "AGGREGATE_EVIDENCE_SET",
+        "PRODUCT_TRANSACTION_IDENTITY",
+    }
+
+
+def test_deferred_lifecycle_contract_accepts_released_outbox_and_terminal_no_broker_states() -> None:
+    common = {
+        "authority_item_sha256": "a" * 64,
+        "effect_ordinal": 0,
+        "command_id": "command_deferred",
+        "disposition": ProductCommandDispositionV3.DEFER_DEPENDENT_BUY,
+        "mapping_id": "mapping_deferred",
+        "child_order_id": "child_deferred",
+        "qmt_order_id": None,
+        "callback_watermark": None,
+        "reconciliation_receipt_sha256": None,
+    }
+
+    released = ProductCommandLifecycleProjectionItemV3.create(
+        **common,
+        outbox_id="command_deferred",
+        lifecycle_status=ProductLifecycleStatusV3.PENDING,
+        last_committed_stage="PENDING",
+        broker_called=None,
+    )
+    terminal = ProductCommandLifecycleProjectionItemV3.create(
+        **common,
+        outbox_id=None,
+        lifecycle_status=ProductLifecycleStatusV3.FAILED_TERMINAL,
+        last_committed_stage="EOD_RESIDUAL",
+        broker_called=False,
+    )
+
+    assert released.outbox_id == released.command_id
+    assert terminal.broker_called is False
+
+
+def test_product_lifecycle_authority_cardinality_drift_fails_with_typed_context() -> None:
+    authority_input, transition, receipt, evidence = _aggregate_fixture()
+    authority = build_product_command_authority_set_v3(
+        transition=transition,
+        transition_receipt=receipt,
+        projection_set=evidence.execution_projection_set,
+        ordered_evidence=(evidence,),
+        catalog=authority_input.plugin_catalog_snapshot,
+        creation_binding=authority_input,
+        timer_schedules=(),
+    )
+    lifecycle = ProductCommandLifecycleProjectionV3.create(
+        runtime_id=authority.runtime_id,
+        algo_instance_id=authority.algo_instance_id,
+        event_id=authority.event_id,
+        delivery_id=authority.delivery_id,
+        transition_id=authority.transition_id,
+        authority_set_sha256=authority.authority_set_sha256,
+        ordered_item_projections=(),
+    )
+
+    with pytest.raises(KernelProductContractError) as raised:
+        lifecycle.validate_against_authority_v3(authority)
+
+    assert raised.value.context["expected_outbox_ids"] == [authority.ordered_items[0].outbox_id]
+    assert raised.value.context["actual_outbox_ids"] == []
+
+    forged_lifecycle = lifecycle.model_copy(update={"ordered_item_projections": (object(),)})
+    with pytest.raises(KernelProductContractError) as malformed:
+        forged_lifecycle.validate_against_authority_v3(authority)
+
+    assert malformed.value.reason_code == "MINIQMT_K6_PRODUCT_AUTHORITY_LIFECYCLE_STRICT_READBACK_INVALID"
 
 
 def test_product_transaction_readback_rejects_timer_cardinality_drift() -> None:

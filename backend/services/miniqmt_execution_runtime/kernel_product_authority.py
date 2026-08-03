@@ -54,6 +54,82 @@ def _product_authority_invalid(message: str, *, stage: str, **context: Any) -> K
     )
 
 
+def _strict_product_tuple_v3(
+    values: Any,
+    *,
+    model_type: type[Any],
+    field_name: str,
+    stage: str,
+) -> tuple[Any, ...]:
+    """Strictly rebuild every public tuple item before business-field access."""
+
+    if type(values) is not tuple:
+        raise _product_authority_invalid(
+            f"{field_name} must be one strict tuple",
+            stage=stage,
+            field_name=field_name,
+            actual_type=type(values).__name__,
+        )
+    rebuilt: list[Any] = []
+    for ordinal, value in enumerate(values):
+        try:
+            if not isinstance(value, model_type):
+                raise TypeError(f"item must be {model_type.__name__}")
+            rebuilt.append(model_type.model_validate_json(value.model_dump_json(), strict=True))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise _product_authority_invalid(
+                f"{field_name} item failed strict readback",
+                stage=stage,
+                field_name=field_name,
+                item_ordinal=ordinal,
+                actual_type=type(value).__name__,
+                error_type=type(exc).__name__,
+                error=json_safe_evidence_v1(exc),
+            ) from exc
+    return tuple(rebuilt)
+
+
+def _strict_transition_inputs_v3(
+    *,
+    transition: Any,
+    transition_receipt: Any,
+    stage: str,
+) -> tuple[AlgoTransitionV1, AlgoTransitionReceiptV1]:
+    try:
+        if not isinstance(transition, AlgoTransitionV1):
+            raise TypeError("transition must be AlgoTransitionV1")
+        if not isinstance(transition_receipt, AlgoTransitionReceiptV1):
+            raise TypeError("transition_receipt must be AlgoTransitionReceiptV1")
+        return (
+            AlgoTransitionV1.model_validate_json(transition.model_dump_json(), strict=True),
+            AlgoTransitionReceiptV1.model_validate_json(transition_receipt.model_dump_json(), strict=True),
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise _product_authority_invalid(
+            "product transition inputs failed strict readback",
+            stage=stage,
+            transition_type=type(transition).__name__,
+            transition_receipt_type=type(transition_receipt).__name__,
+            error_type=type(exc).__name__,
+            error=json_safe_evidence_v1(exc),
+        ) from exc
+
+
+def _strict_transition_receipt_v3(value: Any, *, stage: str) -> AlgoTransitionReceiptV1:
+    try:
+        if not isinstance(value, AlgoTransitionReceiptV1):
+            raise TypeError("transition_receipt must be AlgoTransitionReceiptV1")
+        return AlgoTransitionReceiptV1.model_validate_json(value.model_dump_json(), strict=True)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise _product_authority_invalid(
+            "product transition receipt failed strict readback",
+            stage=stage,
+            actual_type=type(value).__name__,
+            error_type=type(exc).__name__,
+            error=json_safe_evidence_v1(exc),
+        ) from exc
+
+
 def _strict_inputs_v3(
     *,
     command: BrokerCommandV2,
@@ -359,9 +435,12 @@ def build_product_command_authority_set_v3(
 ) -> ProductCommandAuthoritySetV3:
     """Build the exact 0..N aggregate from one applied plugin transition."""
 
+    transition, transition_receipt = _strict_transition_inputs_v3(
+        transition=transition,
+        transition_receipt=transition_receipt,
+        stage="AGGREGATE_STRICT_READBACK",
+    )
     try:
-        transition = AlgoTransitionV1.model_validate_json(transition.model_dump_json())
-        transition_receipt = AlgoTransitionReceiptV1.model_validate_json(transition_receipt.model_dump_json())
         projection_set = ExecutionProjectionSetV1.model_validate_json(projection_set.model_dump_json())
         catalog = PluginCatalogSnapshotV1.model_validate_json(catalog.model_dump_json(), strict=True)
         creation_binding = VnpyFacadeAuthorityInputV2.model_validate_json(
@@ -374,12 +453,12 @@ def build_product_command_authority_set_v3(
             error_type=type(exc).__name__,
             error=json_safe_evidence_v1(exc),
         ) from exc
-    if type(ordered_evidence) is not tuple:
-        raise _product_authority_invalid(
-            "ordered_evidence must be one strict tuple",
-            stage="AGGREGATE_EVIDENCE_SET",
-            actual_type=type(ordered_evidence).__name__,
-        )
+    ordered_evidence = _strict_product_tuple_v3(
+        ordered_evidence,
+        model_type=ProductCommandEvaluationEvidenceV3,
+        field_name="ordered_evidence",
+        stage="AGGREGATE_EVIDENCE_SET",
+    )
     commands = transition.broker_commands
     command_ids = tuple(command.command_id for command in commands)
     evidence_keys = tuple((item.effect_ordinal, item.command_id) for item in ordered_evidence)
@@ -484,6 +563,30 @@ def product_transition_commit_identity_v3(
 ) -> str:
     """Return the non-circular transaction identity for one K6 product transition."""
 
+    transition, transition_receipt = _strict_transition_inputs_v3(
+        transition=transition,
+        transition_receipt=transition_receipt,
+        stage="PRODUCT_TRANSACTION_IDENTITY",
+    )
+    ordered_evidence = _strict_product_tuple_v3(
+        ordered_evidence,
+        model_type=ProductCommandEvaluationEvidenceV3,
+        field_name="ordered_evidence",
+        stage="PRODUCT_TRANSACTION_IDENTITY",
+    )
+    timer_schedules = _strict_product_tuple_v3(
+        timer_schedules,
+        model_type=ExecutionAlgoTimerScheduleV1,
+        field_name="timer_schedules",
+        stage="PRODUCT_TIMER_SCHEDULE_CLOSURE",
+    )
+    if len(ordered_evidence) != len(transition.broker_commands):
+        raise _product_authority_invalid(
+            "product transaction evidence does not close to commands",
+            stage="PRODUCT_TRANSACTION_IDENTITY",
+            command_count=len(transition.broker_commands),
+            evidence_count=len(ordered_evidence),
+        )
     command_inputs = tuple(
         {
             "effect_ordinal": command.ordinal,
@@ -493,12 +596,12 @@ def product_transition_commit_identity_v3(
         }
         for command, evidence in zip(transition.broker_commands, ordered_evidence, strict=True)
     )
-    if type(timer_schedules) is not tuple or len(timer_schedules) != len(transition.timer_mutations):
+    if len(timer_schedules) != len(transition.timer_mutations):
         raise _product_authority_invalid(
             "product transaction timer schedules do not close to timer mutations",
             stage="PRODUCT_TIMER_SCHEDULE_CLOSURE",
             timer_mutation_count=len(transition.timer_mutations),
-            timer_schedule_count=len(timer_schedules) if type(timer_schedules) is tuple else None,
+            timer_schedule_count=len(timer_schedules),
         )
     for mutation, schedule in zip(transition.timer_mutations, timer_schedules, strict=True):
         if (
@@ -574,6 +677,34 @@ def product_transition_commit_identity_from_authority_v3(
 ) -> str:
     """Recompute the product transaction identity from durable V3 command/evidence facts."""
 
+    try:
+        if not isinstance(authority, ProductCommandAuthoritySetV3):
+            raise TypeError("authority must be ProductCommandAuthoritySetV3")
+        authority = ProductCommandAuthoritySetV3.model_validate_json(authority.model_dump_json(), strict=True)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise _product_authority_invalid(
+            "durable product authority failed strict readback",
+            stage="PRODUCT_TRANSACTION_IDENTITY_READBACK",
+            actual_type=type(authority).__name__,
+            error_type=type(exc).__name__,
+            error=json_safe_evidence_v1(exc),
+        ) from exc
+    transition_receipt = _strict_transition_receipt_v3(
+        transition_receipt,
+        stage="PRODUCT_TRANSACTION_IDENTITY_READBACK",
+    )
+    timer_schedules = _strict_product_tuple_v3(
+        timer_schedules,
+        model_type=ExecutionAlgoTimerScheduleV1,
+        field_name="timer_schedules",
+        stage="PRODUCT_TRANSACTION_IDENTITY_READBACK",
+    )
+    diagnostic_observations = _strict_product_tuple_v3(
+        diagnostic_observations,
+        model_type=DiagnosticObservationV1,
+        field_name="diagnostic_observations",
+        stage="PRODUCT_TRANSACTION_IDENTITY_READBACK",
+    )
     if (
         authority.transition_id != transition_receipt.transition_id
         or authority.transition_receipt_sha256 != transition_receipt.receipt_sha256
@@ -614,6 +745,23 @@ def bind_product_transition_receipt_v3(
 ) -> AlgoTransitionReceiptV1:
     """Replace only the repository transaction identity with the exact K6 product identity."""
 
+    transition, transition_receipt = _strict_transition_inputs_v3(
+        transition=transition,
+        transition_receipt=transition_receipt,
+        stage="PRODUCT_TRANSACTION_IDENTITY",
+    )
+    ordered_evidence = _strict_product_tuple_v3(
+        ordered_evidence,
+        model_type=ProductCommandEvaluationEvidenceV3,
+        field_name="ordered_evidence",
+        stage="PRODUCT_TRANSACTION_IDENTITY",
+    )
+    timer_schedules = _strict_product_tuple_v3(
+        timer_schedules,
+        model_type=ExecutionAlgoTimerScheduleV1,
+        field_name="timer_schedules",
+        stage="PRODUCT_TIMER_SCHEDULE_CLOSURE",
+    )
     if tuple(item.command_id for item in transition.broker_commands) != transition_receipt.ordered_command_ids:
         raise _product_authority_invalid(
             "cannot bind a receipt to a different transition command set",
