@@ -3027,9 +3027,46 @@ def _load_b3_d1_train_inputs(
     if current_policy.get("schema_version") != C010_POLICY_VERSION:
         mismatches.append("schema_version")
     if mismatches:
+
+        def first_diff_paths(actual: Any, expected: Any, *, prefix: str, limit: int = 12) -> list[str]:
+            paths: list[str] = []
+
+            def visit(left: Any, right: Any, path: str) -> None:
+                if len(paths) >= limit or left == right:
+                    return
+                if isinstance(left, dict) and isinstance(right, dict):
+                    for key in sorted(set(left) | set(right)):
+                        if len(paths) >= limit:
+                            return
+                        if key not in left or key not in right:
+                            paths.append(f"{path}.{key}:missing")
+                        else:
+                            visit(left[key], right[key], f"{path}.{key}")
+                    return
+                if isinstance(left, list) and isinstance(right, list):
+                    if len(left) != len(right):
+                        paths.append(f"{path}:length")
+                        return
+                    for index, (left_item, right_item) in enumerate(zip(left, right, strict=True)):
+                        if len(paths) >= limit:
+                            return
+                        visit(left_item, right_item, f"{path}[{index}]")
+                    return
+                paths.append(path)
+
+            visit(actual, expected, prefix)
+            return paths
+
+        diff_paths = [
+            path
+            for field, (actual, expected) in receipt_objects.items()
+            for path in first_diff_paths(actual, expected, prefix=field)
+        ][:20]
         raise StateModelSetError(
             "D1-B C-010-A5 v2 execution lineage drifted from the approved preflight: "
             + ",".join(sorted(set(mismatches)))
+            + "; diff_paths="
+            + "|".join(diff_paths)
         )
     identities["c010_feature_domain_policy_sha256"] = str(current_policy["receipt_sha256"])
     return inputs, identities
