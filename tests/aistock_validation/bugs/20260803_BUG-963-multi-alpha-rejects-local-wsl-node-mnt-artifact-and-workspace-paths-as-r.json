@@ -1,6 +1,8 @@
 {
   "actual": "MA-E05 durable runs targeting online node wsl2-5080 fail before remote submission. Both orthogonality_aware children end in dispatch_failed/remote_path_invalid because remote_dispatch.py rejects the WSL node API artifact_store_root /mnt/f/Dev/RD-Agent-state/artifact_cas. The registered local WSL node also uses loopback api_base_url and /mnt/f workspace paths, while remote Linux nodes must continue rejecting Windows-mounted paths. Fix must distinguish a loopback local-WSL compute node from a genuinely remote Linux node, preserve fail-closed path validation for remote nodes, add targeted regression tests, and require fresh-process runtime verification after merge. Do not control backend processes.",
   "allowed_write_scope": [
+    "backend/services/multi_alpha/remote_dispatch.py",
+    "backend/tests/test_multi_alpha_remote_dispatch.py",
     "tests/aistock_validation/bugs/20260803_BUG-963-multi-alpha-rejects-local-wsl-node-mnt-artifact-and-workspace-paths-as-r.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,23 +22,73 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260803-18b5479d538e",
       "timestamp": "2026-08-03T06:46:48.784033Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "codex",
+      "note": "Changed-file runtime inference upgraded the initial triage-only scope to the Multi-Alpha remote dispatcher and its direct regression test; backend runtime impact cannot remain none.",
+      "timestamp": "2026-08-03T07:18:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/tests/test_multi_alpha_remote_dispatch.py"
+      ],
+      "impacted_modules": [
+        "platform.db",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/remote_dispatch.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/test_multi_alpha_remote_dispatch.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/remote_dispatch.py",
+        "backend/tests/test_multi_alpha_remote_dispatch.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py"
+    ]
   },
   "first_seen_at": "2026-08-03T06:46:48.784037Z",
   "fix_branch": null,
@@ -54,18 +106,30 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_idem_54220fa1bbcd45580f8160404466eab7f9b800e9",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded commit 14941679 and completed backend/tests/test_multi_alpha_remote_dispatch.py: 39 passed, 1 skipped",
+      "Fresh Python process verified loopback WSL /mnt drive acceptance plus remote/non-WSL/Windows-path fail-closed cases: 5 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
