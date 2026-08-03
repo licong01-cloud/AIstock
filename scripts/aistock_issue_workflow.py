@@ -1821,6 +1821,23 @@ def build_runtime_contract(
                 for field in ("health_ref", "identity_ref", "business_smoke_ref"):
                     if not target["probes"].get(field):
                         blocking.append(f"runtime target {target_id} probe is incomplete: {field}")
+                    else:
+                        probe_error = _validate_runtime_probe_ref(
+                            field,
+                            target["probes"].get(field),
+                            allowed_origins=flow._as_list(target.get("probe_origins")),
+                        )
+                        if probe_error:
+                            blocking.append(f"runtime target {target_id} {probe_error}")
+                database_ref = target["probes"].get("database_readback_ref")
+                if database_ref:
+                    probe_error = _validate_runtime_probe_ref(
+                        "database_readback_ref",
+                        database_ref,
+                        allowed_origins=flow._as_list(target.get("probe_origins")),
+                    )
+                    if probe_error:
+                        blocking.append(f"runtime target {target_id} {probe_error}")
         except WorkflowError as exc:
             blocking.append(str(exc))
         if not explicit:
@@ -1924,6 +1941,27 @@ def _normalized_http_origin(url: str) -> str | None:
     return f"{parsed.scheme}://{host}:{port}"
 
 
+def _validate_runtime_probe_ref(
+    name: str,
+    value: Any,
+    *,
+    allowed_origins: Iterable[str],
+) -> str | None:
+    text = str(value or "").strip()
+    if name == "database_readback_ref" and text.lower() == "not_required":
+        return None
+    if re.search(r"\s|[{}]", text):
+        return f"probe {name} must be an executable absolute endpoint without whitespace or placeholders: {text or 'missing'}"
+    origin = _normalized_http_origin(text)
+    if origin is None:
+        return f"probe {name} must be an http(s) read-only endpoint without credentials: {text or 'missing'}"
+    allowed = {_normalized_http_origin(item) for item in allowed_origins}
+    allowed.discard(None)
+    if origin not in allowed:
+        return f"probe {name} origin is not catalog-allowed: {origin}"
+    return None
+
+
 def _read_only_http_probe(
     name: str,
     url: str,
@@ -1976,6 +2014,131 @@ def _identity_values(body: str) -> set[str]:
 
     visit(payload)
     return {item for item in values if item}
+
+
+_FULL_GIT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_RUNTIME_IDENTITY_PROOF_SCHEMA = "aistock_runtime_identity_proof_v1"
+
+
+def _runtime_identity_proof_digest(proof: dict[str, Any]) -> str:
+    encoded = json.dumps(proof, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _git_commit_is_ancestor(ancestor: str, descendant: str, *, root: Path) -> bool:
+    return bool(
+        _run_command(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=root,
+            timeout=30,
+        ).get("ok")
+    )
+
+
+def _origin_main_commit(*, root: Path) -> str | None:
+    result = _run_command(
+        ["git", "rev-parse", "--verify", "origin/main^{commit}"],
+        cwd=root,
+        timeout=30,
+    )
+    value = str(result.get("stdout") or "").strip()
+    return value.lower() if result.get("ok") and _FULL_GIT_COMMIT_RE.fullmatch(value) else None
+
+
+def _build_runtime_identity_proof(
+    *,
+    expected_identity: str,
+    response_body: str,
+    root: Path,
+) -> tuple[dict[str, Any], str | None]:
+    expected = expected_identity.strip()
+    values = _identity_values(response_body)
+    if expected in values:
+        return (
+            {
+                "schema_version": _RUNTIME_IDENTITY_PROOF_SCHEMA,
+                "mode": "exact",
+                "expected_identity": expected,
+                "observed_identity": expected,
+                "origin_main_identity": None,
+                "expected_is_ancestor": True,
+                "observed_in_origin_main": True,
+            },
+            None,
+        )
+
+    candidates = sorted({value.lower() for value in values if _FULL_GIT_COMMIT_RE.fullmatch(value)})
+    observed = candidates[0] if len(candidates) == 1 else None
+    proof: dict[str, Any] = {
+        "schema_version": _RUNTIME_IDENTITY_PROOF_SCHEMA,
+        "mode": "origin_main_descendant",
+        "expected_identity": expected,
+        "observed_identity": observed,
+        "origin_main_identity": None,
+        "expected_is_ancestor": False,
+        "observed_in_origin_main": False,
+    }
+    if not _FULL_GIT_COMMIT_RE.fullmatch(expected):
+        return proof, "expected identity must be a full 40-hex Git commit for descendant proof"
+    if not candidates:
+        return proof, "runtime identity response does not contain the expected identity or one full Git commit"
+    if len(candidates) != 1:
+        return proof, f"runtime identity response is ambiguous: observed {len(candidates)} full Git commits"
+    origin_main = _origin_main_commit(root=root)
+    proof["origin_main_identity"] = origin_main
+    if origin_main is None:
+        return proof, "origin/main commit identity is unavailable for descendant proof"
+    expected_is_ancestor = _git_commit_is_ancestor(expected.lower(), observed, root=root)
+    proof["expected_is_ancestor"] = expected_is_ancestor
+    if not expected_is_ancestor:
+        return proof, "runtime identity is not a deployed origin/main descendant of the expected merge commit"
+    observed_in_origin_main = _git_commit_is_ancestor(observed, origin_main, root=root)
+    proof["observed_in_origin_main"] = observed_in_origin_main
+    if not observed_in_origin_main:
+        return proof, "runtime identity descendant is not contained in the verified origin/main lineage"
+    return proof, None
+
+
+def _runtime_identity_proof_errors(
+    receipt: dict[str, Any],
+    *,
+    expected_identity: str,
+    root: Path,
+) -> list[str]:
+    proof = receipt.get("runtime_identity_proof")
+    if not isinstance(proof, dict):
+        return ["post-restart receipt runtime identity proof is missing"]
+    errors: list[str] = []
+    if proof.get("schema_version") != _RUNTIME_IDENTITY_PROOF_SCHEMA:
+        errors.append("post-restart receipt runtime identity proof schema mismatch")
+    if receipt.get("runtime_identity_proof_digest") != _runtime_identity_proof_digest(proof):
+        errors.append("post-restart receipt runtime identity proof digest mismatch")
+    expected = expected_identity.strip()
+    observed = str(proof.get("observed_identity") or "").strip()
+    if str(proof.get("expected_identity") or "").strip() != expected:
+        errors.append("post-restart receipt runtime identity proof expected identity mismatch")
+    mode = proof.get("mode")
+    if mode == "exact":
+        if observed != expected or proof.get("expected_is_ancestor") is not True or proof.get("observed_in_origin_main") is not True:
+            errors.append("post-restart receipt exact runtime identity proof is inconsistent")
+        if proof.get("origin_main_identity") is not None:
+            errors.append("post-restart receipt exact runtime identity proof must not claim an origin/main snapshot")
+        return errors
+    if mode != "origin_main_descendant":
+        errors.append("post-restart receipt runtime identity proof mode is invalid")
+        return errors
+    origin_main = str(proof.get("origin_main_identity") or "").strip().lower()
+    if not all(_FULL_GIT_COMMIT_RE.fullmatch(value) for value in (expected, observed, origin_main)):
+        errors.append("post-restart receipt descendant identity proof requires full Git commits")
+        return errors
+    if proof.get("expected_is_ancestor") is not True or not _git_commit_is_ancestor(expected.lower(), observed.lower(), root=root):
+        errors.append("post-restart receipt expected merge is not an ancestor of the observed runtime identity")
+    if proof.get("observed_in_origin_main") is not True or not _git_commit_is_ancestor(observed.lower(), origin_main, root=root):
+        errors.append("post-restart receipt observed runtime identity is not in the recorded origin/main lineage")
+    current_origin_main = _origin_main_commit(root=root)
+    if current_origin_main is None or not _git_commit_is_ancestor(origin_main, current_origin_main, root=root):
+        errors.append("post-restart receipt recorded origin/main lineage is not contained in current origin/main")
+    return errors
 
 
 def _probe_evidence_digest(results: list[dict[str, Any]]) -> str:
@@ -2041,9 +2204,25 @@ def build_post_restart_verify(
                 )
             )
     identity_result = next((item for item in results if item.get("name") == "identity_ref"), {})
-    identity_match = bool(expected and expected in _identity_values(str(identity_result.get("_response_body") or "")))
-    if results and not identity_match:
-        blocking.append("runtime identity response does not contain the expected merged identity")
+    identity_proof, identity_error = _build_runtime_identity_proof(
+        expected_identity=expected,
+        response_body=str(identity_result.get("_response_body") or ""),
+        root=REPO_ROOT,
+    ) if results and expected else (
+        {
+            "schema_version": _RUNTIME_IDENTITY_PROOF_SCHEMA,
+            "mode": "unverified",
+            "expected_identity": expected or None,
+            "observed_identity": None,
+            "origin_main_identity": None,
+            "expected_is_ancestor": False,
+            "observed_in_origin_main": False,
+        },
+        "runtime identity proof was not executed",
+    )
+    identity_match = identity_error is None
+    if results and identity_error:
+        blocking.append(identity_error)
     failed_probes = [item.get("name") for item in results if item.get("status") != "passed"]
     if failed_probes:
         blocking.append(f"post-restart read-only probes failed: {failed_probes}")
@@ -2062,6 +2241,9 @@ def build_post_restart_verify(
         "process_control_performed": False,
         "tracked_files_written": False,
         "expected_identity": expected or None,
+        "observed_identity": identity_proof.get("observed_identity"),
+        "runtime_identity_proof": identity_proof,
+        "runtime_identity_proof_digest": _runtime_identity_proof_digest(identity_proof),
         "contract_digest": _runtime_contract_digest(contract),
         "catalog_sha256": _runtime_catalog_sha256(root=REPO_ROOT),
         "required_probe_names": required_probe_names,
@@ -12071,10 +12253,30 @@ def build_close_sync_plan(
                 runtime_receipt_errors.append("post-restart receipt gate is not passed")
             if runtime_receipt.get("runtime_identity_match") is not True:
                 runtime_receipt_errors.append("post-restart receipt runtime identity did not match")
+            if runtime_receipt.get("mode") != "read_only":
+                runtime_receipt_errors.append("post-restart receipt mode is not read_only")
+            if runtime_receipt.get("tracked_files_written") is not False:
+                runtime_receipt_errors.append("post-restart receipt must not include tracked writes")
             if not str(runtime_receipt.get("expected_identity") or "").strip():
                 runtime_receipt_errors.append("post-restart receipt expected identity is missing")
             if merge_commit and str(runtime_receipt.get("expected_identity") or "").strip() != str(merge_commit).strip():
                 runtime_receipt_errors.append("post-restart receipt expected identity does not match merge commit")
+            receipt_expected_identity = str(runtime_receipt.get("expected_identity") or "").strip()
+            if receipt_expected_identity:
+                runtime_receipt_errors.extend(
+                    _runtime_identity_proof_errors(
+                        runtime_receipt,
+                        expected_identity=receipt_expected_identity,
+                        root=REPO_ROOT,
+                    )
+                )
+            proof_observed_identity = (
+                str((runtime_receipt.get("runtime_identity_proof") or {}).get("observed_identity") or "").strip()
+                if isinstance(runtime_receipt.get("runtime_identity_proof"), dict)
+                else ""
+            )
+            if str(runtime_receipt.get("observed_identity") or "").strip() != proof_observed_identity:
+                runtime_receipt_errors.append("post-restart receipt observed identity does not match identity proof")
             if runtime_receipt.get("process_control_performed") is not False:
                 runtime_receipt_errors.append("post-restart receipt must not include process control")
             if runtime_receipt.get("blocking"):
