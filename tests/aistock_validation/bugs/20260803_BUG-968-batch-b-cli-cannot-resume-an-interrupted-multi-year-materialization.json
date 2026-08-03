@@ -1,0 +1,254 @@
+{
+  "actual": "Retry fails before recovery with an idempotency conflict, and an otherwise complete env file does not activate mutation runtime because repository root is not loaded.",
+  "allowed_write_scope": [
+    "scripts/advisory_short_rebound_batch_b.py",
+    "backend/services/advisory_modeling/batch_b.py",
+    "backend/tests/advisory_modeling/test_batch_b_cli.py",
+    "backend/tests/advisory_modeling/test_batch_b_contracts.py",
+    "tests/aistock_validation/bugs/20260803_BUG-968-batch-b-cli-cannot-resume-an-interrupted-multi-year-materialization.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-968",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-03T13:01:50.824410Z",
+  "description": "Retry fails before recovery with an idempotency conflict, and an otherwise complete env file does not activate mutation runtime because repository root is not loaded.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260803-ed158414d0df",
+      "timestamp": "2026-08-03T13:01:50.824405Z"
+    }
+  ],
+  "evidence_uris": [
+    "production batch ahrb_8318b7c195d5da1c032ca1d2a03439eb; operation ahrop_51e038905364b534c18110a290ca0fbf; request 6625102757ba31d0a581ed54d916700ecc8bbceac8260fc80b554dc8fc3519d7"
+  ],
+  "expected": "A Batch B CLI retry must recover the exact existing batch only when client key, stable user semantics, Program binding and date range match; runtime roots must load exclusively from the explicit env file.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/advisory_short_rebound_batch_b.py",
+      "backend/services/advisory_modeling/batch_b.py",
+      "backend/tests/advisory_modeling/test_batch_b_cli.py",
+      "backend/tests/advisory_modeling/test_batch_b_contracts.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "scripts/advisory_short_rebound_batch_b.py",
+        "backend/services/advisory_modeling/batch_b.py",
+        "backend/tests/advisory_modeling/test_batch_b_cli.py",
+        "backend/tests/advisory_modeling/test_batch_b_contracts.py"
+      ],
+      "impacted_modules": [
+        "advisory.modeling",
+        "advisory.historical_range"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/advisory_short_rebound_batch_b.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.modeling",
+          "risk_level": "high",
+          "rule_id": "advisory_short_rebound_modeling"
+        },
+        {
+          "file": "backend/services/advisory_modeling/batch_b.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.modeling",
+          "risk_level": "high",
+          "rule_id": "advisory_short_rebound_modeling"
+        },
+        {
+          "file": "backend/tests/advisory_modeling/test_batch_b_cli.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.modeling",
+          "risk_level": "high",
+          "rule_id": "advisory_short_rebound_modeling"
+        },
+        {
+          "file": "backend/tests/advisory_modeling/test_batch_b_contracts.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.modeling",
+          "risk_level": "high",
+          "rule_id": "advisory_short_rebound_modeling"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/advisory_short_rebound_batch_b.py",
+        "backend/services/advisory_modeling/batch_b.py",
+        "backend/tests/advisory_modeling/test_batch_b_cli.py",
+        "backend/tests/advisory_modeling/test_batch_b_contracts.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/advisory_short_rebound_batch_b.py",
+      "backend/services/advisory_modeling/batch_b.py",
+      "backend/tests/advisory_modeling/test_batch_b_cli.py",
+      "backend/tests/advisory_modeling/test_batch_b_contracts.py"
+    ]
+  },
+  "first_seen_at": "2026-08-03T13:01:50.824410Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3101,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3101",
+  "last_seen_at": "2026-08-03T13:01:50.824410Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "Batch B CLI cannot resume an interrupted multi-year materialization",
+  "trigger_condition": {
+    "fingerprint": "ed158414d0df8caf54e2df41",
+    "source_event_id": "FE-20260803-ed158414d0df"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
