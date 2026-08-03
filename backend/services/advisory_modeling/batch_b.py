@@ -35,6 +35,9 @@ from .training_export import TrainingExportStore, materialize_training_export
 from .training_view import DatasetBuildIntentV1
 
 
+BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM = 8
+
+
 class BatchBDatasetMaterializationRequestV1(FrozenModel):
     schema_version: Literal["advisory_reranker_batch_b_materialization_request_v1"] = (
         "advisory_reranker_batch_b_materialization_request_v1"

@@ -11,6 +11,9 @@ from scripts.advisory_short_rebound_batch_b import (
     _load_environment,
     build_parser,
 )
+from backend.services.advisory_modeling.batch_b import (
+    BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM,
+)
 
 
 def test_batch_b_cli_requires_every_explicit_root_and_env_source(tmp_path: Path) -> None:
@@ -47,3 +50,7 @@ def test_database_config_uses_only_loaded_env_values_without_logging_secrets() -
         "password": "secret",
     }
     assert "secret" not in json.dumps({"keys": sorted(config)})
+
+
+def test_batch_b_uses_the_frozen_bounded_candidate_prefetch_width() -> None:
+    assert BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM == 8

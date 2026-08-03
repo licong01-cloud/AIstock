@@ -29,6 +29,7 @@ from backend.services.advisory_modeling.base_snapshot import (
     RerankerBaseSnapshotReader,
 )
 from backend.services.advisory_modeling.batch_b import (
+    BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM,
     BatchBDatasetMaterializationRequestV1,
     BatchBHistoricalRangeDriver,
     BatchBMaterializationService,
@@ -167,7 +168,9 @@ def main(argv: list[str] | None = None) -> int:
         historical_artifacts = HistoricalRangeArtifactStore.from_environment()
         service = BatchBMaterializationService(
             historical_driver=BatchBHistoricalRangeDriver(
-                service=build_environment_historical_range_r5_application_service()
+                service=build_environment_historical_range_r5_application_service(
+                    candidate_prefetch_per_program=BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM
+                )
             ),
             base_reader=RerankerBaseSnapshotReader(
                 catalog=PostgresPhase0BSnapshotCatalog(

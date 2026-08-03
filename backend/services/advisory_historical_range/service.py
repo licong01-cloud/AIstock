@@ -21,7 +21,11 @@ from .dataset_bridge import (
     HistoricalRangeDatasetBridgeApplicationService,
     HistoricalRangeDatasetBridgeArtifactV1,
 )
-from .executor import HistoricalRangeBatchExecutionService
+from .executor import (
+    DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
+    HistoricalRangeBatchExecutionService,
+    validate_candidate_prefetch_per_program,
+)
 from .artifact_store import HistoricalRangeArtifactStore
 from .models import (
     OUTCOME_REFRESH_RECEIPT_SCHEMA_VERSION,
@@ -149,10 +153,14 @@ class ResponseBoundHistoricalRangeDispatcher:
         *,
         runtime_factory: RuntimeFactory,
         failure_recorder_factory: FailureRecorderFactory | None = None,
+        candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
     ) -> None:
         if runtime_factory is None:
             raise ValueError("historical-range dispatcher requires runtime_factory")
         self._runtime_factory = runtime_factory
+        self._candidate_prefetch_per_program = validate_candidate_prefetch_per_program(
+            candidate_prefetch_per_program
+        )
         self._failure_recorder_factory = failure_recorder_factory or (
             lambda: _RuntimePreclaimFailureRecorder(runtime_factory)
         )
@@ -191,6 +199,7 @@ class ResponseBoundHistoricalRangeDispatcher:
                     worker_id=worker_id,
                     operation_idempotency_key=str(payload["operation_idempotency_key"]),
                     expected_batch_row_version=int(payload["expected_row_version"]),
+                    candidate_prefetch_per_program=self._candidate_prefetch_per_program,
                 )
             elif command == "CANCEL":
                 stage = "CLAIM_AND_EXECUTION"
@@ -801,7 +810,11 @@ class ResponseBoundHistoricalRangeDispatcher:
         operation = runtime.query.get_operation_internal(operation_id)
         if operation["status"] == HistoricalRangeOperationStatus.COMPLETED.value:
             runtime.planning.seal_completed_catalog(operation_id=operation_id)
-            runtime.execution.execute_until_blocked(batch_id=batch_id, worker_id=worker_id)
+            runtime.execution.execute_until_blocked(
+                batch_id=batch_id,
+                worker_id=worker_id,
+                candidate_prefetch_per_program=self._candidate_prefetch_per_program,
+            )
             return
         if operation["status"] == HistoricalRangeOperationStatus.RUNNING.value and not operation.get("lease_expired"):
             return
@@ -835,7 +848,11 @@ class ResponseBoundHistoricalRangeDispatcher:
             )
             claimed = result.operation
             if result.sealed_batch is not None:
-                runtime.execution.execute_until_blocked(batch_id=batch_id, worker_id=worker_id)
+                runtime.execution.execute_until_blocked(
+                    batch_id=batch_id,
+                    worker_id=worker_id,
+                    candidate_prefetch_per_program=self._candidate_prefetch_per_program,
+                )
                 return
             if str(claimed["status"]) != HistoricalRangeOperationStatus.RUNNING.value:
                 return
@@ -894,6 +911,7 @@ class HistoricalRangeApplicationService:
         query_runtime_factory: RuntimeFactory | None = None,
         mutation_runtime_factory: RuntimeFactory | None = None,
         failure_recorder_factory: FailureRecorderFactory | None = None,
+        candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
     ) -> None:
         query_factory = query_runtime_factory or runtime_factory
         mutation_factory = mutation_runtime_factory or runtime_factory
@@ -901,12 +919,16 @@ class HistoricalRangeApplicationService:
             raise ValueError("historical-range application service requires query and mutation runtime factories")
         self._query_runtime_factory = query_factory
         self._mutation_runtime_factory = mutation_factory
+        self._candidate_prefetch_per_program = validate_candidate_prefetch_per_program(
+            candidate_prefetch_per_program
+        )
         failure_recorder_factory = failure_recorder_factory or (
             lambda: _RuntimePreclaimFailureRecorder(mutation_factory)
         )
         self._dispatcher = ResponseBoundHistoricalRangeDispatcher(
             runtime_factory=mutation_factory,
             failure_recorder_factory=failure_recorder_factory,
+            candidate_prefetch_per_program=self._candidate_prefetch_per_program,
         )
 
     def list_batch_options(self) -> dict[str, Any]:
@@ -1059,6 +1081,7 @@ class HistoricalRangeApplicationService:
             batch_id=batch_id,
             request=request,
             operation_type=HistoricalRangeOperationType.RESUME,
+            candidate_prefetch_per_program=self._candidate_prefetch_per_program,
         )
         scheduled = _operation_dispatchable(operation)
         if scheduled:
@@ -1088,6 +1111,7 @@ class HistoricalRangeApplicationService:
             batch_id=batch_id,
             request=request,
             operation_type=HistoricalRangeOperationType.CANCEL,
+            candidate_prefetch_per_program=self._candidate_prefetch_per_program,
         )
         scheduled = _operation_dispatchable(operation)
         if scheduled:
@@ -1194,6 +1218,7 @@ def _domain_program_spec(value: Any) -> ExistingProgramSpecV1 | ResearchProgramS
 def _persist_execution_operation(
     *, runtime: HistoricalRangeRuntime, batch_id: str, request: HistoricalRangeCommandRequest,
     operation_type: HistoricalRangeOperationType,
+    candidate_prefetch_per_program: int,
 ) -> tuple[dict[str, Any], bool]:
     schema = "resume" if operation_type is HistoricalRangeOperationType.RESUME else "cancel"
     payload: dict[str, Any] = {
@@ -1205,7 +1230,9 @@ def _persist_execution_operation(
     if operation_type is HistoricalRangeOperationType.RESUME:
         payload.update({
             "max_program_concurrency": 2,
-            "candidate_prefetch_per_program": 2,
+            "candidate_prefetch_per_program": validate_candidate_prefetch_per_program(
+                candidate_prefetch_per_program
+            ),
             "day_slice_size": 4,
             "lease_seconds": 3600,
         })
