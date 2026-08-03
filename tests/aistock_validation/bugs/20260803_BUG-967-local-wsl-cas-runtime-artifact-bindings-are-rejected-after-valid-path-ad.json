@@ -113,7 +113,11 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_453ca2d0c5b21b40_20240701_20260629_20260803T100944839929Z_3fbba27f",
     "database_readback_ref": "not_required",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh Python process loaded commit 282bd808 and completed backend/tests/test_multi_alpha_remote_dispatch.py: 43 passed, 1 skipped",
+      "Fresh Python process verified loopback WSL /mnt drive CAS binding acceptance plus remote/non-WSL/non-drive /mnt fail-closed cases: 6 passed",
+      "Fresh Python process compiled backend/services/multi_alpha/remote_dispatch.py and backend/tests/test_multi_alpha_remote_dispatch.py successfully"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
