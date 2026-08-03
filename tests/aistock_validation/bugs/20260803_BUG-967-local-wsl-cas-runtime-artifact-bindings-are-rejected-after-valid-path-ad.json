@@ -3,42 +3,56 @@
   "allowed_write_scope": [
     "backend/services/multi_alpha/remote_dispatch.py",
     "backend/tests/test_multi_alpha_remote_dispatch.py",
+    "backend/services/multi_alpha/durable_execution_adapter.py",
+    "backend/tests/multi_alpha/test_durable_execution_adapter.py",
     "tests/aistock_validation/bugs/20260803_BUG-967-local-wsl-cas-runtime-artifact-bindings-are-rejected-after-valid-path-ad.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-967",
-  "closed_at": "2026-08-03T12:27:53.972151Z",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-03T10:38:34.147791Z",
-  "description": "Both MA-E05 WSL orthogonality_aware attempts fail before remote task creation with remote_runtime_artifact_binding_invalid on a valid /mnt/f/Dev/RD-Agent-state/artifact_cas/<sha256> object.",
+  "description": "MA-E05 WSL orthogonality_aware attempts fail before remote task creation with remote_runtime_artifact_binding_invalid on a valid /mnt/f/Dev/RD-Agent-state/artifact_cas/<sha256> object. Post-restart retries proved that the durable execution adapter omitted the resolved compute node when building the remote WSL command, so the node-aware binding validator still received node=None.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260803-f3f10eb8492c",
       "timestamp": "2026-08-03T10:38:34.147786Z"
+    },
+    {
+      "action": "reopen_after_runtime_reproduction",
+      "actor": "codex",
+      "note": "Post-restart MA-E05 retries reproduced the failure in durable_execution_adapter.py because the resolved node was not propagated to _remote_wsl_command.",
+      "timestamp": "2026-08-03T12:57:23.836075Z"
     }
   ],
   "evidence_uris": [
     "attempt=macba_c87c019c059594364f283cea9c2f76647c63c914f269df231db3f3b9fe4dabf6 reason_code=remote_runtime_artifact_binding_invalid",
-    "attempt=macba_a418bbc47af55dfdbad97364f8eb5dcb583f0d915e069bb811a37894bb9cac76 reason_code=remote_runtime_artifact_binding_invalid"
+    "attempt=macba_a418bbc47af55dfdbad97364f8eb5dcb583f0d915e069bb811a37894bb9cac76 reason_code=remote_runtime_artifact_binding_invalid",
+    "attempt=macba_f5439f6abfc45fc130a91a5a54e0c0c3f0dc95a3e1cc761f4a083cf3acb4a578 reason_code=remote_runtime_artifact_binding_invalid",
+    "attempt=macba_3a7c20f07205b3d9a51e96cf22780aee0b3207d9b5d14cb85c04770f7f27fe64 reason_code=remote_runtime_artifact_binding_invalid"
   ],
   "expected": "A CAS object under the configured /mnt/<drive>/ artifact_store_root is accepted only for the loopback local-WSL compute node; genuine remote nodes remain fail closed.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
       "backend/services/multi_alpha/remote_dispatch.py",
-      "backend/tests/test_multi_alpha_remote_dispatch.py"
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/multi_alpha/remote_dispatch.py",
-        "backend/tests/test_multi_alpha_remote_dispatch.py"
+        "backend/tests/test_multi_alpha_remote_dispatch.py",
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py"
       ],
       "impacted_modules": [
         "qe.auto_evolution",
@@ -78,28 +92,32 @@
       ],
       "suggested_scope": [
         "backend/services/multi_alpha/remote_dispatch.py",
-        "backend/tests/test_multi_alpha_remote_dispatch.py"
+        "backend/tests/test_multi_alpha_remote_dispatch.py",
+        "backend/services/multi_alpha/durable_execution_adapter.py",
+        "backend/tests/multi_alpha/test_durable_execution_adapter.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/multi_alpha/remote_dispatch.py",
-      "backend/tests/test_multi_alpha_remote_dispatch.py"
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
+      "backend/services/multi_alpha/durable_execution_adapter.py",
+      "backend/tests/multi_alpha/test_durable_execution_adapter.py"
     ]
   },
   "first_seen_at": "2026-08-03T10:38:34.147791Z",
   "fix_branch": null,
-  "fix_commit": "64b04198214358347a1bf7f594fa8a0f870445d8",
-  "fixed_at": "2026-08-03T12:27:53.972134Z",
+  "fix_commit": null,
+  "fixed_at": null,
   "github_issue_number": 3092,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3092",
-  "last_seen_at": "2026-08-03T10:38:34.147791Z",
+  "last_seen_at": "2026-08-03T12:57:23.836075Z",
   "module": "multi_alpha",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3096",
+  "pr_url": null,
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -118,14 +136,16 @@
       "Fresh Python process loaded commit 282bd808 and completed backend/tests/test_multi_alpha_remote_dispatch.py: 43 passed, 1 skipped",
       "Fresh Python process verified loopback WSL /mnt drive CAS binding acceptance plus remote/non-WSL/non-drive /mnt fail-closed cases: 6 passed",
       "Fresh Python process compiled backend/services/multi_alpha/remote_dispatch.py and backend/tests/test_multi_alpha_remote_dispatch.py successfully",
-      "Fresh Python process loaded persistent commit 282bd808 and completed remote-dispatch matrix: 43 passed, 1 skipped"
+      "Fresh Python process loaded persistent commit 282bd808 and completed remote-dispatch matrix: 43 passed, 1 skipped",
+      "Fresh Python process loaded follow-up commit 8829b8b9 and completed durable-adapter plus remote-dispatch matrix: 60 passed, 1 skipped",
+      "Fresh Python process verified the durable submit path accepts /mnt/f CAS bindings only after propagating the resolved wsl2-5080 node: 1 passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "passed",
-    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-967/post-restart-verify.json",
-    "runtime_identity_match": true,
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -135,7 +155,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "verified",
+  "status": "open",
   "suspected_modules": [
     "multi_alpha"
   ],
