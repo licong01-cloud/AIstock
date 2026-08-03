@@ -1050,6 +1050,59 @@ def test_remote_wsl_command_activates_only_explicit_conda_env() -> None:
     assert "python qrun_limit_minute.py" in command
 
 
+def test_remote_wsl_command_activates_deployed_conda_before_python_for_loopback_wsl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
+    command = _remote_wsl_command(
+        workspace=Path("/mnt/f/local/workspace"),
+        node=ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+        remote_paths={"artifact_path": "/mnt/f/artifacts/abc", "prediction_artifact_path": "/mnt/f/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+        backtest_config={"remote_env": {"PATH": "/custom/bin"}},
+    )
+
+    assert "/home/lc999/miniconda3/etc/profile.d/conda.sh" in command
+    assert "conda activate" in command and "rdagent-gpu" in command
+    assert command.index("export PATH=") < command.index("conda activate")
+    assert command.index("conda activate") < command.index("python -c")
+    assert "command -v python" in command
+
+
+def test_remote_wsl_command_rejects_missing_deployed_conda_for_loopback_wsl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("QLIB_WSL_CONDA_SH", raising=False)
+    monkeypatch.delenv("QLIB_WSL_CONDA_ENV", raising=False)
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _remote_wsl_command(
+            workspace=Path("/mnt/f/local/workspace"),
+            node=ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+            remote_paths={"artifact_path": "/mnt/f/artifacts/abc", "prediction_artifact_path": "/mnt/f/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+            backtest_config={},
+        )
+
+    assert excinfo.value.reason_code == "remote_wsl_runtime_config_missing"
+    assert excinfo.value.context["missing"] == ["QLIB_WSL_CONDA_SH", "QLIB_WSL_CONDA_ENV"]
+
+
+def test_remote_wsl_command_does_not_apply_local_wsl_conda_to_remote_linux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
+    command = _remote_wsl_command(
+        workspace=Path("/mnt/f/local/workspace"),
+        node=ComputeNodeInfo(node_id="rdagent-node1", api_base_url="http://192.168.50.215:9000"),
+        remote_paths={"artifact_path": "/remote/artifacts/abc", "prediction_artifact_path": "/remote/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+        backtest_config={},
+    )
+
+    assert "conda activate" not in command
+    assert "/home/lc999/miniconda3/etc/profile.d/conda.sh" not in command
+
+
 def test_remote_wsl_command_cd_to_uploaded_loop_workspace_when_available() -> None:
     command = _remote_wsl_command(
         workspace=Path("/mnt/f/local/run/combined_ic_weighted"),
