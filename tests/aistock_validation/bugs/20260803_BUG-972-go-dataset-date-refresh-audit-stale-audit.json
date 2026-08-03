@@ -72,25 +72,26 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "runtime_impact": "backend",
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process loaded backend/ingestion/tdx_scheduler.py by file path and verified _reconcile_go_job_refresh_audit sweep exists and _record_refresh_audit_from_table_range remains intact -> PASS",
+      "fresh process loaded backend/ingestion/tdx_scheduler.py: _reconcile_go_job_refresh_audit present, _record_refresh_audit_from_table_range intact"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/openapi.json",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "identity_ref": "http://127.0.0.1:8001/openapi.json",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
-    "database_readback_ref": "not_required",
-    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
-    "persistence_basis": "git_tracked_source",
-    "fresh_process_evidence": [
-      "fresh Python process loaded backend/ingestion/tdx_scheduler.py by file path and verified _reconcile_go_job_refresh_audit sweep exists and _record_refresh_audit_from_table_range remains intact -> PASS"
-    ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
