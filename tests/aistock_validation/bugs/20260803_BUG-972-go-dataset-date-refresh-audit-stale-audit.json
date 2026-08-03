@@ -2,7 +2,9 @@
   "actual": "根因: Go引擎kline增量有两条触发链路——调度器_route_go_incremental(成功后会写dataset_date_refresh_audit, tdx_scheduler.py:4435)与路由器POST /api/ingestion/incremental(routers/ingestion.py:2910, 手动/仪表盘/补数路径)。后者创建job后直接调Go任务并立即返回, Go后端异步markJobFinished, Python侧从不感知完成, 因此从不写audit。2026-08-03实证: 手动补数经路由器端点完成kline_minute_raw 08-03全量入库(物理MAX=08-03), 但audit max停在07-31, 当晚22:00_data_freshness_check以refresh_audit为源将kline_minute_raw误报stale(audit_stale), overall=partial。衍生三害: 1)每晚新鲜度检查在手动补数日后误报stale(告警噪声); 2)_auto_retry_stale可能对数据已完整的分钟线做无谓重复入库(幂等但浪费, 单次全市场分钟线约27分钟); 3)BUG-957的audit游标快路径对该数据集永不生效, 每次调度触发都付33.6s有界MAX(60s限额余量单薄)。修复方案: 在tdx_scheduler.refresh_schedules既有reconcile族中新增幂等sweep——扫描近期成功的Go引擎job(kline_minute_raw/kline_daily_raw), 对audit缺失的已同步区间调用_record_refresh_audit_from_table_range补写(upsert幂等), 使所有触发链路(调度/手动/未来新增)统一自愈。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260803_BUG-972-go-dataset-date-refresh-audit-stale-audit.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-972",
@@ -20,6 +22,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260803-db88d36bb0ba",
       "timestamp": "2026-08-03T15:48:52.161367Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "claude_code",
+      "note": "修复需在 tdx_scheduler.py 新增 Go job audit 自愈 reconcile sweep, 并在既有测试文件中补回归测试; 用户已授权登记修复",
+      "timestamp": "2026-08-03T15:49:49.763908Z"
+    },
+    {
+      "action": "runtime_contract_alignment",
+      "actor": "claude_code",
+      "note": "runtime_impact none->backend (调度器修复需用户重启后端生效); 可执行探针引用, 与 BUG-960/966 同格式",
+      "timestamp": "2026-08-03T15:56:08.163184Z"
     }
   ],
   "evidence_uris": [],
@@ -58,14 +72,25 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "runtime_impact": "backend",
+    "backend_restart_required": true,
+    "backend_restart_owner": "user",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/openapi.json",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "not_required",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "fresh_process_evidence": [
+      "fresh Python process loaded backend/ingestion/tdx_scheduler.py by file path and verified _reconcile_go_job_refresh_audit sweep exists and _record_refresh_audit_from_table_range remains intact -> PASS"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
