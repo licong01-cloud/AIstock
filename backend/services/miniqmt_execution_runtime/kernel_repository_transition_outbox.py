@@ -206,7 +206,10 @@ class KernelRepositoryTransitionOutboxMixin:
                            algo.terminal_at_utc,algo.kernel_carrier_json,
                            COUNT(child.child_order_id) FILTER (
                                WHERE child.kernel_contract_version='KERNEL_V2'
-                                 AND child.mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+                                 AND child.mapping_status IN (
+                                     'DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING',
+                                     'BROKER_ACCEPTED','OUTCOME_UNKNOWN'
+                                 )
                            ) AS reconstructed_active_child_count
                     FROM qmt_strategy.execution_algo_instance AS algo
                     LEFT JOIN qmt_strategy.execution_child_order AS child
@@ -1051,7 +1054,10 @@ class KernelRepositoryTransitionOutboxMixin:
                     SELECT COUNT(*) AS active_child_count
                     FROM qmt_strategy.execution_child_order
                     WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-                      AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+                      AND mapping_status IN (
+                          'DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING',
+                          'BROKER_ACCEPTED','OUTCOME_UNKNOWN'
+                      )
                     """,
                     (mapping.runtime_id, mapping.algo_instance_id),
                 )
@@ -1242,7 +1248,10 @@ class KernelRepositoryTransitionOutboxMixin:
                         SELECT COUNT(*) AS active_child_count
                         FROM qmt_strategy.execution_child_order
                         WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-                          AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+                          AND mapping_status IN (
+                              'DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING',
+                              'BROKER_ACCEPTED','OUTCOME_UNKNOWN'
+                          )
                         """,
                         (mapping.runtime_id, mapping.algo_instance_id),
                     )
@@ -1564,7 +1573,7 @@ class KernelRepositoryTransitionOutboxMixin:
             SELECT COUNT(*) AS active_child_count
             FROM qmt_strategy.execution_child_order
             WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-              AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+              AND mapping_status IN ('DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
             """,
             (algo_instance.runtime_id, algo_instance.algo_instance_id),
         )

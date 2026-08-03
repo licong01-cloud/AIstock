@@ -1164,6 +1164,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["backend/services/advisory_phase0b/audit_service.py"],
         root=isolated_workflow_root,
     )
+    offline_advisory_batch_b = workflow._classify_runtime_impact(
+        ["scripts/advisory_short_rebound_batch_b.py"],
+        root=isolated_workflow_root,
+    )
     mixed_advisory_and_backend = workflow._classify_runtime_impact(
         [
             "backend/services/advisory_phase0b/audit_service.py",
@@ -1186,6 +1190,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_hmm_d1["runtime_files"] == []
     assert offline_advisory_phase0b["runtime_impact"] == "none"
     assert offline_advisory_phase0b["runtime_files"] == []
+    assert offline_advisory_batch_b["runtime_impact"] == "none"
+    assert offline_advisory_batch_b["runtime_files"] == []
     assert mixed_advisory_and_backend["runtime_impact"] == "backend"
     assert mixed_advisory_and_backend["runtime_files"] == ["backend/services/example.py"]
     assert mixed_advisory_and_backend["target_ids"] == ["backend-main"]

@@ -600,7 +600,9 @@ class KernelRepositoryEventDeliveryMixin:
             SELECT COUNT(*) AS active_child_count
             FROM qmt_strategy.execution_child_order
             WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-              AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+              AND mapping_status IN (
+                  'DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN'
+              )
             """,
             (mapping.runtime_id, mapping.algo_instance_id),
         )
@@ -911,7 +913,9 @@ class KernelRepositoryEventDeliveryMixin:
             SELECT COUNT(*) AS active_child_count
             FROM qmt_strategy.execution_child_order
             WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-              AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+              AND mapping_status IN (
+                  'DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN'
+              )
             """,
             (closure.mapping.runtime_id, closure.mapping.algo_instance_id),
         )

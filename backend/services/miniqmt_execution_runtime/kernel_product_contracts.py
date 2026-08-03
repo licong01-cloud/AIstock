@@ -12,6 +12,8 @@ from typing import Any, Literal, Self
 
 from pydantic import StrictBool, ValidationError, model_validator
 
+from backend.execution_algos.vnpy_compat.facade_contracts import VnpyFacadeAuthorityInputV2
+
 from .plugin_canonical import (
     canonical_json_bytes_v1,
     canonical_utc_datetime_v1,
@@ -24,6 +26,7 @@ from .plugin_contracts import (
     BrokerCommandV2,
     CanonicalDecimalV1,
     ExecutionProjectionSetV1,
+    ExecutionAlgoTimerScheduleV1,
     FrozenStrictModel,
     FrozenJsonObjectFieldV1,
     IdentityV1,
@@ -981,7 +984,22 @@ class DependentBuyCoordinationV2(FrozenStrictModel):
             "lease_worker_id": values.get("lease_worker_id"),
             "lease_process_incarnation_id": values.get("lease_process_incarnation_id"),
             "lease_epoch": values.get("lease_epoch", 0),
-            "lease_expires_at_utc": values.get("lease_expires_at_utc"),
+            "lease_expires_at_utc": (
+                None
+                if values.get("lease_expires_at_utc") is None
+                else canonical_utc_datetime_v1(
+                    values["lease_expires_at_utc"],
+                    field_name="lease_expires_at_utc",
+                )
+            ),
+            "created_at_utc": canonical_utc_datetime_v1(
+                values["created_at_utc"],
+                field_name="created_at_utc",
+            ),
+            "updated_at_utc": canonical_utc_datetime_v1(
+                values["updated_at_utc"],
+                field_name="updated_at_utc",
+            ),
         }
         hash_payload = {key: value for key, value in payload.items() if key not in _COORDINATION_HASH_EXCLUDES}
         return cls(**payload, coordination_sha256=hash_hex_v1("miniqmt_dependent_buy_coordination_v2", hash_payload))
@@ -2039,6 +2057,11 @@ class ProductCommandAuthoritySetV3(FrozenStrictModel):
             if item.execution_projection_set_sha256 != self.execution_projection_set_sha256:
                 raise ValueError("product command item projection differs from authority set")
         counts = Counter(item.disposition for item in self.ordered_items)
+        coordination_ids = tuple(
+            item.coordination_id for item in self.ordered_items if item.coordination_id is not None
+        )
+        if len(coordination_ids) != len(set(coordination_ids)):
+            raise ValueError("product authority V3 cannot create duplicate dependent-BUY coordination owners")
         actual_counts = (
             counts[ProductCommandDispositionV3.MATERIALIZE],
             counts[ProductCommandDispositionV3.REJECT_SYNCHRONOUS],
@@ -2066,6 +2089,66 @@ class ProductCommandAuthoritySetV3(FrozenStrictModel):
         )
         if self.authority_set_sha256 != expected:
             raise ValueError("product command authority set V3 hash mismatch")
+        return self
+
+
+class ProductCommandAuthorityEnvelopeV3(FrozenStrictModel):
+    """Durable fresh-process authority for one product command aggregate."""
+
+    schema_version: Literal["miniqmt_product_command_authority_envelope_v3"]
+    authority_set: ProductCommandAuthoritySetV3
+    creation_authority: VnpyFacadeAuthorityInputV2
+    ordered_timer_schedules: tuple[ExecutionAlgoTimerScheduleV1, ...]
+    envelope_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        authority_set: ProductCommandAuthoritySetV3,
+        creation_authority: VnpyFacadeAuthorityInputV2,
+        ordered_timer_schedules: tuple[ExecutionAlgoTimerScheduleV1, ...],
+    ) -> Self:
+        if not isinstance(authority_set, ProductCommandAuthoritySetV3):
+            raise TypeError("authority_set must be ProductCommandAuthoritySetV3")
+        if not isinstance(creation_authority, VnpyFacadeAuthorityInputV2):
+            raise TypeError("creation_authority must be VnpyFacadeAuthorityInputV2")
+        if type(ordered_timer_schedules) is not tuple or any(
+            not isinstance(item, ExecutionAlgoTimerScheduleV1) for item in ordered_timer_schedules
+        ):
+            raise TypeError("ordered_timer_schedules must be one strict timer schedule tuple")
+        payload = {
+            "schema_version": "miniqmt_product_command_authority_envelope_v3",
+            "authority_set": authority_set,
+            "creation_authority": creation_authority,
+            "ordered_timer_schedules": ordered_timer_schedules,
+        }
+        return cls(
+            **payload,
+            envelope_sha256=hash_hex_v1("miniqmt_product_command_authority_envelope_v3", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_contract(self) -> Self:
+        authority = self.authority_set
+        creation = self.creation_authority
+        if (
+            authority.catalog_sha256 != creation.plugin_catalog_snapshot.catalog_sha256
+            or authority.creation_binding_sha256 != creation.authority_input_sha256
+            or authority.facade_conformance_set_sha256 != creation.facade_conformance_set_v2.receipt_set_sha256
+        ):
+            raise ValueError("product authority envelope creation authority differs from aggregate hashes")
+        schedule_ids = tuple(item.schedule_id for item in self.ordered_timer_schedules)
+        if len(schedule_ids) != len(set(schedule_ids)):
+            raise ValueError("product authority envelope timer schedule identities must be unique")
+        if any(item.algo_instance_id != authority.algo_instance_id for item in self.ordered_timer_schedules):
+            raise ValueError("product authority envelope timer owner differs from aggregate")
+        expected = hash_hex_v1(
+            "miniqmt_product_command_authority_envelope_v3",
+            self.canonical_payload_v1(exclude={"envelope_sha256"}),
+        )
+        if self.envelope_sha256 != expected:
+            raise ValueError("product command authority envelope hash mismatch")
         return self
 
 
@@ -2105,21 +2188,25 @@ class ProductCommandLifecycleProjectionItemV3(FrozenStrictModel):
     @model_validator(mode="after")
     def _validate_contract(self) -> Self:
         if self.disposition is ProductCommandDispositionV3.DEFER_DEPENDENT_BUY:
-            if (
-                self.outbox_id is not None
-                or self.lifecycle_status is not ProductLifecycleStatusV3.DEFERRED_DEPENDENT_BUY
-            ):
-                raise ValueError("deferred lifecycle must have no outbox and exact deferred status")
-            if any(
-                value is not None
-                for value in (
-                    self.broker_called,
-                    self.qmt_order_id,
-                    self.callback_watermark,
-                    self.reconciliation_receipt_sha256,
-                )
-            ):
-                raise ValueError("deferred lifecycle cannot carry broker, callback or reconciliation facts")
+            if self.outbox_id is None:
+                deferred = self.lifecycle_status is ProductLifecycleStatusV3.DEFERRED_DEPENDENT_BUY
+                terminal = self.lifecycle_status is ProductLifecycleStatusV3.FAILED_TERMINAL
+                if not (deferred or terminal):
+                    raise ValueError("unreleased deferred lifecycle must remain deferred or terminate explicitly")
+                expected_broker_called = False if terminal else None
+                if self.broker_called is not expected_broker_called or any(
+                    value is not None
+                    for value in (
+                        self.qmt_order_id,
+                        self.callback_watermark,
+                        self.reconciliation_receipt_sha256,
+                    )
+                ):
+                    raise ValueError(
+                        "unreleased deferred lifecycle cannot carry inconsistent broker, callback or reconciliation facts"
+                    )
+            elif self.outbox_id != self.command_id:
+                raise ValueError("released deferred lifecycle outbox must equal original command identity")
         elif self.outbox_id != self.command_id:
             raise ValueError("materialized/rejected lifecycle outbox must equal command identity")
         if self.disposition is ProductCommandDispositionV3.REJECT_SYNCHRONOUS:
@@ -2136,12 +2223,16 @@ class ProductCommandLifecycleProjectionItemV3(FrozenStrictModel):
                 )
             ):
                 raise ValueError("synchronous reject lifecycle requires terminal no-broker evidence")
-        elif self.disposition is ProductCommandDispositionV3.MATERIALIZE:
+        elif self.disposition is ProductCommandDispositionV3.MATERIALIZE or (
+            self.disposition is ProductCommandDispositionV3.DEFER_DEPENDENT_BUY and self.outbox_id is not None
+        ):
             if self.lifecycle_status in {
                 ProductLifecycleStatusV3.SYNCHRONOUS_REJECTED,
                 ProductLifecycleStatusV3.DEFERRED_DEPENDENT_BUY,
             }:
-                raise ValueError("materialized lifecycle status cannot use product-only reject/defer states")
+                if self.disposition is ProductCommandDispositionV3.MATERIALIZE:
+                    raise ValueError("materialized lifecycle status cannot use product-only reject/defer states")
+                raise ValueError("released deferred lifecycle cannot use product-only reject/defer states")
             if self.qmt_order_id is not None and self.broker_called is not True:
                 raise ValueError("accepted order identity requires broker_called=true")
             if self.lifecycle_status in {
@@ -2223,8 +2314,22 @@ class ProductCommandLifecycleProjectionV3(FrozenStrictModel):
         return self
 
     def validate_against_authority_v3(self, authority: ProductCommandAuthoritySetV3) -> None:
-        if not isinstance(authority, ProductCommandAuthoritySetV3):
-            raise TypeError("authority must be ProductCommandAuthoritySetV3")
+        try:
+            if not isinstance(authority, ProductCommandAuthoritySetV3):
+                raise TypeError("authority must be ProductCommandAuthoritySetV3")
+            authority = ProductCommandAuthoritySetV3.model_validate_json(authority.model_dump_json(), strict=True)
+            self = type(self).model_validate_json(self.model_dump_json(), strict=True)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise KernelProductContractError(
+                "MINIQMT_K6_PRODUCT_AUTHORITY_LIFECYCLE_STRICT_READBACK_INVALID",
+                "product lifecycle or authority fails strict durable readback",
+                context={
+                    "authority_type": type(authority).__name__,
+                    "lifecycle_type": type(self).__name__,
+                    "error_type": type(exc).__name__,
+                    "error": json_safe_evidence_v1(exc),
+                },
+            ) from exc
         expected_owner = (
             authority.runtime_id,
             authority.algo_instance_id,
@@ -2248,7 +2353,6 @@ class ProductCommandLifecycleProjectionV3(FrozenStrictModel):
                 item.disposition,
                 item.item_sha256,
                 item.mapping_id,
-                item.outbox_id,
                 item.child_order_id,
             )
             for item in authority.ordered_items
@@ -2260,12 +2364,23 @@ class ProductCommandLifecycleProjectionV3(FrozenStrictModel):
                 item.disposition,
                 item.authority_item_sha256,
                 item.mapping_id,
-                item.outbox_id,
                 item.child_order_id,
             )
             for item in self.ordered_item_projections
         )
-        if actual_owner != expected_owner or actual_items != expected_items:
+        outbox_closure_valid = len(authority.ordered_items) == len(self.ordered_item_projections) and all(
+            lifecycle_item.outbox_id
+            in (
+                {None, authority_item.command_id}
+                if authority_item.disposition is ProductCommandDispositionV3.DEFER_DEPENDENT_BUY
+                else {authority_item.outbox_id}
+            )
+            for authority_item, lifecycle_item in zip(
+                authority.ordered_items,
+                self.ordered_item_projections,
+            )
+        )
+        if actual_owner != expected_owner or actual_items != expected_items or not outbox_closure_valid:
             raise KernelProductContractError(
                 "MINIQMT_K6_PRODUCT_AUTHORITY_LIFECYCLE_ORDER_DRIFT",
                 "product lifecycle V3 differs from exact authority order",
@@ -2274,6 +2389,8 @@ class ProductCommandLifecycleProjectionV3(FrozenStrictModel):
                     "actual_owner": actual_owner,
                     "expected": expected_items,
                     "actual": actual_items,
+                    "expected_outbox_ids": tuple(item.outbox_id for item in authority.ordered_items),
+                    "actual_outbox_ids": tuple(item.outbox_id for item in self.ordered_item_projections),
                 },
             )
 
@@ -2501,6 +2618,7 @@ __all__ = [
     "ProductCommandAggregateDispositionV3",
     "ProductCommandAuthorityItemV2",
     "ProductCommandAuthorityItemV3",
+    "ProductCommandAuthorityEnvelopeV3",
     "ProductCommandAuthoritySetV2",
     "ProductCommandAuthoritySetV3",
     "ProductCommandChildMappingStatusV1",

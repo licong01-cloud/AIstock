@@ -1100,6 +1100,37 @@ def test_k6c0_v2_ledger_and_coordination_negative_matrix() -> None:
         _coordination_v2(row_version=terminal.row_version + 1).validate_successor_v2(terminal)
 
 
+def test_k6c0_v2_coordination_successor_writer_normalizes_timestamp_before_hashing() -> None:
+    previous = _coordination_v2()
+    successor_payload = previous.model_dump(
+        exclude={
+            "schema_version",
+            "coordination_id",
+            "coordination_sha256",
+            "status",
+            "decision_sequence",
+            "last_decision_sha256",
+            "released_command_id",
+            "released_outbox_id",
+            "row_version",
+            "updated_at_utc",
+        }
+    )
+    successor = DependentBuyCoordinationV2.create(
+        **successor_payload,
+        status=DependentBuyCoordinationStatusV1.RELEASED_TO_K2_OUTBOX,
+        decision_sequence=1,
+        last_decision_sha256=_sha("e"),
+        released_command_id=previous.release_command_id,
+        released_outbox_id=previous.release_command_id,
+        row_version=2,
+        updated_at_utc="2026-08-03T01:33:00Z",
+    )
+
+    successor.validate_successor_v2(previous)
+    assert DependentBuyCoordinationV2.model_validate_json(successor.model_dump_json()) == successor
+
+
 def test_k6c0_mapping_supports_exact_deferred_to_reserved_successor_only() -> None:
     authority_item = _v3_item(disposition=ProductCommandDispositionV3.DEFER_DEPENDENT_BUY)
     deferred = ProductCommandChildMappingV1.create_deferred(
