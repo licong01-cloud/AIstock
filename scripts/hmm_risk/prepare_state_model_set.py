@@ -3002,20 +3002,35 @@ def _load_b3_d1_train_inputs(
         "security_identity_manifest_sha256": c010_a5_report["security_identity_manifest_sha256"],
         "provider_absence_manifest_sha256": c010_a5_report["provider_absence_manifest_sha256"],
     }
-    if (
-        current_policy.get("schema_version") != C010_POLICY_VERSION
-        or any(current_policy.get(field) != expected for field, expected in a5_source_identities.items())
-        or current_policy.get("provider_absence_partition_receipt")
-        != c010_a5_report["provider_absence_partition_receipt"]
-        or current_policy.get("provider_absence_partition_receipt_sha256")
-        != c010_a5_report["provider_absence_partition_receipt_sha256"]
-        or current_policy.get("expected_opportunity_receipt") != c010_a5_report["expected_opportunity_receipt"]
-        or current_policy.get("expected_opportunity_receipt_sha256")
-        != c010_a5_report["expected_opportunity_receipt_sha256"]
-        or current_policy.get("eligibility_receipt") != c010_a5_report["observation_eligibility_receipt"]
-        or current_policy.get("eligibility_receipt_sha256") != c010_a5_report["observation_eligibility_receipt_sha256"]
-    ):
-        raise StateModelSetError("D1-B C-010-A5 v2 execution lineage drifted from the approved preflight")
+    expected_lineage = {
+        **a5_source_identities,
+        "provider_absence_partition_receipt_sha256": c010_a5_report["provider_absence_partition_receipt_sha256"],
+        "expected_opportunity_receipt_sha256": c010_a5_report["expected_opportunity_receipt_sha256"],
+        "eligibility_receipt_sha256": c010_a5_report["observation_eligibility_receipt_sha256"],
+    }
+    mismatches = sorted(field for field, expected in expected_lineage.items() if current_policy.get(field) != expected)
+    receipt_objects = {
+        "provider_absence_partition_receipt": (
+            current_policy.get("provider_absence_partition_receipt"),
+            c010_a5_report["provider_absence_partition_receipt"],
+        ),
+        "expected_opportunity_receipt": (
+            current_policy.get("expected_opportunity_receipt"),
+            c010_a5_report["expected_opportunity_receipt"],
+        ),
+        "eligibility_receipt": (
+            current_policy.get("eligibility_receipt"),
+            c010_a5_report["observation_eligibility_receipt"],
+        ),
+    }
+    mismatches.extend(sorted(field for field, (actual, expected) in receipt_objects.items() if actual != expected))
+    if current_policy.get("schema_version") != C010_POLICY_VERSION:
+        mismatches.append("schema_version")
+    if mismatches:
+        raise StateModelSetError(
+            "D1-B C-010-A5 v2 execution lineage drifted from the approved preflight: "
+            + ",".join(sorted(set(mismatches)))
+        )
     identities["c010_feature_domain_policy_sha256"] = str(current_policy["receipt_sha256"])
     return inputs, identities
 
