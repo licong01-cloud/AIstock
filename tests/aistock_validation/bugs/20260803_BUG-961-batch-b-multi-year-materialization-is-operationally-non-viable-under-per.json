@@ -5,7 +5,6 @@
     "backend/services/advisory_historical_range/executor.py",
     "backend/services/advisory_historical_range/service.py",
     "backend/services/advisory_historical_range/composition.py",
-    "scripts/advisory_short_rebound_batch_b.py",
     "backend/tests/advisory_modeling/test_batch_b_contracts.py",
     "backend/tests/advisory_modeling/test_batch_b_cli.py",
     "backend/tests/advisory_historical_range/test_r3_executor.py",
@@ -40,7 +39,6 @@
       "backend/services/advisory_historical_range/executor.py",
       "backend/services/advisory_historical_range/service.py",
       "backend/services/advisory_historical_range/composition.py",
-      "scripts/advisory_short_rebound_batch_b.py",
       "backend/tests/advisory_modeling/test_batch_b_contracts.py",
       "backend/tests/advisory_modeling/test_batch_b_cli.py",
       "backend/tests/advisory_historical_range/test_r3_executor.py",
@@ -52,7 +50,6 @@
         "backend/services/advisory_historical_range/executor.py",
         "backend/services/advisory_historical_range/service.py",
         "backend/services/advisory_historical_range/composition.py",
-        "scripts/advisory_short_rebound_batch_b.py",
         "backend/tests/advisory_modeling/test_batch_b_contracts.py",
         "backend/tests/advisory_modeling/test_batch_b_cli.py",
         "backend/tests/advisory_historical_range/test_r3_executor.py",
@@ -101,15 +98,6 @@
           "rule_id": "advisory_historical_range_foundation"
         },
         {
-          "file": "scripts/advisory_short_rebound_batch_b.py",
-          "impact_modules": [
-            "advisory.historical_range"
-          ],
-          "primary_module": "advisory.modeling",
-          "risk_level": "high",
-          "rule_id": "advisory_short_rebound_modeling"
-        },
-        {
           "file": "backend/tests/advisory_modeling/test_batch_b_contracts.py",
           "impact_modules": [
             "advisory.historical_range"
@@ -154,7 +142,6 @@
         "backend/services/advisory_historical_range/executor.py",
         "backend/services/advisory_historical_range/service.py",
         "backend/services/advisory_historical_range/composition.py",
-        "scripts/advisory_short_rebound_batch_b.py",
         "backend/tests/advisory_modeling/test_batch_b_contracts.py",
         "backend/tests/advisory_modeling/test_batch_b_cli.py",
         "backend/tests/advisory_historical_range/test_r3_executor.py",
@@ -168,7 +155,6 @@
       "backend/services/advisory_historical_range/executor.py",
       "backend/services/advisory_historical_range/service.py",
       "backend/services/advisory_historical_range/composition.py",
-      "scripts/advisory_short_rebound_batch_b.py",
       "backend/tests/advisory_modeling/test_batch_b_contracts.py",
       "backend/tests/advisory_modeling/test_batch_b_cli.py",
       "backend/tests/advisory_historical_range/test_r3_executor.py",
@@ -202,7 +188,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Conda Python process loaded commit 9ba63663a10b19d4dd93c1107ced4201e4c8c090 and verified normal Historical Range default prefetch=2, Batch B prefetch=8, service/dispatcher width equality, and strict max validation; no database or service mutation"
+      "Fresh aistock-environment Python process loaded commit 1db58caa4d995f4db77b6b4b5ffcf8c5deffb1ed and verified normal Historical Range default prefetch=2, Batch B driver prefetch=8, dispatcher width=8, and maximum width=8; no database or service mutation"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
