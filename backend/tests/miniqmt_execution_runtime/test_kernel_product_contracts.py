@@ -172,6 +172,7 @@ def _proceeds_ref(*, broker_trade_id: str = "trade_1", sequence: int = 11) -> De
     return DependentBuySettledProceedsRefV2.create(
         broker_trade_id=broker_trade_id,
         qmt_trade_ledger_id=f"ledger_{broker_trade_id}",
+        qmt_trade_account_id="account_k6",
         qmt_trade_fact_sha256=_sha("1"),
         cash_ledger_id=f"cash_{sequence}",
         cash_ledger_sequence=sequence,
@@ -205,6 +206,8 @@ def _coordination_v2(*, row_version: int = 1, release_command_id: str = "command
         buy_algo_instance_id="algo_k6",
         buy_parent_intent_id="intent_buy",
         required_cash="1050",
+        virtual_account_id="account_k6",
+        session_authority_sha256=_sha("f"),
         release_command_id=release_command_id,
         release_transition_id="transition_k6",
         release_command_authority_item_sha256=_sha("e"),
@@ -476,6 +479,7 @@ def _v3_item(*, disposition: ProductCommandDispositionV3, ordinal: int = 0) -> P
                 "buy_parent_intent_id": command.parent_intent_id,
                 "strategy_id": "strategy_k6",
                 "trade_date": "2026-08-01",
+                "virtual_account_id": "account_k6",
             },
         )
     rejected = disposition is ProductCommandDispositionV3.REJECT_SYNCHRONOUS

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import UTC, date, datetime, time
 import json
 import os
 
@@ -10,23 +10,30 @@ import psycopg2
 import psycopg2.extras
 import pytest
 
+from backend.execution_algos.adaptive_is.contracts import (
+    CalendarSnapshot,
+    CalendarSnapshotSet,
+    MarketCode,
+    SessionSegment,
+    canonical_json_bytes,
+)
+
 from backend.services.miniqmt_execution_runtime.kernel_delivery import KernelTransitionWriteBundleV1
+from backend.services.miniqmt_execution_runtime.kernel_clock import build_eod_event_v1
 from backend.services.miniqmt_execution_runtime.kernel_product_authority import (
     bind_product_transition_receipt_v3,
     build_product_command_authority_set_v3,
 )
 from backend.services.miniqmt_execution_runtime.kernel_product_contracts import (
-    DependentBuyCoordinationStatusV1,
-    DependentBuyCoordinationV2,
+    DependentBuyCandidateAuthorityV2,
+    DependentBuyDependencyStatusV1,
+    DependentBuySellDependencyV2,
     ProductCommandAuthorityEnvelopeV3,
-    ProductCommandChildMappingStatusV1,
-    ProductCommandChildMappingV1,
+    ProductCommandEvaluationEvidenceV3,
+    ProductRouteCutoverReceiptV1,
+    ProductRouteOwnerKindV1,
+    ProductRouteOwnerV1,
 )
-from backend.services.miniqmt_execution_runtime.kernel_product_materialization_repository import (
-    _coordination_projection_v2,
-)
-from backend.services.miniqmt_execution_runtime.kernel_repository_common import _json
-from backend.services.miniqmt_execution_runtime.kernel_repository_projection import _mapping_scalar_projection
 from backend.services.miniqmt_execution_runtime.kernel_repository import (
     KernelRepositoryCommitUnknown,
     KernelRepositoryConflict,
@@ -51,6 +58,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     DeliveryStatusV1,
     EventSourceV2,
     EventTypeV2,
+    ExchangeSessionAuthorityV1,
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoTimerScheduleStatusV1,
     ExecutionAlgoTimerScheduleV1,
@@ -60,6 +68,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     KernelErrorEvidenceV1,
     RuntimeEventEnvelopeV2,
     OrderTypeV1,
+    NormalizedOrderStatusV1,
     SideV1,
     SessionPhaseV1,
     TimerMutationTypeV1,
@@ -69,6 +78,8 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     kernel_lease_fence_token_v1,
 )
 from backend.tests.miniqmt_execution_runtime.test_kernel_k6_migration_postgres import (
+    K6B_FORWARD,
+    K6B_ROLLBACK,
     K6C_FORWARD,
     _apply_k2_and_k6,
 )
@@ -83,6 +94,51 @@ from backend.tests.miniqmt_execution_runtime.test_kernel_repository_postgres imp
 )
 from backend.tests.miniqmt_execution_runtime.test_vnpy_facade_kernel_invocation import _v2_candidate
 from backend.tests.miniqmt_execution_runtime.test_kernel_product_authority import _evidence_for_authority
+
+
+_K6B_DEV_MODES = frozenset(
+    {
+        "released_defer_lifecycle",
+        "k6b_concurrent",
+        "k6b_wait",
+        "k6b_order_block",
+        "k6b_trade_release",
+        "k6b_eod",
+    }
+)
+
+
+def _k6b_session_authority() -> ExchangeSessionAuthorityV1:
+    segments = (SessionSegment(time(9, 30), time(11, 30)), SessionSegment(time(13), time(15)))
+    effective_at = datetime(2026, 7, 31, 16, tzinfo=UTC)
+    snapshots = {
+        market: CalendarSnapshot(
+            calendar_id=f"calendar_{market.value}_20260801",
+            market=market,
+            trade_date=date(2026, 8, 1),
+            timezone="Asia/Shanghai",
+            session_segments=segments,
+            effective_at_utc=effective_at,
+            source_version="aistock_calendar_v1",
+        )
+        for market in MarketCode
+    }
+    snapshot_set = CalendarSnapshotSet(snapshot_set_id="calendar_set_k6b", snapshot_by_market=snapshots)
+    snapshot_json = json.loads(canonical_json_bytes(snapshot_set.canonical_payload()).decode("utf-8"))
+    snapshot_json["set_sha256"] = snapshot_set.set_sha256
+    return ExchangeSessionAuthorityV1.create(
+        runtime_id="runtime_k6c1",
+        exchange_trade_date="2026-08-01",
+        calendar_snapshot_set_id=snapshot_set.snapshot_set_id,
+        calendar_snapshot_set_json=snapshot_json,
+        calendar_snapshot_set_sha256=snapshot_set.set_sha256,
+        ordered_market_calendar_sha256s=tuple(
+            snapshot_set.snapshot_by_market[market].calendar_sha256
+            for market in (MarketCode.SH, MarketCode.SZ, MarketCode.BJ)
+        ),
+        ordered_session_segments=tuple(segment.canonical_payload() for segment in segments),
+        source_effective_at_utc=effective_at,
+    )
 
 
 def test_k6c1_product_repository_public_surface_is_complete() -> None:
@@ -118,6 +174,11 @@ def test_k6c1_product_repository_public_surface_is_complete() -> None:
         "claimed_lifecycle",
         "terminal_lifecycle",
         "released_defer_lifecycle",
+        "k6b_concurrent",
+        "k6b_wait",
+        "k6b_order_block",
+        "k6b_trade_release",
+        "k6b_eod",
         "concurrent",
     ),
     ids=(
@@ -139,6 +200,11 @@ def test_k6c1_product_repository_public_surface_is_complete() -> None:
         "claimed-outbox-lifecycle-readback",
         "terminal-outbox-lifecycle-readback",
         "released-defer-outbox-lifecycle-readback",
+        "dependent-buy-concurrent-same-event",
+        "dependent-buy-account-wait",
+        "dependent-buy-terminal-order-block",
+        "dependent-buy-settled-trade-release",
+        "dependent-buy-eod-residual",
         "same-authority-concurrent-writers",
     ),
 )
@@ -152,11 +218,13 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
         with raw.cursor() as cur:
             _apply_k2_and_k6(cur, schema)
             cur.execute(K6C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(K6B_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
             cur.execute(
                 f"INSERT INTO {schema}.execution_runtime(runtime_id,trade_date) VALUES (%s,%s)",
                 ("runtime_k6c1", date(2026, 8, 1)),
             )
         repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+        k6b_session = _k6b_session_authority()
         authority_input = _v2_candidate()[2]
         manifest = authority_input.manifest
         config = {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
@@ -208,7 +276,7 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
             archived_at_utc=None,
         )
         repository.compare_and_swap_algo_instance(algo_instance=algo_v1, expected_row_version=0)
-        if mode in {"defer", "mixed", "coordination_drift", "released_defer_lifecycle"}:
+        if mode in {"defer", "mixed", "coordination_drift", *_K6B_DEV_MODES}:
             with raw.cursor() as cur:
                 cur.execute(
                     f"""
@@ -300,7 +368,7 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
                 ("materialize", "reject", "defer")
                 if mode == "mixed"
                 else ("defer",)
-                if mode in {"coordination_drift", "released_defer_lifecycle"}
+                if mode in {"coordination_drift", *_K6B_DEV_MODES}
                 else ("materialize",)
                 if mode
                 in {
@@ -349,6 +417,47 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
                 )
                 for command, command_mode in zip(commands, command_modes, strict=True)
             )
+            if mode in _K6B_DEV_MODES:
+                adjusted_evidences = []
+                for evidence in evidences:
+                    candidate = evidence.dependent_buy_candidate
+                    assert candidate is not None
+                    waiting_dependencies = tuple(
+                        DependentBuySellDependencyV2.create(
+                            runtime_id=dependency.runtime_id,
+                            strategy_id=dependency.strategy_id,
+                            sell_parent_intent_id=dependency.sell_parent_intent_id,
+                            sell_algo_instance_id=dependency.sell_algo_instance_id,
+                            latest_order_fact_id=None,
+                            latest_order_fact_sha256=None,
+                            ordered_settled_proceeds_refs=(),
+                            dependency_status=DependentBuyDependencyStatusV1.OPEN,
+                        )
+                        for dependency in candidate.ordered_sell_dependencies
+                    )
+                    candidate = DependentBuyCandidateAuthorityV2.create(
+                        **candidate.model_dump(
+                            mode="python",
+                            exclude={
+                                "schema_version",
+                                "candidate_sha256",
+                                "session_authority_sha256",
+                                "ordered_sell_dependencies",
+                            },
+                        ),
+                        session_authority_sha256=k6b_session.authority_sha256,
+                        ordered_sell_dependencies=waiting_dependencies,
+                    )
+                    adjusted_evidences.append(
+                        ProductCommandEvaluationEvidenceV3.create(
+                            **evidence.model_dump(
+                                mode="python",
+                                exclude={"schema_version", "evidence_sha256", "dependent_buy_candidate"},
+                            ),
+                            dependent_buy_candidate=candidate,
+                        )
+                    )
+                evidences = tuple(adjusted_evidences)
             projection_set = evidences[0].execution_projection_set
             evidences = tuple(
                 type(evidence).create(
@@ -968,115 +1077,246 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
                 expected_lease_epoch=0,
                 expected_lease_fence_token=None,
             )
-        if mode == "released_defer_lifecycle":
+        if mode in _K6B_DEV_MODES:
             item = authority.ordered_items[0]
+            available_cash = "1000" if mode in {"k6b_wait", "k6b_order_block", "k6b_eod"} else "1050"
             with raw.cursor() as cur:
                 cur.execute(
-                    f"SELECT mapping_json FROM {schema}.execution_child_order WHERE mapping_id=%s",
-                    (item.mapping_id,),
+                    f"""
+                    CREATE TABLE {schema}.virtual_account(
+                        strategy_id TEXT PRIMARY KEY, strategy_name TEXT NOT NULL, display_name TEXT NOT NULL,
+                        account_id TEXT NOT NULL, mode TEXT NOT NULL, initial_cash NUMERIC(20,6) NOT NULL,
+                        cash NUMERIC(20,6) NOT NULL, frozen_cash NUMERIC(20,6) NOT NULL DEFAULT 0,
+                        market_value NUMERIC(20,6) NOT NULL DEFAULT 0, realized_pnl NUMERIC(20,6) NOT NULL DEFAULT 0,
+                        unrealized_pnl NUMERIC(20,6) NOT NULL DEFAULT 0, status TEXT NOT NULL,
+                        risk_config JSONB NOT NULL DEFAULT '{{}}', metadata JSONB NOT NULL DEFAULT '{{}}',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    );
+                    CREATE TABLE {schema}.trade_ledger(
+                        trade_id TEXT NOT NULL,intent_id TEXT NOT NULL,strategy_id TEXT NOT NULL,qmt_order_id TEXT NOT NULL,
+                        qmt_order_sysid TEXT,symbol TEXT NOT NULL,side TEXT NOT NULL,price NUMERIC(20,6) NOT NULL,
+                        quantity INTEGER NOT NULL,amount NUMERIC(20,6) NOT NULL,commission NUMERIC(20,6) NOT NULL,
+                        trade_date DATE NOT NULL,account_id TEXT NOT NULL,trade_time TIMESTAMPTZ,order_remark TEXT NOT NULL,
+                        raw_json JSONB NOT NULL,UNIQUE(account_id,trade_date,trade_id)
+                    );
+                    CREATE TABLE {schema}.cash_ledger(
+                        cash_id TEXT PRIMARY KEY,cash_sequence BIGINT NOT NULL,strategy_id TEXT NOT NULL,account_id TEXT NOT NULL,
+                        trade_date DATE NOT NULL,entry_type TEXT NOT NULL,cash_delta NUMERIC(20,6) NOT NULL,
+                        cash_after NUMERIC(20,6) NOT NULL,frozen_delta NUMERIC(20,6) NOT NULL,frozen_after NUMERIC(20,6) NOT NULL,
+                        intent_id TEXT,trade_id TEXT,symbol TEXT,reason TEXT,metadata JSONB NOT NULL,created_at TIMESTAMPTZ NOT NULL
+                    );
+                    """
                 )
-                current_mapping = ProductCommandChildMappingV1.model_validate_json(
-                    json.dumps(cur.fetchone()[0], sort_keys=True, separators=(",", ":"))
+                candidate = item.evaluation_evidence.dependent_buy_candidate
+                assert candidate is not None
+                cur.execute(
+                    f"INSERT INTO {schema}.virtual_account("
+                    "strategy_id,strategy_name,display_name,account_id,mode,initial_cash,cash,status,updated_at) "
+                    "VALUES (%s,'k6b','K6-B',%s,'SIM',1050,%s,'ENABLED','2026-08-03T01:32:00Z')",
+                    (candidate.strategy_id, candidate.virtual_account_id, available_cash),
+                )
+                if mode == "k6b_trade_release":
+                    dependency = candidate.ordered_sell_dependencies[0]
+                    cur.execute(
+                        f"INSERT INTO {schema}.trade_ledger("
+                        "trade_id,intent_id,strategy_id,qmt_order_id,qmt_order_sysid,symbol,side,price,quantity,"
+                        "amount,commission,trade_date,account_id,trade_time,order_remark,raw_json) "
+                        "VALUES ('trade_k6b',%s,%s,'broker_order_k6b',NULL,'600001.SH','SELL',10.5,100,1050,0,"
+                        "%s,%s,'2026-08-03T01:32:30Z','remark_k6b','{}'::jsonb)",
+                        (
+                            dependency.sell_parent_intent_id,
+                            candidate.strategy_id,
+                            candidate.trade_date,
+                            candidate.virtual_account_id,
+                        ),
+                    )
+                    cur.execute(
+                        f"INSERT INTO {schema}.cash_ledger("
+                        "cash_id,cash_sequence,strategy_id,account_id,trade_date,entry_type,cash_delta,cash_after,"
+                        "frozen_delta,frozen_after,intent_id,trade_id,symbol,reason,metadata,created_at) "
+                        "VALUES ('cash_k6b',1,%s,%s,%s,'SELL_FILL',1050,1050,0,0,%s,'trade_k6b',"
+                        "'600001.SH','sell-fill','{}'::jsonb,'2026-08-03T01:32:31Z')",
+                        (
+                            candidate.strategy_id,
+                            candidate.virtual_account_id,
+                            candidate.trade_date,
+                            dependency.sell_parent_intent_id,
+                        ),
+                    )
+                cur.execute(
+                    f"INSERT INTO {schema}.execution_kernel_worker_epoch(worker_id,process_role,incarnation_sequence) "
+                    "VALUES ('worker_k6b','PRODUCT_COORDINATOR',1)"
                 )
                 cur.execute(
-                    f"SELECT carrier_json FROM {schema}.execution_dependent_buy_coordination WHERE coordination_id=%s",
-                    (item.coordination_id,),
+                    f"INSERT INTO {schema}.execution_kernel_worker_incarnation("
+                    "worker_id,process_role,incarnation_sequence,source_revision,process_incarnation_id,started_at_utc,"
+                    "startup_transaction_commit_identity,receipt_sha256,startup_receipt_json) "
+                    "VALUES ('worker_k6b','PRODUCT_COORDINATOR',1,'k6b-test','process_k6b',now(),'tx_k6b',%s,'{}'::jsonb)",
+                    ("a" * 64,),
                 )
-                current_coordination = DependentBuyCoordinationV2.model_validate_json(
-                    json.dumps(cur.fetchone()[0], sort_keys=True, separators=(",", ":"))
+            repository.write_exchange_session_authority(k6b_session)
+            route_receipt = ProductRouteCutoverReceiptV1.create(
+                runtime_id="runtime_k6c1",
+                binding_id=candidate.binding_id,
+                trade_date=candidate.trade_date,
+                route_epoch=1,
+                route_owner=ProductRouteOwnerKindV1.KERNEL_V2,
+                effective_new_instance_sequence=1,
+                legacy_active_instance_count=0,
+                kernel_active_instance_count=1,
+                catalog_sha256="1" * 64,
+                gateway_capability_catalog_sha256="2" * 64,
+                exchange_session_authority_sha256=k6b_session.authority_sha256,
+                migration_readback_sha256="3" * 64,
+                product_authority_schema_sha256="4" * 64,
+                previous_receipt_sha256=None,
+                created_at_utc=datetime(2026, 8, 3, 1, 32, tzinfo=UTC),
+            )
+            repository.write_product_route_cutover_v1(
+                receipt=route_receipt,
+                owner=ProductRouteOwnerV1.create(receipt=route_receipt, row_version=1),
+            )
+            dependency = candidate.ordered_sell_dependencies[0]
+            if mode == "k6b_order_block":
+                order_payload = {
+                    "order_event_id": "order_event_k6b",
+                    "runtime_id": "runtime_k6c1",
+                    "algo_instance_id": dependency.sell_algo_instance_id,
+                    "parent_intent_id": dependency.sell_parent_intent_id,
+                    "strategy_slot_id": "slot_sell",
+                    "mapping_id": "mapping_sell_k6b",
+                    "command_id": "command_sell_k6b",
+                    "local_vt_orderid": "local_sell_k6b",
+                    "broker_order_id": "broker_order_k6b",
+                    "symbol": "600001.SH",
+                    "side": SideV1.SELL.value,
+                    "normalized_order_status": NormalizedOrderStatusV1.CANCELLED.value,
+                    "observed_cumulative_filled_quantity": 0,
+                    "observed_remaining_quantity": 100,
+                    "terminal": True,
+                    "source_payload_sha256": "5" * 64,
+                }
+                order_payload["fact_sha256"] = hash_hex_v1("miniqmt_kernel_order_event_payload_v1", order_payload)
+                trigger_event = RuntimeEventEnvelopeV2.create(
+                    runtime_id="runtime_k6c1",
+                    sequence=2,
+                    event_type=EventTypeV2.ORDER,
+                    event_time_utc="2026-08-03T01:33:00Z",
+                    monotonic_ns=None,
+                    source=EventSourceV2.QMT_GATEWAY_CALLBACK,
+                    symbol="600001.SH",
+                    payload_schema_version="miniqmt_order_event_v1",
+                    payload=order_payload,
+                    source_identity={"order_event_id": "order_event_k6b"},
+                    correlation={},
                 )
-            released_mapping = ProductCommandChildMappingV1.create_successor(
-                previous=current_mapping,
-                mapping_status=ProductCommandChildMappingStatusV1.RESERVED,
-                updated_by_event_id=event.event_id,
-                updated_at_utc="2026-08-03T01:33:00Z",
-            )
-            coordination_payload = current_coordination.model_dump(
-                exclude={
-                    "schema_version",
-                    "coordination_id",
-                    "coordination_sha256",
-                    "status",
-                    "decision_sequence",
-                    "last_decision_sha256",
-                    "released_command_id",
-                    "released_outbox_id",
-                    "row_version",
-                    "updated_at_utc",
-                },
-            )
-            coordination_payload.update(
-                status=DependentBuyCoordinationStatusV1.RELEASED_TO_K2_OUTBOX,
-                decision_sequence=1,
-                last_decision_sha256="e" * 64,
-                released_command_id=item.command_id,
-                released_outbox_id=item.command_id,
-                row_version=2,
-                updated_at_utc="2026-08-03T01:33:00Z",
-            )
-            released_coordination = DependentBuyCoordinationV2.create(**coordination_payload)
-            released_coordination.validate_successor_v2(current_coordination)
-            mapping_projection = _mapping_scalar_projection(released_mapping)
-            coordination_projection = _coordination_projection_v2(released_coordination)
-            with repository._connection(transaction=True) as conn:
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(
-                        "INSERT INTO qmt_strategy.execution_algo_command_outbox("
-                        "command_id,transition_id,ordinal,runtime_id,algo_instance_id,parent_intent_id,"
-                        "mapping_id,command_type,local_vt_orderid,payload_json,payload_sha256,"
-                        "status,attempt_count,lease_owner,lease_epoch,lease_fence_token,"
-                        "lease_expires_at,dispatch_attempt_id,callback_watermark_before_call,"
-                        "deterministic_client_order_ref,next_attempt_at_utc,broker_called,broker_order_id,"
-                        "ack_receipt_json,ack_receipt_sha256,non_acceptance_receipt_json,"
-                        "unknown_outcome_receipt_json,reconcile_receipt_json,last_error_json,row_version,"
-                        "created_at_utc,updated_at_utc,closed_at_utc,carrier_json,outbox_row_sha256"
-                        ") VALUES (" + ",".join(["%s"] * 35) + ")",
-                        repository._outbox_sql_values(command_outboxes[0]),
-                    )
-                    mapping_update_keys = tuple(
-                        key
-                        for key in mapping_projection
-                        if key
-                        not in {
-                            "mapping_id",
-                            "child_order_id",
-                            "runtime_id",
-                            "algo_instance_id",
-                            "parent_intent_id",
-                            "strategy_slot_id",
-                            "symbol",
-                            "side",
-                            "quantity",
-                            "price",
-                            "price_type",
-                            "kernel_contract_version",
-                        }
-                    )
-                    cur.execute(
-                        "UPDATE qmt_strategy.execution_child_order SET "
-                        + ",".join(f"{key}=%s" for key in mapping_update_keys)
-                        + ",mapping_json=%s WHERE mapping_id=%s AND mapping_version=%s",
-                        (
-                            *(mapping_projection[key] for key in mapping_update_keys),
-                            _json(released_mapping.model_dump(mode="json")),
-                            released_mapping.mapping_id,
-                            current_mapping.mapping_version,
-                        ),
-                    )
-                    assert cur.rowcount == 1
-                    coordination_update_keys = tuple(key for key in coordination_projection if key != "coordination_id")
-                    cur.execute(
-                        "UPDATE qmt_strategy.execution_dependent_buy_coordination SET "
-                        + ",".join(f"{key}=%s" for key in coordination_update_keys)
-                        + ",carrier_json=%s WHERE coordination_id=%s AND row_version=%s",
-                        (
-                            *(coordination_projection[key] for key in coordination_update_keys),
-                            _json(released_coordination.model_dump(mode="json")),
-                            released_coordination.coordination_id,
-                            current_coordination.row_version,
-                        ),
-                    )
-                    assert cur.rowcount == 1
+            elif mode == "k6b_trade_release":
+                trade_payload = {
+                    "trade_id": "trade_k6b",
+                    "runtime_id": "runtime_k6c1",
+                    "algo_instance_id": dependency.sell_algo_instance_id,
+                    "parent_intent_id": dependency.sell_parent_intent_id,
+                    "strategy_slot_id": "slot_sell",
+                    "mapping_id": "mapping_sell_k6b",
+                    "command_id": "command_sell_k6b",
+                    "local_vt_orderid": "local_sell_k6b",
+                    "broker_order_id": "broker_order_k6b",
+                    "symbol": "600001.SH",
+                    "side": SideV1.SELL.value,
+                    "trade_quantity": 100,
+                    "trade_price_decimal": "10.5",
+                    "source_payload_sha256": "6" * 64,
+                }
+                trade_payload["fact_sha256"] = hash_hex_v1("miniqmt_kernel_trade_event_payload_v1", trade_payload)
+                trigger_event = RuntimeEventEnvelopeV2.create(
+                    runtime_id="runtime_k6c1",
+                    sequence=2,
+                    event_type=EventTypeV2.TRADE,
+                    event_time_utc="2026-08-03T01:33:00Z",
+                    monotonic_ns=None,
+                    source=EventSourceV2.QMT_GATEWAY_CALLBACK,
+                    symbol="600001.SH",
+                    payload_schema_version="miniqmt_trade_fact_v1",
+                    payload=trade_payload,
+                    source_identity={"trade_id": "trade_k6b"},
+                    correlation={},
+                )
+            elif mode == "k6b_eod":
+                trigger_event = build_eod_event_v1(
+                    authority=k6b_session,
+                    sequence=2,
+                    phase_boundary_at_utc="2026-08-03T07:00:00Z",
+                )
+            else:
+                account_ref = next(
+                    ref
+                    for ref in item.evaluation_evidence.execution_projection_set.ordered_projection_refs
+                    if ref.projection_type.value == "ACCOUNT"
+                )
+                trigger_event = RuntimeEventEnvelopeV2.create(
+                    runtime_id="runtime_k6c1",
+                    sequence=2,
+                    event_type=EventTypeV2.ACCOUNT,
+                    event_time_utc="2026-08-03T01:33:00Z",
+                    monotonic_ns=None,
+                    source=EventSourceV2.QMT_OMS_PROJECTION,
+                    symbol=None,
+                    payload_schema_version="miniqmt_account_projection_v1",
+                    payload={"cash": available_cash},
+                    source_identity={
+                        "projection_version": account_ref.projection_version,
+                        "projection_sha256": account_ref.payload_sha256,
+                    },
+                    correlation={},
+                )
+            _seed_event_receipt_deliveries(repository, event=trigger_event, deliveries=())
+            coordinate_args = {
+                "event_id": trigger_event.event_id,
+                "worker_id": "worker_k6b",
+                "process_incarnation_id": "process_k6b",
+            }
+            if mode == "released_defer_lifecycle":
+                unknown_repository = PostgresMiniQMTKernelRepository(conn_factory=_commit_unknown_factory(schema))
+                with pytest.raises(KernelRepositoryCommitUnknown, match="not observed"):
+                    unknown_repository.coordinate_dependent_buys_for_event_atomic_v2(**coordinate_args)
+                release_bundles = repository.coordinate_dependent_buys_for_event_atomic_v2(**coordinate_args)
+                restarted_repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+                assert (
+                    restarted_repository.coordinate_dependent_buys_for_event_atomic_v2(**coordinate_args)
+                    == release_bundles
+                )
+            else:
+
+                def coordinate_same_event() -> tuple[dict[str, object], ...]:
+                    concurrent_repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+                    return concurrent_repository.coordinate_dependent_buys_for_event_atomic_v2(**coordinate_args)
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    concurrent_bundles = tuple(executor.map(lambda _: coordinate_same_event(), range(2)))
+                assert concurrent_bundles[0] == concurrent_bundles[1]
+                release_bundles = concurrent_bundles[0]
+            assert len(release_bundles) == 1
+            expected_decision = {
+                "released_defer_lifecycle": "RELEASE_TO_K2_OUTBOX",
+                "k6b_concurrent": "RELEASE_TO_K2_OUTBOX",
+                "k6b_wait": "WAIT",
+                "k6b_order_block": "BLOCK",
+                "k6b_trade_release": "RELEASE_TO_K2_OUTBOX",
+                "k6b_eod": "EOD_RESIDUAL",
+            }[mode]
+            assert release_bundles[0]["decision"].decision.value == expected_decision
+            if expected_decision == "RELEASE_TO_K2_OUTBOX":
+                assert release_bundles[0]["outbox"].command_id == item.command_id
+            else:
+                assert release_bundles[0]["outbox"] is None
+            with raw.cursor() as cur:
+                cur.execute(f"SELECT count(*) FROM {schema}.execution_dependent_buy_decision")
+                assert cur.fetchone()[0] == 1
+                cur.execute(f"SELECT count(*) FROM {schema}.execution_algo_command_outbox")
+                assert cur.fetchone()[0] == (1 if expected_decision == "RELEASE_TO_K2_OUTBOX" else 0)
+                with pytest.raises(psycopg2.errors.RaiseException, match="durable rows exist"):
+                    cur.execute(K6B_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+                cur.execute("ROLLBACK")
         read_authority, lifecycle, read_receipt = repository.read_product_materialization_v3(
             authority.authority_set_sha256
         )
@@ -1116,6 +1356,11 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
             "claimed_lifecycle": ("MATERIALIZE",),
             "terminal_lifecycle": ("MATERIALIZE",),
             "released_defer_lifecycle": ("DEFER_DEPENDENT_BUY",),
+            "k6b_concurrent": ("DEFER_DEPENDENT_BUY",),
+            "k6b_wait": ("DEFER_DEPENDENT_BUY",),
+            "k6b_order_block": ("DEFER_DEPENDENT_BUY",),
+            "k6b_trade_release": ("DEFER_DEPENDENT_BUY",),
+            "k6b_eod": ("DEFER_DEPENDENT_BUY",),
             "concurrent": ("MATERIALIZE",),
         }[mode]
         assert tuple(item.disposition.value for item in lifecycle.ordered_item_projections) == expected_dispositions
@@ -1123,14 +1368,23 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
             assert lifecycle.ordered_item_projections[0].lifecycle_status.value == "CLAIMED"
         if mode == "terminal_lifecycle":
             assert lifecycle.ordered_item_projections[0].lifecycle_status.value == "FAILED_TERMINAL"
-        if mode == "released_defer_lifecycle":
-            assert lifecycle.ordered_item_projections[0].lifecycle_status.value == "PENDING"
-            assert lifecycle.ordered_item_projections[0].outbox_id == commands[0].command_id
+        if mode in _K6B_DEV_MODES:
+            expected_lifecycle = {
+                "released_defer_lifecycle": "PENDING",
+                "k6b_concurrent": "PENDING",
+                "k6b_wait": "DEFERRED_DEPENDENT_BUY",
+                "k6b_order_block": "FAILED_TERMINAL",
+                "k6b_trade_release": "PENDING",
+                "k6b_eod": "FAILED_TERMINAL",
+            }[mode]
+            assert lifecycle.ordered_item_projections[0].lifecycle_status.value == expected_lifecycle
+            expected_outbox_id = commands[0].command_id if expected_lifecycle == "PENDING" else None
+            assert lifecycle.ordered_item_projections[0].outbox_id == expected_outbox_id
         assert repository.read_delivery(pending.delivery_id).status is DeliveryStatusV1.APPLIED
         expected_active_count = sum(
             disposition in {"MATERIALIZE", "DEFER_DEPENDENT_BUY"} for disposition in expected_dispositions
         )
-        if mode == "terminal_lifecycle":
+        if mode in {"terminal_lifecycle", "k6b_order_block", "k6b_eod"}:
             expected_active_count = 0
         assert repository.read_algo_instance(algo_instance_id).active_child_count == expected_active_count
     finally:
