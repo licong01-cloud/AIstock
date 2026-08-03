@@ -72,7 +72,8 @@
       "Fresh Python process loaded the changed remote_dispatch source with the canonical .env and verified rdagent-gpu activation precedes python -c.",
       "Fresh WSL shell sourced /home/lc999/miniconda3/etc/profile.d/conda.sh, activated rdagent-gpu, and resolved Python 3.10.19 at /home/lc999/miniconda3/envs/rdagent-gpu/bin/python.",
       "Fresh pytest process completed the durable-adapter plus remote-dispatch matrix: 63 passed, 1 skipped.",
-      "Fresh Python process loaded the persistent source and verified deployed rdagent-gpu activation precedes python -c; fresh WSL probe resolved Python 3.10.19"
+      "Fresh Python process loaded the persistent source and verified deployed rdagent-gpu activation precedes python -c; fresh WSL probe resolved Python 3.10.19",
+      "Fresh Python process loaded commit 79fddeb3ecdf71b2016861a4d51a620f5e6571fd and verified deployed rdagent-gpu activation precedes python -c; fresh WSL probe resolved Python 3.10.19"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
