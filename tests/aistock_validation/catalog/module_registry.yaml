@@ -16,6 +16,14 @@ modules:
     description_zh: Phase 0B 荐股候选质量研究，仅审计显式 SEALED 历史快照，并与选股和交易运行时隔离。
     test_plans:
       required_on_change: [l0, advisory_phase0b_backend]
+  - module_id: advisory.modeling
+    display_name: Advisory short-rebound modeling
+    module_type: data_pipeline
+    risk_level: high
+    description: Isolated static contracts, deterministic feature and label semantics, temporal split plans, immutable artifacts, and shadow-result identities for Advisory short-rebound reranking research.
+    description_zh: 荐股超跌反弹重排序研究的隔离静态合同、确定性特征与标签语义、时间切分、不可变工件和影子结果身份，不接入选股或交易运行时。
+    test_plans:
+      required_on_change: [l0, advisory_modeling_backend]
   - module_id: advisory.dev_input_onboarding
     display_name: Advisory DEV input onboarding
     module_type: data_pipeline

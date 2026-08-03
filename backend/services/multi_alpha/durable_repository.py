@@ -5213,6 +5213,12 @@ class MultiAlphaDurableRepository:
                     token=token,
                     expected_statuses=expected_statuses,
                 )
+                reconciled_cancelled_scheme_results = (
+                    self._reconcile_missing_cancelled_scheme_results(
+                        cur,
+                        run_id=run_id,
+                    )
+                )
                 cur.execute(
                     """
                     SELECT COUNT(*) AS child_count,
@@ -5255,6 +5261,9 @@ class MultiAlphaDurableRepository:
                     "terminal_child_count": terminal_child_count,
                     "scheme_result_count": scheme_count,
                     "loo_result_count": loo_count,
+                    "reconciled_cancelled_scheme_result_count": len(
+                        reconciled_cancelled_scheme_results
+                    ),
                 }
                 if (
                     actual_child_count != expected_child_count
@@ -5340,6 +5349,109 @@ class MultiAlphaDurableRepository:
                     },
                 )
                 return row
+
+    def _reconcile_missing_cancelled_scheme_results(
+        self,
+        cur: Any,
+        *,
+        run_id: str,
+    ) -> list[str]:
+        """Persist typed skipped evidence before a cancelled parent is finalized.
+
+        Older and pre-attempt cancellation paths may have terminalized a scheme
+        child before the legacy-compatible skipped result was written. Parent
+        finalization owns the durable repair: it never invents metrics, never
+        changes the child terminal state, and remains atomic with the parent
+        business readback.
+        """
+
+        cur.execute(
+            """
+            SELECT child.child_id,
+                   child.weighting_scheme,
+                   child.selected_attempt_id,
+                   cancellation.phase AS cancellation_phase,
+                   cancellation.reason_code AS cancellation_reason_code
+            FROM strategy_pkg.multi_alpha_combine_backtest_child AS child
+            LEFT JOIN LATERAL (
+                SELECT event.phase, event.reason_code
+                FROM strategy_pkg.multi_alpha_combine_backtest_event AS event
+                WHERE event.child_id = child.child_id
+                ORDER BY event.event_id DESC
+                LIMIT 1
+            ) AS cancellation ON TRUE
+            WHERE child.run_id = %s
+              AND child.child_kind = 'scheme'
+              AND child.status = 'cancelled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM strategy_pkg.multi_alpha_combine_backtest_scheme_result AS result
+                  WHERE result.run_id = child.run_id
+                    AND result.weighting_scheme = child.weighting_scheme
+              )
+            ORDER BY child.ordinal, child.child_id
+            FOR UPDATE OF child
+            """,
+            (run_id,),
+        )
+        missing = [dict(row) for row in cur.fetchall()]
+        reconciled_child_ids: list[str] = []
+        for child in missing:
+            child_id = str(child["child_id"])
+            weighting_scheme = str(child.get("weighting_scheme") or "").strip()
+            if not weighting_scheme:
+                raise MultiAlphaDurableRepositoryError(
+                    "cancelled scheme child is missing weighting_scheme",
+                    reason_code="multi_alpha_business_result_scope_mismatch",
+                    context={"run_id": run_id, "child_id": child_id},
+                )
+            source_reason_code = str(
+                child.get("cancellation_reason_code") or "multi_alpha_scheme_cancelled"
+            )
+            source_phase = str(child.get("cancellation_phase") or "cancelled")
+            error = {
+                "reason_code": source_reason_code,
+                "message": "scheme child was cancelled before a business result was available",
+                "context": {
+                    "run_id": run_id,
+                    "child_id": child_id,
+                    "weighting_scheme": weighting_scheme,
+                    "child_status": "cancelled",
+                    "cancellation_phase": source_phase,
+                    "selected_attempt_id": child.get("selected_attempt_id"),
+                },
+            }
+            desired = self._normalized_scheme_result(
+                {
+                    "weighting_scheme": weighting_scheme,
+                    "weights_json": {},
+                    "per_window_weights_json": [],
+                    "pred_persisted": False,
+                    "skipped": True,
+                    "skipped_reason": canonical_json(error),
+                }
+            )
+            self._insert_or_compare_scheme_result(
+                cur,
+                run_id=run_id,
+                desired=desired,
+            )
+            self._insert_event(
+                cur,
+                run_id=run_id,
+                child_id=child_id,
+                event_type="reconciled",
+                phase="cancelled_scheme_business_evidence_reconciled",
+                reason_code="multi_alpha_cancelled_scheme_result_reconciled",
+                payload={
+                    "weighting_scheme": weighting_scheme,
+                    "skipped": True,
+                    "source_phase": source_phase,
+                    "source_reason_code": source_reason_code,
+                },
+            )
+            reconciled_child_ids.append(child_id)
+        return reconciled_child_ids
 
     def _lock_business_child(
         self,

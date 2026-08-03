@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-944",
-  "closed_at": null,
+  "closed_at": "2026-08-03T04:27:57.452202Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -150,9 +150,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-944\\post-restart-receipt.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -162,7 +162,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -188,7 +188,9 @@
     "Second-review F2 PASS with 3 design items, 8 matrix rows and 0 warnings; l0 blocking=0; validation registry 8 passed and 14/14 mapped",
     "Cross-module validation reason: backend runtime impact requires a frozen merge-SHA identity and exact HMM C-010-A5 business smoke; only direct endpoint tests were added",
     "No HMM fit, D5/D6, selection, model/READY, database write, DDL/DML, runtime action, or backend process control was performed",
-    "GitHub PR #3027 CI verdict -> PASS"
+    "GitHub PR #3027 CI verdict -> PASS",
+    "validation-receipt: id=177237b1e2203bbc commit=f0dcf64723a581884dc86657d636caf182db03ef kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2` result=`PASS`",
+    "validation-receipt: id=e8ccb42cb96be25b commit=f0dcf64723a581884dc86657d636caf182db03ef kind=diff_check plan=direct status=passed command=`git diff --check origin/main...HEAD` result=`PASS`"
   ],
   "validation_receipts": [
     {

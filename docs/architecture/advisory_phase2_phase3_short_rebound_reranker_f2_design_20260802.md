@@ -2,7 +2,7 @@
 
 > 日期：2026-08-02
 > Feature tier：`F2`（Advisory 数据、WSL 训练、immutable bundle 与影子推理跨边界能力）
-> 当前状态：`design_reviewed_ready_for_commit_implementation_not_started`
+> 当前状态：`batch_a_contract_source_verified_batches_b_c_d_not_started`
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 上游数据合同：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`
 > 上游审计合同：`docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md`
@@ -211,6 +211,28 @@ final_fit_as_of
 request_semantic_hash
 ```
 
+首版 `multi_alpha_parent_contract_version` 固定为
+`advisory_historical_range_candidate_component_lineage_v1`；
+`multi_alpha_component_identity_set_hash` 固定为按 `component_id` 排序后的完整 admitted component
+canonical payload 集合 hash，不是只对 component 名称求 hash。base read 必须对每个 candidate artifact
+验证 schema/package/manifest/alpha_mode/component set 一致；该校验只关闭本次数据血缘，不重复执行策略包准入。
+
+Batch B 的可执行入口使用外层 `BatchBDatasetMaterializationRequestV1`。它必须同时携带
+`DatasetBuildIntentV1`、完整 `StrategyStyleProfileV1`，以及一个显式
+`ExistingProgramInput(program_id, expected_program_version, expected_binding_version_id)`。
+`package_id` 不能反查或猜测 Program、binding、review policy 或 runtime config；首版也不接受
+`ResearchProgramInput` 临时拼装一套运行配置。Historical Range 冻结 Program 后，编排器必须逐项校验
+package/manifest/asset closure/runtime semantics/多 Alpha 父包与 component identity 是否与 dataset request
+一致，不一致时以结构化错误停止。artifact root、repository root 和数据库连接属于显式物理配置，不进入
+数据集经济身份，也不得从工作树或相邻目录猜测。
+
+`DatasetBuildIntentV1` 包含除 `source_revision_set_id/hash` 和
+`universe_policy_set_id/hash` 外的全部静态请求字段。这四个身份不能在 Historical Range 构建前猜测：
+编排器先以 intent 和精确 Existing Program 生成 SEALED base snapshot，再从已验证 manifest、
+`source_revisions` 和逐日 observation 的 universe policy 确定性派生集合身份，最后冻结完整
+`DatasetBuildRequestV1`。调用者可提供 expected source/universe set hash 作为一致性断言，但不得把它当作
+权威生产者。完整 request 冻结后才允许开始 feature source 读取和 feature snapshot 物化。
+
 同一个 SEALED base snapshot 是候选、stage、label 和 source revision 的物理权威；它至少覆盖最长 5 年拟合窗口，以及其后的 20 日 fit/validation gap、60 日 validation、20 日 pre-test embargo、300 日 test 和 20 日 post-test label-maturity source tail，共 420 个交易日。最后 20 日只提供 test outcome 成熟所需行情/企业行动/source evidence，不进入 decision group、fit、validation 或 test。2/3/5 年 view manifest 只保存各自 fit/validation/test date boundary、group/member hashes、base snapshot ref/hash 和 feature snapshot ref/hash，不复制三份相同文件。若数据库可复算日期不足，构建仍产出准确 coverage receipt，但不得把不足窗口标记为可训练。首模只要求候选 observation/outcome 闭合；`universe_outcomes` 不作为训练前置，也不得用候选集合伪造 universe denominator。
 
 ### 6.3 FeatureSchemaV1
@@ -232,16 +254,17 @@ request_semantic_hash
 
 | formula_id | 公式与输入 | PIT/source 约束 |
 |---|---|---|
+| `frozen_evidence_projection_v1` | 原样投影 base/source 中的 identity、rank、score、HMM、risk 和行业映射字段，不做填充或数值变换 | 输入必须来自已验证 SEALED base snapshot、其内容寻址 artifact ref 或冻结 feature source partition；hash 不闭合即失败 |
 | `candidate_rank_percentile_v1` | `n>1 ? (n-rank)/(n-1) : 0.5`；四个 stage 分别计算 | 只读 base snapshot 同日 stage candidates |
 | `candidate_score_gap_v1` | 当前 score 与相邻上一/下一 rank score 的差；边界为空并带 missing flag | score direction 与 tie policy 取自同日 stage summary |
 | `multi_alpha_consensus_v1` | 对冻结 leg score 做 weighted mean、weighted std、sign agreement、`max(abs(weight*score))/sum(abs(weight*score))` | leg/weight/model identity 必须来自 base snapshot `component_evidence_json`，不得查询 current package |
-| `adjusted_return_v1` | `adj_close_T/adj_close_{T-h}-1`，`h in {1,3,5,10,20,60}` | close/adj_factor revision 的 `available_at<=decision_cutoff_ts` |
+| `adjusted_return_v1` | `adj_close_T/adj_close_{T-h}-1`，`h in {1,3,5,10,20,60}` | close/adj_factor 行业务日期不晚于 decision date；revision 明确标记 `RETROSPECTIVE_DB_CONTENT_HASH`，不冒充 formal availability event |
 | `realized_volatility_v1` | 最近 h 日 `log(adj_close_t/adj_close_{t-1})` 的 sample std，`ddof=1` | 至少 `h` 个合法交易日，否则缺失 |
 | `distance_to_extreme_v1` | `adj_close_T/max(adj_high_{T-h+1:T})-1` 与 `adj_close_T/min(adj_low_{T-h+1:T})-1` | 企业行动一致的 high/low/adj_factor |
 | `liquidity_state_v1` | amount/turnover 的 5/20 日均值、当前值除以 20 日均值、20 日 log-amount z-score | 停牌日保留零成交事实，不向前填充 |
 | `moneyflow_state_v1` | 主力净流入除以成交额、5/20 日和及方向一致率 | 分母为 0 时值缺失并置 flag，不填 0 |
 | `industry_context_v1` | PIT 行业成员等权 5/20 日收益、`close>MA20` 比例、正净流入成员比例 | 使用 T 日可用行业映射和成员集合 hash |
-| `market_context_v1` | PIT universe 个股 5/20 日收益的等权均值/横截面波动、`close>MA20` 比例、涨跌停比例 | universe、价格限制政策和有效成员集合均进入 hash；不新增指数数据源 |
+| `market_context_v1` | PIT universe 个股 5/20 日收益的等权均值（冻结字段 `market_return_5_mean/market_return_20_mean`）、横截面波动、`close>MA20` 比例、涨跌停比例 | universe、价格限制政策和有效成员集合均进入 hash；不新增指数数据源 |
 | `candidate_group_context_v1` | 候选数、行业 Herfindahl、四阶段 score std、leg disagreement 均值 | 仅使用同日 base candidates |
 
 `h` 个交易日窗口按冻结 calendar 展开，不按自然日。任何滚动统计的均值、标准差、分母、空值和最少观测数均由 formula payload 固定，不能由实现选择 pandas 默认值。
@@ -267,7 +290,7 @@ completion_receipt.json
 
 #### 6.3.2 FrozenFeatureQueryRegistryV1
 
-第一版不增加共享 catalog query。`FrozenFeatureQueryRegistryV1` 在 `advisory_modeling` 内冻结下列现有只读模板的 SQL bytes、参数 schema、结果 schema、template/version/hash 和来源 repository commit；运行时不 import 或修改共享 catalog。每个 bound parameter hash、partition hash、row count 和 availability event 写入 `feature_source_revisions.parquet`：
+第一版不增加共享 catalog query。`FrozenFeatureQueryRegistryV1` 在 `advisory_modeling` 内冻结下列现有只读模板的 SQL bytes、参数 schema、结果 schema、template/version/hash 和来源 repository commit；运行时不 import 或修改共享 catalog。每个 bound parameter hash、partition hash、row count、database target 和 `RETROSPECTIVE_DB_CONTENT_HASH` admissibility 写入 `feature_source_revisions.parquet`；本阶段不把运行时抽取时间冒充历史 formal availability event：
 
 ```text
 historical_pit_universe_existing_readonly
@@ -279,6 +302,14 @@ historical_fundamental_moneyflow_window
 historical_suspend_lookup
 historical_industry_membership
 ```
+
+上述 template id 表示既有正式只读数据语义，不要求按每个决策日重复执行共享链路中面向单日推理的物理
+SQL。Batch B 在 `advisory_modeling` 内冻结等价的区间化 SQL bytes/version/result schema：价格、复权、
+成交额、换手、资金流、涨跌停、停牌、PIT universe 和行业 membership 均按各自行的交易日/有效区间连接，
+一次有界分区读取后写入临时 spool，再由各决策日复用。区间化不得把最终日股票池套用到历史日期，不得
+丢弃历史退市成员，也不得扩大 `row_business_date <= decision_as_of_trade_date`、PIT membership 或 source revision
+语义。逐日物理查询与区间查询在相同日期范围上的 canonical row set/hash 必须有直接测试；任何不一致均
+失败，不允许以性能优化名义降级为近似数据。
 
 同一日期/窗口/参数的 source partition 只读取一次并在本次 feature build 的临时 spool 中复用，不能按候选或模型组合重复查询数据库。任一模板缺失、schema hash 改变或 source revision 不闭合时整个 feature snapshot 失败；不得跳过该特征族后继续发布同一 schema id。
 
@@ -297,14 +328,14 @@ raw_utility_5 = return_5 + 0.25 * mfe_5 - 0.50 * mae_loss_5
 
 在同一 ranking group 内先对不同 `raw_utility_5` 值做 ascending dense rank。设不同值数量为 `m`、当前 dense rank 从 0 开始为 `d`，`m>1` 时 `relevance=floor(4*d/(m-1))`；`m=1` 时全部 relevance 为 0 且该 group 标记 `NO_LABEL_VARIATION`，不进入拟合。相同 utility 必须获得相同 relevance；symbol 只用于序列化顺序，`selection_effective_rank` 绝不进入标签或 tie-break。`label_gain=[0,1,3,7,15]`。该 relevance 仅是排序训练目标，不是收益预测。
 
-`return_5` 精确消费候选 owner、`projection=RETURN_NET_EXCESS`、`horizon=5`、`maturity=MATURED` 的 projection value；MFE/MAE 同样消费候选 owner 和同一 label policy 的 `EXECUTABLE_MFE/MAE`。5 日绝对净收益、1/3/10/20 日净收益、PATH_MFE/MAE、positive-return 和 signal decay 只作诊断/分桶，不参与首个主标签择优。label policy 必须复用 Phase 1 的 entry、成本、benchmark、企业行动、terminal/censor 和可交易性口径；不得另写简化收益计算。
+`return_5` 精确消费候选 owner、`projection=RETURN_NET_EXCESS`、`horizon=5`、`maturity=MATURED` 的 projection value；MFE/MAE 同样消费候选 owner 和同一 label policy 的 `EXECUTABLE_MFE/MAE`。正常到期的 `outcome_event_status=NONE`、路径事件 `BARRIER` 和提前终止 `TERMINAL` 均保留；不得把 `TERMINAL` 误作所有成熟样本的前置条件。5 日绝对净收益、1/3/10/20 日净收益、PATH_MFE/MAE、positive-return 和 signal decay 只作诊断/分桶，不参与首个主标签择优。label policy 必须复用 Phase 1 的 entry、成本、benchmark、企业行动、terminal/censor 和可交易性口径；不得另写简化收益计算。
 
 ranking group 固定为：
 
 ```text
 (decision_as_of_trade_date,
  target_trade_date,
- canonical_signal_scope_hash,
+ stable_signal_semantics_hash,
  label_policy_hash)
 ```
 
@@ -316,7 +347,7 @@ ranking group 固定为：
 - 将 snapshot 最后的 300 个 eligible decision dates 按升序切成五个连续且不重叠的 60 日 outer test blocks；不足 300 日时只能生成 coverage report。
 - 对每个 test block `j`，`test_start_j/test_end_j` 取其首末日期；`pre_test_embargo_j` 是 `test_start_j` 前连续 20 个交易日；`validation_j` 是 embargo 前连续 60 个交易日；`fit_validation_gap_j` 是 validation 前连续 20 个交易日。
 - `fit_end_j` 是 `fit_validation_gap_j` 前一交易日；窗口 `y in {2,3,5}` 的 `fit_start_{j,y}` 是 `fit_end_j` 向前 y 个完整日历年后遇到的第一个交易日。拟合数据只含 `[fit_start_{j,y},fit_end_j]`，validation 和两个 gap 均不进入拟合。
-- `fold_training_as_of_j` 固定为 `test_start_j` 前一交易日收盘 cutoff。fit/validation 行只有在主标签及其所有 source revision 的 `available_at/computed_at <= fold_training_as_of_j` 时可用；不得依据后来补算结果回写既有 fold。
+- `fold_training_as_of_j` 固定为 `test_start_j` 前一交易日收盘 cutoff。fit/validation 行只有在主标签 `computed_at <= fold_training_as_of_j` 且其 feature row 的 business-date cutoff/source-slice closure 不晚于该 fold 时可用；retrospective revision 不得伪造 formal availability timestamp，也不得依据后来补算结果回写既有 fold。
 - 对 `j>0`，早期 test block 只有在其标签于当前 `fold_training_as_of_j` 前已经成熟时，才可能自然落入新的 fit/validation 日期范围；程序不得用“曾经是 test”永久排除，也不得在成熟前提前使用。
 - 每个候选行按决策日归属唯一 split；同一日所有股票必须位于同一 split。
 - `effective_package_oos_cutoff + embargo` 之后且 package/runtime/HMM vintage 当时已存在的 test 才能计为 formal OOS；其余明确为 retrospective research。
@@ -432,7 +463,7 @@ completion_receipt.json
 
 research bundle 必须满足：
 
-- 三个窗口均有明确 coverage；可训练窗口至少 480/720/1200 个有效决策日，分别对应 2/3/5 年目标；
+- 三个窗口均有明确 coverage；可训练窗口至少 480/720/1200 个 `MODELABLE` 拟合决策日，分别对应 2/3/5 年目标；eligible 与 modelable 计数必须分别报告，不得用仅有标签但不足 2 个候选的日期替代；
 - 每个 fold 都报告 eligible/modelable/no-label-variation/feature-missing dates 和候选深度；少于 2 个候选不伪造 ranking group；
 - snapshot、view、feature、label、split、environment、code 和 model hash 全部闭合；
 - WSL 三个固定种子均成功，失败种子不能被静默丢弃；
@@ -663,35 +694,35 @@ SEALED/hash/PIT/WSL/bundle 校验是数据与程序正确性合同，不是人�
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
-本矩阵只表示详细设计已经闭合；`design_ready` 不表示源码、数据、模型或影子推理已经完成。代码 PR 必须替换为真实 implementation refs 和测试证据。
+本矩阵的 `pass` 只表示对应设计项已有源码和本地合同证据；DEV/生产 DML、真实多年 snapshot、WSL 训练和影子推理属于后续独立运行时验收，不得从本矩阵状态推导为已完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-201 | §2.2、§6.1 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
+| F-201 | `backend/services/advisory_modeling/style_profile.py` | `backend/tests/advisory_modeling/test_contracts_and_features.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
 | F-202 | §2、§3、§5.1 | artifact: `docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md` | design_ready | none |
-| F-203 | §6.2、§6.3.1、§9 Batch B | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-204 | §6.1-§6.5 | artifact: `docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md` | design_ready | none |
-| F-205 | §6.4 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-206 | §6.3、§6.6 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
-| F-207 | §6.5 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-208 | §6.6、§6.6.2 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
+| F-203 | `backend/services/advisory_modeling/batch_b.py`、`base_snapshot.py`、`scripts/advisory_short_rebound_batch_b.py` | `backend/tests/advisory_modeling/test_batch_b_contracts.py`、`test_batch_b_cli.py` | pass | none |
+| F-204 | `backend/services/advisory_modeling/feature_schema.py`、`feature_snapshot.py`、`feature_sources.py`、`dataset_spool.py` | `backend/tests/advisory_modeling/test_batch_b_feature_materialization.py` | pass | none |
+| F-205 | `backend/services/advisory_modeling/label_policy.py`、`training_export.py` | `backend/tests/advisory_modeling/test_contracts_and_features.py`、`test_batch_b_feature_materialization.py` | pass | none |
+| F-206 | `backend/services/advisory_modeling/feature_builder.py`、`feature_schema.py` | `backend/tests/advisory_modeling/test_contracts_and_features.py`、`test_batch_b_feature_materialization.py` | pass | none |
+| F-207 | `backend/services/advisory_modeling/training_view.py`、`training_export.py` | `backend/tests/advisory_modeling/test_split_experiment_regime.py`、`test_batch_b_feature_materialization.py` | pass | none |
+| F-208 | `backend/services/advisory_modeling/contracts.py` | `backend/tests/advisory_modeling/test_split_experiment_regime.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
 | F-209 | §6.7 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-210 | §6.8 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-211 | §5、§6.9 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
-| F-212 | §7.3 | artifact: `docs/architecture/advisory_phase0b_candidate_quality_modelability_f1_design_20260731.md` | design_ready | none |
+| F-210 | `backend/services/advisory_modeling/bundle_store.py` | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-211 | `backend/services/advisory_modeling/shadow_inference.py` | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-212 | `backend/services/advisory_modeling/batch_b.py`、`training_export.py` | `backend/tests/advisory_modeling/test_batch_b_feature_materialization.py` | pass | none |
 | F-213 | §7.1-§7.2 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
 | F-214 | §7.2 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
-| F-215 | §8、§10.4 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
+| F-215 | `backend/services/advisory_modeling/errors.py`、`batch_b.py`、全部 frozen contracts | `python -m nox -s advisory_modeling_backend` | pass | none |
 | F-216 | §6.9、§10.4 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
 | F-217 | §6.1、§6.9 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
-| F-218 | §6.6、§6.8 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-219 | §5.3 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-220 | §3、§13 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-221 | §3、§9 Batch B、§13 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-222 | §5.2、§10.1 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-223 | §9、§10.4 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
-| F-224 | §6.4、§6.9 | artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
+| F-218 | `backend/services/advisory_modeling/contracts.py`、`bundle_store.py` | `backend/tests/advisory_modeling/test_split_experiment_regime.py`、`test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-219 | `backend/services/advisory_modeling/bundle_store.py` | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-220 | `backend/services/advisory_modeling/**`、`scripts/advisory_short_rebound_batch_b.py` | `python -m nox -s advisory_modeling_backend`；`tests/aistock_validation/history/advisory_modeling/20260803_advisory_short_rebound_batch_b_source_review.md` | pass | none |
+| F-221 | Batch B 无 migration；DML 仅经 Historical Range/Phase 1R 正式 repositories，新特征/训练文件只写显式 artifact root | `python -m nox -s advisory_modeling_backend`；ownership/classifier | pass | none |
+| F-222 | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | `backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
+| F-223 | Batch A implementation and five review rounds | artifact: `tests/aistock_validation/history/advisory_modeling/20260803_advisory_short_rebound_batch_a_contract_review.md` | batch_a_verified | none |
+| F-224 | `backend/services/advisory_modeling/label_policy.py`、`shadow_inference.py` | `backend/tests/advisory_modeling/test_contracts_and_features.py`、`test_artifacts_shadow_isolation.py` | batch_a_contract_verified_remaining_batches_design_ready | none |
 
 ## 15. 当前结论与下一步
 
-本设计把首个可用模型功能压缩为一个明确垂直切片，没有恢复历史数据或建设通用平台。设计合入后，代码阶段从 Batch A 开始；Batch A 审核通过后才进入新多年 snapshot 构建。任何代码合入、生产数据库读取/写入、依赖安装、服务控制或模型激活仍需按当时具体任务单独报告。
+本设计把首个可用模型功能压缩为一个明确垂直切片，没有恢复历史数据或建设通用平台。Batch A 的 style、feature/formula/query、label、split、experiment、regime、bundle、shadow-result 和 typed reason 合同已完成源码与五轮审核；它没有执行数据库读取、特征物化、WSL 训练或模型推理，因此不代表 Phase 2/3 整体完成。下一步是 Batch B 新多年 snapshot 与训练文件构建。任何代码合入、生产数据库读取/写入、依赖安装、服务控制或模型激活仍需按当时具体任务单独报告。
