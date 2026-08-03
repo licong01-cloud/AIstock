@@ -82,18 +82,22 @@ from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
     D1InactiveDimensionError,
     FEATURE_DEFINITION_SHA256 as B3_D1_FEATURE_DEFINITION_SHA256,
     PREPROCESS_IDENTITY_SHA256 as B3_D1_PREPROCESS_IDENTITY_SHA256,
-    REPORT_SCHEMA_VERSION as B3_D1_REPORT_SCHEMA_VERSION,
+    REFIT02_REPORT_SCHEMA_VERSION as B3_D1_REFIT02_REPORT_SCHEMA_VERSION,
     REMEDIATION_REPORT_SHA256 as B3_D1_REMEDIATION_REPORT_SHA256,
     SOURCE_AUTHORITY as B3_D1_SOURCE_AUTHORITY,
     TREATMENT_PROFILE_RECEIPT_SHA256 as B3_D1_TREATMENT_PROFILE_RECEIPT_SHA256,
     TREATMENT_SECTOR as B3_D1_TREATMENT_SECTOR,
     TREATMENT_SOURCE_SET_SHA256 as B3_D1_TREATMENT_SOURCE_SET_SHA256,
     TREATMENT_TRAIN_INPUT_MANIFEST_SHA256 as B3_D1_TREATMENT_TRAIN_INPUT_MANIFEST_SHA256,
-    build_input_migration_receipt as build_b3_d1_input_migration_receipt,
-    build_controlled_refit_report as build_b3_d1_controlled_refit_report,
-    run_controlled_process as run_b3_d1_controlled_process,
+    build_refit02_current_a5_authority as build_b3_d1_refit02_current_a5_authority,
+    build_refit02_execution_failure_report as build_b3_d1_refit02_execution_failure_report,
+    build_refit02_historical_reference_receipt as build_b3_d1_refit02_historical_reference_receipt,
+    build_refit02_not_applicable_report as build_b3_d1_refit02_not_applicable_report,
+    build_refit02_preflight_failure_report as build_b3_d1_refit02_preflight_failure_report,
+    build_refit02_report as build_b3_d1_refit02_report,
+    run_refit02_process as run_b3_d1_refit02_process,
+    validate_refit02_process_receipt as validate_b3_d1_refit02_process_receipt,
     validate_source_identity_set as validate_b3_d1_source_identity_set,
-    validate_process_receipt as validate_b3_d1_process_receipt,
     write_controlled_refit_report as write_b3_d1_controlled_refit_report,
 )
 from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
@@ -3088,7 +3092,7 @@ def _load_b3_d1_train_inputs(
     return inputs, identities
 
 
-def prepare_b3_d1_controlled_pass(
+def _prepare_b3_d1_refit02_authority(
     request: dict[str, Any],
     formal_report: dict[str, Any],
     blocker_report: dict[str, Any],
@@ -3096,21 +3100,15 @@ def prepare_b3_d1_controlled_pass(
     c010_a5_report: dict[str, Any],
     *,
     db_prefix: str,
-    process_identity: str,
     producer_commit: str,
 ) -> dict[str, Any]:
-    """Run one 16-attempt D1-B process after all frozen authorities close."""
+    """Build the current-A5 REFIT-02 authority before any child fit starts."""
 
-    if process_identity not in {"fresh_process_1", "fresh_process_2"}:
-        raise D1InactiveDimensionError(
-            "hmm_risk_model_inactive_dimension_contract_invalid",
-            "D1-B child process identity is invalid",
-        )
     current_commit = _formal_producer_commit()
     if current_commit != producer_commit:
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_authority_mismatch",
-            "D1-B child producer commit differs from the parent authority",
+            "D1-B producer commit differs from the parent authority",
         )
     authority = _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report, c010_a5_report)
     current_environment = c008_b3_diag04_fixed_numeric_environment()
@@ -3138,48 +3136,79 @@ def prepare_b3_d1_controlled_pass(
             "hmm_risk_model_inactive_dimension_authority_mismatch",
             "D1-B treatment/control train inputs are missing",
         )
-    treatment_migration = build_b3_d1_input_migration_receipt(
-        series[B3_D1_TREATMENT_SECTOR],
-        historical_train_input_manifest=authority["profiles"][B3_D1_TREATMENT_SECTOR]["train_input_manifest"],
-        role="treatment",
-        current_policy_sha256=input_identities["c010_feature_domain_policy_sha256"],
-        producer_commit=current_commit,
-        historical_observation_manifest_hash=authority["frozen_model_lineage"][B3_D1_TREATMENT_SECTOR][
-            "observation_manifest_hash"
-        ],
-        historical_pit_constituent_manifest_hash=authority["frozen_model_lineage"][B3_D1_TREATMENT_SECTOR][
-            "pit_constituent_manifest_hash"
-        ],
-        c010_a5_lineage_migration_receipt=input_identities["c010_a5_lineage_migration_receipt"],
-    )
-    control_migration = build_b3_d1_input_migration_receipt(
-        series[B3_D1_CONTROL_SECTOR],
-        historical_train_input_manifest=authority["profiles"][B3_D1_CONTROL_SECTOR]["train_input_manifest"],
-        role="control",
-        current_policy_sha256=input_identities["c010_feature_domain_policy_sha256"],
-        producer_commit=current_commit,
-        historical_observation_manifest_hash=authority["frozen_model_lineage"][B3_D1_CONTROL_SECTOR][
-            "observation_manifest_hash"
-        ],
-        historical_pit_constituent_manifest_hash=authority["frozen_model_lineage"][B3_D1_CONTROL_SECTOR][
-            "pit_constituent_manifest_hash"
-        ],
-        c010_a5_lineage_migration_receipt=input_identities["c010_a5_lineage_migration_receipt"],
-    )
-    receipt = run_b3_d1_controlled_process(
+    current_authority = build_b3_d1_refit02_current_a5_authority(
         treatment_item=series[B3_D1_TREATMENT_SECTOR],
-        control_item=series[B3_D1_CONTROL_SECTOR],
+        harness_item=series[B3_D1_CONTROL_SECTOR],
         preprocess=authority["preprocess"],
-        process_identity=process_identity,
+        current_policy_sha256=input_identities["c010_feature_domain_policy_sha256"],
         producer_commit=current_commit,
-        numeric_environment=current_environment,
-        treatment_source_identities=authority["treatment_source_identities"],
-        control_source_identities=authority["control_source_identities"],
-        frozen_control_hashes=authority["frozen_control_hashes"],
-        treatment_input_migration_receipt=treatment_migration,
-        control_input_migration_receipt=control_migration,
     )
-    if _formal_producer_commit() != current_commit:
+    historical_reference = build_b3_d1_refit02_historical_reference_receipt(
+        treatment_item=series[B3_D1_TREATMENT_SECTOR],
+        harness_item=series[B3_D1_CONTROL_SECTOR],
+        historical_treatment_manifest=authority["profiles"][B3_D1_TREATMENT_SECTOR]["train_input_manifest"],
+        historical_harness_manifest=authority["profiles"][B3_D1_CONTROL_SECTOR]["train_input_manifest"],
+    )
+    return {
+        "treatment_item": series[B3_D1_TREATMENT_SECTOR],
+        "harness_item": series[B3_D1_CONTROL_SECTOR],
+        "preprocess": authority["preprocess"],
+        "numeric_environment": current_environment,
+        "current_authority": current_authority,
+        "historical_reference": historical_reference,
+    }
+
+
+def prepare_b3_d1_controlled_pass(
+    request: dict[str, Any],
+    formal_report: dict[str, Any],
+    blocker_report: dict[str, Any],
+    remediation_report: dict[str, Any],
+    c010_a5_report: dict[str, Any],
+    *,
+    db_prefix: str,
+    process_identity: str,
+    producer_commit: str,
+    expected_current_authority_sha256: str,
+    expected_historical_reference_sha256: str,
+) -> dict[str, Any]:
+    """Run one 24-attempt REFIT-02 process after current-A5 preflight closes."""
+
+    if process_identity not in {"fresh_process_1", "fresh_process_2"}:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "D1-B child process identity is invalid",
+        )
+    prepared = _prepare_b3_d1_refit02_authority(
+        request,
+        formal_report,
+        blocker_report,
+        remediation_report,
+        c010_a5_report,
+        db_prefix=db_prefix,
+        producer_commit=producer_commit,
+    )
+    current_authority = prepared["current_authority"]
+    historical_reference = prepared["historical_reference"]
+    if (
+        current_authority.get("receipt_sha256") != expected_current_authority_sha256
+        or historical_reference.get("receipt_sha256") != expected_historical_reference_sha256
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_current_authority_mismatch",
+            "REFIT-02 child current-A5 authority differs from the parent preflight",
+        )
+    receipt = run_b3_d1_refit02_process(
+        treatment_item=prepared["treatment_item"],
+        harness_item=prepared["harness_item"],
+        preprocess=prepared["preprocess"],
+        process_identity=process_identity,
+        producer_commit=producer_commit,
+        numeric_environment=prepared["numeric_environment"],
+        current_authority=current_authority,
+        historical_reference=historical_reference,
+    )
+    if _formal_producer_commit() != producer_commit:
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_authority_mismatch",
             "D1-B producer source changed during the child process",
@@ -3211,6 +3240,10 @@ def _b3_d1_child_command(args: argparse.Namespace, process_identity: str) -> lis
         process_identity,
         "--b3-d1-producer-commit",
         str(args.b3_d1_producer_commit),
+        "--b3-d1-current-authority-sha256",
+        str(args.b3_d1_current_authority_sha256),
+        "--b3-d1-historical-reference-sha256",
+        str(args.b3_d1_historical_reference_sha256),
         "--_b3-d1-controlled-child",
     ]
 
@@ -3240,7 +3273,7 @@ def _parse_b3_d1_child_payload(
             "hmm_risk_model_inactive_dimension_contract_invalid",
             f"D1-B {process_identity} receipt identity is invalid",
         )
-    return validate_b3_d1_process_receipt(
+    return validate_b3_d1_refit02_process_receipt(
         value,
         expected_process_identity=process_identity,
         expected_producer_commit=producer_commit,
@@ -3255,10 +3288,14 @@ class B3D1ControlledProcessError(D1InactiveDimensionError):
         *,
         completed_processes: list[dict[str, Any]],
         failed_process_receipt: dict[str, Any],
+        current_authority: dict[str, Any] | None = None,
+        historical_reference: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(reason_code, message)
         self.completed_processes = [dict(value) for value in completed_processes]
         self.failed_process_receipt = dict(failed_process_receipt)
+        self.current_authority = dict(current_authority or {})
+        self.historical_reference = dict(historical_reference or {})
 
 
 def _resolve_b3_d1_report_path(args: argparse.Namespace) -> Path:
@@ -3338,9 +3375,10 @@ def _b3_d1_child_failure_receipt(
 
 
 def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
-    """Run exactly two fresh 16-attempt processes; never select or write models."""
+    """Run REFIT-02 preflight and exactly two fresh 24-attempt processes when applicable."""
 
     _resolve_b3_d1_report_path(args)
+    request = _load_request(Path(args.request).resolve())
     producer_commit = _formal_producer_commit()
     args.b3_d1_producer_commit = producer_commit
     formal_report = _load_json_mapping(Path(args.b3_formal_report).resolve(), label="formal B3 report")
@@ -3351,6 +3389,25 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
         label="C-010-A5 domain-partition report",
     )
     _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report, c010_a5_report)
+    preflight = _prepare_b3_d1_refit02_authority(
+        request,
+        formal_report,
+        blocker_report,
+        remediation_report,
+        c010_a5_report,
+        db_prefix=args.db_env_prefix,
+        producer_commit=producer_commit,
+    )
+    current_authority = preflight["current_authority"]
+    historical_reference = preflight["historical_reference"]
+    args.b3_d1_current_authority_sha256 = current_authority["receipt_sha256"]
+    args.b3_d1_historical_reference_sha256 = historical_reference["receipt_sha256"]
+    if current_authority.get("current_profile_eligible") is not True:
+        return build_b3_d1_refit02_not_applicable_report(
+            current_authority,
+            historical_reference,
+            producer_commit=producer_commit,
+        )
     environment = os.environ.copy()
     for key in (
         "OMP_NUM_THREADS",
@@ -3385,6 +3442,8 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
                 failure["error"],
                 completed_processes=processes,
                 failed_process_receipt=failure,
+                current_authority=current_authority,
+                historical_reference=historical_reference,
             ) from exc
         if completed.returncode != 0:
             failure = _b3_d1_child_failure_receipt(
@@ -3400,6 +3459,8 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
                 failure["error"],
                 completed_processes=processes,
                 failed_process_receipt=failure,
+                current_authority=current_authority,
+                historical_reference=historical_reference,
             )
         try:
             process = _parse_b3_d1_child_payload(
@@ -3420,6 +3481,8 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
                 str(exc),
                 completed_processes=processes,
                 failed_process_receipt=failure,
+                current_authority=current_authority,
+                historical_reference=historical_reference,
             ) from exc
         processes.append(process)
     try:
@@ -3428,7 +3491,7 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
                 "hmm_risk_model_inactive_dimension_authority_mismatch",
                 "D1-B producer source changed across fresh processes",
             )
-        return build_b3_d1_controlled_refit_report(processes[0], processes[1], producer_commit=producer_commit)
+        return build_b3_d1_refit02_report(processes[0], processes[1], producer_commit=producer_commit)
     except Exception as exc:
         failure = _b3_d1_child_failure_receipt(
             process_identity="parent_finalize",
@@ -3444,6 +3507,8 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
             str(exc),
             completed_processes=processes,
             failed_process_receipt=failure,
+            current_authority=current_authority,
+            historical_reference=historical_reference,
         ) from exc
 
 
@@ -3778,6 +3843,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--_b3-d1-controlled-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--b3-process-identity", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-d1-producer-commit", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--b3-d1-current-authority-sha256", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--b3-d1-historical-reference-sha256", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-formal-report", help="Approved immutable formal B3 preparation report.")
     parser.add_argument("--b3-blocker-report", help="Approved immutable C-008-B3-FORMAL-BLOCKER-DIAG-01 report.")
     parser.add_argument("--b3-remediation-report", help="Approved immutable C-008-B3-REMEDIATION-DIAG-02 report.")
@@ -4041,6 +4108,8 @@ def main() -> int:
                 db_prefix=str(args.db_env_prefix),
                 process_identity=str(args.b3_process_identity),
                 producer_commit=str(args.b3_d1_producer_commit),
+                expected_current_authority_sha256=str(args.b3_d1_current_authority_sha256),
+                expected_historical_reference_sha256=str(args.b3_d1_historical_reference_sha256),
             )
             sys.stdout.buffer.write(canonical_json_bytes(report))
             return 0
@@ -4095,57 +4164,47 @@ def main() -> int:
                     dict(value) for value in getattr(exc, "completed_processes", []) if isinstance(value, dict)
                 ]
                 failed_process_receipt = getattr(exc, "failed_process_receipt", None)
-                known_attempt_count = sum(int(value.get("attempt_count") or 0) for value in completed_processes)
                 accepted_producer_commit = str(getattr(args, "b3_d1_producer_commit", "") or "")
-                producer_authority_accepted = len(accepted_producer_commit) == 40
-                producer_commit = accepted_producer_commit if producer_authority_accepted else _git_commit()
-                failure_body = {
-                    "schema_version": B3_D1_REPORT_SCHEMA_VERSION,
-                    "diagnostic_contract": "C-008-B3-REMEDIATION-D1-B-REFIT-01",
-                    "producer_commit": producer_commit,
-                    "producer_authority_accepted": producer_authority_accepted,
-                    "source_authority": dict(B3_D1_SOURCE_AUTHORITY),
-                    "status": "diagnostic_failed",
-                    "mechanism_assessment": "inconclusive",
-                    "mechanism_assessment_reason_codes": [
-                        str(
+                producer_commit = accepted_producer_commit if len(accepted_producer_commit) == 40 else _git_commit()
+                current_authority = getattr(exc, "current_authority", None)
+                historical_reference = getattr(exc, "historical_reference", None)
+                if (
+                    isinstance(failed_process_receipt, dict)
+                    and isinstance(current_authority, dict)
+                    and current_authority
+                    and isinstance(historical_reference, dict)
+                    and historical_reference
+                ):
+                    failure = build_b3_d1_refit02_execution_failure_report(
+                        producer_commit=producer_commit,
+                        current_authority=current_authority,
+                        historical_reference=historical_reference,
+                        completed_processes=completed_processes,
+                        failed_process_receipt=failed_process_receipt,
+                    )
+                else:
+                    failure = build_b3_d1_refit02_preflight_failure_report(
+                        producer_commit=producer_commit,
+                        reason_code=str(
                             getattr(
                                 exc,
                                 "reason_code",
                                 "hmm_risk_model_inactive_dimension_contract_invalid",
                             )
-                        )
-                    ],
-                    "error_type": type(exc).__name__,
-                    "error": str(exc)[-4000:],
-                    "d5_compatibility_evidence_ready": False,
-                    "process_receipts": completed_processes,
-                    "completed_process_count": len(completed_processes),
-                    "failed_process_receipt": (
-                        dict(failed_process_receipt) if isinstance(failed_process_receipt, dict) else None
-                    ),
-                    "canonical_payload_bitwise_equal": False,
-                    "attempt_count": known_attempt_count,
-                    "fit_budget_completion_unknown": (
-                        bool(failed_process_receipt.get("fit_budget_completion_unknown"))
-                        if isinstance(failed_process_receipt, dict)
-                        else False
-                    ),
-                    "selection_performed": False,
-                    "d3_d4_descriptive_contracts_applied": False,
-                    "formal_model_set_acceptance_performed": False,
-                    "hard_semantic_authority_changed": False,
-                    "model_write_performed": False,
-                    "ready_artifact_write_performed": False,
-                    "database_write_performed": False,
-                    "runtime_action_performed": False,
-                }
-                failure = {**failure_body, "receipt_sha256": canonical_sha256(failure_body)}
+                        ),
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
                 write_b3_d1_controlled_refit_report(report_path, failure)
                 raise
+            if report.get("schema_version") != B3_D1_REFIT02_REPORT_SCHEMA_VERSION:
+                raise D1InactiveDimensionError(
+                    "hmm_risk_model_inactive_dimension_contract_invalid",
+                    "REFIT-02 parent produced an unsupported report schema",
+                )
             report_sha256 = write_b3_d1_controlled_refit_report(report_path, report)
             receipt = {
-                "schema_version": "hmm_risk_c008_b3_d1_controlled_refit_cli_receipt_v1",
+                "schema_version": "hmm_risk_c008_b3_d1_controlled_refit_cli_receipt_v2",
                 "status": report["status"],
                 "diagnostic_contract": report["diagnostic_contract"],
                 "report_path": str(report_path),
