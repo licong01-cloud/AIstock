@@ -98,7 +98,9 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh Python process loaded backend/routers/ingestion.py by file path and verified _refresh_data_stats_backend per-dataset isolation, _refresh_one_data_stats SET statement_timeout, and _record_data_stats_refresh_failure marker -> PASS"
+    ],
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
@@ -106,7 +108,14 @@
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "business_smoke_ref": "POST /api/data-stats/refresh completes with per-dataset results; readback market.data_stats stat_generated_at advances beyond 2026-07-14 for healthy datasets and last_check_result records any per-dataset failure",
+    "database_readback_ref": "noop:no_database_change",
+    "runtime_identity_match": "pending",
+    "post_restart_receipt_ref": null
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
