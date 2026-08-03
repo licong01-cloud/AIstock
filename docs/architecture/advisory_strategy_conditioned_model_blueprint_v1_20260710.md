@@ -3,7 +3,7 @@
 > 日期：2026-07-10
 > 修订日期：2026-08-03
 > 文档类型：F2 顶层架构蓝图，当前修订使用 `docs-fast-update`
-> 当前状态：蓝图已形成；Phase 0A/Phase 1/Phase 1R 数据底座和 Phase 0B 真实 15 日只读审计已完成。15 日 snapshot 的成熟收益标签覆盖率为 0，因此经济和模型结论仍为 `NOT_YET_AVAILABLE`。首个 SHORT_REBOUND Phase 2/3 F2 详细设计已形成，Batch A 最小 style、feature/formula/query、label、split、experiment、regime、immutable bundle、shadow-result 和 reason 合同已通过源码审核；当前 P0 转为 Batch B，从数据库生成覆盖 5 年训练历史及至少 300 个独立评估交易日的新 SEALED snapshot 和训练文件，再进入 WSL Top20→Top5 研究影子模型。旧 batch/root/orphan 只读保留且不阻断主线；不设置人工审批、角色、运行时策略包二次验证或未经确认的 canary/champion/ModelOps 前置链。
+> 当前状态：蓝图已形成；Phase 0A/Phase 1/Phase 1R 数据底座和 Phase 0B 真实 15 日只读审计已完成。15 日 snapshot 的成熟收益标签覆盖率为 0，因此经济和模型结论仍为 `NOT_YET_AVAILABLE`。首个 SHORT_REBOUND Phase 2/3 F2 详细设计已形成；Batch A 合同及 Batch B 的精确 Existing Program 编排、SEALED base verified read、区间化 PIT source、完整 FeatureBuilder、feature snapshot、2/3/5 年训练 view/file 和 coverage receipt 源码已经实现并通过本地模块测试。当前 P0 是先做 DEV 合同验证，再按独立授权执行真实多年 Historical Range/Phase 1R DML 与 artifact 物化；真实 snapshot 未生成前不得进入 WSL Top20→Top5 训练。旧 batch/root/orphan 只读保留且不阻断主线；不设置人工审批、角色、运行时策略包二次验证或未经确认的 canary/champion/ModelOps 前置链。
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -1064,8 +1064,8 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 | Phase 1R R1-R4 | 历史逐日执行、Outcome/Summary 和 retrospective bridge 已验证 | `FOUNDATION_SUFFICIENT` | 保留既有事实，不返工 |
 | Phase 1R R5 | 源码、bridge、exact retry 和既有 UI readback 已验证；完整新链路 E2E 未闭合 | `DEFERRED_PRODUCT_ACCEPTANCE` | 首批模型功能完成后用新任务验证 |
 | Phase 0B | 真实 15 日只读审计与 exact retry 已完成；两包收益证据均为 `NOT_YET_AVAILABLE` | `TECHNICAL_AUDIT_COMPLETE` | 保留报告事实；多年 snapshot 生成后重新审计经济指标 |
-| 最小 Phase 2/3 合同 | F2 设计已合入；Batch A 合同源码和五轮审核已完成，未执行数据构建、训练或推理 | `BATCH_A_SOURCE_VERIFIED` | 合入 Batch A 后进入 Batch B，多年 snapshot/训练文件不回填为本行完成证据 |
-| Phase 3 多年训练 snapshot | 尚未生成；现有数据不满足 2/3/5 年训练窗口 | `P0_FUNCTION_INPUT` | 按最小 Phase 2 合同从生产数据库生成新的 SEALED Parquet |
+| 最小 Phase 2/3 合同 | F2 设计与 Batch A 合同源码已合入；Batch B 数据构建源码已完成本地合同验证，未执行多年数据物化、训练或推理 | `BATCH_B_SOURCE_VERIFIED` | 完成 Batch B 源码合入后进入独立 runtime materialization，多年 snapshot/训练文件不回填为本行完成证据 |
+| Phase 3 多年训练 snapshot | Batch B 源码与本地合同验证已完成；真实多年 base/feature/training artifact 尚未生成 | `P0_RUNTIME_MATERIALIZATION` | 先做 DEV 合同验证，再按独立授权执行正式 Historical Range/Phase 1R DML 和 artifact 物化 |
 | Phase 3 Top20→Top5 重排 | 尚未训练或实现 | `P0_FIRST_MODEL_FUNCTION` | WSL 训练、影子推理和对照验收 |
 | Phase 4 收益/持有期 | 尚未训练或实现 | `P1_SECOND_MODEL_FUNCTION` | Phase 3 后实现唯一 Outcome bundle |
 | Phase 5 价格区间 | 尚未训练或实现 | `P1_THIRD_MODEL_FUNCTION` | Phase 4 后按分钟覆盖实施 |
@@ -1394,7 +1394,7 @@ peak-before-stop path correctness
 4. Phase 1R R1-R4 已完成真实历史、Outcome/Summary、retrospective SEALED bridge、source correction 与隔离验收；R5 源码和生产 Dataset Bridge、lease、exact retry、既有 batch UI readback 已通过。旧 PARTIAL batch 和旧 root 只保留为历史事实，不再修复、迁移、归档或阻断后续研发。
 5. Phase 0B 详细设计、现有 15 日 SEALED snapshot 只读审计和 exact retry 已完成；报告准确返回成熟收益覆盖率 0、HMM/行业/Recall capability 不足和 null package conclusion，没有伪造候选深度或目标期限结论。
 6. Phase 2/3 F2 详细设计已形成；Batch A 的最小 style、feature/formula/query、label、split、experiment、regime、bundle、shadow-result 与 reason contract 已完成源码和五轮审核，不处理旧 batch、不扩建通用平台。
-7. Batch A 合入后，按冻结合同从生产数据库生成覆盖 5 年训练历史和至少 300 个独立评估交易日的新 SEALED Parquet snapshot 及 2/3/5 年训练视图；该 Batch B 数据构建不执行 WSL 训练。
+7. Batch B 源码已经实现精确 Existing Program 输入、正式 Historical Range/Phase 1R bridge、verified base read、滚动 PIT feature build、feature snapshot、统一 WSL 可读训练文件、2/3/5 年 view 与样本不足 receipt；合入后先完成 DEV 合同验证，再按独立授权从配置数据库生成覆盖 5 年训练历史和至少 300 个独立评估交易日的新 SEALED base/feature/training artifacts。该 Batch B 数据构建不执行 WSL 训练。
 8. Batch B 数据质量闭合后，在 WSL 完成 Phase 3 Top20→Top5 影子模型训练、验证和 immutable bundle；配置不改变现有荐股排名。
 9. 依次实现 Phase 4 收益/持有期和 Phase 5 买入/止盈/止损区间；每项模型独立验证，失败只关闭对应 capability。
 10. 按完成顺序发布 Phase 6 UI 影子展示，不等待所有模型同时完成。

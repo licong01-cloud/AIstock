@@ -170,7 +170,7 @@ def _group(policy: RankingLabelPolicyV1 | None = None) -> RankingGroupIdentityV1
     return RankingGroupIdentityV1(
         decision_as_of_trade_date=date(2026, 7, 1),
         target_trade_date=date(2026, 7, 2),
-        canonical_signal_scope_hash="9" * 64,
+        stable_signal_semantics_hash="9" * 64,
         label_policy_hash=str(active_policy.label_policy_hash),
     )
 
@@ -227,7 +227,7 @@ def test_dataset_request_freezes_full_static_identity() -> None:
         package_manifest_sha256=profile.package_manifest_sha256,
         package_asset_closure_hash=profile.package_asset_closure_hash,
         selection_runtime_semantics_hash=profile.selection_runtime_semantics_hash,
-        multi_alpha_parent_contract_version="multi-alpha-parent-v1",
+        multi_alpha_parent_contract_version="advisory_historical_range_candidate_component_lineage_v1",
         multi_alpha_component_identity_set_hash="d" * 64,
         decision_date_start=date(2021, 1, 1),
         decision_date_end=date(2026, 7, 1),

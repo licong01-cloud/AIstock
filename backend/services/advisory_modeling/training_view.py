@@ -17,11 +17,131 @@ from backend.services.advisory_modeling.identity import (
 
 
 DATASET_BUILD_REQUEST_SCHEMA_VERSION = "advisory_reranker_dataset_build_request_v1"
+DATASET_BUILD_INTENT_SCHEMA_VERSION = "advisory_reranker_dataset_build_intent_v1"
 TRAINING_VIEW_SCHEMA_VERSION = "advisory_reranker_training_view_v1"
 SPLIT_FOLD_SCHEMA_VERSION = "advisory_reranker_split_fold_v1"
 SPLIT_PLAN_SCHEMA_VERSION = "advisory_reranker_split_plan_v1"
 FOLD_EVIDENCE_SCHEMA_VERSION = "advisory_reranker_fold_evidence_closure_v1"
 REQUESTED_WINDOWS_YEARS = (2, 3, 5)
+
+
+class DatasetBuildIntentV1(FrozenModel):
+    request_schema_version: Literal[DATASET_BUILD_INTENT_SCHEMA_VERSION] = (
+        DATASET_BUILD_INTENT_SCHEMA_VERSION
+    )
+    style_profile_id: str = Field(min_length=1, max_length=160)
+    style_profile_hash: str = Field(min_length=64, max_length=64)
+    package_id: str = Field(min_length=1, max_length=160)
+    package_manifest_sha256: str = Field(min_length=64, max_length=64)
+    package_asset_closure_hash: str = Field(min_length=64, max_length=64)
+    selection_runtime_semantics_hash: str = Field(min_length=64, max_length=64)
+    multi_alpha_parent_contract_version: Literal[
+        "advisory_historical_range_candidate_component_lineage_v1"
+    ]
+    multi_alpha_component_identity_set_hash: str = Field(min_length=64, max_length=64)
+    decision_date_start: date
+    decision_date_end: date
+    requested_windows_years: tuple[int, ...] = REQUESTED_WINDOWS_YEARS
+    evaluation_tail_trade_days: Literal[420] = 420
+    candidate_observation_top_k: Literal[20] = 20
+    feature_schema_id: str = Field(min_length=1, max_length=160)
+    feature_schema_hash: str = Field(min_length=64, max_length=64)
+    feature_formula_registry_hash: str = Field(min_length=64, max_length=64)
+    feature_query_registry_hash: str = Field(min_length=64, max_length=64)
+    market_regime_policy_template_id: str = Field(min_length=1, max_length=160)
+    market_regime_policy_template_hash: str = Field(min_length=64, max_length=64)
+    label_policy_id: str = Field(min_length=1, max_length=160)
+    label_policy_hash: str = Field(min_length=64, max_length=64)
+    calendar_version: str = Field(min_length=1, max_length=160)
+    calendar_hash: str = Field(min_length=64, max_length=64)
+    evidence_scope: Literal["RETROSPECTIVE_RESEARCH_ONLY"] = "RETROSPECTIVE_RESEARCH_ONLY"
+    repository_commit: str = Field(min_length=7, max_length=64)
+    final_fit_as_of: datetime
+    expected_source_revision_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    expected_universe_policy_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    intent_semantic_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "style_profile_id",
+        "package_id",
+        "feature_schema_id",
+        "market_regime_policy_template_id",
+        "label_policy_id",
+        "calendar_version",
+        "repository_commit",
+    )
+    @classmethod
+    def _identifiers(cls, value: str, info: Any) -> str:
+        return strict_identifier(value, field_name=info.field_name)
+
+    @field_validator(
+        "style_profile_hash",
+        "package_manifest_sha256",
+        "package_asset_closure_hash",
+        "selection_runtime_semantics_hash",
+        "multi_alpha_component_identity_set_hash",
+        "feature_schema_hash",
+        "feature_formula_registry_hash",
+        "feature_query_registry_hash",
+        "market_regime_policy_template_hash",
+        "label_policy_hash",
+        "calendar_hash",
+        "expected_source_revision_set_hash",
+        "expected_universe_policy_set_hash",
+        "intent_semantic_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info: Any) -> str | None:
+        return validated_hash(value, field_name=info.field_name)
+
+    @field_validator("final_fit_as_of")
+    @classmethod
+    def _as_of(cls, value: datetime) -> datetime:
+        return utc_datetime(value, field_name="final_fit_as_of")
+
+    @model_validator(mode="after")
+    def _identity(self) -> "DatasetBuildIntentV1":
+        if self.decision_date_start > self.decision_date_end:
+            raise ValueError("decision_date_start must not exceed decision_date_end")
+        if self.requested_windows_years != REQUESTED_WINDOWS_YEARS:
+            raise ValueError(f"requested_windows_years must equal {REQUESTED_WINDOWS_YEARS}")
+        set_computed_hash(self, field_name="intent_semantic_hash", exclude={"intent_semantic_hash"})
+        return self
+
+    def finalize(
+        self,
+        *,
+        source_revision_set_id: str,
+        source_revision_set_hash: str,
+        universe_policy_set_id: str,
+        universe_policy_set_hash: str,
+    ) -> "DatasetBuildRequestV1":
+        if (
+            self.expected_source_revision_set_hash is not None
+            and self.expected_source_revision_set_hash != source_revision_set_hash
+        ):
+            raise ValueError("derived source revision set differs from expected hash")
+        if (
+            self.expected_universe_policy_set_hash is not None
+            and self.expected_universe_policy_set_hash != universe_policy_set_hash
+        ):
+            raise ValueError("derived universe policy set differs from expected hash")
+        payload = self.model_dump(
+            mode="python",
+            exclude={
+                "request_schema_version",
+                "expected_source_revision_set_hash",
+                "expected_universe_policy_set_hash",
+                "intent_semantic_hash",
+            },
+        )
+        return DatasetBuildRequestV1(
+            **payload,
+            source_revision_set_id=source_revision_set_id,
+            source_revision_set_hash=source_revision_set_hash,
+            universe_policy_set_id=universe_policy_set_id,
+            universe_policy_set_hash=universe_policy_set_hash,
+        )
 
 
 class DatasetBuildRequestV1(FrozenModel):
@@ -34,7 +154,9 @@ class DatasetBuildRequestV1(FrozenModel):
     package_manifest_sha256: str = Field(min_length=64, max_length=64)
     package_asset_closure_hash: str = Field(min_length=64, max_length=64)
     selection_runtime_semantics_hash: str = Field(min_length=64, max_length=64)
-    multi_alpha_parent_contract_version: str = Field(min_length=1, max_length=160)
+    multi_alpha_parent_contract_version: Literal[
+        "advisory_historical_range_candidate_component_lineage_v1"
+    ]
     multi_alpha_component_identity_set_hash: str = Field(min_length=64, max_length=64)
     decision_date_start: date
     decision_date_end: date
@@ -63,7 +185,6 @@ class DatasetBuildRequestV1(FrozenModel):
     @field_validator(
         "style_profile_id",
         "package_id",
-        "multi_alpha_parent_contract_version",
         "feature_schema_id",
         "market_regime_policy_template_id",
         "label_policy_id",
