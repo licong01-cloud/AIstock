@@ -630,6 +630,65 @@ def test_runtime_artifact_binding_rejects_duplicate_workspace_name() -> None:
     assert excinfo.value.reason_code == "remote_runtime_artifact_binding_invalid"
 
 
+def test_runtime_artifact_binding_allows_loopback_wsl_drive_mount() -> None:
+    sha256 = "a" * 64
+    node = ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000")
+
+    command = _remote_runtime_artifact_link_commands(
+        [
+            {
+                "name": "aistock_models/__init__.py",
+                "binding": "workspace_artifact_cas",
+                "sha256": sha256,
+                "size": 578,
+                "remote_path": f"/mnt/f/Dev/RD-Agent-state/artifact_cas/{sha256}",
+            }
+        ],
+        node=node,
+    )
+
+    assert f"/mnt/f/Dev/RD-Agent-state/artifact_cas/{sha256}" in command
+    assert "aistock_models/__init__.py" in command
+
+
+@pytest.mark.parametrize(
+    ("node", "remote_path"),
+    [
+        (
+            ComputeNodeInfo(node_id="rdagent-node1", api_base_url="http://192.168.50.215:9000"),
+            "/mnt/f/Dev/RD-Agent-state/artifact_cas/" + "a" * 64,
+        ),
+        (
+            ComputeNodeInfo(node_id="linux-loopback", api_base_url="http://127.0.0.1:9000"),
+            "/mnt/f/Dev/RD-Agent-state/artifact_cas/" + "a" * 64,
+        ),
+        (
+            ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+            "/mnt/shared/artifact_cas/" + "a" * 64,
+        ),
+    ],
+)
+def test_runtime_artifact_binding_rejects_untrusted_mnt_paths(
+    node: ComputeNodeInfo,
+    remote_path: str,
+) -> None:
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _remote_runtime_artifact_link_commands(
+            [
+                {
+                    "name": "aistock_models/__init__.py",
+                    "binding": "workspace_artifact_cas",
+                    "sha256": "a" * 64,
+                    "size": 578,
+                    "remote_path": remote_path,
+                }
+            ],
+            node=node,
+        )
+
+    assert excinfo.value.reason_code == "remote_runtime_artifact_binding_invalid"
+
+
 def test_small_file_packager_does_not_silently_exclude_unbound_file(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

@@ -336,6 +336,7 @@ class RemotePredBacktestExecutor:
         self._sync_small_files(node=node, task_id=task_id, loop_index=loop_index, files=small_files, timeout_seconds=timeout_seconds)
         wsl_command = _remote_wsl_command(
             workspace=workspace,
+            node=node,
             remote_paths=remote_paths,
             backtest_config=backtest_config,
             runtime_artifact_bindings=runtime_artifact_bindings,
@@ -642,23 +643,27 @@ def _remote_paths(
 
 
 def _require_remote_linux_path(*, path_name: str, value: str, node: ComputeNodeInfo) -> None:
-    windows_mount = value.startswith("/mnt/")
-    allowed_wsl_mount = (
-        _WSL_DRIVE_MOUNT_RE.match(value) is not None
-        and _is_loopback_wsl_node(node)
-    )
-    invalid = (
-        "\\" in value
-        or re.match(r"^[A-Za-z]:", value) is not None
-        or not value.startswith("/")
-        or (windows_mount and not allowed_wsl_mount)
-    )
-    if invalid:
+    if not _is_remote_linux_path_allowed(value=value, node=node):
         raise MultiAlphaCombineBacktestError(
             f"remote {path_name} must be a node-local Linux absolute path, got: {value}",
             reason_code="remote_path_invalid",
             context={"node_id": node.node_id, "api_base_url": node.api_base_url, "path_name": path_name, "value": value},
         )
+
+
+def _is_remote_linux_path_allowed(*, value: str, node: ComputeNodeInfo | None) -> bool:
+    windows_mount = value.startswith("/mnt/")
+    allowed_wsl_mount = (
+        _WSL_DRIVE_MOUNT_RE.match(value) is not None
+        and node is not None
+        and _is_loopback_wsl_node(node)
+    )
+    return not (
+        "\\" in value
+        or re.match(r"^[A-Za-z]:", value) is not None
+        or not value.startswith("/")
+        or (windows_mount and not allowed_wsl_mount)
+    )
 
 
 def _is_loopback_wsl_node(node: ComputeNodeInfo) -> bool:
@@ -1123,6 +1128,7 @@ def _b64_file(path: Path) -> str:
 def _remote_wsl_command(
     *,
     workspace: Path,
+    node: ComputeNodeInfo | None = None,
     remote_paths: Mapping[str, str],
     backtest_config: Mapping[str, Any],
     runtime_artifact_bindings: Sequence[Mapping[str, Any]] = (),
@@ -1141,7 +1147,7 @@ def _remote_wsl_command(
     factor_cache = _shell_quote(remote_paths["factor_cache_dir"])
     env_exports = _remote_env_exports(backtest_config)
     workspace_cd = _remote_workspace_cd(workspace=workspace, remote_paths=remote_paths, backtest_config=backtest_config)
-    runtime_artifact_links = _remote_runtime_artifact_link_commands(runtime_artifact_bindings)
+    runtime_artifact_links = _remote_runtime_artifact_link_commands(runtime_artifact_bindings, node=node)
     runtime_empty_files = _remote_runtime_empty_file_commands(runtime_file_manifest or {})
     runtime_file_verification = _remote_runtime_file_verify_commands(runtime_file_manifest or {})
     command = "".join(
@@ -1175,6 +1181,8 @@ def _remote_wsl_command(
 
 def _remote_runtime_artifact_link_commands(
     bindings: Sequence[Mapping[str, Any]],
+    *,
+    node: ComputeNodeInfo | None = None,
 ) -> str:
     commands: list[str] = []
     observed_names: set[str] = set()
@@ -1195,9 +1203,7 @@ def _remote_runtime_artifact_link_commands(
             or name in _REMOTE_SMALL_EXCLUDED_NAMES
             or not re.fullmatch(r"[0-9a-f]{64}", sha256)
             or size <= 0
-            or "\\" in remote_path
-            or not remote_path.startswith("/")
-            or remote_path.startswith("/mnt/")
+            or not _is_remote_linux_path_allowed(value=remote_path, node=node)
             or remote_path.rsplit("/", 1)[-1] != sha256
         )
         if invalid:
