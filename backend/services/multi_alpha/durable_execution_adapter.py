@@ -1306,6 +1306,7 @@ class QEWorkspacePredBacktestAdapter:
         }
         wsl_command = _remote_wsl_command(
             workspace=artifacts.workspace,
+            node=node,
             remote_paths=remote_paths,
             backtest_config=submission_backtest_config,
             runtime_artifact_bindings=runtime_artifact_bindings,
