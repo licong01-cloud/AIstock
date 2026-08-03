@@ -1920,9 +1920,18 @@ def test_d1_v2_migration_uses_a5_mapping_identity_and_historical_non_mapping_ide
 
 def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_threads(monkeypatch, tmp_path) -> None:
     args = _d1_args(tmp_path)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
     monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
     monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *args: {})
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": {"current_profile_eligible": True, "receipt_sha256": "a" * 64},
+            "historical_reference": {"receipt_sha256": "b" * 64},
+        },
+    )
     monkeypatch.setattr(
         subject,
         "_parse_b3_d1_child_payload",
@@ -1938,6 +1947,8 @@ def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_thread
         assert command[command.index("--c010-a5-domain-partition-report") + 1] == str(
             tmp_path / "c010-a5-domain-partition.json"
         )
+        assert command[command.index("--b3-d1-current-authority-sha256") + 1] == "a" * 64
+        assert command[command.index("--b3-d1-historical-reference-sha256") + 1] == "b" * 64
         calls.append(
             (
                 process_identity,
@@ -1958,7 +1969,7 @@ def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_thread
     monkeypatch.setattr(subject.subprocess, "run", fake_run)
     monkeypatch.setattr(
         subject,
-        "build_b3_d1_controlled_refit_report",
+        "build_b3_d1_refit02_report",
         lambda first, second, producer_commit: {
             "first": first["process_identity"],
             "second": second["process_identity"],
@@ -1978,7 +1989,7 @@ def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_thread
 def test_d1_controlled_child_payload_must_be_canonical_and_bound_to_process_identity(monkeypatch) -> None:
     monkeypatch.setattr(
         subject,
-        "validate_b3_d1_process_receipt",
+        "validate_b3_d1_refit02_process_receipt",
         lambda value, expected_process_identity, expected_producer_commit: value,
     )
     parsed = subject._parse_b3_d1_child_payload(
@@ -2002,13 +2013,84 @@ def test_d1_controlled_child_payload_must_be_canonical_and_bound_to_process_iden
         )
 
 
+def test_d1_refit02_parent_returns_not_applicable_without_spawning_children(monkeypatch, tmp_path) -> None:
+    args = _d1_args(tmp_path)
+    current = {"current_profile_eligible": False, "receipt_sha256": "a" * 64}
+    historical = {"receipt_sha256": "b" * 64}
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
+    monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *values: {})
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": current,
+            "historical_reference": historical,
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "build_b3_d1_refit02_not_applicable_report",
+        lambda authority, reference, producer_commit: {
+            "status": "not_applicable",
+            "authority": authority,
+            "reference": reference,
+            "producer_commit": producer_commit,
+        },
+    )
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("not-applicable preflight must not spawn a child"),
+    )
+
+    report = subject.run_b3_d1_controlled_repeated(args)
+
+    assert report["status"] == "not_applicable"
+    assert report["authority"] == current
+    assert report["reference"] == historical
+
+
+def test_d1_refit02_child_rejects_parent_authority_drift_before_first_fit(monkeypatch) -> None:
+    current = {"current_profile_eligible": True, "receipt_sha256": "a" * 64}
+    historical = {"receipt_sha256": "b" * 64}
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": current,
+            "historical_reference": historical,
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "run_b3_d1_refit02_process",
+        lambda **kwargs: pytest.fail("authority mismatch must fail before the first fit"),
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="differs from the parent preflight"):
+        subject.prepare_b3_d1_controlled_pass(
+            _request(),
+            {},
+            {},
+            {},
+            {},
+            db_prefix="TDX_DB_",
+            process_identity="fresh_process_1",
+            producer_commit="d" * 40,
+            expected_current_authority_sha256="c" * 64,
+            expected_historical_reference_sha256="b" * 64,
+        )
+
+
 def test_main_d1_controlled_mode_persists_diagnostic_without_selection_or_model_writes(
     monkeypatch, tmp_path, capsys
 ) -> None:
     args = _d1_args(tmp_path)
     body = {
-        "schema_version": subject.B3_D1_REPORT_SCHEMA_VERSION,
-        "diagnostic_contract": "C-008-B3-REMEDIATION-D1-B-REFIT-01",
+        "schema_version": subject.B3_D1_REFIT02_REPORT_SCHEMA_VERSION,
+        "diagnostic_contract": "C-008-B3-REMEDIATION-D1-B-REFIT-02-A",
         "producer_commit": "d" * 40,
         "status": "diagnostic_complete",
         "mechanism_assessment": "constant_dimension_effect_supported",
@@ -2097,10 +2179,9 @@ def test_main_d1_controlled_mode_persists_typed_failure_without_fake_attempt_cou
     assert persisted["attempt_count"] == 0
     assert persisted["completed_process_count"] == 0
     assert persisted["process_receipts"] == []
-    assert persisted["failed_process_receipt"] == child_failure
-    assert persisted["producer_authority_accepted"] is False
+    assert persisted["failed_process_receipt"] is None
     assert persisted["source_authority"] == subject.B3_D1_SOURCE_AUTHORITY
-    assert persisted["fit_budget_completion_unknown"] is True
+    assert persisted["fit_budget_completion_unknown"] is False
     assert persisted["selection_performed"] is False
     assert persisted["ready_artifact_write_performed"] is False
     assert "frozen authority drift" in capsys.readouterr().err
@@ -2132,9 +2213,18 @@ def test_d1_report_path_must_be_repo_external_and_contained_by_artifact_root(tmp
 
 def test_d1_second_child_failure_preserves_first_process_and_typed_reason(monkeypatch, tmp_path) -> None:
     args = _d1_args(tmp_path)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
     monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
     monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *values: {})
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": {"current_profile_eligible": True, "receipt_sha256": "a" * 64},
+            "historical_reference": {"receipt_sha256": "b" * 64},
+        },
+    )
     monkeypatch.setattr(
         subject,
         "_parse_b3_d1_child_payload",
@@ -2179,9 +2269,18 @@ def test_d1_second_child_failure_preserves_first_process_and_typed_reason(monkey
 
 def test_d1_parent_finalize_failure_preserves_both_completed_processes(monkeypatch, tmp_path) -> None:
     args = _d1_args(tmp_path)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
     monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
     monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *values: {})
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": {"current_profile_eligible": True, "receipt_sha256": "a" * 64},
+            "historical_reference": {"receipt_sha256": "b" * 64},
+        },
+    )
     monkeypatch.setattr(
         subject,
         "_parse_b3_d1_child_payload",
@@ -2198,7 +2297,7 @@ def test_d1_parent_finalize_failure_preserves_both_completed_processes(monkeypat
     )
     monkeypatch.setattr(
         subject,
-        "build_b3_d1_controlled_refit_report",
+        "build_b3_d1_refit02_report",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             subject.D1InactiveDimensionError(
                 "hmm_risk_model_inactive_dimension_contract_invalid",
