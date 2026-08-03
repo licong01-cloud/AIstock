@@ -16,8 +16,9 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
 )
 
 
-_PUBLIC_SIGNATURE_SHA256 = "56e18faa64db26cf073a87d0476bf24b30e1d4fb7aea4802a3c28c0d217192af"
+_PUBLIC_SIGNATURE_SHA256 = "948c91ec8c214cd9e7cbe41722b1924a1632525213bdada1535c37b464975880"
 _PRIVATE_MODULES = (
+    "backend.services.miniqmt_execution_runtime.kernel_product_materialization_repository",
     "backend.services.miniqmt_execution_runtime.kernel_product_repository",
     "backend.services.miniqmt_execution_runtime.kernel_repository_common",
     "backend.services.miniqmt_execution_runtime.kernel_repository_projection",
@@ -100,6 +101,7 @@ def test_repository_private_responsibility_modules_have_one_public_facade() -> N
 
     assert [base.__name__ for base in PostgresMiniQMTKernelRepository.__mro__] == [
         "PostgresMiniQMTKernelRepository",
+        "KernelProductMaterializationRepositoryMixin",
         "KernelProductRepositoryMixin",
         "KernelRepositorySchemaMixin",
         "KernelRepositoryEventDeliveryMixin",

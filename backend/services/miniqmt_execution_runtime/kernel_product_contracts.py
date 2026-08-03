@@ -12,6 +12,8 @@ from typing import Any, Literal, Self
 
 from pydantic import StrictBool, ValidationError, model_validator
 
+from backend.execution_algos.vnpy_compat.facade_contracts import VnpyFacadeAuthorityInputV2
+
 from .plugin_canonical import (
     canonical_json_bytes_v1,
     canonical_utc_datetime_v1,
@@ -24,6 +26,7 @@ from .plugin_contracts import (
     BrokerCommandV2,
     CanonicalDecimalV1,
     ExecutionProjectionSetV1,
+    ExecutionAlgoTimerScheduleV1,
     FrozenStrictModel,
     FrozenJsonObjectFieldV1,
     IdentityV1,
@@ -2039,6 +2042,11 @@ class ProductCommandAuthoritySetV3(FrozenStrictModel):
             if item.execution_projection_set_sha256 != self.execution_projection_set_sha256:
                 raise ValueError("product command item projection differs from authority set")
         counts = Counter(item.disposition for item in self.ordered_items)
+        coordination_ids = tuple(
+            item.coordination_id for item in self.ordered_items if item.coordination_id is not None
+        )
+        if len(coordination_ids) != len(set(coordination_ids)):
+            raise ValueError("product authority V3 cannot create duplicate dependent-BUY coordination owners")
         actual_counts = (
             counts[ProductCommandDispositionV3.MATERIALIZE],
             counts[ProductCommandDispositionV3.REJECT_SYNCHRONOUS],
@@ -2066,6 +2074,66 @@ class ProductCommandAuthoritySetV3(FrozenStrictModel):
         )
         if self.authority_set_sha256 != expected:
             raise ValueError("product command authority set V3 hash mismatch")
+        return self
+
+
+class ProductCommandAuthorityEnvelopeV3(FrozenStrictModel):
+    """Durable fresh-process authority for one product command aggregate."""
+
+    schema_version: Literal["miniqmt_product_command_authority_envelope_v3"]
+    authority_set: ProductCommandAuthoritySetV3
+    creation_authority: VnpyFacadeAuthorityInputV2
+    ordered_timer_schedules: tuple[ExecutionAlgoTimerScheduleV1, ...]
+    envelope_sha256: Sha256V1
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        authority_set: ProductCommandAuthoritySetV3,
+        creation_authority: VnpyFacadeAuthorityInputV2,
+        ordered_timer_schedules: tuple[ExecutionAlgoTimerScheduleV1, ...],
+    ) -> Self:
+        if not isinstance(authority_set, ProductCommandAuthoritySetV3):
+            raise TypeError("authority_set must be ProductCommandAuthoritySetV3")
+        if not isinstance(creation_authority, VnpyFacadeAuthorityInputV2):
+            raise TypeError("creation_authority must be VnpyFacadeAuthorityInputV2")
+        if type(ordered_timer_schedules) is not tuple or any(
+            not isinstance(item, ExecutionAlgoTimerScheduleV1) for item in ordered_timer_schedules
+        ):
+            raise TypeError("ordered_timer_schedules must be one strict timer schedule tuple")
+        payload = {
+            "schema_version": "miniqmt_product_command_authority_envelope_v3",
+            "authority_set": authority_set,
+            "creation_authority": creation_authority,
+            "ordered_timer_schedules": ordered_timer_schedules,
+        }
+        return cls(
+            **payload,
+            envelope_sha256=hash_hex_v1("miniqmt_product_command_authority_envelope_v3", payload),
+        )
+
+    @model_validator(mode="after")
+    def _validate_contract(self) -> Self:
+        authority = self.authority_set
+        creation = self.creation_authority
+        if (
+            authority.catalog_sha256 != creation.plugin_catalog_snapshot.catalog_sha256
+            or authority.creation_binding_sha256 != creation.authority_input_sha256
+            or authority.facade_conformance_set_sha256 != creation.facade_conformance_set_v2.receipt_set_sha256
+        ):
+            raise ValueError("product authority envelope creation authority differs from aggregate hashes")
+        schedule_ids = tuple(item.schedule_id for item in self.ordered_timer_schedules)
+        if len(schedule_ids) != len(set(schedule_ids)):
+            raise ValueError("product authority envelope timer schedule identities must be unique")
+        if any(item.algo_instance_id != authority.algo_instance_id for item in self.ordered_timer_schedules):
+            raise ValueError("product authority envelope timer owner differs from aggregate")
+        expected = hash_hex_v1(
+            "miniqmt_product_command_authority_envelope_v3",
+            self.canonical_payload_v1(exclude={"envelope_sha256"}),
+        )
+        if self.envelope_sha256 != expected:
+            raise ValueError("product command authority envelope hash mismatch")
         return self
 
 
@@ -2501,6 +2569,7 @@ __all__ = [
     "ProductCommandAggregateDispositionV3",
     "ProductCommandAuthorityItemV2",
     "ProductCommandAuthorityItemV3",
+    "ProductCommandAuthorityEnvelopeV3",
     "ProductCommandAuthoritySetV2",
     "ProductCommandAuthoritySetV3",
     "ProductCommandChildMappingStatusV1",
