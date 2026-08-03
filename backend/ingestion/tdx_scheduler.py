@@ -385,62 +385,6 @@ class TDXScheduler:
                     cost_ms, threading.current_thread().name, preview, params,
                 )
 
-    @staticmethod
-    def _frequency_cooldown_seconds(frequency: str) -> int:
-        freq = (frequency or "").strip().lower()
-        try:
-            if freq.endswith("s") and freq[:-1].isdigit():
-                return max(1, int(int(freq[:-1]) * 0.8))
-            if freq.endswith("m") and freq[:-1].isdigit():
-                return max(55, int(int(freq[:-1]) * 60 * 0.8))
-            if freq.endswith("h") and freq[:-1].isdigit():
-                return max(55, int(int(freq[:-1]) * 3600 * 0.8))
-        except Exception:
-            return 55
-        if freq in {"daily", "day", "1d"}:
-            return 23 * 3600
-        if freq in {"weekly", "week", "1w"}:
-            return 6 * 24 * 3600
-        return 55
-
-    def _claim_scheduled_fire(
-        self,
-        schedule_id: str,
-        dataset: str,
-        mode: str,
-        frequency: str,
-    ) -> bool:
-        """Claim a scheduled fire in DB so multiple backend instances do not duplicate it."""
-        if not schedule_id:
-            return True
-        cooldown_seconds = self._frequency_cooldown_seconds(frequency)
-        try:
-            rows = self._fetchall(
-                """
-                UPDATE market.ingestion_schedules
-                   SET last_run_at = NOW(),
-                       last_status = 'claimed',
-                       updated_at = NOW()
-                 WHERE schedule_id = %s
-                   AND (
-                       last_run_at IS NULL
-                       OR last_run_at < NOW() - (%s || ' seconds')::interval
-                   )
-                 RETURNING schedule_id
-                """,
-                (schedule_id, str(cooldown_seconds)),
-            )
-            if not rows:
-                _logger.info(
-                    "skip duplicate scheduled ingestion: schedule=%s dataset=%s mode=%s cooldown=%ss",
-                    schedule_id, dataset, mode, cooldown_seconds,
-                )
-                return False
-            return True
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("scheduled ingestion claim failed for %s/%s: %s", dataset, mode, exc)
-            return True
-
     def _recent_dataset_submission_exists(
         self,
         dataset: str,
@@ -1559,9 +1503,16 @@ class TDXScheduler:
                     next_run=self._next_run_for(schedule_id),
                 )
             return
-        if not self._claim_scheduled_fire(schedule_id, dataset, mode, frequency):
-            return
 
+        # BUG-966: the former DB claim gate (_claim_scheduled_fire, 23h daily
+        # cooldown) was removed by user directive — no default cooldown is
+        # allowed. It consumed the window on any fire (including non-trading
+        # no-op skips) and failed silently (no job row, next_run not
+        # advanced), which swallowed a full trading day of core syncs.
+        # Duplicate protection remains: the in-process _tracker.is_running
+        # overlap guard and the DB-level _recent_dataset_submission_exists
+        # check below (queued/running within 60min, success within 60s),
+        # which also covers multiple backend instances sharing one DB.
         key = f"ingestion:{(dataset or '').strip().lower()}:{(mode or '').strip().lower()}"
         if self._tracker.is_running(key):
             # avoid overlapping ingestion of same dataset/mode
