@@ -34,7 +34,14 @@
   ],
   "evidence_uris": [
     "F:/Dev/AIstock_artifacts/hmm_risk/c010_a5_preflight_20260802_28e824fd/c010_a5_domain_partition_preflight.json",
-    "F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260803_375b4daa_bug962/d1_controlled_refit.json"
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260803_375b4daa_bug962/d1_controlled_refit.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260803_ca67b4dd_bug962/d1_controlled_refit.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260803_8bf9acb8_bug962/d1_controlled_refit.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260803_479f9e28_bug962/d1_controlled_refit.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260803_6f375fb9_bug962/d1_controlled_refit.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260803_40dd5fa9_bug962/d1_controlled_refit.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260803_5aa37b66_bug962/d1_controlled_refit.json",
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_controlled_refit_20260803_f226922b_bug962/d1_controlled_refit.json"
   ],
   "expected": "A D1-B execution request can carry a validated C-010-A5 v2 domain-partition authority while remaining exactly bound to the approved historical dataset, mapping, formal report, blocker report, remediation report, two sectors, eight seeds and no-side-effect contract.",
   "file_scope_contract": {
