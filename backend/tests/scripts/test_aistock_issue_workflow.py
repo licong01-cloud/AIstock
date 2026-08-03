@@ -1156,6 +1156,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["scripts/hmm_risk/prepare_state_model_set.py"],
         root=isolated_workflow_root,
     )
+    offline_hmm_d1 = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/b3_d1_inactive_dimension.py"],
+        root=isolated_workflow_root,
+    )
     offline_advisory_phase0b = workflow._classify_runtime_impact(
         ["backend/services/advisory_phase0b/audit_service.py"],
         root=isolated_workflow_root,
@@ -1182,6 +1186,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert backend_test["runtime_impact"] == "none"
     assert offline_hmm_preparation["runtime_impact"] == "none"
     assert offline_hmm_preparation["runtime_files"] == []
+    assert offline_hmm_d1["runtime_impact"] == "none"
+    assert offline_hmm_d1["runtime_files"] == []
     assert offline_advisory_phase0b["runtime_impact"] == "none"
     assert offline_advisory_phase0b["runtime_files"] == []
     assert offline_advisory_batch_b["runtime_impact"] == "none"
