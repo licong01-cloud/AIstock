@@ -163,8 +163,8 @@
   },
   "first_seen_at": "2026-08-03T04:37:13.165535Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b43cfbd2e1f84256c1804577b187d99604008386",
+  "fixed_at": "2026-08-03T06:27:51Z",
   "github_issue_number": 3074,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3074",
   "last_seen_at": "2026-08-03T04:37:13.165535Z",
@@ -172,6 +172,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3076",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -205,7 +206,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -214,6 +215,12 @@
     "fingerprint": "917ff4eb0f929cbae0be3237",
     "source_event_id": "FE-20260803-917ff4eb0f92"
   },
+  "validation_evidence": [
+    "python -m nox -s advisory_historical_range_backend -> passed",
+    "python -m nox -s advisory_modeling_backend -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
