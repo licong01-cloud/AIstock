@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-970",
-  "closed_at": null,
+  "closed_at": "2026-08-03T17:47:51Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -99,8 +99,8 @@
   },
   "first_seen_at": "2026-08-03T15:41:20.554656Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1be5ec3443f099370c663639f0ad968408ffaaa2",
+  "fixed_at": "2026-08-03T17:47:51Z",
   "github_issue_number": 3107,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3107",
   "last_seen_at": "2026-08-03T15:41:20.554656Z",
@@ -108,6 +108,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3115",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -122,6 +123,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -129,7 +132,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -138,6 +141,10 @@
     "fingerprint": "2896373869cd3f0f5410ddf9",
     "source_event_id": "FE-20260803-2896373869cd"
   },
+  "validation_evidence": [
+    "python -m nox -s hmm_risk_backend -> 258 passed; coverage 74.40 percent",
+    "PR #3115 CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
