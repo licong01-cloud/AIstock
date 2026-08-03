@@ -1894,7 +1894,7 @@ def test_d1_v2_migration_uses_a5_mapping_identity_and_historical_non_mapping_ide
     )
     monkeypatch.setattr(subject, "_c010_policy_manifest", lambda *args, **kwargs: current_policy)
 
-    _, identities = subject._load_b3_d1_train_inputs(
+    loaded_inputs, identities = subject._load_b3_d1_train_inputs(
         request,
         db_prefix="TDX_DB_",
         target_manifest={},
@@ -1904,6 +1904,7 @@ def test_d1_v2_migration_uses_a5_mapping_identity_and_historical_non_mapping_ide
 
     assert identities["mapping_manifest_hash"] == a5_report["mapping_manifest_sha256"]
     assert identities["c010_feature_domain_policy_sha256"] == current_policy["receipt_sha256"]
+    assert loaded_inputs["feature_domain_policy_sha256"] == current_policy["receipt_sha256"]
 
     drifted = deepcopy(a5_report)
     drifted["mapping_manifest_sha256"] = "9" * 64

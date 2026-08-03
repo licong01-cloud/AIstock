@@ -3082,6 +3082,7 @@ def _load_b3_d1_train_inputs(
         c010_a5_report,
         producer_commit=producer_commit,
     )
+    inputs["feature_domain_policy_sha256"] = str(current_policy["receipt_sha256"])
     identities["c010_feature_domain_policy_sha256"] = str(current_policy["receipt_sha256"])
     identities["c010_a5_lineage_migration_receipt"] = lineage_migration
     return inputs, identities
