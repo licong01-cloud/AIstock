@@ -4,7 +4,8 @@
     "backend/routers/ingestion.py",
     "backend/tests/test_ingestion_data_stats_readiness_api.py",
     "tests/aistock_validation/bugs/20260803_BUG-960-data-stats-31-2026-07-14.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-960",
@@ -22,6 +23,11 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260803-0c9b506259dc",
       "timestamp": "2026-08-03T01:35:20.090610Z"
+    },
+    {
+      "at": "2026-08-03T02:10:00Z",
+      "type": "scope_expansion",
+      "detail": "add file_ownership.yaml: CI change-classifier blocked PR with unmapped_code_files=[backend/tests/test_ingestion_data_stats_readiness_api.py]; test belongs to local_data_pipeline ownership rule"
     }
   ],
   "evidence_uris": [],
