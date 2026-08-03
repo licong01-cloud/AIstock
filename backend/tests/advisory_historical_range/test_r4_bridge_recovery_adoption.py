@@ -253,8 +253,8 @@ def test_new_operation_expires_and_recovers_lease_expired_running_successor() ->
 def test_new_operation_rejects_running_successor_with_active_lease() -> None:
     clock = _clock()
     repository, request, _, successor = _expired_chain_with_planned_successor(clock)
-    # The lease must be unexpired under both the repository clock and the
-    # wall clock the bridge uses for its RUNNING guard.
+    # Repository time is authoritative; the bridge must not make an
+    # independent wall-clock expiry decision before calling expire().
     repository.acquire(
         capture_batch_id=successor.request.capture_batch_id,
         expected_row_version=successor.row_version,
