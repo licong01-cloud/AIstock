@@ -1,12 +1,12 @@
 # MiniQMT 统一执行内核 K6 产品切换与旧路线退役 F2 详细设计
 
-> Feature tier：`F2`。原 design source 已通过 PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a` 合入，K6-A 已通过 PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401` 完成 `implemented_verified + merged`。2026-08-02 implementation-readiness revision 已通过 PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7` 完成 `design_revision_ready + merged`。K6-C0 strict contracts、successor migration与versioned repository preflight已通过 PR #3032 / merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63` 完成`implemented_verified + merged`；BUG-953 已完成 deterministic lineage、lifecycle authority 与 physical mapping JSON/scalar closure 的 source 修复和直接验证，`source_merge=pending_pr`。后续顺序仍固定为`BUG-953 -> K6-C1 -> K6-B -> K6-D`，K6 overall=`implementation_in_progress`。
+> Feature tier：`F2`。原 design source 已通过 PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a` 合入，K6-A 已通过 PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401` 完成 `implemented_verified + merged`。2026-08-02 implementation-readiness revision 已通过 PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7` 完成 `design_revision_ready + merged`。K6-C0 strict contracts、successor migration与versioned repository preflight已通过 PR #3032 / merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63` 完成`implemented_verified + merged`；BUG-953 source 已通过 PR #3048 / merge `f4da00f6838f6da6344223f6bba55dfe606def3e` 合入，production DDL/readback、用户重启和正式 post-restart descendant-identity receipt 均已闭合，Issue #3045 已关闭。后续顺序固定为`K6-C1 -> K6-B -> K6-D`，K6 overall=`implementation_in_progress`。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
 > 模拟盘唯一上位蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
 >
-> 设计基线：`main@c499276da91dcae40f0e452de11141c7b0585a1c`；K6-A 最终复审修复分支在最终 push 前必须安全包含当时最新 `origin/main`，具体 readback 在 PR/完成报告中记录，避免把易变流程 SHA 写成业务设计 authority。K1–K5 均为 `implemented_verified + merged`；K6-A source 已实现并保持 runtime inactive，产品 runtime 尚未切换；未执行生产 DDL/DML、配置、binding、broker 调用、服务控制或 runtime activation。
+> 设计基线：`main@c499276da91dcae40f0e452de11141c7b0585a1c`；K6-A 最终复审修复分支在最终 push 前必须安全包含当时最新 `origin/main`，具体 readback 在 PR/完成报告中记录，避免把易变流程 SHA 写成业务设计 authority。K1–K5 均为 `implemented_verified + merged`；K6-A/C0 source 已实现并保持 runtime inactive。K6/BUG-953 production DDL 已于独立授权后应用并由 exact repository preflight 回读通过；产品 runtime 仍未切换，production DML、配置、binding、broker 调用和 runtime activation均未执行，服务重启由用户完成并与本次 source 状态分开记录。
 
 ## 0. Executive Decision / 核心结论
 
@@ -275,7 +275,7 @@ DEFER 时 outbox/broker/callback 字段必须为空；REJECT 必须闭合 termin
 
 ## 5. Durable Schema and Migration / 持久化 schema 与迁移
 
-K6-A 已合入的 `miniqmt_execution_kernel_k6_20260801.preflight.sql/.sql/.rollback.sql` checksum保持不可变。K6-C0 独立 successor triplet固定为`miniqmt_execution_kernel_k6c_20260802.preflight.sql/.sql/.rollback.sql`。BUG-953 在production DDL尚未执行的边界内修正该未部署successor：forward canonical-LF SHA-256=`368fc29048ac40c7a9ca32f3ca76a214af2d6ba776e52b2490226ba341fb2ab4`；successor catalog=`f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d`，迁移后的K6/K2 exact catalog仍分别为`6e33248ad909c59db11059f723adbe39c4c8a151c902e9af0fe0fd3637adacc9`与`673ac852d725941112752d2eb63c46342e1b53169fadfacd4664fcbb4c27634e`。successor同时以`ck_miniqmt_k6_product_mapping_state`和版本化`ck_miniqmt_k2_child_mapping_initial`闭合真实row transition，避免只改status枚举却被旧initial CHECK拒绝。该 successor 只补 product implementation-readiness 缺口，不修改 K2 既有业务含义；production K6 DDL 仍未执行并等待独立授权。
+K6-A 已合入的 `miniqmt_execution_kernel_k6_20260801.preflight.sql/.sql/.rollback.sql` checksum保持不可变。K6-C0 独立 successor triplet固定为`miniqmt_execution_kernel_k6c_20260802.preflight.sql/.sql/.rollback.sql`。BUG-953 在首次production DDL执行前修正该successor：forward canonical-LF SHA-256=`368fc29048ac40c7a9ca32f3ca76a214af2d6ba776e52b2490226ba341fb2ab4`；successor catalog=`f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d`，迁移后的K6/K2 exact catalog仍分别为`6e33248ad909c59db11059f723adbe39c4c8a151c902e9af0fe0fd3637adacc9`与`673ac852d725941112752d2eb63c46342e1b53169fadfacd4664fcbb4c27634e`。successor同时以`ck_miniqmt_k6_product_mapping_state`和版本化`ck_miniqmt_k2_child_mapping_initial`闭合真实row transition，避免只改status枚举却被旧initial CHECK拒绝。该 successor 只补 product implementation-readiness 缺口，不修改 K2 既有业务含义；2026-08-03 production K6 DDL 已在独立授权后应用，`PostgresMiniQMTKernelRepository.preflight_k6c_schema()` 独立回读8/8为true。
 
 ### 5.1 New tables
 
@@ -570,7 +570,7 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 ### K6-C — generic product command authority/materializer
 
 - **K6-C0=`implemented_verified + merged`, `source_merge=merged_pr_3032`**，merge=`2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`。已完成authority item strict `command_json`、`DEFER_DEPENDENT_BUY`、V2 proceeds/ledger/coordination carrier、deferred mapping status、immutable K6-A successor migration、migration前后两个exact K2/K6 catalog authority及独立`preflight_k6c_schema()`；没有执行生产DDL或修改历史数据。
-- **BUG-953=`implemented_verified`, `source_merge=pending_pr`**：补齐SUBMIT deterministic mapping/child、CANCEL existing-mapping reuse、lifecycle disposition/status/broker/lineage closure以及exact physical mapping JSON/scalar CHECK；最终直接+DEV PostgreSQL矩阵`91 passed`。修复未执行production DDL、broker、服务启停或runtime activation。
+- **BUG-953=`implemented_verified + merged + runtime_verified`，`source_merge=merged_pr_3048`**：补齐SUBMIT deterministic mapping/child、CANCEL existing-mapping reuse、lifecycle disposition/status/broker/lineage closure以及exact physical mapping JSON/scalar CHECK；最终直接+DEV PostgreSQL矩阵`91 passed`。production DDL已独立授权、应用并经exact K6-C0 repository preflight回读；用户重启后health/identity/platform diagnostics四项正式probe均为HTTP 200，observed runtime `32c81b51...` 已由workflow证明为source merge `f4da00f6...` 的`origin/main`后代；Issue #3045已关闭。未调用broker、未执行runtime activation。
 - **下一优先级K6-C1=`not_started`**。实现§8 V3 aggregate的atomic materializer、0/1/N command、MATERIALIZE/REJECT/DEFER、terminal no-broker reject outcome与K2 outbox/callback/reconcile closure。
 - 五个 plugin 全部通过同一 public seam；仍不激活产品binding。
 - 预计 8–12 个开发日；依赖 K6-A。K6-C 未完成并合入前不得把 K6-B release 标记为 implemented，也不得并行修改三份共享权威设计。
@@ -679,7 +679,7 @@ K6 implementation完成定义：K6-A/B/C/D全部 `implemented_verified + merged`
 - K1/K2/K3/K4/K5 overall：`implemented_verified + merged`。
 - K6 detailed design base：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）；2026-08-02 implementation-readiness revision：`design_revision_ready + merged`（PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7`）。
 - revision review evidence：三份F2 validator=`12/12,70/70,112/112`且warnings=0；classifier=`docs_fast_update`、backend/frontend/Go plans均未选择、`unmapped_code_files=[]`；L0=0 finding；module registry=`8 passed,14/14 mapped`。
-- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green。K6-C0=`implemented_verified + merged`、`source_merge=merged_pr_3032`，merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`，required CI run `30732380227` green；BUG-953=`implemented_verified`、`source_merge=pending_pr`，合入前下一优先级仅BUG-953，之后才是K6-C1；K6-C1/K6-B/K6-D=`not_started`，K6 overall=`implementation_in_progress`。
+- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green。K6-C0=`implemented_verified + merged`、`source_merge=merged_pr_3032`，merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`，required CI run `30732380227` green；BUG-953=`implemented_verified + merged + runtime_verified`、`source_merge=merged_pr_3048`，Issue #3045已关闭；下一优先级为K6-C1，K6-C1/K6-B/K6-D=`not_started`，K6 overall=`implementation_in_progress`。
 - product runtime：`not_switched`。
 - `base_design_source_merge=merged_pr_2993`；`revision_source_merge=merged_pr_3024`；`close_sync=not_applicable_feature`；state-sync/root sync/cleanup分别记录。
-- production DDL=`pending_after_source_merge`且未执行；production DML/dependency/config/binding/broker/restart/runtime activation/normal trading day observation全部`noop/not_run`。
+- production DDL=`applied_and_verified`；用户已完成backend-main重启，post-restart identity/business/database receipt=`passed`。production DML/dependency/config/binding/broker/runtime activation/normal trading day observation仍为`noop/not_run`。
