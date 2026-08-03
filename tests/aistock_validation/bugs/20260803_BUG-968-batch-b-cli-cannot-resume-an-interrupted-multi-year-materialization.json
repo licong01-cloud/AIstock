@@ -2,9 +2,7 @@
   "actual": "Retry fails before recovery with an idempotency conflict, and an otherwise complete env file does not activate mutation runtime because repository root is not loaded.",
   "allowed_write_scope": [
     "scripts/advisory_short_rebound_batch_b.py",
-    "backend/services/advisory_modeling/batch_b.py",
     "backend/tests/advisory_modeling/test_batch_b_cli.py",
-    "backend/tests/advisory_modeling/test_batch_b_contracts.py",
     "tests/aistock_validation/bugs/20260803_BUG-968-batch-b-cli-cannot-resume-an-interrupted-multi-year-materialization.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -34,16 +32,12 @@
     "added_files": [],
     "changed_files": [
       "scripts/advisory_short_rebound_batch_b.py",
-      "backend/services/advisory_modeling/batch_b.py",
-      "backend/tests/advisory_modeling/test_batch_b_cli.py",
-      "backend/tests/advisory_modeling/test_batch_b_contracts.py"
+      "backend/tests/advisory_modeling/test_batch_b_cli.py"
     ],
     "ownership": {
       "changed_files": [
         "scripts/advisory_short_rebound_batch_b.py",
-        "backend/services/advisory_modeling/batch_b.py",
-        "backend/tests/advisory_modeling/test_batch_b_cli.py",
-        "backend/tests/advisory_modeling/test_batch_b_contracts.py"
+        "backend/tests/advisory_modeling/test_batch_b_cli.py"
       ],
       "impacted_modules": [
         "advisory.modeling",
@@ -60,25 +54,7 @@
           "rule_id": "advisory_short_rebound_modeling"
         },
         {
-          "file": "backend/services/advisory_modeling/batch_b.py",
-          "impact_modules": [
-            "advisory.historical_range"
-          ],
-          "primary_module": "advisory.modeling",
-          "risk_level": "high",
-          "rule_id": "advisory_short_rebound_modeling"
-        },
-        {
           "file": "backend/tests/advisory_modeling/test_batch_b_cli.py",
-          "impact_modules": [
-            "advisory.historical_range"
-          ],
-          "primary_module": "advisory.modeling",
-          "risk_level": "high",
-          "rule_id": "advisory_short_rebound_modeling"
-        },
-        {
-          "file": "backend/tests/advisory_modeling/test_batch_b_contracts.py",
           "impact_modules": [
             "advisory.historical_range"
           ],
@@ -92,18 +68,14 @@
       ],
       "suggested_scope": [
         "scripts/advisory_short_rebound_batch_b.py",
-        "backend/services/advisory_modeling/batch_b.py",
-        "backend/tests/advisory_modeling/test_batch_b_cli.py",
-        "backend/tests/advisory_modeling/test_batch_b_contracts.py"
+        "backend/tests/advisory_modeling/test_batch_b_cli.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/advisory_short_rebound_batch_b.py",
-      "backend/services/advisory_modeling/batch_b.py",
-      "backend/tests/advisory_modeling/test_batch_b_cli.py",
-      "backend/tests/advisory_modeling/test_batch_b_contracts.py"
+      "backend/tests/advisory_modeling/test_batch_b_cli.py"
     ]
   },
   "first_seen_at": "2026-08-03T13:01:50.824410Z",
@@ -129,14 +101,13 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_impact": "backend",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ]
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
