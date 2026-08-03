@@ -91,8 +91,12 @@ def _migration_receipts(*, producer_commit: str = "1" * 40) -> dict[str, dict[st
             role=role,
             current_policy_sha256=str(item.train_input_manifest["feature_domain_policy_sha256"]),
             producer_commit=producer_commit,
-            historical_observation_manifest_hash=item.observation_manifest_hash,
-            historical_pit_constituent_manifest_hash=item.pit_constituent_manifest_hash,
+            historical_observation_manifest_hash=(
+                item.observation_manifest_hash if role == subject.CONTROL_ROLE else None
+            ),
+            historical_pit_constituent_manifest_hash=(
+                item.pit_constituent_manifest_hash if role == subject.CONTROL_ROLE else None
+            ),
         )
         for role, item in (
             (subject.TREATMENT_ROLE, treatment),

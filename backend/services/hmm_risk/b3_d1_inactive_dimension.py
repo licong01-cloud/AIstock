@@ -247,8 +247,8 @@ def build_input_migration_receipt(
     role: str,
     current_policy_sha256: str,
     producer_commit: str,
-    historical_observation_manifest_hash: str,
-    historical_pit_constituent_manifest_hash: str,
+    historical_observation_manifest_hash: str | None,
+    historical_pit_constituent_manifest_hash: str | None,
 ) -> dict[str, Any]:
     """Prove that A5 changed only global lineage fields, never D1 sector observations."""
 
@@ -283,18 +283,26 @@ def build_input_migration_receipt(
             evidence={"changed_core_fields": changed},
         )
     normalized_policy_sha256 = _require_sha256(current_policy_sha256, "current_policy_sha256")
-    historical_observation_sha256 = _require_sha256(
-        historical_observation_manifest_hash,
-        "historical_observation_manifest_hash",
-    )
-    historical_pit_sha256 = _require_sha256(
-        historical_pit_constituent_manifest_hash,
-        "historical_pit_constituent_manifest_hash",
-    )
+    historical_observation_sha256 = None
+    historical_pit_sha256 = None
+    if role == CONTROL_ROLE:
+        historical_observation_sha256 = _require_sha256(
+            historical_observation_manifest_hash,
+            "historical_observation_manifest_hash",
+        )
+        historical_pit_sha256 = _require_sha256(
+            historical_pit_constituent_manifest_hash,
+            "historical_pit_constituent_manifest_hash",
+        )
+    elif historical_observation_manifest_hash is not None or historical_pit_constituent_manifest_hash is not None:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1 treatment cannot claim historical fitted-model lineage that was never produced",
+        )
     if (
         current.get("mapping_manifest_hash") != C010_A5_MAPPING_SHA256
         or current.get("feature_domain_policy_sha256") != normalized_policy_sha256
-        or item.observation_manifest_hash != historical_observation_sha256
+        or (role == CONTROL_ROLE and item.observation_manifest_hash != historical_observation_sha256)
         or tuple(item.pit_l2_constituents) != (expected_sector,)
     ):
         raise D1InactiveDimensionError(
@@ -324,6 +332,7 @@ def build_input_migration_receipt(
         "historical_observation_manifest_hash": historical_observation_sha256,
         "current_observation_manifest_hash": item.observation_manifest_hash,
         "historical_pit_constituent_manifest_hash": historical_pit_sha256,
+        "historical_fitted_model_lineage_available": role == CONTROL_ROLE,
         "current_pit_l2_constituents": list(item.pit_l2_constituents),
         "current_pit_constituent_manifest_hash": _require_sha256(
             item.pit_constituent_manifest_hash,
@@ -353,8 +362,8 @@ def validate_input_migration_receipt(
             (normalized.get("current_train_input_manifest") or {}).get("feature_domain_policy_sha256") or ""
         ),
         producer_commit=str(normalized.get("producer_commit") or ""),
-        historical_observation_manifest_hash=str(normalized.get("historical_observation_manifest_hash") or ""),
-        historical_pit_constituent_manifest_hash=str(normalized.get("historical_pit_constituent_manifest_hash") or ""),
+        historical_observation_manifest_hash=normalized.get("historical_observation_manifest_hash"),
+        historical_pit_constituent_manifest_hash=normalized.get("historical_pit_constituent_manifest_hash"),
     )
     if rebuilt != normalized:
         raise D1InactiveDimensionError(
@@ -399,7 +408,19 @@ def _validate_input_migration_envelope(receipt: Mapping[str, Any], *, expected_r
         or normalized.get("unchanged_core_manifest_sha256") != canonical_sha256(current_core)
         or canonical_sha256(historical) != expected_historical_sha256
         or canonical_sha256(current) != normalized.get("current_train_input_manifest_sha256")
-        or normalized.get("current_observation_manifest_hash") != normalized.get("historical_observation_manifest_hash")
+        or normalized.get("historical_fitted_model_lineage_available") is not (expected_role == CONTROL_ROLE)
+        or (
+            expected_role == CONTROL_ROLE
+            and normalized.get("current_observation_manifest_hash")
+            != normalized.get("historical_observation_manifest_hash")
+        )
+        or (
+            expected_role == TREATMENT_ROLE
+            and (
+                normalized.get("historical_observation_manifest_hash") is not None
+                or normalized.get("historical_pit_constituent_manifest_hash") is not None
+            )
+        )
         or normalized.get("current_pit_l2_constituents") != [expected_sector]
         or not str(normalized.get("current_pit_constituent_manifest_hash") or "")
         or any(
@@ -419,13 +440,11 @@ def _validate_input_migration_envelope(receipt: Mapping[str, Any], *, expected_r
             "D1 input migration receipt envelope is invalid",
         )
     _require_commit(normalized.get("producer_commit"), "producer_commit")
-    for field in (
-        "historical_observation_manifest_hash",
-        "current_observation_manifest_hash",
-        "historical_pit_constituent_manifest_hash",
-        "current_pit_constituent_manifest_hash",
-    ):
+    for field in ("current_observation_manifest_hash", "current_pit_constituent_manifest_hash"):
         _require_sha256(normalized.get(field), field)
+    if expected_role == CONTROL_ROLE:
+        for field in ("historical_observation_manifest_hash", "historical_pit_constituent_manifest_hash"):
+            _require_sha256(normalized.get(field), field)
     for field in sorted(_MIGRATABLE_INPUT_IDENTITY_FIELDS):
         _require_sha256(historical.get(field), f"historical.{field}")
         _require_sha256(current.get(field), f"current.{field}")

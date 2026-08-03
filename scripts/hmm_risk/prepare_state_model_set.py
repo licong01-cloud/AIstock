@@ -2760,8 +2760,13 @@ def _b3_d1_frozen_authority(
             "D1-B blocker evidence is missing",
         )
 
-    frozen_model_lineage: dict[str, dict[str, str]] = {}
-    for sector in (B3_D1_TREATMENT_SECTOR, B3_D1_CONTROL_SECTOR):
+    frozen_model_lineage: dict[str, dict[str, str | None]] = {
+        B3_D1_TREATMENT_SECTOR: {
+            "observation_manifest_hash": None,
+            "pit_constituent_manifest_hash": None,
+        }
+    }
+    for sector in (B3_D1_CONTROL_SECTOR,):
         payloads = [
             value.get("fitted_model_payload")
             for value in raw_evidence
