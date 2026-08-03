@@ -28,6 +28,12 @@
       "actor": "claude_code",
       "note": "修复需删除 backend/ingestion/tdx_scheduler.py 中 _claim_scheduled_fire/_frequency_cooldown_seconds 及其调用点, 并同步更新 test_tdx_scheduler_state_reconciliation.py 中引用 claim 桩的测试; 用户明确授权: 禁止任何默认冷却功能",
       "timestamp": "2026-08-03T10:04:23.192368Z"
+    },
+    {
+      "action": "runtime_contract_alignment",
+      "actor": "claude_code",
+      "note": "runtime_impact none->backend (调度器修复需用户重启后端生效); 采用严格校验器认可的可执行探针引用, 与 BUG-960 同格式",
+      "timestamp": "2026-08-03T10:22:34.431681Z"
     }
   ],
   "evidence_uris": [],
@@ -66,14 +72,25 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "runtime_impact": "backend",
+    "backend_restart_required": true,
+    "backend_restart_owner": "user",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/openapi.json",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "not_required",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "fresh_process_evidence": [
+      "fresh Python process loaded backend/ingestion/tdx_scheduler.py by file path and verified _claim_scheduled_fire and _frequency_cooldown_seconds are absent while _scheduled_ingestion_run and _recent_dataset_submission_exists remain intact -> PASS"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
