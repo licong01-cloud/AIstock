@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-967",
-  "closed_at": null,
+  "closed_at": "2026-08-03T12:27:53.972151Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -90,8 +90,8 @@
   },
   "first_seen_at": "2026-08-03T10:38:34.147791Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "64b04198214358347a1bf7f594fa8a0f870445d8",
+  "fixed_at": "2026-08-03T12:27:53.972134Z",
   "github_issue_number": 3092,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3092",
   "last_seen_at": "2026-08-03T10:38:34.147791Z",
@@ -99,6 +99,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3096",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -122,8 +123,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-967/post-restart-verify.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -133,7 +135,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -142,6 +144,14 @@
     "fingerprint": "f3f10eb8492ce7d0a1b5c033",
     "source_event_id": "FE-20260803-f3f10eb8492c"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -k runtime_artifact_binding -q -> passed (6 direct binding/path cases)",
+    "python -m pytest backend/tests/test_multi_alpha_remote_dispatch.py -q -> passed (43 passed, 1 skipped)",
+    "python -m ruff check plus py_compile plus git diff --check -> passed",
+    "python -m nox -s l0 -> passed (0 blocking findings)",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 tests)",
+    "post-restart backend-main identity and business smoke -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
