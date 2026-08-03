@@ -1149,6 +1149,37 @@ def test_refit02_v4_writer_is_immutable_and_rejects_self_consistent_fake_readine
         subject.write_controlled_refit_report(tmp_path / "fake-readiness.json", tampered)
 
 
+def test_refit02_v4_writer_persists_complete_two_process_diagnostic_failed_report(monkeypatch, tmp_path):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+    monkeypatch.setattr(
+        subject,
+        "fit_b3_preprocessed_train_only",
+        lambda item, train, seed: _core(int(train.shape[1])),
+    )
+    processes = [
+        subject.run_refit02_process(
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+            process_identity=identity,
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed-single-thread"},
+            current_authority=authority,
+            historical_reference=historical,
+        )
+        for identity in ("fresh_process_1", "fresh_process_2")
+    ]
+    report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
+
+    assert report["status"] == "diagnostic_failed"
+    assert report["attempt_count"] == 48
+    assert "failed_process_receipt" not in report
+    assert subject.validate_refit02_report(report) == report
+    assert subject.write_controlled_refit_report(tmp_path / "diagnostic-failed.json", report) == canonical_sha256(
+        report
+    )
+
+
 def test_refit02_downstream_d4_failure_does_not_erase_supported_dimension_mechanism(monkeypatch):
     treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
 
