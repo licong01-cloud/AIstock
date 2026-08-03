@@ -30,13 +30,18 @@ from backend.services.advisory_historical_range.composition import (
 from backend.services.advisory_historical_range.code_release import (
     HistoricalRangeCodeReleaseResolver,
 )
-from backend.services.advisory_historical_range.api_models import ExistingProgramInput
+from backend.services.advisory_historical_range.api_models import (
+    ExistingProgramInput,
+    HistoricalRangeCommandRequest,
+)
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
 from backend.services.advisory_historical_range.models import (
     ExistingProgramSpecV1,
     HistoricalRangeAlphaMode,
+    HistoricalRangeContractError,
     HistoricalRangeFrozenProgramV1,
     HistoricalRangeResearchBatchRequestV1,
+    REASON_IDEMPOTENCY_CONFLICT,
 )
 from backend.services.advisory_historical_range.request_resolver import (
     HistoricalRangeAdmittedPackageResolver,
@@ -58,7 +63,10 @@ from backend.services.advisory_modeling.batch_b import (
     BatchBHistoricalRangeDriver,
     BatchBMaterializationService,
 )
-from backend.services.advisory_modeling.errors import AdvisoryModelingError
+from backend.services.advisory_modeling.errors import (
+    AdvisoryModelingError,
+    REASON_DATASET_SNAPSHOT_NOT_SEALED,
+)
 from backend.services.advisory_modeling.feature_builder import frozen_formula_registry_v1
 from backend.services.advisory_modeling.feature_schema import frozen_feature_schema_v1
 from backend.services.advisory_modeling.feature_sources import (
@@ -101,6 +109,7 @@ REQUIRED_RUNTIME_KEYS = (
     "AISTOCK_ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT",
     "AISTOCK_ADVISORY_HISTORICAL_RANGE_TASK_RUNTIME_ROOT",
     "AISTOCK_PACKAGE_ASSET_STORE_ROOT",
+    "AISTOCK_REPOSITORY_ROOT",
     "AISTOCK_ADVISORY_HISTORICAL_RANGE_POLICY_COMPONENT_ROOT",
     "AISTOCK_ADVISORY_CALCULATION_EVIDENCE_ROOT",
     "AISTOCK_ADVISORY_DATASET_STORE_ROOT",
@@ -118,6 +127,144 @@ FrozenProgramProvider = Callable[
 ]
 PackageCreatedAtProvider = Callable[[str], datetime]
 CalendarProvider = Callable[[date, date], TradingCalendar]
+
+
+class RestartSafeHistoricalRangeService:
+    """Recover an exact Batch B request without weakening planning identity checks."""
+
+    def __init__(self, *, service: Any) -> None:
+        if service is None:
+            raise ValueError("restart-safe Historical Range service requires a delegate")
+        self._service = service
+
+    def with_candidate_prefetch_per_program(self, value: int) -> "RestartSafeHistoricalRangeService":
+        return RestartSafeHistoricalRangeService(
+            service=self._service.with_candidate_prefetch_per_program(value)
+        )
+
+    def create_batch(
+        self,
+        request: Any,
+        *,
+        idempotency_key: str,
+        background_tasks: Any,
+        requested_by: str = "local-user",
+    ) -> dict[str, Any]:
+        try:
+            return self._service.create_batch(
+                request,
+                idempotency_key=idempotency_key,
+                background_tasks=background_tasks,
+                requested_by=requested_by,
+            )
+        except HistoricalRangeContractError as exc:
+            if exc.reason_code != REASON_IDEMPOTENCY_CONFLICT:
+                raise
+            return self._recover_existing_batch(
+                error=exc,
+                request=request,
+                idempotency_key=idempotency_key,
+                requested_by=requested_by,
+                background_tasks=background_tasks,
+            )
+
+    def _recover_existing_batch(
+        self,
+        *,
+        error: HistoricalRangeContractError,
+        request: Any,
+        idempotency_key: str,
+        requested_by: str,
+        background_tasks: Any,
+    ) -> dict[str, Any]:
+        existing_batch_id = str(error.context.get("existing_batch_id") or "").strip()
+        if not existing_batch_id:
+            raise error
+        if len(request.program_specs) != 1:
+            raise error
+        try:
+            expected_spec = ExistingProgramSpecV1.model_validate(
+                request.program_specs[0].model_dump(mode="json")
+            )
+            expected_request = HistoricalRangeResearchBatchRequestV1(
+                client_idempotency_key=idempotency_key,
+                program_specs=(expected_spec,),
+                start_trade_date=request.start_trade_date,
+                end_trade_date=request.end_trade_date,
+                requested_by=requested_by,
+            )
+            batch = self._service.get_batch(existing_batch_id)
+            payload = batch.get("request_payload_json")
+            stored_request_payload = payload.get("request") if isinstance(payload, dict) else None
+            stored_request = HistoricalRangeResearchBatchRequestV1.model_validate(
+                stored_request_payload
+            )
+        except (KeyError, TypeError, ValueError):
+            raise error from None
+
+        expected = {
+            "batch_id": existing_batch_id,
+            "client_idempotency_key": idempotency_key,
+            "user_request_semantic_hash": expected_request.user_request_semantic_hash,
+            "start_trade_date": request.start_trade_date,
+            "end_trade_date": request.end_trade_date,
+            "request_id": stored_request.request_id,
+            "requested_by": requested_by,
+        }
+        actual = {
+            "batch_id": batch.get("batch_id"),
+            "client_idempotency_key": batch.get("client_idempotency_key"),
+            "user_request_semantic_hash": batch.get("user_request_semantic_hash"),
+            "start_trade_date": batch.get("start_trade_date"),
+            "end_trade_date": batch.get("end_trade_date"),
+            "request_id": batch.get("request_id"),
+            "requested_by": stored_request.requested_by,
+        }
+        if (
+            actual != expected
+            or stored_request.client_idempotency_key != idempotency_key
+            or stored_request.user_request_semantic_hash
+            != expected_request.user_request_semantic_hash
+        ):
+            raise error
+
+        if (
+            str(batch.get("status")) == "PLANNING"
+            and str(batch.get("catalog_operation_status")) == "RUNNING"
+            and not bool(batch.get("catalog_lease_expired"))
+        ):
+            raise AdvisoryModelingError(
+                REASON_DATASET_SNAPSHOT_NOT_SEALED,
+                "Existing Batch B source catalog is still owned by an active worker",
+                context={
+                    "batch_id": existing_batch_id,
+                    "catalog_operation_id": batch.get("catalog_operation_id"),
+                    "catalog_lease_expires_at": batch.get("catalog_lease_expires_at"),
+                },
+            )
+
+        if str(batch.get("status")) == "PLANNING":
+            return self._service.resume_batch(
+                existing_batch_id,
+                HistoricalRangeCommandRequest(
+                    operation_idempotency_key=(
+                        f"{idempotency_key}-catalog-recovery-{int(batch['row_version'])}"
+                    ),
+                    expected_row_version=int(batch["row_version"]),
+                ),
+                background_tasks=background_tasks,
+            )
+        return {
+            "ok": True,
+            "data": {
+                "batch": batch,
+                "exact_retry": True,
+                "dispatch_state": "NOT_SCHEDULED",
+            },
+        }
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._service, name)
 
 
 class BatchBRequestBuilder:
@@ -589,7 +736,9 @@ def main(argv: list[str] | None = None) -> int:
         historical_artifacts = HistoricalRangeArtifactStore.from_environment()
         service = BatchBMaterializationService(
             historical_driver=BatchBHistoricalRangeDriver(
-                service=build_environment_historical_range_r5_application_service()
+                service=RestartSafeHistoricalRangeService(
+                    service=build_environment_historical_range_r5_application_service()
+                )
             ),
             base_reader=RerankerBaseSnapshotReader(
                 catalog=PostgresPhase0BSnapshotCatalog(
