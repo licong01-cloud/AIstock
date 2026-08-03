@@ -148,11 +148,25 @@ def _passed_runtime_receipt(root: Path, record: dict[str, Any], *, expected_iden
         }
         for name in ("health_ref", "identity_ref", "business_smoke_ref")
     ]
+    identity_proof = {
+        "schema_version": "aistock_runtime_identity_proof_v1",
+        "mode": "exact",
+        "expected_identity": expected_identity,
+        "observed_identity": expected_identity,
+        "origin_main_identity": None,
+        "expected_is_ancestor": True,
+        "observed_in_origin_main": True,
+    }
     return {
         "schema_version": workflow.RUNTIME_VERIFY_RECEIPT_SCHEMA,
         "bug_id": record["bug_id"],
         "target_id": contract["target_id"],
         "expected_identity": expected_identity,
+        "observed_identity": expected_identity,
+        "runtime_identity_proof": identity_proof,
+        "runtime_identity_proof_digest": workflow._runtime_identity_proof_digest(identity_proof),
+        "mode": "read_only",
+        "tracked_files_written": False,
         "contract_digest": workflow._runtime_contract_digest(contract),
         "catalog_sha256": workflow._runtime_catalog_sha256(root=root),
         "required_probe_names": ["health_ref", "identity_ref", "business_smoke_ref"],
@@ -1219,6 +1233,65 @@ def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_bas
     assert any("persistence_basis is invalid" in item for item in contract["blocking"])
 
 
+def test_runtime_contract_rejects_non_executable_probe_refs_before_post_restart(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"] = {
+        **record["runtime_contract"],
+        "identity_ref": f"GET {record['runtime_contract']['identity_ref']} after restart",
+        "business_smoke_ref": "run the fresh-process smoke matrix",
+        "database_readback_ref": "pending separately authorized database readback",
+    }
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert contract["pre_pr_ready"] is False
+    assert contract["target"]["probes"]["health_ref"] == "http://127.0.0.1:8001/api/v1/health"
+    assert any("identity_ref must be an executable absolute endpoint" in item for item in contract["blocking"])
+    assert any("business_smoke_ref must be an executable absolute endpoint" in item for item in contract["blocking"])
+    assert any("database_readback_ref must be an executable absolute endpoint" in item for item in contract["blocking"])
+
+
+def test_runtime_contract_accepts_explicit_database_readback_not_required(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+
+    contract = workflow.build_runtime_contract(
+        record=_runtime_bug(isolated_workflow_root),
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert contract["pre_pr_ready"] is True
+    assert contract["target"]["probes"]["database_readback_ref"] == "not_required"
+
+
+def test_runtime_contract_rejects_unresolved_probe_url_template(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["runtime_contract"]["business_smoke_ref"] = (
+        f"{record['runtime_contract']['business_smoke_ref']}/{{run_id}}"
+    )
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert contract["pre_pr_ready"] is False
+    assert any("business_smoke_ref must be an executable absolute endpoint" in item for item in contract["blocking"])
+
+
 def test_runtime_source_pr_uses_refs_until_post_restart_verification(
     isolated_workflow_root: Path,
 ) -> None:
@@ -1332,6 +1405,194 @@ def test_post_restart_verify_is_read_only_and_writes_only_ignored_receipt(
     assert payload["probe_evidence_digest"]
     assert issue.read_text(encoding="utf-8") == before
     assert (isolated_workflow_root / payload["receipt_path"]).exists()
+
+
+def test_post_restart_verify_accepts_deployed_origin_main_descendant_with_strict_git_proof(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue = _write_json(
+        isolated_workflow_root / "runtime-bug.json",
+        _runtime_bug(isolated_workflow_root),
+    )
+    expected = "a" * 40
+    observed = "b" * 40
+    origin_main = "c" * 40
+
+    class _Response:
+        status = 200
+
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return self.body
+
+    def fake_open(request: Any, *, timeout_seconds: float) -> _Response:
+        assert timeout_seconds == 3.0
+        body = json.dumps({"merge_commit": observed}).encode() if "runtime-identity" in request.full_url else b'{"status":"ok"}'
+        return _Response(body)
+
+    def fake_run(args: list[str], *, cwd: Path, timeout: float = 120.0, env: dict[str, str] | None = None) -> dict[str, Any]:
+        del timeout, env
+        assert cwd == isolated_workflow_root
+        if args == ["git", "rev-parse", "--verify", "origin/main^{commit}"]:
+            return {"ok": True, "returncode": 0, "stdout": origin_main, "stderr": ""}
+        if tuple(args) in {
+            ("git", "merge-base", "--is-ancestor", expected, observed),
+            ("git", "merge-base", "--is-ancestor", observed, origin_main),
+            ("git", "merge-base", "--is-ancestor", origin_main, origin_main),
+        }:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(workflow, "_open_read_only_url", fake_open)
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=expected,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["runtime_identity_match"] is True
+    assert payload["observed_identity"] == observed
+    assert payload["runtime_identity_proof"] == {
+        "schema_version": "aistock_runtime_identity_proof_v1",
+        "mode": "origin_main_descendant",
+        "expected_identity": expected,
+        "observed_identity": observed,
+        "origin_main_identity": origin_main,
+        "expected_is_ancestor": True,
+        "observed_in_origin_main": True,
+    }
+    assert payload["runtime_identity_proof_digest"]
+
+    close_sync = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(isolated_workflow_root / payload["receipt_path"]),
+    )
+    assert close_sync["workflow_gate"] == "ready_for_apply"
+
+
+@pytest.mark.parametrize(
+    ("expected_is_ancestor", "observed_in_origin_main", "expected_error"),
+    [
+        (False, True, "not a deployed origin/main descendant"),
+        (True, False, "not contained in the verified origin/main lineage"),
+    ],
+)
+def test_post_restart_verify_rejects_unproven_deployed_commit(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expected_is_ancestor: bool,
+    observed_in_origin_main: bool,
+    expected_error: str,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue = _write_json(
+        isolated_workflow_root / "runtime-bug.json",
+        _runtime_bug(isolated_workflow_root),
+    )
+    expected = "a" * 40
+    observed = "b" * 40
+    origin_main = "c" * 40
+
+    class _Response:
+        status = 200
+
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return self.body
+
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda request, timeout_seconds: _Response(
+            json.dumps({"merge_commit": observed}).encode()
+            if "runtime-identity" in request.full_url
+            else b'{"status":"ok"}'
+        ),
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if args == ["git", "rev-parse", "--verify", "origin/main^{commit}"]:
+            return {"ok": True, "returncode": 0, "stdout": origin_main, "stderr": ""}
+        if args == ["git", "merge-base", "--is-ancestor", expected, observed]:
+            return {"ok": expected_is_ancestor, "returncode": 0 if expected_is_ancestor else 1, "stdout": "", "stderr": ""}
+        if args == ["git", "merge-base", "--is-ancestor", observed, origin_main]:
+            return {"ok": observed_in_origin_main, "returncode": 0 if observed_in_origin_main else 1, "stdout": "", "stderr": ""}
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=expected,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["runtime_identity_match"] is False
+    assert payload["observed_identity"] == observed
+    assert any(expected_error in item for item in payload["blocking"])
+
+
+def test_close_sync_rejects_forged_runtime_identity_proof(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    issue_payload = _runtime_bug(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", issue_payload)
+    receipt_payload = _passed_runtime_receipt(
+        isolated_workflow_root,
+        issue_payload,
+        expected_identity="merge-abc123",
+    )
+    receipt_payload["runtime_identity_proof"]["observed_identity"] = "forged"
+    receipt = _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "forged.json",
+        receipt_payload,
+    )
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        post_restart_receipt=str(receipt),
+    )
+
+    assert payload["workflow_gate"] == "fixed_source_pending_user_restart"
+    assert any("identity proof digest mismatch" in item for item in payload["post_restart_receipt_errors"])
+    assert any("observed identity does not match identity proof" in item for item in payload["post_restart_receipt_errors"])
 
 
 def test_read_only_probe_rejects_non_catalog_origin_without_network_call(
