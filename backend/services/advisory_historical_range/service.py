@@ -922,13 +922,24 @@ class HistoricalRangeApplicationService:
         self._candidate_prefetch_per_program = validate_candidate_prefetch_per_program(
             candidate_prefetch_per_program
         )
-        failure_recorder_factory = failure_recorder_factory or (
+        self._failure_recorder_factory = failure_recorder_factory or (
             lambda: _RuntimePreclaimFailureRecorder(mutation_factory)
         )
         self._dispatcher = ResponseBoundHistoricalRangeDispatcher(
             runtime_factory=mutation_factory,
-            failure_recorder_factory=failure_recorder_factory,
+            failure_recorder_factory=self._failure_recorder_factory,
             candidate_prefetch_per_program=self._candidate_prefetch_per_program,
+        )
+
+    def with_candidate_prefetch_per_program(
+        self, candidate_prefetch_per_program: int
+    ) -> "HistoricalRangeApplicationService":
+        """Return an equivalent service with an explicit candidate prefetch width."""
+        return HistoricalRangeApplicationService(
+            query_runtime_factory=self._query_runtime_factory,
+            mutation_runtime_factory=self._mutation_runtime_factory,
+            failure_recorder_factory=self._failure_recorder_factory,
+            candidate_prefetch_per_program=candidate_prefetch_per_program,
         )
 
     def list_batch_options(self) -> dict[str, Any]:

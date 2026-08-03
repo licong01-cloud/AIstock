@@ -124,10 +124,10 @@ def test_resume_persists_exact_operation_before_background_dispatch() -> None:
 
 def test_resume_identity_freezes_the_configured_candidate_prefetch_width() -> None:
     repository = _Repository()
-    service = HistoricalRangeApplicationService(
-        runtime_factory=lambda: _runtime(repository),
-        candidate_prefetch_per_program=8,
+    default_service = HistoricalRangeApplicationService(
+        runtime_factory=lambda: _runtime(repository)
     )
+    service = default_service.with_candidate_prefetch_per_program(8)
     service.resume_batch(
         "ahrb_1",
         HistoricalRangeCommandRequest(
@@ -145,6 +145,27 @@ def test_resume_identity_freezes_the_configured_candidate_prefetch_width() -> No
             "expected_batch_row_version": 7,
             "max_program_concurrency": 2,
             "candidate_prefetch_per_program": 8,
+            "day_slice_size": 4,
+            "lease_seconds": 3600,
+        }
+    )
+
+    default_service.resume_batch(
+        "ahrb_1",
+        HistoricalRangeCommandRequest(
+            operation_idempotency_key="default-resume-key",
+            expected_row_version=7,
+        ),
+        background_tasks=_Background(),
+    )
+    assert repository.requests[1].request_payload_sha256 == canonical_json_sha256(
+        {
+            "schema_version": "advisory_historical_range_resume_operation_input_v1",
+            "batch_id": "ahrb_1",
+            "operation_type": "RESUME",
+            "expected_batch_row_version": 7,
+            "max_program_concurrency": 2,
+            "candidate_prefetch_per_program": 2,
             "day_slice_size": 4,
             "lease_seconds": 3600,
         }

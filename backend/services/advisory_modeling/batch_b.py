@@ -149,7 +149,9 @@ class ImmediateBackgroundTasks:
 
 class BatchBHistoricalRangeDriver:
     def __init__(self, *, service: HistoricalRangeApplicationService) -> None:
-        self._service = service
+        self._service = service.with_candidate_prefetch_per_program(
+            BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM
+        )
 
     def ensure_sealed_base(
         self,
