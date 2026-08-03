@@ -18,6 +18,7 @@ from backend.services.multi_alpha.remote_dispatch import (
     _remote_runtime_artifact_link_commands,
     _remote_runtime_file_verify_commands,
     _remote_small_files,
+    _require_remote_linux_path,
     _sync_remote_runtime_artifacts,
     _remote_task_id,
     _remote_wsl_command,
@@ -812,6 +813,56 @@ def test_remote_pred_backtest_executor_rejects_local_paths(tmp_path: Path) -> No
             pred_pkl=pred,
             node_id="rdagent-node1",
             backtest_config={"runtime_template_dir": str(template), "timeout_seconds": 30},
+        )
+
+    assert excinfo.value.reason_code == "remote_path_invalid"
+
+
+def test_remote_path_allows_windows_mount_for_loopback_wsl_node() -> None:
+    node = ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000")
+
+    _require_remote_linux_path(
+        path_name="artifact_store_root",
+        value="/mnt/f/Dev/RD-Agent-state/artifact_cas",
+        node=node,
+    )
+    _require_remote_linux_path(
+        path_name="workspace_base",
+        value="/mnt/f/Dev/RD-Agent-main/qe_workspace",
+        node=node,
+    )
+
+
+@pytest.mark.parametrize(
+    ("node", "value"),
+    [
+        (
+            ComputeNodeInfo(node_id="wsl2-remote", api_base_url="http://192.168.50.215:9000"),
+            "/mnt/f/Dev/RD-Agent-state/artifact_cas",
+        ),
+        (
+            ComputeNodeInfo(node_id="local-linux", api_base_url="http://127.0.0.1:9000"),
+            "/mnt/f/Dev/RD-Agent-state/artifact_cas",
+        ),
+        (
+            ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+            "F:\\Dev\\RD-Agent-state\\artifact_cas",
+        ),
+        (
+            ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+            "/mnt/shared/artifact_cas",
+        ),
+    ],
+)
+def test_remote_path_keeps_non_local_wsl_and_windows_paths_fail_closed(
+    node: ComputeNodeInfo,
+    value: str,
+) -> None:
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _require_remote_linux_path(
+            path_name="artifact_store_root",
+            value=value,
+            node=node,
         )
 
     assert excinfo.value.reason_code == "remote_path_invalid"
