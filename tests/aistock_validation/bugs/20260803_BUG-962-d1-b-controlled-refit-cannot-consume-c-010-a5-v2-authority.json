@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-962",
-  "closed_at": null,
+  "closed_at": "2026-08-03T10:15:52Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -113,8 +113,8 @@
   },
   "first_seen_at": "2026-08-03T04:59:42.232634Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f0978ce68485e67df08afe603ffddbd74a23a217",
+  "fixed_at": "2026-08-03T10:15:52Z",
   "github_issue_number": 3075,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3075",
   "last_seen_at": "2026-08-03T04:59:42.232634Z",
@@ -122,6 +122,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3089",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -145,7 +146,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -154,6 +155,22 @@
     "fingerprint": "b1f0db3db01c1ad880cd8c77",
     "source_event_id": "FE-20260803-b1f0db3db01c"
   },
+  "validation_evidence": [
+    "Conda AIstock direct D1/C-010 fix-point matrix -> 83 passed",
+    "python -m nox -s hmm_risk_backend -> 243 passed, total coverage 74.47%",
+    "system ruff check/format --check on changed Python files -> passed",
+    "Conda AIstock py_compile on changed source files -> passed",
+    "fresh Python canonical readback of C-010-A5 report -> preflight_complete, report e7f7edc9..., partition 03d78534..., counts 502/501/1",
+    "fresh Python historical formal request readback -> policy v1 ae8eda5b... accepted without relabelling",
+    "first controlled execution attempt -> fail-closed at 0 fits on historical-vs-A5 mapping comparison; immutable failure receipt 7eee68e1... preserved and comparison domain corrected to the approved A5 mapping identity",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+    "git diff --check -> passed",
+    "python -m pytest backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -> 85 passed",
+    "python -m nox -s hmm_risk_backend -> 246 passed; coverage 79.10 percent",
+    "python -m nox -s l0 -> passed; blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; 14/14 mapped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -200,18 +217,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_evidence": [
-    "Conda AIstock direct D1/C-010 fix-point matrix -> 83 passed",
-    "python -m nox -s hmm_risk_backend -> 243 passed, total coverage 74.47%",
-    "system ruff check/format --check on changed Python files -> passed",
-    "Conda AIstock py_compile on changed source files -> passed",
-    "fresh Python canonical readback of C-010-A5 report -> preflight_complete, report e7f7edc9..., partition 03d78534..., counts 502/501/1",
-    "fresh Python historical formal request readback -> policy v1 ae8eda5b... accepted without relabelling",
-    "first controlled execution attempt -> fail-closed at 0 fits on historical-vs-A5 mapping comparison; immutable failure receipt 7eee68e1... preserved and comparison domain corrected to the approved A5 mapping identity",
-    "python -m nox -s l0 -> passed, blocking=0",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
-    "git diff --check -> passed"
-  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
