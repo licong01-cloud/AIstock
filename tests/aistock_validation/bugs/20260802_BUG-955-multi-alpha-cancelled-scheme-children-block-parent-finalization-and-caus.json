@@ -184,8 +184,8 @@
     "source_event_id": "FE-20260802-a53b2114c2f1"
   },
   "validation_evidence": [
-    "python -m nox -s l0 -> passed",
-    "python -m nox -s validation_module_registry_l0 -> passed"
+    "validation-receipt: id=8ef80ed87368a7f8 commit=f780c62f50d47a7fbe0b445b55e0132dd31e6c61 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=47be0c746fd92fd7 commit=f780c62f50d47a7fbe0b445b55e0132dd31e6c61 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`"
   ],
   "verification_budget": {
     "budget": "standard",
