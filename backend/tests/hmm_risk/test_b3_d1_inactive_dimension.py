@@ -268,7 +268,7 @@ def test_a5_input_migration_preserves_sector_core_and_normalizes_control_lineage
             "train_input_manifest": {**current_manifest, "train_observation_sha256": "e" * 64},
         }
     )
-    with pytest.raises(subject.D1InactiveDimensionError, match="dates or observations changed"):
+    with pytest.raises(subject.D1InactiveDimensionError, match="train core changed"):
         subject.build_input_migration_receipt(
             drifted,
             historical_train_input_manifest=historical_manifest,

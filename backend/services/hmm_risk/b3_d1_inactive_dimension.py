@@ -292,7 +292,7 @@ def build_input_migration_receipt(
         changed = sorted(key for key in historical_core if historical_core.get(key) != current_core.get(key))
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_authority_mismatch",
-            "D1 target/control train dates or observations changed across C-010-A5 migration",
+            "D1 target/control train core changed across C-010-A5 migration: " + ",".join(changed),
             evidence={"changed_core_fields": changed},
         )
     normalized_policy_sha256 = _require_sha256(current_policy_sha256, "current_policy_sha256")
