@@ -84,8 +84,8 @@
   },
   "first_seen_at": "2026-08-02T18:13:42.160115Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "26825be3f8a46c1e84d89ea0de217be2564bd976",
+  "fixed_at": "2026-08-02T18:55:40Z",
   "github_issue_number": 3054,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3054",
   "last_seen_at": "2026-08-02T18:13:42.160115Z",
@@ -93,6 +93,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3056",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -126,7 +127,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -135,6 +136,12 @@
     "fingerprint": "d295bfb1147be66a30f16509",
     "source_event_id": "FE-20260803-d295bfb1147b"
   },
+  "validation_evidence": [
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 44 passed",
+    "pytest backend/tests/test_local_data_management_facade.py backend/tests/mcp/test_local_data_module.py -q -> 55 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
