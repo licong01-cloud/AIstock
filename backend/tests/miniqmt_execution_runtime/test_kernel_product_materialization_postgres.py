@@ -78,6 +78,9 @@ def test_k6c1_product_repository_public_surface_is_complete() -> None:
         "materialize_product_transition_atomic_v3",
         "read_product_materialization_v3",
     } <= set(dir(PostgresMiniQMTKernelRepository))
+    repository = PostgresMiniQMTKernelRepository(conn_factory=lambda: None)
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
+        repository.read_product_materialization_v3("not-a-sha")
 
 
 @pytest.mark.parametrize(
@@ -582,8 +585,48 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
                 repository.materialize_product_transition_atomic_v3(
                     **{**common, "transition_bundle": replace(bundle, command_outboxes=())}
                 )
-            non_initial_outbox = bundle.command_outboxes[0].model_copy(
-                update={"status": BrokerCommandOutboxStatusV1.CLAIMED}
+            with pytest.raises(ValueError, match="projection set and after state"):
+                repository.materialize_product_transition_atomic_v3(
+                    **{**common, "transition_bundle": replace(bundle, projection_set=None)}
+                )
+            with pytest.raises(ValueError, match="prior terminal updates"):
+                repository.materialize_product_transition_atomic_v3(
+                    **{
+                        **common,
+                        "transition_bundle": replace(
+                            bundle,
+                            updated_child_mappings=bundle.new_child_mappings,
+                        ),
+                    }
+                )
+            non_initial_outbox = BrokerCommandOutboxV1.create(
+                command=commands[0],
+                mapping_id=bundle.command_outboxes[0].mapping_id,
+                status=BrokerCommandOutboxStatusV1.CLAIMED,
+                attempt_count=1,
+                lease_owner="worker_k6c1:preproduct",
+                lease_epoch=1,
+                lease_fence_token=kernel_lease_fence_token_v1(
+                    owner_type="OUTBOX_COMMAND",
+                    owner_id=commands[0].command_id,
+                    lease_epoch=1,
+                    lease_owner="worker_k6c1:preproduct",
+                ),
+                lease_expires_at="2026-08-03T01:40:00Z",
+                dispatch_attempt_id=None,
+                next_attempt_at_utc=None,
+                broker_called=None,
+                broker_order_id=None,
+                ack_receipt_json=None,
+                ack_receipt_sha256=None,
+                non_acceptance_receipt=None,
+                unknown_outcome_receipt=None,
+                reconcile_receipt=None,
+                last_error_json=None,
+                row_version=2,
+                created_at_utc="2026-08-03T01:31:00Z",
+                updated_at_utc="2026-08-03T01:32:00Z",
+                closed_at_utc=None,
             )
             with pytest.raises(ValueError, match="initial PENDING"):
                 repository.materialize_product_transition_atomic_v3(
@@ -592,7 +635,30 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
                         "transition_bundle": replace(bundle, command_outboxes=(non_initial_outbox,)),
                     }
                 )
-            wrong_mapping_outbox = bundle.command_outboxes[0].model_copy(update={"mapping_id": "mqmap_wrong"})
+            wrong_mapping_outbox = BrokerCommandOutboxV1.create(
+                command=commands[0],
+                mapping_id="mqmap_wrong",
+                status=BrokerCommandOutboxStatusV1.PENDING,
+                attempt_count=0,
+                lease_owner=None,
+                lease_epoch=0,
+                lease_fence_token=None,
+                lease_expires_at=None,
+                dispatch_attempt_id=None,
+                next_attempt_at_utc=None,
+                broker_called=None,
+                broker_order_id=None,
+                ack_receipt_json=None,
+                ack_receipt_sha256=None,
+                non_acceptance_receipt=None,
+                unknown_outcome_receipt=None,
+                reconcile_receipt=None,
+                last_error_json=None,
+                row_version=1,
+                created_at_utc="2026-08-03T01:31:00Z",
+                updated_at_utc="2026-08-03T01:31:00Z",
+                closed_at_utc=None,
+            )
             with pytest.raises(ValueError, match="outbox mapping"):
                 repository.materialize_product_transition_atomic_v3(
                     **{
@@ -603,15 +669,25 @@ def test_k6c1_product_transition_is_atomic_and_readback_verified_on_dev_postgres
             wrong_payload_outbox = bundle.command_outboxes[0].model_copy(
                 update={"payload_json": {"schema_version": "miniqmt_broker_command_v2", "forged": True}}
             )
-            with pytest.raises(ValueError, match="payload differs"):
+            with pytest.raises(ValueError, match="strict durable carrier validation"):
                 repository.materialize_product_transition_atomic_v3(
                     **{
                         **common,
                         "transition_bundle": replace(bundle, command_outboxes=(wrong_payload_outbox,)),
                     }
                 )
-            non_initial_mapping = bundle.new_child_mappings[0].model_copy(
-                update={"mapping_status": CommandChildMappingStatusV1.DISPATCHING}
+            non_initial_mapping = ExecutionCommandChildMappingV1.create(
+                command=commands[0],
+                strategy_slot_id="slot_k6c1",
+                mapping_status=CommandChildMappingStatusV1.DISPATCHING,
+                mapping_version=2,
+                broker_order_id=None,
+                broker_identity_source_event_id=None,
+                last_order_event_id=None,
+                last_trade_event_id=None,
+                updated_by_event_id=None,
+                created_at_utc="2026-08-03T01:31:00Z",
+                updated_at_utc="2026-08-03T01:32:00Z",
             )
             with pytest.raises(ValueError, match="initial RESERVED"):
                 repository.materialize_product_transition_atomic_v3(

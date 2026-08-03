@@ -1,6 +1,6 @@
 # MiniQMT 统一执行内核 K6 产品切换与旧路线退役 F2 详细设计
 
-> Feature tier：`F2`。原 design source 已通过 PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a` 合入，K6-A 已通过 PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401` 完成 `implemented_verified + merged`。2026-08-02 implementation-readiness revision 已通过 PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7` 完成 `design_revision_ready + merged`。K6-C0 strict contracts、successor migration与versioned repository preflight已通过 PR #3032 / merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63` 完成`implemented_verified + merged`；BUG-953 source 已通过 PR #3048 / merge `f4da00f6838f6da6344223f6bba55dfe606def3e` 合入，production DDL/readback、用户重启和正式 post-restart descendant-identity receipt 均已闭合，Issue #3045 已关闭。后续顺序固定为`K6-C1 -> K6-B -> K6-D`，K6 overall=`implementation_in_progress`。
+> Feature tier：`F2`。原 design source 已通过 PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a` 合入，K6-A 已通过 PR #3004 / merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401` 完成 `implemented_verified + merged`。2026-08-02 implementation-readiness revision 已通过 PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7` 完成 `design_revision_ready + merged`。K6-C0 strict contracts、successor migration与versioned repository preflight已通过 PR #3032 / merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63` 完成`implemented_verified + merged`；BUG-953 source 已通过 PR #3048 / merge `f4da00f6838f6da6344223f6bba55dfe606def3e` 合入，production DDL/readback、用户重启和正式 post-restart descendant-identity receipt 均已闭合，Issue #3045 已关闭。K6-C1 generic product authority/materializer 当前为`implemented_verified_local`、`source_merge=pending_pr`；后续顺序固定为`K6-B -> K6-D`，K6 overall=`implementation_in_progress`。
 >
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
@@ -77,7 +77,8 @@ K6 的输入边界从已冻结 execution plan/parent intent 开始。它不导�
 | `kernel_product_contracts.py` | K6 strict carriers、canonical hash、state transitions | DB、broker、algorithm branches |
 | `kernel_product_repository.py` | coordination/product authority transaction、strict readback | signal/selection、Gateway call |
 | `kernel_dependent_buy.py` | trigger evaluation、ledger observation、release decision | algorithm state、cash estimate、direct broker submit |
-| `kernel_product_materializer.py` | V3 aggregate validation、K2 mapping/outbox materialization | V1/V2 fallback、partial materialization |
+| `kernel_product_authority.py` | V3 per-command evaluator、aggregate/transaction identity | DB、algo-code branch、caller-supplied disposition |
+| `kernel_product_materialization_repository.py` | V3 envelope validation、K2 mapping/outbox/coordination atomic materialization与独立readback | V1/V2 fallback、partial materialization、broker call |
 | `kernel_product_cutover.py` | route-owner receipt、新实例 selection、legacy drain inventory | manual approval、dual route |
 | `kernel_delivery.py` / `kernel_materializer.py` | 只增加 generic K6 invocation seam | algo-code switch、parallel outbox |
 | `kernel_diagnostics.py` | read-only K6 state/lineage projection | state mutation、acknowledge |
@@ -227,6 +228,8 @@ lineage closure必须按command type执行：`SUBMIT_LIMIT`的`child_order_id/ma
 - `aggregate_disposition in ZERO_COMMAND|ALL_REJECTED|ALL_DEFERRED|MATERIALIZE_ALL_ACCEPTED_COMMANDS|MIXED_PER_COMMAND`
 - `authority_set_sha256=hash_hex_v1("miniqmt_product_command_authority_set_v3", preceding fields)`
 
+`ProductCommandAuthorityEnvelopeV3` 是 repository 唯一写入输入：`authority_set`、完整 strict `VnpyFacadeAuthorityInputV2 creation_authority`、按 transition receipt 顺序排列的 initial `ExecutionAlgoTimerScheduleV1` 以及 `envelope_sha256`。它防止 aggregate 只保存 binding hash 后无法 fresh-process 重跑 evaluator，也把 TIMER immutable schedule payload 纳入同一 transaction identity；不得接受 caller supplied catalog/binding/timer subset。
+
 zero-command 不是空 authority：必须持久化 total=0、`ZERO_COMMAND` 的 aggregate。MIXED 表示每条 command 独立被权威判定，不表示事务可以部分写入；整套 aggregate、全部 command_json、MATERIALIZE lineage、REJECT terminal no-broker lineage与DEFER coordination/mapping/child必须原子落库。任何 item 无法闭合时整套失败、broker_called=false。
 
 三种 disposition 的业务合同固定如下：
@@ -234,7 +237,7 @@ zero-command 不是空 authority：必须持久化 total=0、`ZERO_COMMAND` 的 
 | disposition | durable result | broker behavior | restart authority |
 | --- | --- | --- | --- |
 | `MATERIALIZE` | initial mapping/child + PENDING outbox | 仅 commit 后由现有 K2 worker 调 broker | item command_json + mapping/outbox/child |
-| `REJECT_SYNCHRONOUS` | SUBMIT 创建 terminal mapping/child；CANCEL 复用 active mapping/child；两者均创建 `FAILED_TERMINAL,broker_called=false` outbox 与 typed non-acceptance receipt | 永不调用 broker；现有 outcome publisher 生成 COMMAND_OUTCOME，使 plugin state按正式事件收敛 | item command_json + terminal outbox/outcome |
+| `REJECT_SYNCHRONOUS` | SUBMIT 创建 terminal mapping/child；CANCEL 复用 active mapping/child；两者均创建 `FAILED_TERMINAL,broker_called=false` outbox 与 typed `KernelErrorEvidenceV1` pre-call non-acceptance evidence | 永不调用 broker；现有 outcome publisher 生成 COMMAND_OUTCOME，使 plugin state按正式事件收敛 | item command_json + terminal outbox/outcome |
 | `DEFER_DEPENDENT_BUY` | 仅允许 BUY SUBMIT；创建 `DEFERRED_DEPENDENT_BUY` mapping/child 和 coordination，禁止 outbox | WAIT 期间 broker_called=false；K6-B release 后才为同一 command id 创建 PENDING outbox | item command_json + coordination + deferred mapping/child |
 
 `ProductCommandLifecycleProjectionV3` 为只读重建结果：
@@ -256,7 +259,7 @@ DEFER 时 outbox/broker/callback 字段必须为空；REJECT 必须闭合 termin
 - `zero_command,repository_transaction_id,commit_outcome=COMMITTED_READBACK_VERIFIED,independent_readback_sha256`
 - `receipt_sha256=hash_hex_v1("miniqmt_product_materialization_receipt_v3", preceding fields)`
 
-每个 ordered 集合都必须由 V3 item disposition 投影，不能省略、padding 或按数据库返回顺序重排。writer 只可返回 `COMMITTED_READBACK_VERIFIED`；commit-unknown 抛 typed exception并携带 readback key，不得返回 PENDING 或假 ACK。
+每个 ordered 集合都必须由 V3 item disposition 投影，不能省略、padding 或按数据库返回顺序重排。`independent_readback_sha256`覆盖 exact envelope、transition receipt 与从真实 durable mapping/outbox/child 重建的 immutable lineage；它不绑定 outbox 的可变 PENDING/CLAIMED/DISPATCHING 状态，因此同一已提交 transaction 的 receipt 在合法 worker 推进后保持稳定，而 `ProductCommandLifecycleProjectionV3` 单独呈现当前状态。writer 只可返回 `COMMITTED_READBACK_VERIFIED`；commit-unknown 抛 typed exception并携带 readback key，不得返回 PENDING 或假 ACK。`BrokerNonAcceptanceReceiptV1`要求 callback interval/reconciliation authority，仅用于真实 broker non-acceptance；同步 pre-call reject 禁止伪造该 carrier。
 
 ### 4.3 Route cutover authority
 
@@ -399,8 +402,8 @@ Trigger source contract 不允许自由文本：`SELL_TRADE_SETTLED` 只接受 s
 3. 为每个 command 从同一 `ExecutionProjectionSet` 解析 contract/account/market/OMS/risk/route facts；
 4. 使用唯一 pure evaluator 生成 item disposition；
 5. 构建 aggregate 并以同一 reader 校验；
-6. 在同一 repository transaction 创建 aggregate/items，以及全部 MATERIALIZE lineage、REJECT terminal no-broker lineage、DEFER coordination/deferred mapping/child；
-7. commit 后独立 readback 构建 `ProductMaterializationReceiptV3`。
+6. 以 `ProductCommandAuthorityEnvelopeV3` 和 strict K2 transition bundle 为唯一输入，先重建全部 carrier、校验 initial PENDING outbox/RESERVED mapping与exact payload/mapping association，再按 authority hash 获取transaction advisory lock；同一 repository transaction创建 aggregate/items，以及全部 MATERIALIZE lineage、REJECT terminal no-broker lineage、DEFER coordination/deferred mapping/child，并CAS algo/delivery；
+7. commit 后用独立连接从 durable facts 重跑 evaluator、transaction identity和immutable lineage，构建稳定的 `ProductMaterializationReceiptV3`。同 authority 并发/重试只能回读同一 receipt；不同 closure、stale predecessor或partial existing lineage必须 typed conflict，不做无限重试。
 
 writer 与 readback 共用 pure schema/hash/evaluator，但 readback 必须从数据库事实重建，不接受 writer 返回对象或缓存。hash-correct self-consistent drift、不同 command 集合、错误 ordinal、不同 projection、不同 broker identity 都拒绝。
 
@@ -427,7 +430,7 @@ writer 与 readback 共用 pure schema/hash/evaluator，但 readback 必须从�
 
 唯一pure evaluator为：
 
-`evaluate_product_command_authority_v3(*, command: BrokerCommandV2, evidence: ProductCommandEvaluationEvidenceV3, catalog: PluginCatalogSnapshotV1, creation_binding: ExecutionAlgoCreationBindingV1) -> ProductCommandAuthorityItemV3`。
+`evaluate_product_command_authority_v3(*, command: BrokerCommandV2, evidence: ProductCommandEvaluationEvidenceV3, catalog: PluginCatalogSnapshotV1, creation_binding: VnpyFacadeAuthorityInputV2) -> ProductCommandAuthorityItemV3`。
 
 判定优先级固定且不得按algo code分支：
 
@@ -438,9 +441,9 @@ writer 与 readback 共用 pure schema/hash/evaluator，但 readback 必须从�
 
 aggregate builder为：
 
-`build_product_command_authority_set_v3(*, transition: AlgoTransitionV1, transition_receipt: AlgoTransitionReceiptV1, projection_set: ExecutionProjectionSetV1, ordered_evidence: tuple[ProductCommandEvaluationEvidenceV3,...], catalog: PluginCatalogSnapshotV1, creation_binding: ExecutionAlgoCreationBindingV1) -> ProductCommandAuthoritySetV3`。
+`build_product_command_authority_set_v3(*, transition: AlgoTransitionV1, transition_receipt: AlgoTransitionReceiptV1, projection_set: ExecutionProjectionSetV1, ordered_evidence: tuple[ProductCommandEvaluationEvidenceV3,...], catalog: PluginCatalogSnapshotV1, creation_binding: VnpyFacadeAuthorityInputV2, timer_schedules: tuple[ExecutionAlgoTimerScheduleV1,...]) -> ProductCommandAuthoritySetV3`。
 
-`ordered_evidence`必须与`transition.broker_commands`按ordinal/command id exact one-to-one；zero command必须传空tuple并生成ZERO_COMMAND。repository public seam为`materialize_product_transition_atomic_v3(...) -> ProductMaterializationReceiptV3`；它只接收上述strict aggregate及K2 transition write bundle，不接收caller supplied mapping/outbox subset或disposition。readback seam为`read_product_materialization_v3(authority_set_sha256) -> tuple[ProductCommandAuthoritySetV3,ProductCommandLifecycleProjectionV3,ProductMaterializationReceiptV3]`，必须使用独立连接从durable command/evidence/lineage重建并重新运行同一evaluator。
+`ordered_evidence`必须与`transition.broker_commands`按ordinal/command id exact one-to-one；zero command必须传空tuple并生成ZERO_COMMAND。`bind_product_transition_receipt_v3(...)`以 domain `miniqmt_product_transition_commit_input_set_v3` 将authority command/evidence hashes、effect set、initial timer schedule receipt和diagnostic context hash绑定到operation `APPLY_CLAIMED_DELIVERY_ATOMIC_PRODUCT_V3`。repository public seam为`materialize_product_transition_atomic_v3(...) -> ProductMaterializationReceiptV3`；它只接收strict `ProductCommandAuthorityEnvelopeV3`及K2 transition write bundle，不接收caller supplied mapping/outbox subset或disposition。readback seam为`read_product_materialization_v3(authority_set_sha256) -> tuple[ProductCommandAuthoritySetV3,ProductCommandLifecycleProjectionV3,ProductMaterializationReceiptV3]`，必须使用独立连接从durable command/evidence/lineage重建并重新运行同一evaluator。
 
 ## 9. Product Cutover and Legacy Retirement / 产品切换与旧路线退役
 
@@ -571,9 +574,9 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 
 - **K6-C0=`implemented_verified + merged`, `source_merge=merged_pr_3032`**，merge=`2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`。已完成authority item strict `command_json`、`DEFER_DEPENDENT_BUY`、V2 proceeds/ledger/coordination carrier、deferred mapping status、immutable K6-A successor migration、migration前后两个exact K2/K6 catalog authority及独立`preflight_k6c_schema()`；没有执行生产DDL或修改历史数据。
 - **BUG-953=`implemented_verified + merged + runtime_verified`，`source_merge=merged_pr_3048`**：补齐SUBMIT deterministic mapping/child、CANCEL existing-mapping reuse、lifecycle disposition/status/broker/lineage closure以及exact physical mapping JSON/scalar CHECK；最终直接+DEV PostgreSQL矩阵`91 passed`。production DDL已独立授权、应用并经exact K6-C0 repository preflight回读；用户重启后health/identity/platform diagnostics四项正式probe均为HTTP 200，observed runtime `32c81b51...` 已由workflow证明为source merge `f4da00f6...` 的`origin/main`后代；Issue #3045已关闭。未调用broker、未执行runtime activation。
-- **下一优先级K6-C1=`not_started`**。实现§8 V3 aggregate的atomic materializer、0/1/N command、MATERIALIZE/REJECT/DEFER、terminal no-broker reject outcome与K2 outbox/callback/reconcile closure。
+- **K6-C1=`implemented_verified_local`, `source_merge=pending_pr`**。`kernel_product_authority.py`与`kernel_product_materialization_repository.py`已实现§8唯一pure evaluator、`ProductCommandAuthorityEnvelopeV3`、0/1/N与MIXED aggregate、MATERIALIZE/REJECT/DEFER、typed terminal no-broker reject、atomic K2 transition/mapping/outbox/coordination/timer/diagnostic/algo/delivery writer、same-authority advisory-lock幂等、commit-unknown与独立fresh readback。C1 direct/structure=`21 passed`，disposable DEV PostgreSQL=`18 passed`，authority line/branch=`87.76%/81.48%`，repository line/branch=`87.50%/70.95%`，MiniQMT L2=`1226 passed,60 skipped`。未调用broker、未激活产品route；PR/CI/source merge仍与本地验证分开。
 - 五个 plugin 全部通过同一 public seam；仍不激活产品binding。
-- 预计 8–12 个开发日；依赖 K6-A。K6-C 未完成并合入前不得把 K6-B release 标记为 implemented，也不得并行修改三份共享权威设计。
+- 原预计 8–12 个开发日；依赖 K6-A/C0。K6-C1 source 未合入前不得把 K6-B release 标记为 implemented，也不得并行修改三份共享权威设计。
 
 ### K6-B — dependent-BUY coordinator
 
@@ -634,13 +637,13 @@ K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding
 | `F-101` | §0–§3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` scope/owner/no-diff matrix | design_ready | none |
 | `F-102` | §4.1；`backend/services/miniqmt_execution_runtime/kernel_product_contracts.py` | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py -q`：V2 proceeds/ledger/coordination、strict initial/successor、V1 product reject、strict readback | k6c0_implemented_verified | none |
 | `F-103` | §7 | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy.py -q`：candidate/defer/same-command release/full trigger/state/restart | design_ready | none |
-| `F-104` | §4.2、§8；V3 carriers已在`kernel_product_contracts.py`实现；BUG-953补齐deterministic lineage/lifecycle authority | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py -q`；BUG-953 direct+DEV combined=`91 passed`；C1 target `backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py` | implemented_verified | none |
+| `F-104` | §4.2、§8；`kernel_product_contracts.py`、`kernel_product_authority.py`、`kernel_product_materialization_repository.py`；BUG-953 deterministic lineage/lifecycle authority | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py backend/tests/miniqmt_execution_runtime/test_kernel_repository_structure.py -q`=`21 passed`；C1 DEV=`18 passed` | k6c1_implemented_verified_local | none |
 | `F-105` | §5；K6-A immutable migration + `miniqmt_execution_kernel_k6c_20260802.*` | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py -q`：checksum、coordination/item FK、deferred status、catalog/comment、second apply、readback、data-guarded rollback | k6c0_implemented_verified | none |
-| `F-106` | §6；`kernel_product_repository.py` versioned preflight；BUG-953 exact mapping JSON/scalar CHECK | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py -q`；combined direct matrix=`91 passed`；C1 target `test_kernel_dependent_buy_postgres.py` | implemented_verified | none |
+| `F-106` | §6；`kernel_product_repository.py` versioned preflight；`kernel_product_materialization_repository.py` atomic writer/readback；BUG-953 exact mapping JSON/scalar CHECK | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_materialization_postgres.py -q`=`18 passed`，覆盖rollback、commit-unknown、same-authority concurrency、drift与CLAIMED lifecycle | k6c1_implemented_verified_local | none |
 | `F-107` | §4.3、§9.1、§9.3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` owner/route-generation/drain/rollback matrix | design_ready | none |
 | `F-108` | §9.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_legacy_route_retirement.py` exact inventory + import/call-graph uniqueness | design_ready | none |
 | `F-109` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_diagnostics.py`; artifact: `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-110` | §11 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_authority.py`; `python -m nox -s miniqmt_execution_runtime_l2` and F2 validation receipts | design_ready | none |
+| `F-110` | §11 | C1 direct+DEV=`39 passed`；authority line/branch=`87.76%/81.48%`，repository=`87.50%/70.95%`；`python -m nox -s miniqmt_execution_runtime_l2`=`1226 passed,60 skipped`；F2/PR CI仍独立执行 | k6c1_implemented_verified_local | none |
 | `F-111` | §12–§13 | artifact: four slice PR receipts + separately reported production/runtime states | design_ready | none |
 | `F-112` | §16–§17 | artifact: `docs/architecture/miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md`; DESIGN-COMPLIANCE-001 + normal trading day acceptance receipt | design_ready | none |
 
@@ -679,7 +682,7 @@ K6 implementation完成定义：K6-A/B/C/D全部 `implemented_verified + merged`
 - K1/K2/K3/K4/K5 overall：`implemented_verified + merged`。
 - K6 detailed design base：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）；2026-08-02 implementation-readiness revision：`design_revision_ready + merged`（PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7`）。
 - revision review evidence：三份F2 validator=`12/12,70/70,112/112`且warnings=0；classifier=`docs_fast_update`、backend/frontend/Go plans均未选择、`unmapped_code_files=[]`；L0=0 finding；module registry=`8 passed,14/14 mapped`。
-- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green。K6-C0=`implemented_verified + merged`、`source_merge=merged_pr_3032`，merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`，required CI run `30732380227` green；BUG-953=`implemented_verified + merged + runtime_verified`、`source_merge=merged_pr_3048`，Issue #3045已关闭；下一优先级为K6-C1，K6-C1/K6-B/K6-D=`not_started`，K6 overall=`implementation_in_progress`。
+- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green。K6-C0=`implemented_verified + merged`、`source_merge=merged_pr_3032`，merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`，required CI run `30732380227` green；BUG-953=`implemented_verified + merged + runtime_verified`、`source_merge=merged_pr_3048`，Issue #3045已关闭；K6-C1=`implemented_verified_local`、`source_merge=pending_pr`，K6-B/K6-D=`not_started`，K6 overall=`implementation_in_progress`。
 - product runtime：`not_switched`。
 - `base_design_source_merge=merged_pr_2993`；`revision_source_merge=merged_pr_3024`；`close_sync=not_applicable_feature`；state-sync/root sync/cleanup分别记录。
 - production DDL=`applied_and_verified`；用户已完成backend-main重启，post-restart identity/business/database receipt=`passed`。production DML/dependency/config/binding/broker/runtime activation/normal trading day observation仍为`noop/not_run`。

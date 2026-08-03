@@ -46,9 +46,11 @@ from .plugin_contracts import (
     DeliveryStatusV1,
     DiagnosticObservationV1,
     ExecutionAlgoInstancePersistenceV2,
+    ExecutionAlgoTimerScheduleV1,
     ExecutionCommandChildMappingV1,
     ExecutionProjectionSetV1,
     KernelErrorEvidenceV1,
+    TimerMutationV1,
 )
 
 
@@ -137,6 +139,137 @@ def _dependency_projection_v2(value: DependentBuySellDependencyV2) -> dict[str, 
         "latest_order_fact_sha256": value.latest_order_fact_sha256,
         "ordered_settled_proceeds_refs": [item.model_dump(mode="json") for item in value.ordered_settled_proceeds_refs],
     }
+
+
+def _strict_roundtrip_v1(model_type: type[Any], value: Any, *, field_name: str) -> Any:
+    """Rebuild an in-memory carrier so ``model_copy`` cannot bypass validation."""
+
+    if not isinstance(value, model_type):
+        raise TypeError(f"{field_name} must be {model_type.__name__}")
+    try:
+        return model_type.model_validate_json(value.model_dump_json(), strict=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} fails strict durable carrier validation") from exc
+
+
+def _strict_transition_bundle_v1(value: KernelTransitionWriteBundleV1) -> KernelTransitionWriteBundleV1:
+    if not isinstance(value, KernelTransitionWriteBundleV1):
+        raise TypeError("transition_bundle must be KernelTransitionWriteBundleV1")
+    if not isinstance(value.receipt, AlgoTransitionReceiptV1):
+        raise ValueError("K6 product materialization requires one APPLIED transition receipt")
+    return KernelTransitionWriteBundleV1.create(
+        algo_instance=_strict_roundtrip_v1(
+            ExecutionAlgoInstancePersistenceV2,
+            value.algo_instance,
+            field_name="transition_bundle.algo_instance",
+        ),
+        delivery=_strict_roundtrip_v1(
+            AlgoDeliveryPersistenceV1,
+            value.delivery,
+            field_name="transition_bundle.delivery",
+        ),
+        receipt=_strict_roundtrip_v1(
+            AlgoTransitionReceiptV1,
+            value.receipt,
+            field_name="transition_bundle.receipt",
+        ),
+        projection_set=(
+            None
+            if value.projection_set is None
+            else _strict_roundtrip_v1(
+                ExecutionProjectionSetV1,
+                value.projection_set,
+                field_name="transition_bundle.projection_set",
+            )
+        ),
+        after_state=(
+            None
+            if value.after_state is None
+            else _strict_roundtrip_v1(
+                AlgoStateSnapshotV2,
+                value.after_state,
+                field_name="transition_bundle.after_state",
+            )
+        ),
+        new_child_mappings=tuple(
+            _strict_roundtrip_v1(
+                ExecutionCommandChildMappingV1,
+                item,
+                field_name=f"transition_bundle.new_child_mappings[{ordinal}]",
+            )
+            for ordinal, item in enumerate(value.new_child_mappings)
+        ),
+        command_outboxes=tuple(
+            _strict_roundtrip_v1(
+                BrokerCommandOutboxV1,
+                item,
+                field_name=f"transition_bundle.command_outboxes[{ordinal}]",
+            )
+            for ordinal, item in enumerate(value.command_outboxes)
+        ),
+        updated_child_mappings=tuple(
+            _strict_roundtrip_v1(
+                ExecutionCommandChildMappingV1,
+                item,
+                field_name=f"transition_bundle.updated_child_mappings[{ordinal}]",
+            )
+            for ordinal, item in enumerate(value.updated_child_mappings)
+        ),
+        updated_command_outboxes=tuple(
+            _strict_roundtrip_v1(
+                BrokerCommandOutboxV1,
+                item,
+                field_name=f"transition_bundle.updated_command_outboxes[{ordinal}]",
+            )
+            for ordinal, item in enumerate(value.updated_command_outboxes)
+        ),
+        timer_mutations=tuple(
+            _strict_roundtrip_v1(
+                TimerMutationV1,
+                item,
+                field_name=f"transition_bundle.timer_mutations[{ordinal}]",
+            )
+            for ordinal, item in enumerate(value.timer_mutations)
+        ),
+        timer_schedules=tuple(
+            _strict_roundtrip_v1(
+                ExecutionAlgoTimerScheduleV1,
+                item,
+                field_name=f"transition_bundle.timer_schedules[{ordinal}]",
+            )
+            for ordinal, item in enumerate(value.timer_schedules)
+        ),
+        diagnostic_observations=tuple(
+            _strict_roundtrip_v1(
+                DiagnosticObservationV1,
+                item,
+                field_name=f"transition_bundle.diagnostic_observations[{ordinal}]",
+            )
+            for ordinal, item in enumerate(value.diagnostic_observations)
+        ),
+    )
+
+
+def _immutable_materialization_lineage_sha256_v3(
+    lifecycle: ProductCommandLifecycleProjectionV3,
+) -> str:
+    """Hash only the durable commit lineage, excluding later worker lifecycle state."""
+
+    return hash_hex_v1(
+        "miniqmt_product_materialization_immutable_lineage_v3",
+        [
+            {
+                "authority_item_sha256": item.authority_item_sha256,
+                "effect_ordinal": item.effect_ordinal,
+                "command_id": item.command_id,
+                "disposition": item.disposition.value,
+                "mapping_id": item.mapping_id,
+                "outbox_id": item.outbox_id,
+                "child_order_id": item.child_order_id,
+            }
+            for item in lifecycle.ordered_item_projections
+        ],
+    )
 
 
 def _coordination_v2(item: ProductCommandAuthorityItemV3, *, created_at_utc: Any) -> DependentBuyCoordinationV2:
@@ -267,10 +400,12 @@ class KernelProductMaterializationRepositoryMixin:
         envelope = ProductCommandAuthorityEnvelopeV3.model_validate_json(
             authority_envelope.model_dump_json(), strict=True
         )
-        if not isinstance(transition_bundle, KernelTransitionWriteBundleV1):
-            raise TypeError("transition_bundle must be KernelTransitionWriteBundleV1")
-        if not isinstance(previous_delivery, AlgoDeliveryPersistenceV1):
-            raise TypeError("previous_delivery must be AlgoDeliveryPersistenceV1")
+        transition_bundle = _strict_transition_bundle_v1(transition_bundle)
+        previous_delivery = _strict_roundtrip_v1(
+            AlgoDeliveryPersistenceV1,
+            previous_delivery,
+            field_name="previous_delivery",
+        )
         if type(strategy_slot_id) is not str or not strategy_slot_id or strategy_slot_id != strategy_slot_id.strip():
             raise ValueError("strategy_slot_id must be a canonical strict identity")
         authority = envelope.authority_set
@@ -797,7 +932,7 @@ class KernelProductMaterializationRepositoryMixin:
             "miniqmt_product_materialization_independent_readback_v3",
             {
                 "authority_envelope_sha256": envelope.envelope_sha256,
-                "lifecycle_projection_sha256": lifecycle.lifecycle_projection_sha256,
+                "immutable_lineage_sha256": _immutable_materialization_lineage_sha256_v3(lifecycle),
                 "transition_receipt_sha256": transition_receipt.receipt_sha256,
             },
         )
