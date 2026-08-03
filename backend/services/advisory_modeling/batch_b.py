@@ -35,6 +35,9 @@ from .training_export import TrainingExportStore, materialize_training_export
 from .training_view import DatasetBuildIntentV1
 
 
+BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM = 8
+
+
 class BatchBDatasetMaterializationRequestV1(FrozenModel):
     schema_version: Literal["advisory_reranker_batch_b_materialization_request_v1"] = (
         "advisory_reranker_batch_b_materialization_request_v1"
@@ -146,7 +149,9 @@ class ImmediateBackgroundTasks:
 
 class BatchBHistoricalRangeDriver:
     def __init__(self, *, service: HistoricalRangeApplicationService) -> None:
-        self._service = service
+        self._service = service.with_candidate_prefetch_per_program(
+            BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM
+        )
 
     def ensure_sealed_base(
         self,

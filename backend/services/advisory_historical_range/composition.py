@@ -33,7 +33,11 @@ from .decision_mark_provider import (
     HistoricalRangeDecisionMarkProvider,
     PostgresHistoricalRangeDecisionMarkReader,
 )
-from .executor import HistoricalRangeBatchExecutionService, HistoricalRangeDayExecutor
+from .executor import (
+    DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
+    HistoricalRangeBatchExecutionService,
+    HistoricalRangeDayExecutor,
+)
 from .repository import (
     PostgresHistoricalRangePreclaimFailureRepository,
     PostgresHistoricalRangeRepository,
@@ -512,6 +516,7 @@ def build_historical_range_r5_application_service(
     query_runtime_factory: RuntimeFactory,
     mutation_runtime_factory: RuntimeFactory,
     failure_recorder_factory: Callable[[], Any] | None = None,
+    candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
 ) -> HistoricalRangeApplicationService:
     """Compose R5 without request-scoped connections or implicit dependencies."""
 
@@ -521,6 +526,7 @@ def build_historical_range_r5_application_service(
         query_runtime_factory=query_runtime_factory,
         mutation_runtime_factory=mutation_runtime_factory,
         failure_recorder_factory=failure_recorder_factory,
+        candidate_prefetch_per_program=candidate_prefetch_per_program,
     )
 
 
@@ -690,7 +696,10 @@ def build_explicit_historical_range_r5_runtime_factory(
     return runtime
 
 
-def build_environment_historical_range_r5_application_service() -> HistoricalRangeApplicationService:
+def build_environment_historical_range_r5_application_service(
+    *,
+    candidate_prefetch_per_program: int = DEFAULT_CANDIDATE_PREFETCH_PER_PROGRAM,
+) -> HistoricalRangeApplicationService:
     """Build the HTTP service from explicit environment configuration only."""
 
     conn_factory = explicit_historical_range_connection_factory()
@@ -756,6 +765,7 @@ def build_environment_historical_range_r5_application_service() -> HistoricalRan
         failure_recorder_factory=lambda: PostgresHistoricalRangePreclaimFailureRepository(
             conn_factory=conn_factory
         ),
+        candidate_prefetch_per_program=candidate_prefetch_per_program,
     )
 
 

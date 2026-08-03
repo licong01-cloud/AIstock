@@ -9,6 +9,7 @@ from backend.services.advisory_historical_range.api_models import ExistingProgra
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256, canonicalize
 from backend.services.advisory_modeling.base_snapshot import _resolve_multi_alpha_legs
 from backend.services.advisory_modeling.batch_b import (
+    BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM,
     BatchBDatasetMaterializationRequestV1,
     BatchBHistoricalRangeDriver,
 )
@@ -164,6 +165,11 @@ class _HistoricalService:
         self.create_request = None
         self.refresh_request = None
         self.bridge_request = None
+        self.candidate_prefetch_per_program = None
+
+    def with_candidate_prefetch_per_program(self, width):
+        self.candidate_prefetch_per_program = width
+        return self
 
     def create_batch(self, request, **_kwargs):
         self.create_request = request
@@ -217,6 +223,7 @@ def test_historical_driver_uses_exact_program_and_full_outcome_bridge_scope() ->
     result = BatchBHistoricalRangeDriver(service=service).ensure_sealed_base(request=request)
 
     assert result.sealed_snapshot_id == "snapshot-1"
+    assert service.candidate_prefetch_per_program == BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM
     assert service.create_request.program_specs == [request.existing_program]
     assert service.refresh_request.horizons == [1, 3, 5, 10, 20]
     assert service.refresh_request.expected_row_version == 11
