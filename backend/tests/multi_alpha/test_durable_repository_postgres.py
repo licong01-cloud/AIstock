@@ -944,6 +944,175 @@ def test_p0_2_zero_child_pause_resume_cancel_lifecycle_in_postgres() -> None:
     assert closed_cancel is not None and closed_cancel["status"] == "succeeded"
 
 
+def test_cancelled_scheme_parent_finalization_repairs_typed_skipped_business_evidence() -> None:
+    repository = MultiAlphaDurableRepository(connection_provider=_connection_provider)
+    task_id = "mact_pg_cancelled_scheme_readback"
+    run_id = "macb_pg_cancelled_scheme_readback"
+    roster = [{"leg_id": "L1"}]
+    repository.create_task(
+        DurableTaskSpec(
+            task_id=task_id,
+            task_name="Cancelled scheme business readback",
+            roster_hash="cancelled_scheme_roster",
+            roster=roster,
+            default_request={"normalize_method": "rank"},
+            source_kind="api",
+        )
+    )
+    request = durable_run_request_payload(
+        roster_hash="cancelled_scheme_roster",
+        roster=roster,
+        oos_start="2026-01-01",
+        oos_end="2026-06-29",
+        normalize_method="rank",
+        walk_forward={"enabled": True},
+        backtest_config={"topk": 25},
+    )
+    repository.create_run(
+        DurableRunSpec(
+            run_id=run_id,
+            task_id=task_id,
+            request_hash=request_hash_for(request),
+            roster_hash="cancelled_scheme_roster",
+            roster=roster,
+            oos_start="2026-01-01",
+            oos_end="2026-06-29",
+            normalize_method="rank",
+            walk_forward={"enabled": True},
+            backtest_config={"topk": 25},
+        )
+    )
+    for ordinal, (child_kind, child_key, weighting_scheme) in enumerate(
+        [
+            ("baseline", "baseline:L1", None),
+            ("scheme", "scheme:equal", "equal"),
+        ]
+    ):
+        child_id = make_child_id(run_id, child_key)
+        manifest = {"run_id": run_id, "child_key": child_key}
+        repository.create_child(
+            DurableChildSpec(
+                child_id=child_id,
+                run_id=run_id,
+                child_key=child_key,
+                child_kind=child_kind,
+                weighting_scheme=weighting_scheme,
+                ordinal=ordinal,
+                input_manifest=manifest,
+                input_manifest_hash=artifact_manifest_hash_for(manifest),
+            )
+        )
+
+    control = DurableMultiAlphaControlService(repository)
+    control.submit(
+        run_id=run_id,
+        action="cancel",
+        idempotency_key="pg-cancel-scheme-readback",
+        requested_by="postgres-test",
+    )
+    cancel_command = control.apply_one_local_command(
+        owner_id="pg-cancel-scheme-control",
+        lease_seconds=60,
+    )
+    assert cancel_command is not None and cancel_command["status"] == "reconciling"
+    children = repository.list_children(run_id)
+    assert [(child["child_kind"], child["status"]) for child in children] == [
+        ("baseline", "cancelled"),
+        ("scheme", "cancelled"),
+    ]
+
+    finalizable = repository.claim_next_finalizable_run(
+        owner_id="pg-cancel-scheme-finalizer",
+        lease_seconds=60,
+    )
+    assert finalizable is not None and finalizable["id"] == run_id
+    finalizer_token = OwnershipToken(
+        owner_id=str(finalizable["owner_id"]),
+        fencing_token=int(finalizable["fencing_token"]),
+        row_version=int(finalizable["row_version"]),
+    )
+    with pytest.raises(MultiAlphaDurableRepositoryError) as mismatch:
+        repository.finalize_run_with_business_readback(
+            run_id,
+            token=finalizer_token,
+            expected_statuses=("cancel_requested", "cancelling"),
+            next_status="cancelled",
+            expected_child_count=2,
+            expected_scheme_result_count=0,
+            expected_loo_result_count=0,
+            progress={"planned_child_count": 2, "terminal_child_count": 2},
+            reason_code="operator_cancelled",
+        )
+    assert mismatch.value.reason_code == "multi_alpha_parent_readback_mismatch"
+    with _connection_provider() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS result_count
+                FROM strategy_pkg.multi_alpha_combine_backtest_scheme_result
+                WHERE run_id = %s
+                """,
+                (run_id,),
+            )
+            assert int(cur.fetchone()["result_count"]) == 0
+            cur.execute(
+                """
+                SELECT COUNT(*) AS event_count
+                FROM strategy_pkg.multi_alpha_combine_backtest_event
+                WHERE run_id = %s
+                  AND phase = 'cancelled_scheme_business_evidence_reconciled'
+                """,
+                (run_id,),
+            )
+            assert int(cur.fetchone()["event_count"]) == 0
+
+    cancelled = repository.finalize_run_with_business_readback(
+        run_id,
+        token=finalizer_token,
+        expected_statuses=("cancel_requested", "cancelling"),
+        next_status="cancelled",
+        expected_child_count=2,
+        expected_scheme_result_count=1,
+        expected_loo_result_count=0,
+        progress={"planned_child_count": 2, "terminal_child_count": 2},
+        reason_code="operator_cancelled",
+    )
+    assert cancelled["status"] == "cancelled"
+
+    with _connection_provider() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT skipped, skipped_reason
+                FROM strategy_pkg.multi_alpha_combine_backtest_scheme_result
+                WHERE run_id = %s AND weighting_scheme = 'equal'
+                """,
+                (run_id,),
+            )
+            scheme_result = dict(cur.fetchone())
+            cur.execute(
+                """
+                SELECT COUNT(*) AS event_count
+                FROM strategy_pkg.multi_alpha_combine_backtest_event
+                WHERE run_id = %s
+                  AND phase = 'cancelled_scheme_business_evidence_reconciled'
+                """,
+                (run_id,),
+            )
+            reconciliation_event_count = int(cur.fetchone()["event_count"])
+    assert scheme_result["skipped"] is True
+    skipped_reason = json.loads(scheme_result["skipped_reason"])
+    assert skipped_reason["context"]["child_status"] == "cancelled"
+    assert skipped_reason["context"]["weighting_scheme"] == "equal"
+    assert reconciliation_event_count == 1
+
+    closed_cancel = control.apply_one_local_command(
+        owner_id="pg-cancel-scheme-control",
+        lease_seconds=60,
+    )
+    assert closed_cancel is not None and closed_cancel["status"] == "succeeded"
+
+
 @pytest.mark.parametrize(
     ("action", "expected_status"),
     [("pause", "pause_requested"), ("cancel", "cancel_requested")],

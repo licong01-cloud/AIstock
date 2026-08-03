@@ -1177,9 +1177,7 @@ class DurableMultiAlphaOrchestrator:
                 next_status=next_status,
                 expected_child_count=len(children),
                 expected_scheme_result_count=sum(
-                    1
-                    for child in scheme_children
-                    if str(child.get("status") or "") != "not_recovered"
+                    1 for child in scheme_children if _scheme_result_required(child)
                 ),
                 expected_loo_result_count=sum(
                     1 for child in loo_children if child["status"] == "succeeded"
@@ -2596,6 +2594,23 @@ def _parent_status(
         "failed_child_tasks": failures,
         "successful_scheme_count": successful_scheme_count,
     }
+
+
+def _scheme_result_required(child: Mapping[str, Any]) -> bool:
+    """Keep planned scheme-result completeness explicit for every terminal state."""
+
+    status = str(child.get("status") or "")
+    if status not in TERMINAL_CHILD_STATUSES:
+        raise DurableOrchestratorError(
+            "scheme result authority requires a terminal child status",
+            reason_code="multi_alpha_scheme_result_status_invalid",
+            context={
+                "child_id": child.get("child_id"),
+                "child_kind": child.get("child_kind"),
+                "status": status,
+            },
+        )
+    return status != "not_recovered"
 
 
 def _ownership_token(row: Mapping[str, Any]) -> OwnershipToken:
