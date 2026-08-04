@@ -133,7 +133,15 @@
     "source_event_id": "FE-20260804-1a7df086625f"
   },
   "validation_evidence": [
-    "local advisory_historical_range_backend: 325 passed, 5 skipped; PR CI verdict green"
+    {
+      "command": "python -m nox -s advisory_historical_range_backend",
+      "commit": "2aaf602d752e1e9052b4d800d08502de7b8d33f5",
+      "evidence_kind": "nox",
+      "receipt_id": "2aaf602d752e1e90",
+      "result": "325 passed, 5 skipped; source PR CI verdict passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
   ],
   "verification_budget": {
     "budget": "standard",
