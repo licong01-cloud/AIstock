@@ -358,6 +358,6 @@ K6-D implementation完成：source merged；用户restart、runtime identity和�
 
 - K6-A/C0/C1/B：`implemented_verified + merged`。
 - K6-B production DDL：`applied_and_verified`；K6-D new DDL=`noop`。
-- K6-D detailed design：`design_ready_local`，`source_commit=committed_local_task_branch`、`source_push=not_run`、`source_pr=not_created`、`source_merge=not_run`。
+- K6-D detailed design：`design_ready + merged`，PR #3129，merge `5b1e1477c98fedbc1361b5551133fcb3075bb2b3`，`source_merge=merged_pr_3129`。
 - K6-D code：`not_started`；K6 overall=`implementation_in_progress`。
 - product runtime=`not_switched`；K6-D DML/config/binding=`noop`，broker/restart/runtime/normal-day=`not_run`。
