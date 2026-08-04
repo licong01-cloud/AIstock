@@ -584,6 +584,25 @@ def test_code_intelligence_nightly_workflow_change_uses_focused_fast_lane(tmp_pa
     assert payload["unmapped_code_files"] == []
 
 
+def test_nightly_session_runner_uses_its_direct_workflow_target(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            ".github/workflows/nightly.yml",
+            "scripts/nightly_session_runner.py",
+            "backend/tests/scripts/test_nightly_session_runner.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/scripts/test_nightly_session_runner.py",
+    ]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_validation_llm_prompt_pack_change_uses_focused_fast_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
