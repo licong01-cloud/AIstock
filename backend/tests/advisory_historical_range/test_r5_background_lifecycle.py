@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -23,6 +24,9 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeOperationStatus,
 )
 from backend.services.advisory_historical_range.service import ResponseBoundHistoricalRangeDispatcher
+from backend.services.advisory_historical_range.planning_service import (
+    _CatalogLeaseHeartbeatSupervisor,
+)
 from backend.services.advisory_historical_range.repository import (
     PostgresHistoricalRangePreclaimFailureRepository,
 )
@@ -35,6 +39,181 @@ class _Background:
 
     def add_task(self, func, *args, **kwargs):
         self.task = (func, args, kwargs)
+
+
+def test_catalog_heartbeat_renews_same_durable_ownership() -> None:
+    renewed = Event()
+    calls = []
+    operation = {
+        "operation_id": "ahrop_heartbeat",
+        "row_version": 4,
+        "attempt_no": 2,
+        "worker_id": "worker-1",
+        "lease_token": "lease-1",
+        "fencing_token": 2,
+        "stable_keyset_cursor_json": {"next_requirement_ordinal": 97},
+    }
+
+    def transition_operation(**kwargs):
+        calls.append(kwargs)
+        renewed.set()
+        return {**operation, "row_version": kwargs["expected_row_version"] + 1}
+
+    heartbeat = _CatalogLeaseHeartbeatSupervisor(
+        repository=SimpleNamespace(transition_operation=transition_operation),
+        operation=operation,
+        lease_duration=timedelta(milliseconds=300),
+    )
+    heartbeat.start()
+    assert renewed.wait(timeout=1)
+    current = heartbeat.stop()
+
+    assert current["row_version"] == 4 + len(calls)
+    assert all(call["target_status"].value == "RUNNING" for call in calls)
+    assert all(call["attempt_no"] == 2 for call in calls)
+    assert all(call["worker_id"] == "worker-1" for call in calls)
+    assert all(call["lease_token"] == "lease-1" for call in calls)
+    assert all(call["fencing_token"] == 2 for call in calls)
+    assert all(
+        call["stable_keyset_cursor_json"] == {"next_requirement_ordinal": 97}
+        for call in calls
+    )
+    assert calls[-1]["lease_expires_at"] > datetime.now(UTC)
+
+
+def test_catalog_heartbeat_surfaces_lost_durable_ownership() -> None:
+    attempted = Event()
+
+    def transition_operation(**_kwargs):
+        attempted.set()
+        raise HistoricalRangeContractError(
+            "ADVISORY_HR_ROW_VERSION_CONFLICT",
+            "catalog heartbeat lost durable ownership",
+        )
+
+    heartbeat = _CatalogLeaseHeartbeatSupervisor(
+        repository=SimpleNamespace(transition_operation=transition_operation),
+        operation={
+            "operation_id": "ahrop_lost",
+            "row_version": 4,
+            "attempt_no": 2,
+            "worker_id": "worker-1",
+            "lease_token": "lease-1",
+            "fencing_token": 2,
+            "stable_keyset_cursor_json": {"next_requirement_ordinal": 97},
+        },
+        lease_duration=timedelta(milliseconds=300),
+    )
+    heartbeat.start()
+    assert attempted.wait(timeout=1)
+
+    with pytest.raises(HistoricalRangeContractError, match="lost durable ownership"):
+        heartbeat.stop()
+
+
+def test_catalog_dispatcher_defers_rollover_deadline_until_after_chunk_execution() -> None:
+    operation = {
+        "operation_id": "ahrop_1",
+        "batch_id": "ahrb_1",
+        "status": "WAITING_INPUT",
+        "row_version": 3,
+        "attempt_no": 1,
+        "fencing_token": 1,
+    }
+    query = SimpleNamespace(get_operation_internal=lambda _operation_id: operation)
+    repository = SimpleNamespace(
+        claim_catalog_operation=lambda **_kwargs: {
+            **operation,
+            "status": "RUNNING",
+            "row_version": 4,
+            "attempt_no": 2,
+            "fencing_token": 2,
+        }
+    )
+    calls = []
+
+    def execute_claimed_chunk(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(operation={"status": "WAITING_INPUT"}, sealed_batch=None)
+
+    runtime = SimpleNamespace(
+        query=query,
+        repository=repository,
+        planning=SimpleNamespace(execute_claimed_chunk=execute_claimed_chunk),
+    )
+    dispatcher = ResponseBoundHistoricalRangeDispatcher(runtime_factory=lambda: runtime)
+
+    dispatcher._run_catalog(
+        runtime=runtime,
+        payload={"operation_id": "ahrop_1", "batch_id": "ahrb_1"},
+        worker_id="worker-1",
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["next_lease_duration"] == timedelta(minutes=5)
+    assert "next_lease_expires_at" not in calls[0]
+
+
+def test_expired_first_catalog_attempt_publishes_checkpoint_kind_receipt() -> None:
+    operation = {
+        "operation_id": "ahrop_1",
+        "batch_id": "ahrb_1",
+        "attempt_no": 1,
+        "worker_id": "worker-1",
+        "lease_token": "lease-1",
+        "fencing_token": 1,
+        "lease_expires_at": "2026-07-28T05:00:00+00:00",
+        "planning_identity_hash": "a" * 64,
+        "catalog_generation": 1,
+        "catalog_phase": "DISCOVER",
+        "cumulative_resolved_count": 0,
+        "cumulative_member_chain_hash": "b" * 64,
+        "stable_keyset_cursor_json": None,
+    }
+    state = SimpleNamespace(
+        checkpoint_chain=(),
+        plan=SimpleNamespace(
+            requirement_plan_hash="c" * 64,
+            requirements=(SimpleNamespace(requirement_id="requirement-1"),),
+        ),
+    )
+    published = []
+    checkpoint_ref = HistoricalRangeArtifactRefV1(
+        artifact_kind=HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT,
+        relative_path="source-catalog-checkpoints/checkpoint.json",
+        producer_contract_version="phase1r_r2b",
+        payload_schema_version="advisory_historical_range_source_catalog_checkpoint_v1",
+        semantic_content_hash="d" * 64,
+        payload_sha256="e" * 64,
+        file_sha256="f" * 64,
+    )
+
+    def publish_planning_payload(**kwargs):
+        published.append(kwargs)
+        return SimpleNamespace(ref=checkpoint_ref)
+
+    runtime = SimpleNamespace(
+        repository=SimpleNamespace(load_catalog_planning_state=lambda **_kwargs: state),
+        artifact_store=SimpleNamespace(publish_planning_payload=publish_planning_payload),
+    )
+
+    attempt = ResponseBoundHistoricalRangeDispatcher._expired_catalog_attempt(
+        runtime=runtime,
+        operation=operation,
+    )
+
+    assert attempt.attempt_receipt_ref == checkpoint_ref
+    assert attempt.result_hash == checkpoint_ref.semantic_content_hash
+    assert published[0]["artifact_kind"] is HistoricalRangeArtifactKind.SOURCE_CATALOG_CHECKPOINT
+    assert published[0]["payload"]["unresolved_requirement_delta"] == [
+        {
+            "ordinal": 1,
+            "requirement_id": "requirement-1",
+            "reason_code": "ADVISORY_HR_OPERATION_LEASE_EXPIRED",
+            "blocked_by_requirement_ids": [],
+            "context": {"operation_id": "ahrop_1", "attempt_no": 1},
+        }
+    ]
 
 
 def test_dispatcher_captures_only_json_round_tripped_identity() -> None:
