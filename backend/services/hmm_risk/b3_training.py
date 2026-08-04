@@ -165,6 +165,20 @@ class B3CoreFitEvidence:
     model_entry_valid: bool
 
 
+@dataclass(frozen=True)
+class _B3PreparedTrainOnlyInitialization:
+    """Shared, fit-free initialization authority for formal and diagnostic paths."""
+
+    train: np.ndarray
+    reference: np.ndarray
+    startprob: np.ndarray
+    transmat: np.ndarray
+    means: np.ndarray
+    covars: np.ndarray
+    prior: np.ndarray
+    evidence: Mapping[str, Any]
+
+
 def _train_only_frame(
     panel: Any,
     *,
@@ -357,18 +371,14 @@ def formal_b3_parameter_profile() -> dict[str, Any]:
     }
 
 
-def fit_b3_preprocessed_train_only(
+def _prepare_b3_preprocessed_train_only_initialization(
     item: B3TrainOnlySeries,
     *,
     train: np.ndarray,
     seed: int,
-) -> B3CoreFitEvidence:
-    """Fit one already-preprocessed train matrix without artifact or selection semantics."""
+) -> _B3PreparedTrainOnlyInitialization:
+    """Apply the exact D3 initialization contract without invoking HMM fit."""
 
-    try:
-        from hmmlearn.hmm import GaussianHMM
-    except ImportError as exc:  # pragma: no cover - dependency gate is explicit.
-        raise StateModelSetError("hmmlearn==0.3.3 is required for formal B3 training") from exc
     prepared = np.ascontiguousarray(np.asarray(train, dtype="<f8"))
     if prepared.ndim != 2 or prepared.shape[0] != len(item.train_dates) or prepared.shape[1] < 1:
         raise B3TrainingStageError(
@@ -403,6 +413,51 @@ def fit_b3_preprocessed_train_only(
         "formal_initialization_contract_applied": True,
     }
     prior = C008_B3_DIAG04_NU * np.broadcast_to(reference, (3, prepared.shape[1])).copy()
+    return _B3PreparedTrainOnlyInitialization(
+        train=prepared,
+        reference=reference,
+        startprob=startprob,
+        transmat=transmat,
+        means=means,
+        covars=initialized_covars,
+        prior=prior,
+        evidence=initialization,
+    )
+
+
+def prepare_b3_preprocessed_train_only_initialization(
+    item: B3TrainOnlySeries,
+    *,
+    train: np.ndarray,
+    seed: int,
+) -> Mapping[str, Any]:
+    """Return canonical initialization evidence without importing or invoking HMM."""
+
+    prepared = _prepare_b3_preprocessed_train_only_initialization(item, train=train, seed=seed)
+    return dict(prepared.evidence)
+
+
+def fit_b3_preprocessed_train_only(
+    item: B3TrainOnlySeries,
+    *,
+    train: np.ndarray,
+    seed: int,
+) -> B3CoreFitEvidence:
+    """Fit one already-preprocessed train matrix without artifact or selection semantics."""
+
+    try:
+        from hmmlearn.hmm import GaussianHMM
+    except ImportError as exc:  # pragma: no cover - dependency gate is explicit.
+        raise StateModelSetError("hmmlearn==0.3.3 is required for formal B3 training") from exc
+    prepared_initialization = _prepare_b3_preprocessed_train_only_initialization(item, train=train, seed=seed)
+    prepared = prepared_initialization.train
+    reference = prepared_initialization.reference
+    startprob = prepared_initialization.startprob
+    transmat = prepared_initialization.transmat
+    means = prepared_initialization.means
+    initialized_covars = prepared_initialization.covars
+    prior = prepared_initialization.prior
+    initialization = dict(prepared_initialization.evidence)
     try:
         model = GaussianHMM(
             n_components=3,
