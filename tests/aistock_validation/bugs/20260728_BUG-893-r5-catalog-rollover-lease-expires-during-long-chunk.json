@@ -107,11 +107,18 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r5_background_lifecycle.py -q",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
     "fresh_process_evidence": [
-      "Fresh Python nox process imported the persisted BUG-893 heartbeat implementation and passed the advisory_historical_range backend matrix; no backend process control"
+      "Fresh Python nox process imported the persisted BUG-893 heartbeat implementation and passed the advisory_historical_range backend matrix; no backend process control",
+      "Fresh Python nox process imported persisted BUG-893 source at 38124a33dbb116098bd28e956ace71a824c133df and passed 325 advisory_historical_range tests; no backend process control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -126,12 +133,6 @@
       "backend-main"
     ]
   },
-  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r5_background_lifecycle.py -q",
-  "required_verification": [
-    "l0",
-    "advisory_historical_range_backend"
-  ],
-  "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
