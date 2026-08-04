@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-974",
-  "closed_at": null,
+  "closed_at": "2026-08-04T02:53:04.833395Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -46,8 +46,8 @@
   },
   "first_seen_at": "2026-08-03T18:06:46.341883Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a7e679376cfbdad3a0367ad0d8f3d36178e9eae6",
+  "fixed_at": "2026-08-03T19:02:02Z",
   "github_issue_number": 3118,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3118",
   "last_seen_at": "2026-08-03T18:06:46.341883Z",
@@ -55,6 +55,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3119",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -78,8 +79,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-974\\post-restart-verify.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -89,7 +91,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -107,7 +109,11 @@
     "rtk nox -s validation_module_registry_l0 -> passed (8 tests)",
     "rtk nox -s qe_read_backend -> passed (14 tests)",
     "WSL deployed runtime probe -> /home/lc999/miniconda3/envs/rdagent-gpu/bin/python, Python 3.10.19",
-    "fresh Python process loaded the changed source and verified deployed rdagent-gpu activation precedes python -c with an explicit python availability probe"
+    "fresh Python process loaded the changed source and verified deployed rdagent-gpu activation precedes python -c with an explicit python availability probe",
+    "python -m pytest backend/tests/multi_alpha/test_durable_execution_adapter.py backend/tests/test_multi_alpha_remote_dispatch.py -q -p no:cacheprovider -> 63 passed, 1 skipped",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s qe_read_backend -> 14 passed"
   ],
   "verification_budget": {
     "budget": "standard",
