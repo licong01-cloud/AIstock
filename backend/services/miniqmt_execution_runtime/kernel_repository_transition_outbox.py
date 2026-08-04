@@ -206,7 +206,10 @@ class KernelRepositoryTransitionOutboxMixin:
                            algo.terminal_at_utc,algo.kernel_carrier_json,
                            COUNT(child.child_order_id) FILTER (
                                WHERE child.kernel_contract_version='KERNEL_V2'
-                                 AND child.mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+                                 AND child.mapping_status IN (
+                                     'DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING',
+                                     'BROKER_ACCEPTED','OUTCOME_UNKNOWN'
+                                 )
                            ) AS reconstructed_active_child_count
                     FROM qmt_strategy.execution_algo_instance AS algo
                     LEFT JOIN qmt_strategy.execution_child_order AS child
@@ -728,6 +731,48 @@ class KernelRepositoryTransitionOutboxMixin:
             if row is None or _model_from_json(BrokerCommandOutboxV1, _row_json(row, "outbox_json")) != outbox:
                 raise KernelRepositoryConflict("command identity exists with different immutable payload")
 
+    def list_outbox_outcome_candidates(
+        self,
+        *,
+        after: tuple[str, str, str] | None,
+        limit: int,
+    ) -> tuple[BrokerCommandOutboxV1, ...]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("outcome recovery page limit must be between 1 and 100")
+        if after is not None and (
+            not isinstance(after, tuple) or len(after) != 3 or any(type(item) is not str or not item for item in after)
+        ):
+            raise TypeError("outcome recovery cursor must be a strict runtime/time/command tuple")
+        predicate = ""
+        params: list[Any] = []
+        if after is not None:
+            predicate = "AND (target.runtime_id,target.updated_at_utc,target.command_id)>(%s,%s::timestamptz,%s)"
+            params.extend(after)
+        params.append(limit)
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT target.carrier_json
+                    FROM qmt_strategy.execution_algo_command_outbox AS target
+                    WHERE target.status IN ('ACKED','ACKED_REJECTED','OUTCOME_UNKNOWN','FAILED_TERMINAL')
+                      {predicate}
+                      AND NOT EXISTS (
+                          SELECT 1 FROM qmt_strategy.execution_runtime_event AS event
+                          WHERE event.runtime_id=target.runtime_id
+                            AND event.event_type='COMMAND_OUTCOME'
+                            AND event.event_contract_version='KERNEL_V2'
+                            AND event.payload->'payload'->>'command_id'=target.command_id
+                            AND (event.payload->'payload'->>'outbox_row_version')::bigint=target.row_version
+                      )
+                    ORDER BY target.runtime_id,target.updated_at_utc,target.command_id
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return tuple(_model_from_json(BrokerCommandOutboxV1, _row_json(row, "carrier_json")) for row in rows)
+
     def read_command_identity_chain(self, command_id: str) -> dict[str, Any]:
         with self._connection(transaction=False) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -1009,7 +1054,10 @@ class KernelRepositoryTransitionOutboxMixin:
                     SELECT COUNT(*) AS active_child_count
                     FROM qmt_strategy.execution_child_order
                     WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-                      AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+                      AND mapping_status IN (
+                          'DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING',
+                          'BROKER_ACCEPTED','OUTCOME_UNKNOWN'
+                      )
                     """,
                     (mapping.runtime_id, mapping.algo_instance_id),
                 )
@@ -1200,7 +1248,10 @@ class KernelRepositoryTransitionOutboxMixin:
                         SELECT COUNT(*) AS active_child_count
                         FROM qmt_strategy.execution_child_order
                         WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-                          AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+                          AND mapping_status IN (
+                              'DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING',
+                              'BROKER_ACCEPTED','OUTCOME_UNKNOWN'
+                          )
                         """,
                         (mapping.runtime_id, mapping.algo_instance_id),
                     )
@@ -1522,7 +1573,7 @@ class KernelRepositoryTransitionOutboxMixin:
             SELECT COUNT(*) AS active_child_count
             FROM qmt_strategy.execution_child_order
             WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-              AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
+              AND mapping_status IN ('DEFERRED_DEPENDENT_BUY','RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
             """,
             (algo_instance.runtime_id, algo_instance.algo_instance_id),
         )

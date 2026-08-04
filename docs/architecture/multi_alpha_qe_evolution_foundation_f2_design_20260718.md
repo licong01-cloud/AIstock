@@ -3,12 +3,12 @@
 - 文档类型：F2 跨模块架构与实现级详细设计
 - 模块：QuantEvolver / Multi-Alpha combine-backtest / QE Workspace / QE UI
 - 日期：2026-07-18
-- 状态：`P0_1_P0_2_MERGED_PRODUCTION_VERIFIED_P0_3_P0_4_MERGED_RUNTIME_VERIFIED`
-- 审计修订：P0-1/P0-2 源码、DDL、AIstock 与 RD-Agent 部署、服务重启和 QE-only canary 已完成并验证。P0-3/P0-4 的规范 QE route、正式多场景创建器、child/attempt grid、durable event cursor/SSE、日志/命令/Archive/恢复证据分区及旧 URL 映射已通过源码级验证，并由 PR #2593 合入 `main`（merge commit `faaad2376ed381618aa66a60aa6d2740a4f42069`）；用户重启 backend/frontend 后，真实 OpenAPI、历史 readback、event page/SSE、canonical SSR/静态资源与 CLI Playwright `8 passed` 已完成运行态验收，不新增设计合入、编码审批或研究门禁
+- 状态：`P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY_STRATEGY_EVOLUTION_FIRST`
+- 审计修订：P0-1/P0-2 源码、DDL、AIstock 与 RD-Agent 部署、服务重启和 QE-only canary 已完成并验证。P0-3/P0-4 的规范 QE route、正式多场景创建器、child/attempt grid、durable event cursor/SSE、日志/命令/Archive/恢复证据分区及旧 URL 映射已通过源码级验证，并由 PR #2593 合入 `main`（merge commit `faaad2376ed381618aa66a60aa6d2740a4f42069`）；后续 BUG-850/851/856/857/858/859/860/864/865/867/872/878/881/882/883/887/889 已闭合 identity、recovery ancestry、事务线性化与 reservation release。2026-07-29 用户重启 backend 后，OpenAPI 与最新成功 run readback 再次通过。dataset/runtime provenance 缺口继续作为既有事实显示，但不是活动 backlog；不得为补齐历史证据、UI 或平台完整度追加研发。
 - 用户授权本次设计范围：P0-1 持久化编排、P0-2 生命周期与子任务恢复、P0-3 QE 同风格创建器、P0-4 子任务运行网格与重启恢复可见性；不代表用户已逐项批准本文全部实现细节或未来偏差
 - 唯一运行边界：QE-only；不得影响 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 运行语义或其他非 QE 模块
 - 设计约束：遵循 `DESIGN-COMPLIANCE-001` 四项约束，基于现有架构增量开发，不另建“多 Alpha v2”
-- 研究蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.6
+- 研究蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v5.24
 
 关联基线：
 
@@ -26,6 +26,14 @@
 - `backend/routers/multi_alpha.py`
 - `frontend/src/app/quantevolver/evolution/page.tsx`
 - `frontend/src/app/quantevolver/evolution/components/*`
+
+## 0. v5.24 当前执行边界（2026-07-31）
+
+1. P0-1～P0-4 已满足后续策略候选提交、运行、重启恢复和结果读取，基础设施现封板为 maintenance-only。
+2. 当前唯一主动主线是 `MA-E01 Sector-Conditioned Multi-Alpha Strategy Package v1`。2026-07-31 已提交四个正式 policy run、共 8 个 baseline/equal child，正在运行。只有这些真实 trial 暴露出可复现、直接阻止产生策略结果的问题时，才允许修复底座；修复后立即恢复同一 candidate。
+3. 禁止新增或恢复 UI 完善、历史 Archive 回填、历史状态重算、旧 run/child/attempt 补映射、历史制品固化和 provenance 完整化任务。本文后续章节中的历史回填与 UI 合同仅描述已完成实现和当时设计，不构成未来 backlog。
+4. 新策略 trial 随运行自然保存最小配置、输入身份、指标、成本、风险和失败原因；这属于策略比较结果，不授权建设新的历史证据平台。
+5. 对未来有价值但不阻断的动态图、数据与诊断工作，只能在 MA-E01 已提交且运行/排队期间并行，不得延迟下一策略 candidate。
 - `frontend/src/app/quantevolver/multi-alpha/combine-backtest/*`
 
 ---
@@ -143,6 +151,13 @@ P0-1～P0-4 是一个完整基础能力包。以下任一情况都不能报告�
 - 数据或 artifact 缺失形成可见错误和恢复动作，不淘汰腿或方向。
 - 配置摘要只是用户确认输入内容的普通 UI，不是审批流。
 - 唯一硬边界是 QE-only 隔离。
+
+### 4.5 v5.24 封板审核
+
+- `no_simplified_delivery`：只声明已验证的 P0-1～P0-4 足以支撑策略演进，不把 MA-E01 源码、实验或 provenance 完整度包装为完成。
+- `no_silent_error`：既有 dataset/runtime provenance 缺口继续显式保留；maintenance-only 不等于把缺口改写为已验证。
+- `no_business_semantic_drift`：combine、权重、LOO、回测、恢复与 QE-only 业务公式均未修改，本修订只改变未来工作优先级。
+- `no_unrequested_gate_or_approval`：移除平台完整化前置，只允许真实 trial 的可复现阻断 BUG 暂停策略；不新增审批、确认或 research-ready 状态。
 
 ## 5. 当前架构与复用清单
 
@@ -1041,31 +1056,33 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | F-216 | QE-only；schema/worker 不可用仅影响 multi-alpha 写接口，非 QE 模块零读写/零调用/零运行影响。 |
 | F-217 | 不新增研究门禁、淘汰规则、人工审批或 promotion 审批；设计、实现和实验分析不创建人工确认状态。 |
 | F-218 | 完整 receipt/restart/reservation concurrency/timeout/Archive/control/retry/API/UI/DB 验证，禁止简化、静默 fallback 和伪成功。 |
+| F-219 | P0-1～P0-4 完成后封板为 maintenance-only；只修复真实策略 trial 暴露的可复现阻断 BUG，禁止 UI、历史回填、provenance 完整化或平台扩展抢占策略演进。 |
 
 ## 24. Design Acceptance Matrix
 
-本矩阵只表达“设计条目是否已完整定义”，不声称对应代码、DDL、测试或运行证据已经存在。`DESIGN_READY` 表示可进入实现，真实实现状态统一以第 26 节和未来代码 PR 的更新为准；设计、编码、实验和合入流程不创建 `APPROVED_BY_USER/AWAITING_USER_CONFIRMATION` 状态。生产 DDL、依赖安装、服务启停和运行激活仍按其真实外部副作用单独取得明确授权。
+本矩阵同时记录设计条目与已闭合的实施证据；状态只描述对应条目的真实交付层级，不把 source、DDL、runtime 或数据 provenance 合并成一个完成状态。设计、编码、实验和合入流程不创建 `APPROVED_BY_USER/AWAITING_USER_CONFIRMATION` 状态。未来新的生产 DDL、依赖安装、服务启停和运行激活仍按其真实外部副作用单独取得明确授权。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-201 | `backend/services/multi_alpha/{combine_backtest,remote_dispatch,combine_ui_adapter}.py`; `frontend/src/app/quantevolver/{evolution,multi-alpha/combine-backtest}` | `backend/tests/test_multi_alpha_combine_backtest.py`; `backend/tests/test_multi_alpha_combine_ui_adapter.py`; `rtk git diff --check` | DESIGN_VERIFIED | 无 |
-| F-202 | `backend/migrations/multi_alpha_durable_orchestration_20260718{,.preflight,.rollback}.sql`; `backend/services/multi_alpha/{durable_models,durable_repository}.py`；P0-1B task identity compare 修订 | `backend/tests/multi_alpha/test_durable_schema.py`; `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_durable_submission.py::test_task_identity_allows_distinct_run_scenarios`；2026-07-19 P0-1A 生产 SQL/application preflight | P0_1A_PRODUCTION_VERIFIED_P0_1B_DESIGN_READY | 无 |
+| F-202 | `backend/migrations/multi_alpha_durable_orchestration_20260718{,.preflight,.rollback}.sql`; `backend/services/multi_alpha/{durable_models,durable_repository}.py`；P0-1B task identity compare 修订 | `backend/tests/multi_alpha/test_durable_schema.py`; `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_durable_submission.py::test_task_identity_allows_distinct_run_scenarios`；2026-07-19 P0-1A 生产 SQL/application preflight | P0_1A_P0_1B_PRODUCTION_VERIFIED | 无 |
 | F-203 | `MultiAlphaDurableRepository` claim/heartbeat/transition CAS，lease/fencing/row-version；lease 使用数据库真实时钟判定，过期 owner 在新 owner claim 前也立即失权 | `backend/tests/multi_alpha/test_durable_repository.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_eight_workers_claim_once_event_rollback_and_stale_fencing` | P0_1A_PRODUCTION_VERIFIED | 无 |
 | F-204 | execution adapter + attempt remote identity + QE Workspace submission receipt；AIstock PR #2509 / RD-Agent companion PR #5 | `backend/tests/multi_alpha/test_durable_orchestrator_restart.py`; `F:/Dev/RD-Agent-main/test/app/test_qe_evolution_submission_receipt.py` | P0_1B_MERGED_VERIFIED | 无 |
 | F-205 | `QEWorkspaceClient`、remote dispatch refactor 和统一 coordinator；AIstock merge commit `67a54a90` | `backend/tests/test_multi_alpha_remote_dispatch.py`; `backend/tests/multi_alpha/test_durable_execution_adapter.py` | P0_1B_MERGED_VERIFIED | 无 |
 | F-206 | canonical reservation ledger + atomic source claim；生产 migration/preflight 已执行并验证 | `backend/tests/multi_alpha/test_durable_capacity.py`; `backend/migrations/qe_execution_reservation_20260719.preflight.sql`; BUG-785 validation receipt | P0_1B_PRODUCTION_VERIFIED | 无 |
-| F-207 | `docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`：command/delivery、pause/resume/cancel/reconcile、typed kill receipt、durable stop/API/UI/MCP | `backend/tests/multi_alpha/test_durable_control.py`；`F:/Dev/RD-Agent-main/test/app/test_qe_evolution_kill_receipt.py`；`frontend/tests/quantevolver/multi-alpha-control.spec.ts` | DESIGN_READY | 无 |
-| F-208 | `docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`：狭义 results-only reference append、atomic successor、四种 disposition、reference/derived result、内容身份闭包和三种 retry mode | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/qe_archive/test_multi_alpha_recovery_archive.py` | DESIGN_READY | 无 |
-| F-209 | child result persistence、`not_computable` 和普通 deterministic aggregate rules 已由 P0-1B 实现；operator-cancel、`not_recovered/partial_recovered` 聚合扩展由 P0-2 设计覆盖 | `backend/tests/multi_alpha/test_durable_parent_finalization.py`；`backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_retry.py` | P0_1B_MERGED_VERIFIED_P0_2_DESIGN_READY | 无 |
+| F-207 | `docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`：command/delivery、pause/resume/cancel/reconcile、typed kill receipt、durable stop/API/UI/MCP | `backend/tests/multi_alpha/test_durable_control.py`；`F:/Dev/RD-Agent-main/test/app/test_qe_evolution_kill_receipt.py`；`frontend/tests/quantevolver/multi-alpha-control.spec.ts` | P0_2_MERGED_PRODUCTION_RUNTIME_VERIFIED | 无 |
+| F-208 | `docs/architecture/multi_alpha_p0_2_control_recovery_f2_design_20260721.md`：狭义 results-only reference append、atomic successor、四种 disposition、reference/derived result、内容身份闭包和三种 retry mode | `backend/tests/multi_alpha/test_durable_retry.py`；`backend/tests/qe_archive/test_multi_alpha_recovery_archive.py`；BUG-859/860/864/865/867 recovery ancestry fixes | P0_2_MERGED_RUNTIME_VERIFIED | 无 |
+| F-209 | child result persistence、`not_computable`、operator-cancel、`not_recovered/partial_recovered` 与 deterministic aggregate rules | `backend/tests/multi_alpha/test_durable_parent_finalization.py`；`backend/tests/multi_alpha/test_durable_control.py`；`backend/tests/multi_alpha/test_durable_retry.py` | P0_1B_P0_2_MERGED_RUNTIME_VERIFIED | 无 |
 | F-210 | `durable_repository.py` atomic state/event transaction + event cursor/SSE/log adapter | `backend/tests/multi_alpha/test_durable_repository.py::test_event_failure_rolls_back_the_state_transition`；`backend/tests/multi_alpha/test_durable_router.py`；`frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts` | P0_4_MERGED_VERIFIED | 无 |
 | F-211 | canonical shared QE page components + visual golden | `frontend/tests/quantevolver/evolution-shared-shell.spec.ts`; `frontend/tests/quantevolver/evolution-visual-parity.spec.ts`; committed golden PNG | P0_3_MERGED_VERIFIED | 无 |
 | F-212 | multi-alpha full request + multi-scenario create composer | `frontend/tests/quantevolver/multi-alpha-create.spec.ts` | P0_3_MERGED_VERIFIED | 无 |
 | F-213 | run-scoped child/attempt grid + runtime actions/events | `frontend/tests/quantevolver/multi-alpha-child-grid.spec.ts`; `frontend/tests/multi-alpha-combine-backtest.spec.ts` | P0_4_MERGED_VERIFIED | 无 |
 | F-214 | `backend/services/multi_alpha/durable_backfill.py`; `scripts/backfill_multi_alpha_durable_tasks.py`；只扫描 `legacy_backfill`/未绑定历史 run，技术失败与数学不可计算分别映射为 `failed`/`not_computable` | `backend/tests/multi_alpha/test_durable_backfill.py`; `backend/tests/multi_alpha/test_durable_repository_postgres.py::test_historical_backfill_is_idempotent_and_preserves_metrics_status_reason`；生产 12 task/41 run/138 child readback | P0_1A_PRODUCTION_VERIFIED | 无 |
-| F-215 | existing combiner/pred-backtest result parity + post-terminal Archive visibility/retry；P0-2 v2 继续补 cancelled/partial_recovered recovery snapshot | `backend/tests/multi_alpha/test_durable_parity.py`; `backend/tests/multi_alpha/test_archive_health.py`; `backend/tests/qe_archive/test_multi_alpha_recovery_archive.py`; `backend/tests/test_multi_alpha_combine_backtest.py` | P0_1B_MERGED_VERIFIED_P0_2_DESIGN_READY | 无 |
+| F-215 | existing combiner/pred-backtest result parity + post-terminal Archive visibility/retry；P0-2 v2 cancelled/partial_recovered recovery snapshot | `backend/tests/multi_alpha/test_durable_parity.py`; `backend/tests/multi_alpha/test_archive_health.py`; `backend/tests/qe_archive/test_multi_alpha_recovery_archive.py`; `backend/tests/test_multi_alpha_combine_backtest.py` | P0_1B_P0_2_MERGED_RUNTIME_VERIFIED | 无 |
 | F-216 | P0-1A durable schema 与 P0-1B `infra.qe_execution_reservation` 均保持 QE multi-alpha scoped，生产 preflight 已通过 | `backend/tests/multi_alpha/test_durable_schema.py::test_schema_contract_is_qe_multi_alpha_scoped`; reservation schema tests；生产 preflight receipts | P0_1B_PRODUCTION_VERIFIED | 无 |
 | F-217 | state/API/UI audit without research gates or claimed approval | `backend/tests/multi_alpha/test_durable_contract.py`; `frontend/tests/quantevolver/multi-alpha-no-approval.spec.ts` | DESIGN_VERIFIED | 无 |
-| F-218 | full receipt/reservation/restart/timeout/Archive v2/control/API/UI validation matrix | `pytest backend/tests/multi_alpha/test_durable_contract.py`; `backend/tests/qe_archive/test_multi_alpha_recovery_archive.py`; `playwright test frontend/tests/quantevolver/multi-alpha-control.spec.ts`; `artifact: F:/Dev/RD-Agent-main/test/app/test_qe_evolution_submission_receipt.py`; `rtk python scripts/aistock_feature_workflow.py validate --design docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md --tier F2` | DESIGN_READY | 无 |
+| F-218 | full receipt/reservation/restart/timeout/Archive v2/control/API/UI validation matrix | `pytest backend/tests/multi_alpha/test_durable_contract.py`; `backend/tests/qe_archive/test_multi_alpha_recovery_archive.py`; `playwright test frontend/tests/quantevolver/multi-alpha-control.spec.ts`; `artifact: F:/Dev/RD-Agent-main/test/app/test_qe_evolution_submission_receipt.py`; `rtk python scripts/aistock_feature_workflow.py validate --design docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md --tier F2`；2026-07-29 OpenAPI 47 paths + latest run readback；latest run 的 dataset/runtime provenance 为显式 incomplete | P0_1_P0_2_PRODUCTION_VERIFIED_P0_3_P0_4_RUNTIME_VERIFIED | 无 |
+| F-219 | 本文第 0 节、25.1、26、27；上位蓝图 v5.24 验收条目 023 | validation-receipt: P0-1～P0-4 合入/DDL/runtime/恢复 evidence；用户 2026-07-31 策略优先指令 | APPROVED_BY_USER: COMPLETE_MAINTENANCE_ONLY | 无；MA-E01 源码与真实 run 属下一策略任务，不属于底座补完 |
 
 ## 25. Rollout / Rollback
 
@@ -1074,7 +1091,8 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 1. P0-1A/P0-1B 与 P0-2 源码、DDL、AIstock/RD-Agent 部署、重启和 canary 已完成并验证。
 2. P0-3/P0-4 从属设计、源码、定向验证、PR #2593 合入、根目录同步和任务分支/worktree 清理已完成。
 3. 本阶段无新 DDL/依赖。用户已完成 backend/frontend 重启；canonical/legacy route、event cursor/SSE、child grid、创建器、静态资源和 backend restart readback 均已完成运行态验收。
-4. 失败或缺失证据继续用于修复、补取和交叉分析，不淘汰研究方向。
+4. P0-1～P0-4 自 2026-07-31 封板为 maintenance-only；既有失败或 provenance 缺失保持可见，但不再安排历史补取、回填或完整化。
+5. MA-E01 四个正式 policy run 已提交并进入运行；下一动作是回读 8 个 child 的终态结果与 failure evidence。仅当该 run 暴露可复现阻断 BUG 时回到本底座修复；其他未来价值项只在实验运行期间并行。
 
 ### 25.2 Rollback
 
@@ -1087,14 +1105,14 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 
 | 项目 | 当前状态 |
 |---|---|
-| design | `P0_1_P0_2_MERGED_PRODUCTION_VERIFIED_P0_3_P0_4_MERGED_RUNTIME_VERIFIED`；P0-2 从属设计 PR #2535 与 P0-3/P0-4 从属设计均保持 QE-only、无科研审批状态 |
+| design | `P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY_STRATEGY_EVOLUTION_FIRST`；P0-2 从属设计 PR #2535 与 P0-3/P0-4 从属设计均保持 QE-only、无科研审批状态 |
 | source code | P0-1A PR #2464、P0-1B AIstock PR #2509、P0-2 AIstock PR #2580 / RD-Agent PR #6、P0-3/P0-4 AIstock PR #2593 均已合入；PR #2593 merge commit 为 `faaad2376ed381618aa66a60aa6d2740a4f42069`，后端、TypeScript、Playwright、Next build、F2 validator 与 PR CI 均通过 |
 | migration | P0-1A、P0-1B 与 P0-2 migrations 均已对 DEV/生产应用并通过 SQL/application preflight；P0-3/P0-4 无 schema 变化 |
 | P0-1A validation | 隔离 PostgreSQL 16 临时容器验证 migration 连续执行两次无 schema 漂移、历史回填幂等且不扫描 first-class run、技术失败/不可计算分类准确、8 worker 单一 claim、event 失败整事务回滚、lease 过期 owner 在重新 claim 前被拒绝且新 owner claim 后 stale fencing 被拒绝、schema 类型/约束/索引/注释缺失均 fail-loud |
 | BUG-767 | PR #2464 / close-sync PR #2467 已合入，GitHub issue #2459 已关闭；BUG JSON 的 `production_ddl_gate` 仍需后续元数据 close-sync，不影响已验证的生产 schema 事实 |
 | production DB | 已创建 durable schema；历史回填 12 task、41/41 run、138 child（59 scheme、79 LOO），attempt/event 均为 0，保护摘要 `733d48413364658972bbef1be625b205e1eb191c5df8e9e0f2465d3bea4bffa4` 不变，readback 无 mismatch/orphan |
-| backend/frontend runtime | 2026-07-22 用户已为 PR #2593 重启 AIstock backend/frontend；`8001/3000` 新进程、OpenAPI、canonical SSR、9/9 Next 静态资源、历史 task/run/child readback、event cursor/SSE 终态收口、结构化 404/422 与 CLI Playwright `8 passed` 均已验证。CLI 浏览器测试通过 API mock 隔离真实提交，仅验证交互合同；真实 API 探针全部为 GET，没有创建实验或数据库写入。WSL/远端 QE API 本批无代码变化，无需再次重启 |
-| QE experiments | 本设计不创建、停止、恢复或修改实验 |
+| backend/frontend runtime | 2026-07-22 已完成 PR #2593 的 backend/frontend 运行态验收。2026-07-29 用户再次重启 backend；12:44 +08:00 只读复核确认 `8001` 已监听、OpenAPI 有 47 条 Multi-Alpha 路径，最新 run `macb_453ca2d0c5b21b40_20240701_20260629_20260728T021052319863Z_00cf02ce` 为 `succeeded/completed`。该 run 仍缺 dataset manifest/root 与 runtime lock/executor commit；本次探针均为 GET，未创建实验或数据库写入。frontend/3000 与 WSL/远端 QE API 本次未重新验收 |
+| QE experiments | `MA_E01_4_POLICY_8_CHILD_SUBMITTED_IN_PROGRESS`；四个 run 均只含 LGBM baseline + four-leg equal，无 LOO；结果尚未终态 |
 | non-QE impact | `NONE_REQUIRED` |
 | research gates/approvals | `NONE_ADDED` |
 | production_ddl_gate | `applied_and_verified`（P0-1/P0-2）；P0-3/P0-4 为 `noop` |
@@ -1102,9 +1120,10 @@ P0-1～P0-4 可拆为多个可审查 PR，但任何阶段只能报告其真实�
 | production_historical_backfill | `applied_and_verified`；没有伪造 attempt/event，没有修改历史指标、状态、reason、created_at 或 Archive 业务结果 |
 | production_frontend_dependency_gate | `noop` |
 | production_backend_dependency_gate | `noop` |
+| future foundation work | `BLOCKING_BUG_ONLY`；禁止历史回填、UI 完善、provenance 完整化和通用平台扩展 |
 
 ## 27. 设计结论
 
-AIstock 不需要重新建设一个多 Alpha 平台。正确路线是把现有 combine-backtest 从“进程内可运行的 Tier-1 研究服务”提升为“数据库持久业务状态 + 共享 execution reservation + QE Workspace 服务端 receipt/统一执行 + 单 Alpha QE 同风格 UI”的完整演进底座。
+AIstock 不需要重新建设一个多 Alpha 平台。现有 combine-backtest、durable orchestration、统一 reservation、QE Workspace receipt/执行与共享 QE UI 已构成足够的演进底座；P0-1～P0-4 到此封板为 maintenance-only。
 
-P0-1～P0-4 完成后，股票截面 prediction 多腿组合、资金/TopK/持仓场景和后续板块轮动组合研究将主要通过配置、模型、因子和策略插件推进；只有出现新的决策层级、执行频率或资产语义时，才需要继续扩展通用接口。任何实现都必须保留现有研究结果、失败证据和业务公式，不得用可靠性缺口淘汰 Alpha 方向。
+股票截面 prediction 多腿组合、资金/TopK/持仓场景和板块轮动研究现在必须通过真实策略 candidate 和 QE run 推进。MA-E01 已进入四 policy、8 child 的正式运行，下一步是获取真实终态对照，而不是继续底座、UI、Archive、历史回填或 provenance 工程。只有真实 trial 暴露的可复现阻断 BUG 才允许修改通用接口；任何修复都必须保留现有研究结果、失败证据和业务公式，修复后立即恢复策略实验。

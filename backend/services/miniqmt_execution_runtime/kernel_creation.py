@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from backend.execution_algos.vnpy_compat.facade_adapter import VnpyFacadeBackedPluginAdapterV1
+from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeAuthorityInputV2,
+    VnpyFacadeConformanceAuthorityV2,
+    VnpyFacadeInitializationInputV2,
+)
+
 from .kernel_delivery import (
     KernelAlgoCreationRequestV1,
     KernelAlgoStartWriteBundleV1,
     KernelPluginInvocationError,
     invoke_plugin_initialize_v1,
     resolve_plugin_for_restore_v1,
+    validate_vnpy_facade_k2_shadow_command_authority_v1,
 )
 from .kernel_materializer import materialize_applied_transition_v1, materialize_failure_transition_v1
 from .plugin_canonical import thaw_json_v1
@@ -28,6 +36,7 @@ from .plugin_contracts import (
     ExecutionProjectionRefV1,
     GatewayCapabilityCatalogV1,
     KernelProjectionTypeV1,
+    KernelCommandLifecycleProjectionV1,
     RuntimeEventEnvelopeV2,
     _algo_instance_id_v2,
     stable_exception_reason_code_v1,
@@ -58,6 +67,7 @@ class KernelAlgoCreationCoordinatorV1:
         repository: KernelAlgoCreationRepositoryV1,
         catalog_runtime: PluginCatalogRuntimeV2,
         gateway_catalog: GatewayCapabilityCatalogV1,
+        facade_authority: VnpyFacadeConformanceAuthorityV2 | None = None,
     ) -> None:
         self._repository = repository
         self._catalog_runtime = catalog_runtime
@@ -67,6 +77,9 @@ class KernelAlgoCreationCoordinatorV1:
         self._gateway_catalog = GatewayCapabilityCatalogV1.model_validate(
             gateway_catalog.model_dump(mode="python"), strict=True
         )
+        if facade_authority is not None and not isinstance(facade_authority, VnpyFacadeConformanceAuthorityV2):
+            raise TypeError("facade_authority must be VnpyFacadeConformanceAuthorityV2 or None")
+        self._facade_authority = facade_authority
 
     def create(self, request: KernelAlgoCreationRequestV1) -> dict[str, Any]:
         if not isinstance(request, KernelAlgoCreationRequestV1):
@@ -262,11 +275,44 @@ class KernelAlgoCreationCoordinatorV1:
                     canonical_plugin_config=thaw_json_v1(request.plugin_config),
                     plugin_config_sha256=request.plugin_config_sha256,
                 )
+                facade_input = None
+                if isinstance(resolved.plugin, VnpyFacadeBackedPluginAdapterV1):
+                    if self._facade_authority is not None:
+                        k1_receipts = tuple(
+                            item
+                            for item in self._catalog_snapshot.pinned_compatibility_receipts
+                            if item.plugin_key == plugin_key
+                        )
+                        if len(k1_receipts) != 1:
+                            raise KernelPluginInvocationError(
+                                "MINIQMT_VNPY_FACADE_CONFORMANCE_AUTHORITY_INVALID",
+                                "facade initialization requires one exact K1 compatibility receipt",
+                                context={"plugin_key": plugin_key.canonical_payload_v1()},
+                                broker_called=False,
+                            )
+                        authority_input = VnpyFacadeAuthorityInputV2.create(
+                            conformance_authority=self._facade_authority,
+                            plugin_catalog_snapshot=self._catalog_snapshot,
+                            gateway_capability_catalog=self._gateway_catalog,
+                            plugin_key=plugin_key,
+                            manifest=manifest,
+                            pinned_compatibility_receipt=k1_receipts[0],
+                            route_compatibility_receipt=route_receipt,
+                        )
+                        facade_input = VnpyFacadeInitializationInputV2.create(
+                            start_event=event,
+                            start_delivery=event_delivery,
+                            start_context=start_context,
+                            authority_input=authority_input,
+                        )
                 initialization = invoke_plugin_initialize_v1(
                     plugin=resolved.plugin,
                     expected_manifest=manifest,
                     start_context=start_context,
+                    facade_input=facade_input,
                 )
+                if facade_input is not None:
+                    validate_vnpy_facade_k2_shadow_command_authority_v1(initialization)
                 transition = AlgoTransitionV1(
                     schema_version="miniqmt_algo_transition_v1",
                     next_state=initialization.next_state,
@@ -298,6 +344,13 @@ class KernelAlgoCreationCoordinatorV1:
                     algo_code=manifest.algo_code,
                     symbol=request.symbol,
                     side=request.side,
+                    command_lifecycle_projection=KernelCommandLifecycleProjectionV1.create(
+                        runtime_id=event.runtime_id,
+                        algo_instance_id=initialization.next_state.algo_instance_id,
+                        event_id=event.event_id,
+                        delivery_id=initial_delivery.delivery_id,
+                        ordered_items=(),
+                    ),
                     existing_mappings_by_local_vt_orderid={},
                     existing_timer_schedules={},
                     initialization=True,

@@ -3,6 +3,8 @@ import uuid
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 import backend.services.tushare_sync_engine as sync_engine
 import backend.services.event_signal.tushare_event_raw_sync as raw_sync_module
 import backend.services.stock_universe_pit_service as pit_service
@@ -12,6 +14,8 @@ from backend.services.tushare_dataset_specs import (
     QueryMode,
     STOCK_ST_EVENTS,
     SUSPEND_D,
+    SW_DAILY,
+    SW_INDEX_MEMBER,
     TUSHARE_FORECAST_RAW,
 )
 from backend.services.tushare_sync_engine import TushareSyncEngine
@@ -38,6 +42,9 @@ class _FakeCursor:
     def execute(self, sql, params=None):
         self._conn.executed.append((sql, params))
 
+    def fetchone(self):
+        return self._conn.fetchone_value
+
 
 class _FakeConn:
     def __init__(self):
@@ -45,6 +52,7 @@ class _FakeConn:
         self.executed = []
         self.commits = 0
         self.rollbacks = 0
+        self.fetchone_value = (0,)
 
     def __enter__(self):
         return self
@@ -388,43 +396,35 @@ def test_cyq_dataset_specs_are_registered_with_independent_tables_and_limits():
 
 
 def test_fetch_from_tushare_paginates_when_limit_is_configured(monkeypatch):
-    class _FakeDf:
-        def __init__(self, rows):
-            self._rows = rows
-            self.empty = not bool(rows)
-
-        def iterrows(self):
-            return iter(enumerate(self._rows))
-
-        def __len__(self):
-            return len(self._rows)
-
     calls = []
 
-    class _FakePro:
-        def cyq_perf(self, **kwargs):
-            calls.append(kwargs)
-            offset = int(kwargs.get("offset") or 0)
-            if offset == 0:
-                return _FakeDf([
-                    {"trade_date": "20260518", "ts_code": "000001.SZ", "his_low": 1, "his_high": 2,
-                     "cost_5pct": 1, "cost_15pct": 1, "cost_50pct": 1, "cost_85pct": 1,
-                     "cost_95pct": 1, "weight_avg": 1, "winner_rate": 1}
-                    for _ in range(4900)
-                ])
-            return _FakeDf([
-                {"trade_date": "20260518", "ts_code": "000002.SZ", "his_low": 1, "his_high": 2,
-                 "cost_5pct": 1, "cost_15pct": 1, "cost_50pct": 1, "cost_85pct": 1,
-                 "cost_95pct": 1, "weight_avg": 1, "winner_rate": 1}
-            ])
+    class _PagingHttpResponse:
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def _paging_post(url, payload, timeout):
+        params = payload["params"]
+        fields = str(payload["fields"]).split(",")
+        calls.append(params)
+        offset = int(params.get("offset") or 0)
+        count = 4900 if offset == 0 else 1
+        items = [[f"v{offset + i}" for _ in fields] for i in range(count)]
+        return _PagingHttpResponse({"code": 0, "data": {"fields": fields, "items": items}})
 
     class _NoopLimiter:
         def acquire(self):
             return None
 
     monkeypatch.setattr(sync_engine, "get_limiter", lambda *_args, **_kwargs: _NoopLimiter())
+    monkeypatch.setattr(sync_engine, "_http_post", _paging_post)
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
     engine = TushareSyncEngine()
-    engine._pro = _FakePro()
 
     rows = engine._fetch_from_tushare(CYQ_PERF, {"trade_date": "20260518"})
 
@@ -679,3 +679,255 @@ def test_sync_fails_fast_when_physical_table_is_missing_before_cold_floor(monkey
     assert "target table market.cyq_perf is missing" in (result.error or "")
     assert "scripts/create_cyq_tables.py" in (result.error or "")
     assert not any("dataset_date_refresh_audit" in sql for sql, _params in conn.executed)
+
+
+def _member_row(ts_code, l2_code="801767.SI", in_date="19960628", out_date=None):
+    return {
+        "l1_code": "801760.SI",
+        "l1_name": "能源",
+        "l2_code": l2_code,
+        "l2_name": "数字媒体",
+        "l3_code": "",
+        "l3_name": "",
+        "ts_code": ts_code,
+        "name": "测试股",
+        "in_date": in_date,
+        "out_date": out_date,
+        "is_new": "Y",
+    }
+
+
+def _stub_execute_values(monkeypatch):
+    def _record(cur, sql, values, *args, **kwargs):
+        cur._conn.executed.append((sql, None))
+
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", _record)
+
+
+def test_sw_index_member_spec_enables_replace_by_code():
+    assert SW_INDEX_MEMBER.replace_by_code is True
+    assert SW_DAILY.replace_by_code is False
+
+
+def test_replace_code_batch_deletes_then_inserts_in_single_transaction(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    _stub_execute_values(monkeypatch)
+    rows = [_member_row("000406.SZ"), _member_row("000817.SZ", in_date="19980528")]
+
+    inserted = engine._replace_code_batch(conn, SW_INDEX_MEMBER, "801767.SI", rows)
+
+    assert inserted == 2
+    assert conn.executed[0] == (
+        "DELETE FROM market.sw_index_member WHERE l2_code = %s",
+        ("801767.SI",),
+    )
+    assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert conn.commits == 1
+    assert conn.rollbacks == 0
+    assert conn.autocommit is True
+
+
+def test_replace_code_batch_rolls_back_when_insert_fails(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+
+    def _boom(conn, spec, rows):
+        raise RuntimeError("insert failed")
+
+    monkeypatch.setattr(engine, "_upsert_batch", _boom)
+
+    with pytest.raises(RuntimeError, match="insert failed"):
+        engine._replace_code_batch(conn, SW_INDEX_MEMBER, "801767.SI", [_member_row("000406.SZ")])
+
+    assert conn.commits == 0
+    assert conn.rollbacks == 1
+    assert conn.autocommit is True
+
+
+def _patch_by_code_loop(engine, monkeypatch, conn, codes, payload):
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(engine, "_fetch_code_list", lambda _conn, _spec: codes)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: payload)
+    monkeypatch.setattr(engine, "_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_record_by_code_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+    _stub_execute_values(monkeypatch)
+
+
+def test_by_code_batched_mirrors_payload_and_takes_down_missing_rows(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    _patch_by_code_loop(
+        engine, monkeypatch, conn, ["801767.SI"], [_member_row("000406.SZ")]
+    )
+
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+
+    assert result.success_batches == 1
+    assert result.failed_batches == 0
+    assert result.inserted_rows == 1
+    assert (
+        "DELETE FROM market.sw_index_member WHERE l2_code = %s",
+        ("801767.SI",),
+    ) in conn.executed
+    assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+def test_by_code_batched_refuses_to_mirror_empty_payload(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    conn.fetchone_value = (3,)  # local rows exist for the code
+    _patch_by_code_loop(engine, monkeypatch, conn, ["801767.SI"], [])
+
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+
+    assert result.success_batches == 0
+    assert result.failed_batches == 1
+    assert result.inserted_rows == 0
+    assert any(
+        "SELECT COUNT(*) FROM market.sw_index_member WHERE l2_code = %s" in sql
+        for sql, _ in conn.executed
+    )
+    assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+def test_by_code_batched_accepts_empty_payload_when_local_empty(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()  # fetchone_value defaults to (0,): no local rows
+    _patch_by_code_loop(engine, monkeypatch, conn, ["801217.SI"], [])
+
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+
+    assert result.success_batches == 1
+    assert result.failed_batches == 0
+    assert result.inserted_rows == 0
+    assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+def test_by_code_batched_keeps_upsert_when_replace_by_code_disabled(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    spec = replace(SW_INDEX_MEMBER, replace_by_code=False)
+    _patch_by_code_loop(
+        engine, monkeypatch, conn, ["801767.SI"], [_member_row("000406.SZ")]
+    )
+
+    result = engine._sync_by_code_batched(spec, None, None, uuid.uuid4())
+
+    assert result.success_batches == 1
+    assert result.failed_batches == 0
+    assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+# ---------------------------------------------------------------------------
+# BUG-947: tushare falsy-Response masking — direct dataapi transport
+# ---------------------------------------------------------------------------
+
+
+class _FakeHttpResponse:
+    def __init__(self, status_code=200, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+def test_query_tushare_dataapi_raises_on_http_error(monkeypatch):
+    monkeypatch.setattr(
+        sync_engine,
+        "_http_post",
+        lambda url, payload, timeout: _FakeHttpResponse(503, text="Bad Gateway"),
+    )
+
+    with pytest.raises(sync_engine.TushareHttpError, match="HTTP 503"):
+        sync_engine._query_tushare_dataapi("sw_daily", {"ts_code": "801033.SI"}, "ts_code", token="t")
+
+
+def test_query_tushare_dataapi_raises_on_nonzero_code(monkeypatch):
+    monkeypatch.setattr(
+        sync_engine,
+        "_http_post",
+        lambda url, payload, timeout: _FakeHttpResponse(200, {"code": 40020, "msg": "token invalid"}),
+    )
+
+    with pytest.raises(sync_engine.TushareHttpError, match="code=40020"):
+        sync_engine._query_tushare_dataapi("sw_daily", {}, "ts_code", token="t")
+
+
+def test_query_tushare_dataapi_returns_rows_and_genuine_empty(monkeypatch):
+    responses = iter([
+        _FakeHttpResponse(200, {"code": 0, "data": {"fields": ["ts_code", "close"], "items": [["801033.SI", 12.3]]}}),
+        _FakeHttpResponse(200, {"code": 0, "data": {"fields": [], "items": []}}),
+    ])
+    monkeypatch.setattr(sync_engine, "_http_post", lambda url, payload, timeout: next(responses))
+
+    rows = sync_engine._query_tushare_dataapi("sw_daily", {}, "ts_code,close", token="t")
+    assert rows == [{"ts_code": "801033.SI", "close": 12.3}]
+    # protocol-level success with zero items = legitimate empty, not an error
+    assert sync_engine._query_tushare_dataapi("sw_daily", {}, "ts_code,close", token="t") == []
+
+
+def test_fetch_from_tushare_retries_after_http_error_then_succeeds(monkeypatch):
+    engine = TushareSyncEngine()
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+    calls = []
+
+    def _flaky(url, payload, timeout):
+        calls.append(url)
+        if len(calls) < 3:
+            return _FakeHttpResponse(429, text="Too Many Requests")
+        return _FakeHttpResponse(
+            200,
+            {"code": 0, "data": {"fields": ["l2_code", "ts_code"], "items": [["801767.SI", "000406.SZ"]]}},
+        )
+
+    monkeypatch.setattr(sync_engine, "_http_post", _flaky)
+
+    rows = engine._fetch_from_tushare(SW_INDEX_MEMBER, {"l2_code": "801767.SI"})
+
+    assert len(calls) == 3
+    assert any(r["ts_code"] == "000406.SZ" for r in rows)
+
+
+def test_fetch_from_tushare_raises_after_three_http_errors(monkeypatch):
+    engine = TushareSyncEngine()
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        sync_engine,
+        "_http_post",
+        lambda url, payload, timeout: _FakeHttpResponse(500, text="boom"),
+    )
+
+    with pytest.raises(RuntimeError, match="failed after 3 retries"):
+        engine._fetch_from_tushare(SW_INDEX_MEMBER, {"l2_code": "801767.SI"})
+
+
+def test_by_code_batched_warns_on_empty_upsert_with_local_history(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    conn.fetchone_value = (124,)  # sw_daily has local history for this code
+    spec = replace(SW_INDEX_MEMBER, replace_by_code=False)
+    logs = []
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(engine, "_fetch_code_list", lambda _conn, _spec: ["801217.SI"])
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: [])
+    monkeypatch.setattr(engine, "_log", lambda *args: logs.append(args))
+    monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_record_by_code_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+    _stub_execute_values(monkeypatch)
+
+    result = engine._sync_by_code_batched(spec, None, None, uuid.uuid4())
+
+    assert result.success_batches == 1
+    assert result.failed_batches == 0
+    warnings = [args for args in logs if len(args) >= 4 and str(args[2]).lower() == "warning"]
+    assert len(warnings) == 1
+    assert "upstream returned no rows but local history exists" in warnings[0][3]

@@ -8,6 +8,7 @@ current product runtime.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
@@ -28,6 +29,7 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AbsenceDispositionV1,
+    CurrentThreeActiveOrderStateV3,
     EventTypeV2,
     ExecutionAlgoPluginManifestV2,
     FileHashV1,
@@ -69,18 +71,17 @@ from .attribution import (
     UPSTREAM_LICENSE,
     UPSTREAM_REPO,
 )
-from .best_limit_core import BestLimitMiniQMTCore
-from .sniper_core import SniperMiniQMTCore
-from .twap_lite_core import TwapLiteMiniQMTCore
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_PLUGIN_VERSION = "2.0.0"
+_PLUGIN_VERSION = "3.0.0"
 _CONTINUOUS_PHASES = (SessionPhaseV1.CONTINUOUS_AM, SessionPhaseV1.CONTINUOUS_PM)
 _SIDES = (SideV1.BUY, SideV1.SELL)
 _COMMON_EVENTS = (
     EventTypeV2.ALGO_START,
+    EventTypeV2.COMMAND_OUTCOME,
     EventTypeV2.EOD,
     EventTypeV2.ORDER,
+    EventTypeV2.RECONCILE,
     EventTypeV2.SESSION,
     EventTypeV2.TICK,
     EventTypeV2.TRADE,
@@ -117,42 +118,35 @@ _ALGO_FACTS = MappingProxyType(
     {
         "BEST_LIMIT_MINIQMT": (
             "aistock.vnpy.best_limit",
-            "backend.execution_algos.vnpy_style.best_limit_core:BestLimitMiniQMTCore",
-            "2e69ca1b505dcdd6f75728f1a61d38ccbb2a71fcfdd4776986fd8b3bbefcd3f7",
-            "best_limit_state_v2",
+            "backend.execution_algos.vnpy_style.plugin_factories:create_best_limit_miniqmt_plugin_v3",
+            "bbd63315630f0f527f913f43e76ccfeaef310eef69b5b6e034142122672fd16b",
+            "best_limit_state_v3",
             "vnpy_algotrading/algos/best_limit_algo.py",
-            "backend/execution_algos/vnpy_style/best_limit_core.py",
+            "backend/execution_algos/vnpy_style/best_limit_plugin.py",
         ),
         "SNIPER_MINIQMT": (
             "aistock.vnpy.sniper",
-            "backend.execution_algos.vnpy_style.sniper_core:SniperMiniQMTCore",
-            "c89e8de34dd0b3f5814354003db9fa335c1d8a6a14dfc0a928c44053ec374b9f",
-            "sniper_state_v2",
+            "backend.execution_algos.vnpy_style.plugin_factories:create_sniper_miniqmt_plugin_v3",
+            "3511d07220e4e8ad69713cc2996009d231fe5562b6e0c1be7cf071a578b41572",
+            "sniper_state_v3",
             "vnpy_algotrading/algos/sniper_algo.py",
-            "backend/execution_algos/vnpy_style/sniper_core.py",
+            "backend/execution_algos/vnpy_style/sniper_plugin.py",
         ),
         "TWAP_LITE_MINIQMT": (
             "aistock.vnpy.twap_lite",
-            "backend.execution_algos.vnpy_style.twap_lite_core:TwapLiteMiniQMTCore",
-            "c89e8de34dd0b3f5814354003db9fa335c1d8a6a14dfc0a928c44053ec374b9f",
-            "twap_lite_state_v2",
+            "backend.execution_algos.vnpy_style.plugin_factories:create_twap_lite_miniqmt_plugin_v3",
+            "493462c7b821025fa60b670e6e864c1dc25a592687bdfb0bbd90645f4984dedb",
+            "twap_lite_state_v3",
             "vnpy_algotrading/algos/twap_algo.py",
-            "backend/execution_algos/vnpy_style/twap_lite_core.py",
+            "backend/execution_algos/vnpy_style/twap_lite_plugin.py",
         ),
-    }
-)
-_PROCESS_FACTORIES = MappingProxyType(
-    {
-        "BEST_LIMIT_MINIQMT": BestLimitMiniQMTCore,
-        "SNIPER_MINIQMT": SniperMiniQMTCore,
-        "TWAP_LITE_MINIQMT": TwapLiteMiniQMTCore,
     }
 )
 _PROCESS_VALIDATOR_FACTS = MappingProxyType(
     {
         "config_validator_ref": "backend.execution_algos.vnpy_style.plugin_manifests:validate_current_three_config_v2",
         "config_validator_signature_sha256": "487a83b73a7d94a2d0ee6e43fb00b0337ab928fdf7bddcb54098db8c626daa58",
-        "state_codec_ref": "backend.execution_algos.vnpy_style.plugin_manifests:validate_current_three_state_v2",
+        "state_codec_ref": "backend.execution_algos.vnpy_style.plugin_manifests:validate_current_three_state_v3",
         "state_codec_signature_sha256": "487a83b73a7d94a2d0ee6e43fb00b0337ab928fdf7bddcb54098db8c626daa58",
     }
 )
@@ -299,7 +293,6 @@ def _lineage_schema() -> dict[str, Any]:
 def _active_order_schema() -> dict[str, Any]:
     return _object_schema(
         {
-            "parent_intent_id": {"type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$"},
             "local_vt_orderid": {"type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$"},
             "submit_command_id": {"type": "string", "minLength": 1, "pattern": "^(?:\\S|\\S.*\\S)$"},
             "broker_order_id": {
@@ -312,16 +305,16 @@ def _active_order_schema() -> dict[str, Any]:
             "side": {"enum": ["BUY", "SELL"]},
             "status": {
                 "enum": [
-                    "PENDING_DISPATCH",
+                    "COMMAND_PENDING",
                     "SUBMITTED",
                     "PARTIALLY_FILLED",
                     "CANCEL_PENDING",
-                    "CANCELLED",
-                    "FILLED",
-                    "REJECTED",
                     "OUTCOME_UNKNOWN",
+                    "TERMINAL_TRADE_PENDING",
                 ]
             },
+            "pending_command_type": {"type": ["string", "null"], "enum": ["SUBMIT_LIMIT", "CANCEL_ORDER", None]},
+            "pending_command_id": {"type": ["string", "null"]},
             "requested_price_decimal": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"},
             "requested_quantity": {"type": "integer", "minimum": 1},
             "cumulative_filled_quantity": {"type": "integer", "minimum": 0},
@@ -338,25 +331,37 @@ def _active_order_schema() -> dict[str, Any]:
                     {"type": "null"},
                 ]
             },
+            "last_command_outcome_event_id": {"type": ["string", "null"]},
+            "last_oms_reconcile_event_id": {"type": ["string", "null"]},
+            "terminal_order_status": {
+                "type": ["string", "null"],
+                "enum": ["FILLED", "CANCELLED", "REJECTED", None],
+            },
+            "terminal_observed_cumulative_filled_quantity": {"type": ["integer", "null"], "minimum": 0},
             "market_data_lineage": _lineage_schema(),
-            "mapping_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "active_order_state_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         },
         (
-            "parent_intent_id",
             "local_vt_orderid",
             "submit_command_id",
             "broker_order_id",
             "symbol",
             "side",
             "status",
+            "pending_command_type",
+            "pending_command_id",
             "requested_price_decimal",
             "requested_quantity",
             "cumulative_filled_quantity",
             "remaining_quantity",
             "last_order_event_id",
             "last_trade_event_id",
+            "last_command_outcome_event_id",
+            "last_oms_reconcile_event_id",
+            "terminal_order_status",
+            "terminal_observed_cumulative_filled_quantity",
             "market_data_lineage",
-            "mapping_sha256",
+            "active_order_state_sha256",
         ),
     )
 
@@ -446,7 +451,9 @@ def _state_schema(algo_code: str) -> dict[str, Any]:
 
 
 def _file_hash(path: str) -> FileHashV1:
-    return FileHashV1(path=path, sha256=hashlib.sha256((_REPO_ROOT / path).read_bytes()).hexdigest())
+    payload = (_REPO_ROOT / path).read_bytes()
+    canonical_lf = payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return FileHashV1(path=path, sha256=hashlib.sha256(canonical_lf).hexdigest())
 
 
 def _source_attribution(algo_code: str) -> SourceAttributionV1:
@@ -463,14 +470,12 @@ def _source_attribution(algo_code: str) -> SourceAttributionV1:
         )
     )
     aistock_paths = (
-        "backend/execution_algos/vnpy_style/base.py",
+        "backend/execution_algos/vnpy_style/plugin_base.py",
+        "backend/execution_algos/vnpy_style/plugin_factories.py",
         core_path,
-        "backend/execution_algos/vnpy_style/models.py",
         "backend/execution_algos/vnpy_style/plugin_manifests.py",
-    ) + (
-        ("backend/services/miniqmt_execution_runtime/deterministic_context.py",)
-        if algo_code == "BEST_LIMIT_MINIQMT"
-        else ()
+        "backend/services/miniqmt_execution_runtime/deterministic_context.py",
+        "backend/services/miniqmt_execution_runtime/plugin_contracts.py",
     )
     aistock_files = tuple(_file_hash(path) for path in sorted(aistock_paths))
     plain = {
@@ -1015,8 +1020,14 @@ def _manifest(algo_code: str) -> ExecutionAlgoPluginManifestV2:
     )
 
 
-def current_three_manifests_v2() -> tuple[ExecutionAlgoPluginManifestV2, ...]:
+def current_three_manifests_v3() -> tuple[ExecutionAlgoPluginManifestV2, ...]:
     return tuple(_manifest(algo_code) for algo_code in sorted(_ALGO_FACTS))
+
+
+def current_three_manifests_v2() -> tuple[ExecutionAlgoPluginManifestV2, ...]:
+    """Compatibility name for callers migrating to the current v3 catalog."""
+
+    return current_three_manifests_v3()
 
 
 def _validate_schema(schema: Any, value: Mapping[str, Any], contract: str) -> dict[str, Any]:
@@ -1104,7 +1115,7 @@ def _validate_lineage(lineage: Any, *, field_name: str) -> None:
         raise ValueError(f"{field_name}.exchange_time_utc must be canonical UTC")
 
 
-def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, value: Mapping[str, Any]) -> Any:
+def validate_current_three_state_v3(manifest: ExecutionAlgoPluginManifestV2, value: Mapping[str, Any]) -> Any:
     state = _validate_schema(manifest.state_schema, value, f"{manifest.algo_code} state")
     common_integer_fields = (
         "parent_quantity",
@@ -1135,51 +1146,20 @@ def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, val
     active_cumulative_filled = 0
     active_remaining = 0
     for active in state["active_orders"]:
-        if active["status"] in {"CANCELLED", "FILLED", "REJECTED"}:
-            raise ValueError("inactive child must not remain in active_orders")
-        if (
-            type(active["requested_quantity"]) is not int
-            or type(active["cumulative_filled_quantity"]) is not int
-            or type(active["remaining_quantity"]) is not int
-        ):
-            raise ValueError("active child quantity fields must be strict integers")
-        if active["cumulative_filled_quantity"] > active["requested_quantity"]:
-            raise ValueError("active child cumulative quantity exceeds requested quantity")
-        if active["remaining_quantity"] != active["requested_quantity"] - active["cumulative_filled_quantity"]:
-            raise ValueError("active child remaining quantity does not close over requested and filled quantity")
-        if (
-            active["parent_intent_id"] != state["parent_intent_id"]
-            or active["symbol"] != state["symbol"]
-            or active["side"] != state["side"]
-        ):
-            raise ValueError("active child parent, symbol and side must equal frozen algo state")
-        if not _canonical_decimal(active["requested_price_decimal"], positive=True):
-            raise ValueError("active child requested price must be a positive canonical decimal")
-        for identity_field in (
-            "parent_intent_id",
-            "local_vt_orderid",
-            "submit_command_id",
-            "broker_order_id",
-            "last_order_event_id",
-            "last_trade_event_id",
-        ):
-            if active[identity_field] is not None and not _trim_stable_identity(active[identity_field]):
-                raise ValueError(f"active child {identity_field} must be a trim-stable identity")
+        strict_active = CurrentThreeActiveOrderStateV3.model_validate_json(
+            json.dumps(active, sort_keys=True, separators=(",", ":"))
+        )
+        if active["symbol"] != state["symbol"] or active["side"] != state["side"]:
+            raise ValueError("active child symbol and side must equal frozen algo state")
         _validate_lineage(active["market_data_lineage"], field_name="active child market_data_lineage")
         if active["market_data_lineage"]["session_phase"] not in {
             SessionPhaseV1.CONTINUOUS_AM.value,
             SessionPhaseV1.CONTINUOUS_PM.value,
         }:
             raise ValueError("active child market data lineage must come from a continuous-session native quote")
-        expected = hash_hex_v1(
-            "miniqmt_plugin_active_order_state_v1",
-            {key: item for key, item in active.items() if key != "mapping_sha256"},
-        )
-        if active["mapping_sha256"] != expected:
-            raise ValueError("active child mapping_sha256 mismatch")
-        active_ids.append(active["local_vt_orderid"])
-        active_cumulative_filled += active["cumulative_filled_quantity"]
-        active_remaining += active["remaining_quantity"]
+        active_ids.append(strict_active.local_vt_orderid)
+        active_cumulative_filled += strict_active.cumulative_filled_quantity
+        active_remaining += strict_active.remaining_quantity
     if active_ids != sorted(set(active_ids)):
         raise ValueError("active_orders must have unique ascending local_vt_orderid")
     if active_remaining > state["parent_quantity"] - state["traded_quantity"]:
@@ -1239,8 +1219,11 @@ def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, val
                 raise ValueError("TWAP order_volume violates frozen board-lot closure")
         if (state["active_elapsed_seconds"] == 0) != (state["last_timer_occurrence_id"] is None):
             raise ValueError("TWAP timer occurrence identity does not close over elapsed state")
-        if state["active_elapsed_seconds"] == duration and state["status"] != "FINISHED":
-            raise ValueError("TWAP duration exhaustion requires explicit FINISHED terminal state")
+        if state["active_elapsed_seconds"] == duration:
+            if state["active_orders"] and state["status"] != "STOPPED":
+                raise ValueError("TWAP duration exhaustion with active child requires STOPPED")
+            if not state["active_orders"] and state["status"] != "FINISHED":
+                raise ValueError("TWAP duration exhaustion without active child requires FINISHED")
         _validate_lineage(state["last_market_data_lineage"], field_name="last_market_data_lineage")
         if state["last_market_data_lineage"] != state["last_tick_lineage"]:
             raise ValueError("TWAP durable latest market data lineage must equal last tick lineage")
@@ -1256,6 +1239,12 @@ def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, val
         if state["variables"] != expected_variables:
             raise ValueError("TWAP durable variables do not close over exact state")
     return freeze_json_v1(state)
+
+
+def validate_current_three_state_v2(manifest: ExecutionAlgoPluginManifestV2, value: Mapping[str, Any]) -> Any:
+    """Compatibility name for strict readback of the current v3 catalog."""
+
+    return validate_current_three_state_v3(manifest, value)
 
 
 def current_three_descriptors_v2() -> tuple[PluginRegistrationDescriptorV2, ...]:
@@ -1281,6 +1270,10 @@ def current_three_descriptors_v2() -> tuple[PluginRegistrationDescriptorV2, ...]
     return tuple(descriptors)
 
 
+def current_three_descriptors_v3() -> tuple[PluginRegistrationDescriptorV2, ...]:
+    return current_three_descriptors_v2()
+
+
 def current_three_creation_bindings_v1() -> tuple[PluginCreationBindingV1, ...]:
     return tuple(
         PluginCreationBindingV1(algo_code=manifest.algo_code, plugin_key=descriptor.plugin_key)
@@ -1288,14 +1281,14 @@ def current_three_creation_bindings_v1() -> tuple[PluginCreationBindingV1, ...]:
     )
 
 
+def current_three_creation_bindings_v3() -> tuple[PluginCreationBindingV1, ...]:
+    return current_three_creation_bindings_v1()
+
+
 def current_three_process_bindings_v2() -> PluginProcessBindingsV2:
-    bindings: dict[str, Any] = {}
-    for manifest in current_three_manifests_v2():
-        prefix = manifest.plugin_id
-        bindings[f"{prefix}.factory"] = _PROCESS_FACTORIES[manifest.algo_code]
-        bindings[f"{prefix}.config_validator"] = validate_current_three_config_v2
-        bindings[f"{prefix}.state_codec"] = validate_current_three_state_v2
-    return PluginProcessBindingsV2(bindings)
+    from .plugin_factories import current_three_process_bindings_v3
+
+    return current_three_process_bindings_v3()
 
 
 class LegacyProjectionDriftV1(StrEnum):

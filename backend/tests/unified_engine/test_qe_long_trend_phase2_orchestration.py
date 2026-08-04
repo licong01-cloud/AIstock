@@ -17,6 +17,7 @@ from backend.services.quantevolver.long_trend_evaluation_phase2 import (
     QELongTrendControlSecretStore,
     QELongTrendPhase2Error,
     QELongTrendPhase2Service,
+    ResolvedLongTrendEvaluationRequest,
     _long_trend_snapshot,
     _merge_registration_catalog,
     _evaluation_parent_identity,
@@ -24,7 +25,10 @@ from backend.services.quantevolver.long_trend_evaluation_phase2 import (
 )
 from backend.services.quantevolver.long_trend_artifact_resolver import RecorderArtifactInventory
 from backend.services.quantevolver.long_trend_evaluation_bundle import QELongTrendEvaluatorBundle
-from backend.services.quantevolver.long_trend_evaluation_contract import QEDatasetSnapshotIdentity
+from backend.services.quantevolver.long_trend_evaluation_contract import (
+    QEDatasetSnapshotIdentity,
+    QELongTrendReason,
+)
 from backend.services.quantevolver.long_trend_evaluation_control_repository import QELongTrendControlLease
 from backend.services.quantevolver.qe_resource_phase_service import (
     PHASE_INVALID_REASON,
@@ -39,6 +43,11 @@ from backend.services.quantevolver.qe_workspace_client import (
 )
 from backend.services.quantevolver.long_trend_pickle_parser_entry import ParserContractError, _reject_secrets
 from backend.services.quantevolver.templates import long_trend_postprocess_adapter as postprocess_adapter
+from backend.services.qe_archive.long_trend_repository import (
+    PersistedEvaluationReceipt,
+    QELongTrendResultRepositoryError,
+    QELongTrendResultSchemaNotReady,
+)
 
 
 def test_long_trend_opt_in_is_explicit_strict_and_qe_only() -> None:
@@ -179,6 +188,100 @@ def test_snapshot_evidence_remains_usable_when_legacy_manifest_is_incomplete() -
     assert action is None
 
 
+def test_known_missing_snapshot_creates_partial_control_before_node_or_recorder_access(tmp_path: Path) -> None:
+    class Repository:
+        def __init__(self) -> None:
+            self.row: dict[str, object] = {}
+
+        def create_or_get_queued(self, spec, *, qelt_resource):  # type: ignore[no-untyped-def]
+            self.row = {
+                **spec.__dict__,
+                "status": "queued",
+                "owner_id": None,
+                "fencing_token": 0,
+                "row_version": 1,
+                "job_id": None,
+                "reason_code": None,
+                "qelt_resource": qelt_resource,
+            }
+            return dict(self.row)
+
+        def claim(self, _evaluation_id, **_kwargs):  # type: ignore[no-untyped-def]
+            self.row.update({"owner_id": "owner", "fencing_token": 1, "row_version": 2})
+            return dict(self.row)
+
+        @staticmethod
+        def lease_from(row):  # type: ignore[no-untyped-def]
+            return QELongTrendControlLease(row["evaluation_id"], "owner", 1, row["row_version"])
+
+        def transition(self, _lease, *, updates, **_kwargs):  # type: ignore[no-untyped-def]
+            self.row.update(updates)
+            self.row.update({"owner_id": None, "row_version": 3})
+            return dict(self.row)
+
+    class ResourceService:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        def ingest_event(self, *, token, payload):  # type: ignore[no-untyped-def]
+            assert token
+            self.events.append(dict(payload))
+
+    class Client:
+        @staticmethod
+        async def get_execution_environment():
+            raise AssertionError("known missing snapshots must not depend on node environment")
+
+    missing = QEWorkspaceDatasetIdentity(
+        schema_version="qe_dataset_identity_evidence_v1",
+        complete=False,
+        reason_code="QELT_REQUESTED_OUTCOME_SNAPSHOT_UNAVAILABLE",
+        missing=("snapshot",),
+        acquisition_suggestions=("register_snapshot",),
+        dataset=None,
+        long_trend_snapshot=None,
+        long_trend_snapshot_reason="QELT_REQUESTED_OUTCOME_SNAPSHOT_UNAVAILABLE",
+    )
+    repository = Repository()
+    resources = ResourceService()
+    service = QELongTrendPhase2Service(
+        control_repository=repository,  # type: ignore[arg-type]
+        resource_service=resources,  # type: ignore[arg-type]
+        secret_store=QELongTrendControlSecretStore(tmp_path / "secrets"),
+        owner_id="owner",
+    )
+
+    prepared = asyncio.run(
+        service.prepare_long_trend_only_resolved(
+            run_id="run-1",
+            task_id="task-1",
+            loop_index=1,
+            node_id="wsl",
+            resolved_request=ResolvedLongTrendEvaluationRequest(
+                profile_id="qe_long_trend_v1",
+                evaluator_version="f014_v1",
+                feature_data_root_uri="",
+                outcome_data_root_uri=None,
+                backtest_freq="1day",
+                requested_outcome_snapshot_id="missing-snapshot",
+                feature_identity=missing,
+                outcome_identity=missing,
+            ),
+            registration_catalog={},
+            label_horizon=60,
+            strategy_topk=25,
+            client=Client(),  # type: ignore[arg-type]
+        )
+    )
+
+    assert prepared.ready_for_node is False
+    assert prepared.control_row["status"] == "partial"
+    assert prepared.control_row["reason_code"] == "QELT_DATASET_IDENTITY_INCOMPLETE"
+    assert prepared.control_row["request_json"] == {"platform_status": "dataset_identity_incomplete"}
+    assert "data_action_plan" not in prepared.control_row["request_json"]
+    assert [event["phase_status"] for event in resources.events] == ["not_submitted", "partial"]
+
+
 def test_registration_catalog_must_match_live_size_and_hash() -> None:
     path = "mlruns/exp/rec/artifacts/pred.pkl"
     live = {
@@ -250,6 +353,15 @@ def test_control_secret_store_is_idempotent_and_never_embeds_identity_drift(tmp_
             session_id="different",
             source_run_key=f"qelt:{evaluation_id}",
         )
+
+    (tmp_path / "secrets" / f"{evaluation_id}.json").write_text("{", encoding="utf-8")
+    with pytest.raises(QELongTrendPhase2Error, match="secret is malformed") as exc_info:
+        store.load(
+            evaluation_id,
+            session_id="qers-qelt-1",
+            source_run_key=f"qelt:{evaluation_id}",
+        )
+    assert exc_info.value.reason_code == QELongTrendReason.CONTROL_STATE_CONFLICT.value
 
 
 def test_control_secret_store_concurrent_creation_publishes_one_token(tmp_path: Path) -> None:
@@ -919,6 +1031,189 @@ def test_collect_failure_is_persisted_as_recoverable_platform_state(monkeypatch:
     assert recovery["updates"]["status"] == "remote_state_unknown"
     assert recovery["updates"]["platform_delivery_status_json"]["cas"] == "collect_failed"
     assert recovery["release_owner"] is True
+
+
+@pytest.mark.parametrize("schema_ready", [True, False])
+def test_collect_materializes_phase3_or_records_schema_action_without_losing_cas(
+    monkeypatch: pytest.MonkeyPatch,
+    schema_ready: bool,
+) -> None:
+    evaluation_id = "qelt_" + "b" * 64
+
+    class Repository:
+        def __init__(self) -> None:
+            self.transitions = []
+
+        @staticmethod
+        def claim(value, **_kwargs):  # type: ignore[no-untyped-def]
+            return {"evaluation_id": value, "owner_id": "owner", "fencing_token": 1, "row_version": 1}
+
+        @staticmethod
+        def lease_from(row):  # type: ignore[no-untyped-def]
+            return QELongTrendControlLease(
+                evaluation_id=row["evaluation_id"],
+                owner_id="owner",
+                fencing_token=1,
+                row_version=row["row_version"],
+            )
+
+        def transition(self, lease, **kwargs):  # type: ignore[no-untyped-def]
+            self.transitions.append((lease, kwargs))
+            return {
+                "evaluation_id": lease.evaluation_id,
+                "owner_id": "owner",
+                "fencing_token": 1,
+                "row_version": lease.row_version + 1,
+                "status": kwargs["updates"]["status"],
+                "platform_delivery_status_json": kwargs["updates"].get("platform_delivery_status_json", {}),
+            }
+
+    class ResultRepository:
+        @staticmethod
+        def persist_published_receipt(**_kwargs):
+            if not schema_ready:
+                raise QELongTrendResultSchemaNotReady("apply migration")
+            return PersistedEvaluationReceipt(
+                evaluation_id=evaluation_id,
+                metric_count=2,
+                artifact_count=4,
+                control_row={
+                    "evaluation_id": evaluation_id,
+                    "owner_id": "owner",
+                    "fencing_token": 1,
+                    "row_version": 3,
+                    "platform_delivery_status_json": {"cas": "published", "db": "published"},
+                },
+                replayed=False,
+            )
+
+    class Client:
+        @staticmethod
+        async def inspect_long_trend_evaluation(**_kwargs):
+            return QELongTrendJobInspection(
+                schema_version="qe_long_trend_job_receipt_v1",
+                task_id="task-1",
+                loop_id="Loop1",
+                evaluation_id=evaluation_id,
+                job_id="job-1",
+                request_sha="b" * 64,
+                status="partial",
+                current_attempt_id="attempt-1",
+                process_identity=None,
+                terminal_receipt=None,
+                updated_at="2026-07-22T00:00:00Z",
+            )
+
+    repository = Repository()
+    service = QELongTrendPhase2Service(
+        control_repository=repository,  # type: ignore[arg-type]
+        result_repository=ResultRepository(),  # type: ignore[arg-type]
+        owner_id="owner",
+    )
+    terminal = {
+        "status": "partial",
+        "family_status": {"signal_path": {"status": "COMPUTED"}},
+        "data_action_plan": [],
+        "stats": {},
+    }
+
+    async def publish(**_kwargs):
+        return (
+            terminal,
+            {"uri": "aistock-qe-long-trend://evaluations/x", "artifact_manifest_sha256": "c" * 64},
+            {"platform_delivery_status": {"worker": "partial", "cas": "published"}},
+            {"sha256": "d" * 64},
+            {"worker_terminal_receipt": {"sha256": "e" * 64}},
+        )
+
+    monkeypatch.setattr(service, "_publish_remote_artifacts", publish)
+    result = asyncio.run(
+        service.collect_and_publish(
+            evaluation_id=evaluation_id,
+            task_id="task-1",
+            loop_index=1,
+            client=Client(),  # type: ignore[arg-type]
+        )
+    )
+
+    final_updates = repository.transitions[-1][1]["updates"]
+    assert result["status"] == "partial"
+    if schema_ready:
+        assert final_updates["platform_delivery_status_json"]["db"] == "published"
+        assert repository.transitions[-1][0].row_version == 3
+    else:
+        assert final_updates["platform_delivery_status_json"]["db"] == "schema_not_ready"
+        assert final_updates["data_action_plan_json"][-1]["action"] == (
+            "apply_phase3_result_schema_then_materialize_existing_receipt"
+        )
+
+
+def test_collect_phase3_conflict_is_loud_and_recoverable(monkeypatch: pytest.MonkeyPatch) -> None:
+    evaluation_id = "qelt_" + "c" * 64
+
+    class Repository:
+        def __init__(self) -> None:
+            self.transitions = []
+
+        @staticmethod
+        def claim(value, **_kwargs):  # type: ignore[no-untyped-def]
+            return {"evaluation_id": value, "owner_id": "owner", "fencing_token": 1, "row_version": 1}
+
+        @staticmethod
+        def lease_from(row):  # type: ignore[no-untyped-def]
+            return QELongTrendControlLease(row["evaluation_id"], "owner", 1, row["row_version"])
+
+        def transition(self, lease, **kwargs):  # type: ignore[no-untyped-def]
+            self.transitions.append((lease, kwargs))
+            return {"evaluation_id": lease.evaluation_id, "row_version": lease.row_version + 1}
+
+    class ResultRepository:
+        @staticmethod
+        def persist_published_receipt(**_kwargs):
+            raise QELongTrendResultRepositoryError("content drift")
+
+    class Client:
+        @staticmethod
+        async def inspect_long_trend_evaluation(**_kwargs):
+            return QELongTrendJobInspection(
+                "qe_long_trend_job_receipt_v1", "task-1", "Loop1", evaluation_id, "job-1",
+                "b" * 64, "succeeded", "attempt-1", None, None, "2026-07-22T00:00:00Z"
+            )
+
+    repository = Repository()
+    service = QELongTrendPhase2Service(
+        control_repository=repository,  # type: ignore[arg-type]
+        result_repository=ResultRepository(),  # type: ignore[arg-type]
+        owner_id="owner",
+    )
+
+    async def publish(**_kwargs):
+        return (
+            {"status": "succeeded", "data_action_plan": []},
+            {"uri": "aistock-qe-long-trend://evaluations/x", "artifact_manifest_sha256": "c" * 64},
+            {"platform_delivery_status": {"worker": "succeeded", "cas": "published"}},
+            {"sha256": "d" * 64},
+            {"worker_terminal_receipt": {"sha256": "e" * 64}},
+        )
+
+    monkeypatch.setattr(service, "_publish_remote_artifacts", publish)
+    with pytest.raises(QELongTrendResultRepositoryError, match="content drift"):
+        asyncio.run(
+            service.collect_and_publish(
+                evaluation_id=evaluation_id,
+                task_id="task-1",
+                loop_index=1,
+                client=Client(),  # type: ignore[arg-type]
+            )
+        )
+
+    conflict = repository.transitions[-1][1]
+    assert conflict["updates"]["status"] == "succeeded"
+    assert conflict["updates"]["platform_delivery_status_json"]["db"] == "conflict"
+    assert conflict["updates"]["data_action_plan_json"][-1]["action"] == (
+        "inspect_phase3_receipt_content_conflict"
+    )
+    assert conflict["release_owner"] is True
 
 
 def test_params_hash_is_identity_evidence_but_not_a_worker_pickle_input() -> None:

@@ -107,6 +107,13 @@ def test_real_pinned_source_manifest_and_surface_read_back_exactly() -> None:
     assert surface.surface_sha256 == compatibility_component_hashes_v2(requirement)["surface_sha256"]
 
 
+def test_k1_delegates_only_the_exact_k4_pinned_artifact_paths() -> None:
+    receipts = build_current_three_compatibility_receipts_v1()
+
+    assert len(receipts) == 3
+    assert {receipt.status for receipt in receipts} == {CompatibilityStatusV1.PASSED}
+
+
 def test_public_source_and_receipt_builders_reject_non_strict_carriers() -> None:
     requirement = _manifest().compatibility_requirement
     with pytest.raises(TypeError, match="pathlib.Path"):

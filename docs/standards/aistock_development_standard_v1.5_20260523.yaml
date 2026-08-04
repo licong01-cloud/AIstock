@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 5303eea08bfa911ff0502e3851c931f73c6ff4cf30da5704ae8ca166a7015fde
+source_sha256: 434c4b522c2923df5a125de0e296f56eafdb98c57409213dcc46d9228ec4a3d6
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-07-22"
+updated_at: "2026-08-03"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -527,6 +527,76 @@ rules:
     baseline_policy: block_release_until_verified
     remediation: Build RD-Agent from a clean merged commit into an immutable release, keep state under RDAGENT_STATE_ROOT, atomically switch current, persist a receipt, and fail instead of using file overlays.
 
+  - rule_id: TOOL-RTK-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-tool-rtk-001
+    title: Interactive windows prefer supported RTK wrappers without making RTK a gate
+    severity: P1
+    category: agent_efficiency
+    enabled: true
+    checker:
+      type: manual_review
+      required_evidence:
+        - supported_high_output_commands_prefer_rtk
+        - unsupported_commands_record_capability_fallback
+        - no_rtk_trust_or_ci_dependency
+        - missing_telemetry_does_not_trigger_probe
+    baseline_policy: manual_review_only
+    remediation: Prefer RTK for supported high-output interactive commands, use direct commands for unsupported operations, and never make RTK availability a task or CI gate.
+
+  - rule_id: BACKEND-RESTART-OWNERSHIP-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-backend-restart-ownership-001
+    title: User backend process control requires explicit per-target authorization
+    severity: P0
+    category: production_isolation
+    enabled: true
+    applies_to:
+      include_globs:
+        - scripts/**/*
+        - .codex/**/*
+        - .claude/**/*
+        - .github/workflows/**/*
+        - noxfile.py
+      exclude_globs:
+        - backend/tests/**
+    checker:
+      type: regex
+      patterns:
+        - '(?i)(taskkill|stop-process|restart-service|systemctl\s+(?:start|stop|restart)|docker\s+(?:start|stop|restart)|start-process).{0,160}(backend|uvicorn|8001|19080)'
+        - '(?i)(backend|uvicorn|8001|19080).{0,160}(taskkill|stop-process|restart-service|systemctl\s+(?:start|stop|restart)|docker\s+(?:start|stop|restart)|start-process)'
+        - '(?i)(python(?:\.exe)?\s+scripts[/\\]_restart_backend\.py|python(?:\.exe)?\s+backend[/\\]main\.py|uvicorn\s+backend\.main:app)'
+        - '(?i)(sc(?:\.exe)?|net(?:\.exe)?)\s+(?:start|stop)\s+[^\r\n]*(backend|uvicorn|8001|19080)'
+    baseline_policy: block_new_only
+    remediation: Reject user-backend process control in the workflow subprocess executor, emit an operator runbook reference, and wait for the user; validation, merge, close-sync, aftercare, and cleanup never authorize backend process control.
+
+  - rule_id: BUG-RESTART-EFFECTIVE-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001
+    title: Runtime BUG fixes persist across restart and pass post-restart read-only verification
+    severity: P0
+    category: issue_workflow
+    enabled: true
+    checker:
+      type: manual_review
+      required_evidence:
+        - runtime_impact_classified_or_unknown_fail_closed
+        - explicit_contract_cannot_downgrade_changed_file_inference
+        - exact_single_runtime_target_or_split_bug
+        - persistent_fix_basis
+        - durable_fresh_process_load_evidence_in_bug_and_pr
+        - runtime_target_catalog_ref
+        - existing_repo_operator_runbook_ref
+        - runtime_source_pr_uses_refs_not_closes
+        - runtime_batch_path_blocked
+        - runtime_identity_match
+        - catalog_origin_limited_post_restart_probes
+        - complete_digest_bound_post_restart_business_smoke
+        - database_readback_when_required
+        - no_probe_response_body_in_receipt
+        - tracked_bug_close_sync_after_runtime_gate
+        - github_issue_open_while_runtime_pending
+        - close_sync_worktree_current_with_origin_main
+    baseline_policy: block_issue_verified_until_post_restart_passed
+    remediation: Keep the BUG fixed_source_pending_user_restart until the user restarts the catalog target and post-restart read-only identity and smoke evidence passes.
+
 manual_review_controls:
   - control_id: DESIGN-COMPLIANCE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-compliance-001
@@ -553,7 +623,15 @@ manual_review_controls:
   - control_id: STD-SYNC-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-std-sync-001
     severity: P1
-    title: Human-readable standard and machine-readable YAML must be updated in the same versioned change.
+    title: Human-readable standard, machine-readable YAML, and task-relevant client entrypoints stay aligned without unrelated-lane blocking or repeated broad installs.
+    required_evidence:
+      - markdown_and_yaml_updated_together
+      - full_client_hash_verification_after_entrypoint_merge
+      - selected_router_and_lane_only_block_active_task
+      - unrelated_lane_staleness_warning_only
+      - explicit_client_profile_target
+      - idempotent_lock_protected_staged_client_sync
+      - restart_only_when_recommended_or_client_ui_stale
   - control_id: FEATURE-WORKFLOW-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-feature-workflow-001
     severity: P1
@@ -586,3 +664,17 @@ manual_review_controls:
       - rollback_target
       - no_source_overlay
     failure_policy: block_release_deploy_restart_and_verified_claims
+  - control_id: TOOL-RTK-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-tool-rtk-001
+    severity: P1
+    title: Interactive high-output commands prefer supported RTK wrappers; capability fallback and missing telemetry remain non-blocking.
+  - control_id: BACKEND-RESTART-OWNERSHIP-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-backend-restart-ownership-001
+    severity: P0
+    title: User backend start, stop, and restart require explicit authorization for the current target and cannot be inferred from any workflow stage.
+    failure_policy: block_process_control_and_runtime_verified_claims
+  - control_id: BUG-RESTART-EFFECTIVE-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001
+    severity: P0
+    title: Runtime BUG closure requires persistent-source, fresh-process, runtime identity, and post-restart read-only smoke evidence.
+    failure_policy: block_issue_close_sync_and_verified_claims

@@ -179,11 +179,15 @@ jobs:
             const summaryPath = 'tmp/validation/pr_quality/summary.md';
             const codeIntelPath = 'tmp/validation/pr_quality/code-intelligence-summary.md';
             const docsLitePath = 'tmp/validation/pr_quality/docs-lite-version-record.md';
+            const classificationPath = 'tmp/validation/pr_quality/change-classification.json';
             const summary = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : 'PR quality summary was not generated.';
             const codeIntel = fs.existsSync(codeIntelPath) ? fs.readFileSync(codeIntelPath, 'utf8') : 'Code intelligence summary was not generated.';
             const docsLite = fs.existsSync(docsLitePath) ? fs.readFileSync(docsLitePath, 'utf8') : '';
             const maxChars = 55000;
-            const compactFooter = 'Code intelligence is report-only; Semgrep runs once in its dedicated workflow.';
+            const classification = fs.existsSync(classificationPath)
+              ? JSON.parse(fs.readFileSync(classificationPath, 'utf8')).classification
+              : 'unknown';
+            const compactFooter = `Classification: ${classification}. Backend restart owner: user; this CI performs no user-backend process control. Code intelligence is report-only; Semgrep runs once in its dedicated workflow.`;
             let body = `${marker}\n${summary}`;
             if (docsLite) {
               body = `${marker}\n${docsLite}\n\n${summary}`;

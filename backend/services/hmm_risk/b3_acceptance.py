@@ -449,7 +449,12 @@ def evaluate_train_occupancy(
             evidence={},
         )
     ordered_date_strings = [value.isoformat() for value in ordered_dates]
-    required_hashes = ("dataset_manifest_hash", "mapping_manifest_hash", "calendar_manifest_hash")
+    required_hashes = (
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "calendar_manifest_hash",
+        "feature_domain_policy_sha256",
+    )
     if (
         frozen_input_manifest.get("schema_version") != "hmm_risk_d4_train_frozen_input_manifest_v1"
         or frozen_input_manifest.get("direct_sector_level") not in {"L1", "L2"}
@@ -533,6 +538,102 @@ def _candidate_status(entry: Mapping[str, Any]) -> bool:
     )
 
 
+def _rejected_stage(
+    *,
+    stage: str,
+    status: str,
+    valid: bool,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    failures = list(receipt.get("failure_reason_codes") or ())
+    blockers = list(receipt.get("blocking_reason_codes") or ())
+    if not failures and not blockers:
+        failures.append("hmm_risk_model_selection_contract_unsatisfied")
+    primary = receipt.get("primary_reason_code") or (failures[0] if failures else blockers[0])
+    return {
+        "stage": stage,
+        "status": status,
+        "valid": valid,
+        "failure_reason_codes": failures,
+        "blocking_reason_codes": blockers,
+        "primary_reason_code": primary,
+    }
+
+
+def _candidate_rejection_summary(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Retain compact train-only D4 rejection evidence for every ineligible sector entry."""
+
+    rejected: list[dict[str, Any]] = []
+    for entry in entries:
+        stages: list[dict[str, Any]] = []
+        if entry.get("fit_status") != "accepted":
+            failures = list(entry.get("failure_reason_codes") or ())
+            blockers = list(entry.get("blocking_reason_codes") or ())
+            if not failures and not blockers:
+                failures.append("hmm_risk_model_fit_failed")
+            stages.append(
+                {
+                    "stage": str(entry.get("failure_stage") or "fit"),
+                    "status": str(entry.get("model_entry_status") or "failed"),
+                    "valid": False,
+                    "failure_reason_codes": failures,
+                    "blocking_reason_codes": blockers,
+                    "primary_reason_code": (
+                        failures[0] if failures else blockers[0] if blockers else "hmm_risk_model_fit_failed"
+                    ),
+                }
+            )
+        else:
+            likelihood = entry.get("likelihood")
+            if isinstance(likelihood, Mapping) and not (
+                likelihood.get("convergence_valid") is True and likelihood.get("likelihood_valid") is True
+            ):
+                failures = list(likelihood.get("failure_reason_codes") or ())
+                blockers = list(likelihood.get("blocking_reason_codes") or ())
+                status = "failed" if failures else "insufficient_evidence" if blockers else "failed"
+                stages.append(_rejected_stage(stage="likelihood", status=status, valid=False, receipt=likelihood))
+            covariance = entry.get("covariance")
+            if isinstance(covariance, Mapping) and covariance.get("covariance_valid") is not True:
+                stages.append(
+                    _rejected_stage(
+                        stage="covariance",
+                        status=str(covariance.get("covariance_status") or "failed"),
+                        valid=False,
+                        receipt=covariance,
+                    )
+                )
+            occupancy = entry.get("train_occupancy")
+            if isinstance(occupancy, Mapping) and occupancy.get("train_occupancy_valid") is not True:
+                stages.append(
+                    _rejected_stage(
+                        stage="train_occupancy",
+                        status=str(occupancy.get("train_occupancy_status") or "failed"),
+                        valid=False,
+                        receipt=occupancy,
+                    )
+                )
+            if entry.get("model_entry_valid") is not True and not stages:
+                stages.append(
+                    {
+                        "stage": "model_entry",
+                        "status": str(entry.get("model_entry_status") or "failed"),
+                        "valid": False,
+                        "failure_reason_codes": ["hmm_risk_model_selection_contract_unsatisfied"],
+                        "blocking_reason_codes": [],
+                        "primary_reason_code": "hmm_risk_model_selection_contract_unsatisfied",
+                    }
+                )
+        if stages:
+            rejected.append(
+                {
+                    "sector_code": str(entry.get("sector_code") or ""),
+                    "entry_receipt_sha256": str(entry.get("entry_receipt_sha256") or ""),
+                    "failed_stages": stages,
+                }
+            )
+    return rejected
+
+
 def _canonical_receipt_hash_valid(receipt: Mapping[str, Any], field: str = "receipt_sha256") -> bool:
     expected = str(receipt.get(field) or "")
     body = {key: value for key, value in receipt.items() if key != field}
@@ -547,15 +648,19 @@ def select_level_restart(
     level: str,
     expected_sector_codes: Sequence[str],
     feature_count: int,
+    feature_domain_policy_sha256: str,
 ) -> dict[str, Any]:
     """Apply D5-01-B after D5-02 bitwise repeat equality, without reading validation evidence."""
 
     codes = tuple(sorted(str(value) for value in expected_sector_codes))
+    policy_identity_valid = _valid_sha256(feature_domain_policy_sha256)
     expected_count = 31 if level == "L1" else 131 if level == "L2" else 0
     blockers: list[str] = []
     failures: list[str] = []
     if len(codes) != expected_count or len(set(codes)) != expected_count:
         failures.append("hmm_risk_model_selection_level_incomplete")
+    if not policy_identity_valid:
+        blockers.append("hmm_risk_model_selection_contract_unsatisfied")
     for repeat in (first_repeat, second_repeat):
         if tuple(repeat.get("schedule") or ()) != RESTART_SCHEDULE:
             blockers.append("hmm_risk_model_restart_schedule_incomplete")
@@ -658,6 +763,28 @@ def select_level_restart(
             key=lambda entry: str(entry.get("sector_code") or ""),
         )
         entry_codes = tuple(str(entry.get("sector_code") or "") for entry in entries)
+        rejection_summary = _candidate_rejection_summary(entries)
+        candidate_failures = [
+            str(code)
+            for item in rejection_summary
+            for stage in item["failed_stages"]
+            for code in stage["failure_reason_codes"]
+        ]
+        candidate_blockers = [
+            str(code)
+            for item in rejection_summary
+            for stage in item["failed_stages"]
+            for code in stage["blocking_reason_codes"]
+        ]
+        if entry_codes != codes:
+            candidate_failures.append("hmm_risk_model_selection_level_incomplete")
+        if any(not _candidate_status(entry) for entry in entries) and not rejection_summary:
+            candidate_failures.append("hmm_risk_model_selection_contract_unsatisfied")
+        accepted_entry_codes = {
+            str(entry.get("sector_code") or "") for entry in entries if entry.get("fit_status") == "accepted"
+        }
+        if any((seed, code) not in model_maps[0] for code in accepted_entry_codes):
+            candidate_failures.append("hmm_risk_model_selection_repeat_mismatch")
         eligible = (
             entry_codes == codes
             and all(_candidate_status(entry) for entry in entries)
@@ -673,9 +800,11 @@ def select_level_restart(
                     score = final / (rows * dimensions)
                 except (KeyError, TypeError, ValueError, ZeroDivisionError):
                     eligible = False
+                    candidate_failures.append("hmm_risk_model_selection_contract_unsatisfied")
                     break
                 if rows <= 0 or dimensions != feature_count or not math.isfinite(score):
                     eligible = False
+                    candidate_failures.append("hmm_risk_model_selection_contract_unsatisfied")
                     break
                 scores.append(score)
         aggregate = None
@@ -696,6 +825,17 @@ def select_level_restart(
                 "eligible": eligible,
                 "aggregate": aggregate,
                 "entry_receipt_hashes": [str(entry.get("entry_receipt_sha256") or "") for entry in entries],
+                "failure_reason_codes": list(dict.fromkeys(candidate_failures)),
+                "blocking_reason_codes": list(dict.fromkeys(candidate_blockers)),
+                "primary_reason_code": (
+                    candidate_failures[0]
+                    if candidate_failures
+                    else candidate_blockers[0]
+                    if candidate_blockers
+                    else None
+                ),
+                "rejection_summary": rejection_summary,
+                "rejection_summary_sha256": canonical_sha256(rejection_summary),
                 "warning_reason_codes": sorted(
                     {
                         str(code)
@@ -731,6 +871,7 @@ def select_level_restart(
     evidence = {
         "family": family,
         "level": level,
+        "feature_domain_policy_sha256": feature_domain_policy_sha256,
         "canonical_sector_codes": list(codes),
         "canonical_sector_set_sha256": canonical_sha256(list(codes)),
         "schedule": list(RESTART_SCHEDULE),
@@ -782,6 +923,7 @@ def evaluate_semantic_validation(
         "mapping_manifest_hash",
         "calendar_manifest_hash",
         "l2_stock_fact_manifest_hash",
+        "feature_domain_policy_sha256",
     )
     if manifest_valid and (
         frozen_input_manifest.get("schema_version") != "hmm_risk_d6_frozen_input_manifest_v1"

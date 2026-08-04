@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from typing import Any, Iterable
 
@@ -18,6 +19,7 @@ from backend.services.advisory_historical_range.dataset_bridge import (
     HistoricalRangeDatasetBridgeError,
 )
 from backend.services.advisory_historical_range.models import (
+    HistoricalRangeArtifactKind,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeContractError,
     HistoricalRangeDatasetBridgeRequestV1,
@@ -39,6 +41,7 @@ from backend.services.advisory_phase1.capture_foundation import (
     RetrospectiveObservationCaptureBatchRequestV1,
     RetrospectiveObservationCaptureBinding,
     REASON_CAPTURE_BATCH_CONFLICT,
+    REASON_CAPTURE_BATCH_STATE_INVALID,
     capture_request_hash,
 )
 from backend.services.advisory_phase1.dataset_build import (
@@ -47,6 +50,9 @@ from backend.services.advisory_phase1.dataset_build import (
     LabelTargetIdentity,
     RetrospectiveCaptureSetMember,
     RetrospectiveDatasetBuildRequest,
+    RetrospectiveSnapshotPolicyMember,
+    RetrospectiveSnapshotPolicySet,
+    SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
     SnapshotUniversePolicySetError,
     build_snapshot_universe_policy_set_hash,
 )
@@ -110,6 +116,15 @@ from backend.services.advisory_phase1.source_revision_postgres import (
 )
 
 
+@dataclass(frozen=True)
+class _SnapshotPolicyAuthority:
+    policy_bundle_id: str
+    policy_bundle_hash: str
+    policy_bundle_ref: HistoricalRangeArtifactRefV1
+    component_hashes: dict[str, str]
+    component_set_hash: str
+
+
 class PostgresHistoricalRangeBridgeAdapters:
     """One exact-retry adapter used for all three bridge protocol boundaries."""
 
@@ -149,7 +164,12 @@ class PostgresHistoricalRangeBridgeAdapters:
             conn_factory=conn_factory,
         )
         self._build_repository = PostgresDatasetBuildRepository(
-            conn_factory=conn_factory
+            conn_factory=conn_factory,
+            historical_range_policy_payload_loader=lambda raw_ref: (
+                self._artifact_store.load(
+                    HistoricalRangeArtifactRefV1.model_validate(raw_ref)
+                ).payload
+            ),
         )
         writer = DeterministicParquetWriter(lineage_identity_type="HISTORICAL_RANGE")
         source_reader = PostgresSnapshotSourceReader(
@@ -354,18 +374,9 @@ class PostgresHistoricalRangeBridgeAdapters:
             }:
                 return batch
             if batch.status is CaptureBatchStatus.RUNNING:
-                if (
-                    batch.lease_expires_at is None
-                    or batch.lease_expires_at > datetime.now(UTC)
-                ):
-                    raise HistoricalRangeContractError(
-                        REASON_DATABASE_CAPACITY_EXHAUSTED,
-                        "retrospective capture batch still has an active lease",
-                    )
-                batch = self._capture_repository.expire(
-                    capture_batch_id=batch.request.capture_batch_id,
-                    expected_row_version=batch.row_version,
-                    fencing_token=batch.fencing_token,
+                batch = self._expire_capture_batch(
+                    batch=batch,
+                    active_lease_detail="retrospective capture batch still has an active lease",
                 )
             if batch.status not in {
                 CaptureBatchStatus.FAILED,
@@ -435,18 +446,9 @@ class PostgresHistoricalRangeBridgeAdapters:
         if active:
             candidate = active[0]
             if candidate.status is CaptureBatchStatus.RUNNING:
-                if (
-                    candidate.lease_expires_at is None
-                    or candidate.lease_expires_at > datetime.now(UTC)
-                ):
-                    raise HistoricalRangeContractError(
-                        REASON_DATABASE_CAPACITY_EXHAUSTED,
-                        "active capture successor still has an active lease",
-                    )
-                expired = self._capture_repository.expire(
-                    capture_batch_id=candidate.request.capture_batch_id,
-                    expected_row_version=candidate.row_version,
-                    fencing_token=candidate.fencing_token,
+                expired = self._expire_capture_batch(
+                    batch=candidate,
+                    active_lease_detail="active capture successor still has an active lease",
                 )
                 return self._recover_capture_successor(
                     request=request,
@@ -468,6 +470,28 @@ class PostgresHistoricalRangeBridgeAdapters:
             id_prefix=id_prefix,
             predecessor=chain[-1],
         )
+
+    def _expire_capture_batch(
+        self,
+        *,
+        batch: CaptureBatch,
+        active_lease_detail: str,
+    ) -> CaptureBatch:
+        """Use repository time as the single lease-expiry authority."""
+
+        try:
+            return self._capture_repository.expire(
+                capture_batch_id=batch.request.capture_batch_id,
+                expected_row_version=batch.row_version,
+                fencing_token=batch.fencing_token,
+            )
+        except SourceLedgerError as error:
+            if error.reason_code == REASON_CAPTURE_BATCH_STATE_INVALID:
+                raise HistoricalRangeContractError(
+                    REASON_DATABASE_CAPACITY_EXHAUSTED,
+                    active_lease_detail,
+                ) from error
+            raise
 
     def _recover_capture_successor(
         self,
@@ -770,6 +794,19 @@ class PostgresHistoricalRangeBridgeAdapters:
             raise HistoricalRangeDatasetBridgeError(
                 REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
                 "label capture source is not a retrospective observation capture",
+            )
+        capture_policy_identities = {
+            (
+                item.historical_range_policy_bundle_ref,
+                item.historical_range_policy_bundle_hash,
+                item.policy_component_set_hash,
+            )
+            for item in labels
+        }
+        if len(capture_policy_identities) != 1:
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                "one label capture group requires one exact policy/component set",
             )
         mappings = self._select_observations(
             request=request,
@@ -1412,6 +1449,117 @@ class PostgresHistoricalRangeBridgeAdapters:
             union.requested_source_cutoff,
         )
 
+    def _resolve_snapshot_policy_authority(
+        self,
+        *,
+        request: HistoricalRangeDatasetBridgeRequestV1,
+        labels: tuple[HistoricalRangeBridgeLabelV1, ...],
+    ) -> _SnapshotPolicyAuthority:
+        policy_hashes = tuple(
+            sorted({item.historical_range_policy_bundle_hash for item in labels})
+        )
+        if not policy_hashes:
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                "snapshot policy set cannot be empty",
+            )
+        refs_by_hash = {
+            item.payload_sha256: item for item in request.policy_bundle_refs
+        }
+        members: list[RetrospectiveSnapshotPolicyMember] = []
+        policy_ids: dict[str, str] = {}
+        component_hashes_by_policy: dict[str, dict[str, str]] = {}
+        component_set_hashes: dict[str, str] = {}
+        for policy_hash in policy_hashes:
+            policy_ref = refs_by_hash.get(policy_hash)
+            component_hashes = request.policy_component_hashes.get(policy_hash)
+            if policy_ref is None or component_hashes is None:
+                raise HistoricalRangeDatasetBridgeError(
+                    REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                    "snapshot label policy lies outside the exact bridge request",
+                )
+            policy = HistoricalRangeOutcomePolicyBundleV1.model_validate(
+                self._artifact_store.load(policy_ref).payload
+            )
+            label_component_sets = {
+                item.policy_component_set_hash
+                for item in labels
+                if item.historical_range_policy_bundle_hash == policy_hash
+            }
+            if len(label_component_sets) != 1:
+                raise HistoricalRangeDatasetBridgeError(
+                    REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                    "one snapshot policy requires one exact component set",
+                )
+            component_set_hash = next(iter(label_component_sets))
+            policy_ids[policy_hash] = str(policy.policy_bundle_id)
+            component_hashes_by_policy[policy_hash] = dict(component_hashes)
+            component_set_hashes[policy_hash] = component_set_hash
+            try:
+                member = RetrospectiveSnapshotPolicyMember(
+                    policy_bundle_id=policy_ids[policy_hash],
+                    policy_bundle_hash=policy_hash,
+                    policy_bundle_ref=policy_ref.model_dump(mode="json"),
+                    policy_component_hashes=component_hashes,
+                    policy_component_set_hash=component_set_hash,
+                )
+            except ValueError as exc:
+                raise HistoricalRangeDatasetBridgeError(
+                    REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                    "snapshot policy member differs from its exact component authority",
+                ) from exc
+            members.append(member)
+
+        if len(members) == 1:
+            policy_hash = policy_hashes[0]
+            return _SnapshotPolicyAuthority(
+                policy_bundle_id=policy_ids[policy_hash],
+                policy_bundle_hash=policy_hash,
+                policy_bundle_ref=refs_by_hash[policy_hash],
+                component_hashes=component_hashes_by_policy[policy_hash],
+                component_set_hash=component_set_hashes[policy_hash],
+            )
+
+        try:
+            policy_set = RetrospectiveSnapshotPolicySet.from_members(members)
+        except ValueError as exc:
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                "snapshot policy set differs from its exact members",
+            ) from exc
+        payload = policy_set.canonical_payload()
+        upstream_refs = tuple(
+            sorted(
+                (refs_by_hash[policy_hash] for policy_hash in policy_hashes),
+                key=lambda item: (
+                    item.artifact_kind.value,
+                    item.semantic_content_hash,
+                    item.relative_path,
+                ),
+            )
+        )
+        stored = self._artifact_store.publish_payload(
+            artifact_kind=HistoricalRangeArtifactKind.REQUEST,
+            producer_contract_version=SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
+            payload_schema_version=SNAPSHOT_POLICY_SET_SCHEMA_VERSION,
+            resolved_request_hash=str(request.request_hash),
+            payload=payload,
+            upstream_refs=upstream_refs,
+        )
+        readback = self._artifact_store.load(stored.ref)
+        if readback.payload != payload or readback.upstream_refs != upstream_refs:
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                "snapshot policy set artifact differs from its exact members",
+            )
+        return _SnapshotPolicyAuthority(
+            policy_bundle_id=f"ahrpbs_{stored.ref.payload_sha256[:20]}",
+            policy_bundle_hash=stored.ref.payload_sha256,
+            policy_bundle_ref=stored.ref,
+            component_hashes=policy_set.aggregate_component_hashes,
+            component_set_hash=policy_set.aggregate_component_set_hash,
+        )
+
     def _build_request(
         self,
         *,
@@ -1421,19 +1569,9 @@ class PostgresHistoricalRangeBridgeAdapters:
         labels: tuple[HistoricalRangeBridgeLabelV1, ...],
         snapshot_source: tuple[str, str, str, datetime],
     ) -> RetrospectiveDatasetBuildRequest:
-        policy_hashes = {item.historical_range_policy_bundle_hash for item in labels}
-        component_hashes = {item.policy_component_set_hash for item in labels}
-        if len(policy_hashes) != 1 or len(component_hashes) != 1:
-            raise HistoricalRangeDatasetBridgeError(
-                REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
-                "one snapshot cannot mix range policies or component sets",
-            )
-        policy_hash = next(iter(policy_hashes))
-        policy_ref = next(
-            item for item in request.policy_bundle_refs if item.payload_sha256 == policy_hash
-        )
-        policy = HistoricalRangeOutcomePolicyBundleV1.model_validate(
-            self._artifact_store.load(policy_ref).payload
+        policy_authority = self._resolve_snapshot_policy_authority(
+            request=request,
+            labels=labels,
         )
         range_scopes_by_id = {
             str(plan.range_scope.range_lineage_scope_id): FrozenIdentity(
@@ -1505,11 +1643,10 @@ class PostgresHistoricalRangeBridgeAdapters:
                 "snapshot observations have conflicting same-day universe "
                 f"policies: {error}",
             ) from error
-        component_roles = request.policy_component_hashes[policy_hash]
         compatibility_hash = canonical_json_sha256(
             {
-                "policy_bundle_hash": policy_hash,
-                "policy_component_set_hash": next(iter(component_hashes)),
+                "policy_bundle_hash": policy_authority.policy_bundle_hash,
+                "policy_component_set_hash": policy_authority.component_set_hash,
                 "label_targets": [item.model_dump(mode="json") for item in targets],
                 "snapshot_universe_policy_set_hash": universe_policy_hash,
             }
@@ -1521,13 +1658,15 @@ class PostgresHistoricalRangeBridgeAdapters:
             date_end=date_end,
             selected_observation_mappings=selected_observations,
             selected_label_mappings=selected_labels,
-            label_policy_bundle_id=str(policy.policy_bundle_id),
-            label_policy_bundle_hash=policy_hash,
-            historical_range_policy_bundle_ref=policy_ref.model_dump(mode="json"),
+            label_policy_bundle_id=policy_authority.policy_bundle_id,
+            label_policy_bundle_hash=policy_authority.policy_bundle_hash,
+            historical_range_policy_bundle_ref=(
+                policy_authority.policy_bundle_ref.model_dump(mode="json")
+            ),
             label_targets=targets,
             universe_policy_hash=universe_policy_hash,
-            benchmark_policy_hash=component_roles["BENCHMARK"],
-            cost_policy_hash=component_roles["COST"],
+            benchmark_policy_hash=policy_authority.component_hashes["BENCHMARK"],
+            cost_policy_hash=policy_authority.component_hashes["COST"],
             calendar_hash=next(iter(calendar_hashes)),
             symbol_normalization_policy_hash=next(iter(symbol_hashes)),
             query_registry_version=self._query_registry_version,
@@ -1563,7 +1702,7 @@ class PostgresHistoricalRangeBridgeAdapters:
                     )
                 ]
             ),
-            policy_component_set_hash=next(iter(component_hashes)),
+            policy_component_set_hash=policy_authority.component_set_hash,
         )
 
     def _select_labels(
@@ -1694,17 +1833,26 @@ class PostgresHistoricalRangeBridgeAdapters:
         requested_outcomes = set(request.outcome_refs)
         requested_policies = set(request.policy_bundle_refs)
         label_signals: set[str] = set()
-        policy_identities: set[tuple[HistoricalRangeArtifactRefV1, str]] = set()
-        component_hashes: set[str] = set()
+        policy_identity_by_signal: dict[
+            str,
+            tuple[HistoricalRangeArtifactRefV1, str, str],
+        ] = {}
         for label in labels:
             label_signals.add(label.canonical_signal_id)
-            policy_identities.add(
-                (
-                    label.historical_range_policy_bundle_ref,
-                    label.historical_range_policy_bundle_hash,
-                )
+            policy_identity = (
+                label.historical_range_policy_bundle_ref,
+                label.historical_range_policy_bundle_hash,
+                label.policy_component_set_hash,
             )
-            component_hashes.add(label.policy_component_set_hash)
+            existing_policy_identity = policy_identity_by_signal.setdefault(
+                label.canonical_signal_id,
+                policy_identity,
+            )
+            if existing_policy_identity != policy_identity:
+                raise HistoricalRangeDatasetBridgeError(
+                    REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
+                    "one canonical signal requires one exact policy/component set",
+                )
             if (
                 label.canonical_signal_id not in observation_signals
                 or label.historical_range_policy_bundle_ref
@@ -1717,14 +1865,10 @@ class PostgresHistoricalRangeBridgeAdapters:
                     REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
                     "bridge capture label lies outside the exact request",
                 )
-        if (
-            label_signals != set(observation_signals)
-            or len(policy_identities) != 1
-            or len(component_hashes) != 1
-        ):
+        if label_signals != set(observation_signals):
             raise HistoricalRangeDatasetBridgeError(
                 REASON_DATASET_BRIDGE_LINEAGE_CONFLICT,
-                "one bridge capture requires one exact policy/component set",
+                "bridge capture labels must cover every exact observation signal",
             )
 
 

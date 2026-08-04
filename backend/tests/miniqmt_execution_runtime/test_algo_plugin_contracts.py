@@ -24,6 +24,12 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     require_sha256_v1,
     thaw_json_v1,
 )
+from backend.services.miniqmt_execution_runtime.kernel_callback_events import (
+    build_kernel_command_outcome_event_payload_v1,
+    build_kernel_order_event_payload_v1,
+    build_kernel_order_reconcile_event_payload_v1,
+    build_kernel_trade_event_payload_v1,
+)
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     AbsenceDispositionV1,
     AlgoEventDeliveryV1,
@@ -783,6 +789,14 @@ def test_gateway_capability_catalog_is_a_hashed_technical_fact_not_a_gate() -> N
             None,
         ),
         (
+            EventTypeV2.COMMAND_OUTCOME,
+            EventSourceV2.MINIQMT_EXECUTION_KERNEL,
+            "miniqmt_command_outcome_v1",
+            {"receipt_id": "outcome_receipt_a", "receipt_sha256": "e" * 64},
+            "600000.SH",
+            None,
+        ),
+        (
             EventTypeV2.TICK,
             EventSourceV2.B0_QUOTE_V2,
             "miniqmt_market_data_view_v2",
@@ -843,7 +857,7 @@ def test_gateway_capability_catalog_is_a_hashed_technical_fact_not_a_gate() -> N
             EventSourceV2.QMT_OMS_RECONCILIATION,
             "miniqmt_reconciliation_receipt_v1",
             {"receipt_id": "receipt_a", "receipt_sha256": "d" * 64},
-            None,
+            "600000.SH",
             None,
         ),
         (
@@ -864,6 +878,64 @@ def test_all_runtime_event_composite_rows_are_explicit_and_roundtrip(
     symbol: str | None,
     monotonic_ns: int | None,
 ) -> None:
+    payload: dict[str, object] = {"row": event_type.value}
+    common = {
+        "runtime_id": "runtime_a",
+        "algo_instance_id": "mqalgo_a",
+        "parent_intent_id": "intent_a",
+        "strategy_slot_id": "slot_a",
+        "mapping_id": "mapping_a",
+        "command_id": "command_a",
+        "local_vt_orderid": "local_order_a",
+        "broker_order_id": "broker_order_a",
+    }
+    if event_type is EventTypeV2.ORDER:
+        payload = build_kernel_order_event_payload_v1(
+            raw_payload={"order_status": 48},
+            order_event_id="order_evt_a",
+            symbol="600000.SH",
+            side="BUY",
+            requested_quantity=100,
+            **common,
+        ).model_dump(mode="json")
+    elif event_type is EventTypeV2.TRADE:
+        payload = build_kernel_trade_event_payload_v1(
+            raw_payload={"trade_id": "trade_a"},
+            symbol="600000.SH",
+            side="BUY",
+            trade_quantity=100,
+            trade_price_decimal="10",
+            **common,
+        ).model_dump(mode="json")
+    elif event_type is EventTypeV2.COMMAND_OUTCOME:
+        payload = build_kernel_command_outcome_event_payload_v1(
+            receipt_id="outcome_receipt_a",
+            receipt_sha256="e" * 64,
+            command_type="SUBMIT_LIMIT",
+            outcome="ACCEPTED",
+            outbox_status="ACKED",
+            outbox_row_version=2,
+            outcome_receipt_sha256="f" * 64,
+            outbox_terminal=True,
+            order_terminal=False,
+            **common,
+        ).model_dump(mode="json")
+    elif event_type is EventTypeV2.RECONCILE:
+        reconcile_common = {key: value for key, value in common.items() if key != "command_id"}
+        payload = build_kernel_order_reconcile_event_payload_v1(
+            ordered_trade_refs=(),
+            requested_quantity=100,
+            receipt_id="receipt_a",
+            receipt_sha256="d" * 64,
+            symbol="600000.SH",
+            side="BUY",
+            normalized_order_status="ACCEPTED",
+            authoritative_cumulative_filled_quantity=0,
+            authoritative_remaining_quantity=100,
+            callback_watermark="watermark_a",
+            snapshot_sha256="a" * 64,
+            **reconcile_common,
+        ).model_dump(mode="json")
     event = RuntimeEventEnvelopeV2.create(
         runtime_id="runtime_a",
         sequence=1,
@@ -873,7 +945,7 @@ def test_all_runtime_event_composite_rows_are_explicit_and_roundtrip(
         source=source,
         symbol=symbol,
         payload_schema_version=schema,
-        payload={"row": event_type.value},
+        payload=payload,
         source_identity=source_identity,
         correlation={},
     )

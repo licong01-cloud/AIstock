@@ -11,6 +11,7 @@ from .plugin_contracts import (
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoPersistenceStatusV2,
     KernelCallbackMappingUpdateV1,
+    KernelCommandOutcomeMappingClosureV1,
     RuntimeEventEnvelopeV2,
     RuntimeEventIngressReceiptV1,
 )
@@ -32,6 +33,7 @@ _CORRELATED_OWNER_EVENTS = frozenset(
         EventTypeV2.ORDER,
         EventTypeV2.TRADE,
         EventTypeV2.RECONCILE,
+        EventTypeV2.COMMAND_OUTCOME,
         EventTypeV2.OPERATOR,
     }
 )
@@ -51,6 +53,7 @@ class KernelIngressRepositoryV1(Protocol):
         catalog_runtime: PluginCatalogRuntimeV2,
         correlated_algo_instance_ids: tuple[str, ...],
         callback_mapping_update: KernelCallbackMappingUpdateV1 | None = None,
+        command_outcome_mapping_closure: KernelCommandOutcomeMappingClosureV1 | None = None,
     ) -> RuntimeEventIngressReceiptV1: ...
 
 
@@ -64,10 +67,12 @@ class KernelIngressCoordinatorV1:
         *,
         event: RuntimeEventEnvelopeV2,
         callback_mapping_update: KernelCallbackMappingUpdateV1 | None = None,
+        command_outcome_mapping_closure: KernelCommandOutcomeMappingClosureV1 | None = None,
     ) -> RuntimeEventIngressReceiptV1:
         correlated_algo_instance_ids = _correlated_algo_instance_ids_v1(
             event=event,
             callback_mapping_update=callback_mapping_update,
+            command_outcome_mapping_closure=command_outcome_mapping_closure,
         )
         callback_types = {EventTypeV2.ORDER, EventTypeV2.TRADE, EventTypeV2.RECONCILE}
         if event.event_type in callback_types:
@@ -90,24 +95,35 @@ class KernelIngressCoordinatorV1:
                         "correlated_algo_instance_ids": list(correlated_algo_instance_ids),
                     },
                 )
-        elif callback_mapping_update is not None:
+        elif event.event_type is EventTypeV2.COMMAND_OUTCOME:
+            if not isinstance(command_outcome_mapping_closure, KernelCommandOutcomeMappingClosureV1):
+                raise KernelEventRoutingError(
+                    "MINIQMT_RUNTIME_EVENT_COMMAND_OUTCOME_CLOSURE_MISSING",
+                    "COMMAND_OUTCOME ingress requires one exact mapping closure",
+                    context={"event_id": event.event_id},
+                )
+        elif callback_mapping_update is not None or command_outcome_mapping_closure is not None:
             raise KernelEventRoutingError(
                 "MINIQMT_RUNTIME_EVENT_CALLBACK_MAPPING_UPDATE_UNEXPECTED",
                 "non-callback ingress cannot mutate a durable child mapping",
                 context={"event_id": event.event_id, "event_type": event.event_type.value},
             )
-        return self.repository.ingest_routed_event_atomic(
+        repository_values = dict(
             event=event,
             catalog_runtime=self.catalog_runtime,
             correlated_algo_instance_ids=correlated_algo_instance_ids,
             callback_mapping_update=callback_mapping_update,
         )
+        if command_outcome_mapping_closure is not None:
+            repository_values["command_outcome_mapping_closure"] = command_outcome_mapping_closure
+        return self.repository.ingest_routed_event_atomic(**repository_values)
 
 
 def _correlated_algo_instance_ids_v1(
     *,
     event: RuntimeEventEnvelopeV2,
     callback_mapping_update: KernelCallbackMappingUpdateV1 | None,
+    command_outcome_mapping_closure: KernelCommandOutcomeMappingClosureV1 | None,
 ) -> tuple[str, ...]:
     correlation = thaw_json_v1(event.correlation)
     if event.event_type in {EventTypeV2.ORDER, EventTypeV2.TRADE, EventTypeV2.RECONCILE}:
@@ -125,6 +141,21 @@ def _correlated_algo_instance_ids_v1(
                 context={"event_id": event.event_id, "expected": expected, "actual": correlation},
             )
         return (callback_mapping_update.mapping.algo_instance_id,)
+    if event.event_type is EventTypeV2.COMMAND_OUTCOME:
+        if not isinstance(command_outcome_mapping_closure, KernelCommandOutcomeMappingClosureV1):
+            return ()
+        expected = {
+            "algo_instance_id": command_outcome_mapping_closure.mapping.algo_instance_id,
+            "mapping_id": command_outcome_mapping_closure.mapping.mapping_id,
+            "reference_command_id": command_outcome_mapping_closure.reference_command_id,
+        }
+        if any(correlation.get(key) != value for key, value in expected.items()):
+            raise KernelEventRoutingError(
+                "MINIQMT_RUNTIME_EVENT_COMMAND_OUTCOME_CORRELATION_CONFLICT",
+                "COMMAND_OUTCOME correlation does not close to its mapping authority",
+                context={"event_id": event.event_id, "expected": expected, "actual": correlation},
+            )
+        return (command_outcome_mapping_closure.mapping.algo_instance_id,)
     if event.event_type in {EventTypeV2.TIMER, EventTypeV2.OPERATOR}:
         algo_instance_id = correlation.get("algo_instance_id")
         if type(algo_instance_id) is not str or not algo_instance_id.strip():
@@ -268,6 +299,8 @@ def route_event_targets_v1(
         elif event.event_type in {EventTypeV2.ACCOUNT, EventTypeV2.SESSION}:
             eligible = algo.status in _ACTIVE_OR_PAUSED
         elif event.event_type is EventTypeV2.RECONCILE:
+            eligible = algo.status in _ACTIVE_OR_PAUSED
+        elif event.event_type is EventTypeV2.COMMAND_OUTCOME:
             eligible = algo.status in _ACTIVE_OR_PAUSED
         elif event.event_type is EventTypeV2.EOD:
             eligible = algo.status in _ACTIVE_OR_PAUSED

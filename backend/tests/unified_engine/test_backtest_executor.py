@@ -140,6 +140,85 @@ class TestBacktestExecutorBasic:
 
         assert result.job_id == "Loop1"
         assert result.status == "submitted"
+
+    def test_task_profile_resolves_node_owned_root_before_compose(self):
+        composer = MagicMock()
+
+        def _compose(**kwargs):
+            return {
+                "experiment_files": dict(MOCK_EXPERIMENT_FILES),
+                "wsl_command": MOCK_WSL_COMMAND,
+                "long_trend_evaluation_descriptor": kwargs["long_trend_evaluation_descriptor"],
+            }
+
+        composer.compose_experiment_in_memory.side_effect = _compose
+        client = make_mock_client()
+        client.get_execution_environment.return_value = SimpleNamespace(
+            execution_environment_snapshot_id="env-1",
+            execution_environment_manifest_sha256="e" * 64,
+            manifest={
+                "schema_version": "qe_execution_environment_v1",
+                "python": {
+                    "implementation": "cpython",
+                    "version": "3.11.9",
+                    "cache_tag": "cpython-311",
+                },
+            },
+        )
+        client.get_dataset_identity.return_value = SimpleNamespace(
+            complete=True,
+            dataset={"dataset_manifest_sha256": "d" * 64},
+            long_trend_snapshot={
+                "snapshot_id": "snapshot-1",
+                "manifest_sha256": "s" * 64,
+            },
+            long_trend_snapshot_reason=None,
+        )
+
+        class _Resolver:
+            calls: list[str] = []
+
+            def primary_factor_data_root(self, node_id: str) -> str:
+                self.calls.append(node_id)
+                return "/node-owned/factor-data"
+
+        resolver = _Resolver()
+        executor = ProductionBacktestExecutor(
+            composer,
+            client,
+            submission_coordinator=_UnitSubmissionCoordinator(),
+            long_trend_snapshot_resolver=resolver,  # type: ignore[arg-type]
+        )
+        cfg = ExperimentConfig(
+            factor_names=["Alpha001"],
+            model_id="model_lgbm_v1",
+            long_trend_profile_id="qe_long_trend_v1",
+        )
+        ctx = ExecutionContext(
+            task_id="task-profile",
+            loop_index=1,
+            experiment_name="task-profile/Loop1",
+            node_id="node-a",
+            resource_session_id="qers-1",
+            resource_source_run_key="qe:task-profile:Loop1",
+            resource_session_token="token",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="loop-row-1",
+        )
+
+        result = asyncio.run(executor.submit(cfg, ctx))
+
+        assert result.status == "submitted"
+        assert resolver.calls == ["node-a"]
+        assert client.get_dataset_identity.await_count == 2
+        assert {
+            call.kwargs["data_root_uri"] for call in client.get_dataset_identity.await_args_list
+        } == {"/node-owned/factor-data"}
+        descriptor = composer.compose_experiment_in_memory.call_args.kwargs[
+            "long_trend_evaluation_descriptor"
+        ]
+        assert descriptor["long_trend_evaluation"]["profile_id"] == "qe_long_trend_v1"
+        assert descriptor["long_trend_evaluation"]["feature_data_root_uri"] == "/node-owned/factor-data"
         assert result.experiment_files == MOCK_EXPERIMENT_FILES
         assert result.wsl_command == MOCK_WSL_COMMAND
 

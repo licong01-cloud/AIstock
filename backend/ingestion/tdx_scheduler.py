@@ -385,62 +385,6 @@ class TDXScheduler:
                     cost_ms, threading.current_thread().name, preview, params,
                 )
 
-    @staticmethod
-    def _frequency_cooldown_seconds(frequency: str) -> int:
-        freq = (frequency or "").strip().lower()
-        try:
-            if freq.endswith("s") and freq[:-1].isdigit():
-                return max(1, int(int(freq[:-1]) * 0.8))
-            if freq.endswith("m") and freq[:-1].isdigit():
-                return max(55, int(int(freq[:-1]) * 60 * 0.8))
-            if freq.endswith("h") and freq[:-1].isdigit():
-                return max(55, int(int(freq[:-1]) * 3600 * 0.8))
-        except Exception:
-            return 55
-        if freq in {"daily", "day", "1d"}:
-            return 23 * 3600
-        if freq in {"weekly", "week", "1w"}:
-            return 6 * 24 * 3600
-        return 55
-
-    def _claim_scheduled_fire(
-        self,
-        schedule_id: str,
-        dataset: str,
-        mode: str,
-        frequency: str,
-    ) -> bool:
-        """Claim a scheduled fire in DB so multiple backend instances do not duplicate it."""
-        if not schedule_id:
-            return True
-        cooldown_seconds = self._frequency_cooldown_seconds(frequency)
-        try:
-            rows = self._fetchall(
-                """
-                UPDATE market.ingestion_schedules
-                   SET last_run_at = NOW(),
-                       last_status = 'claimed',
-                       updated_at = NOW()
-                 WHERE schedule_id = %s
-                   AND (
-                       last_run_at IS NULL
-                       OR last_run_at < NOW() - (%s || ' seconds')::interval
-                   )
-                 RETURNING schedule_id
-                """,
-                (schedule_id, str(cooldown_seconds)),
-            )
-            if not rows:
-                _logger.info(
-                    "skip duplicate scheduled ingestion: schedule=%s dataset=%s mode=%s cooldown=%ss",
-                    schedule_id, dataset, mode, cooldown_seconds,
-                )
-                return False
-            return True
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("scheduled ingestion claim failed for %s/%s: %s", dataset, mode, exc)
-            return True
-
     def _recent_dataset_submission_exists(
         self,
         dataset: str,
@@ -935,9 +879,94 @@ class TDXScheduler:
         except Exception:  # noqa: BLE001 - durable final targets remain available for the next sweep.
             _logger.exception("final data sync target recovery sweep failed")
         try:
+            self._reconcile_go_job_refresh_audit()
+        except Exception:  # noqa: BLE001 - audit self-heal must not block schedule refresh.
+            _logger.exception("go job refresh audit reconciliation failed")
+        try:
             self._reconcile_due_data_sync_targets()
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
+
+    def _reconcile_go_job_refresh_audit(self) -> None:
+        """Self-heal refresh-audit rows for successful Go-engine jobs (BUG-972).
+
+        The router endpoint POST /api/ingestion/incremental (and any other
+        non-scheduler trigger) hands work to the Go backend, which marks the
+        job finished asynchronously — the Python side never sees completion,
+        so no dataset_date_refresh_audit rows are written. The freshness
+        check reads from that audit table and then reports the dataset stale
+        even though the physical data is complete. The scheduled Go route
+        writes audit on its own completions; this sweep closes the gap for
+        every other trigger path by backfilling audit rows (idempotent
+        upsert) for recently succeeded Go jobs whose audit cursor lags the
+        synced range.
+        """
+        now = _now()
+        last_sweep = getattr(self, "_last_go_audit_reconcile_sweep", None)
+        if last_sweep is not None and now - last_sweep < dt.timedelta(minutes=10):
+            return
+        self._last_go_audit_reconcile_sweep = now
+        rows = self._fetchall(
+            """
+            SELECT job_id, summary
+              FROM market.ingestion_jobs
+             WHERE status = 'success'
+               AND finished_at >= NOW() - INTERVAL '3 days'
+               AND summary->>'via' = 'go_init'
+             ORDER BY finished_at DESC
+             LIMIT 50
+            """
+        )
+        for row in rows:
+            summary = row.get("summary") or {}
+            if isinstance(summary, str):
+                try:
+                    summary = json.loads(summary)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(summary, dict):
+                continue
+            dataset = str(summary.get("dataset") or "").strip().lower()
+            if not dataset:
+                # router-endpoint jobs carry data_kind instead of dataset
+                data_kind = str(summary.get("data_kind") or "").strip().lower()
+                dataset = {"kline_daily_raw_go": "kline_daily_raw"}.get(data_kind, data_kind)
+            if dataset not in _GO_INCREMENTAL_DATASETS:
+                continue
+            start_d = self._parse_cmd_date(summary.get("start_date"))
+            end_d = self._parse_cmd_date(summary.get("end_date"))
+            if start_d is None or end_d is None:
+                continue
+            audit_rows = self._fetchall(
+                """
+                SELECT MAX(trade_date)::date AS mx
+                  FROM market.dataset_date_refresh_audit
+                 WHERE dataset = %s AND status = 'success'
+                """,
+                (dataset,),
+            )
+            audit_max = audit_rows[0].get("mx") if audit_rows else None
+            if audit_max is not None and audit_max >= end_d:
+                continue
+            try:
+                self._record_refresh_audit_from_table_range(
+                    dataset=dataset,
+                    job_id=row.get("job_id"),
+                    start_date=start_d,
+                    end_date=end_d,
+                    data_source="tdx_api",
+                    metadata={"mode": "incremental", "via": "go_init", "audit_reconcile": True},
+                )
+                _logger.info(
+                    "go audit reconcile: backfilled refresh audit for %s %s→%s (job %s)",
+                    dataset, start_d, end_d, row.get("job_id"),
+                )
+            except Exception as exc:  # noqa: BLE001 - one job must not block the sweep.
+                _logger.warning(
+                    "go audit reconcile failed for %s (job %s): %s",
+                    dataset, row.get("job_id"), exc,
+                )
+
 
     def _schedule_map_for_enabled_datasets(self) -> Dict[str, Dict[str, Any]]:
         active_schedules = self._fetchall(
@@ -1445,9 +1474,12 @@ class TDXScheduler:
         if not table_name:
             return None, None
 
-        rows = self._fetchall(f"SELECT MAX({date_column})::date AS mx FROM {table_name}")
-        current_max: Optional[dt.date] = rows[0].get("mx") if rows and rows[0].get("mx") else None
+        current_max: Optional[dt.date] = None
         if use_refresh_audit_cursor:
+            # Audit cursor first: a successful refresh audit fully determines
+            # the cursor, so the physical MAX scan is skipped entirely
+            # (BUG-957: planning an unbounded MAX over a ~10k-chunk
+            # TimescaleDB hypertable exceeds statement_timeout).
             audit_rows = self._fetchall(
                 """
                 SELECT MAX(trade_date)::date AS mx
@@ -1460,6 +1492,19 @@ class TDXScheduler:
             audit_max = audit_rows[0].get("mx") if audit_rows else None
             if audit_max is not None:
                 current_max = audit_max
+        if current_max is None:
+            # Bounded fast path: the incremental cursor is almost always
+            # recent, so probing a trailing window prunes hypertable chunks
+            # and stays within statement_timeout (BUG-957). Fall back to the
+            # unbounded scan for bootstrap or long-stalled datasets.
+            rows = self._fetchall(
+                f"SELECT MAX({date_column})::date AS mx FROM {table_name} "
+                f"WHERE {date_column} >= CURRENT_DATE - INTERVAL '45 days'"
+            )
+            current_max = rows[0].get("mx") if rows and rows[0].get("mx") else None
+            if current_max is None:
+                rows = self._fetchall(f"SELECT MAX({date_column})::date AS mx FROM {table_name}")
+                current_max = rows[0].get("mx") if rows and rows[0].get("mx") else None
 
         if use_calendar_dates:
             latest_date: Optional[dt.date] = dt.date.today()
@@ -1543,9 +1588,16 @@ class TDXScheduler:
                     next_run=self._next_run_for(schedule_id),
                 )
             return
-        if not self._claim_scheduled_fire(schedule_id, dataset, mode, frequency):
-            return
 
+        # BUG-966: the former DB claim gate (_claim_scheduled_fire, 23h daily
+        # cooldown) was removed by user directive — no default cooldown is
+        # allowed. It consumed the window on any fire (including non-trading
+        # no-op skips) and failed silently (no job row, next_run not
+        # advanced), which swallowed a full trading day of core syncs.
+        # Duplicate protection remains: the in-process _tracker.is_running
+        # overlap guard and the DB-level _recent_dataset_submission_exists
+        # check below (queued/running within 60min, success within 60s),
+        # which also covers multiple backend instances sharing one DB.
         key = f"ingestion:{(dataset or '').strip().lower()}:{(mode or '').strip().lower()}"
         if self._tracker.is_running(key):
             # avoid overlapping ingestion of same dataset/mode

@@ -18,6 +18,7 @@ from backend.services.multi_alpha.remote_dispatch import (
     _remote_runtime_artifact_link_commands,
     _remote_runtime_file_verify_commands,
     _remote_small_files,
+    _require_remote_linux_path,
     _sync_remote_runtime_artifacts,
     _remote_task_id,
     _remote_wsl_command,
@@ -629,6 +630,65 @@ def test_runtime_artifact_binding_rejects_duplicate_workspace_name() -> None:
     assert excinfo.value.reason_code == "remote_runtime_artifact_binding_invalid"
 
 
+def test_runtime_artifact_binding_allows_loopback_wsl_drive_mount() -> None:
+    sha256 = "a" * 64
+    node = ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000")
+
+    command = _remote_runtime_artifact_link_commands(
+        [
+            {
+                "name": "aistock_models/__init__.py",
+                "binding": "workspace_artifact_cas",
+                "sha256": sha256,
+                "size": 578,
+                "remote_path": f"/mnt/f/Dev/RD-Agent-state/artifact_cas/{sha256}",
+            }
+        ],
+        node=node,
+    )
+
+    assert f"/mnt/f/Dev/RD-Agent-state/artifact_cas/{sha256}" in command
+    assert "aistock_models/__init__.py" in command
+
+
+@pytest.mark.parametrize(
+    ("node", "remote_path"),
+    [
+        (
+            ComputeNodeInfo(node_id="rdagent-node1", api_base_url="http://192.168.50.215:9000"),
+            "/mnt/f/Dev/RD-Agent-state/artifact_cas/" + "a" * 64,
+        ),
+        (
+            ComputeNodeInfo(node_id="linux-loopback", api_base_url="http://127.0.0.1:9000"),
+            "/mnt/f/Dev/RD-Agent-state/artifact_cas/" + "a" * 64,
+        ),
+        (
+            ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+            "/mnt/shared/artifact_cas/" + "a" * 64,
+        ),
+    ],
+)
+def test_runtime_artifact_binding_rejects_untrusted_mnt_paths(
+    node: ComputeNodeInfo,
+    remote_path: str,
+) -> None:
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _remote_runtime_artifact_link_commands(
+            [
+                {
+                    "name": "aistock_models/__init__.py",
+                    "binding": "workspace_artifact_cas",
+                    "sha256": "a" * 64,
+                    "size": 578,
+                    "remote_path": remote_path,
+                }
+            ],
+            node=node,
+        )
+
+    assert excinfo.value.reason_code == "remote_runtime_artifact_binding_invalid"
+
+
 def test_small_file_packager_does_not_silently_exclude_unbound_file(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -817,6 +877,56 @@ def test_remote_pred_backtest_executor_rejects_local_paths(tmp_path: Path) -> No
     assert excinfo.value.reason_code == "remote_path_invalid"
 
 
+def test_remote_path_allows_windows_mount_for_loopback_wsl_node() -> None:
+    node = ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000")
+
+    _require_remote_linux_path(
+        path_name="artifact_store_root",
+        value="/mnt/f/Dev/RD-Agent-state/artifact_cas",
+        node=node,
+    )
+    _require_remote_linux_path(
+        path_name="workspace_base",
+        value="/mnt/f/Dev/RD-Agent-main/qe_workspace",
+        node=node,
+    )
+
+
+@pytest.mark.parametrize(
+    ("node", "value"),
+    [
+        (
+            ComputeNodeInfo(node_id="wsl2-remote", api_base_url="http://192.168.50.215:9000"),
+            "/mnt/f/Dev/RD-Agent-state/artifact_cas",
+        ),
+        (
+            ComputeNodeInfo(node_id="local-linux", api_base_url="http://127.0.0.1:9000"),
+            "/mnt/f/Dev/RD-Agent-state/artifact_cas",
+        ),
+        (
+            ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+            "F:\\Dev\\RD-Agent-state\\artifact_cas",
+        ),
+        (
+            ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+            "/mnt/shared/artifact_cas",
+        ),
+    ],
+)
+def test_remote_path_keeps_non_local_wsl_and_windows_paths_fail_closed(
+    node: ComputeNodeInfo,
+    value: str,
+) -> None:
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _require_remote_linux_path(
+            path_name="artifact_store_root",
+            value=value,
+            node=node,
+        )
+
+    assert excinfo.value.reason_code == "remote_path_invalid"
+
+
 def test_remote_task_id_default_is_unique_per_child_workspace(tmp_path: Path) -> None:
     run_root = tmp_path / "macb_run_1"
     task_a = _remote_task_id(backtest_config={}, workspace=run_root / "combined_ic_weighted")
@@ -938,6 +1048,59 @@ def test_remote_wsl_command_activates_only_explicit_conda_env() -> None:
     assert "source ~/miniconda3/etc/profile.d/conda.sh" in command
     assert "conda activate" in command and "rdagent-gpu" in command
     assert "python qrun_limit_minute.py" in command
+
+
+def test_remote_wsl_command_activates_deployed_conda_before_python_for_loopback_wsl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
+    command = _remote_wsl_command(
+        workspace=Path("/mnt/f/local/workspace"),
+        node=ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+        remote_paths={"artifact_path": "/mnt/f/artifacts/abc", "prediction_artifact_path": "/mnt/f/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+        backtest_config={"remote_env": {"PATH": "/custom/bin"}},
+    )
+
+    assert "/home/lc999/miniconda3/etc/profile.d/conda.sh" in command
+    assert "conda activate" in command and "rdagent-gpu" in command
+    assert command.index("export PATH=") < command.index("conda activate")
+    assert command.index("conda activate") < command.index("python -c")
+    assert "command -v python" in command
+
+
+def test_remote_wsl_command_rejects_missing_deployed_conda_for_loopback_wsl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("QLIB_WSL_CONDA_SH", raising=False)
+    monkeypatch.delenv("QLIB_WSL_CONDA_ENV", raising=False)
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _remote_wsl_command(
+            workspace=Path("/mnt/f/local/workspace"),
+            node=ComputeNodeInfo(node_id="wsl2-5080", api_base_url="http://127.0.0.1:9000"),
+            remote_paths={"artifact_path": "/mnt/f/artifacts/abc", "prediction_artifact_path": "/mnt/f/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+            backtest_config={},
+        )
+
+    assert excinfo.value.reason_code == "remote_wsl_runtime_config_missing"
+    assert excinfo.value.context["missing"] == ["QLIB_WSL_CONDA_SH", "QLIB_WSL_CONDA_ENV"]
+
+
+def test_remote_wsl_command_does_not_apply_local_wsl_conda_to_remote_linux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
+    command = _remote_wsl_command(
+        workspace=Path("/mnt/f/local/workspace"),
+        node=ComputeNodeInfo(node_id="rdagent-node1", api_base_url="http://192.168.50.215:9000"),
+        remote_paths={"artifact_path": "/remote/artifacts/abc", "prediction_artifact_path": "/remote/artifacts/pred", "qlib_data_path": "/home/node/qlib", "factor_cache_dir": "/home/node/factor_values"},
+        backtest_config={},
+    )
+
+    assert "conda activate" not in command
+    assert "/home/lc999/miniconda3/etc/profile.d/conda.sh" not in command
 
 
 def test_remote_wsl_command_cd_to_uploaded_loop_workspace_when_available() -> None:

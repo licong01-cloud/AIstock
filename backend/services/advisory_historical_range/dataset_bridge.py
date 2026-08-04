@@ -68,9 +68,10 @@ logger = logging.getLogger(__name__)
 
 
 class HistoricalRangeDatasetBridgeError(RuntimeError):
-    def __init__(self, reason_code: str, message: str) -> None:
+    def __init__(self, reason_code: str, message: str, *, retryable: bool = False) -> None:
         super().__init__(message)
         self.reason_code = reason_code
+        self.retryable = retryable
 
 
 class HistoricalRangeBridgeCandidateV1(BaseModel):
@@ -1001,12 +1002,12 @@ class HistoricalRangeDatasetBridgeApplicationService:
                 "ahrop",
                 {
                     "batch_id": request.batch_id,
-                    "operation_type": HistoricalRangeOperationType.BUILD_DATASET_BRIDGE.value,
+                    "operation_type": HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN.value,
                     "idempotency_key": request.operation_idempotency_key,
                 },
             ),
             batch_id=request.batch_id,
-            operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
+            operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN,
             operation_idempotency_key=request.operation_idempotency_key,
             request_payload_sha256=str(request.request_hash),
             expected_row_version=request.expected_batch_row_version,
@@ -1145,6 +1146,141 @@ class HistoricalRangeDatasetBridgeApplicationService:
                 error_type=type(error).__name__,
             )
 
+    def publish_parent_receipt(
+        self,
+        *,
+        operation_id: str,
+        child_receipt: HistoricalRangeDatasetBridgeReceiptV1,
+        child_receipt_ref: HistoricalRangeArtifactRefV1,
+        resolved_request_hash: str,
+    ) -> tuple[HistoricalRangeDatasetBridgeReceiptV1, HistoricalRangeArtifactRefV1]:
+        """Close an R5 command operation over the authoritative R4 child receipt."""
+        resolved_request_hash = require_sha256(
+            resolved_request_hash,
+            field_name="resolved_request_hash",
+        )
+        if child_receipt_ref.artifact_kind is not HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT:
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_REPOSITORY_CONFLICT,
+                "bridge parent requires a DATASET_BRIDGE_RECEIPT child ref",
+            )
+        child_envelope = self._artifact_store.load(child_receipt_ref)
+        child_readback = HistoricalRangeDatasetBridgeReceiptV1.model_validate(child_envelope.payload)
+        if (
+            child_readback != child_receipt
+            or child_envelope.resolved_request_hash != resolved_request_hash
+            or child_envelope.day_run_id is not None
+            or child_envelope.upstream_refs != (child_receipt.bridge_artifact_ref,)
+        ):
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_REPOSITORY_CONFLICT,
+                "bridge child receipt readback does not close its authoritative artifact",
+            )
+        child_bridge_envelope = self._artifact_store.load(child_receipt.bridge_artifact_ref)
+        child_bridge = HistoricalRangeDatasetBridgeArtifactV1.model_validate(child_bridge_envelope.payload)
+        expected_bridge_upstream = tuple(
+            sorted(
+                (
+                    *child_bridge.request.successful_day_refs,
+                    *child_bridge.request.candidate_refs,
+                    *child_bridge.request.outcome_refs,
+                    *child_bridge.request.summary_refs,
+                    *child_bridge.request.policy_bundle_refs,
+                ),
+                key=lambda item: (
+                    item.artifact_kind.value,
+                    item.semantic_content_hash,
+                    item.relative_path,
+                ),
+            )
+        )
+        if (
+            child_bridge.operation_id != child_receipt.operation_id
+            or child_bridge.request_hash != child_receipt.request_hash
+            or child_bridge.result_status is not child_receipt.result_status
+            or len(child_bridge.observations) != child_receipt.observation_count
+            or len(child_bridge.labels) != child_receipt.label_count
+            or len(child_bridge.observations) != child_receipt.canonical_signal_count
+            or sum(len(item.lineage_variants) for item in child_bridge.observations)
+            != child_receipt.range_lineage_count
+            or child_bridge.selector_policy_hash != child_receipt.retrospective_selector_policy_hash
+            or child_bridge.build_id != child_receipt.dataset_build_id
+            or child_bridge.sealed_snapshot_id != child_receipt.sealed_snapshot_id
+            or child_bridge_envelope.resolved_request_hash != resolved_request_hash
+            or child_bridge_envelope.day_run_id is not None
+            or child_bridge_envelope.upstream_refs != expected_bridge_upstream
+        ):
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_REPOSITORY_CONFLICT,
+                "bridge child artifact differs from its authoritative receipt",
+            )
+        parent_bridge = HistoricalRangeDatasetBridgeArtifactV1.model_validate(
+            {
+                **child_bridge.model_dump(mode="json"),
+                "operation_id": operation_id,
+            }
+        )
+        parent_bridge_stored = self._artifact_store.publish_payload(
+            artifact_kind=HistoricalRangeArtifactKind.DATASET_BRIDGE,
+            producer_contract_version="advisory_phase1r_r5_dataset_bridge_command_v1",
+            payload_schema_version=parent_bridge.schema_version,
+            resolved_request_hash=resolved_request_hash,
+            payload=parent_bridge.model_dump(mode="json"),
+            upstream_refs=expected_bridge_upstream,
+        )
+        parent_bridge_envelope = self._artifact_store.load(parent_bridge_stored.ref)
+        if (
+            HistoricalRangeDatasetBridgeArtifactV1.model_validate(parent_bridge_envelope.payload) != parent_bridge
+            or parent_bridge_envelope.upstream_refs != expected_bridge_upstream
+        ):
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_REPOSITORY_CONFLICT,
+                "bridge parent artifact readback differs from the child facts",
+            )
+        parent_receipt = HistoricalRangeDatasetBridgeReceiptV1.model_validate(
+            {
+                **child_receipt.model_dump(mode="json", exclude={"receipt_hash"}),
+                "operation_id": operation_id,
+                "bridge_artifact_ref": parent_bridge_stored.ref.model_dump(mode="json"),
+            }
+        )
+        upstream_refs = (parent_bridge_stored.ref,)
+        stored = self._artifact_store.publish_payload(
+            artifact_kind=HistoricalRangeArtifactKind.DATASET_BRIDGE_RECEIPT,
+            producer_contract_version="advisory_phase1r_r5_dataset_bridge_command_v1",
+            payload_schema_version=DATASET_BRIDGE_RECEIPT_SCHEMA_VERSION,
+            resolved_request_hash=resolved_request_hash,
+            payload=parent_receipt.model_dump(mode="json"),
+            upstream_refs=upstream_refs,
+        )
+        parent_envelope = self._artifact_store.load(stored.ref)
+        if (
+            HistoricalRangeDatasetBridgeReceiptV1.model_validate(parent_envelope.payload) != parent_receipt
+            or parent_envelope.upstream_refs != upstream_refs
+        ):
+            raise HistoricalRangeDatasetBridgeError(
+                REASON_REPOSITORY_CONFLICT,
+                "bridge parent receipt readback differs from the child closure",
+            )
+        return parent_receipt, stored.ref
+
+    def publish_failed_parent_receipt(
+        self,
+        *,
+        operation_id: str,
+        request: HistoricalRangeDatasetBridgeRequestV1,
+        resolved_request_hash: str,
+        reason_code: str,
+        result_status: HistoricalRangeBridgeResultStatus,
+    ) -> tuple[HistoricalRangeDatasetBridgeReceiptV1, HistoricalRangeArtifactRefV1]:
+        return self._bridge_service.publish_failed_receipt(
+            operation_id=operation_id,
+            request=request,
+            resolved_request_hash=resolved_request_hash,
+            reason_code=reason_code,
+            result_status=result_status,
+        )
+
     def _claim(
         self,
         *,
@@ -1160,6 +1296,7 @@ class HistoricalRangeDatasetBridgeApplicationService:
                 raise HistoricalRangeDatasetBridgeError(
                     REASON_REPOSITORY_CONFLICT,
                     "BUILD_DATASET_BRIDGE operation already has an active lease",
+                    retryable=True,
                 )
             _, expired_ref = self._bridge_service.publish_failed_receipt(
                 operation_id=str(operation["operation_id"]),

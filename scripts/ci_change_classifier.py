@@ -15,7 +15,13 @@ from scripts import issue_flow as flow  # noqa: E402
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
 CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
-WORKFLOW_BUG_METADATA_STATUSES = {"open", "in_progress", "triaged", *CLOSE_SYNC_STATUSES}
+WORKFLOW_BUG_METADATA_STATUSES = {
+    "open",
+    "in_progress",
+    "triaged",
+    "fixed_source_pending_user_restart",
+    *CLOSE_SYNC_STATUSES,
+}
 DOCS_ONLY_PREFIXES = ("docs/",)
 DOCS_ONLY_ROOT_FILES = {"README.md", "AGENTS.md", "AGENTS.override.md"}
 DOCS_FAST_PREFIXES = (
@@ -87,6 +93,9 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
     "docs/codex_project_memory.md",
     "docs/standards/README.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "docs/standards/aistock_issue_workflow_quickstart.md",
     "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
     "prompt_packs/validation_llm/evaluation_cases/historical_failure_fixtures.json",
@@ -126,6 +135,12 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow.py",),
     "scripts/aistock_feature_workflow.py": ("backend/tests/scripts/test_aistock_feature_workflow.py",),
     "scripts/aistock_guardrail_scan.py": ("backend/tests/test_aistock_guardrail_scan.py",),
+    "docs/standards/aistock_development_standard_v1.5_20260523.md": ("backend/tests/test_aistock_guardrail_scan.py",),
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml": ("backend/tests/test_aistock_guardrail_scan.py",),
+    "docs/standards/aistock_runtime_targets_v1.yaml": (
+        "backend/tests/test_aistock_guardrail_scan.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+    ),
     "scripts/bug_registry_metadata_check.py": ("backend/tests/scripts/test_bug_registry_metadata_check.py",),
     "scripts/ci_change_classifier.py": ("backend/tests/scripts/test_ci_change_classifier.py",),
     "scripts/ci_changed_files.py": ("backend/tests/scripts/test_ci_changed_files.py",),

@@ -3,7 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol, Sequence, runtime_checkable
+import json
+from typing import Any, Callable, Protocol, Sequence
+
+from backend.execution_algos.vnpy_compat.facade_adapter import VnpyFacadeBackedPluginAdapterV1
+from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeAuthorityInputV2,
+    VnpyFacadeConformanceAuthorityV2,
+    VnpyFacadeContractError,
+    VnpyFacadeInitializationInputV2,
+    VnpyFacadeRepositoryReadRequestV1,
+    VnpyFacadeRepositoryReadSetV1,
+    read_vnpy_facade_lifecycle_items_v1,
+    VnpyFacadeTransitionInputV2,
+)
 
 from .plugin_canonical import freeze_json_v1, hash_hex_v1, json_safe_evidence_v1, thaw_json_v1
 from .plugin_contracts import (
@@ -17,6 +30,7 @@ from .plugin_contracts import (
     AlgoTransitionReceiptV1,
     AlgoTransitionV1,
     BrokerCommandOutboxV1,
+    CurrentThreeActiveOrderStateV3,
     DeterministicExecutionContextV1,
     DiagnosticObservationV1,
     ExecutionAlgoInstancePersistenceV2,
@@ -25,9 +39,14 @@ from .plugin_contracts import (
     ExecutionCommandChildMappingV1,
     ExecutionProjectionSetV1,
     ExecutionProjectionRefV1,
+    EventTypeV2,
     FrozenJsonObjectFieldV1,
     FrozenStrictModel,
+    GatewayCapabilityCatalogV1,
     KernelErrorEvidenceV1,
+    KernelCommandLifecycleProjectionItemV1,
+    KernelCommandLifecycleProjectionV1,
+    KernelCommandOutcomeEventPayloadV1,
     KernelProjectionTypeV1,
     RuntimeEventEnvelopeV2,
     SessionPhaseV1,
@@ -40,11 +59,15 @@ from .plugin_contracts import (
     TimerMutationV1,
 )
 from .plugin_registry import (
+    CompatibilityStatusV1,
+    ExecutionAlgoPluginV2,
     PluginCatalogRuntimeV2,
     PluginCatalogSnapshotV1,
     PluginKeyV1,
     PluginRegistrationDescriptorV2,
+    PluginRouteCompatibilityReceiptV1,
 )
+from .vnpy_facade_diagnostics import record_vnpy_facade_runtime_invocation_v1
 
 
 class KernelPluginInvocationError(RuntimeError):
@@ -62,23 +85,6 @@ class KernelPluginInvocationError(RuntimeError):
         self.context = json_safe_evidence_v1(context)
         self.broker_called = broker_called
         super().__init__(message)
-
-
-@runtime_checkable
-class ExecutionAlgoPluginV2(Protocol):
-    manifest: ExecutionAlgoPluginManifestV2
-
-    def initialize(self, context: AlgoStartContextV1) -> AlgoInitializationV1: ...
-
-    def restore_state(self, snapshot: AlgoStateSnapshotV2) -> AlgoStateSnapshotV2: ...
-
-    def transition(
-        self,
-        *,
-        state: AlgoStateSnapshotV2,
-        event: RuntimeEventEnvelopeV2,
-        services: AlgoReadOnlyServicesV1,
-    ) -> AlgoTransitionV1: ...
 
 
 @dataclass(frozen=True)
@@ -158,6 +164,126 @@ class KernelDeliveryExecutionInputV1:
     services: AlgoReadOnlyServicesV1
     deterministic_context: DeterministicExecutionContextV1
     consumed_lineage_refs: tuple[ConsumedLineageRefV1, ...]
+    command_lifecycle_projection: KernelCommandLifecycleProjectionV1
+
+
+def build_command_lifecycle_projection_v1(
+    *,
+    event: RuntimeEventEnvelopeV2,
+    delivery: AlgoDeliveryPersistenceV1,
+    previous_state: AlgoStateSnapshotV2,
+    mappings: Sequence[ExecutionCommandChildMappingV1],
+    outboxes: Sequence[BrokerCommandOutboxV1],
+) -> KernelCommandLifecycleProjectionV1:
+    state_payload = thaw_json_v1(previous_state.state)
+    if state_payload.get("schema_version") == "miniqmt_vnpy_facade_state_envelope_v1":
+        active_items = [item.model_dump(mode="json") for item in read_vnpy_facade_lifecycle_items_v1(state_payload)]
+    else:
+        active_items = state_payload.get("active_orders")
+        if not isinstance(active_items, list):
+            raise ValueError("durable state must expose active_orders for lifecycle projection")
+    state_by_local: dict[str, CurrentThreeActiveOrderStateV3] = {}
+    for item in active_items:
+        if not isinstance(item, dict):
+            raise ValueError("active-order lifecycle state is not a strict object")
+        strict_item = CurrentThreeActiveOrderStateV3.model_validate_json(
+            json.dumps(item, sort_keys=True, separators=(",", ":"))
+        )
+        local_id = strict_item.local_vt_orderid
+        if local_id in state_by_local:
+            raise ValueError("active-order lifecycle state contains duplicate local identities")
+        state_by_local[local_id] = strict_item
+    mapping_by_local = {item.local_vt_orderid: item for item in mappings}
+    if len(mapping_by_local) != len(tuple(mappings)):
+        raise ValueError("durable lifecycle mapping set contains duplicate local identities")
+    if any(
+        item.runtime_id != event.runtime_id or item.algo_instance_id != previous_state.algo_instance_id
+        for item in mappings
+    ):
+        raise ValueError("durable lifecycle mapping set crosses runtime or algo owner")
+    relevant_local_ids = sorted(
+        set(state_by_local)
+        | {
+            item.local_vt_orderid
+            for item in mappings
+            if item.mapping_status.value in {"RESERVED", "DISPATCHING", "BROKER_ACCEPTED", "OUTCOME_UNKNOWN"}
+        }
+    )
+    outbox_by_command = {item.command_id: item for item in outboxes}
+    if len(outbox_by_command) != len(tuple(outboxes)):
+        raise ValueError("durable lifecycle outbox set contains duplicate command identities")
+    if any(
+        item.runtime_id != event.runtime_id or item.algo_instance_id != previous_state.algo_instance_id
+        for item in outboxes
+    ):
+        raise ValueError("durable lifecycle outbox set crosses runtime or algo owner")
+    strict_outcome = None
+    if event.event_type is EventTypeV2.COMMAND_OUTCOME:
+        strict_outcome = KernelCommandOutcomeEventPayloadV1.model_validate_json(
+            json.dumps(thaw_json_v1(event.payload), sort_keys=True, separators=(",", ":"))
+        )
+    projection_items: list[KernelCommandLifecycleProjectionItemV1] = []
+    for local_id in relevant_local_ids:
+        mapping = mapping_by_local.get(local_id)
+        state_item = state_by_local.get(local_id)
+        if mapping is None or state_item is None:
+            raise ValueError("active state and durable mapping lifecycle sets differ")
+        command_id = state_item.pending_command_id or state_item.submit_command_id
+        outbox = outbox_by_command.get(command_id)
+        if outbox is None or outbox.mapping_id != mapping.mapping_id:
+            raise ValueError("active state current command has no exact durable outbox")
+        outcome_values: dict[str, Any] = {
+            "outcome_receipt_sha256": None,
+            "latest_command_outcome_event_id": None,
+            "latest_command_outcome_payload_sha256": None,
+            "command_outcome_delivery_id": None,
+            "command_outcome_delivery_status": None,
+        }
+        if strict_outcome is not None and strict_outcome.command_id == outbox.command_id:
+            if (
+                strict_outcome.runtime_id != event.runtime_id
+                or strict_outcome.algo_instance_id != previous_state.algo_instance_id
+                or strict_outcome.parent_intent_id != mapping.parent_intent_id
+                or strict_outcome.strategy_slot_id != mapping.strategy_slot_id
+                or strict_outcome.mapping_id != mapping.mapping_id
+                or strict_outcome.command_type is not outbox.command_type
+                or strict_outcome.local_vt_orderid != local_id
+                or strict_outcome.outbox_row_version != outbox.row_version
+                or strict_outcome.outbox_status != outbox.status.value
+                or strict_outcome.broker_order_id not in {None, outbox.broker_order_id, mapping.broker_order_id}
+            ):
+                raise ValueError("COMMAND_OUTCOME delivery conflicts with locked outbox readback")
+            outcome_values = {
+                "outcome_receipt_sha256": strict_outcome.outcome_receipt_sha256,
+                "latest_command_outcome_event_id": event.event_id,
+                "latest_command_outcome_payload_sha256": event.payload_sha256,
+                "command_outcome_delivery_id": delivery.delivery_id,
+                "command_outcome_delivery_status": delivery.status,
+            }
+        projection_items.append(
+            KernelCommandLifecycleProjectionItemV1(
+                mapping_id=mapping.mapping_id,
+                mapping_version=mapping.mapping_version,
+                mapping_payload_sha256=mapping.payload_sha256,
+                local_vt_orderid=mapping.local_vt_orderid,
+                submit_command_id=mapping.command_id,
+                broker_order_id=mapping.broker_order_id,
+                mapping_status=mapping.mapping_status,
+                current_outbox_command_id=outbox.command_id,
+                current_outbox_command_type=outbox.command_type,
+                current_outbox_status=outbox.status,
+                current_outbox_row_version=outbox.row_version,
+                current_outbox_payload_sha256=outbox.payload_sha256,
+                **outcome_values,
+            )
+        )
+    return KernelCommandLifecycleProjectionV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=previous_state.algo_instance_id,
+        event_id=event.event_id,
+        delivery_id=delivery.delivery_id,
+        ordered_items=tuple(projection_items),
+    )
 
 
 class KernelDeliveryRepositoryV1(Protocol):
@@ -180,6 +306,27 @@ class KernelRequiredProviderUnavailable(RuntimeError):
         super().__init__(message)
 
 
+def validate_vnpy_facade_k2_shadow_command_authority_v1(
+    transition: AlgoTransitionV1 | AlgoInitializationV1,
+) -> None:
+    """Keep the existing K2 V1 materializer at its exact single-command boundary."""
+
+    if not isinstance(transition, (AlgoTransitionV1, AlgoInitializationV1)):
+        raise TypeError("transition must be AlgoTransitionV1 or AlgoInitializationV1")
+    commands = transition.broker_commands
+    if len(commands) > 1:
+        raise KernelPluginInvocationError(
+            "MINIQMT_VNPY_FACADE_MULTI_COMMAND_PRODUCT_AUTHORITY_UNAVAILABLE",
+            "K4 shadow preserves the full ordered command trace but K2 V1 cannot materialize it",
+            context={
+                "command_count": len(commands),
+                "ordered_command_ids": [item.command_id for item in commands],
+                "effect_set_sha256": transition.effect_set_sha256,
+            },
+            broker_called=False,
+        )
+
+
 class KernelDeliveryWorkerV1:
     def __init__(
         self,
@@ -188,11 +335,28 @@ class KernelDeliveryWorkerV1:
         catalog_runtime: PluginCatalogRuntimeV2,
         worker_id: str,
         process_incarnation_id: str,
+        facade_authority: VnpyFacadeConformanceAuthorityV2 | None = None,
+        gateway_catalog: GatewayCapabilityCatalogV1 | None = None,
     ) -> None:
         if not worker_id or not process_incarnation_id:
             raise ValueError("worker and process incarnation identities are required")
         self._repository = repository
         self._catalog_runtime = catalog_runtime
+        self._catalog_snapshot = PluginCatalogSnapshotV1.model_validate(
+            catalog_runtime.snapshot.model_dump(mode="python"), strict=True
+        )
+        if facade_authority is not None and not isinstance(facade_authority, VnpyFacadeConformanceAuthorityV2):
+            raise TypeError("facade_authority must be VnpyFacadeConformanceAuthorityV2 or None")
+        if facade_authority is not None and not isinstance(gateway_catalog, GatewayCapabilityCatalogV1):
+            raise TypeError("gateway_catalog is required when facade_authority is supplied")
+        if gateway_catalog is not None and not isinstance(gateway_catalog, GatewayCapabilityCatalogV1):
+            raise TypeError("gateway_catalog must be GatewayCapabilityCatalogV1 or None")
+        self._facade_authority = facade_authority
+        self._gateway_catalog = (
+            None
+            if gateway_catalog is None
+            else GatewayCapabilityCatalogV1.model_validate(gateway_catalog.model_dump(mode="python"), strict=True)
+        )
         self._lease_owner = f"{worker_id}:{process_incarnation_id}"
 
     def process_once(
@@ -201,6 +365,7 @@ class KernelDeliveryWorkerV1:
         delivery_id: str,
         lease_expires_at: Any,
         logical_time_utc: Any,
+        facade_read_request: VnpyFacadeRepositoryReadRequestV1 | None = None,
         input_builder: Callable[
             [
                 RuntimeEventEnvelopeV2,
@@ -208,7 +373,10 @@ class KernelDeliveryWorkerV1:
                 ExecutionAlgoInstancePersistenceV2,
                 AlgoStateSnapshotV2 | None,
                 tuple[ExecutionCommandChildMappingV1, ...],
+                tuple[BrokerCommandOutboxV1, ...],
                 tuple[ExecutionAlgoTimerScheduleV1, ...],
+                KernelCommandLifecycleProjectionV1,
+                VnpyFacadeRepositoryReadSetV1 | None,
             ],
             KernelDeliveryExecutionInputV1,
         ],
@@ -235,6 +403,20 @@ class KernelDeliveryWorkerV1:
                 broker_called=False,
             )
         algo = self._repository.read_algo_instance(current.algo_instance_id)
+        if facade_read_request is not None and not isinstance(facade_read_request, VnpyFacadeRepositoryReadRequestV1):
+            raise TypeError("facade_read_request must be VnpyFacadeRepositoryReadRequestV1 or None")
+        if facade_read_request is not None and self._facade_authority is None:
+            raise KernelPluginInvocationError(
+                "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+                "facade repository read request requires a sealed conformance authority",
+                context={
+                    "delivery_id": delivery_id,
+                    "algo_instance_id": current.algo_instance_id,
+                    "facade_authority_supplied": self._facade_authority is not None,
+                    "facade_read_request_supplied": facade_read_request is not None,
+                },
+                broker_called=False,
+            )
         if current.status.value == "CLAIMED":
             if current.lease_owner != self._lease_owner or current.lease_fence_token is None:
                 raise KernelPluginInvocationError(
@@ -276,7 +458,29 @@ class KernelDeliveryWorkerV1:
             active_mappings: tuple[ExecutionCommandChildMappingV1, ...],
             active_command_outboxes: tuple[BrokerCommandOutboxV1, ...],
             active_timers: tuple[ExecutionAlgoTimerScheduleV1, ...],
+            facade_read_set: VnpyFacadeRepositoryReadSetV1 | None,
         ) -> KernelTransitionWriteBundleV1:
+            failure_mapping_statuses = {
+                "RESERVED",
+                "DISPATCHING",
+                "BROKER_ACCEPTED",
+                "OUTCOME_UNKNOWN",
+            }
+            failure_outbox_statuses = {
+                "PENDING",
+                "CLAIMED",
+                "DISPATCHING",
+                "FAILED_RETRYABLE",
+                "OUTCOME_UNKNOWN",
+                "RECONCILING",
+            }
+            failure_mappings = tuple(
+                item for item in active_mappings if item.mapping_status.value in failure_mapping_statuses
+            )
+            failure_command_outboxes = tuple(
+                item for item in active_command_outboxes if item.status.value in failure_outbox_statuses
+            )
+
             def terminal_failure(
                 exc: Exception,
                 *,
@@ -304,8 +508,8 @@ class KernelDeliveryWorkerV1:
                     exception=exc,
                     failure_context=(context if context is not None else {"stage": "ALGO_DELIVERY_APPLY"}),
                     projection_set=projection_set,
-                    active_mappings=active_mappings,
-                    active_command_outboxes=active_command_outboxes,
+                    active_mappings=failure_mappings,
+                    active_command_outboxes=failure_command_outboxes,
                     active_timer_schedules=active_timers,
                     logical_time_utc=logical_time_utc,
                     initialization=False,
@@ -334,13 +538,30 @@ class KernelDeliveryWorkerV1:
                     context=exc.context,
                 )
             try:
+                lifecycle_projection = build_command_lifecycle_projection_v1(
+                    event=event,
+                    delivery=locked_delivery,
+                    previous_state=previous_state,
+                    mappings=active_mappings,
+                    outboxes=active_command_outboxes,
+                )
+            except Exception as exc:
+                return terminal_failure(
+                    exc,
+                    reason_code="MINIQMT_ALGO_DELIVERY_LIFECYCLE_PROJECTION_INVALID",
+                    context={"stage": "DELIVERY_LIFECYCLE_PROJECTION_READBACK"},
+                )
+            try:
                 inputs = input_builder(
                     event,
                     locked_delivery,
                     locked_algo,
                     previous_state,
                     active_mappings,
+                    active_command_outboxes,
                     active_timers,
+                    lifecycle_projection,
+                    facade_read_set,
                 )
             except KernelRequiredProviderUnavailable as exc:
                 if locked_delivery.attempt_count < 5:
@@ -363,6 +584,23 @@ class KernelDeliveryWorkerV1:
                     reason_code="MINIQMT_ALGO_DELIVERY_INPUT_INVALID",
                     context={"stage": "DELIVERY_INPUT_READBACK", "result_type": type(inputs).__name__},
                 )
+            if inputs.command_lifecycle_projection != lifecycle_projection:
+                exc = KernelPluginInvocationError(
+                    "MINIQMT_ALGO_DELIVERY_LIFECYCLE_PROJECTION_DRIFT",
+                    "delivery input lifecycle projection differs from the locked durable readback",
+                    context={
+                        "delivery_id": locked_delivery.delivery_id,
+                        "expected_projection_sha256": lifecycle_projection.projection_sha256,
+                        "actual_projection_sha256": inputs.command_lifecycle_projection.projection_sha256,
+                    },
+                    broker_called=False,
+                )
+                return terminal_failure(
+                    exc,
+                    reason_code=exc.reason_code,
+                    context=exc.context,
+                    projection_set=inputs.services.execution_projection_set,
+                )
             try:
                 resolved = resolve_plugin_for_restore_v1(
                     catalog_runtime=self._catalog_runtime,
@@ -372,6 +610,94 @@ class KernelDeliveryWorkerV1:
                     canonical_plugin_config=thaw_json_v1(locked_algo.plugin_config_json),
                     plugin_config_sha256=locked_algo.plugin_config_sha256,
                 )
+                facade_input = None
+                if isinstance(resolved.plugin, VnpyFacadeBackedPluginAdapterV1):
+                    if self._facade_authority is None or self._gateway_catalog is None:
+                        raise KernelPluginInvocationError(
+                            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+                            "facade-backed transition requires sealed authority and strict gateway catalog",
+                            context={
+                                "runtime_id": event.runtime_id,
+                                "algo_instance_id": locked_algo.algo_instance_id,
+                                "delivery_id": locked_delivery.delivery_id,
+                            },
+                            broker_called=False,
+                        )
+                    if facade_read_request is None or facade_read_set is None:
+                        raise KernelPluginInvocationError(
+                            "MINIQMT_VNPY_FACADE_REPOSITORY_READ_INVALID",
+                            "facade-backed transition requires its exact same-cursor repository read set",
+                            context={
+                                "runtime_id": event.runtime_id,
+                                "algo_instance_id": locked_algo.algo_instance_id,
+                                "delivery_id": locked_delivery.delivery_id,
+                            },
+                            broker_called=False,
+                        )
+                    facade_read_set.validate_against_request_v1(facade_read_request)
+                    plugin_key = resolved.descriptor.plugin_key
+                    k1_receipts = tuple(
+                        item
+                        for item in self._catalog_snapshot.pinned_compatibility_receipts
+                        if item.plugin_key == plugin_key
+                    )
+                    if len(k1_receipts) != 1:
+                        raise KernelPluginInvocationError(
+                            "MINIQMT_VNPY_FACADE_CONFORMANCE_AUTHORITY_INVALID",
+                            "facade transition requires one exact K1 compatibility receipt",
+                            context={"plugin_key": plugin_key.canonical_payload_v1()},
+                            broker_called=False,
+                        )
+                    route_receipt = PluginRouteCompatibilityReceiptV1.create(
+                        catalog_snapshot=self._catalog_snapshot,
+                        plugin_key=plugin_key,
+                        gateway_catalog=self._gateway_catalog,
+                    ).validate_against_authority_v1(
+                        catalog_snapshot=self._catalog_snapshot,
+                        gateway_catalog=self._gateway_catalog,
+                    )
+                    if route_receipt.status is not CompatibilityStatusV1.PASSED:
+                        raise KernelPluginInvocationError(
+                            "MINIQMT_ALGO_ROUTE_COMPATIBILITY_FAILED",
+                            "facade transition route compatibility receipt is not PASSED",
+                            context={
+                                "plugin_key": plugin_key.canonical_payload_v1(),
+                                "route_receipt_sha256": route_receipt.receipt_sha256,
+                            },
+                            broker_called=False,
+                        )
+                    authority_input = VnpyFacadeAuthorityInputV2.create(
+                        conformance_authority=self._facade_authority,
+                        plugin_catalog_snapshot=self._catalog_snapshot,
+                        gateway_capability_catalog=self._gateway_catalog,
+                        plugin_key=plugin_key,
+                        manifest=resolved.descriptor.manifest,
+                        pinned_compatibility_receipt=k1_receipts[0],
+                        route_compatibility_receipt=route_receipt,
+                    )
+                    facade_input = VnpyFacadeTransitionInputV2.create(
+                        runtime_event=event,
+                        claimed_delivery=locked_delivery,
+                        algo_instance=locked_algo,
+                        manifest=resolved.descriptor.manifest,
+                        authority_input=authority_input,
+                        before_state=previous_state,
+                        read_only_services=inputs.services,
+                        command_lifecycle_projection=lifecycle_projection,
+                        ordered_active_mappings=active_mappings,
+                        deterministic_context=inputs.deterministic_context,
+                        transition_sequence=inputs.deterministic_context.transition_sequence,
+                    )
+                elif facade_read_set is not None or facade_read_request is not None:
+                    raise KernelPluginInvocationError(
+                        "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+                        "ordinary pure plugin cannot consume facade repository authority",
+                        context={
+                            "plugin_id": resolved.descriptor.plugin_key.plugin_id,
+                            "algo_instance_id": locked_algo.algo_instance_id,
+                        },
+                        broker_called=False,
+                    )
                 transition = invoke_plugin_transition_v1(
                     plugin=resolved.plugin,
                     expected_manifest=resolved.descriptor.manifest,
@@ -380,7 +706,10 @@ class KernelDeliveryWorkerV1:
                     event=event,
                     services=inputs.services,
                     deterministic_context=inputs.deterministic_context,
+                    facade_input=facade_input,
                 )
+                if facade_input is not None:
+                    validate_vnpy_facade_k2_shadow_command_authority_v1(transition)
                 return materialize_applied_transition_v1(
                     event=event,
                     predecessor_delivery=locked_delivery,
@@ -397,6 +726,7 @@ class KernelDeliveryWorkerV1:
                     algo_code=locked_algo.algo_code,
                     symbol=locked_algo.symbol,
                     side=locked_algo.side,
+                    command_lifecycle_projection=lifecycle_projection,
                     existing_mappings_by_local_vt_orderid={item.local_vt_orderid: item for item in active_mappings},
                     existing_timer_schedules={item.schedule_id: item for item in active_timers},
                     initialization=False,
@@ -418,6 +748,7 @@ class KernelDeliveryWorkerV1:
                 expected_lease_epoch=lease_epoch,
                 expected_lease_fence_token=fence,
                 bundle_builder=build,
+                facade_read_request=facade_read_request,
             )
         except KernelRequiredProviderUnavailable as exc:
             evidence = KernelErrorEvidenceV1.create(
@@ -532,6 +863,16 @@ def _invocation_error(
     return KernelPluginInvocationError(reason_code, message, context=evidence, broker_called=False)
 
 
+def _facade_exception_context_v1(exc: VnpyFacadeContractError) -> dict[str, Any]:
+    """Render facade evidence without allowing its carrier type to mask it."""
+
+    try:
+        context = thaw_json_v1(exc.context)
+    except TypeError:
+        context = json_safe_evidence_v1(exc.context)
+    return context if type(context) is dict else {"facade_context": context}
+
+
 def resolve_plugin_for_restore_v1(
     *,
     catalog_runtime: PluginCatalogRuntimeV2,
@@ -592,7 +933,7 @@ def resolve_plugin_for_restore_v1(
         validated_config = config_validator(descriptor.manifest, canonical_plugin_config)
         if hash_hex_v1("miniqmt_plugin_config_v2", thaw_json_v1(validated_config)) != plugin_config_sha256:
             raise ValueError("config validator output does not preserve frozen config identity")
-        plugin = factory(validated_config)
+        plugin = factory(thaw_json_v1(validated_config))
     except (TypeError, ValueError, AttributeError, KeyError) as exc:
         raise _invocation_error(
             "MINIQMT_ALGO_PLUGIN_BINDING_INVALID",
@@ -616,13 +957,27 @@ def resolve_plugin_for_restore_v1(
 
 def invoke_plugin_initialize_v1(
     *,
-    plugin: ExecutionAlgoPluginV2,
+    plugin: ExecutionAlgoPluginV2 | VnpyFacadeBackedPluginAdapterV1,
     expected_manifest: ExecutionAlgoPluginManifestV2,
     start_context: AlgoStartContextV1,
+    facade_input: VnpyFacadeInitializationInputV2 | None = None,
 ) -> AlgoInitializationV1:
     if not isinstance(expected_manifest, ExecutionAlgoPluginManifestV2):
         raise TypeError("expected_manifest must be ExecutionAlgoPluginManifestV2")
-    if not isinstance(plugin, ExecutionAlgoPluginV2) or plugin.manifest != expected_manifest:
+    is_facade_adapter = isinstance(plugin, VnpyFacadeBackedPluginAdapterV1)
+    if facade_input is not None and not isinstance(facade_input, VnpyFacadeInitializationInputV2):
+        raise TypeError("facade_input must be VnpyFacadeInitializationInputV2 or None")
+    if is_facade_adapter != (facade_input is not None):
+        raise _invocation_error(
+            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+            "facade-backed adapter and exact V2 initialization input must be supplied together",
+            stage="PLUGIN_INITIALIZE_FACADE_BINDING",
+            plugin_type=type(plugin).__name__,
+            facade_input_type=None if facade_input is None else type(facade_input).__name__,
+        )
+    if (
+        not is_facade_adapter and not isinstance(plugin, ExecutionAlgoPluginV2)
+    ) or plugin.manifest != expected_manifest:
         raise _invocation_error(
             "MINIQMT_ALGO_PLUGIN_BINDING_INVALID",
             "initialize plugin manifest or pure method surface is invalid",
@@ -632,9 +987,34 @@ def invoke_plugin_initialize_v1(
         )
     if not isinstance(start_context, AlgoStartContextV1):
         raise TypeError("start_context must be AlgoStartContextV1")
+    if facade_input is not None and facade_input.start_context != start_context:
+        raise _invocation_error(
+            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+            "facade initialization input does not equal the SPI start context",
+            stage="PLUGIN_INITIALIZE_FACADE_INPUT",
+            algo_instance_id=start_context.algo_instance_id,
+        )
     try:
-        result = plugin.initialize(start_context)
+        result = (
+            plugin.initialize_with_facade_v2(facade_input)
+            if is_facade_adapter and facade_input is not None
+            else plugin.initialize(start_context)
+        )
+    except VnpyFacadeContractError as exc:
+        record_vnpy_facade_runtime_invocation_v1(phase="INITIALIZE", outcome="FAILED", reason_code=exc.reason_code)
+        raise _invocation_error(
+            exc.reason_code,
+            exc.message,
+            stage="PLUGIN_INITIALIZE_FACADE",
+            **_facade_exception_context_v1(exc),
+        ) from exc
     except Exception as exc:
+        if is_facade_adapter:
+            record_vnpy_facade_runtime_invocation_v1(
+                phase="INITIALIZE",
+                outcome="FAILED",
+                reason_code="MINIQMT_VNPY_FACADE_CONTRACT_INVALID",
+            )
         raise _invocation_error(
             "MINIQMT_ALGO_INITIALIZATION_PLUGIN_FAILED",
             "pure plugin initialize raised a deterministic failure",
@@ -646,6 +1026,12 @@ def invoke_plugin_initialize_v1(
             delivery_id=start_context.start_delivery_id,
         ) from exc
     if not isinstance(result, AlgoInitializationV1):
+        if is_facade_adapter:
+            record_vnpy_facade_runtime_invocation_v1(
+                phase="INITIALIZE",
+                outcome="FAILED",
+                reason_code="MINIQMT_VNPY_FACADE_CONTRACT_INVALID",
+            )
         raise _invocation_error(
             "MINIQMT_ALGO_INITIALIZATION_RESULT_INVALID",
             "plugin initialize did not return AlgoInitializationV1",
@@ -660,6 +1046,12 @@ def invoke_plugin_initialize_v1(
         or result.next_state.plugin_manifest_sha256 != expected_manifest.manifest_sha256
         or result.next_state.updated_at_utc != start_context.deterministic_context.logical_time_utc
     ):
+        if is_facade_adapter:
+            record_vnpy_facade_runtime_invocation_v1(
+                phase="INITIALIZE",
+                outcome="FAILED",
+                reason_code="MINIQMT_VNPY_FACADE_CONTRACT_INVALID",
+            )
         raise _invocation_error(
             "MINIQMT_ALGO_INITIALIZATION_RESULT_INVALID",
             "plugin initialization result does not close to its deterministic start context",
@@ -668,22 +1060,38 @@ def invoke_plugin_initialize_v1(
             event_id=start_context.start_event_id,
             delivery_id=start_context.start_delivery_id,
         )
+    if is_facade_adapter:
+        record_vnpy_facade_runtime_invocation_v1(phase="INITIALIZE", outcome="PASSED", reason_code="NONE")
     return result
 
 
 def invoke_plugin_transition_v1(
     *,
-    plugin: ExecutionAlgoPluginV2,
+    plugin: ExecutionAlgoPluginV2 | VnpyFacadeBackedPluginAdapterV1,
     expected_manifest: ExecutionAlgoPluginManifestV2,
     state_codec: Callable[[ExecutionAlgoPluginManifestV2, Any], Any],
     state: AlgoStateSnapshotV2,
     event: RuntimeEventEnvelopeV2,
     services: AlgoReadOnlyServicesV1,
     deterministic_context: DeterministicExecutionContextV1,
+    facade_input: VnpyFacadeTransitionInputV2 | None = None,
 ) -> AlgoTransitionV1:
     if not isinstance(expected_manifest, ExecutionAlgoPluginManifestV2):
         raise TypeError("expected_manifest must be ExecutionAlgoPluginManifestV2")
-    if not isinstance(plugin, ExecutionAlgoPluginV2) or plugin.manifest != expected_manifest:
+    is_facade_adapter = isinstance(plugin, VnpyFacadeBackedPluginAdapterV1)
+    if facade_input is not None and not isinstance(facade_input, VnpyFacadeTransitionInputV2):
+        raise TypeError("facade_input must be VnpyFacadeTransitionInputV2 or None")
+    if is_facade_adapter != (facade_input is not None):
+        raise _invocation_error(
+            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+            "facade-backed adapter and exact V2 transition input must be supplied together",
+            stage="PLUGIN_TRANSITION_FACADE_BINDING",
+            plugin_type=type(plugin).__name__,
+            facade_input_type=None if facade_input is None else type(facade_input).__name__,
+        )
+    if (
+        not is_facade_adapter and not isinstance(plugin, ExecutionAlgoPluginV2)
+    ) or plugin.manifest != expected_manifest:
         raise _invocation_error(
             "MINIQMT_ALGO_PLUGIN_BINDING_INVALID",
             "transition plugin manifest or pure method surface is invalid",
@@ -701,6 +1109,19 @@ def invoke_plugin_transition_v1(
         raise TypeError("services must be AlgoReadOnlyServicesV1")
     if not isinstance(deterministic_context, DeterministicExecutionContextV1):
         raise TypeError("deterministic_context must be DeterministicExecutionContextV1")
+    if facade_input is not None and (
+        facade_input.before_state != state
+        or facade_input.runtime_event != event
+        or facade_input.read_only_services != services
+        or facade_input.deterministic_context != deterministic_context
+    ):
+        raise _invocation_error(
+            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+            "facade transition input does not equal the SPI state/event/services/context",
+            stage="PLUGIN_TRANSITION_FACADE_INPUT",
+            algo_instance_id=state.algo_instance_id,
+            event_id=event.event_id,
+        )
     if (
         state.algo_instance_id != deterministic_context.algo_instance_id
         or state.plugin_manifest_sha256 != expected_manifest.manifest_sha256
@@ -722,16 +1143,33 @@ def invoke_plugin_transition_v1(
             delivery_id=deterministic_context.delivery_id,
         )
     try:
-        codec_state = state_codec(expected_manifest, thaw_json_v1(state.state))
-        if thaw_json_v1(freeze_json_v1(codec_state)) != thaw_json_v1(state.state):
-            raise ValueError("state codec changed durable state during strict readback")
-        restored = plugin.restore_state(state)
-        if restored != state:
-            raise ValueError("restore_state changed the frozen same-version state snapshot")
-        result = plugin.transition(state=restored, event=event, services=services)
+        if is_facade_adapter and facade_input is not None:
+            result = plugin.transition_with_facade_v2(facade_input)
+        else:
+            codec_state = state_codec(expected_manifest, thaw_json_v1(state.state))
+            if thaw_json_v1(freeze_json_v1(codec_state)) != thaw_json_v1(state.state):
+                raise ValueError("state codec changed durable state during strict readback")
+            restored = plugin.restore_state(state)
+            if restored != state:
+                raise ValueError("restore_state changed the frozen same-version state snapshot")
+            result = plugin.transition(state=restored, event=event, services=services)
     except KernelPluginInvocationError:
         raise
+    except VnpyFacadeContractError as exc:
+        record_vnpy_facade_runtime_invocation_v1(phase="TRANSITION", outcome="FAILED", reason_code=exc.reason_code)
+        raise _invocation_error(
+            exc.reason_code,
+            exc.message,
+            stage="PLUGIN_TRANSITION_FACADE",
+            **_facade_exception_context_v1(exc),
+        ) from exc
     except Exception as exc:
+        if is_facade_adapter:
+            record_vnpy_facade_runtime_invocation_v1(
+                phase="TRANSITION",
+                outcome="FAILED",
+                reason_code="MINIQMT_VNPY_FACADE_CONTRACT_INVALID",
+            )
         raise _invocation_error(
             "MINIQMT_ALGO_TRANSITION_PLUGIN_FAILED",
             "pure plugin transition raised a deterministic failure",
@@ -743,6 +1181,12 @@ def invoke_plugin_transition_v1(
             delivery_id=services.delivery_id,
         ) from exc
     if not isinstance(result, AlgoTransitionV1):
+        if is_facade_adapter:
+            record_vnpy_facade_runtime_invocation_v1(
+                phase="TRANSITION",
+                outcome="FAILED",
+                reason_code="MINIQMT_VNPY_FACADE_CONTRACT_INVALID",
+            )
         raise _invocation_error(
             "MINIQMT_ALGO_TRANSITION_RESULT_INVALID",
             "plugin transition did not return AlgoTransitionV1",
@@ -763,6 +1207,12 @@ def invoke_plugin_transition_v1(
         or next_state.last_applied_event_id != event.event_id
         or next_state.updated_at_utc != deterministic_context.logical_time_utc
     ):
+        if is_facade_adapter:
+            record_vnpy_facade_runtime_invocation_v1(
+                phase="TRANSITION",
+                outcome="FAILED",
+                reason_code="MINIQMT_VNPY_FACADE_CONTRACT_INVALID",
+            )
         raise _invocation_error(
             "MINIQMT_ALGO_TRANSITION_RESULT_INVALID",
             "plugin transition result does not close to durable predecessor and deterministic context",
@@ -773,6 +1223,8 @@ def invoke_plugin_transition_v1(
             before_state_sha256=state.state_sha256,
             after_state_sha256=next_state.state_sha256,
         )
+    if is_facade_adapter:
+        record_vnpy_facade_runtime_invocation_v1(phase="TRANSITION", outcome="PASSED", reason_code="NONE")
     return result
 
 
@@ -780,10 +1232,13 @@ __all__ = [
     "ExecutionAlgoPluginV2",
     "KernelAlgoStartWriteBundleV1",
     "KernelAlgoCreationRequestV1",
+    "KernelDeliveryExecutionInputV1",
     "KernelPluginInvocationError",
     "KernelTransitionWriteBundleV1",
     "ResolvedKernelPluginV1",
+    "build_command_lifecycle_projection_v1",
     "invoke_plugin_initialize_v1",
     "invoke_plugin_transition_v1",
     "resolve_plugin_for_restore_v1",
+    "validate_vnpy_facade_k2_shadow_command_authority_v1",
 ]

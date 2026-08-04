@@ -85,7 +85,87 @@ def test_runtime_rejects_conflicting_sector_states_before_deduplication(tmp_path
         )
 
 
-def test_runtime_strict_mode_rejects_missing_stock_date(tmp_path) -> None:
+def test_runtime_strict_mode_neutralizes_in_domain_missing_stock_date(tmp_path) -> None:
+    manifest_path, data_path = _write_artifact(
+        tmp_path,
+        [
+            _row("2026-01-05", "000002.SZ", 2, "NORMAL"),
+            _row("2026-01-06", "000001.SZ", 1, "NORMAL"),
+            _row("2026-01-07", "000002.SZ", 2, "NORMAL"),
+        ],
+    )
+    policy = QESectorRiskOverlayPolicy(
+        enabled=True,
+        mode="entry_gate",
+        manifest_file=manifest_path,
+        data_file=data_path,
+        strict=True,
+    )
+    row = policy.row("000002.SZ", "2026-01-06")
+
+    assert row["risk_state"] == "UNMAPPED"
+    assert row["source_status"] == "MISSING_ARTIFACT_ROW"
+    assert row["l2_code_id"] == -1
+    assert policy.entry_allowed("000002.SZ", "2026-01-06") is True
+    assert policy.multiplier("000002.SZ", "2026-01-06") == 1.0
+    assert policy.missing_row_events() == (
+        {
+            "trade_date": "2026-01-06",
+            "instrument": "000002.SZ",
+            "risk_state": "UNMAPPED",
+            "source_status": "MISSING_ARTIFACT_ROW",
+            "instrument_coverage_start": "2026-01-05",
+            "instrument_coverage_end": "2026-01-07",
+        },
+    )
+
+
+def test_runtime_strict_mode_rejects_unknown_instrument_and_missing_calendar_date(
+    tmp_path,
+) -> None:
+    manifest_path, data_path = _write_artifact(
+        tmp_path,
+        [
+            _row("2026-01-05", "000001.SZ", 1, "NORMAL"),
+            _row("2026-01-07", "000001.SZ", 1, "NORMAL"),
+        ],
+    )
+    policy = QESectorRiskOverlayPolicy(
+        enabled=True,
+        mode="entry_gate",
+        manifest_file=manifest_path,
+        data_file=data_path,
+        strict=True,
+    )
+
+    with pytest.raises(RuntimeError, match="instrument is absent"):
+        policy.state("999999.SZ", "2026-01-05")
+    with pytest.raises(RuntimeError, match="date is absent"):
+        policy.state("000001.SZ", "2026-01-06")
+
+
+def test_runtime_strict_mode_rejects_date_outside_instrument_coverage(tmp_path) -> None:
+    manifest_path, data_path = _write_artifact(
+        tmp_path,
+        [
+            _row("2026-01-05", "000001.SZ", 1, "NORMAL"),
+            _row("2026-01-07", "000001.SZ", 1, "NORMAL"),
+            _row("2026-01-09", "000002.SZ", 2, "NORMAL"),
+        ],
+    )
+    policy = QESectorRiskOverlayPolicy(
+        enabled=True,
+        mode="entry_gate",
+        manifest_file=manifest_path,
+        data_file=data_path,
+        strict=True,
+    )
+
+    with pytest.raises(RuntimeError, match="outside the instrument coverage domain"):
+        policy.state("000001.SZ", "2026-01-09")
+
+
+def test_runtime_strict_mode_rejects_missing_stock_date_outside_manifest_domain(tmp_path) -> None:
     manifest_path, data_path = _write_artifact(
         tmp_path,
         [_row("2026-01-05", "000001.SZ", 1, "NORMAL")],
@@ -97,8 +177,73 @@ def test_runtime_strict_mode_rejects_missing_stock_date(tmp_path) -> None:
         data_file=data_path,
         strict=True,
     )
-    with pytest.raises(RuntimeError, match="has no row"):
-        policy.state("000002.SZ", "2026-01-05")
+
+    with pytest.raises(RuntimeError, match="outside the manifest date domain"):
+        policy.state("000002.SZ", "2026-01-12")
+
+
+def test_runtime_rejects_missing_or_inverted_manifest_date_domain(tmp_path) -> None:
+    manifest_path, data_path = _write_artifact(
+        tmp_path,
+        [_row("2026-01-05", "000001.SZ", 1, "NORMAL")],
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("output_start")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="valid output_start"):
+        QESectorRiskOverlayPolicy(
+            enabled=True,
+            mode="entry_gate",
+            manifest_file=manifest_path,
+            data_file=data_path,
+        )
+
+    manifest["output_start"] = "2026-01-10"
+    manifest["output_end"] = "2026-01-09"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="must not exceed"):
+        QESectorRiskOverlayPolicy(
+            enabled=True,
+            mode="entry_gate",
+            manifest_file=manifest_path,
+            data_file=data_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("trade_date", "instrument"),
+    [
+        ("2024-07-03", "603227.SH"),
+        ("2024-08-02", "600027.SH"),
+    ],
+)
+def test_runtime_real_ma_e01_missing_keys_are_explicit_neutral_rows(
+    tmp_path, trade_date, instrument
+) -> None:
+    missing_date = pd.Timestamp(trade_date)
+    manifest_path, data_path = _write_artifact(
+        tmp_path,
+        [
+            _row(missing_date - pd.offsets.BDay(1), instrument, 1, "NORMAL"),
+            _row(missing_date, "000001.SZ", 2, "NORMAL"),
+            _row(missing_date + pd.offsets.BDay(1), instrument, 1, "NORMAL"),
+        ],
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["output_start"] = "2024-07-01"
+    manifest["output_end"] = "2026-06-29"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    policy = QESectorRiskOverlayPolicy(
+        enabled=True,
+        mode="entry_gate",
+        manifest_file=manifest_path,
+        data_file=data_path,
+        strict=True,
+    )
+
+    assert policy.state(instrument, trade_date) == "UNMAPPED"
+    assert policy.entry_allowed(instrument, trade_date) is True
 
 
 @pytest.mark.parametrize(

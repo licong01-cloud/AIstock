@@ -79,6 +79,31 @@ def test_workflow_change_with_bug_metadata_uses_workflow_lane(tmp_path: Path) ->
     assert payload["workflow_validation_required"] is True
 
 
+def test_standard_skill_workflow_and_runtime_catalog_stay_in_focused_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "docs/standards/aistock_development_standard_v1.5_20260523.md",
+            "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+            "docs/standards/aistock_runtime_targets_v1.yaml",
+            ".codex/skills/fix-aistock-issue/SKILL.md",
+            ".claude/commands/fix-aistock-issue.md",
+            "scripts/aistock_issue_workflow.py",
+            "scripts/aistock_guardrail_scan.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["workflow_validation_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["frontend_required"] is False
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/test_aistock_guardrail_scan.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_issue_flow.py",
+    ]
+
+
 def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) -> None:
     advisory_payload = classifier.classify_changed_files(
         [
@@ -827,6 +852,7 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     frontend_runs = "\n".join(str(step.get("run", "")) for step in jobs["frontend-quality"]["steps"])
     assert "npm exec tsc" in frontend_runs
     assert "npm run lint" in frontend_runs
+    assert "npx playwright install --with-deps chromium" in frontend_runs
     assert "FRONTEND_TEST_TARGETS" in frontend_runs
     assert 'npm run test:e2e -- "${module_test_targets[@]}"' in frontend_runs
     assert jobs["tdx-go-tests"]["if"] == "needs.classify-changes.outputs.go_required == 'true'"
@@ -840,7 +866,7 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
 
 
-def test_github_backend_dependency_surface_installs_pinned_hmmlearn() -> None:
+def test_github_backend_dependency_surface_installs_pinned_runtime_dependencies() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
@@ -850,6 +876,7 @@ def test_github_backend_dependency_surface_installs_pinned_hmmlearn() -> None:
     )
 
     assert "hmmlearn==0.3.3" in str(install["run"])
+    assert "mcp[cli]==1.25.0" in str(install["run"])
 
 
 def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:

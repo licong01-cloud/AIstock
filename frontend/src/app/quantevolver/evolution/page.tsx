@@ -97,6 +97,8 @@ const emptyNewTaskState = () => ({
   random_seed: DEFAULT_QE_RANDOM_SEED,
   filter_suspended_on_signal: false,
   suspend_filter_strict: true,
+  long_trend_enabled: false,
+  long_trend_profile_id: "qe_long_trend_v1" as const,
 });
 
 const emptyForkFormState = () => ({
@@ -113,6 +115,8 @@ const emptyForkFormState = () => ({
   random_seed: DEFAULT_QE_RANDOM_SEED,
   filter_suspended_on_signal: false,
   suspend_filter_strict: true,
+  long_trend_enabled: false,
+  long_trend_profile_id: "qe_long_trend_v1" as const,
 });
 
 function archiveStatusLabel(status?: string): string {
@@ -1439,6 +1443,7 @@ function SingleAlphaEvolutionDashboard() {
             additional_factor_keys: additionalFactorKeys.size > 0 ? Array.from(additionalFactorKeys) : undefined,
             label_horizon: newTask.label_horizon,
             random_seed: newTask.random_seed,
+            long_trend_profile_id: newTask.long_trend_enabled ? newTask.long_trend_profile_id : undefined,
           }),
         });
         if (!res.ok) {
@@ -1537,6 +1542,10 @@ function SingleAlphaEvolutionDashboard() {
           engine_mode: "unified",
           clone_from_task_id: customEvoFormMode === "clone" ? (customEvoCloneSourceTaskId || undefined) : undefined,
           auto_start: customEvoFormMode === "create" || customEvoFormMode === "clone" ? false : undefined,
+          long_trend_profile_id:
+            customEvoFormMode === "create" || customEvoFormMode === "clone"
+              ? (newTask.long_trend_enabled ? newTask.long_trend_profile_id : undefined)
+              : undefined,
         };
         if (customEvoFormMode === "rerun") {
           endpoint = `${API}/quantevolver/evolution/tasks/${customEvoTargetTaskId}/loops/${customEvoTargetLoopIndex}/rerun`;
@@ -1636,6 +1645,8 @@ function SingleAlphaEvolutionDashboard() {
 
       const submitData = {
         ...newTask,
+        long_trend_enabled: undefined,
+        long_trend_profile_id: newTask.long_trend_enabled ? newTask.long_trend_profile_id : undefined,
         node_id: newTask.node_id || undefined,
         selected_model_id: selectedModelForEvo || undefined,
         selected_factor_keys: factorKeys,
@@ -1905,6 +1916,7 @@ function SingleAlphaEvolutionDashboard() {
           task_name: forkForm.task_name || undefined,
           loops: strategyEvoLoops,
           inherit_history: forkForm.inherit_history,
+          long_trend_profile_id: forkForm.long_trend_enabled ? forkForm.long_trend_profile_id : undefined,
         }),
       });
       const data = await res.json();
@@ -1958,6 +1970,7 @@ function SingleAlphaEvolutionDashboard() {
           suspend_filter_strict: forkForm.suspend_filter_strict !== false,
           label_horizon: forkForm.label_horizon,
           random_seed: forkForm.random_seed,
+          long_trend_profile_id: forkForm.long_trend_enabled ? forkForm.long_trend_profile_id : undefined,
         }),
       });
       const data = await res.json();
@@ -2397,6 +2410,7 @@ function SingleAlphaEvolutionDashboard() {
               演进控制中心
             </h2>
             <button
+              data-testid="qe-create-task-open"
               onClick={() => { resetCustomEvoFormState("create"); setShowCreateTask(true); fetchSourceExperiments(); fetchSourceTasks(); }}
               style={{
                 padding: "8px 14px",
@@ -2845,6 +2859,7 @@ function SingleAlphaEvolutionDashboard() {
               <div>
                 <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>任务名称</label>
                 <input
+                  data-testid="qe-create-task-name"
                   type="text"
                   value={newTask.task_name}
                   onChange={e => setNewTask({...newTask, task_name: e.target.value})}
@@ -2908,10 +2923,29 @@ function SingleAlphaEvolutionDashboard() {
               </div>
               </>)}
 
+              {(newTask.source_type !== "custom_evo" || customEvoFormMode === "create" || customEvoFormMode === "clone") && (
+                <div data-testid="qe-long-trend-task-profile" style={{ padding: "12px 14px", borderRadius: "8px", border: "1px solid #bfdbfe", backgroundColor: "#eff6ff" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "9px", color: "#1e3a8a", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      data-testid="qe-long-trend-task-profile-toggle"
+                      checked={newTask.long_trend_enabled}
+                      onChange={event => setNewTask(prev => ({ ...prev, long_trend_enabled: event.target.checked }))}
+                    />
+                    启用长期趋势评价 profile
+                  </label>
+                  <div style={{ marginTop: "7px", color: "#475569", fontSize: "12px", lineHeight: 1.65 }}>
+                    <strong style={{ fontFamily: "monospace" }}>qe_long_trend_v1</strong> 在任务创建后不可变；冻结 20/40/60/120/180D、30%/50%/70% 与全期/126D/252D 切片，页面不提供参数覆盖。
+                    默认关闭；开启只影响本次新建 QE task 的 Loop 后处理，不改变训练或回测结果，也不是科研许可。
+                  </div>
+                </div>
+              )}
+
               {newTask.source_type !== "custom_evo" && (<>{newTask.source_type === "qe_experiment" ? (
                 <div>
                   <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>选择基础实验</label>
                   <select
+                    data-testid="qe-create-task-base-experiment"
                     value={newTask.base_experiment_id}
                     onChange={e => setNewTask({...newTask, base_experiment_id: e.target.value})}
                     style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "14px", boxSizing: "border-box" }}
@@ -3452,6 +3486,7 @@ function SingleAlphaEvolutionDashboard() {
               <div>
                 <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>演进目标描述 (给 Agent 的指引)</label>
                 <textarea
+                  data-testid="qe-create-task-target"
                   value={newTask.target_desc}
                   onChange={e => setNewTask({...newTask, target_desc: e.target.value})}
                   placeholder="例如: 尝试提升 ICIR，降低多头波动率，重点探索树模型的深度参数..."
@@ -3706,6 +3741,7 @@ function SingleAlphaEvolutionDashboard() {
                   演进指引 <span style={{ color: "#ef4444" }}>*</span>
                 </label>
                 <textarea
+                  data-testid="qe-create-task-guidance"
                   value={newTask.evolution_guidance}
                   onChange={e => setNewTask({ ...newTask, evolution_guidance: e.target.value })}
                   placeholder="描述你希望演进往什么方向探索。例如：优先尝试动量+波动率因子组合，避免过度依赖单一类别..."
@@ -4291,6 +4327,7 @@ function SingleAlphaEvolutionDashboard() {
                 取消
               </button>
               <button
+                data-testid="qe-create-task-submit"
                 onClick={handleCreateTask}
                 disabled={isCreating}
                 style={{ padding: "8px 16px", backgroundColor: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", fontSize: "14px", fontWeight: 600, cursor: isCreating ? "not-allowed" : "pointer", opacity: isCreating ? 0.7 : 1 }}
@@ -4418,6 +4455,20 @@ function SingleAlphaEvolutionDashboard() {
                 }}>
                 策略演进（跳过训练）
               </button>
+            </div>
+
+            <div data-testid="qe-long-trend-fork-profile" style={{ marginBottom: "14px", padding: "10px 12px", borderRadius: "8px", border: "1px solid #bfdbfe", backgroundColor: "#eff6ff" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", color: "#1e3a8a", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={forkForm.long_trend_enabled}
+                  onChange={event => setForkForm(prev => ({ ...prev, long_trend_enabled: event.target.checked }))}
+                />
+                新任务启用不可变 qe_long_trend_v1
+              </label>
+              <div style={{ marginTop: "5px", color: "#64748b", fontSize: "11px" }}>
+                默认关闭；仅对新 fork task 生效，不修改源 task，也不允许覆盖冻结期限、barrier 或切片。
+              </div>
             </div>
 
             {forkType === "evolution" ? (

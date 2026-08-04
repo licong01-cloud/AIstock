@@ -53,6 +53,9 @@ TIER_COMPLEXITY_THRESHOLDS = {
 }
 STANDARD_REFS = [
     "docs/standards/aistock_development_standard_v1.5_20260523.md#CONTEXT-BUDGET-001",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-tool-rtk-001",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-backend-restart-ownership-001",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001",
 ]
 VALID_CANDIDATE_STATUSES = {
     "new",
@@ -68,7 +71,14 @@ VALID_CANDIDATE_TRANSITIONS = {
     "promoted": set(),
     "ignored": set(),
 }
-VALID_BUG_STATUSES = {"open", "in_progress", "fixed", "verified", "wontfix"}
+VALID_BUG_STATUSES = {
+    "open",
+    "in_progress",
+    "fixed_source_pending_user_restart",
+    "fixed",
+    "verified",
+    "wontfix",
+}
 DOCS_LITE_PREFIXES = (
     "docs/architecture/",
     "docs/analysis/",
@@ -772,7 +782,7 @@ def promote_candidate_to_bug(
             "Run required verification plans.",
             "Keep BUG JSON and GitHub Issue synchronized.",
         ],
-        "non_goals": ["Do not restart production runtime services without explicit approval."],
+        "non_goals": ["Do not start, stop, or restart any user backend without explicit per-target approval."],
         "trigger_condition": {
             "source_event_id": candidate.get("source_event_id"),
             "fingerprint": candidate.get("fingerprint"),
@@ -834,7 +844,7 @@ def build_fix_ready(record: dict[str, Any], changed_files: list[str]) -> dict[st
         "recommended_verification": validation["recommended_plans"],
         "non_goals": _unique_strings(
             _as_list(record.get("non_goals"))
-            + ["Do not restart production runtime services without explicit approval."]
+            + ["Do not start, stop, or restart any user backend without explicit per-target approval."]
         ),
         "workflow_gate": "allowed" if scope else "triage_only_until_allowed_write_scope_is_set",
         "validation_selection": validation,

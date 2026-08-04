@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
 
+from backend.services.hmm_risk.provider_absence import (
+    MONEYFLOW_DATASET,
+    MONEYFLOW_MISSING_FIELDS,
+    ProviderAbsenceEvidence,
+)
 from backend.services.hmm_risk.state_model_set import ALL_CORE_FEATURES, BASE_FEATURES, StateModelSetError
 from scripts.hmm_risk import prepare_state_model_set as subject
 
@@ -36,6 +43,8 @@ def _request() -> dict:
                 "preprocess_family": "identity",
                 "train_start": "2022-01-01",
                 "train_end": "2024-06-30",
+                "validation_start": "2024-07-01",
+                "validation_end": "2025-03-31",
             },
             {
                 "family": "autocycle_all_core",
@@ -43,13 +52,15 @@ def _request() -> dict:
                 "preprocess_family": "winsor_zscore_1_99_train_global_v1",
                 "train_start": "2022-01-01",
                 "train_end": "2024-06-30",
+                "validation_start": "2024-07-01",
+                "validation_end": "2025-03-31",
             },
         ],
     }
 
 
 def _preflight_inputs() -> dict:
-    return {
+    values = {
         "database": {"host": "127.0.0.1", "port": 5432, "dbname": "aistock"},
         "dataset_manifest": {
             "schema_version": "dataset_v1",
@@ -111,23 +122,104 @@ def _preflight_inputs() -> dict:
             "manifest_sha256": "b" * 64,
         },
     }
+    definition = {
+        "schema_version": subject.C010_FORMULA_VERSION,
+        "feature_domain_policy_version": subject.C010_POLICY_VERSION,
+        "diagnostic_only": False,
+        "moneyflow_mandatory_fields": [
+            "buy_sm_amount_cny",
+            "sell_sm_amount_cny",
+            "buy_elg_amount_cny",
+            "sell_elg_amount_cny",
+            "net_mf_amount_cny",
+        ],
+    }
+
+    def entry(value: dict) -> dict:
+        return {**value, "entry_sha256": subject.canonical_sha256(value)}
+
+    def receipt(value: dict) -> dict:
+        return {**value, "receipt_sha256": subject.canonical_sha256(value)}
+
+    eligibility_entries = [
+        entry({"canonical_ts_code": symbol, "moneyflow_contributor_eligible": True})
+        for symbol in ("000001.SZ", "000002.SZ")
+    ]
+    domain_entry = entry({"direct_sector_level": "L1", "sector_code": "801010.SI", "trade_date": "2022-01-04"})
+    l2_domain_entry = entry({"direct_sector_level": "L2", "sector_code": "801012.SI", "trade_date": "2022-01-04"})
+    trading_dates = tuple(date(2022, 1, 1) + timedelta(days=index) for index in range(601))
+    cross_entries = [entry({"index": index}) for index in range(4 * len(trading_dates))]
+    eligibility = receipt(
+        {
+            "schema_version": "hmm_risk_c010_train_observation_eligibility_v1",
+            "entry_count": len(eligibility_entries),
+            "entries": eligibility_entries,
+            "excluded_moneyflow_symbols": ["689009.SH"],
+            "diagnostic_only": False,
+            "formal_policy_activated": True,
+        }
+    )
+    aggregate = receipt(
+        {
+            "schema_version": "hmm_risk_c010_feature_domain_aggregate_evidence_v1",
+            "l1_aggregate_count": 1,
+            "l2_aggregate_count": 1,
+            "l1_domain_receipts": [domain_entry],
+            "l2_domain_receipts": [l2_domain_entry],
+            "l1_invalid_price_domain": [],
+            "l2_invalid_price_domain": [],
+            "formal_policy_activated": True,
+        }
+    )
+    l1_cross = receipt(
+        {
+            "schema_version": "hmm_risk_c010_feature_cross_section_receipt_set_v1",
+            "direct_sector_level": "L1",
+            "expected_sector_count": 31,
+            "entry_count": len(cross_entries),
+            "entries": cross_entries,
+            "diagnostic_only": False,
+        }
+    )
+    l2_cross = receipt(
+        {
+            "schema_version": "hmm_risk_c010_feature_cross_section_receipt_set_v1",
+            "direct_sector_level": "L2",
+            "expected_sector_count": 131,
+            "entry_count": len(cross_entries),
+            "entries": cross_entries,
+            "diagnostic_only": False,
+        }
+    )
+    values["c010_diagnostic"] = {
+        "eligibility": eligibility,
+        "aggregate_evidence": aggregate,
+        "l1_cross_section_evidence": l1_cross,
+        "l2_cross_section_evidence": l2_cross,
+        "l1_feature_definition": dict(definition),
+        "l2_feature_definition": dict(definition),
+    }
+    values["trading_dates"] = trading_dates
+    return values
 
 
-def _approve_preflight_inputs(monkeypatch, inputs: dict) -> None:
+def _approve_preflight_template(monkeypatch, request: dict) -> None:
     monkeypatch.setattr(
         subject,
         "B3_APPROVED_FROZEN_IDENTITIES",
         {
-            "dataset_manifest_hash": subject.canonical_sha256(inputs["dataset_manifest"]),
-            "mapping_manifest_hash": subject.canonical_sha256(inputs["mapping_manifest"]),
-            "l2_stock_fact_manifest_hash": subject.canonical_sha256(inputs["l2_stock_fact_manifest"]),
+            "dataset_manifest_hash": request["dataset_manifest_hash"],
+            "mapping_manifest_hash": request["mapping_manifest_hash"],
+            "l2_stock_fact_manifest_hash": request["l2_stock_fact_manifest_hash"],
         },
     )
 
 
-def _coverage_preflight(*, valid: bool = True) -> dict:
+def _coverage_preflight(*, valid: bool = True, policy_sha256: str | None = None) -> dict:
     body = {
         "schema_version": "hmm_risk_b3_train_coverage_preflight_set_v1",
+        "feature_domain_policy_sha256": policy_sha256,
+        "formula_version": subject.C010_FORMULA_VERSION if policy_sha256 else None,
         "reports": {},
         "report_count": 4,
         "train_coverage_valid": valid,
@@ -140,6 +232,218 @@ def _coverage_preflight(*, valid: bool = True) -> dict:
         "ready_artifact_write_performed": False,
     }
     return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+
+def _minimal_c010_policy() -> dict:
+    return {
+        "receipt_sha256": "f" * 64,
+        "provider_absence_partition_receipt": {"receipt_sha256": "e" * 64},
+        "provider_absence_partition_receipt_sha256": "e" * 64,
+    }
+
+
+class _C010Cursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def execute(self, query, params):
+        self.query = query
+        self.params = params
+
+    def fetchall(self):
+        return self.rows
+
+
+class _C010Connection:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def cursor(self):
+        return _C010Cursor(self.rows)
+
+
+class _C010Resolution:
+    def __init__(self, symbol: str, dataset: str):
+        self.security_identity_id = f"canonical:{symbol}"
+        self.source_ts_code = symbol
+        self._symbol = symbol
+        self._dataset = dataset
+
+    def evidence(self):
+        return {
+            "security_identity_id": self.security_identity_id,
+            "canonical_ts_code": self._symbol,
+            "source_dataset": self._dataset,
+            "source_ts_code": self.source_ts_code,
+            "resolution_kind": "canonical_same_code",
+        }
+
+
+class _C010SecurityManifest:
+    manifest_sha256 = "a" * 64
+
+    def alias_rows(self, source_dataset):
+        return []
+
+    def resolve(self, symbol, trade_date, source_dataset):
+        return _C010Resolution(symbol, source_dataset)
+
+    def evidence(self):
+        return {
+            "schema_version": "hmm_risk_security_source_identity_manifest_v1",
+            "manifest_sha256": self.manifest_sha256,
+        }
+
+
+def _c010_absence(symbol: str, trade_date_value: date) -> ProviderAbsenceEvidence:
+    body = {
+        "canonical_ts_code": symbol,
+        "source_dataset": MONEYFLOW_DATASET,
+        "source_ts_code": symbol,
+        "trade_date": trade_date_value.isoformat(),
+        "missing_fields": list(MONEYFLOW_MISSING_FIELDS),
+        "provider_audit_receipt_sha256": "b" * 64,
+    }
+    return ProviderAbsenceEvidence(
+        canonical_ts_code=symbol,
+        source_dataset=MONEYFLOW_DATASET,
+        source_ts_code=symbol,
+        trade_date=trade_date_value,
+        missing_fields=MONEYFLOW_MISSING_FIELDS,
+        provider_audit_receipt_sha256="b" * 64,
+        row_hash=subject.canonical_sha256(body),
+    )
+
+
+def test_c010_partition_keeps_known_sw_domain_out_key_without_fabricating_sector_identity() -> None:
+    trade_date_value = date(2023, 5, 22)
+    absence = _c010_absence("002951.SZ", trade_date_value)
+    provider_manifest = SimpleNamespace(
+        rows=(absence,),
+        evidence=lambda: {"schema_version": "hmm_risk_provider_absence_manifest_v1", "manifest_sha256": "b" * 64},
+    )
+    source_spec = SimpleNamespace(universe_key="frozen", universe_rule_version="rule-v1")
+    source_state = {"column_contract_sha256": "c" * 64, "source_state": "ready"}
+    rows = [
+        (
+            "002951.SZ",
+            trade_date_value,
+            [{"ts_code": "002951.SZ", "eligible_start": "2022-01-01", "eligible_end": None}],
+            [{"ts_code": "002951.SZ", "trade_date": "2023-05-22", "close_li": 12345}],
+            [],
+        )
+    ]
+
+    partition, _ = subject._c010_provider_absence_partition(
+        _C010Connection(rows),
+        source_spec,
+        security_identity_manifest=_C010SecurityManifest(),
+        provider_absence_manifest=provider_manifest,
+        source_state=source_state,
+        mapping_manifest={"schema_version": "hmm_risk_pit_mapping_manifest_v1", "source_jsonl_sha256": "d" * 64},
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+        formal_policy=True,
+    )
+
+    assert partition["p_all_entry_count"] == 1
+    assert partition["p_in_entry_count"] == 0
+    assert partition["p_out_entry_count"] == 1
+    assert partition["entries"][0]["failed_predicates"] == [
+        "sw_l1_identity_valid",
+        "sw_l2_identity_valid",
+    ]
+    assert partition["entries"][0]["primary_reason_code"] == ("hmm_risk_c010_sw_identity_unavailable_for_opportunity")
+
+
+def test_c010_expected_opportunity_receipt_requires_unique_direct_l1_l2_mapping() -> None:
+    authority = subject.canonical_authority_identity("test", {"version": "v1"})
+    source_spec = SimpleNamespace(universe_key="frozen")
+    valid_mapping = {
+        "source_ts_code": "000001.SZ",
+        "source_l1_code": "801010",
+        "source_l2_code": "801011",
+        "in_date": "2020-01-01",
+        "out_date": None,
+        "l1_code": "801010.SI",
+        "l2_code": "801011.SI",
+    }
+    receipt = subject._c010_expected_opportunity_receipt(
+        _C010Connection([("000001.SZ", date(2022, 1, 4), [valid_mapping])]),
+        source_spec,
+        security_identity_manifest=_C010SecurityManifest(),
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+        authority_identities=[authority],
+    )
+    assert receipt["opportunity_key_count"] == 1
+    assert receipt["entries"][0]["opportunity_dates"] == ["2022-01-04"]
+
+    with pytest.raises(StateModelSetError, match="opportunity mapping is not unique"):
+        subject._c010_expected_opportunity_receipt(
+            _C010Connection(
+                [
+                    (
+                        "000001.SZ",
+                        date(2022, 1, 4),
+                        [valid_mapping, {**valid_mapping, "l2_code": "801012.SI"}],
+                    )
+                ]
+            ),
+            source_spec,
+            security_identity_manifest=_C010SecurityManifest(),
+            train_start=date(2022, 1, 1),
+            train_end=date(2024, 6, 30),
+            authority_identities=[authority],
+        )
+
+
+def test_main_c010_a5_preflight_writes_compact_readonly_receipt(monkeypatch, tmp_path, capsys) -> None:
+    output = tmp_path / "c010-a5-preflight.json"
+    partition = {
+        "p_all_entry_count": 502,
+        "p_in_entry_count": 501,
+        "p_out_entry_count": 1,
+    }
+    report = {
+        "status": "preflight_complete",
+        "provider_absence_partition_receipt": partition,
+        "provider_absence_partition_receipt_sha256": "a" * 64,
+        "known_sw_domain_out_verified": True,
+    }
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request_template", lambda path: _request())
+    monkeypatch.setattr(subject, "prepare_c010_a5_domain_partition_preflight", lambda request, db_prefix: report)
+    monkeypatch.setattr(subject, "_write_diagnostic_report", lambda path, value: "b" * 64)
+    monkeypatch.setattr(
+        subject,
+        "parse_args",
+        lambda: SimpleNamespace(
+            request=str(tmp_path / "request.json"),
+            env_file=str(tmp_path / "env"),
+            db_env_prefix="TDX_DB_",
+            b3_preflight_output=None,
+            c009_stock_fact_preflight_output=None,
+            c010_observation_eligibility_output=None,
+            c010_a5_domain_partition_output=str(output),
+            b3_request_candidate_output=None,
+        ),
+    )
+
+    assert subject.main() == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "preflight_complete"
+    assert receipt["p_all_entry_count"] == 502
+    assert receipt["p_out_entry_count"] == 1
+    assert receipt["known_sw_domain_out_verified"] is True
+    assert receipt["fit_performed"] is False
+    assert receipt["database_write_performed"] is False
 
 
 def test_legacy_fixed_seed_ready_writer_is_disabled() -> None:
@@ -177,7 +481,7 @@ def test_source_loader_requires_explicit_identity_and_provider_absence_manifests
 def test_preflight_rejects_live_manifest_drift_before_candidate_ready(monkeypatch) -> None:
     inputs = _preflight_inputs()
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
 
     with pytest.raises(StateModelSetError, match="formal B3 frozen identity mismatch"):
         subject.prepare_b3_preflight_candidate(_request(), db_prefix="TDX_DB_")
@@ -187,21 +491,45 @@ def test_preflight_freezes_current_identities_without_fit_selection_or_writes(mo
     request = _request()
     old_producer = request["producer_commit"]
     inputs = _preflight_inputs()
-    _approve_preflight_inputs(monkeypatch, inputs)
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
-    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda inputs, request: _coverage_preflight())
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda inputs, request: _coverage_preflight(policy_sha256=inputs["feature_domain_policy_sha256"]),
+    )
 
     report = subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
 
     candidate = report["request_candidate"]
-    assert report["schema_version"] == subject.B3_PREFLIGHT_SCHEMA
+    assert report["schema_version"] == subject.C010_FORMAL_PREFLIGHT_SCHEMA
     assert report["status"] == "candidate_ready"
     assert report["source_template_producer_commit"] == old_producer
     assert candidate["producer_commit"] == "d" * 40
     assert candidate["dataset_manifest_hash"] == subject.canonical_sha256(inputs["dataset_manifest"])
     assert candidate["mapping_manifest_hash"] == subject.canonical_sha256(inputs["mapping_manifest"])
     assert candidate["l2_stock_fact_manifest_hash"] == subject.canonical_sha256(inputs["l2_stock_fact_manifest"])
+    assert candidate["feature_domain_policy_sha256"] == report["feature_domain_policy_sha256"]
+    assert candidate["feature_domain_policy_manifest"] == report["feature_domain_policy_manifest"]
+    assert report["feature_domain_policy_evidence"]["eligibility"]["entry_count"] == 2
+    assert report["feature_domain_policy_evidence"]["aggregate"]["l1_aggregate_count"] == 1
+    assert report["feature_domain_policy_manifest"]["feature_order_by_family"] == {
+        "legacy_covfix": list(BASE_FEATURES),
+        "autocycle_all_core": list(ALL_CORE_FEATURES),
+    }
+    assert (
+        candidate["feature_domain_policy_manifest"]["aggregate_receipt"]
+        == inputs["c010_diagnostic"]["aggregate_evidence"]
+    )
+    assert (
+        candidate["feature_domain_policy_manifest"]["l1_cross_section_receipt"]
+        == inputs["c010_diagnostic"]["l1_cross_section_evidence"]
+    )
+    assert candidate["parent_frozen_identities"] == subject.B3_APPROVED_FROZEN_IDENTITIES
+    assert report["formula_version"] == subject.C010_FORMULA_VERSION
+    assert report["train_trading_date_count"] == 601
     assert candidate["train_coverage_contract_version"] == subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION
     assert candidate["train_coverage_receipt_sha256"] == report["train_coverage"]["receipt_sha256"]
     assert report["request_candidate_sha256"] == subject.canonical_sha256(candidate)
@@ -227,16 +555,131 @@ def test_preflight_freezes_current_identities_without_fit_selection_or_writes(mo
     assert request["producer_commit"] == old_producer
 
 
-def test_preflight_blocks_insufficient_train_coverage_without_request_candidate(monkeypatch) -> None:
+def test_formal_preflight_freezes_stock_facts_to_train_window_and_preserves_circ_mv_history(
+    monkeypatch,
+) -> None:
     request = _request()
     inputs = _preflight_inputs()
-    _approve_preflight_inputs(monkeypatch, inputs)
+    observed: dict[str, object] = {"sources": []}
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+
+    def load_inputs(train_request, *, db_prefix, c010_formal=False):
+        observed["sources"].append(dict(train_request["source"]))
+        observed["db_prefix"] = db_prefix
+        observed["c010_formal"] = c010_formal
+        return inputs
+
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", load_inputs)
     monkeypatch.setattr(
         subject,
         "_b3_train_coverage_preflight",
-        lambda inputs, request: _coverage_preflight(valid=False),
+        lambda values, req: _coverage_preflight(policy_sha256=values["feature_domain_policy_sha256"]),
+    )
+
+    report = subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
+
+    assert observed["sources"][0]["source_start"] == "2022-01-01"
+    assert observed["sources"][0]["source_end"] == "2024-06-30"
+    assert observed["sources"][0]["circ_mv_history_start"] == "2020-07-30"
+    assert observed["sources"][1]["source_start"] == "2022-01-01"
+    assert observed["sources"][1]["source_end"] == "2025-04-30"
+    assert observed["sources"][1]["circ_mv_history_start"] == "2020-07-30"
+    assert observed["db_prefix"] == "TDX_DB_"
+    assert observed["c010_formal"] is True
+    assert report["request_candidate"]["source"]["source_start"] == "2022-01-01"
+    assert report["request_candidate"]["source"]["source_end"] == "2024-06-30"
+    assert report["request_candidate"]["source"]["circ_mv_history_start"] == "2020-07-30"
+    assert report["request_candidate"]["semantic_source"] == observed["sources"][1]
+    assert report["validation_start"] == "2024-07-01"
+    assert report["validation_end"] == "2025-03-31"
+    assert request["source"]["source_start"] == "2020-07-30"
+    assert "circ_mv_history_start" not in request["source"]
+
+
+def test_formal_preflight_freezes_missing_approved_validation_window(monkeypatch) -> None:
+    request = _request()
+    for family in request["families"]:
+        family.pop("validation_start")
+        family.pop("validation_end")
+    inputs = _preflight_inputs()
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_load_l1_source_inputs",
+        lambda train_request, *, db_prefix, c010_formal=False: inputs,
+    )
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda values, req: _coverage_preflight(policy_sha256=values["feature_domain_policy_sha256"]),
+    )
+
+    report = subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
+
+    assert report["validation_start"] == "2024-07-01"
+    assert report["validation_end"] == "2025-03-31"
+    assert {
+        (family["validation_start"], family["validation_end"]) for family in report["request_candidate"]["families"]
+    } == {("2024-07-01", "2025-03-31")}
+    assert all("validation_start" not in family for family in request["families"])
+
+
+def test_formal_preflight_rejects_unapproved_validation_window_before_source_load(monkeypatch) -> None:
+    request = _request()
+    request["families"][0]["validation_start"] = "2024-07-02"
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    source_load_called = False
+
+    def unexpected_source_load(*args, **kwargs):
+        nonlocal source_load_called
+        source_load_called = True
+        raise AssertionError("source load must not start for an unapproved validation window")
+
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", unexpected_source_load)
+
+    with pytest.raises(StateModelSetError, match="formal B3 validation window mismatch"):
+        subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
+    assert source_load_called is False
+
+
+def test_formal_preflight_rejects_source_that_does_not_cover_semantic_watermark(monkeypatch) -> None:
+    request = _request()
+    request["source"]["source_end"] = "2025-03-31"
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    source_load_called = False
+
+    def unexpected_source_load(*args, **kwargs):
+        nonlocal source_load_called
+        source_load_called = True
+        raise AssertionError("source load must not expand an immutable source window")
+
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", unexpected_source_load)
+
+    with pytest.raises(StateModelSetError, match="semantic window escapes the immutable source window"):
+        subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
+    assert source_load_called is False
+
+
+def test_preflight_blocks_insufficient_train_coverage_without_request_candidate(monkeypatch) -> None:
+    request = _request()
+    inputs = _preflight_inputs()
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda inputs, request: _coverage_preflight(
+            valid=False,
+            policy_sha256=inputs["feature_domain_policy_sha256"],
+        ),
     )
 
     report = subject.prepare_b3_preflight_candidate(request, db_prefix="TDX_DB_")
@@ -299,7 +742,7 @@ def test_c009_preflight_rejects_l1_l2_source_evidence_drift(monkeypatch) -> None
     inputs = _preflight_inputs()
     inputs["l2_stock_fact_manifest"]["moneyflow_provider_absence_count"] = 501
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "e" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, req: _coverage_preflight())
 
     with pytest.raises(StateModelSetError, match="C-009 L1/L2 source evidence mismatch"):
@@ -310,7 +753,7 @@ def test_c009_preflight_rejects_l1_l2_circ_mv_crossing_evidence_drift(monkeypatc
     inputs = _preflight_inputs()
     inputs["l2_stock_fact_manifest"]["circ_mv_pit_boundary_crossing_available_count"] = 1_072
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "e" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, req: _coverage_preflight())
 
     with pytest.raises(StateModelSetError, match="C-009 L1/L2 source evidence mismatch"):
@@ -337,6 +780,8 @@ def test_c010_diagnostic_compares_baseline_and_masks_without_model_actions(monke
         "l2_panel": object(),
         "l1_feature_definition": {"cross_section_contract": "coverage_aware_diagnostic"},
         "l2_feature_definition": {"cross_section_contract": "coverage_aware_diagnostic"},
+        "l1_cross_section_evidence": {"receipt_sha256": "7" * 64},
+        "l2_cross_section_evidence": {"receipt_sha256": "8" * 64},
     }
     observed = {}
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "f" * 40)
@@ -426,10 +871,15 @@ def test_main_preflight_writes_immutable_candidate_and_receipt(monkeypatch, tmp_
     candidate_path = tmp_path / "candidate.json"
     report_path = tmp_path / "preflight.json"
     inputs = _preflight_inputs()
-    _approve_preflight_inputs(monkeypatch, inputs)
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
-    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda inputs, request: _coverage_preflight())
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda inputs, request: _coverage_preflight(policy_sha256=inputs["feature_domain_policy_sha256"]),
+    )
     monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
     monkeypatch.setattr(
         subject,
@@ -464,13 +914,17 @@ def test_main_blocked_preflight_does_not_overwrite_stale_candidate(monkeypatch, 
     candidate_path.write_text('{"stale":true}\n', encoding="utf-8")
     report_path = tmp_path / "preflight.json"
     inputs = _preflight_inputs()
-    _approve_preflight_inputs(monkeypatch, inputs)
+    _approve_preflight_template(monkeypatch, request)
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda manifest: dict(manifest))
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
     monkeypatch.setattr(
         subject,
         "_b3_train_coverage_preflight",
-        lambda inputs, request: _coverage_preflight(valid=False),
+        lambda inputs, request: _coverage_preflight(
+            valid=False,
+            policy_sha256=inputs["feature_domain_policy_sha256"],
+        ),
     )
     monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
     monkeypatch.setattr(
@@ -517,6 +971,10 @@ def test_formal_parent_persists_typed_child_failure_receipt(monkeypatch, tmp_pat
         "run",
         lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=b"", stderr=stderr),
     )
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_require_formal_semantic_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_load_verified_formal_semantic_inputs", lambda request, db_prefix: {})
 
     with pytest.raises(StateModelSetError, match="801010.SI train-only observation coverage is insufficient: 10"):
         subject.run_b3_repeated(args, _request())
@@ -528,6 +986,130 @@ def test_formal_parent_persists_typed_child_failure_receipt(monkeypatch, tmp_pat
     assert failure["fit_grid_completed"] is False
     assert failure["selection_performed"] is False
     assert failure["ready_artifact_write_performed"] is False
+
+
+def test_formal_parent_rejects_missing_validation_window_before_fresh_process(monkeypatch, tmp_path) -> None:
+    request = _request()
+    for family in request["families"]:
+        family.pop("validation_start")
+        family.pop("validation_end")
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_preparation_output=str(tmp_path / "formal-receipt.json"),
+    )
+    subprocess_called = False
+
+    def unexpected_subprocess(*args, **kwargs):
+        nonlocal subprocess_called
+        subprocess_called = True
+        raise AssertionError("fresh process must not start without the approved validation window")
+
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda value: None)
+    monkeypatch.setattr(subject.subprocess, "run", unexpected_subprocess)
+
+    with pytest.raises(StateModelSetError, match="formal B3 validation window is missing"):
+        subject.run_b3_repeated(args, request)
+    assert subprocess_called is False
+
+
+def test_formal_parent_rejects_missing_semantic_identity_before_fresh_process(monkeypatch, tmp_path) -> None:
+    request = _request()
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_preparation_output=str(tmp_path / "formal-receipt.json"),
+    )
+    subprocess_called = False
+
+    def unexpected_subprocess(*args, **kwargs):
+        nonlocal subprocess_called
+        subprocess_called = True
+        raise AssertionError("fresh process must not start without frozen semantic identity")
+
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda value: None)
+    monkeypatch.setattr(subject.subprocess, "run", unexpected_subprocess)
+
+    with pytest.raises(StateModelSetError, match="formal B3 semantic source identity is missing"):
+        subject.run_b3_repeated(args, request)
+    assert subprocess_called is False
+
+
+def test_formal_semantic_identity_rejects_source_window_drift() -> None:
+    request = _request()
+    request["semantic_source"] = subject._b3_semantic_source_request(request)["source"]
+    request.update(
+        {
+            "semantic_dataset_manifest_hash": "1" * 64,
+            "semantic_mapping_manifest_hash": "2" * 64,
+            "semantic_calendar_manifest_hash": "3" * 64,
+            "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+        }
+    )
+    subject._require_formal_semantic_identity(request)
+
+    request["semantic_source"]["source_end"] = "2025-03-31"
+    with pytest.raises(StateModelSetError, match="formal B3 semantic source identity mismatch"):
+        subject._require_formal_semantic_identity(request)
+
+
+def test_formal_semantic_identity_accepts_train_only_candidate_source() -> None:
+    request = _request()
+    request["semantic_source"] = subject._b3_semantic_source_request(request)["source"]
+    request["source"]["source_start"] = "2022-01-01"
+    request["source"]["source_end"] = "2024-06-30"
+    request["source"]["circ_mv_history_start"] = "2020-07-30"
+    request.update(
+        {
+            "semantic_dataset_manifest_hash": "1" * 64,
+            "semantic_mapping_manifest_hash": "2" * 64,
+            "semantic_calendar_manifest_hash": "3" * 64,
+            "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+        }
+    )
+
+    subject._require_formal_semantic_identity(request)
+
+
+def test_formal_parent_rejects_semantic_hash_drift_before_fresh_process(monkeypatch, tmp_path) -> None:
+    request = _request()
+    request["semantic_source"] = subject._b3_semantic_source_request(request)["source"]
+    request.update(
+        {
+            "semantic_dataset_manifest_hash": "1" * 64,
+            "semantic_mapping_manifest_hash": "2" * 64,
+            "semantic_calendar_manifest_hash": "3" * 64,
+            "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+        }
+    )
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_preparation_output=str(tmp_path / "formal-receipt.json"),
+    )
+    subprocess_called = False
+
+    def unexpected_subprocess(*args, **kwargs):
+        nonlocal subprocess_called
+        subprocess_called = True
+        raise AssertionError("fresh process must not start after semantic hash drift")
+
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda *args, **kwargs: _preflight_inputs())
+    monkeypatch.setattr(subject.subprocess, "run", unexpected_subprocess)
+
+    with pytest.raises(StateModelSetError, match="semantic input drifted"):
+        subject.run_b3_repeated(args, request)
+    assert subprocess_called is False
 
 
 def test_child_failure_receipt_bounds_untrusted_error_text(monkeypatch, tmp_path) -> None:
@@ -552,13 +1134,460 @@ def test_child_failure_receipt_bounds_untrusted_error_text(monkeypatch, tmp_path
     assert len(failure["error"]) == 4000
 
 
+def _blocker_pass_payload() -> bytes:
+    numeric_environment = {"packages": {"hmmlearn": "0.3.3"}, "thread_env": {"OMP_NUM_THREADS": "1"}}
+    body = {
+        "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_pass_v1",
+        "diagnostic_producer_commit": "d" * 40,
+        "target_manifest_sha256": "1" * 64,
+        "targeted_evidence": [{"diagnostic_entry_sha256": "2" * 64}],
+        "fit_count": 174,
+        "numeric_environment": numeric_environment,
+        "numeric_environment_sha256": subject.canonical_sha256(numeric_environment),
+    }
+    value = {**body, "pass_receipt_sha256": subject.canonical_sha256(body)}
+    return subject.canonical_json_bytes(value)
+
+
+def _blocker_args(tmp_path) -> SimpleNamespace:
+    formal = tmp_path / "formal.json"
+    formal.write_text("{}", encoding="utf-8")
+    return SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_formal_report=str(formal),
+    )
+
+
+def _remediation_args(tmp_path) -> SimpleNamespace:
+    formal = tmp_path / "formal.json"
+    blocker = tmp_path / "blocker.json"
+    formal.write_text("{}", encoding="utf-8")
+    blocker.write_text("{}", encoding="utf-8")
+    return SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "model-sets"),
+        env_file=str(tmp_path / "env"),
+        db_env_prefix="TDX_DB_",
+        b3_preflight_output=None,
+        b3_request_candidate_output=None,
+        b3_blocker_diagnostic_output=None,
+        b3_remediation_diag02_output=str(tmp_path / "remediation.json"),
+        b3_formal_report=str(formal),
+        b3_blocker_report=str(blocker),
+        b3_target_manifest_sha256="",
+        _b3_blocker_diag01_child=False,
+        _c008_b3_diag02_child=False,
+        _c008_b3_diag04_child=False,
+        _b3_child=False,
+        b3_preparation_output=None,
+        c008_b3_diag04_output=None,
+        c008_b3_diag02_output=None,
+        c008_diagnostic_output=None,
+        c008_b1_diagnostic_output=None,
+    )
+
+
+def test_main_remediation_diag02_persists_no_fit_receipt(monkeypatch, tmp_path, capsys) -> None:
+    args = _remediation_args(tmp_path)
+    body = {
+        "schema_version": "hmm_risk_c008_b3_remediation_diag02_v1",
+        "status": "diagnostic_complete",
+        "diagnostic_contract": "C-008-B3-REMEDIATION-DIAG-02",
+        "profile_manifest": {"profile_count": 324},
+        "completed_entry_analysis": {"entry_count": 163},
+        "initialization_source_evidence": {"entry_count": 11},
+        "hmm_refit_performed": False,
+        "selection_performed": False,
+        "validation_accessed": False,
+        "formal_acceptance_reexecuted": False,
+        "threshold_changed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    report = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+    monkeypatch.setattr(subject, "parse_args", lambda: args)
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
+    monkeypatch.setattr(subject, "prepare_b3_remediation_diag02", lambda *a, **k: report)
+
+    assert subject.main() == 0
+
+    persisted = json.loads((tmp_path / "remediation.json").read_text(encoding="utf-8"))
+    receipt = json.loads(capsys.readouterr().out)
+    assert persisted == report
+    assert receipt["profile_count"] == 324
+    assert receipt["completed_entry_count"] == 163
+    assert receipt["initialization_failure_count"] == 11
+    assert receipt["hmm_refit_performed"] is False
+    assert receipt["validation_accessed"] is False
+    assert receipt["ready_artifact_write_performed"] is False
+
+
+def _blocker_numeric_environment(*, thread_pools=None) -> dict:
+    return {
+        "schema_version": "hmm_risk_c008_b3_diag04_numeric_environment_v1",
+        "scope": "same_host_same_fixed_numeric_environment_only",
+        "python_version": "3.13.5",
+        "python_implementation": "CPython",
+        "python_executable": "C:/Miniconda/envs/AIstock/python.exe",
+        "packages": {
+            "numpy": "2.4.0",
+            "scipy": "1.16.3",
+            "scikit-learn": "1.8.0",
+            "hmmlearn": "0.3.3",
+            "threadpoolctl": "3.6.0",
+        },
+        "thread_env": {
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+        },
+        "thread_pools": [
+            {
+                "user_api": "blas",
+                "internal_api": "openblas",
+                "num_threads": 1,
+                "prefix": "libscipy_openblas",
+            }
+        ]
+        if thread_pools is None
+        else thread_pools,
+    }
+
+
+def _valid_blocker_child_value(numeric_environment: dict) -> tuple[dict, dict]:
+    target_entry = {
+        "role": "control",
+        "family": "legacy_covfix",
+        "level": "L2",
+        "seed": 42,
+        "sector_code": "L2-001",
+        "source_entry_receipt_sha256": "7" * 64,
+        "formal_failed_stages": [],
+    }
+    target = {
+        "formal_report_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["report_sha256"],
+        "target_manifest_sha256": "1" * 64,
+        "parameter_profile_sha256": "2" * 64,
+        "target_pair_count": 1,
+        "targets": [target_entry],
+    }
+    evidence_body = {
+        **target_entry,
+        "status": "fit_completed",
+        "formal_entry_receipt_reproduced": True,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "model_write_performed": False,
+    }
+    value = {
+        "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_pass_v1",
+        "diagnostic_producer_commit": "d" * 40,
+        "formal_producer_commit": subject.B3_BLOCKER_FORMAL_AUTHORITY["producer_commit"],
+        "formal_report_sha256": target["formal_report_sha256"],
+        "target_manifest_sha256": target["target_manifest_sha256"],
+        "dataset_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["dataset_manifest_hash"],
+        "mapping_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["mapping_manifest_hash"],
+        "calendar_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["l2_stock_fact_manifest_hash"],
+        "feature_domain_policy_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["feature_domain_policy_sha256"],
+        "formula_version": subject.B3_BLOCKER_FORMAL_AUTHORITY["formula_version"],
+        "parameter_profile_sha256": target["parameter_profile_sha256"],
+        "numeric_environment": numeric_environment,
+        "numeric_environment_sha256": subject.canonical_sha256(numeric_environment),
+        "fit_count": 1,
+        "targeted_evidence": [{**evidence_body, "diagnostic_entry_sha256": subject.canonical_sha256(evidence_body)}],
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "acceptance_decision_reexecuted": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return value, target
+
+
+def test_blocker_child_pass_validator_rejects_incomplete_success(monkeypatch) -> None:
+    target_entry = {
+        "role": "control",
+        "family": "legacy_covfix",
+        "level": "L2",
+        "seed": 42,
+        "sector_code": "L2-001",
+        "source_entry_receipt_sha256": "7" * 64,
+        "formal_failed_stages": [],
+    }
+    target = {
+        "formal_report_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["report_sha256"],
+        "target_manifest_sha256": "1" * 64,
+        "parameter_profile_sha256": "2" * 64,
+        "target_pair_count": 1,
+        "targets": [target_entry],
+    }
+    evidence_body = {
+        **target_entry,
+        "status": "fit_completed",
+        "formal_entry_receipt_reproduced": True,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "model_write_performed": False,
+    }
+    numeric_environment = _blocker_numeric_environment()
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: deepcopy(numeric_environment))
+    value = {
+        "schema_version": "hmm_risk_c008_b3_formal_blocker_diag01_pass_v1",
+        "diagnostic_producer_commit": "d" * 40,
+        "formal_producer_commit": subject.B3_BLOCKER_FORMAL_AUTHORITY["producer_commit"],
+        "formal_report_sha256": target["formal_report_sha256"],
+        "target_manifest_sha256": target["target_manifest_sha256"],
+        "dataset_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["dataset_manifest_hash"],
+        "mapping_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["mapping_manifest_hash"],
+        "calendar_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": subject.B3_BLOCKER_FORMAL_AUTHORITY["l2_stock_fact_manifest_hash"],
+        "feature_domain_policy_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["feature_domain_policy_sha256"],
+        "formula_version": subject.B3_BLOCKER_FORMAL_AUTHORITY["formula_version"],
+        "parameter_profile_sha256": target["parameter_profile_sha256"],
+        "numeric_environment": numeric_environment,
+        "numeric_environment_sha256": subject.canonical_sha256(numeric_environment),
+        "fit_count": 1,
+        "targeted_evidence": [{**evidence_body, "diagnostic_entry_sha256": subject.canonical_sha256(evidence_body)}],
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "selection_performed": False,
+        "acceptance_decision_reexecuted": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    subject._validate_b3_blocker_pass(value, target)
+
+    incomplete = deepcopy(value)
+    incomplete["targeted_evidence"] = []
+    with pytest.raises(StateModelSetError, match="evidence count is invalid"):
+        subject._validate_b3_blocker_pass(incomplete, target)
+
+
+def test_blocker_child_accepts_additional_post_fit_single_thread_pool(monkeypatch) -> None:
+    parent_environment = _blocker_numeric_environment()
+    child_environment = _blocker_numeric_environment(
+        thread_pools=[
+            *parent_environment["thread_pools"],
+            {
+                "user_api": "openmp",
+                "internal_api": "openmp",
+                "num_threads": 1,
+                "prefix": "libomp",
+            },
+        ]
+    )
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: parent_environment)
+    value, target = _valid_blocker_child_value(child_environment)
+
+    subject._validate_b3_blocker_pass(value, target)
+
+
+def test_blocker_child_rejects_non_single_thread_post_fit_pool(monkeypatch) -> None:
+    parent_environment = _blocker_numeric_environment()
+    child_environment = _blocker_numeric_environment(
+        thread_pools=[{"user_api": "openmp", "internal_api": "openmp", "num_threads": 2}]
+    )
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: parent_environment)
+    value, target = _valid_blocker_child_value(child_environment)
+
+    with pytest.raises(StateModelSetError, match="thread pools are not single-threaded"):
+        subject._validate_b3_blocker_pass(value, target)
+
+
+def test_d1_numeric_environment_accepts_different_single_thread_pool_inventory(monkeypatch) -> None:
+    current_environment = _blocker_numeric_environment(
+        thread_pools=[
+            {
+                "user_api": "blas",
+                "internal_api": "openblas",
+                "num_threads": 1,
+                "prefix": "libscipy_openblas",
+            }
+        ]
+    )
+    frozen_environment = _blocker_numeric_environment(
+        thread_pools=[
+            *current_environment["thread_pools"],
+            {
+                "user_api": "openmp",
+                "internal_api": "openmp",
+                "num_threads": 1,
+                "prefix": "libomp",
+            },
+        ]
+    )
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: current_environment)
+
+    subject._validate_b3_d1_numeric_environment_authority(
+        current_environment,
+        frozen_environment,
+    )
+
+
+def test_d1_numeric_environment_rejects_frozen_stable_identity_drift(monkeypatch) -> None:
+    current_environment = _blocker_numeric_environment()
+    frozen_environment = deepcopy(current_environment)
+    frozen_environment["packages"]["hmmlearn"] = "0.3.4"
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: current_environment)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="numeric environment identity is invalid") as captured:
+        subject._validate_b3_d1_numeric_environment_authority(
+            current_environment,
+            frozen_environment,
+        )
+    assert captured.value.reason_code == "hmm_risk_model_inactive_dimension_authority_mismatch"
+
+
+def test_d1_numeric_environment_rejects_non_single_thread_frozen_pool(monkeypatch) -> None:
+    current_environment = _blocker_numeric_environment()
+    frozen_environment = _blocker_numeric_environment(
+        thread_pools=[
+            {
+                "user_api": "openmp",
+                "internal_api": "openmp",
+                "num_threads": 2,
+                "prefix": "libomp",
+            }
+        ]
+    )
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: current_environment)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="thread pools are not single-threaded") as captured:
+        subject._validate_b3_d1_numeric_environment_authority(
+            current_environment,
+            frozen_environment,
+        )
+    assert captured.value.reason_code == "hmm_risk_model_inactive_dimension_authority_mismatch"
+
+
+def test_blocker_child_rejects_numeric_environment_hash_mismatch(monkeypatch) -> None:
+    numeric_environment = _blocker_numeric_environment()
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: numeric_environment)
+    value, target = _valid_blocker_child_value(numeric_environment)
+    value["numeric_environment_sha256"] = "0" * 64
+
+    with pytest.raises(StateModelSetError, match="numeric environment identity is invalid"):
+        subject._validate_b3_blocker_pass(value, target)
+
+
+@pytest.mark.parametrize("field", ["python_executable", "packages", "thread_env"])
+def test_blocker_child_rejects_stable_numeric_environment_drift(monkeypatch, field) -> None:
+    parent_environment = _blocker_numeric_environment()
+    child_environment = deepcopy(parent_environment)
+    if field == "python_executable":
+        child_environment[field] = "C:/other/python.exe"
+    else:
+        child_environment[field] = {**child_environment[field], next(iter(child_environment[field])): "drifted"}
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: parent_environment)
+    value, target = _valid_blocker_child_value(child_environment)
+
+    with pytest.raises(StateModelSetError, match="numeric environment identity is invalid"):
+        subject._validate_b3_blocker_pass(value, target)
+
+
+def test_blocker_parent_rejects_non_bitwise_fresh_process_payloads(monkeypatch, tmp_path) -> None:
+    args = _blocker_args(tmp_path)
+    target = {"target_manifest_sha256": "1" * 64}
+    first = _blocker_pass_payload()
+    second_value = json.loads(first)
+    second_body = {key: value for key, value in second_value.items() if key != "pass_receipt_sha256"}
+    second_body["diagnostic_producer_commit"] = "e" * 40
+    second = subject.canonical_json_bytes({**second_body, "pass_receipt_sha256": subject.canonical_sha256(second_body)})
+    payloads = iter((first, second))
+    monkeypatch.setattr(subject, "derive_b3_blocker_target_manifest", lambda report: target)
+    monkeypatch.setattr(subject, "_validate_b3_blocker_pass", lambda value, manifest: None)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=next(payloads), stderr=b""),
+    )
+
+    with pytest.raises(StateModelSetError, match="canonical payloads differ"):
+        subject.run_b3_blocker_diag01_repeated(args, _request())
+
+
+def test_blocker_parent_keeps_d4_and_d6_replay_read_only(monkeypatch, tmp_path) -> None:
+    args = _blocker_args(tmp_path)
+    target = {
+        "target_manifest_sha256": "1" * 64,
+        "target_pair_count": 174,
+        "fits_per_process": 174,
+        "total_fit_budget": 348,
+        "fresh_process_count": 2,
+        "formal_report_sha256": subject.B3_BLOCKER_FORMAL_AUTHORITY["report_sha256"],
+    }
+    payload = _blocker_pass_payload()
+    monkeypatch.setattr(subject, "derive_b3_blocker_target_manifest", lambda report: target)
+    monkeypatch.setattr(subject, "_validate_b3_blocker_pass", lambda value, manifest: None)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=payload, stderr=b""),
+    )
+    monkeypatch.setattr(subject, "_load_verified_formal_semantic_inputs", lambda request, db_prefix: {})
+    monkeypatch.setattr(
+        subject,
+        "_semantic_input_identities",
+        lambda inputs: {
+            field: subject.B3_BLOCKER_FORMAL_AUTHORITY[field]
+            for field in (
+                "semantic_dataset_manifest_hash",
+                "semantic_mapping_manifest_hash",
+                "semantic_calendar_manifest_hash",
+                "semantic_l2_stock_fact_manifest_hash",
+            )
+        },
+    )
+    monkeypatch.setattr(subject, "_direct_series_for_family", lambda inputs, family: {"L1": {}})
+    monkeypatch.setattr(
+        subject,
+        "replay_b3_blocker_selected_d6",
+        lambda report, series, manifest: [{"d6_replay_sha256": str(index) * 64} for index in (3, 4, 5)],
+    )
+    monkeypatch.setattr(
+        subject,
+        "build_b3_blocker_matched_comparisons",
+        lambda evidence: {"receipt_sha256": "6" * 64},
+    )
+
+    report = subject.run_b3_blocker_diag01_repeated(args, _request())
+
+    assert report["status"] == "diagnostic_complete"
+    assert report["observed_total_fit_count"] == 348
+    assert report["canonical_payload_bitwise_equal"] is True
+    assert report["d6_replay_count"] == 3
+    assert report["selection_performed"] is False
+    assert report["acceptance_decision_reexecuted"] is False
+    assert report["model_write_performed"] is False
+    assert report["ready_artifact_write_performed"] is False
+
+
 def test_formal_single_pass_runs_both_families_and_levels_without_selection_or_validation(monkeypatch) -> None:
     request = _request()
-    coverage = _coverage_preflight()
+    coverage = _coverage_preflight(policy_sha256="f" * 64)
     request.update(
         {
             "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": coverage["receipt_sha256"],
+            "feature_domain_policy_manifest": _minimal_c010_policy(),
+            "feature_domain_policy_sha256": "f" * 64,
         }
     )
     inputs = {
@@ -570,8 +1599,13 @@ def test_formal_single_pass_runs_both_families_and_levels_without_selection_or_v
         "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
     }
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
-    monkeypatch.setattr(subject, "_require_approved_b3_identities", lambda request: None)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(
+        subject,
+        "_c010_policy_manifest",
+        lambda values, request, producer_commit: request["feature_domain_policy_manifest"],
+    )
     monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda inputs, request: coverage)
     monkeypatch.setattr(
         subject,
@@ -610,14 +1644,16 @@ def test_formal_single_pass_rejects_frozen_manifest_drift(monkeypatch) -> None:
         {
             "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": "a" * 64,
+            "feature_domain_policy_manifest": _minimal_c010_policy(),
+            "feature_domain_policy_sha256": "f" * 64,
         }
     )
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
-    monkeypatch.setattr(subject, "_require_approved_b3_identities", lambda request: None)
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
     monkeypatch.setattr(
         subject,
         "_load_l1_source_inputs",
-        lambda request, db_prefix: {
+        lambda request, db_prefix, c010_formal=False: {
             "dataset_manifest": {"schema_version": "drifted"},
             "mapping_manifest": {"schema_version": "mapping_v1"},
             "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
@@ -637,6 +1673,8 @@ def test_formal_single_pass_rejects_stale_train_coverage_receipt_before_fit(monk
         {
             "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
             "train_coverage_receipt_sha256": "a" * 64,
+            "feature_domain_policy_manifest": _minimal_c010_policy(),
+            "feature_domain_policy_sha256": "f" * 64,
         }
     )
     inputs = {
@@ -648,9 +1686,18 @@ def test_formal_single_pass_rejects_stale_train_coverage_receipt_before_fit(monk
         "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
     }
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
-    monkeypatch.setattr(subject, "_require_approved_b3_identities", lambda request: None)
-    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix: inputs)
-    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda inputs, request: _coverage_preflight())
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(
+        subject,
+        "_c010_policy_manifest",
+        lambda values, request, producer_commit: request["feature_domain_policy_manifest"],
+    )
+    monkeypatch.setattr(
+        subject,
+        "_b3_train_coverage_preflight",
+        lambda inputs, request: _coverage_preflight(policy_sha256="f" * 64),
+    )
     fit_called = False
 
     def unexpected_fit(*args, **kwargs):
@@ -667,3 +1714,605 @@ def test_formal_single_pass_rejects_stale_train_coverage_receipt_before_fit(monk
             process_identity="fresh_process_1",
         )
     assert fit_called is False
+
+
+def _d1_args(tmp_path) -> SimpleNamespace:
+    values = _remediation_args(tmp_path)
+    remediation = tmp_path / "source-remediation.json"
+    remediation.write_text("{}", encoding="utf-8")
+    c010_a5 = tmp_path / "c010-a5-domain-partition.json"
+    c010_a5.write_text("{}", encoding="utf-8")
+    artifact_root = tmp_path / "model-sets"
+    values.b3_remediation_diag02_output = None
+    values.b3_d1_controlled_refit_output = str(artifact_root / "d1-controlled-refit.json")
+    values.b3_remediation_report = str(remediation)
+    values.c010_a5_domain_partition_report = str(c010_a5)
+    values._b3_d1_controlled_child = False
+    values.b3_process_identity = ""
+    values.b3_d1_producer_commit = ""
+    values.c009_stock_fact_preflight_output = None
+    values.c010_observation_eligibility_output = None
+    return values
+
+
+def _d1_process_payload(process_identity: str) -> bytes:
+    body = {"process_identity": process_identity}
+    value = {**body, "process_receipt_sha256": subject.canonical_sha256(body)}
+    return subject.canonical_json_bytes(value)
+
+
+def _d1_c010_a5_report() -> dict:
+    def receipt(body: dict) -> dict:
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    partition = receipt(
+        {
+            "schema_version": "hmm_risk_c010_provider_absence_domain_partition_v1",
+            "p_all_entry_count": 502,
+            "p_in_entry_count": 501,
+            "p_out_entry_count": 1,
+        }
+    )
+    eligibility = receipt({"schema_version": "hmm_risk_c010_train_observation_eligibility_v2"})
+    opportunity = receipt({"schema_version": "hmm_risk_c010_expected_opportunity_dates_v2"})
+    body = {
+        "schema_version": subject.C010_A5_DOMAIN_PARTITION_PREFLIGHT_SCHEMA,
+        "status": "preflight_complete",
+        "producer_commit": "a" * 40,
+        "train_trading_date_count": subject.C010_APPROVED_TRAIN_TRADING_DATE_COUNT,
+        "train_trading_date_sha256": subject.C010_APPROVED_TRAIN_TRADING_DATE_SHA256,
+        "mapping_manifest_sha256": "4" * 64,
+        "security_identity_manifest_sha256": "5" * 64,
+        "provider_absence_manifest_sha256": "6" * 64,
+        "provider_absence_partition_receipt": partition,
+        "provider_absence_partition_receipt_sha256": partition["receipt_sha256"],
+        "observation_eligibility_receipt": eligibility,
+        "observation_eligibility_receipt_sha256": eligibility["receipt_sha256"],
+        "expected_opportunity_receipt": opportunity,
+        "expected_opportunity_receipt_sha256": opportunity["receipt_sha256"],
+        "known_sw_domain_out_verified": True,
+        "partition_complete": True,
+        "fit_performed": False,
+        "selection_performed": False,
+        "d6_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return receipt(body)
+
+
+def test_d1_c010_a5_authority_is_exact_and_tamper_evident(monkeypatch) -> None:
+    report = _d1_c010_a5_report()
+    monkeypatch.setattr(subject, "B3_D1_C010_A5_REPORT_SHA256", subject.canonical_sha256(report))
+    monkeypatch.setattr(
+        subject,
+        "B3_D1_C010_A5_PARTITION_SHA256",
+        report["provider_absence_partition_receipt_sha256"],
+    )
+    monkeypatch.setattr(subject, "B3_D1_C010_A5_MAPPING_SHA256", report["mapping_manifest_sha256"])
+
+    assert subject._validate_b3_d1_c010_a5_authority(report) == report
+
+    tampered = deepcopy(report)
+    tampered["partition_complete"] = False
+    tampered_body = {key: value for key, value in tampered.items() if key != "receipt_sha256"}
+    tampered["receipt_sha256"] = subject.canonical_sha256(tampered_body)
+    monkeypatch.setattr(subject, "B3_D1_C010_A5_REPORT_SHA256", subject.canonical_sha256(tampered))
+    with pytest.raises(StateModelSetError, match="approved 601-day v2 preflight"):
+        subject._validate_b3_d1_c010_a5_authority(tampered)
+
+
+def test_d1_historical_request_remains_v1_and_cannot_be_silently_relabelled(monkeypatch) -> None:
+    request = _request()
+    authority = dict(subject.B3_BLOCKER_FORMAL_AUTHORITY)
+    for field in (
+        "producer_commit",
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+        "semantic_dataset_manifest_hash",
+        "semantic_mapping_manifest_hash",
+        "semantic_calendar_manifest_hash",
+        "semantic_l2_stock_fact_manifest_hash",
+        "feature_domain_policy_sha256",
+    ):
+        request[field] = authority[field]
+    request["parent_frozen_identities"] = subject.B3_APPROVED_FROZEN_IDENTITIES
+    request["train_coverage_contract_version"] = subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION
+    request["train_coverage_receipt_sha256"] = "1" * 64
+    historical_policy = {
+        "schema_version": subject.C010_POLICY_VERSION_V1,
+        "receipt_sha256": authority["feature_domain_policy_sha256"],
+    }
+    request["feature_domain_policy_manifest"] = historical_policy
+    target_manifest = {
+        "formal_producer_commit": authority["producer_commit"],
+        "parameter_profile_sha256": subject.canonical_sha256(subject.formal_b3_parameter_profile()),
+    }
+    monkeypatch.setattr(subject, "validate_c010_policy_manifest", lambda value: dict(value))
+
+    assert (
+        subject._validate_b3_d1_historical_request_authority(request, target_manifest=target_manifest)
+        == historical_policy
+    )
+
+    request["feature_domain_policy_manifest"] = {
+        **historical_policy,
+        "schema_version": subject.C010_POLICY_VERSION,
+    }
+    with pytest.raises(StateModelSetError, match="historical formal request authority is invalid"):
+        subject._validate_b3_d1_historical_request_authority(request, target_manifest=target_manifest)
+
+
+def test_d1_v2_migration_uses_a5_mapping_identity_and_historical_non_mapping_identities(monkeypatch) -> None:
+    request = _request()
+    a5_report = _d1_c010_a5_report()
+    mapping = {"mapping": "a5"}
+    calendar = {"calendar": "historical"}
+    l2_stock_fact = {"l2": "historical"}
+    a5_report["mapping_manifest_sha256"] = subject.canonical_sha256(mapping)
+    historical_policy = {
+        "schema_version": subject.C010_POLICY_VERSION_V1,
+        "l2_stock_fact_manifest_hash": subject.canonical_sha256(l2_stock_fact),
+        "calendar_manifest_hash": subject.canonical_sha256(calendar),
+    }
+    current_policy = {
+        "schema_version": subject.C010_POLICY_VERSION,
+        "receipt_sha256": "7" * 64,
+        "mapping_manifest_hash": a5_report["mapping_manifest_sha256"],
+        "l2_stock_fact_manifest_hash": historical_policy["l2_stock_fact_manifest_hash"],
+        "calendar_manifest_hash": historical_policy["calendar_manifest_hash"],
+        "security_identity_manifest_sha256": a5_report["security_identity_manifest_sha256"],
+        "provider_absence_manifest_sha256": a5_report["provider_absence_manifest_sha256"],
+        "provider_absence_partition_receipt": a5_report["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": a5_report["provider_absence_partition_receipt_sha256"],
+        "expected_opportunity_receipt": a5_report["expected_opportunity_receipt"],
+        "expected_opportunity_receipt_sha256": a5_report["expected_opportunity_receipt_sha256"],
+        "eligibility_receipt": a5_report["observation_eligibility_receipt"],
+        "eligibility_receipt_sha256": a5_report["observation_eligibility_receipt_sha256"],
+    }
+    authority = dict(subject.B3_BLOCKER_FORMAL_AUTHORITY)
+    authority["calendar_manifest_hash"] = historical_policy["calendar_manifest_hash"]
+    authority["l2_stock_fact_manifest_hash"] = historical_policy["l2_stock_fact_manifest_hash"]
+    monkeypatch.setattr(subject, "B3_BLOCKER_FORMAL_AUTHORITY", authority)
+    monkeypatch.setattr(
+        subject,
+        "_validate_b3_d1_historical_request_authority",
+        lambda request, target_manifest: historical_policy,
+    )
+    monkeypatch.setattr(subject, "_validate_b3_d1_c010_a5_authority", lambda report: report)
+    monkeypatch.setattr(
+        subject,
+        "_load_l1_source_inputs",
+        lambda request, db_prefix, c010_formal: {
+            "mapping_manifest": mapping,
+            "dataset_manifest": {"calendar_benchmark": calendar},
+            "l2_stock_fact_manifest": l2_stock_fact,
+        },
+    )
+    monkeypatch.setattr(subject, "_c010_policy_manifest", lambda *args, **kwargs: current_policy)
+
+    loaded_inputs, identities = subject._load_b3_d1_train_inputs(
+        request,
+        db_prefix="TDX_DB_",
+        target_manifest={},
+        c010_a5_report=a5_report,
+        producer_commit="8" * 40,
+    )
+
+    assert identities["mapping_manifest_hash"] == a5_report["mapping_manifest_sha256"]
+    assert identities["c010_feature_domain_policy_sha256"] == current_policy["receipt_sha256"]
+    assert loaded_inputs["feature_domain_policy_sha256"] == current_policy["receipt_sha256"]
+
+    drifted = deepcopy(a5_report)
+    drifted["mapping_manifest_sha256"] = "9" * 64
+    with pytest.raises(StateModelSetError, match="mapping_manifest_hash"):
+        subject._load_b3_d1_train_inputs(
+            request,
+            db_prefix="TDX_DB_",
+            target_manifest={},
+            c010_a5_report=drifted,
+            producer_commit="8" * 40,
+        )
+
+
+def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_threads(monkeypatch, tmp_path) -> None:
+    args = _d1_args(tmp_path)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
+    monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *args: {})
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": {"current_profile_eligible": True, "receipt_sha256": "a" * 64},
+            "historical_reference": {"receipt_sha256": "b" * 64},
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "_parse_b3_d1_child_payload",
+        lambda payload, process_identity, producer_commit: {
+            "process_identity": process_identity,
+            "producer_commit": producer_commit,
+        },
+    )
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    def fake_run(command, *, check, capture_output, env, timeout):
+        process_identity = command[command.index("--b3-process-identity") + 1]
+        assert command[command.index("--c010-a5-domain-partition-report") + 1] == str(
+            tmp_path / "c010-a5-domain-partition.json"
+        )
+        assert command[command.index("--b3-d1-current-authority-sha256") + 1] == "a" * 64
+        assert command[command.index("--b3-d1-historical-reference-sha256") + 1] == "b" * 64
+        calls.append(
+            (
+                process_identity,
+                {
+                    key: env[key]
+                    for key in (
+                        "OMP_NUM_THREADS",
+                        "OPENBLAS_NUM_THREADS",
+                        "MKL_NUM_THREADS",
+                        "VECLIB_MAXIMUM_THREADS",
+                        "NUMEXPR_NUM_THREADS",
+                    )
+                },
+            )
+        )
+        return SimpleNamespace(returncode=0, stdout=_d1_process_payload(process_identity), stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        subject,
+        "build_b3_d1_refit02_report",
+        lambda first, second, producer_commit: {
+            "first": first["process_identity"],
+            "second": second["process_identity"],
+            "producer_commit": producer_commit,
+        },
+    )
+
+    report = subject.run_b3_d1_controlled_repeated(args)
+
+    assert calls == [
+        ("fresh_process_1", {key: "1" for key in calls[0][1]}),
+        ("fresh_process_2", {key: "1" for key in calls[1][1]}),
+    ]
+    assert report == {"first": "fresh_process_1", "second": "fresh_process_2", "producer_commit": "d" * 40}
+
+
+def test_d1_controlled_child_payload_must_be_canonical_and_bound_to_process_identity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        subject,
+        "validate_b3_d1_refit02_process_receipt",
+        lambda value, expected_process_identity, expected_producer_commit: value,
+    )
+    parsed = subject._parse_b3_d1_child_payload(
+        _d1_process_payload("fresh_process_1"),
+        process_identity="fresh_process_1",
+        producer_commit="d" * 40,
+    )
+    assert parsed["process_identity"] == "fresh_process_1"
+
+    with pytest.raises(StateModelSetError, match="receipt identity"):
+        subject._parse_b3_d1_child_payload(
+            _d1_process_payload("fresh_process_2"),
+            process_identity="fresh_process_1",
+            producer_commit="d" * 40,
+        )
+    with pytest.raises(StateModelSetError, match="canonical JSON"):
+        subject._parse_b3_d1_child_payload(
+            _d1_process_payload("fresh_process_1") + b"\n",
+            process_identity="fresh_process_1",
+            producer_commit="d" * 40,
+        )
+
+
+def test_d1_refit02_parent_returns_not_applicable_without_spawning_children(monkeypatch, tmp_path) -> None:
+    args = _d1_args(tmp_path)
+    current = {"current_profile_eligible": False, "receipt_sha256": "a" * 64}
+    historical = {"receipt_sha256": "b" * 64}
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
+    monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *values: {})
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": current,
+            "historical_reference": historical,
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "build_b3_d1_refit02_not_applicable_report",
+        lambda authority, reference, producer_commit: {
+            "status": "not_applicable",
+            "authority": authority,
+            "reference": reference,
+            "producer_commit": producer_commit,
+        },
+    )
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("not-applicable preflight must not spawn a child"),
+    )
+
+    report = subject.run_b3_d1_controlled_repeated(args)
+
+    assert report["status"] == "not_applicable"
+    assert report["authority"] == current
+    assert report["reference"] == historical
+
+
+def test_d1_refit02_child_rejects_parent_authority_drift_before_first_fit(monkeypatch) -> None:
+    current = {"current_profile_eligible": True, "receipt_sha256": "a" * 64}
+    historical = {"receipt_sha256": "b" * 64}
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": current,
+            "historical_reference": historical,
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "run_b3_d1_refit02_process",
+        lambda **kwargs: pytest.fail("authority mismatch must fail before the first fit"),
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="differs from the parent preflight"):
+        subject.prepare_b3_d1_controlled_pass(
+            _request(),
+            {},
+            {},
+            {},
+            {},
+            db_prefix="TDX_DB_",
+            process_identity="fresh_process_1",
+            producer_commit="d" * 40,
+            expected_current_authority_sha256="c" * 64,
+            expected_historical_reference_sha256="b" * 64,
+        )
+
+
+def test_main_d1_controlled_mode_persists_diagnostic_without_selection_or_model_writes(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    args = _d1_args(tmp_path)
+    body = {
+        "schema_version": subject.B3_D1_REFIT02_REPORT_SCHEMA_VERSION,
+        "diagnostic_contract": "C-008-B3-REMEDIATION-D1-B-REFIT-02-A",
+        "producer_commit": "d" * 40,
+        "status": "diagnostic_complete",
+        "mechanism_assessment": "constant_dimension_effect_supported",
+        "d5_compatibility_evidence_ready": True,
+        "attempt_count": 32,
+        "selection_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    report = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+    monkeypatch.setattr(subject, "parse_args", lambda: args)
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "run_b3_d1_controlled_repeated", lambda value: report)
+
+    def persist_validated_report(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return subject.canonical_sha256(value)
+
+    monkeypatch.setattr(subject, "write_b3_d1_controlled_refit_report", persist_validated_report)
+
+    assert subject.main() == 0
+
+    persisted = json.loads((tmp_path / "model-sets" / "d1-controlled-refit.json").read_text(encoding="utf-8"))
+    receipt = json.loads(capsys.readouterr().out)
+    assert persisted == report
+    assert receipt["attempt_count"] == 32
+    assert receipt["selection_performed"] is False
+    assert receipt["model_write_performed"] is False
+    assert receipt["ready_artifact_write_performed"] is False
+
+
+def test_main_d1_controlled_mode_requires_explicit_c010_a5_authority(monkeypatch, tmp_path, capsys) -> None:
+    args = _d1_args(tmp_path)
+    args.c010_a5_domain_partition_report = None
+    monkeypatch.setattr(subject, "parse_args", lambda: args)
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+
+    assert subject.main() == 1
+    assert "--c010-a5-domain-partition-report" in capsys.readouterr().err
+
+
+def test_main_d1_controlled_mode_persists_typed_failure_without_fake_attempt_count(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    args = _d1_args(tmp_path)
+    monkeypatch.setattr(subject, "parse_args", lambda: args)
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "_git_commit", lambda: "d" * 40)
+    child_failure = subject._b3_d1_child_failure_receipt(
+        process_identity="fresh_process_1",
+        producer_commit="d" * 40,
+        returncode=1,
+        stdout=b"",
+        stderr=b"",
+        fit_budget_completion_unknown=True,
+        error=subject.D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "frozen authority drift",
+        ),
+    )
+    monkeypatch.setattr(
+        subject,
+        "run_b3_d1_controlled_repeated",
+        lambda value: (_ for _ in ()).throw(
+            subject.B3D1ControlledProcessError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                "frozen authority drift",
+                completed_processes=[],
+                failed_process_receipt=child_failure,
+            )
+        ),
+    )
+
+    assert subject.main() == 1
+
+    persisted = json.loads((tmp_path / "model-sets" / "d1-controlled-refit.json").read_text(encoding="utf-8"))
+    assert persisted["status"] == "diagnostic_failed"
+    assert persisted["mechanism_assessment"] == "inconclusive"
+    assert persisted["mechanism_assessment_reason_codes"] == ["hmm_risk_model_inactive_dimension_authority_mismatch"]
+    assert persisted["attempt_count"] == 0
+    assert persisted["completed_process_count"] == 0
+    assert persisted["process_receipts"] == []
+    assert persisted["failed_process_receipt"] is None
+    assert persisted["source_authority"] == subject.B3_D1_SOURCE_AUTHORITY
+    assert persisted["fit_budget_completion_unknown"] is False
+    assert persisted["selection_performed"] is False
+    assert persisted["ready_artifact_write_performed"] is False
+    assert "frozen authority drift" in capsys.readouterr().err
+
+
+def test_d1_frozen_authority_rejects_rehashed_nonapproved_remediation_before_projection(monkeypatch) -> None:
+    body = {"formal_source_commit": "0" * 40}
+    remediation = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+    monkeypatch.setattr(subject, "_validate_b3_d1_c010_a5_authority", lambda report: report)
+    monkeypatch.setattr(subject, "validate_b3_remediation_authorities", lambda formal, blocker: None)
+
+    with pytest.raises(StateModelSetError, match="approved canonical artifact"):
+        subject._b3_d1_frozen_authority({}, {}, remediation, {})
+
+
+def test_d1_report_path_must_be_repo_external_and_contained_by_artifact_root(tmp_path) -> None:
+    args = _d1_args(tmp_path)
+    assert subject._resolve_b3_d1_report_path(args) == (tmp_path / "model-sets" / "d1-controlled-refit.json").resolve()
+
+    args.b3_d1_controlled_refit_output = str(tmp_path / "outside.json")
+    with pytest.raises(StateModelSetError, match="contained"):
+        subject._resolve_b3_d1_report_path(args)
+
+    args.output_root = str(subject.ROOT / "tmp" / "d1-artifacts")
+    args.b3_d1_controlled_refit_output = str(subject.ROOT / "tmp" / "d1-artifacts" / "report.json")
+    with pytest.raises(StateModelSetError, match="outside the repository"):
+        subject._resolve_b3_d1_report_path(args)
+
+
+def test_d1_second_child_failure_preserves_first_process_and_typed_reason(monkeypatch, tmp_path) -> None:
+    args = _d1_args(tmp_path)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
+    monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *values: {})
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": {"current_profile_eligible": True, "receipt_sha256": "a" * 64},
+            "historical_reference": {"receipt_sha256": "b" * 64},
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "_parse_b3_d1_child_payload",
+        lambda payload, process_identity, producer_commit: {
+            "process_identity": process_identity,
+            "producer_commit": producer_commit,
+            "attempt_count": 16,
+        },
+    )
+    calls = 0
+
+    def fake_run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(returncode=0, stdout=b"{}", stderr=b"")
+        error = {
+            "schema_version": "hmm_risk_state_model_set_preparation_error_v1",
+            "status": "failed",
+            "error_type": "D1InactiveDimensionError",
+            "error": "numeric environment drift",
+            "reason_code": "hmm_risk_model_inactive_dimension_authority_mismatch",
+        }
+        return SimpleNamespace(returncode=1, stdout=b"", stderr=json.dumps(error).encode("utf-8"))
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+
+    with pytest.raises(subject.B3D1ControlledProcessError) as captured:
+        subject.run_b3_d1_controlled_repeated(args)
+
+    assert captured.value.reason_code == "hmm_risk_model_inactive_dimension_authority_mismatch"
+    assert captured.value.completed_processes == [
+        {"process_identity": "fresh_process_1", "producer_commit": "d" * 40, "attempt_count": 16}
+    ]
+    assert captured.value.failed_process_receipt["process_identity"] == "fresh_process_2"
+    assert captured.value.failed_process_receipt["producer_commit"] == "d" * 40
+    assert captured.value.failed_process_receipt["source_authority"] == subject.B3_D1_SOURCE_AUTHORITY
+    assert captured.value.failed_process_receipt["reason_code"] == (
+        "hmm_risk_model_inactive_dimension_authority_mismatch"
+    )
+
+
+def test_d1_parent_finalize_failure_preserves_both_completed_processes(monkeypatch, tmp_path) -> None:
+    args = _d1_args(tmp_path)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda path, label: {})
+    monkeypatch.setattr(subject, "_b3_d1_frozen_authority", lambda *values: {})
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        subject,
+        "_prepare_b3_d1_refit02_authority",
+        lambda *args, **kwargs: {
+            "current_authority": {"current_profile_eligible": True, "receipt_sha256": "a" * 64},
+            "historical_reference": {"receipt_sha256": "b" * 64},
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "_parse_b3_d1_child_payload",
+        lambda payload, process_identity, producer_commit: {
+            "process_identity": process_identity,
+            "producer_commit": producer_commit,
+            "attempt_count": 16,
+        },
+    )
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=b"{}", stderr=b""),
+    )
+    monkeypatch.setattr(
+        subject,
+        "build_b3_d1_refit02_report",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subject.D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_contract_invalid",
+                "parent readback mismatch",
+            )
+        ),
+    )
+
+    with pytest.raises(subject.B3D1ControlledProcessError) as captured:
+        subject.run_b3_d1_controlled_repeated(args)
+
+    assert len(captured.value.completed_processes) == 2
+    assert [value["process_identity"] for value in captured.value.completed_processes] == [
+        "fresh_process_1",
+        "fresh_process_2",
+    ]
+    assert captured.value.failed_process_receipt["process_identity"] == "parent_finalize"
+    assert captured.value.failed_process_receipt["fit_budget_completion_unknown"] is False

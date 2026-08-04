@@ -59,6 +59,30 @@ def test_real_k1_a_and_k1_c_modules_pass_ast_and_isolated_import() -> None:
             "backend.execution_algos.vnpy_compat.receipts",
             REPO_ROOT / "backend/execution_algos/vnpy_compat/receipts.py",
         ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_contracts",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_contracts.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_projection",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_projection.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_adapter",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_adapter.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_characterization",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_characterization.py",
+        ),
+        _target(
+            "backend.execution_algos.vnpy_compat.facade_source_execution",
+            REPO_ROOT / "backend/execution_algos/vnpy_compat/facade_source_execution.py",
+        ),
     )
 
     receipt = validate_plugin_import_boundaries_v1(repo_root=REPO_ROOT, targets=targets)
@@ -747,6 +771,7 @@ sys.path.insert(0, sys.argv[1])
 sys.dont_write_bytecode = True
 side_effects = []
 original_open = builtins.open
+original_popen = subprocess.Popen
 def guarded_open(file, mode="r", *args, **kwargs):
     if any(flag in mode for flag in ("w", "a", "x", "+")):
         side_effects.append("open_write")
@@ -757,9 +782,13 @@ def blocked(operation):
         side_effects.append(operation)
         raise RuntimeError(f"package import attempted {operation}")
     return reject
+class BlockingPopen(original_popen):
+    def __init__(self, *args, **kwargs):
+        side_effects.append("process_start")
+        raise RuntimeError("package import attempted process_start")
 builtins.open = guarded_open
 socket.socket.connect = blocked("network_connect")
-subprocess.Popen = blocked("process_start")
+subprocess.Popen = BlockingPopen
 threading.Thread.start = blocked("thread_start")
 import backend.execution_algos.vnpy_compat
 registry = sys.modules.get("backend.execution_algos.registry")

@@ -1,0 +1,209 @@
+{
+  "actual": "根因: Go引擎kline增量有两条触发链路——调度器_route_go_incremental(成功后会写dataset_date_refresh_audit, tdx_scheduler.py:4435)与路由器POST /api/ingestion/incremental(routers/ingestion.py:2910, 手动/仪表盘/补数路径)。后者创建job后直接调Go任务并立即返回, Go后端异步markJobFinished, Python侧从不感知完成, 因此从不写audit。2026-08-03实证: 手动补数经路由器端点完成kline_minute_raw 08-03全量入库(物理MAX=08-03), 但audit max停在07-31, 当晚22:00_data_freshness_check以refresh_audit为源将kline_minute_raw误报stale(audit_stale), overall=partial。衍生三害: 1)每晚新鲜度检查在手动补数日后误报stale(告警噪声); 2)_auto_retry_stale可能对数据已完整的分钟线做无谓重复入库(幂等但浪费, 单次全市场分钟线约27分钟); 3)BUG-957的audit游标快路径对该数据集永不生效, 每次调度触发都付33.6s有界MAX(60s限额余量单薄)。修复方案: 在tdx_scheduler.refresh_schedules既有reconcile族中新增幂等sweep——扫描近期成功的Go引擎job(kline_minute_raw/kline_daily_raw), 对audit缺失的已同步区间调用_record_refresh_audit_from_table_range补写(upsert幂等), 使所有触发链路(调度/手动/未来新增)统一自愈。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260803_BUG-972-go-dataset-date-refresh-audit-stale-audit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-972",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-03T15:48:52.161372Z",
+  "description": "根因: Go引擎kline增量有两条触发链路——调度器_route_go_incremental(成功后会写dataset_date_refresh_audit, tdx_scheduler.py:4435)与路由器POST /api/ingestion/incremental(routers/ingestion.py:2910, 手动/仪表盘/补数路径)。后者创建job后直接调Go任务并立即返回, Go后端异步markJobFinished, Python侧从不感知完成, 因此从不写audit。2026-08-03实证: 手动补数经路由器端点完成kline_minute_raw 08-03全量入库(物理MAX=08-03), 但audit max停在07-31, 当晚22:00_data_freshness_check以refresh_audit为源将kline_minute_raw误报stale(audit_stale), overall=partial。衍生三害: 1)每晚新鲜度检查在手动补数日后误报stale(告警噪声); 2)_auto_retry_stale可能对数据已完整的分钟线做无谓重复入库(幂等但浪费, 单次全市场分钟线约27分钟); 3)BUG-957的audit游标快路径对该数据集永不生效, 每次调度触发都付33.6s有界MAX(60s限额余量单薄)。修复方案: 在tdx_scheduler.refresh_schedules既有reconcile族中新增幂等sweep——扫描近期成功的Go引擎job(kline_minute_raw/kline_daily_raw), 对audit缺失的已同步区间调用_record_refresh_audit_from_table_range补写(upsert幂等), 使所有触发链路(调度/手动/未来新增)统一自愈。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260803-db88d36bb0ba",
+      "timestamp": "2026-08-03T15:48:52.161367Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "claude_code",
+      "note": "修复需在 tdx_scheduler.py 新增 Go job audit 自愈 reconcile sweep, 并在既有测试文件中补回归测试; 用户已授权登记修复",
+      "timestamp": "2026-08-03T15:49:49.763908Z"
+    },
+    {
+      "action": "runtime_contract_alignment",
+      "actor": "claude_code",
+      "note": "runtime_impact none->backend (调度器修复需用户重启后端生效); 可执行探针引用, 与 BUG-960/966 同格式",
+      "timestamp": "2026-08-03T15:56:08.163184Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-03T15:48:52.161372Z",
+  "fix_branch": null,
+  "fix_commit": "abad34389e3638ee07567cab1578c9cb555adcb6",
+  "fixed_at": "2026-08-03T16:49:18Z",
+  "github_issue_number": 3109,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3109",
+  "last_seen_at": "2026-08-03T15:48:52.161372Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3110",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process loaded backend/ingestion/tdx_scheduler.py by file path and verified _reconcile_go_job_refresh_audit sweep exists and _record_refresh_audit_from_table_range remains intact -> PASS",
+      "fresh process loaded backend/ingestion/tdx_scheduler.py: _reconcile_go_job_refresh_audit present, _record_refresh_audit_from_table_range intact"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/openapi.json",
+    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed_source_pending_user_restart",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "Go引擎增量链路(手动/路由器端点)不写dataset_date_refresh_audit, 新鲜度检查误报stale且audit游标快路径失效",
+  "trigger_condition": {
+    "fingerprint": "db88d36bb0baf3551374a847",
+    "source_event_id": "FE-20260803-db88d36bb0ba"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 49 passed",
+    "python -m py_compile backend/ingestion/tdx_scheduler.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

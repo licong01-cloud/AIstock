@@ -75,7 +75,11 @@ def _label(_run_id: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _request(tmp_path: Path):
+def _request(
+    tmp_path: Path,
+    *,
+    remote_artifact_store_root: str = "/remote/artifacts",
+):
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     conf = {
@@ -108,7 +112,7 @@ def _request(tmp_path: Path):
                 "node_id": "wsl2-5080",
                 "node_parallelism": {"wsl2-5080": 2},
                 "runtime_template_dir": str(runtime),
-                "remote_artifact_store_root": "/remote/artifacts",
+                "remote_artifact_store_root": remote_artifact_store_root,
             },
             "baseline_leg_id": "leg_a",
             "topk": 1,
@@ -181,8 +185,9 @@ class _Repository:
 
 
 class _ArtifactClient:
-    def __init__(self) -> None:
+    def __init__(self, *, artifact_store_root: str = "/remote/artifacts") -> None:
         self.paths: list[Path] = []
+        self.artifact_store_root = artifact_store_root
 
     def ensure_artifact(self, path: Path, *, node_id: str) -> dict[str, Any]:
         self.paths.append(path)
@@ -197,7 +202,7 @@ class _ArtifactClient:
             "status": {
                 "exists": True,
                 "size": path.stat().st_size,
-                "artifact_store_root": "/remote/artifacts",
+                "artifact_store_root": self.artifact_store_root,
             },
         }
 
@@ -305,12 +310,19 @@ class _SubmissionCoordinator:
         )
 
 
-def _adapter(tmp_path: Path):
-    request = _request(tmp_path)
+def _adapter(
+    tmp_path: Path,
+    *,
+    artifact_store_root: str = "/remote/artifacts",
+):
+    request = _request(
+        tmp_path,
+        remote_artifact_store_root=artifact_store_root,
+    )
     repository = _Repository(request)
     predictions = {"a1": _prediction(0.0), "b1": _prediction(0.5)}
     used_nodes: list[str] = []
-    artifact_client = _ArtifactClient()
+    artifact_client = _ArtifactClient(artifact_store_root=artifact_store_root)
     coordinator = _SubmissionCoordinator()
     adapter = QEWorkspacePredBacktestAdapter(
         repository=repository,  # type: ignore[arg-type]
@@ -800,7 +812,12 @@ def test_published_manifest_rejects_path_escape_before_reading_external_file(
     assert caught.value.reason_code == "multi_alpha_artifact_manifest_invalid"
 
 
-def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(tmp_path: Path) -> None:
+def test_local_and_remote_nodes_use_same_qe_workspace_client_and_coordinator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
     adapter, repository, coordinator, artifact_client, used_nodes = _adapter(tmp_path)
     materialized = adapter.materialize_child_input(
         run_id=RUN_ID,
@@ -937,6 +954,57 @@ def test_durable_submit_freezes_oversized_runtime_artifact_cas_binding(tmp_path:
     assert collected.result_manifest["submission_artifact_manifest_hash"] == claimed_manifest["manifest_hash"]
     assert collected.result_manifest["remote_runtime_file_manifest"] == runtime_manifest
     assert collected.result_manifest["remote_runtime_artifact_bindings"] == bindings
+
+
+def test_durable_submit_allows_loopback_wsl_drive_mount_runtime_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh")
+    monkeypatch.setenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu")
+    artifact_store_root = "/mnt/f/Dev/RD-Agent-state/artifact_cas"
+    adapter, repository, coordinator, artifact_client, _used_nodes = _adapter(
+        tmp_path,
+        artifact_store_root=artifact_store_root,
+    )
+    materialized = adapter.materialize_child_input(
+        run_id=RUN_ID,
+        child_id=CHILD_ID,
+        attempt_id=ATTEMPT_ID,
+    )
+    published = adapter.publish_artifacts(materialized)
+    nested_runtime = published.workspace / "aistock_models" / "__init__.py"
+    nested_runtime.parent.mkdir()
+    nested_runtime.write_bytes(b"r" * 578)
+    intent = adapter.prepare_submission_intent(
+        run=repository.run,
+        child=repository.child,
+        attempt=repository.attempt,
+        node_id="wsl2-5080",
+    )
+    token = OwnershipToken(owner_id="worker_1", fencing_token=1, row_version=1)
+
+    outcome = asyncio.run(
+        adapter.submit(
+            artifacts=published,
+            intent=intent,
+            attempt_token=token,
+        )
+    )
+
+    expected_sha = _sha256(nested_runtime)
+    expected_remote_path = f"{artifact_store_root}/{expected_sha}"
+    payload = coordinator.calls[0]["payload"]
+    binding = next(
+        item
+        for item in payload.config["runtime_artifact_bindings"]
+        if item["name"] == "aistock_models/__init__.py"
+    )
+    assert outcome.state == "submitted"
+    assert artifact_client.paths[-1] == nested_runtime
+    assert binding["remote_path"] == expected_remote_path
+    assert expected_remote_path in payload.wsl_command
+    assert payload.wsl_command.index("conda activate") < payload.wsl_command.index("python -c")
 
 
 def test_submission_intent_is_deterministic_and_attempt_scoped(tmp_path: Path) -> None:

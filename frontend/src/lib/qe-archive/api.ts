@@ -243,6 +243,19 @@ export type ArchivedRunListItem = {
   trade_count?: number;
 };
 
+export type RunOperatorOption = {
+  value: string;
+  task_name?: string | null;
+  run_type?: string | null;
+  model_type?: string | null;
+  label_horizon?: number | null;
+  factor_count?: number | null;
+  loop_index?: number | null;
+  status?: string | null;
+  completed_at?: string | null;
+  archived_at?: string | null;
+};
+
 export type BackfillCandidateReport = {
   status: string;
   include_archived: boolean;
@@ -410,6 +423,193 @@ export type PromotionCandidateItem = {
   latest_completed_at?: string | null;
 };
 
+export type LongTrendFamilyStatus = {
+  status?: string | null;
+  reason_code?: string | null;
+  reason_codes?: unknown[] | null;
+  message?: string | null;
+  coverage?: JsonObject | null;
+  limitations?: unknown[] | null;
+  available_inputs?: unknown[] | null;
+  missing_inputs?: unknown[] | null;
+  data_actions?: unknown[] | null;
+  supporting_artifacts?: unknown[] | null;
+  [key: string]: unknown;
+};
+
+export type LongTrendEvaluation = {
+  evaluation_id: string;
+  run_id?: string | null;
+  parent_task_id?: string | null;
+  parent_loop_index?: number | null;
+  evaluation_type?: string | null;
+  profile_id?: string | null;
+  profile_sha256?: string | null;
+  evaluator_version?: string | null;
+  feature_dataset_snapshot_id?: string | null;
+  outcome_dataset_snapshot_id?: string | null;
+  evaluation_asof?: string | null;
+  node_id?: string | null;
+  status?: string | null;
+  family_status_json?: Record<string, LongTrendFamilyStatus | string | null> | null;
+  platform_delivery_status_json?: JsonObject | null;
+  data_action_plan_json?: JsonObject | unknown[] | null;
+  reason_code?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  updated_at?: string | null;
+  ready_for_node?: boolean;
+};
+
+export type LongTrendInputPreviewItem = {
+  input_name: string;
+  category: "dataset_identity" | "recorder_artifact";
+  available: boolean;
+  reason_code?: string | null;
+  requested_snapshot_id?: string | null;
+  snapshot_id?: string | null;
+  manifest_sha256?: string | null;
+  artifact?: JsonObject | null;
+  data_action?: JsonObject | null;
+  action?: string | null;
+};
+
+export type LongTrendInputPreview = {
+  schema_version: "qe_long_trend_input_preview_v1";
+  task_id: string;
+  loop_index: number;
+  run_id: string;
+  node_id: string;
+  profile: {
+    profile_id: "qe_long_trend_v1";
+    profile_sha256: string;
+    horizons: number[];
+    barriers: number[];
+    calendar_slices: string[];
+  };
+  requested_outcome_dataset_snapshot_id: string;
+  backtest_freq?: string | null;
+  dataset_inputs: LongTrendInputPreviewItem[];
+  artifact_inputs: LongTrendInputPreviewItem[];
+  ready_for_node: boolean;
+  technical_readiness_only: true;
+  research_gate: false;
+  data_action_plan: JsonObject[];
+  warnings: string[];
+  side_effects: Record<string, false>;
+};
+
+export type LongTrendMetric = {
+  evaluation_metric_id?: number;
+  evaluation_id: string;
+  metric_key: string;
+  metric_scope: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  horizon?: number | null;
+  sector_code?: string | null;
+  dimension_key: string;
+  dimension_json?: JsonObject | null;
+  value_num?: number | null;
+  value_text?: string | null;
+  value_json?: JsonObject | null;
+  unit?: string | null;
+  direction?: string | null;
+  quality_flag?: string | null;
+};
+
+export type LongTrendArtifact = {
+  evaluation_artifact_id?: number;
+  evaluation_id: string;
+  artifact_type: string;
+  artifact_uri: string;
+  sha256: string;
+  schema_sha256?: string | null;
+  size_bytes?: number | null;
+  row_count?: number | null;
+  status?: string | null;
+  metadata?: JsonObject | null;
+};
+
+export type LongTrendEvaluationDetail = {
+  evaluation: LongTrendEvaluation;
+  metrics: LongTrendMetric[];
+  metric_next_cursor?: string | null;
+  artifacts: LongTrendArtifact[];
+};
+
+export type LongTrendQualityItem = LongTrendMetric & {
+  run_id?: string | null;
+  parent_task_id?: string | null;
+  parent_loop_index?: number | null;
+  profile_id?: string | null;
+  evaluation_status?: string | null;
+  feature_dataset_snapshot_id?: string | null;
+  outcome_dataset_snapshot_id?: string | null;
+  evaluation_asof?: string | null;
+  family_status_json?: Record<string, LongTrendFamilyStatus | string | null> | null;
+  platform_delivery_status_json?: JsonObject | null;
+  created_at?: string | null;
+  model_type?: string | null;
+  factor_set_hash?: string | null;
+  factor_count?: number | null;
+  label_horizon?: number | null;
+  random_seed?: number | null;
+};
+
+export type LongTrendQualityQuery = {
+  evaluation_id?: string;
+  run_id?: string;
+  task_id?: string;
+  loop_index?: number;
+  model_type?: string;
+  label_horizon?: 20 | 40 | 60 | 120 | 180;
+  evaluation_asof?: string;
+  outcome_dataset_snapshot_id?: string;
+  metric_key?: string;
+  horizon?: 20 | 40 | 60 | 120 | 180;
+  sector_code?: string;
+  family_status?: "COMPUTED" | "COMPUTED_WITH_LIMITATIONS" | "NOT_COMPUTABLE" | "NOT_VERIFIABLE";
+  entry_execution_status?: "filled_t1" | "partial_fill_t1" | "delayed_fill" | "never_filled" | "not_attempted_by_strategy" | "not_verifiable";
+  exit_execution_status?: "filled_on_exit_signal_day" | "delayed_exit" | "never_exited" | "not_attempted_by_strategy" | "not_verifiable";
+  entry_execution_evidence_level?: "none" | "ambiguous_trade_match" | "reconciled_trade" | "indicator_and_trade_reconciled" | "qlib_indicator_object" | "explicit_order_intent" | "position_transition_only";
+  exit_execution_evidence_level?: "none" | "ambiguous_trade_match" | "exit_signal_only" | "reconciled_trade" | "position_transition" | "qlib_indicator_object" | "indicator_and_exit_reconciled" | "explicit_order_intent" | "position_transition_only";
+};
+
+export type LongTrendTaskOption = {
+  value: string;
+  task_name: string;
+  first_evaluation_asof?: string | null;
+  latest_evaluation_asof?: string | null;
+  evaluation_count: number;
+  snapshot_count: number;
+  model_types?: string[];
+};
+
+export type LongTrendSnapshotOption = {
+  value: string;
+  first_evaluation_asof?: string | null;
+  latest_evaluation_asof?: string | null;
+  evaluation_count: number;
+  task_count: number;
+  task_names?: string[];
+};
+
+export type LongTrendSectorOption = {
+  value: string;
+  sector_name: string;
+  evaluation_count: number;
+  latest_evaluation_asof?: string | null;
+};
+
+export type LongTrendOperatorOptions = {
+  tasks: LongTrendTaskOption[];
+  snapshots: LongTrendSnapshotOption[];
+  sectors: LongTrendSectorOption[];
+  limit: number;
+};
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -420,7 +620,7 @@ function errorMessage(payload: unknown, status: number): string {
     if (isObject(payload.detail)) {
       const detail = payload.detail;
       if (typeof detail.message === "string") return detail.message;
-      return JSON.stringify(detail);
+      return "请求失败；服务端已返回结构化诊断，请查看运行日志。";
     }
     if (typeof payload.message === "string") return payload.message;
     if (typeof payload.error === "string") return payload.error;
@@ -539,6 +739,25 @@ export const qeArchiveApi = {
     const response = await apiFetch<{ status: string; data: ArchivedRunListItem[] }>(`/qe-archive/runs?${qs.toString()}`);
     return response.data || [];
   },
+  async runOperatorOptions(payload: {
+    search?: string;
+    run_type?: string;
+    model_type?: string;
+    label_horizon?: number;
+    completed_from?: string;
+    completed_to?: string;
+    limit?: number;
+  } = {}): Promise<{ items: RunOperatorOption[]; limit: number }> {
+    const qs = new URLSearchParams({ limit: String(payload.limit ?? 30) });
+    for (const [key, value] of Object.entries(payload)) {
+      if (key === "limit" || value === undefined || value === null || value === "") continue;
+      qs.set(key, String(value));
+    }
+    const response = await apiFetch<{ status: string; data: { items: RunOperatorOption[]; limit: number } }>(
+      `/qe-archive/operator-options/runs?${qs.toString()}`,
+    );
+    return response.data;
+  },
   async backfillCandidates(payload: { limit?: number; page?: number; page_size?: number; status?: string; include_archived?: boolean } = {}): Promise<BackfillCandidateReport> {
     const qs = new URLSearchParams({
       page: String(payload.page ?? 1),
@@ -611,6 +830,122 @@ export const qeArchiveApi = {
     if (payload.model_type) qs.set("model_type", payload.model_type);
     const response = await apiFetch<{ status: string; data: PromotionCandidateItem[] }>(`/qe-archive/analytics/promotion-candidates?${qs.toString()}`);
     return response.data || [];
+  },
+  async listLongTrendEvaluations(taskId: string, loopIndex: number): Promise<LongTrendEvaluation[]> {
+    const path = `/quantevolver/evolution/tasks/${encodeURIComponent(taskId)}/loops/${loopIndex}/long-trend-evaluations?limit=100`;
+    const response = await apiFetch<{ items: LongTrendEvaluation[] }>(path);
+    return response.items || [];
+  },
+  async longTrendInputPreview(payload: {
+    task_id: string;
+    loop_index: number;
+    profile_id: "qe_long_trend_v1";
+    outcome_dataset_snapshot_id: string;
+  }): Promise<LongTrendInputPreview> {
+    const qs = new URLSearchParams({
+      profile_id: payload.profile_id,
+      outcome_dataset_snapshot_id: payload.outcome_dataset_snapshot_id,
+    });
+    const path = `/quantevolver/evolution/tasks/${encodeURIComponent(payload.task_id)}/loops/${payload.loop_index}/long-trend-input-preview?${qs.toString()}`;
+    return apiFetch<LongTrendInputPreview>(path);
+  },
+  async createOrUpdateLongTrendEvaluation(payload: {
+    task_id: string;
+    loop_index: number;
+    profile_id: "qe_long_trend_v1";
+    outcome_dataset_snapshot_id: string;
+  }): Promise<LongTrendEvaluation> {
+    const path = `/quantevolver/evolution/tasks/${encodeURIComponent(payload.task_id)}/loops/${payload.loop_index}/long-trend-evaluations`;
+    return apiFetch<LongTrendEvaluation>(path, body({
+      profile_id: payload.profile_id,
+      outcome_dataset_snapshot_id: payload.outcome_dataset_snapshot_id,
+    }));
+  },
+  async longTrendEvaluationDetail(
+    evaluationId: string,
+    payload: { limit?: number; cursor?: string } = {},
+  ): Promise<LongTrendEvaluationDetail> {
+    const qs = new URLSearchParams({ metric_limit: String(payload.limit ?? 100) });
+    if (payload.cursor) qs.set("metric_cursor", payload.cursor);
+    return apiFetch<LongTrendEvaluationDetail>(
+      `/quantevolver/evolution/long-trend-evaluations/${encodeURIComponent(evaluationId)}?${qs.toString()}`,
+    );
+  },
+  async allLongTrendEvaluationDetail(evaluationId: string, maxRows = 5000): Promise<LongTrendEvaluationDetail> {
+    const metrics: LongTrendMetric[] = [];
+    let cursor: string | undefined;
+    let evaluation: LongTrendEvaluation | undefined;
+    let artifacts: LongTrendArtifact[] = [];
+    do {
+      const page = await this.longTrendEvaluationDetail(evaluationId, { limit: 100, cursor });
+      evaluation = page.evaluation;
+      if (artifacts.length === 0) artifacts = page.artifacts || [];
+      metrics.push(...(page.metrics || []));
+      cursor = page.metric_next_cursor || undefined;
+      if (cursor && metrics.length >= maxRows) {
+        throw new QEArchiveApiError(
+          `GET long-trend evaluation exceeded the explicit client limit ${maxRows}`,
+          0,
+          { reason_code: "client_result_limit_exceeded", evaluation_id: evaluationId, max_rows: maxRows },
+          { reasonCode: "client_result_limit_exceeded" },
+        );
+      }
+    } while (cursor);
+    if (!evaluation) {
+      throw new QEArchiveApiError(
+        "GET long-trend evaluation returned no evaluation payload",
+        0,
+        { reason_code: "empty_evaluation_payload", evaluation_id: evaluationId },
+        { reasonCode: "empty_evaluation_payload" },
+      );
+    }
+    return { evaluation, metrics, metric_next_cursor: null, artifacts };
+  },
+  async longTrendQuality(
+    payload: LongTrendQualityQuery & { limit?: number; cursor?: string } = {},
+  ): Promise<{ items: LongTrendQualityItem[]; next_cursor?: string | null; limit: number }> {
+    const qs = new URLSearchParams({ limit: String(payload.limit ?? 100) });
+    for (const [key, value] of Object.entries(payload)) {
+      if (key === "limit" || key === "cursor" || value === undefined || value === null || value === "") continue;
+      qs.set(key, String(value));
+    }
+    if (payload.cursor) qs.set("cursor", payload.cursor);
+    return apiFetch<{ items: LongTrendQualityItem[]; next_cursor?: string | null; limit: number }>(
+      `/qe-archive/analytics/long-trend-quality?${qs.toString()}`,
+    );
+  },
+  async longTrendOperatorOptions(payload: {
+    search?: string;
+    task_id?: string;
+    outcome_dataset_snapshot_id?: string;
+    evaluation_asof_from?: string;
+    evaluation_asof_to?: string;
+    limit?: number;
+  } = {}): Promise<LongTrendOperatorOptions> {
+    const qs = new URLSearchParams({ limit: String(payload.limit ?? 30) });
+    for (const [key, value] of Object.entries(payload)) {
+      if (key === "limit" || value === undefined || value === null || value === "") continue;
+      qs.set(key, String(value));
+    }
+    return apiFetch<LongTrendOperatorOptions>(`/qe-archive/analytics/long-trend-options?${qs.toString()}`);
+  },
+  async allLongTrendQuality(payload: LongTrendQualityQuery, maxRows = 5000): Promise<LongTrendQualityItem[]> {
+    const items: LongTrendQualityItem[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.longTrendQuality({ ...payload, limit: 100, cursor });
+      items.push(...(page.items || []));
+      cursor = page.next_cursor || undefined;
+      if (cursor && items.length >= maxRows) {
+        throw new QEArchiveApiError(
+          `GET long-trend quality exceeded the explicit client limit ${maxRows}`,
+          0,
+          { reason_code: "client_result_limit_exceeded", max_rows: maxRows },
+          { reasonCode: "client_result_limit_exceeded" },
+        );
+      }
+    } while (cursor);
+    return items;
   },
 };
 

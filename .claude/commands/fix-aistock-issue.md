@@ -4,6 +4,7 @@ Use this lane for AIstock BUG/GitHub Issue work in Claude Code. The sole develop
 
 ## Context
 
+- Prefer RTK for supported high-output interactive commands; capability fallback is allowed, RTK is not a gate, and no window may self-authorize `rtk trust`.
 - Read project rules once, then use this command, `task-card.md`, the compact Context Pack and direct code references.
 - After compaction/restart, run `resume` and use the Context Resume Digest hashes.
 - Machine JSON supports failure diagnosis and state recovery; normal execution uses compact Markdown/stdout artifacts.
@@ -22,6 +23,8 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 
 ## Implement
 
+- Read the compact `runtime_contract`; actual changed-file/catalog inference cannot be downgraded. Unknown, conflicting, missing-runbook and multi-target contracts fail closed. Backend/worker/scheduler fixes use the single-issue lane and record tracked persistence plus fresh-process evidence in BUG JSON and PR body before PR readiness.
+- User backend start/stop/restart is never authorized by this command or any workflow stage; only explicit user authorization for the current target changes that.
 - BUG metadata and GitHub linkage use the workflow. A required scope expansion updates the issue record in the task worktree before implementation continues.
 - Ordinary BUGs use targeted snippets and ownership/catalog data; cited designs and T3 tasks add the relevant design acceptance items.
 - Production merge, services, DB writes and DDL execute only under explicit user authorization and report separately from source completion.
@@ -42,5 +45,7 @@ python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --valida
 ```
 
 Workflow/client changes add `workflow-smoke --changed-file <path> --module validation`. Merge aftercare uses `merge-finalizer` or `.claude/commands/aistock-merge-aftercare.md`.
+
+For runtime BUGs, source PRs use `Refs`, the Issue stays open, and `finish-batch`/`close-sync-batch` are forbidden. `restart-plan` only expands the existing repo runbook and catalog target. After the user restarts, run `post-restart-verify --bug-id BUG-XXX --target <target> --expected-identity <merge-sha>` and pass its complete digest-bound receipt to `close-sync --bug-id BUG-XXX --pr-url <source-pr> --validation-evidence "<command> -> passed" --post-restart-receipt <receipt> --create-registry-worktree --apply --create-pr`; until then keep `fixed_source_pending_user_restart` and `runtime_identity_match=pending`.
 
 Report branch, PR, commit, changed files, direct validation, production gates, delegated/nightly plans and runtime/DB impact.

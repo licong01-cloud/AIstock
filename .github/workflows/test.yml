@@ -279,8 +279,8 @@ jobs:
             sqlalchemy alembic psycopg2-binary 'asyncpg' \
             pyyaml 'orjson' \
             pytest 'pytest-cov' 'pytest-asyncio' 'pytest-mock' \
-            mcp 'mcp[cli]' \
-            pandas numpy scipy 'scikit-learn' hmmlearn==0.3.3 pyarrow \
+            'mcp[cli]==1.25.0' \
+            pandas numpy scipy 'scikit-learn' hmmlearn==0.3.3 pyarrow==21.0.0 \
             'python-dateutil' pytz \
             'tenacity' 'cachetools' \
             'aiosqlite'
@@ -333,6 +333,10 @@ jobs:
       - name: Lint frontend surface
         run: npm run lint
 
+      - name: Install Playwright Chromium
+        if: needs.classify-changes.outputs.frontend_test_targets != '[]'
+        run: npx playwright install --with-deps chromium
+
       - name: Run owning frontend module tests
         if: needs.classify-changes.outputs.frontend_test_targets != '[]'
         env:
@@ -341,6 +345,19 @@ jobs:
           python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' > module_test_targets.txt
           mapfile -t module_test_targets < module_test_targets.txt
           npm run test:e2e -- "${module_test_targets[@]}"
+
+      - name: Upload frontend UI acceptance evidence
+        if: always() && needs.classify-changes.outputs.frontend_test_targets != '[]'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-ui-evidence-${{ github.run_id }}
+          path: |
+            tmp/playwright-results-f014-phase4/
+            tmp/playwright-results/
+            tmp/playwright-report-f014-phase4/
+            tmp/playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
 
   tdx-go-tests:
     name: TDX Go tests
@@ -364,7 +381,7 @@ jobs:
         run: go test ./...
 
   workflow-validation-tests:
-    name: Workflow validation fast lane
+    name: Workflow validation fast lane (no user-backend process control)
     needs: [classify-changes, static-gate]
     if: needs.classify-changes.outputs.workflow_validation_required == 'true' && needs.classify-changes.outputs.workflow_test_targets != '[]'
     runs-on: ubuntu-latest
@@ -386,7 +403,10 @@ jobs:
       - name: Run focused workflow validation tests
         env:
           WORKFLOW_TEST_TARGETS: ${{ needs.classify-changes.outputs.workflow_test_targets }}
+          AISTOCK_RUNNER_PROCESS_OWNERSHIP: runner_owned_isolated_only
+          AISTOCK_USER_BACKEND_PROCESS_CONTROL: forbidden
         run: |
+          test "${AISTOCK_USER_BACKEND_PROCESS_CONTROL}" = "forbidden"
           python -c 'import json, os; print("\n".join(json.loads(os.environ["WORKFLOW_TEST_TARGETS"])))' > workflow_test_targets.txt
           mapfile -t workflow_test_targets < workflow_test_targets.txt
           python -m pytest "${workflow_test_targets[@]}" -q -p no:cacheprovider

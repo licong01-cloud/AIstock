@@ -19,6 +19,7 @@ from .qe_workspace_client import QEWorkspaceClient, QELoopWorkspaceCleanupUnavai
 from .qe_evolution_agents import EvolutionAgents, EvolutionFactorAgent, EvolutionModelAgent, AnalystResult
 from .callback_urls import build_aistock_callback_url
 from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon, normalize_qe_random_seed
+from .long_trend_evaluation_contract import get_long_trend_profile
 from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .seed_contract import ensure_loop_fixed_seed
 from .payload_summary import compact_loop_row, compact_task_row
@@ -55,6 +56,14 @@ from ..strategy_package.workspace_policy import (
 logger = logging.getLogger(__name__)
 
 QE_RESOURCE_MONITORING_DISABLED_REASON = "QE_RESOURCE_MONITORING_DISABLED"
+
+
+def normalize_long_trend_profile_id(value: Any) -> str | None:
+    """Normalize a public task profile without accepting inline overrides."""
+
+    if value in (None, ""):
+        return None
+    return get_long_trend_profile(str(value).strip()).profile_id
 
 
 def _normalize_removed_resource_telemetry(requested: Any, *, context: str) -> bool:
@@ -914,6 +923,7 @@ class AutoEvolutionScheduler:
         stock_pool: Optional[str] = None,
         label_horizon: Optional[int] = None,
         random_seed: Optional[int] = None,
+        long_trend_profile_id: Optional[str] = None,
     ) -> str:
         """
         创建演进任务并写入数据库。
@@ -945,6 +955,9 @@ class AutoEvolutionScheduler:
             random_seed,
             field_name="create_task.random_seed",
         )
+        effective_long_trend_profile_id = normalize_long_trend_profile_id(
+            long_trend_profile_id
+        )
         root_experiment_id = base_experiment_id
         # rdagent_task_sota: 从 0 开始，Loop1 为初始回测
         # qe_experiment: 从 1 开始，基础实验已完成相当于 Loop1
@@ -957,10 +970,22 @@ class AutoEvolutionScheduler:
         task_id = root_experiment_id
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT task_id, status, current_loop, strategy_params FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                cur.execute(
+                    "SELECT task_id, status, current_loop, strategy_params, long_trend_profile_id "
+                    "FROM qe_evolution_tasks WHERE task_id = %s",
+                    (task_id,),
+                )
                 existing_task = cur.fetchone()
 
         if existing_task:
+            stored_profile_id = normalize_long_trend_profile_id(
+                existing_task.get("long_trend_profile_id")
+            )
+            if stored_profile_id != effective_long_trend_profile_id:
+                raise ValueError(
+                    "long_trend_profile_id is immutable for an existing QE task identity: "
+                    f"stored={stored_profile_id!r}, requested={effective_long_trend_profile_id!r}"
+                )
             if existing_task['status'] == 'running':
                 raise ValueError(f"该实验已有正在运行的演进任务: {task_id}")
             # 已有任务但已完成/暂停/失败 → 更新为新一轮
@@ -1007,13 +1032,15 @@ class AutoEvolutionScheduler:
                     cur.execute("""
                         INSERT INTO qe_evolution_tasks
                         (task_id, task_name, target_desc, max_loops, current_loop, status,
-                         base_experiment_id, node_id, stock_pool, strategy_params, label_horizon)
-                        VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
+                         base_experiment_id, node_id, stock_pool, strategy_params, label_horizon,
+                         long_trend_profile_id)
+                        VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s)
                     """, (
                         task_id, task_name, target_desc, actual_start + max_loops,
                         actual_start, base_experiment_id, node_id, stock_pool,
                         json.dumps({"random_seed": effective_random_seed}),
                         effective_label_horizon,
+                        effective_long_trend_profile_id,
                     ))
                 conn.commit()
             logger.info(f"Created evolution task {task_id}: start_loop={actual_start}, max_loops={actual_start + max_loops}")
@@ -2932,6 +2959,7 @@ class AutoEvolutionScheduler:
                         f"""
                         SELECT task_id, task_name, target_desc, max_loops, current_loop,
                                status, base_experiment_id, node_id, label_horizon,
+                               long_trend_profile_id,
                                task_type, source_type, strategy_id, strategy_params,
                                strategy_evo_config, execution_algo,
                                strategy_evo_execution_mode, created_at, updated_at
@@ -3063,6 +3091,7 @@ class AutoEvolutionScheduler:
         node_id: Optional[str] = None,
         label_horizon: Optional[int] = None,
         random_seed: Optional[int] = None,
+        long_trend_profile_id: Optional[str] = None,
     ) -> str:
         """
         从指定 task 的某个已完成 loop 分叉出新的演进任务。
@@ -3122,6 +3151,9 @@ class AutoEvolutionScheduler:
             field_name="fork_task.random_seed",
         )
         effective_strategy_params["random_seed"] = effective_random_seed
+        effective_long_trend_profile_id = normalize_long_trend_profile_id(
+            long_trend_profile_id
+        )
         strategy_id = effective_strategy_id
         data_split = config.get("data_split", {})
         model_params = config.get("model_params", {})
@@ -3195,9 +3227,10 @@ class AutoEvolutionScheduler:
                      evolution_guidance, evolution_mode,
                      fork_from_task_id, fork_from_loop_index, inherit_history,
                      strategy_id, strategy_params, execution_algo, execution_algo_params,
-                     unfilled_handler, unfilled_handler_params, label_horizon)
+                     unfilled_handler, unfilled_handler_params, label_horizon,
+                     long_trend_profile_id)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'fork', %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s)
+                            %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, max_loops,
                     base_exp_id, effective_node_id,
@@ -3210,6 +3243,7 @@ class AutoEvolutionScheduler:
                     effective_unfilled_handler,
                     json.dumps(effective_unfilled_handler_params) if effective_unfilled_handler_params else None,
                     effective_label_horizon,
+                    effective_long_trend_profile_id,
                 ))
             conn.commit()
 
@@ -3228,6 +3262,7 @@ class AutoEvolutionScheduler:
                     cur.execute("""
                         SELECT task_id, task_name, target_desc, max_loops, current_loop,
                                status, base_experiment_id, node_id, label_horizon,
+                               long_trend_profile_id,
                                task_type, source_type, strategy_id, strategy_params,
                                execution_algo, execution_algo_params, unfilled_handler,
                                unfilled_handler_params, strategy_evo_execution_mode,
@@ -5136,6 +5171,7 @@ class AutoEvolutionScheduler:
         loops_config: List[Dict[str, Any]] = None,
         inherit_history: bool = False,
         node_id: Optional[str] = None,
+        long_trend_profile_id: Optional[str] = None,
     ) -> str:
         """
         从指定 task 的某个已完成 loop 创建策略演进任务。
@@ -5143,6 +5179,9 @@ class AutoEvolutionScheduler:
         """
         if not loops_config or len(loops_config) == 0:
             raise ValueError("loops_config 不能为空，至少需要配置一个 Loop")
+        effective_long_trend_profile_id = normalize_long_trend_profile_id(
+            long_trend_profile_id
+        )
 
         # 1. 验证源 task 和 loop
         with get_conn() as conn:
@@ -5264,9 +5303,10 @@ class AutoEvolutionScheduler:
                      base_experiment_id, node_id, source_type,
                      task_type, strategy_evo_config,
                      model_source_task_id, model_source_loop_index,
-                     fork_from_task_id, fork_from_loop_index, inherit_history, label_horizon)
+                     fork_from_task_id, fork_from_loop_index, inherit_history, label_horizon,
+                     long_trend_profile_id)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'strategy_fork',
-                            'strategy_evo', %s, %s, %s, %s, %s, %s, %s)
+                            'strategy_evo', %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, len(loops_config),
                     base_exp_id, effective_node_id,
@@ -5274,6 +5314,7 @@ class AutoEvolutionScheduler:
                     source_task_id, from_loop_index,
                     source_task_id, from_loop_index, inherit_history,
                     source_label_horizon,
+                    effective_long_trend_profile_id,
                 ))
             conn.commit()
 
@@ -5819,6 +5860,7 @@ class AutoEvolutionScheduler:
         engine_mode: str = "unified",
         clone_from_task_id: Optional[str] = None,
         auto_start: bool = True,
+        long_trend_profile_id: Optional[str] = None,
     ) -> str:
         """
         创建自定义演进任务。每个 Loop 都可以完全自定义因子、模型、策略配置，
@@ -5833,6 +5875,9 @@ class AutoEvolutionScheduler:
         resource_telemetry_enabled = _normalize_removed_resource_telemetry(
             resource_telemetry_enabled,
             context="create_custom_evo_task",
+        )
+        effective_long_trend_profile_id = normalize_long_trend_profile_id(
+            long_trend_profile_id
         )
         if phase_pipeline_enabled:
             QEResourcePhaseService().ensure_schema_ready()
@@ -5921,9 +5966,9 @@ class AutoEvolutionScheduler:
                     INSERT INTO qe_evolution_tasks
                     (task_id, task_name, target_desc, max_loops, current_loop, status,
                      base_experiment_id, node_id, source_type,
-                     task_type, strategy_evo_config, label_horizon)
+                     task_type, strategy_evo_config, label_horizon, long_trend_profile_id)
                     VALUES (%s, %s, %s, %s, 0, 'pending', %s, %s, 'custom',
-                            'custom_evo', %s, %s)
+                            'custom_evo', %s, %s, %s)
                 """, (
                     new_task_id, task_name, target_desc, len(loops_config),
                     base_exp_id, node_id,
@@ -5937,6 +5982,7 @@ class AutoEvolutionScheduler:
                         "clone_from_task_id": clone_from_task_id,
                     }),
                     first_label_horizon,
+                    effective_long_trend_profile_id,
                 ))
             conn.commit()
 

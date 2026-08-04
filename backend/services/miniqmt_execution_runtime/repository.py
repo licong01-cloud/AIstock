@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import threading
 from collections import Counter
 from contextlib import contextmanager
@@ -251,11 +252,14 @@ class MiniQMTExecutionRuntimeRepository(Protocol):
         active_only: bool = False,
     ) -> list[MiniQMTChildOrder]: ...
 
+    def read_current_three_shadow_snapshot(self, runtime_id: str, *, include_archived: bool = False) -> Any: ...
+
 
 class InMemoryMiniQMTExecutionRuntimeRepository:
     """Deterministic in-memory repository for unit tests."""
 
     def __init__(self) -> None:
+        self._snapshot_lock = threading.RLock()
         self._runtimes: dict[str, MiniQMTExecutionRuntimeRecord] = {}
         self._events: dict[str, list[MiniQMTExecutionEvent]] = {}
         self._evidence_receipts: dict[str, DurableEvidenceReceipt] = {}
@@ -263,21 +267,22 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
         self._child_orders: dict[str, MiniQMTChildOrder] = {}
 
     def upsert_runtime(self, runtime: MiniQMTExecutionRuntimeRecord) -> MiniQMTExecutionRuntimeRecord:
-        existing = self._runtimes.get(runtime.runtime_id)
-        events = self._events.get(runtime.runtime_id) or []
-        last_event_sequence = max(
-            int(runtime.last_event_sequence or 0),
-            int(existing.last_event_sequence or 0) if existing is not None else 0,
-            int(events[-1].sequence) if events else 0,
-        )
-        stored = runtime.model_copy(
-            update={
-                "last_event_sequence": last_event_sequence,
-                "updated_at": datetime.now(UTC),
-            }
-        )
-        self._runtimes[stored.runtime_id] = stored
-        return stored
+        with self._snapshot_lock:
+            existing = self._runtimes.get(runtime.runtime_id)
+            events = self._events.get(runtime.runtime_id) or []
+            last_event_sequence = max(
+                int(runtime.last_event_sequence or 0),
+                int(existing.last_event_sequence or 0) if existing is not None else 0,
+                int(events[-1].sequence) if events else 0,
+            )
+            stored = runtime.model_copy(
+                update={
+                    "last_event_sequence": last_event_sequence,
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+            self._runtimes[stored.runtime_id] = stored
+            return stored
 
     def get_runtime(self, runtime_id: str) -> MiniQMTExecutionRuntimeRecord | None:
         return self._runtimes.get(runtime_id)
@@ -285,9 +290,7 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
     def list_runtimes(self) -> list[MiniQMTExecutionRuntimeRecord]:
         return sorted(self._runtimes.values(), key=lambda item: item.updated_at, reverse=True)
 
-    def list_runtimes_for_account(
-        self, *, account_group_id: str, limit: int
-    ) -> list[MiniQMTExecutionRuntimeRecord]:
+    def list_runtimes_for_account(self, *, account_group_id: str, limit: int) -> list[MiniQMTExecutionRuntimeRecord]:
         if limit <= 0:
             raise ValueError("limit must be positive")
         exact_account_group_id = str(account_group_id or "").strip()
@@ -307,57 +310,59 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
         return rows[:limit]
 
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
-        existing = self._events.setdefault(event.runtime_id, [])
-        runtime = self._runtimes.get(event.runtime_id)
-        last_sequence = max(
-            int(runtime.last_event_sequence or 0) if runtime is not None else 0,
-            int(existing[-1].sequence) if existing else 0,
-        )
-        expected_sequence = int(last_sequence or 0) + 1
-        if event.sequence != expected_sequence:
-            raise ValueError(
-                f"event sequence must be monotonic for runtime {event.runtime_id}: "
-                f"expected {expected_sequence}, got {event.sequence}"
+        with self._snapshot_lock:
+            existing = self._events.setdefault(event.runtime_id, [])
+            runtime = self._runtimes.get(event.runtime_id)
+            last_sequence = max(
+                int(runtime.last_event_sequence or 0) if runtime is not None else 0,
+                int(existing[-1].sequence) if existing else 0,
             )
-        existing.append(event)
-        if runtime is not None:
-            self._runtimes[event.runtime_id] = runtime.model_copy(
-                update={"last_event_sequence": event.sequence, "updated_at": datetime.now(UTC)}
-            )
-        return event
+            expected_sequence = int(last_sequence or 0) + 1
+            if event.sequence != expected_sequence:
+                raise ValueError(
+                    f"event sequence must be monotonic for runtime {event.runtime_id}: "
+                    f"expected {expected_sequence}, got {event.sequence}"
+                )
+            existing.append(event)
+            if runtime is not None:
+                self._runtimes[event.runtime_id] = runtime.model_copy(
+                    update={"last_event_sequence": event.sequence, "updated_at": datetime.now(UTC)}
+                )
+            return event
 
     def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
-        existing = self._evidence_receipts.get(candidate.event_id)
-        if existing is not None:
-            event = existing.event
-            if not _evidence_event_matches_candidate(event, candidate):
-                raise QuoteEvidenceIdempotencyConflict(f"quote evidence event id conflicts: {candidate.event_id}")
-            return existing
-        runtime = self._runtimes.get(candidate.runtime_id)
-        if runtime is None:
-            raise ValueError(f"quote evidence runtime does not exist: {candidate.runtime_id}")
-        sequence = int(runtime.last_event_sequence or 0) + 1
-        event = MiniQMTExecutionEvent(
-            event_id=candidate.event_id,
-            runtime_id=candidate.runtime_id,
-            sequence=sequence,
-            event_type=candidate.event_type,
-            event_time=candidate.event_time,
-            source="quote_ingress",
-            payload=dict(candidate.payload),
-        )
-        self._events.setdefault(event.runtime_id, []).append(event)
-        self._runtimes[event.runtime_id] = runtime.model_copy(
-            update={"last_event_sequence": event.sequence, "updated_at": event.event_time}
-        )
-        receipt = DurableEvidenceReceipt(
-            event=event,
-            persisted_at_utc=datetime.now(UTC),
-            durable_ack=True,
-            readback_verified=True,
-        )
-        self._evidence_receipts[candidate.event_id] = receipt
-        return receipt
+        with self._snapshot_lock:
+            existing = self._evidence_receipts.get(candidate.event_id)
+            if existing is not None:
+                event = existing.event
+                if not _evidence_event_matches_candidate(event, candidate):
+                    raise QuoteEvidenceIdempotencyConflict(f"quote evidence event id conflicts: {candidate.event_id}")
+                return existing
+            runtime = self._runtimes.get(candidate.runtime_id)
+            if runtime is None:
+                raise ValueError(f"quote evidence runtime does not exist: {candidate.runtime_id}")
+            sequence = int(runtime.last_event_sequence or 0) + 1
+            event = MiniQMTExecutionEvent(
+                event_id=candidate.event_id,
+                runtime_id=candidate.runtime_id,
+                sequence=sequence,
+                event_type=candidate.event_type,
+                event_time=candidate.event_time,
+                source="quote_ingress",
+                payload=dict(candidate.payload),
+            )
+            self._events.setdefault(event.runtime_id, []).append(event)
+            self._runtimes[event.runtime_id] = runtime.model_copy(
+                update={"last_event_sequence": event.sequence, "updated_at": event.event_time}
+            )
+            receipt = DurableEvidenceReceipt(
+                event=event,
+                persisted_at_utc=datetime.now(UTC),
+                durable_ack=True,
+                readback_verified=True,
+            )
+            self._evidence_receipts[candidate.event_id] = receipt
+            return receipt
 
     def list_events(self, runtime_id: str, *, include_archived: bool = False) -> list[MiniQMTExecutionEvent]:
         return list(self._events.get(runtime_id, ()))
@@ -481,9 +486,10 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
         )
 
     def upsert_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance:
-        stored = instance.model_copy(update={"updated_at": datetime.now(UTC)})
-        self._algo_instances[stored.algo_instance_id] = stored
-        return stored
+        with self._snapshot_lock:
+            stored = instance.model_copy(update={"updated_at": datetime.now(UTC)})
+            self._algo_instances[stored.algo_instance_id] = stored
+            return stored
 
     def list_algo_instances(
         self,
@@ -497,9 +503,10 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
         return sorted(items, key=lambda item: item.created_at)
 
     def upsert_child_order(self, order: MiniQMTChildOrder) -> MiniQMTChildOrder:
-        stored = order.model_copy(update={"updated_at": datetime.now(UTC)})
-        self._child_orders[stored.child_order_id] = stored
-        return stored
+        with self._snapshot_lock:
+            stored = order.model_copy(update={"updated_at": datetime.now(UTC)})
+            self._child_orders[stored.child_order_id] = stored
+            return stored
 
     def list_child_orders(
         self,
@@ -517,6 +524,52 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
             items = [item for item in items if item.status not in terminal]
         return sorted(items, key=lambda item: item.updated_at)
 
+    def read_current_three_shadow_snapshot(
+        self,
+        runtime_id: str,
+        *,
+        include_archived: bool = False,  # noqa: ARG002 - no archive layer in memory
+    ) -> Any:
+        from .kernel_current_three_shadow_source import build_current_three_shadow_repository_read_v1
+
+        with self._snapshot_lock:
+            runtime = self._runtimes.get(runtime_id)
+            if runtime is None:
+                raise RuntimeConfigInvalidError(
+                    "current-three shadow snapshot runtime does not exist",
+                    context={
+                        "reason_code": "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+                        "stage": "K3_SHADOW_SOURCE_READ",
+                        "runtime_id": runtime_id,
+                    },
+                )
+            commit_sha = runtime.metadata.get("repository_commit_sha")
+            if type(commit_sha) is not str or len(commit_sha) != 40:
+                raise RuntimeConfigInvalidError(
+                    "current-three shadow snapshot lacks exact repository commit authority",
+                    context={
+                        "reason_code": "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+                        "stage": "K3_SHADOW_SOURCE_READ",
+                        "runtime_id": runtime_id,
+                        "field": "metadata.repository_commit_sha",
+                    },
+                )
+            observed_at = datetime.now(UTC)
+            return build_current_three_shadow_repository_read_v1(
+                repository_commit_sha=commit_sha,
+                runtime=runtime.model_copy(deep=True),
+                events=tuple(item.model_copy(deep=True) for item in self._events.get(runtime_id, ())),
+                algos=tuple(
+                    item.model_copy(deep=True)
+                    for item in self._algo_instances.values()
+                    if item.runtime_id == runtime_id
+                ),
+                children=tuple(
+                    item.model_copy(deep=True) for item in self._child_orders.values() if item.runtime_id == runtime_id
+                ),
+                database_snapshot_at_utc=observed_at,
+            )
+
     def mark_runtime_state(
         self,
         runtime_id: str,
@@ -529,12 +582,15 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
 class PostgresMiniQMTExecutionRuntimeRepository:
     """Production MiniQMT runtime store with incremental per-row DB writes."""
 
-    def __init__(self, conn_factory: Any = get_conn) -> None:
+    def __init__(self, conn_factory: Any = get_conn, *, _shadow_read_schema: str = "qmt_strategy") -> None:
         self._conn_factory = conn_factory
         self._conn_factory_accepts_autocommit = _supports_conn_factory_kw(conn_factory, "autocommit")
         self._conn_factory_accepts_manage_transaction = _supports_conn_factory_kw(conn_factory, "manage_transaction")
         self._prune_write_count_by_runtime: dict[str, int] = {}
         self._prune_lock = threading.Lock()
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,62}", _shadow_read_schema) is None:
+            raise ValueError("shadow read schema must be a strict PostgreSQL identifier")
+        self._shadow_read_schema = _shadow_read_schema
 
     def upsert_runtime(self, runtime: MiniQMTExecutionRuntimeRecord) -> MiniQMTExecutionRuntimeRecord:
         stored = runtime.model_copy(update={"updated_at": datetime.now(UTC)})
@@ -562,9 +618,7 @@ class PostgresMiniQMTExecutionRuntimeRepository:
             self._list_runtime_rows,
         )
 
-    def list_runtimes_for_account(
-        self, *, account_group_id: str, limit: int
-    ) -> list[MiniQMTExecutionRuntimeRecord]:
+    def list_runtimes_for_account(self, *, account_group_id: str, limit: int) -> list[MiniQMTExecutionRuntimeRecord]:
         exact_account_group_id = str(account_group_id or "").strip()
         if not exact_account_group_id:
             raise ValueError("account_group_id is required")
@@ -854,6 +908,105 @@ class PostgresMiniQMTExecutionRuntimeRepository:
             {"runtime_id": runtime_id, "active_only": active_only},
             lambda: self._list_child_order_rows(runtime_id, active_only=active_only),
         )
+
+    def read_current_three_shadow_snapshot(self, runtime_id: str, *, include_archived: bool = False) -> Any:
+        exact_runtime_id = str(runtime_id or "").strip()
+        if not exact_runtime_id:
+            raise ValueError("runtime_id is required")
+        return self._with_runtime_db_error(
+            "read_current_three_shadow_snapshot",
+            "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+            {"runtime_id": exact_runtime_id, "include_archived": include_archived},
+            lambda: self._read_current_three_shadow_snapshot_rows(
+                runtime_id=exact_runtime_id,
+                include_archived=include_archived,
+            ),
+        )
+
+    def _read_current_three_shadow_snapshot_rows(self, *, runtime_id: str, include_archived: bool) -> Any:
+        from .kernel_current_three_shadow_source import (
+            _validate_capacity,
+            build_current_three_shadow_repository_read_v1,
+        )
+
+        archived_clause = "" if include_archived else "AND archived_at IS NULL"
+        schema = self._shadow_read_schema
+        with self._conn(manage_transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                cur.execute("SELECT transaction_timestamp() AS snapshot_at")
+                stamp_row = cur.fetchone()
+                snapshot_at = stamp_row["snapshot_at"]
+                cur.execute(
+                    f"""
+                    SELECT
+                      (SELECT COUNT(*) FROM {schema}.execution_runtime_event
+                         WHERE runtime_id = %s {archived_clause}) AS event_count,
+                      (SELECT COUNT(*) FROM {schema}.execution_algo_instance
+                         WHERE runtime_id = %s {archived_clause}) AS algo_count,
+                      (SELECT COUNT(*) FROM {schema}.execution_child_order
+                         WHERE runtime_id = %s {archived_clause}) AS child_count
+                    """,
+                    (runtime_id, runtime_id, runtime_id),
+                )
+                count_row = cur.fetchone()
+                _validate_capacity(
+                    event_count=int(count_row["event_count"]),
+                    algo_count=int(count_row["algo_count"]),
+                    child_count=int(count_row["child_count"]),
+                )
+                cur.execute(f"SELECT * FROM {schema}.execution_runtime WHERE runtime_id = %s", (runtime_id,))
+                runtime_row = cur.fetchone()
+                if runtime_row is None:
+                    raise RuntimeConfigInvalidError(
+                        "current-three shadow snapshot runtime does not exist",
+                        context={
+                            "reason_code": "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+                            "stage": "K3_SHADOW_SOURCE_READ",
+                            "runtime_id": runtime_id,
+                        },
+                    )
+                cur.execute(
+                    f"""SELECT * FROM {schema}.execution_runtime_event
+                        WHERE runtime_id = %s {archived_clause}
+                        ORDER BY sequence, event_id""",
+                    (runtime_id,),
+                )
+                events = tuple(_row_to_event(row) for row in cur.fetchall())
+                cur.execute(
+                    f"""SELECT * FROM {schema}.execution_algo_instance
+                        WHERE runtime_id = %s {archived_clause}
+                        ORDER BY algo_instance_id""",
+                    (runtime_id,),
+                )
+                algos = tuple(_row_to_algo_instance(row) for row in cur.fetchall())
+                cur.execute(
+                    f"""SELECT * FROM {schema}.execution_child_order
+                        WHERE runtime_id = %s {archived_clause}
+                        ORDER BY child_order_id""",
+                    (runtime_id,),
+                )
+                children = tuple(_row_to_child_order(row) for row in cur.fetchall())
+                runtime = _row_to_runtime(runtime_row)
+                commit_sha = runtime.metadata.get("repository_commit_sha")
+                if type(commit_sha) is not str or len(commit_sha) != 40:
+                    raise RuntimeConfigInvalidError(
+                        "current-three shadow snapshot lacks exact repository commit authority",
+                        context={
+                            "reason_code": "MINIQMT_K3_SHADOW_SOURCE_INVALID",
+                            "stage": "K3_SHADOW_SOURCE_READ",
+                            "runtime_id": runtime_id,
+                            "field": "metadata.repository_commit_sha",
+                        },
+                    )
+                return build_current_three_shadow_repository_read_v1(
+                    repository_commit_sha=commit_sha,
+                    runtime=runtime,
+                    events=events,
+                    algos=algos,
+                    children=children,
+                    database_snapshot_at_utc=snapshot_at,
+                )
 
     def mark_runtime_state(
         self,
@@ -1737,8 +1890,12 @@ class PostgresMiniQMTExecutionRuntimeRepository:
         context: dict[str, Any],
         func: Callable[[], Any],
     ) -> Any:
+        from .kernel_current_three_contracts import CurrentThreeContractError
+
         try:
             return func()
+        except CurrentThreeContractError:
+            raise
         except RuntimeConfigInvalidError:
             raise
         except QuoteEvidenceIdempotencyConflict:
@@ -1794,85 +1951,92 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
         self._prune_and_compact_if_needed(reason="load")
 
     def upsert_runtime(self, runtime: MiniQMTExecutionRuntimeRecord) -> MiniQMTExecutionRuntimeRecord:
-        stored = super().upsert_runtime(runtime)
-        self._append_operation("upsert_runtime", stored.model_dump(mode="json"))
-        self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_runtime")
-        return stored
+        with self._snapshot_lock:
+            stored = super().upsert_runtime(runtime)
+            self._append_operation("upsert_runtime", stored.model_dump(mode="json"))
+            self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_runtime")
+            return stored
 
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
-        stored = super().append_event(event)
-        self._append_operation("append_event", stored.model_dump(mode="json"))
-        self._after_incremental_write(runtime_id=stored.runtime_id, reason="append_event")
-        return stored
+        with self._snapshot_lock:
+            stored = super().append_event(event)
+            self._append_operation("append_event", stored.model_dump(mode="json"))
+            self._after_incremental_write(runtime_id=stored.runtime_id, reason="append_event")
+            return stored
 
     def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
-        existing = self._evidence_receipts.get(candidate.event_id)
-        receipt = super().append_evidence_event_idempotent(candidate)
-        if existing is not None:
+        with self._snapshot_lock:
+            existing = self._evidence_receipts.get(candidate.event_id)
+            receipt = super().append_evidence_event_idempotent(candidate)
+            if existing is not None:
+                return receipt
+            self._append_operation(
+                "append_evidence_event",
+                {
+                    "event": receipt.event.model_dump(mode="json"),
+                    "persisted_at_utc": receipt.persisted_at_utc.isoformat(),
+                    "durable_ack": receipt.durable_ack,
+                    "readback_verified": receipt.readback_verified,
+                },
+            )
+            self._after_incremental_write(runtime_id=receipt.event.runtime_id, reason="append_evidence_event")
             return receipt
-        self._append_operation(
-            "append_evidence_event",
-            {
-                "event": receipt.event.model_dump(mode="json"),
-                "persisted_at_utc": receipt.persisted_at_utc.isoformat(),
-                "durable_ack": receipt.durable_ack,
-                "readback_verified": receipt.readback_verified,
-            },
-        )
-        self._after_incremental_write(runtime_id=receipt.event.runtime_id, reason="append_evidence_event")
-        return receipt
 
     def upsert_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance:
-        stored = super().upsert_algo_instance(instance)
-        self._append_operation("upsert_algo_instance", stored.model_dump(mode="json"))
-        self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_algo_instance")
-        return stored
+        with self._snapshot_lock:
+            stored = super().upsert_algo_instance(instance)
+            self._append_operation("upsert_algo_instance", stored.model_dump(mode="json"))
+            self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_algo_instance")
+            return stored
 
     def upsert_child_order(self, order: MiniQMTChildOrder) -> MiniQMTChildOrder:
-        stored = super().upsert_child_order(order)
-        self._append_operation("upsert_child_order", stored.model_dump(mode="json"))
-        self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_child_order")
-        return stored
+        with self._snapshot_lock:
+            stored = super().upsert_child_order(order)
+            self._append_operation("upsert_child_order", stored.model_dump(mode="json"))
+            self._after_incremental_write(runtime_id=stored.runtime_id, reason="upsert_child_order")
+            return stored
 
     def reset_store_for_tmp_rebuild(self, *, reason: str = "manual_tmp_store_reset") -> dict[str, Any]:
         """Archive current tmp state and start a clean bounded runtime store."""
 
-        archived = self._archive_existing_store(reason=reason)
-        self._runtimes = {}
-        self._events = {}
-        self._evidence_receipts = {}
-        self._algo_instances = {}
-        self._child_orders = {}
-        self._writes_since_compaction = 0
-        self._write_snapshot(reason=reason)
-        self._last_maintenance = {
-            "schema_version": "miniqmt_runtime_store_maintenance_v1",
-            "action": "reset_store_for_tmp_rebuild",
-            "reason": reason,
-            "archived": archived,
-            "store_path": str(self._path),
-            "oplog_path": str(self._oplog_path),
-            "completed_at": datetime.now(UTC).isoformat(),
-        }
-        return dict(self._last_maintenance)
+        with self._snapshot_lock:
+            archived = self._archive_existing_store(reason=reason)
+            self._runtimes = {}
+            self._events = {}
+            self._evidence_receipts = {}
+            self._algo_instances = {}
+            self._child_orders = {}
+            self._writes_since_compaction = 0
+            self._write_snapshot(reason=reason)
+            self._last_maintenance = {
+                "schema_version": "miniqmt_runtime_store_maintenance_v1",
+                "action": "reset_store_for_tmp_rebuild",
+                "reason": reason,
+                "archived": archived,
+                "store_path": str(self._path),
+                "oplog_path": str(self._oplog_path),
+                "completed_at": datetime.now(UTC).isoformat(),
+            }
+            return dict(self._last_maintenance)
 
     def maintenance_status(self) -> dict[str, Any]:
-        return {
-            "schema_version": "miniqmt_runtime_store_maintenance_status_v1",
-            "store_path": str(self._path),
-            "oplog_path": str(self._oplog_path),
-            "snapshot_exists": self._path.exists(),
-            "oplog_exists": self._oplog_path.exists(),
-            "snapshot_bytes": self._path.stat().st_size if self._path.exists() else 0,
-            "oplog_bytes": self._oplog_path.stat().st_size if self._oplog_path.exists() else 0,
-            "runtime_count": len(self._runtimes),
-            "event_count": sum(len(events) for events in self._events.values()),
-            "algo_instance_count": len(self._algo_instances),
-            "child_order_count": len(self._child_orders),
-            "writes_since_compaction": self._writes_since_compaction,
-            "last_maintenance": self._last_maintenance,
-            "write_mode": "incremental_jsonl_with_bounded_compaction",
-        }
+        with self._snapshot_lock:
+            return {
+                "schema_version": "miniqmt_runtime_store_maintenance_status_v1",
+                "store_path": str(self._path),
+                "oplog_path": str(self._oplog_path),
+                "snapshot_exists": self._path.exists(),
+                "oplog_exists": self._oplog_path.exists(),
+                "snapshot_bytes": self._path.stat().st_size if self._path.exists() else 0,
+                "oplog_bytes": self._oplog_path.stat().st_size if self._oplog_path.exists() else 0,
+                "runtime_count": len(self._runtimes),
+                "event_count": sum(len(events) for events in self._events.values()),
+                "algo_instance_count": len(self._algo_instances),
+                "child_order_count": len(self._child_orders),
+                "writes_since_compaction": self._writes_since_compaction,
+                "last_maintenance": self._last_maintenance,
+                "write_mode": "incremental_jsonl_with_bounded_compaction",
+            }
 
     def _append_operation(self, operation: str, item: dict[str, Any]) -> None:
         self._oplog_path.parent.mkdir(parents=True, exist_ok=True)

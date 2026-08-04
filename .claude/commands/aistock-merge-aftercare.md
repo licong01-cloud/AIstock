@@ -13,6 +13,9 @@ Use this command for AIstock/RD-Agent PR merge and post-merge aftercare. RD-Agen
 
 ## Merge and aftercare
 
+- Source merge, source cleanup, backend restart, post-restart verification and BUG close-sync are separate states. Source cleanup does not wait for a user restart, but still requires cleanup authorization.
+- Backend restart remains user-owned even when merge/finalizer/aftercare is authorized. Output the catalog target and operator runbook ref; do not perform process control without explicit authorization for that target.
+- Runtime BUGs remain `fixed_source_pending_user_restart` with an open GitHub Issue and `runtime_identity_match=pending` until a complete digest-bound identity/business-smoke receipt is supplied to single-issue close-sync. Runtime BUGs never use close-sync-batch.
 - Prefer workflow merge/finalizer when a BUG state exists.
 - For docs or feature PRs without BUG state, merge only after explicit user authorization and green checks.
 - After merge, fast-forward `F:\Dev\AIstock` to `origin/main`.

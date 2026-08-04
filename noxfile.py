@@ -631,6 +631,32 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def advisory_phase0b_backend(session: nox.Session) -> None:
+    """Run Phase 0B candidate-quality and direct historical-data regressions."""
+    _run_pytest(
+        session,
+        "backend/tests/advisory_phase0b",
+        "backend/tests/advisory_historical_range/test_r4_summary_service.py",
+        "backend/tests/advisory_phase1/test_phase1c3_batch_d_integrity.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def advisory_modeling_backend(session: nox.Session) -> None:
+    """Run isolated Advisory short-rebound modeling contract regressions."""
+    _run_pytest(
+        session,
+        "backend/tests/advisory_modeling",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def paper_v2_backend(session: nox.Session) -> None:
     """Run Paper v2, Selection Center, and shared minute-execution tests."""
     args = [
@@ -1010,6 +1036,74 @@ def qe_long_trend_phase2_backend(session: nox.Session) -> None:
         "-p",
         "no:cacheprovider",
     )
+
+
+@nox.session(venv_backend="none")
+def qe_long_trend_phase3_platform(session: nox.Session) -> None:
+    """Run F-014 Phase 3 persistence, snapshot, API, MCP, and Phase 2 compatibility contracts."""
+    _run_pytest(
+        session,
+        "backend/tests/qe_archive/test_qe_long_trend_phase3_repository.py",
+        "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase3_api.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_orchestration.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_artifact_store.py",
+        "backend/tests/mcp/test_qe_archive_module.py",
+        "backend/tests/test_qe_archive_schema.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qe_long_trend_phase4_ui(session: nox.Session) -> None:
+    """Run the F-014 DB-restored Loop action and same-vintage Archive UI contracts."""
+    _ensure_frontend_node_modules(session)
+    frontend_port = session.posargs[0] if session.posargs else os.environ.get("FRONTEND_PORT", "3012")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        frontend_port,
+        external=True,
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "node",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "node",
+            "node_modules/@playwright/test/cli.js",
+            "test",
+            "tests/quantevolver/qe_long_trend_evaluation.spec.ts",
+            "--project",
+            "chromium",
+            "--timeout",
+            "120000",
+            "--output",
+            "../tmp/playwright-results-f014-phase4",
+            env=_env(
+                {
+                    "BACKEND_PORT": os.environ.get("BACKEND_PORT", "8014"),
+                    "FRONTEND_PORT": frontend_port,
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{os.environ.get('BACKEND_PORT', '8014')}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                    "PLAYWRIGHT_HTML_OUTPUT_DIR": "../tmp/playwright-report-f014-phase4",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
 
 
 @nox.session(venv_backend="none")
@@ -2400,6 +2494,25 @@ def validation_coverage_backend(session: nox.Session) -> None:
         external=True,
     )
     _cleanup_validation_artifact_paths(coverage_xml, coverage_snapshot, coverage_data)
+
+
+@nox.session(venv_backend="none")
+def platform_api_backend(session: nox.Session) -> None:
+    """Run shared Platform API contracts without starting a backend process."""
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/routers/health.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/platform_api",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
 
 
 @nox.session(venv_backend="none")

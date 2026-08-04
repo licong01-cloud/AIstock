@@ -1,9 +1,9 @@
 # AIstock 荐股策略条件化模型体系 F2 架构蓝图 v1
 
 > 日期：2026-07-10
-> 修订日期：2026-07-27
+> 修订日期：2026-08-03
 > 文档类型：F2 顶层架构蓝图，当前修订使用 `docs-fast-update`
-> 当前状态：蓝图已形成；Phase 0A/Phase 1 历史研究、PIT 数据底座、Phase 1E 编译和 G5 基础设施已分阶段合入。O4 authoritative CLI、逐 Program orchestration、typed capacity policy producer 和 pending historical request ref 已完成代码合入；真实 O4/G5 前瞻证据链仍等待所选决策日的真实 DEV ingestion 完成，但该等待不阻塞历史范围研究或模型研发。Phase 1R R1-R4 已完成源码、DEV/production schema 和真实历史业务闭环：R3 单 Alpha与原生多 Alpha 父包完成 `2026-07-01` 至 `2026-07-21` 的 15 个交易日、30/30 package-day E2E；R4 由 PR `#2792` 合入（merge commit `f7cf3fb3c3e7417236671e1bef3cdb1f8a124ab9`），BUG close-sync 由 PR `#2793` 合入（merge commit `81de5f93b8e7326ad9cd13ed2cb520c66847d321`），完成 32,549 条 outcome、4 个 summary、2 个非空 SEALED retrospective snapshot、360 条 source correction 和 exact retry。生产历史读取与 Phase 1R 隔离写入不要求把生产数据复制到 DEV；服务重启和 runtime activation 未执行。当前下一阶段为 R5 API/UI/legacy cutover，唯一实施级设计 `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 已完成正式审核并可进入实现；Phase 0B 模型价值审计、WSL 模型训练和用户可见模型预测尚未开始。根据单用户、学术研究、无实盘交易边界取消人工审批、角色、运行时 DDL、运行时策略包二次验证、candidate-count 运行门禁和未经确认的 canary/champion/ModelOps 前置链；不存在实时荐股或交易执行路径
+> 当前状态：蓝图已形成；Phase 0A/Phase 1/Phase 1R 数据底座和 Phase 0B 真实 15 日只读审计已完成。15 日 snapshot 的成熟收益标签覆盖率为 0，因此经济和模型结论仍为 `NOT_YET_AVAILABLE`。首个 SHORT_REBOUND Phase 2/3 F2 详细设计已形成；Batch A 合同及 Batch B 的精确 Existing Program 编排、SEALED base verified read、区间化 PIT source、完整 FeatureBuilder、feature snapshot、2/3/5 年训练 view/file 和 coverage receipt 源码已经实现并通过本地模块测试。当前 P0 是先做 DEV 合同验证，再按独立授权执行真实多年 Historical Range/Phase 1R DML 与 artifact 物化；真实 snapshot 未生成前不得进入 WSL Top20→Top5 训练。旧 batch/root/orphan 只读保留且不阻断主线；不设置人工审批、角色、运行时策略包二次验证或未经确认的 canary/champion/ModelOps 前置链。
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -1053,6 +1053,28 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 
 所有阶段都遵循：详细设计先确认，代码后实施；数据不足或模型未达标时准确记录当前 capability 状态并继续补采/迭代，不得淘汰研究方向或阻断现有荐股基线。工程检查和运行不变量必须同时具备正向和反向验证，禁止只设计拒绝路径。
 
+自 2026-07-31 起采用“功能垂直切片优先”顺序：先用现有 15 日 SEALED 数据完成可计算项的探索审计并识别样本缺口，再为首个模型定义最小合同、从生产数据库一次性生成新的多年 SEALED 训练文件、训练能够改变 Top5 研究排序的影子模型，然后补收益/持有期、价格区间和页面能力。多年训练文件是首个真实模型的必要业务输入，不是旧数据修复或通用平台扩建。除该垂直切片明确依赖的最小数据、bundle、训练和推理合同外，不单独建设自动调度、历史归档、多 root 恢复、ModelOps 或治理后台。旧历史任务不再作为修复对象；新功能通过新建历史范围任务验证。
+
+### 当前进度与优先级账本（2026-07-31）
+
+| 范围 | 当前状态 | 主线判定 | 下一动作 |
+|---|---|---|---|
+| Phase 0A/Phase 1/PIT/SEALED 数据底座 | 已形成 15 个决策交易日的 retrospective snapshot；候选结构可审计，但成熟收益标签覆盖率为 0 | `AUDIT_CHAIN_VERIFIED_LABEL_EVIDENCE_UNAVAILABLE` | 不扩建通用基础设施；按首个模型合同生成全新多年 snapshot |
+| Phase 1E/O4/G5 前瞻证据 | 源码已合入；真实 DEV DSE/receipt、O4 plan 和 G5 L3/L4 尚未闭合 | `DEFERRED_NON_BLOCKING` | 不阻断 Phase 0B/短反弹模型；按真实前瞻日期另行验证 |
+| Phase 1R R1-R4 | 历史逐日执行、Outcome/Summary 和 retrospective bridge 已验证 | `FOUNDATION_SUFFICIENT` | 保留既有事实，不返工 |
+| Phase 1R R5 | 源码、bridge、exact retry 和既有 UI readback 已验证；完整新链路 E2E 未闭合 | `DEFERRED_PRODUCT_ACCEPTANCE` | 首批模型功能完成后用新任务验证 |
+| Phase 0B | 真实 15 日只读审计与 exact retry 已完成；两包收益证据均为 `NOT_YET_AVAILABLE` | `TECHNICAL_AUDIT_COMPLETE` | 保留报告事实；多年 snapshot 生成后重新审计经济指标 |
+| 最小 Phase 2/3 合同 | F2 设计与 Batch A 合同源码已合入；Batch B 数据构建源码已完成本地合同验证，未执行多年数据物化、训练或推理 | `BATCH_B_SOURCE_VERIFIED` | 完成 Batch B 源码合入后进入独立 runtime materialization，多年 snapshot/训练文件不回填为本行完成证据 |
+| Phase 3 多年训练 snapshot | Batch B 源码与本地合同验证已完成；真实多年 base/feature/training artifact 尚未生成 | `P0_RUNTIME_MATERIALIZATION` | 先做 DEV 合同验证，再按独立授权执行正式 Historical Range/Phase 1R DML 和 artifact 物化 |
+| Phase 3 Top20→Top5 重排 | 尚未训练或实现 | `P0_FIRST_MODEL_FUNCTION` | WSL 训练、影子推理和对照验收 |
+| Phase 4 收益/持有期 | 尚未训练或实现 | `P1_SECOND_MODEL_FUNCTION` | Phase 3 后实现唯一 Outcome bundle |
+| Phase 5 价格区间 | 尚未训练或实现 | `P1_THIRD_MODEL_FUNCTION` | Phase 4 后按分钟覆盖实施 |
+| Phase 6 页面能力 | 尚无模型 capability 可展示 | `P1_PRODUCT_DELIVERY` | 随模型能力逐项开放影子 UI |
+| Phase 8 长期趋势专家 | 等待长期趋势策略包形成稳定样本 | `P2` | 不阻断短反弹主线 |
+| 旧 PARTIAL batch/旧 root/历史孤立产物 | 只读保留 | `OUT_OF_MAINLINE` | 不修复、不迁移、不归档、不作为验收对象 |
+
+按首批短反弹用户可感知功能计数，当前为 `0/4`：Top5 重排、收益/持有期、价格区间、页面影子展示均尚未交付。长期趋势专家单独记录为 `0/1, P2_DEFERRED`，不纳入短反弹分母，也不阻断短反弹主线。后续进度必须分别报告短反弹 `N/4` 和长期趋势 `N/1`，不再用 schema、证据链、历史归档或平台组件数量替代功能完成度。
+
 ### Phase 0A：口径冻结与数据可用性审计
 
 - 目标：在计算任何表现指标前锁定候选权威源、五层 rank、全部 Alpha leg/model/HMM vintage、Selection runtime/adapter/query semantics、effective package OOS cutoff、决策时钟、embargo、benchmark、成本、价格单位、标签/barrier 优先级和数据可用时间。
@@ -1114,33 +1136,40 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 - 隔离：不写普通 Selection run、当前 Advisory list/episode、模拟盘、Paper、QE/Qlib/backtest 或交易表；不创建 scheduler、审批、角色、package re-approval 或运行时 DDL。
 - 共享计算所有权：R2 的公共候选计算契约位于中立的 StrategyPackage 计算模块，由现有 Selection wrapper 和 Phase 1R adapter 分别调用；Advisory 不 import `simulation_runtime`、Paper 或模拟盘模块，公共计算也不持有 repository、sink 或默认生产依赖。
 - 发布/回滚：范围任务是显式用户命令/API；关闭该能力只停止新任务和未开始日期，保留已完成研究事实，不影响现有单日 runner 和当前荐股基线。
-- 详细设计等级：F2。父设计为 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`；R3 子设计为 `docs/architecture/advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md`，R4 子设计为 `docs/architecture/advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md`。R1-R4 均已合入并完成分层验收；当前下一实施批次为 R5 API、UI 与 legacy cutover，唯一实施级设计为 `docs/architecture/advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md`。R5 源码、真实 API/UI E2E 和 runtime activation 分别保持未完成，不得互相冒充完成。
+- 详细设计等级：F2。父设计为 `docs/architecture/advisory_phase1r_historical_range_research_f2_design_20260719.md`；R3、R4、R5 子设计分别覆盖逐日执行、Outcome/Summary/retrospective bridge 和 API/UI/legacy cutover。R1-R4 已完成分层与真实 runtime 验收；R5 源码已合入且 bridge/exact retry/UI readback 已验证，完整 runtime E2E 保持 `runtime_acceptance_partial`，但不阻断模型研发。旧 PARTIAL batch 和旧 root 不再修复或作为验收对象；完成首批模型功能后，以新 batch 验证当前 create/resume/query/outcome/summary/bridge 与模型 readback。
 
 ### Phase 0B：基线质量与可建模性审计
 
-- 目标：基于 Phase 1 的最小 `SEALED` snapshot，确认候选整体 Alpha、内部排名单调性、HMM 边际增益、硬过滤影响和长期赢家 Recall@K。
+- 当前优先级：`TECHNICAL_AUDIT_COMPLETE`。真实 15 日只读审计与 exact retry 已完成，不再把 Phase 1R 历史遗留收口作为前置任务。
+- 目标：基于 Phase 1 的最小 `SEALED` snapshot，探索候选整体 Alpha、内部排名单调性、HMM 边际增益、硬过滤影响和可成熟期限内的 Recall@K，并准确判定哪些结论因样本不足尚不可得。
 - 进入条件：Phase 1 数据最小闭环通过；至少存在一个内容闭合的 formal observation snapshot 或 Phase 1R retrospective snapshot，并明确其 evidence level。只有 retrospective 数据时可以执行候选质量审计和内部 bootstrap 判断，但不得输出已校准用户能力。
-- 交付物：基线审计报告、strategy/conditional Recall 分母与报告、模型价值判断、建议候选深度和目标期限。
+- 交付物：基线审计报告、实际决策交易日/样本/regime/成熟期限统计、strategy/conditional Recall 分母与报告、探索性模型价值判断、建议候选深度和目标期限，以及逐指标 `AVAILABLE`/`INSUFFICIENT_SAMPLE` 结果。
 - 关键对照：`alpha_raw`、`hmm_adjusted`、`risk_policy_adjusted`、`selection_effective`、候选等权、候选内随机 5、HMM/risk overlay 启停和行业黑名单消融。
-- 结果分类：明确每个包当前证据是否支持继续重排研究及建议候选深度；逐包输出 `RESEARCH_EVIDENCE_AVAILABLE` 或 `RESEARCH_EVIDENCE_UNAVAILABLE`。该分类不淘汰策略包、不修改荐股基线，也不停止后续数据补采、代理验证或模型迭代。
+- 结果分类：逐指标先按实际决策交易日、有效样本、regime 和 label maturity 判断 `AVAILABLE` 或 `INSUFFICIENT_SAMPLE`；不得用 observation/label 行数掩盖只有 15 个决策交易日。再按逐指标结果明确每个包当前证据是否支持继续重排研究及候选深度建议，并输出 `RESEARCH_EVIDENCE_AVAILABLE` 或 `RESEARCH_EVIDENCE_UNAVAILABLE`。该分类不淘汰策略包、不修改荐股基线，也不停止后续数据补采、代理验证或模型迭代。
 - 能力边界：没有合法 vintage/OOS 或兼容合法 prior 时，只保留研究报告和 `RETROSPECTIVE_RESEARCH_ONLY` 内部 bootstrap；不得向用户展示伪校准数字。证据补齐后可重新评估，不设置永久停止门禁。
 - 发布/回滚：只读分析，无 runtime 变化。
+- 实施约束：直接消费现有 R4 SEALED snapshot；仅对证据充分的指标产出逐策略包探索结果，证据不足项显式返回 `INSUFFICIENT_SAMPLE`。不得先新增数据库 schema、通用数据平台、历史归档、旧 batch 修复或自动任务框架，也不得把本轮结果冒充 2/3/5 年模型训练验收。
+- 真实验收结论：`advsnap_9faa542fd165be6131715125` 中原生多 Alpha（`SHORT_REBOUND`，373 candidates）与单 Alpha（`UNCLASSIFIED`，300 candidates）各覆盖 15 个决策交易日；成熟收益标签均为 0。报告 semantic hash 为 `2fb0400a25c8d0b1738901c494214de37cdd5c1436af9d6aa2cee14fafc37209`，首次执行和 exact retry 一致。该结论不支持候选深度、HMM/行业效果或模型训练决策。
 - 详细设计等级：F1 数据分析设计。
 
-### Phase 2：策略风格与模型平台
+### Phase 2：首个模型所需的最小策略风格与模型合同
 
-- 目标：建立 style profile、feature/label registry、模型版本、部署状态和层级收缩。
+- 当前优先级：`P0_ACTIVE`，只实现 Phase 3 首个真实模型明确需要的最小合同，不作为独立平台建设项目。
+- 权威详细设计：`docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md`，与 Phase 3 首个垂直切片共同闭合，避免先建设通用模型平台。
+- 目标：为当前超跌反弹多 Alpha 包建立最小 style profile、feature/label identity、WSL 训练输入文件、immutable model bundle 和影子推理版本合同。
 - 输入条件：Phase 1 数据契约稳定且 Phase 0B 已形成目标包/风格分类；没有正式 OOS 时，只有兼容合法 prior 才能建立 `STYLE_PRIOR + SHADOW`，否则仅允许内部 research bootstrap 且用户侧明确 `MODEL_UNAVAILABLE`。
-- 交付物：风格路由、模型制品、校准层级、包版本迁移和 reason code 详细设计。
-- 非目标：不训练正式交易模型，不影响当前排名。
-- 完成判定：新包可解析到明确 style；prior 训练来源、版本和 OOS 合法性可审计；版本不匹配显式失败；`STYLE_PRIOR` 与 `PACKAGE_CALIBRATED` 不得混淆。失败只关闭对应模型能力，不阻断现有荐股。
-- 发布/回滚：平台元数据默认不启用推理。
+- 交付物：首个风格路由、训练数据/标签版本、模型制品、bundle identity、必要 reason code 和最小推理接口详细设计。
+- 非目标：不建设通用模型平台、自动调度、训练后台、champion/challenger、审批、自动晋级、全策略迁移或 ModelOps；不影响当前排名。
+- 完成判定：本阶段只要求当前目标超跌反弹多 Alpha 包解析到明确 style，并使其训练来源、版本和 OOS 合法性可审计；其他包未纳入本垂直切片时显式返回 `MODEL_CONTRACT_NOT_AVAILABLE`，不要求同步建设通用路由或迁移。版本不匹配显式失败；`STYLE_PRIOR` 与 `PACKAGE_CALIBRATED` 不得混淆。失败只关闭对应模型能力，不阻断现有荐股。
+- 发布/回滚：目标包的最小版本元数据默认不启用推理。
 - 详细设计等级：F2。
 
 ### Phase 3：超跌反弹候选重排影子模型
 
+- 当前优先级：`P0_FIRST_MODEL_FUNCTION`，Phase 0B 给出探索结论、最小 Phase 2 合同闭合并生成新的多年训练 snapshot 后立即实施。
+- 权威详细设计：`docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md`；首个实现固定为 SHORT_REBOUND 原生多 Alpha 父包、5 日风险感知 relevance、2/3/5 年窗口和 WSL LambdaRank 研究影子模型。
 - 目标：为当前多 Alpha 反弹包训练 LambdaRank 和风险感知 relevance 目标；用户可见收益胜率与路径分布仍由后续唯一权威 Outcome bundle 提供。
-- 输入条件：Phase 1/2 完成并具有 SEALED 短周期观察；缺少正式 OOS/合法 prior 时允许训练 research bootstrap，但只能是 `RETROSPECTIVE_RESEARCH_ONLY + NONE`，不得声明 `RERANK_READY` 或产生用户可见模型排名。
+- 输入条件：Phase 1/2 完成，现有短周期 snapshot 已完成 Phase 0B 探索，且已从生产数据库按当前 PIT/feature/label identity 生成覆盖目标 2/3/5 年窗口的新 SEALED 训练 snapshot。缺少正式 OOS/合法 prior 时允许训练 research bootstrap，但只能是 `RETROSPECTIVE_RESEARCH_ONLY + NONE`，不得声明 `RERANK_READY` 或产生用户可见模型排名。
 - 交付物：短反弹 ranking 标签、HMM/risk overlay 消融、rank score normalization、原子 bundle、`RERANK_READY(SHORT_REBOUND)` 能力和影子推理详细设计。
 - 验证对照：原始前5、HMM前5、无 HMM 模型、含 HMM 模型、随机5、候选20等权。
 - 结果判定：详细设计预先锁定数值阈值、最小 OOS 交易日/有效样本、regime 覆盖和置信区间；时间样本外 NDCG@5、Precision@5、净收益、MAE、换手和 rank score 稳定性决定该模型版本是 `RERANK_READY` 还是 `MODEL_UNAVAILABLE`。未达标版本保留证据并继续迭代，不淘汰研究方向，也不影响荐股基线。
@@ -1150,6 +1179,7 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 
 ### Phase 4：预期收益与持股周期模型
 
+- 当前优先级：`P1_SECOND_MODEL_FUNCTION`。
 - 目标：输出多期限净收益分位数、正收益概率、信号存活和持股周期范围。
 - 输入条件：对应 style 的 reranker 候选、标签和特征链稳定；SHORT_REBOUND 首次由 Phase 3 进入，LONG_TREND 在 Phase 8B 按本阶段同一契约执行。
 - 交付物：唯一权威 outcome bundle、分位数、存活模型、conformal/概率校准、`RETURN_HORIZON_READY` 和拒绝预测详细设计。
@@ -1159,6 +1189,7 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 
 ### Phase 5：分钟路径与价格区间模型
 
+- 当前优先级：`P1_THIRD_MODEL_FUNCTION`，只在 Phase 4 有效且分钟数据覆盖满足模型需要时实施。
 - 目标：使用分钟行情完善同一 Outcome bundle 的 `EXECUTABLE_MFE/MAE` 与 `PATH_MFE/MAE` 标签/版本，并由 PricePath bundle 训练跳空、成交和事件先后，生成买入、止盈和止损范围；不得发布第二套同 projection prediction head。
 - 输入条件：对应 style 的 Phase 4 结果模型稳定且分钟数据覆盖率通过审计；LONG_TREND 在 Phase 8C 按本阶段同一契约执行。
 - 交付物：分钟标签、新的 immutable Outcome/model bundle version、兼容 Outcome bundle version/hash、`raw + CNY + yuan` 单位转换、T+1/涨跌停/停牌/tick、硬风险上限、`PRICE_RANGE_READY` 详细设计。
@@ -1168,6 +1199,7 @@ ADVISORY_HISTORICAL_RANGE_CURRENT_SEMANTICS_ONLY
 
 ### Phase 6：荐股页面按能力影子展示
 
+- 当前优先级：`P1_PRODUCT_DELIVERY`，按已完成 capability 分批展示，不等待所有模型一次性完成。
 - Phase 6A `RERANK_READY`：展示五层排名、Top5 shortlist、合格 N/5 和解释。
 - Phase 6B `RETURN_HORIZON_READY`：增加收益分位数、概率、持股周期和校准状态。
 - Phase 6C `PRICE_RANGE_READY`：增加买入、止盈/移动保护、软/硬止损和可执行性。
@@ -1211,25 +1243,24 @@ Phase 8 在 Phase 2 后可以并行准备，但不得绕过 PIT、OOS、immutabl
 
 ## 20. 后续详细设计文档清单
 
-建议按以下顺序新建，每份文档必须声明依赖的蓝图编号、Feature tier、验收索引、验证矩阵和生产影响状态：
+当前按“已完成底座不返工、真实模型功能优先”排序。每份新设计必须声明依赖的蓝图编号、Feature tier、验收索引、验证矩阵和生产影响状态，但不得把文档、平台或历史治理本身当作功能交付：
 
 1. 候选权威源、决策时钟、OOS/vintage、benchmark/cost 和数据可用性口径设计：已形成 `advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`。
 2. research policy、历史 dated binding、manual multi-Program runner、immutable Selection evidence 和单/多 Alpha双轨验证设计：已形成 `advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`。
 3. Advisory PIT 历史观察、全候选标签和原子 SEALED Parquet 快照设计：已与原第 3 项统一形成 `advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`。
-4. Advisory 模型数据表、DDL、保留周期、回填和迁移设计：Phase 1 observation/label/snapshot 部分已并入第 3 项；模型表与部署表仍由 Phase 2 专项设计闭合。
-5. 历史范围研究执行器与新策略上线前验证 F2 设计：父设计 `advisory_phase1r_historical_range_research_f2_design_20260719.md` 覆盖日期范围、当前语义 projection、逐日 orchestration、列表 hash chain、收益成熟、恢复、API/UI、retrospective dataset bridge 和跨模块隔离；R3 子设计 `advisory_phase1r_r3_ordered_day_executor_f2_design_20260722.md` 已完成 shared list transition、无 candidate-count gate 的 active rank observation、独立 decision-mark set/day-input v3、deterministic projection、durable day lease/takeover、execute-until-blocked、terminal PARTIAL、exact receipt upstream、原子 day commit、恢复和完整历史库 15 日验收；R4 子设计 `advisory_phase1r_r4_outcome_summary_phase1_bridge_f2_design_20260723.md` 已完成 outcome maturity、summary version、retrospective SEALED bridge、source correction 和 exact retry并由 PR `#2792` 合入。R1-R4 已闭合；下一任务为按 `advisory_phase1r_r5_api_ui_legacy_cutover_f2_design_20260727.md` 实现产品 API、历史验证 UI 和 legacy replay 主流程 cutover。
-6. 荐股候选质量、HMM 消融和长期赢家双口径 Recall@K 基线审计设计。
-7. 策略风格画像、特征/标签注册、原子 bundle 和 Program 部署治理设计。
-8. HMM、行业黑名单和风格化行业优先级设计。
-9. 超跌反弹候选重排与 Top5 shortlist 约束设计。
-10. 收益分位数、信号存活和持股周期设计。
-11. 分钟路径、成交概率、raw/CNY/yuan 转换和价格区间设计。
-12. 长期趋势、有序目标、生存和捕获率设计。
-13. WSL 训练、项目外 content-addressed artifact store、模型制品、数据快照和调度设计。
-14. Advisory 推理服务、API、缓存、幂等和 reason code 设计。
-15. 荐股页面 capability 影子展示与解释性设计。
-16. Advisory 模型排名启用、Top5 active target 迁移、生命周期、发布和回滚设计；不包含 canary/champion 或审批状态机。
-17. 可选 ModelOps、自动重训、漂移告警和灾备设计；仅在用户另行确认范围后启动。
+4. Advisory 模型数据表、DDL、保留周期、回填和迁移设计：Phase 1 observation/label/snapshot 已完成；后续只在首个模型确有持久化需要时随对应功能设计增量闭合，不单独建设模型数据库平台。
+5. 历史范围研究执行器与新策略上线前验证 F2 设计：R1-R4 已完成；R5 源码、bridge、exact retry 和既有 UI readback 已验证。旧 PARTIAL batch、旧 root、历史 operation 和历史孤立产物不修复、不迁移、不归档，也不作为下一阶段验收对象；首批模型功能完成后创建新的历史范围任务验证当前完整链路。
+6. `COMPLETE_WITH_EVIDENCE_UNAVAILABLE`：Phase 0B 真实 15 日只读审计与 exact retry 已完成；成熟收益标签覆盖率为 0，HMM/行业黑名单/Recall 缺失能力均显式暴露，没有伪造经济结论。
+7. `P0_ACTIVE`：把首个超跌反弹重排模型需要的最小策略风格、feature/label identity、WSL 文件训练、immutable bundle 和推理 reason code 与 Phase 3 详细设计一起闭合；不先建设通用平台。
+8. `P0_FUNCTION_INPUT`：按第 7 项冻结的合同，从生产数据库一次性生成覆盖 2/3/5 年窗口的新 SEALED Parquet 训练 snapshot；使用当前数据权威和新 snapshot identity，不恢复或改写旧 Phase 1R batch。
+9. `P0`：超跌反弹候选重排与 Top20→Top5 shortlist 影子模型实现，对比原始前5、HMM前5、模型前5、随机5和候选20等权。
+10. `P1`：收益分位数、正收益概率、信号存活和持股周期范围模型。
+11. `P1`：分钟路径、成交概率、raw/CNY/yuan 转换以及买入、止盈、移动保护和止损区间模型。
+12. `P1`：Advisory 最小推理 API 与荐股页面 capability 影子展示；随已完成模型逐项开放，不等待所有能力。
+13. `P2`：长期趋势、有序目标、生存、time-to-hit 和捕获率模型；等待长期趋势策略包形成稳定历史样本后启动，单独记录 `0/1` 进度。
+14. `P2`：用新历史范围任务完成单/原生多 Alpha create/resume/query/outcome/summary/bridge、模型 readback 和三 viewport UI 验收；该任务验证新功能，不恢复旧任务。
+15. 用户明确确认后执行 Advisory 模型排名启用、Top5 active target 迁移、生命周期、发布和回滚；不包含 canary/champion 或审批状态机。
+16. 可选 ModelOps、自动重训、漂移告警和灾备设计；仅在用户另行确认范围后启动，当前不实施。
 
 ## 21. Verification Plan / 验证方案
 
@@ -1314,7 +1345,7 @@ peak-before-stop path correctness
 | F-005 | §6.3、§9、Phase 0B、Phase 3、Phase 8 | 权威深池与 Recall@K；artifact: `docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md` | design_ready | none |
 | F-006 | §8.1、§8.2 | HMM 边际特征和禁止二次乘权；`backend/tests/selection_center/test_hmm_runtime.py` | design_ready | none |
 | F-007 | §8.3、§9.2 | 黑名单硬过滤；`backend/tests/selection_center/test_risk_policy.py` | design_ready | none |
-| F-008 | §10、Phase 3 | 短反弹期限和标签；artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
+| F-008 | §10、Phase 2、Phase 3 | 短反弹期限、风险感知 relevance 和 OOS 阈值；artifact: `docs/architecture/advisory_phase2_phase3_short_rebound_reranker_f2_design_20260802.md` | design_ready | none |
 | F-009 | §10、§13、Phase 8 | 长趋势多状态和捕获率；artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
 | F-010 | §11.1、Phase 4 | 扣费后概率、分位数和校准；artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
 | F-011 | §11.2、Phase 4 | 存活与收益下分位数周期；artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
@@ -1360,13 +1391,16 @@ peak-before-stop path correctness
 1. 合入并部署 Phase 0A.1/0A.2 policy、dated binding、immutable evidence 与 manual historical runner 代码；不创建 scheduler。
 2. 对现有 single current manifest 和 native multi parent 执行只读 research preflight；手工选择已有历史 binding 可解析的 Program/date，不创建 successor binding 或正式 `T0`。
 3. 在开发/发布流程完成 Phase 1 migration 验证并部署 schema；运行任务不执行 DDL。
-4. Phase 1R R1-R4 已合入；R3 单/原生多 Alpha 15 日完整历史库执行，以及 R4 outcome maturity、summary version、retrospective SEALED bridge、source correction、exact retry 与隔离回执均已通过。不得把已完成的 R3/R4 重新列为 R5 前置实现任务。
-5. 按 R5 F2 详细设计完成 typed API、历史验证 UI、legacy replay 主流程 cutover 和真实 API/UI E2E 后发布历史范围研究功能；使用显式历史区间执行单/多 Alpha 独立逐日研究、恢复和收益成熟查询，不等待最新交易日，也不改变当前荐股 list。R5 当前不新增 migration；若实现复核发现必须变更 schema，必须先更新详细设计并单独报告，不得静默加入 DDL。
-6. 按版本化配置启用只记录数据库 ingestion completion 的 source observer，并将 formal 与 retrospective source 分区构建为各自 SEALED snapshot；observer 不触发荐股，范围研究不改变 evidence level。
-7. 执行 Phase 0B、模型训练和制品提升；配置启用仅服务 Advisory 的模型预测 writer，无需审批事件或授权角色，模型不可用时现有荐股基线继续运行。
-8. 再按 capability 发布 UI 影子展示。
-9. 用户明确确认 Phase 7 范围后，为指定 Program 配置一个 exact immutable model bundle；该配置只影响学术研究 shortlist 展示，不产生实时建议、正式交易列表或执行输入。
-10. 如未来需要 ModelOps、自动重训或漂移治理，另行完成专项设计和用户确认；它们不作为当前模型排名启用的前置门禁。
+4. Phase 1R R1-R4 已完成真实历史、Outcome/Summary、retrospective SEALED bridge、source correction 与隔离验收；R5 源码和生产 Dataset Bridge、lease、exact retry、既有 batch UI readback 已通过。旧 PARTIAL batch 和旧 root 只保留为历史事实，不再修复、迁移、归档或阻断后续研发。
+5. Phase 0B 详细设计、现有 15 日 SEALED snapshot 只读审计和 exact retry 已完成；报告准确返回成熟收益覆盖率 0、HMM/行业/Recall capability 不足和 null package conclusion，没有伪造候选深度或目标期限结论。
+6. Phase 2/3 F2 详细设计已形成；Batch A 的最小 style、feature/formula/query、label、split、experiment、regime、bundle、shadow-result 与 reason contract 已完成源码和五轮审核，不处理旧 batch、不扩建通用平台。
+7. Batch B 源码已经实现精确 Existing Program 输入、正式 Historical Range/Phase 1R bridge、verified base read、滚动 PIT feature build、feature snapshot、统一 WSL 可读训练文件、2/3/5 年 view 与样本不足 receipt；合入后先完成 DEV 合同验证，再按独立授权从配置数据库生成覆盖 5 年训练历史和至少 300 个独立评估交易日的新 SEALED base/feature/training artifacts。该 Batch B 数据构建不执行 WSL 训练。
+8. Batch B 数据质量闭合后，在 WSL 完成 Phase 3 Top20→Top5 影子模型训练、验证和 immutable bundle；配置不改变现有荐股排名。
+9. 依次实现 Phase 4 收益/持有期和 Phase 5 买入/止盈/止损区间；每项模型独立验证，失败只关闭对应 capability。
+10. 按完成顺序发布 Phase 6 UI 影子展示，不等待所有模型同时完成。
+11. 首批真实功能完成后，使用当前代码、当前 root 和新历史区间创建新的单/原生多 Alpha 任务，完成 create/resume/query/outcome/summary/bridge、模型 readback 和三 viewport UI E2E；不恢复旧任务或处理旧产物。
+12. 用户明确确认 Phase 7 范围后，为指定 Program 配置一个 exact immutable model bundle；该配置只影响学术研究 shortlist 展示，不产生实时建议、正式交易列表或执行输入。
+13. 如未来需要 ModelOps、自动重训或漂移治理，另行完成专项设计和用户确认；它们不作为当前模型排名启用的前置门禁。
 
 每一步都可独立停止。训练任务不得自动修改 Program 当前模型配置。
 

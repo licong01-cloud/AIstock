@@ -21,10 +21,14 @@ Use this as Claude Code's lightweight entry for broad or unclear AIstock work. T
 ## Execution Boundaries
 
 - Load one selected lane plus its task card and direct artifacts.
+- If `doctor` reports client entry staleness, run `verify-clients --workflow-only --selected-lane <lane>` against this window's explicit client home. Only router/current-lane staleness blocks the task; unrelated lane staleness is warning-only. Do not run a broad repeated install from an active task window.
+- Prefer RTK for supported high-output interactive commands; unsupported PowerShell/file operations use direct fallback. RTK is never a gate and no window may self-authorize `rtk trust`.
+- Every user backend has `backend_restart_owner=user`; no lane, validation, merge, aftercare or cleanup grants process-control authority.
 - Read-only requests remain diagnostic and return evidence without repository or runtime mutation.
 - Ordinary BUG work uses the Context Pack; design documents are added when cited by the issue/user or when T3 classification requires them.
 - Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) use a registered BUG/feature/docs workflow.
 - Temporary exchange notes use `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
 - BUG fixes select the smallest safe pre-merge gate and delegate broad daily regression to Validation Center/CI/nightly.
+- Runtime BUGs use the lazy task-card contract; changed-file inference cannot be downgraded, unknown/conflict/multi-target fails closed, runtime BUG batches are rejected, and frontend/client/database/backend activation states remain separate.
 
 Report the selected lane, then continue when execution is requested.

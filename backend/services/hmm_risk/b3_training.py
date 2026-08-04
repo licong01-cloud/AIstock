@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -46,6 +46,7 @@ from backend.services.hmm_risk.state_model_set import (
     canonical_sha256,
     causal_forward_posteriors,
 )
+from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
 
 
 class B3TrainingStageError(StateModelSetError):
@@ -56,6 +57,7 @@ class B3TrainingStageError(StateModelSetError):
         self.stage = stage
         self.reason_code = reason_code
         self.cause_type = type(cause).__name__
+        self.cause_evidence = dict(getattr(cause, "evidence", {}) or {})
 
 
 @dataclass(frozen=True)
@@ -136,8 +138,31 @@ class B3TrainOnlySeries:
             or manifest.get("train_observation_sha256") != canonical_sha256(train.tolist())
         ):
             raise StateModelSetError(f"{self.sector_code} train-only frozen input manifest is invalid")
-        for field in ("dataset_manifest_hash", "mapping_manifest_hash", "calendar_manifest_hash"):
+        for field in (
+            "dataset_manifest_hash",
+            "mapping_manifest_hash",
+            "calendar_manifest_hash",
+            "feature_domain_policy_sha256",
+        ):
             _require_hex_identity(str(manifest.get(field) or ""), length=64, label=field)
+
+
+@dataclass(frozen=True)
+class B3CoreFitEvidence:
+    """Artifact-neutral train-only HMM evidence shared by formal and controlled fits."""
+
+    initialization: Mapping[str, Any]
+    monitor_evidence: Mapping[str, Any]
+    likelihood: Mapping[str, Any]
+    covariance: Mapping[str, Any]
+    train_occupancy: Mapping[str, Any]
+    startprob: np.ndarray
+    transmat: np.ndarray
+    means: np.ndarray
+    covars: np.ndarray
+    terminal_likelihood: float | None
+    model_entry_status: str
+    model_entry_valid: bool
 
 
 def _train_only_frame(
@@ -224,7 +249,7 @@ def audit_train_only_coverage(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
-def build_train_only_series(
+def iter_train_only_series(
     panel: Any,
     *,
     feature_names: Sequence[str],
@@ -234,16 +259,20 @@ def build_train_only_series(
     expected_sector_count: int,
     direct_sector_level: str,
     frozen_input_identity: Mapping[str, Any] | None = None,
-) -> dict[str, B3TrainOnlySeries]:
-    """Freeze only D3/D4/D5 train inputs; validation and future utility remain unread."""
+) -> Iterable[B3TrainOnlySeries]:
+    """Yield one frozen D3/D4/D5 train profile at a time without retaining all matrices."""
 
     features = tuple(str(value) for value in feature_names)
     if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
         raise StateModelSetError("B3 train-only feature family is invalid")
     if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
         raise StateModelSetError("B3 train-only level/count contract is invalid")
-    output: dict[str, B3TrainOnlySeries] = {}
-    for code in sorted(panel.index.get_level_values("l1_code").unique()):
+    codes = tuple(sorted(panel.index.get_level_values("l1_code").unique()))
+    if len(codes) != expected_sector_count:
+        raise StateModelSetError(
+            f"B3 train-only requires {expected_sector_count} direct {direct_sector_level} sectors; actual={len(codes)}"
+        )
+    for code in codes:
         sector = panel.xs(code, level="l1_code")
         train = _train_only_frame(
             panel,
@@ -278,7 +307,7 @@ def build_train_only_series(
             "train_dates_sha256": canonical_sha256(train_dates),
             "train_observation_sha256": canonical_sha256(train.to_numpy(dtype=np.float64).tolist()),
         }
-        output[str(code)] = B3TrainOnlySeries(
+        yield B3TrainOnlySeries(
             sector_code=str(code),
             sector_name=str(sector["l1_name"].dropna().iloc[-1]),
             train_observations=train.to_numpy(dtype=np.float64),
@@ -288,11 +317,32 @@ def build_train_only_series(
             observation_manifest_hash=canonical_sha256(body),
             train_input_manifest=train_input_manifest,
         )
-    if len(output) != expected_sector_count:
-        raise StateModelSetError(
-            f"B3 train-only requires {expected_sector_count} direct {direct_sector_level} sectors; actual={len(output)}"
-        )
-    return output
+
+
+def build_train_only_series(
+    panel: Any,
+    *,
+    feature_names: Sequence[str],
+    train_start: date,
+    train_end: date,
+    constituent_manifest: Mapping[str, Mapping[str, Any]],
+    expected_sector_count: int,
+    direct_sector_level: str,
+    frozen_input_identity: Mapping[str, Any] | None = None,
+) -> dict[str, B3TrainOnlySeries]:
+    """Freeze only D3/D4/D5 train inputs; validation and future utility remain unread."""
+
+    values = iter_train_only_series(
+        panel,
+        feature_names=feature_names,
+        train_start=train_start,
+        train_end=train_end,
+        constituent_manifest=constituent_manifest,
+        expected_sector_count=expected_sector_count,
+        direct_sector_level=direct_sector_level,
+        frozen_input_identity=frozen_input_identity,
+    )
+    return {value.sector_code: value for value in values}
 
 
 def formal_b3_parameter_profile() -> dict[str, Any]:
@@ -307,28 +357,35 @@ def formal_b3_parameter_profile() -> dict[str, Any]:
     }
 
 
-def _fit_b3_train_only(
+def fit_b3_preprocessed_train_only(
     item: B3TrainOnlySeries,
     *,
-    family: str,
-    level: str,
-    feature_names: tuple[str, ...],
-    preprocess: Mapping[str, Any],
+    train: np.ndarray,
     seed: int,
-    numeric_environment: Mapping[str, Any],
-) -> tuple[dict[str, Any], B3FittedModel]:
-    """Fit one formal B3 entry without touching validation or future utility."""
+) -> B3CoreFitEvidence:
+    """Fit one already-preprocessed train matrix without artifact or selection semantics."""
 
     try:
         from hmmlearn.hmm import GaussianHMM
     except ImportError as exc:  # pragma: no cover - dependency gate is explicit.
         raise StateModelSetError("hmmlearn==0.3.3 is required for formal B3 training") from exc
-    item.validate(len(feature_names))
+    prepared = np.ascontiguousarray(np.asarray(train, dtype="<f8"))
+    if prepared.ndim != 2 or prepared.shape[0] != len(item.train_dates) or prepared.shape[1] < 1:
+        raise B3TrainingStageError(
+            "initialization",
+            "hmm_risk_model_initialization_failed",
+            StateModelSetError("B3 preprocessed train matrix shape is invalid"),
+        )
+    if not np.isfinite(prepared).all():
+        raise B3TrainingStageError(
+            "initialization",
+            "hmm_risk_model_initialization_failed",
+            StateModelSetError("B3 preprocessed train matrix contains non-finite values"),
+        )
     try:
-        train = _apply_preprocess(item.train_observations, preprocess)
-        reference = _sector_local_reference_variance(train)
+        reference = _sector_local_reference_variance(prepared)
         startprob, transmat, means, initialized_covars, initialization = _manual_b3_diag04_initialization(
-            train,
+            prepared,
             sector_reference_variance=reference,
             random_seed=seed,
         )
@@ -345,7 +402,7 @@ def _fit_b3_train_only(
         "diagnostic_source_contract": initialization.get("schema_version"),
         "formal_initialization_contract_applied": True,
     }
-    prior = C008_B3_DIAG04_NU * np.broadcast_to(reference, (3, len(feature_names))).copy()
+    prior = C008_B3_DIAG04_NU * np.broadcast_to(reference, (3, prepared.shape[1])).copy()
     try:
         model = GaussianHMM(
             n_components=3,
@@ -370,7 +427,7 @@ def _fit_b3_train_only(
         model.transmat_ = transmat.copy()
         model.means_ = means.copy()
         model.covars_ = initialized_covars.copy()
-        model.fit(train)
+        model.fit(prepared)
     except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
         raise B3TrainingStageError("fit", "hmm_risk_model_fit_failed", exc) from exc
     try:
@@ -386,7 +443,7 @@ def _fit_b3_train_only(
         raw_covars = np.asarray(model._covars_, dtype=np.float64)
         covariance_evidence, _, smoothed_audit_log_likelihood = _b3_diag04_covariance_evidence(
             model,
-            train,
+            prepared,
             raw_covars=raw_covars,
             sector_reference_variance=reference,
         )
@@ -398,7 +455,7 @@ def _fit_b3_train_only(
         ) from exc
     covariance_evidence = {
         **covariance_evidence,
-        "train_rows": int(train.shape[0]),
+        "train_rows": int(prepared.shape[0]),
         "postfit_projection_performed": False,
         "smoothed_audit_log_likelihood": smoothed_audit_log_likelihood,
     }
@@ -408,7 +465,7 @@ def _fit_b3_train_only(
         fitted_transmat = _transition_matrix(model.transmat_, f"{item.sector_code}.transmat", 3)
         fitted_means = _finite_array(model.means_, f"{item.sector_code}.means", ndim=2)
         train_posteriors = causal_forward_posteriors(
-            train,
+            prepared,
             startprob=fitted_startprob,
             transmat=fitted_transmat,
             means=fitted_means,
@@ -427,6 +484,66 @@ def _fit_b3_train_only(
         ) from exc
     monitor_history = list(monitor_evidence.get("history") or ())
     terminal_likelihood = monitor_history[-1] if monitor_history else None
+    independent_valid = (
+        likelihood.get("convergence_valid") is True
+        and likelihood.get("likelihood_valid") is True
+        and covariance.get("covariance_valid") is True
+        and occupancy.get("train_occupancy_valid") is True
+    )
+    independent_statuses = {
+        str(likelihood.get("monitor_status") or ""),
+        str(likelihood.get("likelihood_status") or ""),
+        str(covariance.get("covariance_status") or ""),
+        str(occupancy.get("train_occupancy_status") or ""),
+    }
+    if independent_valid:
+        model_entry_status = "accepted"
+    elif "insufficient_evidence" in independent_statuses:
+        model_entry_status = "insufficient_evidence"
+    else:
+        model_entry_status = "failed"
+    return B3CoreFitEvidence(
+        initialization=initialization,
+        monitor_evidence=monitor_evidence,
+        likelihood=likelihood,
+        covariance=covariance,
+        train_occupancy=occupancy,
+        startprob=fitted_startprob,
+        transmat=fitted_transmat,
+        means=fitted_means,
+        covars=raw_covars,
+        terminal_likelihood=terminal_likelihood,
+        model_entry_status=model_entry_status,
+        model_entry_valid=independent_valid,
+    )
+
+
+def _fit_b3_train_only(
+    item: B3TrainOnlySeries,
+    *,
+    family: str,
+    level: str,
+    feature_names: tuple[str, ...],
+    preprocess: Mapping[str, Any],
+    seed: int,
+    numeric_environment: Mapping[str, Any],
+) -> tuple[dict[str, Any], B3FittedModel]:
+    """Fit one formal B3 entry without touching validation or future utility."""
+
+    item.validate(len(feature_names))
+    try:
+        train = _apply_preprocess(item.train_observations, preprocess)
+    except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+        raise B3TrainingStageError(
+            "initialization",
+            "hmm_risk_model_initialization_failed",
+            exc,
+        ) from exc
+    core = fit_b3_preprocessed_train_only(item, train=train, seed=seed)
+    fitted_startprob = core.startprob
+    fitted_transmat = core.transmat
+    fitted_means = core.means
+    raw_covars = core.covars
     model_body = {
         "schema_version": "hmm_risk_b3_fitted_model_v1",
         "contract_version": D3_CONTRACT_VERSION,
@@ -464,24 +581,6 @@ def _fit_b3_train_only(
         pit_constituent_manifest_hash=item.pit_constituent_manifest_hash,
         model_payload_sha256=model_hash,
     )
-    independent_valid = (
-        likelihood.get("convergence_valid") is True
-        and likelihood.get("likelihood_valid") is True
-        and covariance.get("covariance_valid") is True
-        and occupancy.get("train_occupancy_valid") is True
-    )
-    independent_statuses = {
-        str(likelihood.get("monitor_status") or ""),
-        str(likelihood.get("likelihood_status") or ""),
-        str(covariance.get("covariance_status") or ""),
-        str(occupancy.get("train_occupancy_status") or ""),
-    }
-    if independent_valid:
-        model_entry_status = "accepted"
-    elif "insufficient_evidence" in independent_statuses:
-        model_entry_status = "insufficient_evidence"
-    else:
-        model_entry_status = "failed"
     entry_body = {
         "schema_version": "hmm_risk_b3_training_entry_receipt_v1",
         "contract_version": D3_CONTRACT_VERSION,
@@ -493,16 +592,16 @@ def _fit_b3_train_only(
         "feature_count": len(feature_names),
         "training_rows": int(train.shape[0]),
         "fit_status": "accepted",
-        "model_entry_status": model_entry_status,
-        "model_entry_valid": independent_valid,
-        "initialization_evidence": initialization,
+        "model_entry_status": core.model_entry_status,
+        "model_entry_valid": core.model_entry_valid,
+        "initialization_evidence": dict(core.initialization),
         "parameter_profile": formal_b3_parameter_profile(),
         "numeric_environment": dict(numeric_environment),
-        "monitor_evidence": monitor_evidence,
-        "likelihood": likelihood,
-        "covariance": covariance,
-        "train_occupancy": occupancy,
-        "final_train_log_likelihood": terminal_likelihood,
+        "monitor_evidence": dict(core.monitor_evidence),
+        "likelihood": dict(core.likelihood),
+        "covariance": dict(core.covariance),
+        "train_occupancy": dict(core.train_occupancy),
+        "final_train_log_likelihood": core.terminal_likelihood,
         "final_train_log_likelihood_source": "monitor_history_terminal_value",
         "model_payload_sha256": model_hash,
         "validation_accessed": False,
@@ -513,6 +612,34 @@ def _fit_b3_train_only(
         "postfit_projection_performed": False,
     }
     return {**entry_body, "entry_receipt_sha256": canonical_sha256(entry_body)}, fitted
+
+
+def fit_b3_target_entry(
+    item: B3TrainOnlySeries,
+    *,
+    family: str,
+    level: str,
+    feature_names: Sequence[str],
+    preprocess: Mapping[str, Any],
+    seed: int,
+    numeric_environment: Mapping[str, Any],
+) -> tuple[dict[str, Any], B3FittedModel]:
+    """Fit one approved B3 identity for a bounded diagnostic without selection or writes."""
+
+    features = tuple(str(value) for value in feature_names)
+    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+        raise StateModelSetError("B3 target feature_names must match the approved 7/20 dimensional family")
+    if seed not in RESTART_SCHEDULE:
+        raise StateModelSetError("B3 target seed is outside the approved restart schedule")
+    return _fit_b3_train_only(
+        item,
+        family=family,
+        level=level,
+        feature_names=features,
+        preprocess=preprocess,
+        seed=seed,
+        numeric_environment=numeric_environment,
+    )
 
 
 def run_level_repeat(
@@ -809,6 +936,11 @@ def _validate_ready_layer(
     mapping_manifest_hash: str,
     calendar_manifest_hash: str,
     l2_stock_fact_manifest_hash: str,
+    semantic_dataset_manifest_hash: str,
+    semantic_mapping_manifest_hash: str,
+    semantic_calendar_manifest_hash: str,
+    semantic_l2_stock_fact_manifest_hash: str,
+    feature_domain_policy_sha256: str,
 ) -> None:
     if artifact.get("schema_version") != "hmm_risk_b3_selected_level_artifact_v1":
         raise StateModelSetError(f"B3 READY selected artifact schema is invalid for {family}/{level}")
@@ -829,6 +961,7 @@ def _validate_ready_layer(
         or evidence.get("family") != family
         or evidence.get("level") != level
         or evidence.get("selected_seed") != selected_seed
+        or evidence.get("feature_domain_policy_sha256") != feature_domain_policy_sha256
         or selected_seed not in RESTART_SCHEDULE
         or artifact.get("selection_receipt_sha256") != selection.get("receipt_sha256")
     ):
@@ -1019,6 +1152,7 @@ def _validate_ready_layer(
             or occupancy_evidence.get("dataset_manifest_hash") != dataset_manifest_hash
             or occupancy_evidence.get("mapping_manifest_hash") != mapping_manifest_hash
             or occupancy_evidence.get("calendar_manifest_hash") != calendar_manifest_hash
+            or occupancy_evidence.get("feature_domain_policy_sha256") != feature_domain_policy_sha256
         ):
             raise StateModelSetError(f"B3 READY train input lineage is invalid for {family}/{level}/{code}")
         assignment = semantic.get("assignment")
@@ -1055,10 +1189,11 @@ def _validate_ready_layer(
             if (
                 receipt_evidence.get("direct_sector_level") != level
                 or receipt_evidence.get("sector_code") != code
-                or receipt_evidence.get("dataset_manifest_hash") != dataset_manifest_hash
-                or receipt_evidence.get("mapping_manifest_hash") != mapping_manifest_hash
-                or receipt_evidence.get("calendar_manifest_hash") != calendar_manifest_hash
-                or receipt_evidence.get("l2_stock_fact_manifest_hash") != l2_stock_fact_manifest_hash
+                or receipt_evidence.get("dataset_manifest_hash") != semantic_dataset_manifest_hash
+                or receipt_evidence.get("mapping_manifest_hash") != semantic_mapping_manifest_hash
+                or receipt_evidence.get("calendar_manifest_hash") != semantic_calendar_manifest_hash
+                or receipt_evidence.get("l2_stock_fact_manifest_hash") != semantic_l2_stock_fact_manifest_hash
+                or receipt_evidence.get("feature_domain_policy_sha256") != feature_domain_policy_sha256
             ):
                 raise StateModelSetError(f"B3 READY frozen input lineage is invalid for {family}/{level}/{code}")
         codes.add(code)
@@ -1077,6 +1212,12 @@ def write_b3_ready_model_set(
     mapping_manifest_hash: str,
     calendar_manifest_hash: str,
     l2_stock_fact_manifest_hash: str,
+    semantic_dataset_manifest_hash: str,
+    semantic_mapping_manifest_hash: str,
+    semantic_calendar_manifest_hash: str,
+    semantic_l2_stock_fact_manifest_hash: str,
+    feature_domain_policy_sha256: str,
+    feature_domain_policy_manifest: Mapping[str, Any],
     producer_commit: str,
 ) -> Path:
     """Write a complete four-level READY set; blocked or partial inputs write nothing."""
@@ -1088,6 +1229,31 @@ def write_b3_ready_model_set(
     _require_hex_identity(mapping_manifest_hash, length=64, label="mapping manifest hash")
     _require_hex_identity(calendar_manifest_hash, length=64, label="calendar manifest hash")
     _require_hex_identity(l2_stock_fact_manifest_hash, length=64, label="L2 stock-fact manifest hash")
+    _require_hex_identity(semantic_dataset_manifest_hash, length=64, label="semantic dataset manifest hash")
+    _require_hex_identity(semantic_mapping_manifest_hash, length=64, label="semantic mapping manifest hash")
+    _require_hex_identity(semantic_calendar_manifest_hash, length=64, label="semantic calendar manifest hash")
+    _require_hex_identity(
+        semantic_l2_stock_fact_manifest_hash,
+        length=64,
+        label="semantic L2 stock-fact manifest hash",
+    )
+    _require_hex_identity(feature_domain_policy_sha256, length=64, label="feature-domain policy hash")
+    policy_source_identities = {
+        "dataset_manifest_hash": dataset_manifest_hash,
+        "mapping_manifest_hash": mapping_manifest_hash,
+        "calendar_manifest_hash": calendar_manifest_hash,
+        "l2_stock_fact_manifest_hash": l2_stock_fact_manifest_hash,
+    }
+    if any(
+        feature_domain_policy_manifest.get(field) != expected for field, expected in policy_source_identities.items()
+    ):
+        raise StateModelSetError("B3 READY feature-domain policy source identity is invalid")
+    try:
+        validated_policy = validate_c010_policy_manifest(feature_domain_policy_manifest)
+    except StateModelSetError as exc:
+        raise StateModelSetError(f"B3 READY feature-domain policy manifest is invalid: {exc}") from exc
+    if validated_policy.get("receipt_sha256") != feature_domain_policy_sha256:
+        raise StateModelSetError("B3 READY feature-domain policy manifest identity is invalid")
     _require_hex_identity(producer_commit, length=40, label="producer commit")
     layers: dict[str, Any] = {}
     payloads: dict[str, bytes] = {}
@@ -1105,6 +1271,11 @@ def write_b3_ready_model_set(
             mapping_manifest_hash=mapping_manifest_hash,
             calendar_manifest_hash=calendar_manifest_hash,
             l2_stock_fact_manifest_hash=l2_stock_fact_manifest_hash,
+            semantic_dataset_manifest_hash=semantic_dataset_manifest_hash,
+            semantic_mapping_manifest_hash=semantic_mapping_manifest_hash,
+            semantic_calendar_manifest_hash=semantic_calendar_manifest_hash,
+            semantic_l2_stock_fact_manifest_hash=semantic_l2_stock_fact_manifest_hash,
+            feature_domain_policy_sha256=feature_domain_policy_sha256,
         )
         payload = canonical_json_bytes(artifact)
         payload_sha = canonical_sha256(artifact)
@@ -1129,6 +1300,12 @@ def write_b3_ready_model_set(
         "mapping_manifest_hash": mapping_manifest_hash,
         "calendar_manifest_hash": calendar_manifest_hash,
         "l2_stock_fact_manifest_hash": l2_stock_fact_manifest_hash,
+        "semantic_dataset_manifest_hash": semantic_dataset_manifest_hash,
+        "semantic_mapping_manifest_hash": semantic_mapping_manifest_hash,
+        "semantic_calendar_manifest_hash": semantic_calendar_manifest_hash,
+        "semantic_l2_stock_fact_manifest_hash": semantic_l2_stock_fact_manifest_hash,
+        "feature_domain_policy_sha256": feature_domain_policy_sha256,
+        "feature_domain_policy_manifest": validated_policy,
         "contracts": {
             "d3": D3_CONTRACT_VERSION,
             "l2_retrain": L2_RETRAIN_VERSION,

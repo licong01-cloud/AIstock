@@ -88,14 +88,14 @@ def test_schedule_hygiene_reports_without_automatic_cleanup():
     assert by_code["weekend_compensation_not_weekly"]["action"] == "align_with_canonical_saturday_schedule"
 
 
-def test_non_saturday_legacy_weekend_schedule_skips_before_claim_or_job_creation():
+def test_non_saturday_legacy_weekend_schedule_skips_before_job_creation():
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
     scheduler._weekend_compensation_due = lambda: False
     scheduler._next_run_for = lambda _schedule_id: None
     scheduler._update_ingestion_schedule = lambda *args, **kwargs: calls.append((args, kwargs))
-    scheduler._claim_scheduled_fire = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError("non-Saturday legacy cadence must stop before claiming a fire")
+    scheduler._submit_ingestion = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("non-Saturday legacy cadence must stop before job submission")
     )
 
     scheduler._scheduled_ingestion_run(
@@ -109,6 +109,149 @@ def test_non_saturday_legacy_weekend_schedule_skips_before_claim_or_job_creation
     assert calls[0][0] == ("weekend-schedule",)
     assert calls[0][1]["last_status"] == "skipped"
     assert calls[0][1]["last_error"] == "not_saturday"
+
+
+def test_scheduled_fire_proceeds_without_any_cooldown_gate():
+    """BUG-966: no default cooldown is allowed — a daily schedule must fire at
+    its due time even if it already fired hours earlier (the removed 23h DB
+    claim cooldown silently swallowed a full trading day of core syncs)."""
+    assert not hasattr(TDXScheduler, "_claim_scheduled_fire")
+    assert not hasattr(TDXScheduler, "_frequency_cooldown_seconds")
+
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    submitted = []
+    scheduler._tracker = SimpleNamespace(is_running=lambda _key: False)
+    scheduler._recent_dataset_submission_exists = lambda *_args, **_kwargs: False
+    scheduler._is_trading_day = lambda _d: True
+    scheduler._compute_auto_range = lambda _dataset: (dt.date(2026, 8, 3), dt.date(2026, 8, 3))
+    scheduler._execute = lambda *_args, **_kwargs: None
+    scheduler._submit_ingestion = lambda *args, **kwargs: submitted.append((args, kwargs))
+    scheduler._next_run_for = lambda _schedule_id: None
+    scheduler._update_ingestion_schedule = lambda *args, **kwargs: None
+
+    scheduler._scheduled_ingestion_run(
+        "daily-schedule",
+        "kline_daily_raw",
+        "incremental",
+        {"at": "16:10"},
+        "daily",
+    )
+
+    assert len(submitted) == 1
+    args, _kwargs = submitted[0]
+    assert args[:4] == ("daily-schedule", "kline_daily_raw", "incremental", "schedule")
+    assert args[4]["start_date"] == "2026-08-03"
+    assert args[4]["end_date"] == "2026-08-03"
+    assert "job_id" in args[4]
+
+
+def _go_audit_sweep_scheduler(job_rows, audit_max):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    recorded = []
+
+    def _fetchall(sql, params=()):
+        if "FROM market.ingestion_jobs" in sql:
+            return job_rows
+        if "dataset_date_refresh_audit" in sql:
+            return [{"mx": audit_max}]
+        raise AssertionError(f"unexpected SQL: {sql[:80]}")
+
+    scheduler._fetchall = _fetchall
+    scheduler._record_refresh_audit_from_table_range = lambda **kwargs: recorded.append(kwargs)
+    return scheduler, recorded
+
+
+def test_go_audit_reconcile_backfills_when_audit_lags():
+    """BUG-972: router-triggered Go jobs (summary carries data_kind, not
+    dataset) must get audit rows backfilled when the audit cursor lags."""
+    job_rows = [
+        {
+            "job_id": "8d804e81-74a3-4914-9fd0-8428c822dcd3",
+            "summary": {
+                "data_kind": "kline_minute_raw",
+                "mode": "incremental",
+                "via": "go_init",
+                "start_date": "2026-08-03",
+                "end_date": "2026-08-03",
+            },
+        }
+    ]
+    scheduler, recorded = _go_audit_sweep_scheduler(job_rows, dt.date(2026, 7, 31))
+
+    scheduler._reconcile_go_job_refresh_audit()
+
+    assert len(recorded) == 1
+    call = recorded[0]
+    assert call["dataset"] == "kline_minute_raw"
+    assert call["start_date"] == dt.date(2026, 8, 3)
+    assert call["end_date"] == dt.date(2026, 8, 3)
+    assert call["data_source"] == "tdx_api"
+    assert call["job_id"] == "8d804e81-74a3-4914-9fd0-8428c822dcd3"
+
+
+def test_go_audit_reconcile_maps_daily_go_data_kind():
+    job_rows = [
+        {
+            "job_id": "56fefd4d-3e00-4865-964c-5c8ba57c21eb",
+            "summary": json.dumps(
+                {
+                    "data_kind": "kline_daily_raw_go",
+                    "via": "go_init",
+                    "start_date": "2026-08-03",
+                    "end_date": "2026-08-03",
+                }
+            ),
+        }
+    ]
+    scheduler, recorded = _go_audit_sweep_scheduler(job_rows, None)
+
+    scheduler._reconcile_go_job_refresh_audit()
+
+    assert len(recorded) == 1
+    assert recorded[0]["dataset"] == "kline_daily_raw"
+
+
+def test_go_audit_reconcile_skips_when_audit_current():
+    job_rows = [
+        {
+            "job_id": "abc",
+            "summary": {
+                "dataset": "kline_minute_raw",
+                "via": "go_init",
+                "start_date": "2026-08-03",
+                "end_date": "2026-08-03",
+            },
+        }
+    ]
+    scheduler, recorded = _go_audit_sweep_scheduler(job_rows, dt.date(2026, 8, 3))
+
+    scheduler._reconcile_go_job_refresh_audit()
+
+    assert recorded == []
+
+
+def test_go_audit_reconcile_cadence_gates_repeat_sweeps():
+    job_rows = [
+        {
+            "job_id": "abc",
+            "summary": {
+                "dataset": "kline_minute_raw",
+                "via": "go_init",
+                "start_date": "2026-08-03",
+                "end_date": "2026-08-03",
+            },
+        }
+    ]
+    scheduler, recorded = _go_audit_sweep_scheduler(job_rows, dt.date(2026, 7, 31))
+
+    scheduler._reconcile_go_job_refresh_audit()
+    assert len(recorded) == 1
+    # second sweep within the 10-minute cadence window must not touch the DB
+    scheduler._fetchall = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("cadence gate must short-circuit before any SQL")
+    )
+    scheduler._reconcile_go_job_refresh_audit()
+    assert len(recorded) == 1
 
 
 def test_success_ingestion_schedule_update_clears_previous_error():
@@ -1064,6 +1207,135 @@ def test_margin_detail_auto_range_stops_at_previous_trading_day():
         dt.date(2026, 7, 13),
         dt.date(2026, 7, 13),
     )
+
+
+def _stub_trading_calendar(scheduler):
+    scheduler._latest_trading_day = lambda as_of_date=None: (
+        dt.date(2026, 7, 14) if as_of_date is None else dt.date(2026, 7, 13)
+    )
+    scheduler._next_trading_day = lambda _anchor_date, *, inclusive=False: dt.date(2026, 7, 13)
+
+
+def test_auto_range_refresh_audit_cursor_skips_physical_max_scan():
+    """BUG-957: audit cursor configured + audit hit -> no table MAX scan at all."""
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+
+    def _fetchall(sql, _params=()):
+        queries.append(sql)
+        if "FROM market.data_stats_config" in sql:
+            return [{
+                "table_name": "market.kline_minute_raw",
+                "date_column": "trade_time",
+                "extra_info": {"cursor_source": "refresh_audit"},
+            }]
+        if "FROM market.dataset_date_refresh_audit" in sql:
+            return [{"mx": dt.date(2026, 7, 10)}]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    scheduler._fetchall = _fetchall
+    _stub_trading_calendar(scheduler)
+
+    assert scheduler._compute_auto_range("kline_minute_raw") == (
+        dt.date(2026, 7, 13),
+        dt.date(2026, 7, 13),
+    )
+    assert not any("FROM market.kline_minute_raw" in sql for sql in queries)
+
+
+def test_auto_range_refresh_audit_empty_falls_back_to_bounded_physical_scan():
+    """BUG-957: audit cursor configured but no audit rows -> bounded physical scan."""
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+
+    def _fetchall(sql, _params=()):
+        queries.append(sql)
+        if "FROM market.data_stats_config" in sql:
+            return [{
+                "table_name": "market.kline_minute_raw",
+                "date_column": "trade_time",
+                "extra_info": {"cursor_source": "refresh_audit"},
+            }]
+        if "FROM market.dataset_date_refresh_audit" in sql:
+            return []
+        if "INTERVAL '45 days'" in sql:
+            return [{"mx": dt.date(2026, 7, 10)}]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    scheduler._fetchall = _fetchall
+    _stub_trading_calendar(scheduler)
+
+    assert scheduler._compute_auto_range("kline_minute_raw") == (
+        dt.date(2026, 7, 13),
+        dt.date(2026, 7, 13),
+    )
+    assert any("INTERVAL '45 days'" in sql for sql in queries)
+    assert not any(
+        "FROM market.kline_minute_raw" in sql and "INTERVAL" not in sql for sql in queries
+    )
+
+
+def test_auto_range_bounded_fast_path_skips_unbounded_scan_when_recent():
+    """BUG-957: recent cursor found in the bounded window -> no unbounded scan."""
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+
+    def _fetchall(sql, _params=()):
+        queries.append(sql)
+        if "FROM market.data_stats_config" in sql:
+            return [{
+                "table_name": "market.kline_minute_raw",
+                "date_column": "trade_time",
+                "extra_info": {},
+            }]
+        if "INTERVAL '45 days'" in sql:
+            return [{"mx": dt.date(2026, 7, 10)}]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    scheduler._fetchall = _fetchall
+    _stub_trading_calendar(scheduler)
+
+    assert scheduler._compute_auto_range("kline_minute_raw") == (
+        dt.date(2026, 7, 13),
+        dt.date(2026, 7, 13),
+    )
+    assert not any(
+        "FROM market.kline_minute_raw" in sql and "INTERVAL" not in sql for sql in queries
+    )
+
+
+def test_auto_range_bounded_fast_path_falls_back_to_unbounded_scan():
+    """BUG-957: bounded window empty (stalled/bootstrap) -> exact old unbounded scan."""
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+
+    def _fetchall(sql, _params=()):
+        queries.append(sql)
+        if "FROM market.data_stats_config" in sql:
+            return [{
+                "table_name": "market.kline_minute_raw",
+                "date_column": "trade_time",
+                "extra_info": {},
+            }]
+        if "INTERVAL '45 days'" in sql:
+            return [{"mx": None}]
+        if "MAX(trade_time)" in sql:
+            return [{"mx": dt.date(2026, 5, 20)}]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    scheduler._fetchall = _fetchall
+    _stub_trading_calendar(scheduler)
+
+    start, end = scheduler._compute_auto_range("kline_minute_raw")
+    assert (start, end) == (dt.date(2026, 7, 13), dt.date(2026, 7, 13))
+    bounded = [sql for sql in queries if "INTERVAL '45 days'" in sql]
+    unbounded = [
+        sql for sql in queries
+        if "FROM market.kline_minute_raw" in sql and "INTERVAL" not in sql
+    ]
+    assert len(bounded) == 1
+    assert len(unbounded) == 1
+    assert queries.index(bounded[0]) < queries.index(unbounded[0])
 
 
 def test_freshness_target_persists_schedule_owner_retry_time_and_t_plus_one_deadline(monkeypatch):

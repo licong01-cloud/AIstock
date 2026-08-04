@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from decimal import Decimal
 import json
 from typing import Any
+
+from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeStateEnvelopeV1,
+    read_vnpy_facade_lifecycle_items_v1,
+)
 
 from .kernel_delivery import KernelTransitionWriteBundleV1
 from .plugin_canonical import hash_hex_v1, thaw_json_v1
@@ -30,6 +36,9 @@ from .plugin_contracts import (
     ExecutionCommandChildMappingV1,
     ExecutionProjectionSetV1,
     EventTypeV2,
+    CurrentThreeActiveOrderStateV3,
+    CurrentThreeActiveOrderStatusV3,
+    KernelCommandLifecycleProjectionV1,
     KernelProjectionTypeV1,
     KernelErrorEvidenceV1,
     OrderTypeV1,
@@ -49,6 +58,366 @@ class KernelEffectMaterializationError(ValueError):
         self.reason_code = reason_code
         self.context = context
         super().__init__(message)
+
+
+def _active_order_items_v3(state_payload: dict[str, Any]) -> dict[str, CurrentThreeActiveOrderStateV3]:
+    if state_payload.get("schema_version") == "miniqmt_vnpy_facade_state_envelope_v1":
+        try:
+            raw_items = [item.model_dump(mode="json") for item in read_vnpy_facade_lifecycle_items_v1(state_payload)]
+        except (TypeError, ValueError) as exc:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "facade durable lifecycle state failed strict K2 projection",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+    else:
+        raw_items = state_payload.get("active_orders")
+        if not isinstance(raw_items, list):
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "current-three durable state must expose a strict active_orders list",
+                context={"active_orders_type": type(raw_items).__name__},
+            )
+    items: dict[str, CurrentThreeActiveOrderStateV3] = {}
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "active order state item is not a strict object",
+                context={"item_type": type(raw_item).__name__},
+            )
+        try:
+            item = CurrentThreeActiveOrderStateV3.model_validate_json(
+                json.dumps(raw_item, sort_keys=True, separators=(",", ":"))
+            )
+        except (TypeError, ValueError) as exc:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "active order state item fails strict v3 readback",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+        if item.local_vt_orderid in items:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "active order state contains duplicate local identities",
+                context={"local_vt_orderid": item.local_vt_orderid},
+            )
+        items[item.local_vt_orderid] = item
+    return items
+
+
+def _validate_command_lifecycle_projection_v1(
+    *,
+    event: RuntimeEventEnvelopeV2,
+    predecessor_delivery: AlgoDeliveryPersistenceV1,
+    previous_algo: ExecutionAlgoInstancePersistenceV2 | None,
+    transition: AlgoTransitionV1,
+    projection: KernelCommandLifecycleProjectionV1,
+    existing_mappings_by_local_vt_orderid: Mapping[str, ExecutionCommandChildMappingV1],
+    new_mappings: Sequence[ExecutionCommandChildMappingV1],
+    new_outboxes: Sequence[BrokerCommandOutboxV1],
+) -> None:
+    next_state = transition.next_state
+    if not isinstance(projection, KernelCommandLifecycleProjectionV1):
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_TRANSITION_LIFECYCLE_PROJECTION_INVALID",
+            "materializer requires one strict command lifecycle projection",
+            context={"projection_type": type(projection).__name__},
+        )
+    if (
+        projection.runtime_id != event.runtime_id
+        or projection.algo_instance_id != next_state.algo_instance_id
+        or projection.event_id != event.event_id
+        or projection.delivery_id != predecessor_delivery.delivery_id
+    ):
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_TRANSITION_LIFECYCLE_PROJECTION_INVALID",
+            "lifecycle projection owner differs from event, delivery or algo state",
+            context={"event_id": event.event_id, "delivery_id": predecessor_delivery.delivery_id},
+        )
+    expected_projection_hash = hash_hex_v1(
+        "miniqmt_kernel_command_lifecycle_projection_v1",
+        projection.canonical_payload_v1(exclude={"projection_sha256"}),
+    )
+    if projection.projection_sha256 != expected_projection_hash:
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_TRANSITION_LIFECYCLE_PROJECTION_DRIFT",
+            "lifecycle projection hash differs from its strict payload",
+            context={"projection_sha256": projection.projection_sha256},
+        )
+    if previous_algo is None:
+        if projection.ordered_items:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_PROJECTION_INVALID",
+                "initialization lifecycle projection must be empty",
+                context={"item_count": len(projection.ordered_items)},
+            )
+        previous_items: dict[str, CurrentThreeActiveOrderStateV3] = {}
+    else:
+        previous_items = _active_order_items_v3(thaw_json_v1(previous_algo.state_json))
+
+    mapping_by_local = dict(existing_mappings_by_local_vt_orderid)
+    if any(key != item.local_vt_orderid for key, item in mapping_by_local.items()):
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_TRANSITION_LIFECYCLE_PROJECTION_DRIFT",
+            "locked mapping index differs from mapping local identity",
+            context={"algo_instance_id": next_state.algo_instance_id},
+        )
+    active_mapping_statuses = {
+        CommandChildMappingStatusV1.RESERVED,
+        CommandChildMappingStatusV1.DISPATCHING,
+        CommandChildMappingStatusV1.BROKER_ACCEPTED,
+        CommandChildMappingStatusV1.OUTCOME_UNKNOWN,
+    }
+    expected_locals = set(previous_items) | {
+        local_id for local_id, mapping in mapping_by_local.items() if mapping.mapping_status in active_mapping_statuses
+    }
+    projected_locals = {item.local_vt_orderid for item in projection.ordered_items}
+    if projected_locals != expected_locals:
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_TRANSITION_LIFECYCLE_PROJECTION_DRIFT",
+            "lifecycle projection local-order set differs from locked state and mapping authority",
+            context={"expected_local_ids": sorted(expected_locals), "actual_local_ids": sorted(projected_locals)},
+        )
+
+    active_outbox_statuses = {
+        BrokerCommandOutboxStatusV1.PENDING,
+        BrokerCommandOutboxStatusV1.CLAIMED,
+        BrokerCommandOutboxStatusV1.DISPATCHING,
+        BrokerCommandOutboxStatusV1.FAILED_RETRYABLE,
+        BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
+        BrokerCommandOutboxStatusV1.RECONCILING,
+    }
+    terminal_outbox_statuses = {
+        BrokerCommandOutboxStatusV1.ACKED,
+        BrokerCommandOutboxStatusV1.ACKED_REJECTED,
+        BrokerCommandOutboxStatusV1.FAILED_TERMINAL,
+    }
+    callback_lag_types = {EventTypeV2.ORDER, EventTypeV2.TRADE, EventTypeV2.RECONCILE}
+    for projected in projection.ordered_items:
+        mapping = mapping_by_local.get(projected.local_vt_orderid)
+        if mapping is None or (
+            projected.mapping_id != mapping.mapping_id
+            or projected.mapping_version != mapping.mapping_version
+            or projected.mapping_payload_sha256 != mapping.payload_sha256
+            or projected.submit_command_id != mapping.command_id
+            or projected.broker_order_id != mapping.broker_order_id
+            or projected.mapping_status is not mapping.mapping_status
+        ):
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_PROJECTION_DRIFT",
+                "lifecycle projection mapping version or payload differs from locked durable authority",
+                context={"local_vt_orderid": projected.local_vt_orderid},
+            )
+        state_item = previous_items.get(projected.local_vt_orderid)
+        if state_item is None:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "active durable mapping is missing from previous plugin state",
+                context={"local_vt_orderid": projected.local_vt_orderid},
+            )
+        if (
+            state_item.submit_command_id != mapping.command_id
+            or state_item.symbol != mapping.symbol
+            or state_item.side is not mapping.side
+            or state_item.requested_price_decimal != mapping.requested_price_decimal
+            or state_item.requested_quantity != mapping.requested_quantity
+        ):
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "active plugin state differs from immutable durable mapping facts",
+                context={"local_vt_orderid": projected.local_vt_orderid},
+            )
+        has_current_outcome = projected.command_outcome_delivery_id is not None
+        outcome_lag = (
+            has_current_outcome
+            and projected.command_outcome_delivery_id == predecessor_delivery.delivery_id
+            and projected.command_outcome_delivery_status is not DeliveryStatusV1.APPLIED
+        )
+        callback_lag = (
+            event.event_type in callback_lag_types
+            and mapping.updated_by_event_id == event.event_id
+            and predecessor_delivery.status is not DeliveryStatusV1.APPLIED
+        )
+        status = state_item.status
+        outbox_status = projected.current_outbox_status
+        if status is CurrentThreeActiveOrderStatusV3.COMMAND_PENDING:
+            if (
+                projected.current_outbox_command_type is not BrokerCommandTypeV2.SUBMIT_LIMIT
+                or projected.current_outbox_command_id != state_item.submit_command_id
+                or (
+                    outbox_status not in active_outbox_statuses
+                    and not (outbox_status in terminal_outbox_statuses and outcome_lag)
+                )
+                or (
+                    mapping.mapping_status
+                    not in {
+                        CommandChildMappingStatusV1.RESERVED,
+                        CommandChildMappingStatusV1.DISPATCHING,
+                        CommandChildMappingStatusV1.OUTCOME_UNKNOWN,
+                    }
+                    and not outcome_lag
+                )
+                or (mapping.broker_order_id is not None and not outcome_lag)
+            ):
+                raise KernelEffectMaterializationError(
+                    "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                    "COMMAND_PENDING state does not close to its exact SUBMIT lifecycle",
+                    context={"local_vt_orderid": projected.local_vt_orderid},
+                )
+        elif status in {
+            CurrentThreeActiveOrderStatusV3.SUBMITTED,
+            CurrentThreeActiveOrderStatusV3.PARTIALLY_FILLED,
+        }:
+            if (
+                projected.current_outbox_command_type is not BrokerCommandTypeV2.SUBMIT_LIMIT
+                or projected.current_outbox_command_id != state_item.submit_command_id
+                or outbox_status is not BrokerCommandOutboxStatusV1.ACKED
+                or state_item.broker_order_id != mapping.broker_order_id
+                or (mapping.mapping_status is not CommandChildMappingStatusV1.BROKER_ACCEPTED and not callback_lag)
+            ):
+                raise KernelEffectMaterializationError(
+                    "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                    "broker-active state does not close to accepted SUBMIT authority",
+                    context={"local_vt_orderid": projected.local_vt_orderid},
+                )
+        elif status is CurrentThreeActiveOrderStatusV3.CANCEL_PENDING:
+            terminal_cancel_applied = (
+                outbox_status is BrokerCommandOutboxStatusV1.ACKED
+                and state_item.last_command_outcome_event_id is not None
+            )
+            if (
+                projected.current_outbox_command_type is not BrokerCommandTypeV2.CANCEL_ORDER
+                or projected.current_outbox_command_id != state_item.pending_command_id
+                or state_item.broker_order_id != mapping.broker_order_id
+                or mapping.mapping_status is not CommandChildMappingStatusV1.BROKER_ACCEPTED
+                and not callback_lag
+                or (
+                    outbox_status not in active_outbox_statuses
+                    and not terminal_cancel_applied
+                    and not (outbox_status in terminal_outbox_statuses and outcome_lag)
+                )
+            ):
+                raise KernelEffectMaterializationError(
+                    "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                    "CANCEL_PENDING state does not close to its exact CANCEL lifecycle",
+                    context={"local_vt_orderid": projected.local_vt_orderid},
+                )
+        elif status is CurrentThreeActiveOrderStatusV3.OUTCOME_UNKNOWN:
+            allowed_mapping_statuses = {CommandChildMappingStatusV1.OUTCOME_UNKNOWN}
+            if state_item.pending_command_type is BrokerCommandTypeV2.CANCEL_ORDER:
+                allowed_mapping_statuses.add(CommandChildMappingStatusV1.BROKER_ACCEPTED)
+            if (
+                projected.current_outbox_command_id != state_item.pending_command_id
+                or projected.current_outbox_command_type is not state_item.pending_command_type
+                or (state_item.broker_order_id is not None and state_item.broker_order_id != mapping.broker_order_id)
+                or (
+                    state_item.pending_command_type is BrokerCommandTypeV2.CANCEL_ORDER
+                    and state_item.broker_order_id != mapping.broker_order_id
+                )
+                or (
+                    outbox_status
+                    not in {BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN, BrokerCommandOutboxStatusV1.RECONCILING}
+                    and not (outbox_status in terminal_outbox_statuses and outcome_lag)
+                )
+                or (mapping.mapping_status not in allowed_mapping_statuses and not outcome_lag)
+            ):
+                raise KernelEffectMaterializationError(
+                    "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                    "OUTCOME_UNKNOWN state does not close to unresolved durable outcome authority",
+                    context={"local_vt_orderid": projected.local_vt_orderid},
+                )
+        elif status is CurrentThreeActiveOrderStatusV3.TERMINAL_TRADE_PENDING:
+            if (
+                mapping.mapping_status is not CommandChildMappingStatusV1.TERMINAL
+                or state_item.broker_order_id != mapping.broker_order_id
+                or projected.current_outbox_command_type is not BrokerCommandTypeV2.SUBMIT_LIMIT
+                or projected.current_outbox_command_id != state_item.submit_command_id
+                or outbox_status is not BrokerCommandOutboxStatusV1.ACKED
+            ):
+                raise KernelEffectMaterializationError(
+                    "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                    "TERMINAL_TRADE_PENDING state lacks exact terminal mapping and accepted SUBMIT authority",
+                    context={"local_vt_orderid": projected.local_vt_orderid},
+                )
+
+    next_items = _active_order_items_v3(thaw_json_v1(next_state.state))
+    new_mapping_by_local = {item.local_vt_orderid: item for item in new_mappings}
+    new_outbox_by_command = {item.command_id: item for item in new_outboxes}
+    new_state_locals = set(next_items) - set(previous_items)
+    if new_state_locals != set(new_mapping_by_local):
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+            "same-transition SUBMIT state and durable mapping sets differ",
+            context={
+                "new_state_local_ids": sorted(new_state_locals),
+                "new_mapping_local_ids": sorted(new_mapping_by_local),
+            },
+        )
+    allowed_removal_events = {
+        EventTypeV2.ORDER,
+        EventTypeV2.TRADE,
+        EventTypeV2.RECONCILE,
+        EventTypeV2.COMMAND_OUTCOME,
+    }
+    removed_existing = set(previous_items) - set(next_items)
+    if removed_existing and event.event_type not in allowed_removal_events:
+        raise KernelEffectMaterializationError(
+            "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+            "plugin state silently dropped an active durable lifecycle",
+            context={"removed_local_ids": sorted(removed_existing), "event_type": event.event_type.value},
+        )
+    for local_id, next_item in next_items.items():
+        if local_id in previous_items:
+            continue
+        mapping = new_mapping_by_local.get(local_id)
+        outbox = new_outbox_by_command.get(next_item.submit_command_id)
+        if (
+            mapping is None
+            or outbox is None
+            or next_item.status is not CurrentThreeActiveOrderStatusV3.COMMAND_PENDING
+            or next_item.pending_command_id != outbox.command_id
+            or mapping.mapping_status is not CommandChildMappingStatusV1.RESERVED
+            or outbox.status is not BrokerCommandOutboxStatusV1.PENDING
+            or outbox.mapping_id != mapping.mapping_id
+        ):
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "new active state item lacks same-transition RESERVED mapping and PENDING SUBMIT outbox",
+                context={"local_vt_orderid": local_id},
+            )
+    for outbox in new_outboxes:
+        if outbox.command_type is BrokerCommandTypeV2.CANCEL_ORDER:
+            state_item = next_items.get(outbox.local_vt_orderid)
+            if (
+                state_item is None
+                or state_item.status is not CurrentThreeActiveOrderStatusV3.CANCEL_PENDING
+                or state_item.pending_command_id != outbox.command_id
+                or state_item.pending_command_type is not BrokerCommandTypeV2.CANCEL_ORDER
+            ):
+                raise KernelEffectMaterializationError(
+                    "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                    "new CANCEL outbox lacks exact CANCEL_PENDING state closure",
+                    context={"command_id": outbox.command_id},
+                )
+    if event.event_type is EventTypeV2.COMMAND_OUTCOME:
+        outcome = next(
+            (item for item in projection.ordered_items if item.latest_command_outcome_event_id == event.event_id),
+            None,
+        )
+        if outcome is None:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_PROJECTION_INVALID",
+                "COMMAND_OUTCOME delivery lacks its exact lifecycle projection item",
+                context={"event_id": event.event_id},
+            )
+        next_item = next_items.get(outcome.local_vt_orderid)
+        if next_item is not None and next_item.last_command_outcome_event_id != event.event_id:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_LIFECYCLE_STATE_INVALID",
+                "applied COMMAND_OUTCOME state did not consume the exact outcome event lineage",
+                context={"event_id": event.event_id, "local_vt_orderid": outcome.local_vt_orderid},
+            )
 
 
 def _pending_outbox(
@@ -394,6 +763,7 @@ def materialize_applied_transition_v1(
     algo_code: str,
     symbol: str,
     side: Any,
+    command_lifecycle_projection: KernelCommandLifecycleProjectionV1,
     existing_mappings_by_local_vt_orderid: Mapping[str, ExecutionCommandChildMappingV1],
     existing_timer_schedules: Mapping[str, ExecutionAlgoTimerScheduleV1],
     initialization: bool,
@@ -464,6 +834,16 @@ def materialize_applied_transition_v1(
         logical_time_utc=next_state.updated_at_utc,
         existing_mappings_by_local_vt_orderid=existing_mappings_by_local_vt_orderid,
     )
+    _validate_command_lifecycle_projection_v1(
+        event=event,
+        predecessor_delivery=predecessor_delivery,
+        previous_algo=previous_algo,
+        transition=transition,
+        projection=command_lifecycle_projection,
+        existing_mappings_by_local_vt_orderid=existing_mappings_by_local_vt_orderid,
+        new_mappings=mappings,
+        new_outboxes=outboxes,
+    )
     schedules = _materialize_timers(
         runtime_id=event.runtime_id,
         transition=transition,
@@ -501,8 +881,30 @@ def materialize_applied_transition_v1(
         else ActiveChildClosureStatusV1.NOT_APPLICABLE
     )
     state_payload = thaw_json_v1(next_state.state)
-    state_parent_quantity = state_payload.get("parent_quantity")
-    traded_quantity = state_payload.get("traded_quantity")
+    if state_payload.get("schema_version") == "miniqmt_vnpy_facade_state_envelope_v1":
+        try:
+            facade_state = VnpyFacadeStateEnvelopeV1.model_validate_json(
+                json.dumps(state_payload, sort_keys=True, separators=(",", ":")),
+                strict=True,
+            )
+            parent_decimal = Decimal(facade_state.target_volume_decimal)
+            traded_decimal = Decimal(facade_state.traded_volume_decimal)
+            if (
+                parent_decimal != parent_decimal.to_integral_value()
+                or traded_decimal != traded_decimal.to_integral_value()
+            ):
+                raise ValueError("facade share quantities must be integral")
+            state_parent_quantity = int(parent_decimal)
+            traded_quantity = int(traded_decimal)
+        except (TypeError, ValueError, ArithmeticError) as exc:
+            raise KernelEffectMaterializationError(
+                "MINIQMT_ALGO_TRANSITION_QUANTITY_AUTHORITY_INVALID",
+                "facade state does not expose strict integral parent/traded quantity",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+    else:
+        state_parent_quantity = state_payload.get("parent_quantity")
+        traded_quantity = state_payload.get("traded_quantity")
     if (
         type(state_parent_quantity) is not int
         or state_parent_quantity != target_quantity
@@ -573,6 +975,7 @@ def materialize_applied_transition_v1(
     )
     input_hashes = (
         projection_set.projection_set_sha256,
+        command_lifecycle_projection.projection_sha256,
         next_state.state_sha256,
         *(item.payload_sha256 for item in mappings),
         *(item.payload_sha256 for item in outboxes),

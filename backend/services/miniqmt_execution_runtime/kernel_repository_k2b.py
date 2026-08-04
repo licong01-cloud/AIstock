@@ -7,7 +7,18 @@ from typing import Any
 
 import psycopg2.extras
 
-from .kernel_delivery import KernelAlgoCreationRequestV1, KernelAlgoStartWriteBundleV1, KernelTransitionWriteBundleV1
+from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeContractError,
+    VnpyFacadeRepositoryReadRequestV1,
+    VnpyFacadeRepositoryReadSetV1,
+)
+
+from .kernel_delivery import (
+    KernelAlgoCreationRequestV1,
+    KernelAlgoStartWriteBundleV1,
+    KernelTransitionWriteBundleV1,
+    build_command_lifecycle_projection_v1,
+)
 from .kernel_materializer import _validate_projection_lineage_v1
 from .kernel_repository_common import KernelRepositoryConflict, _json, _model_from_json, _row_json
 from .kernel_repository_projection import (
@@ -31,6 +42,7 @@ from .plugin_contracts import (
     ExecutionAlgoInstancePersistenceV2,
     ExecutionAlgoTimerScheduleV1,
     ExecutionCommandChildMappingV1,
+    KernelCommandLifecycleProjectionV1,
     RuntimeEventEnvelopeV2,
     RuntimeEventIngressReceiptV1,
     TimerMutationTypeV1,
@@ -129,8 +141,16 @@ class KernelRepositoryK2BMixin:
                     transition_identity = receipt.transition_id
                     if bundle.projection_set is None or bundle.after_state is None:
                         raise ValueError("successful ALGO_START requires projection set and state")
+                    lifecycle_projection = KernelCommandLifecycleProjectionV1.create(
+                        runtime_id=event.runtime_id,
+                        algo_instance_id=bundle.algo_instance.algo_instance_id,
+                        event_id=event.event_id,
+                        delivery_id=initial.delivery_id,
+                        ordered_items=(),
+                    )
                     transition_inputs = (
                         bundle.projection_set.projection_set_sha256,
+                        lifecycle_projection.projection_sha256,
                         bundle.after_state.state_sha256,
                         *(item.payload_sha256 for item in bundle.new_child_mappings),
                         *(item.payload_sha256 for item in bundle.command_outboxes),
@@ -385,14 +405,18 @@ class KernelRepositoryK2BMixin:
                 tuple[ExecutionCommandChildMappingV1, ...],
                 tuple[BrokerCommandOutboxV1, ...],
                 tuple[ExecutionAlgoTimerScheduleV1, ...],
+                VnpyFacadeRepositoryReadSetV1 | None,
             ],
             KernelTransitionWriteBundleV1,
         ],
+        facade_read_request: VnpyFacadeRepositoryReadRequestV1 | None = None,
     ) -> dict[str, Any]:
         if type(delivery_id) is not str or not delivery_id.strip():
             raise TypeError("delivery_id must be a non-empty string")
         if not callable(bundle_builder):
             raise TypeError("bundle_builder must be callable")
+        if facade_read_request is not None and not isinstance(facade_read_request, VnpyFacadeRepositoryReadRequestV1):
+            raise TypeError("facade_read_request must be VnpyFacadeRepositoryReadRequestV1 or None")
         transition_identity: str | None = None
         expected_bundle: KernelTransitionWriteBundleV1 | None = None
         with self._connection(transaction=True) as conn:
@@ -500,26 +524,35 @@ class KernelRepositoryK2BMixin:
                     """
                     SELECT mapping_json FROM qmt_strategy.execution_child_order
                     WHERE runtime_id=%s AND algo_instance_id=%s AND kernel_contract_version='KERNEL_V2'
-                      AND mapping_status IN ('RESERVED','DISPATCHING','BROKER_ACCEPTED','OUTCOME_UNKNOWN')
-                    ORDER BY child_order_id FOR UPDATE
+                    ORDER BY local_vt_orderid,mapping_id FOR UPDATE
                     """,
                     (claimed.runtime_id, claimed.algo_instance_id),
                 )
-                active_mappings = tuple(
+                locked_mappings = tuple(
                     _model_from_json(ExecutionCommandChildMappingV1, _row_json(row, "mapping_json"))
                     for row in cur.fetchall()
                 )
                 cur.execute(
                     """
                     SELECT carrier_json FROM qmt_strategy.execution_algo_command_outbox
-                    WHERE runtime_id=%s AND algo_instance_id=%s AND command_type='SUBMIT_LIMIT'
-                      AND status IN ('PENDING','CLAIMED','FAILED_RETRYABLE','DISPATCHING','OUTCOME_UNKNOWN','RECONCILING')
-                    ORDER BY mapping_id,command_id FOR UPDATE
+                    WHERE runtime_id=%s AND algo_instance_id=%s
+                    ORDER BY local_vt_orderid,command_id FOR UPDATE
                     """,
                     (claimed.runtime_id, claimed.algo_instance_id),
                 )
-                active_command_outboxes = tuple(
+                locked_command_outboxes = tuple(
                     _model_from_json(BrokerCommandOutboxV1, _row_json(row, "carrier_json")) for row in cur.fetchall()
+                )
+                active_mappings = tuple(
+                    item
+                    for item in locked_mappings
+                    if item.mapping_status.value
+                    in {
+                        "RESERVED",
+                        "DISPATCHING",
+                        "BROKER_ACCEPTED",
+                        "OUTCOME_UNKNOWN",
+                    }
                 )
                 cur.execute(
                     """
@@ -533,14 +566,60 @@ class KernelRepositoryK2BMixin:
                     _model_from_json(ExecutionAlgoTimerScheduleV1, _row_json(row, "carrier_json"))
                     for row in cur.fetchall()
                 )
+                facade_read_set: VnpyFacadeRepositoryReadSetV1 | None = None
+                if facade_read_request is not None:
+                    request = facade_read_request
+                    if (
+                        request.runtime_id != event.runtime_id
+                        or request.algo_instance_id != algo.algo_instance_id
+                        or request.current_event_id != event.event_id
+                        or request.current_event_sequence != event.sequence
+                        or request.current_delivery_id != claimed.delivery_id
+                        or request.current_delivery_sequence != claimed.algo_delivery_sequence
+                    ):
+                        raise VnpyFacadeContractError(
+                            "MINIQMT_VNPY_FACADE_REPOSITORY_READ_INVALID",
+                            "facade repository request differs from the locked event/delivery/algo cutoff",
+                            context={
+                                "runtime_id": event.runtime_id,
+                                "algo_instance_id": algo.algo_instance_id,
+                                "event_id": event.event_id,
+                                "delivery_id": claimed.delivery_id,
+                                "request_sha256": request.request_sha256,
+                            },
+                        )
+                    algo_start_read = self._read_facade_algo_start_event_with_cursor(
+                        cur,
+                        runtime_id=event.runtime_id,
+                        algo_instance_id=algo.algo_instance_id,
+                    )
+                    latest_tick = None
+                    if event.event_type is EventTypeV2.TIMER:
+                        latest_tick = self._read_facade_latest_prior_tick_with_cursor(
+                            cur,
+                            runtime_id=event.runtime_id,
+                            algo_instance_id=algo.algo_instance_id,
+                            cutoff_delivery_sequence=claimed.algo_delivery_sequence,
+                            cutoff_event_sequence=event.sequence,
+                            exchange_trade_date=request.exchange_trade_date,
+                            session_epoch=request.session_epoch,
+                            session_phase=request.session_phase,
+                            expected_symbol=algo.symbol,
+                        )
+                    facade_read_set = VnpyFacadeRepositoryReadSetV1.create(
+                        request=request,
+                        algo_start_read=algo_start_read,
+                        latest_prior_tick_read_or_null=latest_tick,
+                    )
                 bundle = bundle_builder(
                     event,
                     claimed,
                     algo,
                     previous_state,
-                    active_mappings,
-                    active_command_outboxes,
+                    locked_mappings,
+                    locked_command_outboxes,
                     active_timer_schedules,
+                    facade_read_set,
                 )
                 if not isinstance(bundle, KernelTransitionWriteBundleV1):
                     raise TypeError("bundle_builder must return KernelTransitionWriteBundleV1")
@@ -584,6 +663,15 @@ class KernelRepositoryK2BMixin:
                         raise KernelRepositoryConflict(
                             "failure algo active-child closure differs from locked durable authority"
                         )
+                if previous_state is None:
+                    raise KernelRepositoryConflict("claimed active algo has no exact previous state")
+                lifecycle_projection = build_command_lifecycle_projection_v1(
+                    event=event,
+                    delivery=claimed,
+                    previous_state=previous_state,
+                    mappings=active_mappings,
+                    outboxes=locked_command_outboxes,
+                )
                 self._validate_k2b_bundle(
                     bundle,
                     event=event,
@@ -591,6 +679,7 @@ class KernelRepositoryK2BMixin:
                     previous_algo=algo,
                     expected_delivery_row_version=expected_delivery_row_version,
                     expected_algo_row_version=expected_algo_row_version,
+                    command_lifecycle_projection_sha256=lifecycle_projection.projection_sha256,
                 )
                 transition_identity = self._write_k2b_bundle_with_cursor(
                     cur,
@@ -614,6 +703,7 @@ class KernelRepositoryK2BMixin:
         expected_delivery_row_version: int,
         expected_algo_row_version: int,
         expected_transaction_identity: str | None = None,
+        command_lifecycle_projection_sha256: str | None = None,
     ) -> None:
         if bundle.delivery.row_version != expected_delivery_row_version + 1:
             raise KernelRepositoryConflict("delivery bundle row version is not the exact CAS successor")
@@ -760,6 +850,7 @@ class KernelRepositoryK2BMixin:
             assert bundle.projection_set is not None and bundle.after_state is not None
             input_hashes = (
                 bundle.projection_set.projection_set_sha256,
+                *((command_lifecycle_projection_sha256,) if command_lifecycle_projection_sha256 is not None else ()),
                 bundle.after_state.state_sha256,
                 *(item.payload_sha256 for item in bundle.new_child_mappings),
                 *(item.payload_sha256 for item in bundle.command_outboxes),
