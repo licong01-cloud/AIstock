@@ -68,6 +68,19 @@ _BRIDGE_PARENT_LEASE_DURATION = timedelta(minutes=30)
 _CATALOG_LEASE_DURATION = timedelta(minutes=5)
 
 
+def _renewed_lease_expiry(operation: Mapping[str, Any], duration: timedelta) -> datetime:
+    """Advance a lease from the later of durable expiry and current UTC time."""
+
+    now = datetime.now(UTC)
+    raw_expiry = operation.get("lease_expires_at")
+    if raw_expiry is None:
+        return now + duration
+    current_expiry = raw_expiry if isinstance(raw_expiry, datetime) else datetime.fromisoformat(str(raw_expiry))
+    if current_expiry.tzinfo is None:
+        current_expiry = current_expiry.replace(tzinfo=UTC)
+    return max(now, current_expiry.astimezone(UTC)) + duration
+
+
 class BackgroundTaskRegistrar(Protocol):
     def add_task(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> None: ...
 
@@ -493,7 +506,7 @@ class ResponseBoundHistoricalRangeDispatcher:
             attempt_no=int(operation["attempt_no"]),
             worker_id=str(operation["worker_id"]),
             lease_token=str(operation["lease_token"]),
-            lease_expires_at=datetime.now(UTC) + _BRIDGE_PARENT_LEASE_DURATION,
+            lease_expires_at=_renewed_lease_expiry(operation, _BRIDGE_PARENT_LEASE_DURATION),
             fencing_token=int(operation["fencing_token"]),
             stable_keyset_cursor_json={"phase": phase},
         )
