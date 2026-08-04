@@ -80,6 +80,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_issue_flow.py",
     "backend/tests/scripts/test_issue_flow_pr_quality.py",
     "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_session_runner.py",
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "backend/tests/scripts/test_nightly_design_drift_audit.py",
     "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
@@ -117,6 +118,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/code_intelligence_adapter.py",
     "scripts/issue_flow.py",
     "scripts/llm_provider_adapter.py",
+    "scripts/nightly_session_runner.py",
     "scripts/nightly_adaptive_scheduler.py",
     "scripts/nightly_design_drift_audit.py",
     "scripts/nightly_silent_degradation_audit.py",
@@ -151,6 +153,7 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
         "backend/tests/scripts/test_issue_flow_pr_quality.py",
     ),
     "scripts/llm_provider_adapter.py": ("backend/tests/scripts/test_llm_provider_adapter.py",),
+    "scripts/nightly_session_runner.py": ("backend/tests/scripts/test_nightly_session_runner.py",),
     "scripts/nightly_adaptive_scheduler.py": ("backend/tests/scripts/test_nightly_adaptive_scheduler.py",),
     "scripts/nightly_design_drift_audit.py": ("backend/tests/scripts/test_nightly_design_drift_audit.py",),
     "scripts/nightly_silent_degradation_audit.py": (

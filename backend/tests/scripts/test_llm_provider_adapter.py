@@ -1,10 +1,49 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from scripts import llm_provider_adapter as adapter
+
+
+def test_failed_discovery_writes_loud_receipts_for_deterministic_continuation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "hypotheses.json"
+    selected = tmp_path / "selected-plans.json"
+
+    def fail_provider(*_args, **_kwargs):
+        raise adapter.ProviderAdapterError("deepseek_api unavailable")
+
+    monkeypatch.setattr(adapter, "build_nightly_discovery_hypotheses", fail_provider)
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "nightly-discovery-hypothesis",
+            "--provider",
+            "deepseek_api",
+            "--input-pack",
+            str(tmp_path / "input.json"),
+            "--output",
+            str(output),
+            "--selected-plans-output",
+            str(selected),
+        ]
+    )
+
+    assert exit_code == 2
+    failure = json.loads(output.read_text(encoding="utf-8"))
+    selected_payload = json.loads(selected.read_text(encoding="utf-8"))
+    assert failure["workflow_gate"] == "failed"
+    assert failure["planner_status"] == "failed"
+    assert failure["error"] == "deepseek_api unavailable"
+    assert selected_payload["workflow_gate"] == "failed"
+    assert selected_payload["planner_status"] == "failed"
+    assert selected_payload["selected_plan_keys"] == []
+    assert selected_payload["warning_only"] is True
 
 
 def test_llm_triage_config_defaults_are_safe():

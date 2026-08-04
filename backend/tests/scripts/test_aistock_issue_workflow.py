@@ -1202,6 +1202,15 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["scripts/hmm_risk/unmapped_runtime_candidate.py"],
         root=isolated_workflow_root,
     )
+    nightly_intake = workflow._classify_runtime_impact(
+        [
+            ".github/workflows/nightly.yml",
+            "scripts/ci_failure_issue_summary.py",
+            "scripts/llm_provider_adapter.py",
+            "scripts/nightly_session_runner.py",
+        ],
+        root=isolated_workflow_root,
+    )
 
     assert dependency["runtime_impact"] == "backend"
     assert dependency["target_ids"] == ["backend-main"]
@@ -1221,6 +1230,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert mixed_advisory_and_backend["runtime_files"] == ["backend/services/example.py"]
     assert mixed_advisory_and_backend["target_ids"] == ["backend-main"]
     assert unmapped_script["runtime_impact"] == "unknown"
+    assert nightly_intake["runtime_impact"] == "none"
+    assert nightly_intake["runtime_files"] == []
 
     offline_contract = workflow.build_runtime_contract(
         record=_bug(
@@ -8960,6 +8971,11 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
         },
     )
     monkeypatch.setattr(
+        workflow,
+        "_github_actions_registry_pr_capability",
+        lambda: {"allowed": True, "source": "test"},
+    )
+    monkeypatch.setattr(
         workflow.ci_failure_summary,
         "summarize_actions_run",
         lambda **kwargs: summary,
@@ -9034,6 +9050,78 @@ def test_promote_ci_issue_apply_requires_registry_worktree_for_code_bug(
     assert "--create-registry-worktree --apply" in payload["next_command"]
     assert payload["triage"]["needs_bug_json"] is True
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
+def test_promote_ci_issue_actions_defers_before_bug_allocation_when_registry_pr_is_blocked(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    triage = {
+        "linked_bug": None,
+        "classification_recommendation": "real_regression_candidate",
+        "needs_bug_json": True,
+        "summary": {
+            "failed_jobs": [{"nox_session": "advisory_historical_range_backend"}],
+        },
+        "suggested_bug": {
+            "title": "Nightly advisory failure",
+            "module": "advisory.historical_range",
+            "severity": "P1",
+            "allowed_write_scope": ["backend/services/advisory_historical_range"],
+        },
+    }
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", lambda **_: triage)
+    monkeypatch.setattr(
+        workflow,
+        "_github_actions_registry_pr_capability",
+        lambda: {
+            "allowed": False,
+            "source": "github_actions_workflow_permissions",
+            "reason": "repository Actions cannot create or approve pull requests",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_submit_bug_plan",
+        lambda **_: pytest.fail("BUG allocation must not run before registry PR capability is available"),
+    )
+
+    payload = workflow.build_promote_ci_issue_plan(
+        issue_number=197,
+        apply=True,
+        create_registry_worktree=True,
+    )
+
+    assert payload["workflow_gate"] == "deferred_registry_pr_capability"
+    assert payload["registry_pr_capability"]["allowed"] is False
+    assert payload["triage"]["needs_bug_json"] is True
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
+def test_github_actions_registry_pr_capability_reads_repository_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *_, **__: {
+            "ok": True,
+            "stdout": json.dumps(
+                {
+                    "default_workflow_permissions": "read",
+                    "can_approve_pull_request_reviews": False,
+                }
+            ),
+            "stderr": "",
+        },
+    )
+
+    payload = workflow._github_actions_registry_pr_capability()
+
+    assert payload["allowed"] is False
+    assert payload["default_workflow_permissions"] == "read"
+    assert payload["can_approve_pull_request_reviews"] is False
 
 
 def test_triage_ci_issue_compact_output_keeps_actionable_fields(
