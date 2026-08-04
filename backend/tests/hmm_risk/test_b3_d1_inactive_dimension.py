@@ -1023,11 +1023,6 @@ def _refit02_negative_initialization_blocker(item, *, train, seed):
 def _refit02_process(monkeypatch: pytest.MonkeyPatch, process_identity: str) -> dict:
     treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
     monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", _refit02_fit)
-    monkeypatch.setattr(
-        subject,
-        "prepare_b3_preprocessed_train_only_initialization",
-        _refit02_negative_initialization_blocker,
-    )
     return subject.run_refit02_process(
         treatment_item=treatment,
         harness_item=harness,
@@ -1044,6 +1039,42 @@ def _as_legacy_refit02_process(process: dict) -> dict:
     attempts = deepcopy(process["attempts"])
     for attempt in attempts:
         attempt["schema_version"] = subject.REFIT02_ATTEMPT_SCHEMA_VERSION_LEGACY
+        attempt["fit_budget_contract_version"] = subject.REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
+        if attempt["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE:
+            attempt.update(
+                {
+                    "status": "fit_failed",
+                    "fit_status": "failed",
+                    "fit_performed": False,
+                    "role_outcome": "negative_control_blocker_reproduced",
+                    "negative_control_blocker_reproduced": True,
+                    "failure_stage": "initialization",
+                    "failure_reason_codes": ["hmm_risk_model_initialization_failed"],
+                    "failure_message": "legacy matched identity20 initialization blocker",
+                    "parameter_payload": None,
+                    "initialization_evidence": None,
+                    "monitor_evidence": None,
+                    "likelihood": None,
+                    "covariance": None,
+                    "train_occupancy": None,
+                    "final_train_log_likelihood": None,
+                }
+            )
+        body = {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+        attempt["attempt_receipt_sha256"] = canonical_sha256(body)
+    return subject.build_refit02_process_receipt(
+        process_identity=process["process_identity"],
+        producer_commit=process["producer_commit"],
+        attempts=attempts,
+        current_authority=process["current_authority"],
+        historical_reference=process["historical_reference"],
+    )
+
+
+def _as_original_refit02_process(process: dict) -> dict:
+    attempts = deepcopy(process["attempts"])
+    for attempt in attempts:
+        attempt["schema_version"] = subject.REFIT02_ATTEMPT_SCHEMA_VERSION_ORIGINAL
         attempt.pop("fit_budget_contract_version", None)
         body = {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
         attempt["attempt_receipt_sha256"] = canonical_sha256(body)
@@ -1125,19 +1156,20 @@ def test_refit02_current_profile_change_returns_not_applicable_without_attempts(
     assert subject.validate_refit02_report(report) == report
 
 
-def test_refit02_process_runs_24_terminal_attempts_with_16_planned_true_fits(monkeypatch):
+def test_refit02_process_runs_24_terminal_attempts_with_24_planned_true_fits(monkeypatch):
     process = _refit02_process(monkeypatch, "fresh_process_1")
 
     assert process["attempt_count"] == 24
     assert process["terminal_attempt_count"] == 24
-    assert process["planned_hmm_fit_count"] == 16
-    assert process["actual_hmm_fit_invocation_count"] == 16
+    assert process["planned_hmm_fit_count"] == 24
+    assert process["actual_hmm_fit_invocation_count"] == 24
     assert len(process["attempts"]) == 24
     negative = [value for value in process["attempts"] if value["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE]
     assert len(negative) == 8
-    assert all(value["status"] == "fit_failed" for value in negative)
-    assert all(value["fit_performed"] is False for value in negative)
-    assert all(value["negative_control_blocker_reproduced"] is True for value in negative)
+    assert all(value["status"] == "fit_completed" for value in negative)
+    assert all(value["fit_performed"] is True for value in negative)
+    assert all(value["role_outcome"] == "matched_control_fit_completed" for value in negative)
+    assert all(value["negative_control_blocker_reproduced"] is None for value in negative)
     assert process["selection_performed"] is False
     assert process["ready_artifact_write_performed"] is False
 
@@ -1155,11 +1187,6 @@ def test_refit02_under_budget_initialization_failure_preserves_terminal_evidence
         return _core(int(train.shape[1]))
 
     monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_one_initialization_failure)
-    monkeypatch.setattr(
-        subject,
-        "prepare_b3_preprocessed_train_only_initialization",
-        _refit02_negative_initialization_blocker,
-    )
     processes = [
         subject.run_refit02_process(
             treatment_item=treatment,
@@ -1176,7 +1203,7 @@ def test_refit02_under_budget_initialization_failure_preserves_terminal_evidence
 
     assert all(process["attempt_count"] == 24 for process in processes)
     assert all(process["terminal_attempt_count"] == 24 for process in processes)
-    assert all(process["actual_hmm_fit_invocation_count"] == 15 for process in processes)
+    assert all(process["actual_hmm_fit_invocation_count"] == 23 for process in processes)
     failed = [
         attempt
         for attempt in processes[0]["attempts"]
@@ -1188,7 +1215,7 @@ def test_refit02_under_budget_initialization_failure_preserves_terminal_evidence
     report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
     assert report["status"] == "diagnostic_failed"
     assert report["mechanism_assessment"] == "inconclusive"
-    assert report["actual_hmm_fit_invocation_count"] == 30
+    assert report["actual_hmm_fit_invocation_count"] == 46
     assert "hmm_risk_model_initialization_failed" in report["mechanism_assessment_reason_codes"]
 
 
@@ -1199,12 +1226,16 @@ def test_refit02_two_process_report_separates_completion_mechanism_and_d5_readin
     report = subject.build_refit02_report(first, second, producer_commit="1" * 40)
 
     assert report["status"] == "diagnostic_complete"
-    assert report["mechanism_assessment"] == "constant_dimension_effect_supported"
-    assert report["d5_compatibility_evidence_ready"] is True
+    assert report["diagnostic_contract"] == subject.REFIT02_DIAGNOSTIC_CONTRACT
+    assert report["mechanism_assessment"] == "constant_dimension_mechanism_rejected"
+    assert report["d5_compatibility_evidence_ready"] is False
     assert report["canonical_payload_bitwise_equal"] is True
     assert report["attempt_count"] == 48
-    assert report["planned_hmm_fit_count"] == 32
-    assert report["actual_hmm_fit_invocation_count"] == 32
+    assert report["planned_hmm_fit_count"] == 48
+    assert report["actual_hmm_fit_invocation_count"] == 48
+    assert (
+        "hmm_risk_model_inactive_dimension_matched_control_fit_completed" in report["mechanism_assessment_reason_codes"]
+    )
     assert report["formal_model_set_acceptance_performed"] is False
     assert report["hard_semantic_authority_changed"] is False
     assert report["selection_performed"] is False
@@ -1212,7 +1243,48 @@ def test_refit02_two_process_report_separates_completion_mechanism_and_d5_readin
     assert subject.validate_refit02_report(report) == report
 
 
-def test_refit02_v4_writer_is_immutable_and_rejects_self_consistent_fake_readiness(monkeypatch, tmp_path):
+def test_refit02_matched_control_blocker_with_19d_fit_supports_dimension_effect(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_matched_control_blocker(item, *, train, seed):
+        del seed
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
+            raise training_subject.B3TrainingStageError(
+                "initialization",
+                "hmm_risk_model_initialization_failed",
+                ValueError("matched identity20 initialization blocker"),
+            )
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_matched_control_blocker)
+    processes = [
+        subject.run_refit02_process(
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+            process_identity=identity,
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed-single-thread"},
+            current_authority=authority,
+            historical_reference=historical,
+        )
+        for identity in ("fresh_process_1", "fresh_process_2")
+    ]
+
+    report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
+
+    assert all(process["planned_hmm_fit_count"] == 24 for process in processes)
+    assert all(process["actual_hmm_fit_invocation_count"] == 16 for process in processes)
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "constant_dimension_effect_supported"
+    assert report["d5_compatibility_evidence_ready"] is True
+    assert report["planned_hmm_fit_count"] == 48
+    assert report["actual_hmm_fit_invocation_count"] == 32
+    assert "hmm_risk_model_initialization_failed" in report["mechanism_assessment_reason_codes"]
+    assert subject.validate_refit02_report(report) == report
+
+
+def test_refit02_v6_writer_is_immutable_and_rejects_self_consistent_fake_readiness(monkeypatch, tmp_path):
     report = subject.build_refit02_report(
         _refit02_process(monkeypatch, "fresh_process_1"),
         _refit02_process(monkeypatch, "fresh_process_2"),
@@ -1225,24 +1297,19 @@ def test_refit02_v4_writer_is_immutable_and_rejects_self_consistent_fake_readine
     assert identity == canonical_sha256(report)
     assert subject.write_controlled_refit_report(target, report) == identity
     tampered = deepcopy(report)
-    tampered["d5_compatibility_evidence_ready"] = False
+    tampered["d5_compatibility_evidence_ready"] = True
     body = {key: value for key, value in tampered.items() if key != "receipt_sha256"}
     tampered["receipt_sha256"] = canonical_sha256(body)
     with pytest.raises(subject.D1InactiveDimensionError, match="differs from its writer authority"):
         subject.write_controlled_refit_report(tmp_path / "fake-readiness.json", tampered)
 
 
-def test_refit02_v4_writer_persists_complete_two_process_diagnostic_failed_report(monkeypatch, tmp_path):
+def test_refit02_v6_writer_persists_complete_matched_control_rejection_report(monkeypatch, tmp_path):
     treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
     monkeypatch.setattr(
         subject,
         "fit_b3_preprocessed_train_only",
         lambda item, train, seed: _core(int(train.shape[1])),
-    )
-    monkeypatch.setattr(
-        subject,
-        "prepare_b3_preprocessed_train_only_initialization",
-        lambda item, train, seed: _current_initialization_evidence(),
     )
     processes = [
         subject.run_refit02_process(
@@ -1259,9 +1326,10 @@ def test_refit02_v4_writer_persists_complete_two_process_diagnostic_failed_repor
     ]
     report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
 
-    assert report["status"] == "diagnostic_failed"
+    assert report["status"] == "diagnostic_complete"
+    assert report["mechanism_assessment"] == "constant_dimension_mechanism_rejected"
     assert report["attempt_count"] == 48
-    assert report["actual_hmm_fit_invocation_count"] == 32
+    assert report["actual_hmm_fit_invocation_count"] == 48
     assert "failed_process_receipt" not in report
     assert subject.validate_refit02_report(report) == report
     assert subject.write_controlled_refit_report(tmp_path / "diagnostic-failed.json", report) == canonical_sha256(
@@ -1269,7 +1337,7 @@ def test_refit02_v4_writer_persists_complete_two_process_diagnostic_failed_repor
     )
 
 
-def test_refit02_downstream_d4_failure_does_not_erase_supported_dimension_mechanism(monkeypatch):
+def test_refit02_matched_control_fit_rejects_dimension_mechanism_even_when_treatment_d4_fails(monkeypatch):
     treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
 
     def fit_with_downstream_failure(item, *, train, seed):
@@ -1283,11 +1351,6 @@ def test_refit02_downstream_d4_failure_does_not_erase_supported_dimension_mechan
         return _core(int(train.shape[1]))
 
     monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_downstream_failure)
-    monkeypatch.setattr(
-        subject,
-        "prepare_b3_preprocessed_train_only_initialization",
-        _refit02_negative_initialization_blocker,
-    )
     processes = [
         subject.run_refit02_process(
             treatment_item=treatment,
@@ -1305,28 +1368,23 @@ def test_refit02_downstream_d4_failure_does_not_erase_supported_dimension_mechan
     report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
 
     assert report["status"] == "diagnostic_complete"
-    assert report["mechanism_assessment"] == "constant_dimension_effect_supported"
+    assert report["mechanism_assessment"] == "constant_dimension_mechanism_rejected"
     assert report["d5_compatibility_evidence_ready"] is False
     assert "hmm_risk_model_covariance_bounds_failed" in report["mechanism_assessment_reason_codes"]
 
 
-def test_refit02_negative_control_not_reproduced_is_durable_inconclusive_evidence(monkeypatch):
+def test_refit02_matched_control_runs_real_hmm_fit_and_rejects_dimension_mechanism(monkeypatch):
     treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
     fit_calls = []
 
-    def fit_without_negative(item, *, train, seed):
+    def fit_all_roles(item, *, train, seed):
         fit_calls.append((item.sector_code, int(train.shape[1]), seed))
         return _core(int(train.shape[1]))
 
     monkeypatch.setattr(
         subject,
         "fit_b3_preprocessed_train_only",
-        fit_without_negative,
-    )
-    monkeypatch.setattr(
-        subject,
-        "prepare_b3_preprocessed_train_only_initialization",
-        lambda item, train, seed: {**_current_initialization_evidence(), "seed": seed},
+        fit_all_roles,
     )
     process = subject.run_refit02_process(
         treatment_item=treatment,
@@ -1339,25 +1397,28 @@ def test_refit02_negative_control_not_reproduced_is_durable_inconclusive_evidenc
         historical_reference=historical,
     )
     negative = [value for value in process["attempts"] if value["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE]
-    assert process["planned_hmm_fit_count"] == 16
-    assert process["actual_hmm_fit_invocation_count"] == 16
-    assert len(fit_calls) == 16
-    assert all(value["negative_control_blocker_reproduced"] is False for value in negative)
-    assert all(value["fit_performed"] is False for value in negative)
-    assert all(value["failure_stage"] == "initialization" for value in negative)
+    assert process["planned_hmm_fit_count"] == 24
+    assert process["actual_hmm_fit_invocation_count"] == 24
+    assert len(fit_calls) == 24
+    assert all(value["negative_control_blocker_reproduced"] is None for value in negative)
+    assert all(value["fit_performed"] is True for value in negative)
+    assert all(value["status"] == "fit_completed" for value in negative)
+    assert all(value["role_outcome"] == "matched_control_fit_completed" for value in negative)
     assert all(value["initialization_evidence"]["formal_initialization_contract_applied"] is True for value in negative)
-    assert all(
-        "hmm_risk_model_inactive_dimension_negative_control_not_reproduced" in value["failure_reason_codes"]
-        for value in negative
-    )
 
 
-def test_refit02_current_negative_fit_and_initialization_tamper_fail_closed(monkeypatch):
+def test_refit02_current_matched_fit_and_initialization_tamper_fail_closed(monkeypatch):
     process = _refit02_process(monkeypatch, "fresh_process_1")
     negative = next(value for value in process["attempts"] if value["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE)
 
     fit_tampered = deepcopy(negative)
-    fit_tampered["fit_performed"] = True
+    fit_tampered["fit_performed"] = False
+    fit_tampered["status"] = "fit_failed"
+    fit_tampered["fit_status"] = "failed"
+    fit_tampered["role_outcome"] = "negative_control_not_reproduced"
+    fit_tampered["negative_control_blocker_reproduced"] = False
+    fit_tampered["failure_stage"] = "initialization"
+    fit_tampered["failure_reason_codes"] = ["hmm_risk_model_inactive_dimension_negative_control_not_reproduced"]
     fit_tampered["attempt_receipt_sha256"] = canonical_sha256(
         {key: value for key, value in fit_tampered.items() if key != "attempt_receipt_sha256"}
     )
@@ -1367,14 +1428,9 @@ def test_refit02_current_negative_fit_and_initialization_tamper_fail_closed(monk
             process_identity="fresh_process_1",
             current_authority=process["current_authority"],
         )
-    assert fit_error.value.reason_code == "hmm_risk_model_inactive_dimension_fit_budget_exceeded"
+    assert fit_error.value.reason_code == "hmm_risk_model_inactive_dimension_contract_invalid"
 
     initialization_tampered = deepcopy(negative)
-    initialization_tampered["negative_control_blocker_reproduced"] = False
-    initialization_tampered["role_outcome"] = "negative_control_not_reproduced"
-    initialization_tampered["failure_reason_codes"].append(
-        "hmm_risk_model_inactive_dimension_negative_control_not_reproduced"
-    )
     initialization_tampered["initialization_evidence"] = {
         **_current_initialization_evidence(),
         "formal_initialization_contract_applied": False,
@@ -1395,13 +1451,24 @@ def test_refit02_current_and_legacy_schemas_are_explicit_and_cannot_mix(monkeypa
     current_second = _refit02_process(monkeypatch, "fresh_process_2")
     legacy_first = _as_legacy_refit02_process(current_first)
     legacy_second = _as_legacy_refit02_process(current_second)
+    original_first = _as_original_refit02_process(legacy_first)
+    original_second = _as_original_refit02_process(legacy_second)
 
     assert legacy_first["schema_version"] == subject.REFIT02_PROCESS_SCHEMA_VERSION_LEGACY
-    assert "fit_budget_contract_version" not in legacy_first
+    assert legacy_first["fit_budget_contract_version"] == subject.REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
     legacy_report = subject.build_refit02_report(legacy_first, legacy_second, producer_commit="1" * 40)
     assert legacy_report["schema_version"] == subject.REFIT02_REPORT_SCHEMA_VERSION_LEGACY
-    assert "fit_budget_contract_version" not in legacy_report
+    assert legacy_report["diagnostic_contract"] == subject.REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
+    assert legacy_report["fit_budget_contract_version"] == subject.REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
     assert subject.validate_refit02_report(legacy_report) == legacy_report
+
+    assert original_first["schema_version"] == subject.REFIT02_PROCESS_SCHEMA_VERSION_ORIGINAL
+    assert "fit_budget_contract_version" not in original_first
+    original_report = subject.build_refit02_report(original_first, original_second, producer_commit="1" * 40)
+    assert original_report["schema_version"] == subject.REFIT02_REPORT_SCHEMA_VERSION_ORIGINAL
+    assert original_report["diagnostic_contract"] == subject.REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
+    assert "fit_budget_contract_version" not in original_report
+    assert subject.validate_refit02_report(original_report) == original_report
 
     mixed_attempts = deepcopy(current_first["attempts"])
     mixed_attempts[0] = deepcopy(legacy_first["attempts"][0])
