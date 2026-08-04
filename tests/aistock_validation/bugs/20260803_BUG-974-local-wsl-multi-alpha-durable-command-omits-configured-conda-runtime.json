@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-974",
-  "closed_at": null,
+  "closed_at": "2026-08-04T07:10:06.580967Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -35,7 +35,9 @@
     "run=macb_453ca2d0c5b21b40_20240701_20260629_20260803T172627118865Z_1a6c55b6 attempt=macba_0d281cc897eb0c56c016599e601825bf9f1db2b4750e01e660b211c605bd54ab qe_task=macb_remote_3459b1322bee_aecfff9130ea_a1 return_code=127",
     "run=macb_453ca2d0c5b21b40_20240701_20260629_20260803T172628379750Z_2491f875 qe_task=macb_remote_4441b7cb7939_673a6d6499ff_a1 return_code=127",
     "run=macb_453ca2d0c5b21b40_20240701_20260629_20260804T025936797524Z_941835ce qe_task=macb_remote_3104f4ab901e_92058829c219_a1 return_code=1 error=LD_LIBRARY_PATH unbound during conda activate",
-    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260804T025937857264Z_c84653ec qe_task=macb_remote_77e00fc834e7_50828a8c1b02_a1 return_code=1 error=LD_LIBRARY_PATH unbound during conda activate"
+    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260804T025937857264Z_c84653ec qe_task=macb_remote_77e00fc834e7_50828a8c1b02_a1 return_code=1 error=LD_LIBRARY_PATH unbound during conda activate",
+    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260804T065100699664Z_1d10e90c qe_task=macb_remote_7ac5601f550f_15a9d9752067_a1 status=running qlib_started=true",
+    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260804T065102105156Z_c5a712fa qe_task=macb_remote_70f93243dcd9_7eea6fbb899f_a1 status=running qlib_started=true"
   ],
   "expected": "Loopback local-WSL durable dispatch activates the explicitly configured QLIB WSL conda environment before all Python commands and fails closed when that deployment contract is missing; genuine remote Linux behavior is unchanged.",
   "file_scope_contract": {
@@ -54,8 +56,8 @@
   },
   "first_seen_at": "2026-08-03T18:06:46.341883Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7ab1c15c90254b0752ecfbe84ba1d593156dfcf0",
+  "fixed_at": "2026-08-04T03:51:18Z",
   "github_issue_number": 3118,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3118",
   "last_seen_at": "2026-08-04T03:23:58.386524Z",
@@ -63,7 +65,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": null,
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3132",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -89,9 +91,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-974\\post-restart-verify-followup.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -101,7 +103,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -128,10 +130,7 @@
     "rtk pytest three nounset/conda durable command nodeids -> 3 passed",
     "fresh WSL nounset-safe conda activation probe -> Python 3.10.19",
     "rtk pytest backend/tests/multi_alpha/test_durable_execution_adapter.py backend/tests/test_multi_alpha_remote_dispatch.py -> 63 passed, 1 skipped",
-    "ruff check plus py_compile plus git diff --check -> passed",
-    "rtk nox -s l0 -> passed with 0 blocking findings",
-    "rtk nox -s validation_module_registry_l0 -> passed (8 tests)",
-    "rtk nox -s qe_read_backend -> passed (14 tests)"
+    "post-restart exact-snapshot retries 1d10e90c and c5a712fa -> both QE tasks running; 2,206,952 labels initialized; SigAnaRecord/PortAnaRecord entered; python-not-found=false; LD_LIBRARY_PATH-unbound=false"
   ],
   "verification_budget": {
     "budget": "standard",
