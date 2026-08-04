@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Literal, Protocol, Sequence
+
+from pydantic import model_validator
 
 from backend.execution_algos.vnpy_compat.facade_adapter import VnpyFacadeBackedPluginAdapterV1
 from backend.execution_algos.vnpy_compat.facade_contracts import (
@@ -43,12 +45,14 @@ from .plugin_contracts import (
     FrozenJsonObjectFieldV1,
     FrozenStrictModel,
     GatewayCapabilityCatalogV1,
+    IdentityV1,
     KernelErrorEvidenceV1,
     KernelCommandLifecycleProjectionItemV1,
     KernelCommandLifecycleProjectionV1,
     KernelCommandOutcomeEventPayloadV1,
     KernelProjectionTypeV1,
     RuntimeEventEnvelopeV2,
+    PositiveIntV1,
     SessionPhaseV1,
     Sha256V1,
     SideV1,
@@ -157,6 +161,63 @@ class KernelAlgoCreationRequestV1(FrozenStrictModel):
         if KernelProjectionTypeV1.ROUTE_COMPATIBILITY in by_type:
             raise ValueError("route compatibility ref is coordinator-owned and cannot be caller supplied")
         return self
+
+
+class KernelAlgoCreationRequestV2(KernelAlgoCreationRequestV1):
+    """Final K6-D product-creation authority with immutable route lineage."""
+
+    schema_version: Literal["miniqmt_kernel_algo_creation_request_v2"]
+    binding_id: IdentityV1
+    product_route_cutover_receipt_sha256: Sha256V1
+    product_route_owner_sha256: Sha256V1
+    product_route_epoch: PositiveIntV1
+    effective_new_instance_sequence: PositiveIntV1
+    creation_request_sha256: Sha256V1
+
+    @classmethod
+    def from_v1(
+        cls,
+        request: KernelAlgoCreationRequestV1,
+        *,
+        binding_id: str,
+        product_route_cutover_receipt_sha256: str,
+        product_route_owner_sha256: str,
+        product_route_epoch: int,
+        effective_new_instance_sequence: int,
+    ) -> "KernelAlgoCreationRequestV2":
+        """Promote a frozen V1 authority only after repository-owned route readback."""
+        if type(request) is not KernelAlgoCreationRequestV1:
+            raise TypeError("request must be an exact KernelAlgoCreationRequestV1 authority")
+        request.validate_hashes_v1()
+        route_lineage = {
+            "schema_version": "miniqmt_kernel_algo_creation_request_v2",
+            "binding_id": binding_id,
+            "product_route_cutover_receipt_sha256": product_route_cutover_receipt_sha256,
+            "product_route_owner_sha256": product_route_owner_sha256,
+            "product_route_epoch": product_route_epoch,
+            "effective_new_instance_sequence": effective_new_instance_sequence,
+        }
+        canonical_payload = {**request.model_dump(mode="json"), **route_lineage}
+        creation_request_sha256 = hash_hex_v1("miniqmt_kernel_algo_creation_request_v2", canonical_payload)
+        return cls(
+            **request.model_dump(mode="python"),
+            **route_lineage,
+            creation_request_sha256=creation_request_sha256,
+        )
+
+    def validate_hashes_v2(self) -> "KernelAlgoCreationRequestV2":
+        super().validate_hashes_v1()
+        expected = hash_hex_v1(
+            "miniqmt_kernel_algo_creation_request_v2",
+            self.canonical_payload_v1(exclude={"creation_request_sha256"}),
+        )
+        if self.creation_request_sha256 != expected:
+            raise ValueError("product creation request hash differs from frozen route lineage")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_product_route_lineage_v2(self) -> "KernelAlgoCreationRequestV2":
+        return self.validate_hashes_v2()
 
 
 @dataclass(frozen=True)
@@ -1232,6 +1293,7 @@ __all__ = [
     "ExecutionAlgoPluginV2",
     "KernelAlgoStartWriteBundleV1",
     "KernelAlgoCreationRequestV1",
+    "KernelAlgoCreationRequestV2",
     "KernelDeliveryExecutionInputV1",
     "KernelPluginInvocationError",
     "KernelTransitionWriteBundleV1",
