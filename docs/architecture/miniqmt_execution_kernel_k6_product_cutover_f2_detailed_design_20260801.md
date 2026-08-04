@@ -5,8 +5,10 @@
 > 上位唯一实现蓝图：[`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)。
 >
 > 模拟盘唯一上位蓝图：[`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。
+
+> K6-D 唯一下位实施合同：[`miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`](miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md)，当前=`design_ready_local`、code=`not_started`、`source_commit=committed_local_task_branch`、`source_push=not_run`、`source_pr=not_created`、`source_merge=not_run`。
 >
-> 设计基线：`main@c499276da91dcae40f0e452de11141c7b0585a1c`；K6-B 最终分支在 push 前必须安全包含当时最新 `origin/main`，具体 readback 在 PR/完成报告中记录，避免把易变流程 SHA 写成业务设计 authority。K1–K5 均为 `implemented_verified + merged`；K6-A/C0/C1 source 已实现并保持 runtime inactive。K6/BUG-953 predecessor production DDL 已于独立授权后应用并由 exact repository preflight 回读通过；K6-B successor migration 尚未执行生产 DDL，必须在 source merge 后单独取得用户授权并 readback。产品 runtime 仍未切换，production DML、配置、binding、broker 调用和 runtime activation均未执行，服务重启归用户所有并与本次 source 状态分开记录。
+> 设计基线：`main@c499276da91dcae40f0e452de11141c7b0585a1c`；K6-B 最终分支在 push 前必须安全包含当时最新 `origin/main`，具体 readback 在 PR/完成报告中记录，避免把易变流程 SHA 写成业务设计 authority。K1–K5 均为 `implemented_verified + merged`；K6-A/C0/C1/B source 已实现并保持 runtime inactive。K6/BUG-953 predecessor与K6-B successor production DDL均已在独立授权后应用并由exact repository preflight回读通过；K6-B DEV migration=`1 passed`、production `preflight_k6b_schema()`=`9/9 true`、coordination rows=`0`。产品 runtime 仍未切换，production DML、配置、binding、broker 调用和 runtime activation均未执行，服务重启归用户所有并与本次 source 状态分开记录。
 
 ## 0. Executive Decision / 核心结论
 
@@ -20,7 +22,7 @@ K6 是 MiniQMT execution-kernel 重构的唯一产品切换阶段。它不再增
 4. dependent-BUY 的原始 command、transition 与 deterministic command identity 在 K6-C 首次 product transaction 中冻结；WAIT 期间只存在 `DEFERRED_DEPENDENT_BUY` mapping/child，不存在 outbox。BUY 释放必须在单一事务内锁定 coordination、deferred mapping、ledger authority 与 exact authority item，记录 trigger/ledger observation/decision，并为同一 command identity 创建现有 K2 outbox；不得另造 release event/transition/command。事务失败不返回成功；commit-unknown 只能通过独立 readback 判定结果，不能重发。
 5. 一次 transition 的 0..N commands 使用一个 `ProductCommandAuthoritySetV3`；每个 command 都有独立 authority item，按 `effect_ordinal, command_id` 排序，并携带 hash-closed `command_json`。K6-A 的 hash-only `ProductCommandAuthoritySetV2/ItemV2` 保持可读但禁止进入产品 root；product materializer还必须拒绝K4/K5 V1 shadow receipt、缺项、重复、乱序、hash-correct drift、payload/hash不一致和单command receipt冒充multi-command closure。
 6. 切换不在活跃实例上做原地转换。旧 route 实例只允许按旧版本 drain 到终态；切换点之后创建的新实例只走 K6。若无法确定 route owner，则 fail loud 且 broker_called=false。
-7. rollback 不得把已有 K6 durable state 交给 legacy。源代码或部署回滚只能回到最后一个仍理解 K6 schema/receipt 的版本，或先让 K6 实例 drain；不能删除含 durable rows 的表，也不能绕过 fencing。
+7. rollback 不得把已有 K6 durable state 交给 legacy。KERNEL_V2 route receipt写入后，源代码或部署回滚只能使用通过`miniqmt_k6d_route_contract_v1` fresh-process capability readback、仍理解ALGO_START V2与route owner/receipt且保持zero legacy caller的版本；当前不存在更早兼容版本时只能使用当前K6-D source或forward-fix。不能删除含 durable rows 的表，也不能绕过 fencing。
 8. 本设计不增加 RBAC、人工审批、manual acknowledge、manual recovery、人工 stop gate 或额外业务准入门禁。必要的数据源、broker capability、session、ledger 和 authority 校验属于真实运行合同，失败必须可见且按 binding/runtime 隔离。
 9. K6 implementation 只有在 direct/negative/DEV PostgreSQL/concurrency/restart/reconcile/route-uniqueness/coverage/changed-files/F2/真实正常交易日 SIM 全部闭合后才能标记 `implemented_verified`。source merge、生产 DDL、配置/binding、服务重启、runtime activation 和交易日观察必须分开报告。
 10. 自本修订起 legacy product route 进入**代码冻结**：后续研发不得为 `runtime.py`、`client.py`、`order_service.py` 的旧 dependent-BUY、同步 TIMER、algorithm-specific product call 增加功能、修复、backport、parity adapter、compatibility bridge或新测试资产。旧实例仅用当前已合入版本自然 drain；研发工作只允许形成只读 inventory、证明零新 owner、删除调用和验证删除结果。
@@ -470,12 +472,12 @@ aggregate builder为：
 
 ### 9.1 Cutover phases
 
-1. **Source merged, runtime inactive**：K6 code/schema support 可合入，但 legacy 产品 route 不变。
-2. **Production migration applied/read back**：只表示 schema 可用；不改变 binding。
+1. **Source merged, runtime inactive**：K6-D source合入只改变未来重新加载的进程；当前旧进程继续其冻结代码自然drain。合入后的source不得再包含创建新legacy实例的product caller。
+2. **Existing production schema proof**：K6-B successor migration已经应用并独立回读；K6-D不新增DDL，也不改变binding。
 3. **Final-route pre-activation proof**：只对最终 `KERNEL_V2` owner/coordinator/V3 authority/K2 outbox链执行DEV、fresh-process与production只读schema/identity验证；不与legacy输出做parity，不建立bridge或shadow writer，不提交订单。失败只说明最终route尚未具备激活条件，不触发legacy研发或fallback。
-4. **New-instance cutover**：经用户授权的生产配置/binding 写入 route receipt；从 `effective_new_instance_sequence` 起新实例只走 KERNEL_V2。这里的授权是部署动作授权，不是新增业务审批功能。
-5. **Legacy drain**：旧实例只消费其既有 callback/timer直至 terminal；不得生成新的 algo instance 或跨 EOD 续跑。
-6. **Route retirement**：inventory=0 且正常交易日验收完成后删除 legacy product call/import/synchronous loop，并用静态与运行时 route-uniqueness 测试证明唯一。
+4. **Legacy drain before activation**：旧进程中的旧实例只消费其既有 callback/timer直至 terminal；不得生成新的 algo instance 或跨 EOD 续跑。用户重启前active legacy inventory必须只读证明为零。
+5. **New-instance cutover**：K6-D source由用户重启加载后，新MiniQMT实例从既有immutable binding/release identity重建并写入route receipt；从 `effective_new_instance_sequence` 起新实例只走 KERNEL_V2。K6-D不新增生产config/binding DML或业务审批状态；用户授权边界仅保留服务重启与其后的运行时验收。
+6. **Route retirement proof**：source中的legacy product call/import/synchronous loop已经删除；以静态route-uniqueness和正常交易日运行时证据证明唯一，不在激活后追加legacy删除切片。
 
 ### 9.2 Exact retirement inventory
 
@@ -487,13 +489,13 @@ aggregate builder为：
 - legacy `VnpyStyleRegistryAlgo`/adapter 的产品 import 与同步 TIMER for-loop；
 - 任何绕过 K2 outbox 直接调用 Gateway/broker 的 MiniQMT algo path。
 
-每项 disposition 只能是 `REMOVED`、`DRAIN_ONLY_VERSION_PINNED` 或 `NON_PRODUCT_TEST_ADAPTER`，并有代码位置、caller、broker capability、删除 commit 和测试证据。`DRAIN_ONLY_VERSION_PINNED`只能描述切换时已经存在实例使用的冻结代码，不得接受任何新功能、修复、backport或新增产品caller；`NON_PRODUCT_TEST_ADAPTER`不得被产品import。`UNKNOWN`或无caller evidence阻断route retirement；不能用deny gate永久保留未理解代码，也不能把inventory演变为legacy维护项目。
+source inventory与process drain inventory必须分开。source item记录`product_callers_before`非空、`product_callers_after`为空、before/after source hash、replacement/test refs和`REMOVED|NON_PRODUCT_TEST_ADAPTER`；`DRAIN_ONLY_VERSION_PINNED`只属于部署前旧进程实例receipt并证明new algo/child/retry counts全为0。两类item与aggregate的exact schema/hash/truncation domain由K6-D detailed §2.2固定；`UNKNOWN`、after caller非空或无caller evidence阻断route retirement。不能用deny gate永久保留未理解代码，也不能把inventory演变为legacy维护项目。
 
 ### 9.3 Rollback semantics
 
 - activation 前：正常 source rollback，K6 schema空表可 guarded rollback。
-- activation 后但无 K6 broker call：可撤销 route candidate 配置并保持 K6 receipt历史；不得修改已写 receipt。
-- 任一 K6 command 到 PRE_CALL 后：不得切回 legacy。只能部署最后兼容 K6 版本或让实例 drain/reconcile。
+- KERNEL_V2 route receipt写入后，无论是否已有broker call，都不得部署pre-K6-D或任何缺少`miniqmt_k6d_route_contract_v1` capability的source；不存在“撤销route candidate配置”或回到legacy。
+- 任一 K6 command 到 PRE_CALL 后：只能部署通过上述capability的K6-D-compatible版本或让实例 drain/reconcile。
 - rollback 不删除 durable fact、不重置 route epoch、不复用 legacy batch、不人工补订单。
 
 ## 10. Risks, Failure Modes, Diagnostics, Metrics, Alerts and Retention / 风险、失败模式、诊断、指标、告警与保留
@@ -578,7 +580,7 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 - K6 新增/实质修改生产模块 line coverage `>=80%`、branch coverage `>=70%`。
 - changed files -> `file_ownership.yaml` -> `module_registry.yaml` -> `test_plans.yaml`；只运行被选模块及真实 shared-contract依赖。
 - 必跑 `python -m nox -s l0`、`validation_module_registry_l0`、Ruff check/format、py_compile、`git diff --check`。
-- 三份 F2 validator 各 design item 与 matrix 一一对应、warnings=0。
+- 本文、K6-D下位设计、execution-kernel父蓝图与统一蓝图四份 F2 validator 各 design item 与 matrix 一一对应、warnings=0。
 - normal trading day SIM 是 runtime acceptance：至少覆盖开盘创建、连续竞价、午休恢复、下午、收盘；证明唯一 route、无 duplicate broker side effect、dependent-BUY exact outcome、所有 outbox/callback/reconcile闭合。它不能由 mock/CI 替代，也不与 source merge 混报。
 
 ## 12. Implementation Plan and Slices / 实施方案与切片
@@ -603,14 +605,16 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 
 - **第二优先级**。实现 §7 trigger/state machine、ledger authority、deferred mapping -> same-command outbox atomic release、restart/EOD。
 - 直接实现最终 `KERNEL_V2` coordinator与generic invocation seam；只读取V3 deferred authority和K2/qmt strategy ledger durable事实，只写同一command的现有K2 outbox。不得修改或调用legacy dependent-BUY产品逻辑，不做legacy parity、bridge、translator、shadow writer或双写；source merge不自动激活产品route。
-- **当前状态：`implemented_verified + merged`，PR #3120，merge `48bcf1153dea3dca5c598793d6556d2757ed87de`，`source_merge=merged_pr_3120`。** 公共入口只接受 durable `event_id` 与 worker/process identity；在同一数据库事务中 strict-readback K2 ORDER/TRADE/RECONCILE/ACCOUNT/EOD、V3 authority、route owner、session authority、virtual account、trade/cash ledger、coordination/dependencies/mapping，并执行 decision + monotonic dependency + coordination CAS + mapping + same-command K2 outbox 的原子写入。WAIT、RELEASE、terminal BLOCK、EOD residual、late/restart、commit-unknown与同事件并发均保持幂等且 fresh independent readback；replay还要求既有decision owner set与事件候选exact set-equal，任何extra/missing/partial identity均fail loud。K6-B migration triplet与`preflight_k6b_schema()`已以disposable DEV PostgreSQL验证K6-C0 predecessor exact hash、K6-B base/K6C/delta三层catalog、fingerprint function metadata/body、forward second-apply、comment/function drift、nonzero state rollback refusal与零行guarded rollback；未执行生产DDL、broker、配置、binding、服务控制或runtime activation。
+- **当前状态：`implemented_verified + merged`，PR #3120，merge `48bcf1153dea3dca5c598793d6556d2757ed87de`，`source_merge=merged_pr_3120`。** 公共入口只接受 durable `event_id` 与 worker/process identity；在同一数据库事务中 strict-readback K2 ORDER/TRADE/RECONCILE/ACCOUNT/EOD、V3 authority、route owner、session authority、virtual account、trade/cash ledger、coordination/dependencies/mapping，并执行 decision + monotonic dependency + coordination CAS + mapping + same-command K2 outbox 的原子写入。WAIT、RELEASE、terminal BLOCK、EOD residual、late/restart、commit-unknown与同事件并发均保持幂等且 fresh independent readback；replay还要求既有decision owner set与事件候选exact set-equal，任何extra/missing/partial identity均fail loud。K6-B migration triplet与`preflight_k6b_schema()`已以disposable DEV PostgreSQL验证K6-C0 predecessor exact hash、K6-B base/K6C/delta三层catalog、fingerprint function metadata/body、forward second-apply、comment/function drift、nonzero state rollback refusal与零行guarded rollback；production DDL已应用并独立回读`9/9 true`，三层catalog=`6eeff2d2.../ef09f8ab.../10ae5be0...`，coordination rows=`0`；未执行broker、配置、binding、服务控制或runtime activation。
 - 合入证据：direct contracts/state/repository=`111 passed`；K6-B direct + 六个公共 DEV PostgreSQL modes=`50 passed`；migration exact DEV=`2 passed`；状态机 line/branch=`86.08%/74.53%`，coordinator repository=`85.44%/71.10%`，versioned product repository=`87.37%/70.41%`；K6-B catalog hashes为base=`6eeff2d2...`、K6C=`ef09f8ab...`、delta=`10ae5be0...`，fingerprint body=`7a57ccdf...`，forward canonical-LF=`e09fdd48...`。完整`python -m nox -s miniqmt_execution_runtime_l2`=`1276 passed,68 skipped`；changed-files=`18`、classifier=`targeted_ci_required`且只选择`miniqmt_execution_runtime_l2`、`unmapped_code_files=[]`；required CI run `30844554277` 的 MiniQMT、static 与 verdict 均为green。
 - 预计 5–7 个开发日；依赖 K6-C0/C1 source merge，不再声明可与 K6-C 并行完成。
 
 ### K6-D — cutover, retirement and runtime acceptance
 
-- 直接实现 §9 最终route owner、new-instance唯一cutover、冻结旧实例自然drain、完整retirement inventory和旧产品调用删除；不开发新的drain adapter或legacy兼容层。
-- 更新 runbook/diagnostics/metrics；执行生产 migration/config/binding需分别获用户授权；服务重启由用户执行。
+- 唯一下位实施合同为 [`miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`](miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md)，当前=`design_ready_local`、code=`not_started`、`source_commit=committed_local_task_branch`、`source_push=not_run`、`source_pr=not_created`、`source_merge=not_run`。
+
+- 直接实现 §9 最终route owner、new-instance唯一cutover、冻结旧实例自然drain、完整retirement inventory和旧产品调用删除；不开发新的drain adapter或legacy兼容层。K6-D exact contract增加SIM/runtime-binding-account闭包、`KernelAlgoCreationRequestV2` product route lineage、覆盖ALGO_START/TICK/TIMER/SESSION/ORDER/TRADE/COMMAND_OUTCOME/ACCOUNT/RECONCILE/EOD及既有typed OPERATOR owner routing的唯一product coordinator、first/retry/allowed-successor矩阵、source capability rollback identity，以及source/drain双inventory authority；不新增表或binding/config DML，也不增加审批型operator command。
+- 更新 runbook/diagnostics/metrics；K6-D new DDL/DML/config/binding=`noop`；服务重启由用户执行并与source merge、运行时激活、正常交易日验收分开记录。
 - 完成正常交易日 SIM 观察与aftercare。
 - 预计 5–8 个开发日加至少 1 个正常交易日观察；K6-C与K6-B source merge及联合复审依赖均已满足。
 
@@ -634,7 +638,7 @@ alerts：dual route、stale claimed coordination、released-without-outbox、aut
 - `runtime_activation`
 - `normal_trading_day_observation`
 
-K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding、restart、activation 分别按用户明确授权执行；这些是部署边界，不是新增产品审批或人工 acknowledge。
+K6-A/B/C source 合入仍保持 runtime inactive。K6-D new DDL/DML/config/binding=`noop`；服务restart由用户明确执行，runtime activation与正常交易日验收独立回读。这些是部署状态边界，不是新增产品审批或人工 acknowledge。
 
 ## 14. Design Acceptance Index / 设计验收索引
 
@@ -646,10 +650,10 @@ K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding
 | `F-104` | generic per-command V3 command_json/item/set/lifecycle/materialization schema、0/1/N、materialize/reject/defer、K4/K5 V1与K6-A V2产品拒绝和writer/readback authority闭合 |
 | `F-105` | K6 additive表/列、deferred mapping status、composite FK/CHECK/UNIQUE/index/comment、pg_catalog fingerprint、preflight/forward/readback/guarded rollback可执行且不复制K2表 |
 | `F-106` | single-writer、lock order、CAS/fence、atomic product transaction与same-command release、commit-unknown、retry/restart/reconcile和no-double-release完整 |
-| `F-107` | route cutover receipt、新实例唯一KERNEL_V2、旧实例drain、禁止dual route/fallback及rollback边界精确 |
-| `F-108` | legacy helper/direct dependent-BUY/synchronous timer/adapter product route退役inventory、disposition与唯一route证据可执行 |
+| `F-107` | SIM/runtime-binding-account exact closure、route first/retry/allowed-successor、ALGO_START V2 product lineage、新实例唯一KERNEL_V2、禁止dual route/fallback及capability-bound rollback边界精确 |
+| `F-108` | legacy helper/direct dependent-BUY/synchronous timer/adapter product route退役的source-before/after与process-drain双inventory、source capability及唯一route证据可执行 |
 | `F-109` | typed errors、bounded evidence、read-only diagnostics、低cardinality metrics、auto-clear alerts、retention和runbook完整且无人工门禁 |
-| `F-110` | direct/negative/DEV PostgreSQL/migration/concurrency/final-route integration/route uniqueness/frozen-input business invariants/coverage/changed-files测试计划可执行，禁止legacy parity验收 |
+| `F-110` | direct/negative/DEV PostgreSQL/migration/concurrency/final-route integration/route uniqueness/frozen-input/full-five source matrix/existing-binding normal-day/coverage/changed-files测试计划可执行，禁止legacy parity验收 |
 | `F-111` | `K6-C0 -> K6-C1 -> K6-B -> K6-D`优先级、最终架构only/no-C2/no-legacy-R&D约束、依赖、工期、source/DDL/config/restart/runtime/normal-day状态分离与rollout/rollback完整 |
 | `F-112` | DESIGN-COMPLIANCE-001、no simplification/silent error/business drift/unapproved gate及K6完成定义闭合 |
 
@@ -661,14 +665,14 @@ K6-A/B/C source 合入仍保持 runtime inactive。K6-D 的 DDL、config/binding
 | `F-102` | §4.1；`backend/services/miniqmt_execution_runtime/kernel_product_contracts.py` | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py -q`：V2 proceeds/ledger/coordination、strict initial/successor、V1 product reject、strict readback；PR #3032 / merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63` | implemented_verified + merged | none |
 | `F-103` | §4.1、§7；`kernel_dependent_buy.py`、`kernel_dependent_buy_repository.py` | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_dependent_buy.py -q`=`44 passed`；`backend/tests/miniqmt_execution_runtime/test_kernel_product_materialization_postgres.py`六个 disposable DEV PostgreSQL modes覆盖ACCOUNT WAIT、SELL terminal BLOCK、settled TRADE RELEASE、EOD residual、commit-unknown/restart和same-event concurrency；line/branch=`86.08/74.53`与`85.44/71.10`；PR #3120 / merge `48bcf1153dea3dca5c598793d6556d2757ed87de`、`source_merge=merged_pr_3120` | implemented_verified + merged | none |
 | `F-104` | §4.2、§8；`kernel_product_contracts.py`、`kernel_product_authority.py`、`kernel_product_materialization_repository.py`；BUG-953 deterministic lineage/lifecycle authority | `backend/tests/miniqmt_execution_runtime/test_kernel_product_contracts.py`、`test_kernel_product_authority.py`、`test_kernel_product_materialization_postgres.py`：contracts/authority/DEV PostgreSQL direct=`105 passed`，complete disposable DEV PostgreSQL=`20 passed`；PR #3080 / merge `c0ca2e7e356a891ee5b2aad270d391071c942ae4` | implemented_verified + merged | none |
-| `F-105` | §5；K6-A immutable migration + `miniqmt_execution_kernel_k6c_20260802.*` + `miniqmt_execution_kernel_k6b_20260803.*`；`preflight_k6b_schema()` | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py -q`：predecessor checksum/coordination/item FK/deferred status保持闭合；K6-B base/K6C/delta三层independent catalog、fingerprint metadata/body、frozen account/session columns、second apply、comment/function drift、readback、nonzero rollback refusal与zero-row guarded rollback=`2 passed`；PR #3120 / merge `48bcf1153dea3dca5c598793d6556d2757ed87de`、`source_merge=merged_pr_3120`、`production_ddl=pending_separate_authorization` | implemented_verified + merged | none |
+| `F-105` | §5；K6-A immutable migration + `miniqmt_execution_kernel_k6c_20260802.*` + `miniqmt_execution_kernel_k6b_20260803.*`；`preflight_k6b_schema()` | `backend/tests/miniqmt_execution_runtime/test_kernel_k6_migration_postgres.py` exact DEV migration=`1 passed`；production preflight/forward/independent readback已闭合，repository checks=`9/9 true`、catalog=`6eeff2d2.../ef09f8ab.../10ae5be0...`、authority columns=`NOT NULL`、successor trigger=`1`、coordination rows=`0`；PR #3120 / merge `48bcf1153dea3dca5c598793d6556d2757ed87de`、`source_merge=merged_pr_3120`、`production_ddl=applied_and_verified` | implemented_verified + merged | none |
 | `F-106` | §6–§7；`kernel_product_materialization_repository.py` + `kernel_dependent_buy_repository.py` atomic writer/readback；BUG-953 exact mapping JSON/scalar CHECK | `AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_materialization_postgres.py -q`：C1 DEV PostgreSQL=`20 passed`保持；K6-B六模式公共 event-id seam覆盖single-writer、lock/CAS/fence、same-command release、WAIT/BLOCK/EOD、commit-unknown、restart、same-event concurrency、no-double-release与fresh readback；PR #3120 / merge `48bcf1153dea3dca5c598793d6556d2757ed87de`、`source_merge=merged_pr_3120` | implemented_verified + merged | none |
-| `F-107` | §4.3、§9.1、§9.3 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` owner/route-generation/drain/rollback matrix | design_ready | none |
-| `F-108` | §9.2 | target `backend/tests/miniqmt_execution_runtime/test_kernel_legacy_route_retirement.py` exact inventory + import/call-graph uniqueness | design_ready | none |
-| `F-109` | §10 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_diagnostics.py`; artifact: `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-110` | §11 | C1证据保持；`python -m nox -s miniqmt_execution_runtime_l2`最终=`1276 passed,68 skipped`，`backend/tests/miniqmt_execution_runtime/test_kernel_repository_structure.py`包含唯一public façade/MRO/signature/private-module characterization；K6-B DEV PostgreSQL/migration/concurrency/restart/coverage/changed-files均已闭合，classifier仅选择`miniqmt_execution_runtime_l2`；required CI run `30844554277` green，最终route integration、uniqueness、旧调用删除、frozen-input invariants与正常交易日证据仍由K6-D闭合 | design_ready | none |
-| `F-111` | §12–§13 | artifact: 本文、父蓝图、统一蓝图的final-architecture-only/no-legacy-R&D约束；PR #3098 / merge `b986e8f655137e9aea88f17ea91d3eb153f1c017`；K6-B PR #3120 / merge `48bcf1153dea3dca5c598793d6556d2757ed87de`；后续仅K6-D PR receipt与分离的production/runtime states | design_revision_ready + merged | none |
-| `F-112` | §16–§17 | artifact: `docs/architecture/miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md`; DESIGN-COMPLIANCE-001 + normal trading day acceptance receipt | design_ready | none |
+| `F-107` | §4.3、§9.1、§9.3；K6-D detailed §3–§5 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` binding/owner/cutoff/drain/rollback matrix | design_ready | none |
+| `F-108` | §9.2；K6-D detailed §2.2、§6 | target `backend/tests/miniqmt_execution_runtime/test_kernel_legacy_route_retirement.py` exact inventory + AST/import/call-graph uniqueness | design_ready | none |
+| `F-109` | §10；K6-D detailed §7 | target `backend/tests/miniqmt_execution_runtime/test_kernel_product_diagnostics.py`; artifact: `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
+| `F-110` | §11；K6-D detailed §8 | `backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py`、`backend/tests/simulation_runtime/test_lifecycle_scheduler.py`；K6-D target direct/DEV/coverage/route uniqueness/frozen-input与normal trading day receipts | design_ready | none |
+| `F-111` | §12–§13；K6-D detailed §9–§10 | artifact: 本文、父蓝图、统一蓝图与K6-D下位详细设计；后续K6-D source/production/runtime states分离 | design_ready | none |
+| `F-112` | §16–§17；K6-D detailed §13–§14 | artifact: `docs/architecture/miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`；DESIGN-COMPLIANCE-001 + K6-D normal trading day acceptance receipt | design_ready | none |
 
 ## 16. Formal Design Review and DESIGN-COMPLIANCE-001 / 正式设计审核
 
@@ -706,8 +710,8 @@ K6 implementation完成定义：K6-A/B/C/D全部 `implemented_verified + merged`
 - K1/K2/K3/K4/K5 overall：`implemented_verified + merged`。
 - K6 detailed design base：`design_ready + merged`（PR #2993 / merge `f2a7a23d31ab2f214eae506a43f3f0c360b61d4a`）；2026-08-02 implementation-readiness revision：`design_revision_ready + merged`（PR #3024 / merge `1586c15d88f11ad176a6763a15fbc584409f72c7`）。
 - revision review evidence：三份F2 validator=`12/12,70/70,112/112`且warnings=0；classifier=`docs_fast_update`、backend/frontend/Go plans均未选择、`unmapped_code_files=[]`；L0=0 finding；module registry=`8 passed,14/14 mapped`。
-- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green。K6-C0=`implemented_verified + merged`、`source_merge=merged_pr_3032`，merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`，required CI run `30732380227` green；BUG-953=`implemented_verified + merged + runtime_verified`、`source_merge=merged_pr_3048`，Issue #3045已关闭；K6-C1=`implemented_verified + merged`、`source_merge=merged_pr_3080`，merge `c0ca2e7e356a891ee5b2aad270d391071c942ae4`，required CI run `30804132306` green；K6-B=`implemented_verified + merged`、`source_merge=merged_pr_3120`，merge `48bcf1153dea3dca5c598793d6556d2757ed87de`，required CI run `30844554277` green；K6-D=`not_started`，K6 overall=`implementation_in_progress`。
+- K6-A implementation：`implemented_verified + merged`，`source_merge=merged_pr_3004`，merge `a59a9fc2d3f5365ad5ac2d1c8fc72ed5438d5401`，required CI run `30687689439` green。K6-C0=`implemented_verified + merged`、`source_merge=merged_pr_3032`，merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`，required CI run `30732380227` green；BUG-953=`implemented_verified + merged + runtime_verified`、`source_merge=merged_pr_3048`，Issue #3045已关闭；K6-C1=`implemented_verified + merged`、`source_merge=merged_pr_3080`，merge `c0ca2e7e356a891ee5b2aad270d391071c942ae4`，required CI run `30804132306` green；K6-B=`implemented_verified + merged`、`source_merge=merged_pr_3120`，merge `48bcf1153dea3dca5c598793d6556d2757ed87de`，required CI run `30844554277` green；K6-D detailed design=`design_ready_local`、code=`not_started`，K6 overall=`implementation_in_progress`。
 - 2026-08-03 final-architecture-only revision：`design_revision_ready + merged`、`source_merge=merged_pr_3098`，merge `b986e8f655137e9aea88f17ea91d3eb153f1c017`。K6源码切片按A/C0/C1/B/D口径已合入`4/5`（80%）；严格source验收项F-102/F-103/F-104/F-105/F-106=`5/12`，F-110=`implementation_in_progress`；产品runtime cutover=`0%`。后续研发预算仅归属最终KERNEL_V2的K6-D，legacy维护、parity、bridge、backport、C2和额外shadow预算=`0`。
 - product runtime：`not_switched`。
 - `base_design_source_merge=merged_pr_2993`；`revision_source_merge=merged_pr_3024`；`close_sync=not_applicable_feature`；state-sync/root sync/cleanup分别记录。
-- predecessor production DDL=`applied_and_verified`；K6-B successor production DDL=`pending_separate_user_authorization_after_source_merge`。用户此前完成的backend-main重启与BUG-953 post-restart receipt不代表K6-B生效；本切片production DML/dependency/config/binding/broker/service restart/runtime activation/normal trading day observation仍为`noop/not_run`。
+- predecessor与K6-B successor production DDL=`applied_and_verified`，K6-D new DDL/DML/config/binding=`noop`，dependency gate=`noop`。用户此前完成的backend-main重启与BUG-953 post-restart receipt不代表K6-D生效；broker/service restart/runtime activation/normal trading day observation仍为`not_run`。
