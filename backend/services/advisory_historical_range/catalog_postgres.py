@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import uuid
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from typing import Any
 
+import orjson
+import psycopg2.extensions
 import psycopg2.extras
 
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
@@ -35,6 +40,12 @@ from backend.services.advisory_historical_range.models import (
 
 
 ConnFactory = Callable[[], Any]
+
+_DEFAULT_CATALOG_WORKERS = 6
+_MAX_CATALOG_WORKERS = 6
+_DEFAULT_STREAM_FETCH_SIZE = 256
+_MAX_STREAM_FETCH_SIZE = 1000
+_ORJSON_EXPONENT_NUMBER = re.compile(rb"e-?\d")
 
 
 _UNIVERSE_SQL = """
@@ -229,13 +240,31 @@ _FUNDAMENTAL_QUERIES: tuple[tuple[str, str], ...] = (
 
 
 class PostgresHistoricalRangeCatalogExecutor:
-    """Run one bounded planner chunk in one REPEATABLE READ, READ ONLY transaction."""
+    """Resolve one bounded chunk concurrently against one exported read-only snapshot.
 
-    def __init__(self, *, conn_factory: ConnFactory, planner: HistoricalRangeCatalogPlanner | None = None) -> None:
+    Only the at-most-32 member results live in memory. Existing content-addressed
+    checkpoints provide the durable file cache between chunks; raw database rows are
+    deliberately not reused across snapshots because VERIFY must detect source drift.
+    """
+
+    def __init__(
+        self,
+        *,
+        conn_factory: ConnFactory,
+        planner: HistoricalRangeCatalogPlanner | None = None,
+        max_workers: int = _DEFAULT_CATALOG_WORKERS,
+        stream_fetch_size: int = _DEFAULT_STREAM_FETCH_SIZE,
+    ) -> None:
         if conn_factory is None:
             raise ValueError("conn_factory is required")
+        if not 1 <= max_workers <= _MAX_CATALOG_WORKERS:
+            raise ValueError(f"max_workers must be between 1 and {_MAX_CATALOG_WORKERS}")
+        if not 1 <= stream_fetch_size <= _MAX_STREAM_FETCH_SIZE:
+            raise ValueError(f"stream_fetch_size must be between 1 and {_MAX_STREAM_FETCH_SIZE}")
         self._conn_factory = conn_factory
         self._planner = planner or HistoricalRangeCatalogPlanner()
+        self._max_workers = max_workers
+        self._stream_fetch_size = stream_fetch_size
 
     def resolve_chunk(
         self,
@@ -250,18 +279,48 @@ class PostgresHistoricalRangeCatalogExecutor:
         previous_checkpoint: HistoricalRangeSourceCatalogCheckpointV1 | None = None,
         chunk_size: int = 32,
     ) -> HistoricalRangeCatalogChunkResult:
+        if not 1 <= chunk_size <= 32:
+            raise ValueError("catalog chunk_size must be between 1 and 32")
+        if not 1 <= start_ordinal <= len(plan.requirements):
+            raise ValueError("start_ordinal must reference a planned requirement")
+        if phase is HistoricalRangeCatalogPhase.VERIFY and expected_members is None:
+            raise ValueError("VERIFY requires the complete DISCOVER member set")
+        if phase is HistoricalRangeCatalogPhase.DISCOVER and expected_members is not None:
+            raise ValueError("DISCOVER cannot accept a pre-resolved verification set")
+        if catalog_generation < 1:
+            raise ValueError("catalog_generation must be positive")
+        self._planner._validate_previous_checkpoint(
+            plan=plan,
+            catalog_generation=catalog_generation,
+            phase=phase,
+            start_ordinal=start_ordinal,
+            resolved_members=dict(resolved_members),
+            previous_checkpoint_ref=previous_checkpoint_ref,
+            previous_checkpoint=previous_checkpoint,
+        )
         with self._conn_factory() as conn:
             conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT transaction_timestamp() AS observed_at")
-                observed_at = cur.fetchone()["observed_at"]
-                resolver = _PostgresRequirementResolver(cur=cur, observed_at=observed_at)
+                cur.execute(
+                    "SELECT transaction_timestamp() AS observed_at, pg_export_snapshot() AS snapshot_id"
+                )
+                snapshot = cur.fetchone()
+                cached = self._resolve_chunk_requirements(
+                    plan=plan,
+                    phase=phase,
+                    start_ordinal=start_ordinal,
+                    chunk_size=chunk_size,
+                    observed_at=snapshot["observed_at"],
+                    snapshot_id=str(snapshot["snapshot_id"]),
+                    resolved_members=resolved_members,
+                    expected_members=expected_members,
+                )
                 result = self._planner.resolve_chunk(
                     plan=plan,
                     catalog_generation=catalog_generation,
                     phase=phase,
                     start_ordinal=start_ordinal,
-                    resolver=resolver,
+                    resolver=_CachedRequirementResolver(cached),
                     resolved_members=resolved_members,
                     expected_members=expected_members,
                     previous_checkpoint_ref=previous_checkpoint_ref,
@@ -270,6 +329,172 @@ class PostgresHistoricalRangeCatalogExecutor:
                 )
             conn.rollback()
             return result
+
+    def _resolve_chunk_requirements(
+        self,
+        *,
+        plan: HistoricalRangeSourceRequirementPlanV1,
+        phase: HistoricalRangeCatalogPhase,
+        start_ordinal: int,
+        chunk_size: int,
+        observed_at: datetime,
+        snapshot_id: str,
+        resolved_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+        expected_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1] | None,
+    ) -> dict[str, HistoricalRangeSourceRevisionMemberV1 | Exception]:
+        ordinal_end = min(len(plan.requirements), start_ordinal + chunk_size - 1)
+        pending = list(plan.requirements[start_ordinal - 1 : ordinal_end])
+        dependency_source = dict(expected_members or resolved_members)
+        cached: dict[str, HistoricalRangeSourceRevisionMemberV1 | Exception] = {}
+        with ThreadPoolExecutor(
+            max_workers=min(self._max_workers, len(pending)),
+            thread_name_prefix="advisory-catalog",
+        ) as executor:
+            while pending:
+                ready = [
+                    requirement
+                    for requirement in pending
+                    if all(
+                        dependency in dependency_source
+                        for dependency in requirement.depends_on_requirement_ids
+                    )
+                ]
+                if not ready:
+                    break
+                worker_count = min(self._max_workers, len(ready))
+                batches: list[list[HistoricalRangeSourceRequirementV1]] = [
+                    [] for _ in range(worker_count)
+                ]
+                batch_weights = [0 for _ in range(worker_count)]
+                for requirement in sorted(ready, key=_requirement_work_weight, reverse=True):
+                    target = min(range(worker_count), key=batch_weights.__getitem__)
+                    batches[target].append(requirement)
+                    batch_weights[target] += _requirement_work_weight(requirement)
+                futures = [
+                    (
+                        tuple(batch),
+                        executor.submit(
+                            self._resolve_requirement_batch,
+                            requirements=tuple(batch),
+                            dependency_source=dependency_source,
+                            phase=phase,
+                            expected_members=expected_members or {},
+                            observed_at=observed_at,
+                            snapshot_id=snapshot_id,
+                        ),
+                    )
+                    for batch in batches
+                    if batch
+                ]
+                for batch, future in futures:
+                    try:
+                        batch_result = future.result()
+                    except Exception as exc:
+                        batch_result = {
+                            requirement.requirement_id: exc for requirement in batch
+                        }
+                    cached.update(batch_result)
+                    dependency_source.update(
+                        {
+                            requirement_id: value
+                            for requirement_id, value in batch_result.items()
+                            if isinstance(value, HistoricalRangeSourceRevisionMemberV1)
+                        }
+                    )
+                ready_ids = {requirement.requirement_id for requirement in ready}
+                pending = [
+                    requirement
+                    for requirement in pending
+                    if requirement.requirement_id not in ready_ids
+                ]
+        return cached
+
+    def _resolve_requirement_batch(
+        self,
+        *,
+        requirements: tuple[HistoricalRangeSourceRequirementV1, ...],
+        dependency_source: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+        phase: HistoricalRangeCatalogPhase,
+        expected_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+        observed_at: datetime,
+        snapshot_id: str,
+    ) -> dict[str, HistoricalRangeSourceRevisionMemberV1 | Exception]:
+        with self._conn_factory() as conn:
+            conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+            try:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute("SET TRANSACTION SNAPSHOT %s", (snapshot_id,))
+                    resolver = _PostgresRequirementResolver(
+                        cur=cur,
+                        conn=conn,
+                        observed_at=observed_at,
+                        stream_fetch_size=self._stream_fetch_size,
+                    )
+                    results: dict[str, HistoricalRangeSourceRevisionMemberV1 | Exception] = {}
+                    for requirement in requirements:
+                        try:
+                            results[requirement.requirement_id] = resolver.resolve(
+                                requirement=requirement,
+                                dependency_members={
+                                    dependency: dependency_source[dependency]
+                                    for dependency in requirement.depends_on_requirement_ids
+                                },
+                                phase=phase,
+                                expected_member=expected_members.get(requirement.requirement_id),
+                            )
+                        except HistoricalRangeSourceInputUnavailable as exc:
+                            exc.__traceback__ = None
+                            exc.__context__ = None
+                            exc.__cause__ = None
+                            results[requirement.requirement_id] = exc
+                        except Exception as exc:  # retain the original stack for diagnosis
+                            results[requirement.requirement_id] = exc
+                    return results
+            finally:
+                conn.rollback()
+
+
+class _CachedRequirementResolver(HistoricalRangeSourceRequirementResolver):
+    def __init__(
+        self,
+        cached: Mapping[str, HistoricalRangeSourceRevisionMemberV1 | Exception],
+    ) -> None:
+        self._cached = dict(cached)
+
+    def resolve(
+        self,
+        *,
+        requirement: HistoricalRangeSourceRequirementV1,
+        dependency_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+        phase: HistoricalRangeCatalogPhase,
+        expected_member: HistoricalRangeSourceRevisionMemberV1 | None,
+    ) -> HistoricalRangeSourceRevisionMemberV1:
+        del dependency_members, phase, expected_member
+        if requirement.requirement_id not in self._cached:
+            raise RuntimeError(
+                f"catalog requirement was not prefetched: {requirement.requirement_id}"
+            )
+        value = self._cached[requirement.requirement_id]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+def _requirement_work_weight(requirement: HistoricalRangeSourceRequirementV1) -> int:
+    if requirement.query_template_id == "historical_fundamental_moneyflow_window":
+        query_weight = 5
+    elif requirement.query_template_id == "historical_market_history_window":
+        query_weight = 2
+    else:
+        return 1
+    parameters = requirement.parameter_template
+    start_raw = parameters.get("start_date") or parameters.get("range_start")
+    end_raw = parameters.get("trade_date")
+    try:
+        span_days = (date.fromisoformat(str(end_raw)) - date.fromisoformat(str(start_raw))).days + 1
+    except (TypeError, ValueError):
+        return query_weight
+    return query_weight * max(span_days, 1)
 
 
 class PostgresHistoricalRangeSourceRevisionVerifier:
@@ -310,7 +535,7 @@ class PostgresHistoricalRangeSourceRevisionVerifier:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("SELECT transaction_timestamp() AS observed_at")
                 observed_at = cur.fetchone()["observed_at"]
-                resolver = _PostgresRequirementResolver(cur=cur, observed_at=observed_at)
+                resolver = _PostgresRequirementResolver(cur=cur, conn=conn, observed_at=observed_at)
                 for expected in selected:
                     if expected.bound_parameters is None:
                         raise HistoricalRangeContractError(
@@ -362,9 +587,22 @@ class PostgresHistoricalRangeSourceRevisionVerifier:
 
 
 class _PostgresRequirementResolver(HistoricalRangeSourceRequirementResolver):
-    def __init__(self, *, cur: Any, observed_at: datetime) -> None:
+    def __init__(
+        self,
+        *,
+        cur: Any,
+        observed_at: datetime,
+        conn: Any | None = None,
+        stream_fetch_size: int = _DEFAULT_STREAM_FETCH_SIZE,
+    ) -> None:
+        if not 1 <= stream_fetch_size <= _MAX_STREAM_FETCH_SIZE:
+            raise ValueError(f"stream_fetch_size must be between 1 and {_MAX_STREAM_FETCH_SIZE}")
         self._cur = cur
+        self._conn = conn
         self._observed_at = observed_at.astimezone(UTC)
+        self._stream_fetch_size = stream_fetch_size
+        if isinstance(conn, psycopg2.extensions.connection):
+            psycopg2.extras.register_default_jsonb(conn, loads=orjson.loads)
 
     def resolve(
         self,
@@ -681,24 +919,21 @@ class _PostgresRequirementResolver(HistoricalRangeSourceRequirementResolver):
         raise ValueError(f"unsupported historical catalog query template: {query_id}")
 
     def _stream_universe(self, sql: str, params: tuple[Any, ...]) -> tuple[int, str, str]:
-        self._cur.execute(sql, params)
-        schema_fingerprint = canonical_json_sha256(
-            [{"name": str(item.name), "type_code": int(item.type_code)} for item in self._cur.description]
-        )
-        symbols: list[str] = []
-        while True:
-            rows = self._cur.fetchmany(1000)
-            if not rows:
-                break
-            for row in rows:
-                payload = row["payload"]
-                symbol = str(payload.get("ts_code") or "").strip()
-                if not symbol:
-                    raise HistoricalRangeSourceInputUnavailable(
-                        "ADVISORY_HR_PIT_INPUT_UNAVAILABLE",
-                        "historical PIT universe row lacks ts_code",
-                    )
-                symbols.append(symbol)
+        with self._open_stream_cursor(sql, params) as stream_cur:
+            rows = stream_cur.fetchmany(self._stream_fetch_size)
+            schema_fingerprint = self._schema_fingerprint(stream_cur)
+            symbols: list[str] = []
+            while rows:
+                for row in rows:
+                    payload = row["payload"]
+                    symbol = str(payload.get("ts_code") or "").strip()
+                    if not symbol:
+                        raise HistoricalRangeSourceInputUnavailable(
+                            "ADVISORY_HR_PIT_INPUT_UNAVAILABLE",
+                            "historical PIT universe row lacks ts_code",
+                        )
+                    symbols.append(symbol)
+                rows = stream_cur.fetchmany(self._stream_fetch_size)
         if len(symbols) != len(set(symbols)):
             raise HistoricalRangeSourceInputUnavailable(
                 "ADVISORY_HR_PIT_INPUT_UNAVAILABLE",
@@ -731,35 +966,59 @@ class _PostgresRequirementResolver(HistoricalRangeSourceRequirementResolver):
         *,
         required_non_null: tuple[str, ...] = (),
     ) -> tuple[int, str, str]:
-        self._cur.execute(sql, params)
-        schema_fingerprint = canonical_json_sha256(
+        with self._open_stream_cursor(sql, params) as stream_cur:
+            rows = stream_cur.fetchmany(self._stream_fetch_size)
+            schema_fingerprint = self._schema_fingerprint(stream_cur)
+            digest = hashlib.sha256()
+            row_count = 0
+            while rows:
+                for row in rows:
+                    payload = row["payload"]
+                    if any(payload.get(field) is None for field in required_non_null):
+                        raise HistoricalRangeSourceInputUnavailable(
+                            "ADVISORY_HR_PIT_INPUT_UNAVAILABLE",
+                            "historical source row lacks a required database value",
+                            context={"missing_fields": list(required_non_null)},
+                        )
+                    encoded = _canonical_bytes(payload)
+                    digest.update(len(encoded).to_bytes(8, "big"))
+                    digest.update(encoded)
+                    row_count += 1
+                rows = stream_cur.fetchmany(self._stream_fetch_size)
+        return row_count, digest.hexdigest(), schema_fingerprint
+
+    def _open_stream_cursor(self, sql: str, params: tuple[Any, ...]) -> Any:
+        if self._conn is None:
+            raise RuntimeError("streaming historical catalog queries require an explicit PostgreSQL connection")
+        stream_cur = self._conn.cursor(
+            name=f"ahr_catalog_{uuid.uuid4().hex}",
+            cursor_factory=psycopg2.extras.RealDictCursor,
+        )
+        stream_cur.itersize = self._stream_fetch_size
+        stream_cur.execute(sql, params)
+        return stream_cur
+
+    @staticmethod
+    def _schema_fingerprint(cur: Any) -> str:
+        return canonical_json_sha256(
             [
                 {"name": str(item.name), "type_code": int(item.type_code)}
-                for item in self._cur.description
+                for item in cur.description
             ]
         )
-        digest = hashlib.sha256()
-        row_count = 0
-        while True:
-            rows = self._cur.fetchmany(1000)
-            if not rows:
-                break
-            for row in rows:
-                payload = row["payload"]
-                if any(payload.get(field) is None for field in required_non_null):
-                    raise HistoricalRangeSourceInputUnavailable(
-                        "ADVISORY_HR_PIT_INPUT_UNAVAILABLE",
-                        "historical source row lacks a required database value",
-                        context={"missing_fields": list(required_non_null)},
-                    )
-                encoded = _canonical_bytes(payload)
-                digest.update(len(encoded).to_bytes(8, "big"))
-                digest.update(encoded)
-                row_count += 1
-        return row_count, digest.hexdigest(), schema_fingerprint
 
 
 def _canonical_bytes(value: Any) -> bytes:
+    # Query payloads originate as PostgreSQL JSONB, so non-finite numbers are impossible.
+    # CPython and orjson differ only on exponent spelling for this domain; preserve the
+    # frozen hash contract by falling back whenever an exponent token is present.
+    encoded = orjson.dumps(
+        value,
+        option=orjson.OPT_SORT_KEYS | orjson.OPT_PASSTHROUGH_DATETIME,
+        default=str,
+    )
+    if _ORJSON_EXPONENT_NUMBER.search(encoded) is None:
+        return encoded
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False).encode("utf-8")
 
 
