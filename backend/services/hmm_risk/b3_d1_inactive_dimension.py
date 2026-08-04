@@ -3,17 +3,26 @@ from __future__ import annotations
 import json
 import math
 import os
+import struct
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from backend.services.hmm_risk.b3_acceptance import D3_CONTRACT_VERSION, L2_RETRAIN_VERSION, RESTART_SCHEDULE
+from backend.services.hmm_risk.b3_acceptance import (
+    D3_CONTRACT_VERSION,
+    D4_COVARIANCE_VERSION,
+    L2_RETRAIN_VERSION,
+    RESTART_SCHEDULE,
+)
 from backend.services.hmm_risk.b3_training import (
     B3CoreFitEvidence,
     B3TrainingStageError,
     B3TrainOnlySeries,
+    REFIT03_RAW_COVARIANCE_AUTHORITY,
+    REFIT03_RAW_COVARIANCE_SCHEMA_VERSION,
+    REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION,
     fit_b3_preprocessed_train_only,
     formal_b3_parameter_profile,
 )
@@ -24,6 +33,7 @@ from backend.services.hmm_risk.state_model_set import (
     _float64_array_identity,
     canonical_json_bytes,
     canonical_sha256,
+    sha256_bytes,
 )
 
 
@@ -43,17 +53,23 @@ REFIT02_ALGORITHM_VERSION = "hmm_risk_c008_b3_d1_refit_02_a_v1"
 REFIT02_AUTHORITY_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_current_a5_experiment_authority_v1"
 REFIT02_ATTEMPT_SCHEMA_VERSION_ORIGINAL = "hmm_risk_c008_b3_d1_controlled_attempt_v3"
 REFIT02_ATTEMPT_SCHEMA_VERSION_LEGACY = "hmm_risk_c008_b3_d1_controlled_attempt_v4"
-REFIT02_ATTEMPT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_attempt_v5"
+REFIT02_ATTEMPT_SCHEMA_VERSION_MATCHED_FIT = "hmm_risk_c008_b3_d1_controlled_attempt_v5"
+REFIT02_ATTEMPT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_attempt_v6"
 REFIT02_PROCESS_SCHEMA_VERSION_ORIGINAL = "hmm_risk_c008_b3_d1_controlled_process_v4"
 REFIT02_PROCESS_SCHEMA_VERSION_LEGACY = "hmm_risk_c008_b3_d1_controlled_process_v5"
-REFIT02_PROCESS_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_process_v6"
+REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT = "hmm_risk_c008_b3_d1_controlled_process_v6"
+REFIT02_PROCESS_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_process_v7"
 REFIT02_REPORT_SCHEMA_VERSION_ORIGINAL = "hmm_risk_c008_b3_d1_controlled_refit_report_v4"
 REFIT02_REPORT_SCHEMA_VERSION_LEGACY = "hmm_risk_c008_b3_d1_controlled_refit_report_v5"
-REFIT02_REPORT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_refit_report_v6"
+REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT = "hmm_risk_c008_b3_d1_controlled_refit_report_v6"
+REFIT02_REPORT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_refit_report_v7"
 REFIT02_DIAGNOSTIC_CONTRACT_LEGACY = "C-008-B3-REMEDIATION-D1-B-REFIT-02-A"
-REFIT02_DIAGNOSTIC_CONTRACT = "C-008-B3-REMEDIATION-D1-B-REFIT-02-B"
+REFIT02_DIAGNOSTIC_CONTRACT_MATCHED_FIT = "C-008-B3-REMEDIATION-D1-B-REFIT-02-B"
+REFIT02_DIAGNOSTIC_CONTRACT = "C-008-B3-D1-REFIT-03-COVARIANCE-DIAG-01"
 REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY = "hmm_risk_c008_b3_d1_refit02_fit_budget_v1"
 REFIT02_FIT_BUDGET_CONTRACT_VERSION = "hmm_risk_c008_b3_d1_refit02_fit_budget_v2"
+REFIT03_COVARIANCE_EVIDENCE_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_covariance_evidence_v1"
+REFIT03_RAW_FRAME_HEADER_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_covariance_frame_header_v1"
 TREATMENT_ROLE = "treatment"
 CONTROL_ROLE = "control"
 REFIT02_TREATMENT_ROLE = "treatment_19d"
@@ -135,6 +151,28 @@ class D1InactiveDimensionError(StateModelSetError):
         super().__init__(message)
         self.reason_code = reason_code
         self.evidence = dict(evidence or {})
+
+
+def _refit_diagnostic_contract_for_report(schema_version: str) -> str:
+    if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+        return REFIT02_DIAGNOSTIC_CONTRACT
+    if schema_version == REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT:
+        return REFIT02_DIAGNOSTIC_CONTRACT_MATCHED_FIT
+    return REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
+
+
+def _refit_process_schema_for_report(schema_version: str) -> str:
+    if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+        return REFIT02_PROCESS_SCHEMA_VERSION
+    if schema_version == REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT:
+        return REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT
+    if schema_version == REFIT02_REPORT_SCHEMA_VERSION_LEGACY:
+        return REFIT02_PROCESS_SCHEMA_VERSION_LEGACY
+    return REFIT02_PROCESS_SCHEMA_VERSION_ORIGINAL
+
+
+def _refit_report_uses_v2_fit_budget(schema_version: str) -> bool:
+    return schema_version in {REFIT02_REPORT_SCHEMA_VERSION, REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT}
 
 
 def _require_sha256(value: Any, field: str) -> str:
@@ -1797,6 +1835,434 @@ def _refit02_projection_receipt(
     return projected, {**body, "projection_sha256": canonical_sha256(body)}
 
 
+def _refit03_feature_context(role: str) -> tuple[tuple[str, ...], tuple[bool, ...]]:
+    if role == REFIT02_TREATMENT_ROLE:
+        return tuple(ALL_CORE_FEATURES[:19]), (False,) * 19
+    if role == REFIT02_MATCHED_NEGATIVE_ROLE:
+        return tuple(ALL_CORE_FEATURES), (False,) * 19 + (True,)
+    if role == REFIT02_HARNESS_ROLE:
+        return tuple(ALL_CORE_FEATURES), (False,) * 20
+    raise D1InactiveDimensionError(
+        "hmm_risk_model_inactive_dimension_contract_invalid",
+        "REFIT-03 covariance evidence role is invalid",
+    )
+
+
+def _validate_refit03_raw_capture(value: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(value)
+    body = {key: item for key, item in normalized.items() if key != "capture_receipt_sha256"}
+    reasons = normalized.get("reason_codes")
+    cells = normalized.get("cells")
+    if (
+        normalized.get("schema_version") != REFIT03_RAW_COVARIANCE_SCHEMA_VERSION
+        or normalized.get("raw_authority") != REFIT03_RAW_COVARIANCE_AUTHORITY
+        or not isinstance(reasons, list)
+        or any(not isinstance(reason, str) or not reason for reason in reasons)
+        or len(reasons) != len(set(reasons))
+        or not isinstance(cells, list)
+        or not isinstance(normalized.get("raw_validity"), bool)
+        or canonical_sha256(body) != normalized.get("capture_receipt_sha256")
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_evidence_incomplete",
+            "REFIT-03 raw covariance capture receipt is invalid",
+        )
+    expected_shape = normalized.get("expected_shape")
+    actual_shape = normalized.get("actual_shape")
+    if (
+        not isinstance(expected_shape, list)
+        or len(expected_shape) != 2
+        or any(not isinstance(item, int) or isinstance(item, bool) or item <= 0 for item in expected_shape)
+        or (
+            actual_shape is not None
+            and (
+                not isinstance(actual_shape, list)
+                or any(not isinstance(item, int) or isinstance(item, bool) or item < 0 for item in actual_shape)
+            )
+        )
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_evidence_incomplete",
+            "REFIT-03 raw covariance shape metadata is invalid",
+        )
+
+    inferred_reasons: list[str] = []
+    if normalized.get("actual_python_type") != "numpy.ndarray":
+        inferred_reasons.append("hmm_risk_model_covariance_raw_type_invalid")
+    dtype: np.dtype[Any] | None = None
+    if normalized.get("actual_dtype") is not None:
+        try:
+            dtype = np.dtype(str(normalized["actual_dtype"]))
+        except (TypeError, ValueError):
+            dtype = None
+    if actual_shape is not None and (dtype is None or dtype.kind != "f" or dtype.itemsize != 8):
+        inferred_reasons.append("hmm_risk_model_covariance_raw_dtype_invalid")
+    if actual_shape is not None and (len(actual_shape) != 2 or actual_shape != expected_shape):
+        inferred_reasons.append("hmm_risk_model_covariance_raw_shape_invalid")
+    if actual_shape is not None and normalized.get("c_contiguous") is not True:
+        inferred_reasons.append("hmm_risk_model_covariance_raw_layout_invalid")
+
+    allowed_classifications = {
+        "finite_positive",
+        "positive_zero",
+        "negative_zero",
+        "finite_negative",
+        "nan",
+        "positive_infinity",
+        "negative_infinity",
+    }
+    coordinates: set[tuple[int, int]] = set()
+    non_finite = False
+    non_positive = False
+    for raw_cell in cells:
+        if not isinstance(raw_cell, Mapping):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_covariance_evidence_incomplete",
+                "REFIT-03 raw covariance cell is not a mapping",
+            )
+        state_index = raw_cell.get("state_index")
+        feature_index = raw_cell.get("feature_index")
+        bit_pattern = raw_cell.get("semantic_bit_pattern_hex")
+        classification = raw_cell.get("classification")
+        if (
+            not isinstance(state_index, int)
+            or isinstance(state_index, bool)
+            or state_index < 0
+            or not isinstance(feature_index, int)
+            or isinstance(feature_index, bool)
+            or feature_index < 0
+            or not isinstance(bit_pattern, str)
+            or len(bit_pattern) != 16
+            or any(char not in "0123456789abcdef" for char in bit_pattern)
+            or classification not in allowed_classifications
+            or (state_index, feature_index) in coordinates
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_covariance_evidence_incomplete",
+                "REFIT-03 raw covariance cell identity is invalid",
+            )
+        coordinates.add((state_index, feature_index))
+        bits = int(bit_pattern, 16)
+        sign = (bits >> 63) & 1
+        exponent = (bits >> 52) & 0x7FF
+        fraction = bits & ((1 << 52) - 1)
+        if exponent == 0x7FF:
+            expected_classification = "nan" if fraction else "negative_infinity" if sign else "positive_infinity"
+        elif exponent == 0 and fraction == 0:
+            expected_classification = "negative_zero" if sign else "positive_zero"
+        else:
+            expected_classification = "finite_negative" if sign else "finite_positive"
+        if classification != expected_classification:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_covariance_bitpattern_conflict",
+                "REFIT-03 raw covariance classification disagrees with its bit pattern",
+            )
+        finite = classification not in {"nan", "positive_infinity", "negative_infinity"}
+        float_hex = raw_cell.get("float_hex")
+        if finite:
+            try:
+                round_trip = float.fromhex(str(float_hex))
+                round_trip_bits = struct.unpack(">Q", struct.pack(">d", round_trip))[0]
+            except (TypeError, ValueError, OverflowError):
+                round_trip_bits = -1
+            if round_trip_bits != bits:
+                raise D1InactiveDimensionError(
+                    "hmm_risk_model_covariance_bitpattern_conflict",
+                    "REFIT-03 finite covariance hex value disagrees with its bit pattern",
+                )
+        elif float_hex is not None:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_covariance_bitpattern_conflict",
+                "REFIT-03 non-finite covariance cell contains a JSON float value",
+            )
+        non_finite = non_finite or not finite
+        non_positive = non_positive or classification in {
+            "positive_zero",
+            "negative_zero",
+            "finite_negative",
+        }
+
+    if dtype is not None and dtype.kind == "f" and dtype.itemsize == 8 and isinstance(actual_shape, list):
+        expected_cell_count = math.prod(actual_shape) if len(actual_shape) == 2 else 0
+        if len(cells) != expected_cell_count:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_covariance_evidence_incomplete",
+                "REFIT-03 raw covariance logical-cell evidence is incomplete",
+            )
+    elif cells:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_evidence_incomplete",
+            "REFIT-03 unsupported raw covariance carries fabricated logical cells",
+        )
+    if non_finite:
+        inferred_reasons.append("hmm_risk_model_covariance_raw_non_finite")
+    if non_positive:
+        inferred_reasons.append("hmm_risk_model_covariance_raw_non_positive")
+    inferred_reasons = list(dict.fromkeys(inferred_reasons))
+    if reasons != inferred_reasons or normalized.get("raw_validity") is not (not inferred_reasons):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_bitpattern_conflict",
+            "REFIT-03 raw covariance reason summary disagrees with its evidence",
+        )
+    return normalized
+
+
+def _bind_refit03_covariance_evidence(
+    raw_capture: Mapping[str, Any],
+    *,
+    role: str,
+    stage_evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    capture = _validate_refit03_raw_capture(raw_capture)
+    feature_names, inactive_mask = _refit03_feature_context(role)
+    feature_order_sha256 = canonical_sha256(list(feature_names))
+    inactive_mask_sha256 = canonical_sha256(list(inactive_mask))
+    cells: list[dict[str, Any]] = []
+    classification_by_state: dict[str, dict[str, int]] = {}
+    classification_by_feature: dict[str, dict[str, int]] = {}
+    raw_invalid_feature_indices: set[int] = set()
+    for raw_cell in capture["cells"]:
+        state_index = int(raw_cell.get("state_index", -1))
+        feature_index = int(raw_cell.get("feature_index", -1))
+        classification = str(raw_cell.get("classification") or "")
+        feature_name = feature_names[feature_index] if 0 <= feature_index < len(feature_names) else None
+        inactive = bool(inactive_mask[feature_index]) if 0 <= feature_index < len(inactive_mask) else False
+        cell = {
+            **dict(raw_cell),
+            "feature_name": feature_name,
+            "is_inactive_coordinate": inactive,
+        }
+        cells.append(cell)
+        state_counts = classification_by_state.setdefault(str(state_index), {})
+        state_counts[classification] = state_counts.get(classification, 0) + 1
+        feature_counts = classification_by_feature.setdefault(str(feature_index), {})
+        feature_counts[classification] = feature_counts.get(classification, 0) + 1
+        if classification != "finite_positive":
+            raw_invalid_feature_indices.add(feature_index)
+
+    actual_shape = capture.get("actual_shape")
+    expected_shape = [3, len(feature_names)]
+    capture_expected_shape = capture.get("expected_shape")
+    frame_header = {
+        "schema_version": REFIT03_RAW_FRAME_HEADER_SCHEMA_VERSION,
+        "raw_authority": REFIT03_RAW_COVARIANCE_AUTHORITY,
+        "actual_dtype": capture.get("actual_dtype"),
+        "actual_shape": actual_shape,
+        "actual_strides": capture.get("actual_strides"),
+        "feature_order_sha256": feature_order_sha256,
+        "inactive_mask_sha256": inactive_mask_sha256,
+    }
+    dtype_valid = False
+    try:
+        dtype = np.dtype(str(capture.get("actual_dtype") or ""))
+        dtype_valid = dtype.kind == "f" and dtype.itemsize == 8
+    except (TypeError, ValueError):
+        dtype_valid = False
+    frame_eligible = bool(
+        capture.get("actual_python_type") == "numpy.ndarray"
+        and dtype_valid
+        and isinstance(actual_shape, list)
+        and len(actual_shape) == 2
+        and capture.get("c_contiguous") is True
+        and len(cells) == int(actual_shape[0]) * int(actual_shape[1])
+    )
+    payload_sha256: str | None = None
+    if frame_eligible:
+        header_bytes = canonical_json_bytes(frame_header)
+        cell_bits = b"".join(struct.pack(">Q", int(str(cell["semantic_bit_pattern_hex"]), 16)) for cell in cells)
+        payload_sha256 = sha256_bytes(struct.pack(">Q", len(header_bytes)) + header_bytes + cell_bits)
+
+    stage_cause = dict(stage_evidence.get("stage_specific_cause_evidence") or {})
+    covariance_stage = dict(stage_evidence.get("covariance_evidence") or {})
+    acceptance = dict(covariance_stage.get("acceptance") or {})
+    acceptance_evidence = dict(acceptance.get("evidence") or {})
+    if covariance_stage.get("dynamic_lower_reference") is not None:
+        derived_status = "computed"
+        covariance_status = str(acceptance.get("covariance_status") or "") or None
+        covariance_valid = acceptance.get("covariance_valid") is True
+    else:
+        derived_status = str(stage_cause.get("d4_derived_evidence_status") or "") or None
+        covariance_status = str(stage_cause.get("covariance_status") or "") or None
+        covariance_valid = False
+    derived_fields = {
+        "state_posterior_mass": covariance_stage.get("state_posterior_mass"),
+        "posterior_weighted_variance_about_weighted_mean": covariance_stage.get(
+            "posterior_weighted_variance_about_weighted_mean"
+        ),
+        "posterior_second_moment_about_fitted_mean": covariance_stage.get("posterior_second_moment_about_fitted_mean"),
+        "mstep_expected_covariance": covariance_stage.get("mstep_expected_covariance"),
+        "dynamic_lower_reference": covariance_stage.get("dynamic_lower_reference"),
+        "dynamic_upper_reference": covariance_stage.get("dynamic_upper_reference"),
+        "mstep_relative_residual": covariance_stage.get("mstep_relative_residual"),
+    }
+    bound_anomaly_feature_indices = {
+        index
+        for index, count in enumerate(acceptance_evidence.get("per_feature_anomaly_count") or ())
+        if int(count) > 0
+    }
+    residual_failure_feature_indices: set[int] = set()
+    for row in acceptance_evidence.get("mstep_relative_residual") or ():
+        if not isinstance(row, Sequence) or isinstance(row, (str, bytes, bytearray)):
+            continue
+        for feature_index, residual in enumerate(row):
+            if isinstance(residual, (int, float)) and math.isfinite(float(residual)) and float(residual) > 0.02:
+                residual_failure_feature_indices.add(feature_index)
+    invalid_feature_indices = (
+        raw_invalid_feature_indices | bound_anomaly_feature_indices | residual_failure_feature_indices
+    )
+    derived_failure_reason_codes = list(
+        dict.fromkeys(
+            [
+                *(acceptance.get("failure_reason_codes") or ()),
+                *(acceptance.get("blocking_reason_codes") or ()),
+            ]
+        )
+    )
+    derived_warning_reason_codes = list(dict.fromkeys(acceptance.get("warning_reason_codes") or ()))
+    if bound_anomaly_feature_indices:
+        derived_failure_reason_codes.append("hmm_risk_model_covariance_raw_bounds_failed")
+    if isinstance(derived_status, str) and derived_status.startswith("not_computable_"):
+        derived_failure_reason_codes.append("hmm_risk_model_covariance_derived_evidence_not_computable")
+    derived_failure_reason_codes = list(dict.fromkeys(str(reason) for reason in derived_failure_reason_codes))
+    derived_warning_reason_codes = list(dict.fromkeys(str(reason) for reason in derived_warning_reason_codes))
+    derived_reason_codes = list(dict.fromkeys([*derived_failure_reason_codes, *derived_warning_reason_codes]))
+    initialization_evidence = dict(stage_evidence.get("initialization_evidence") or {})
+    d4_formula_identity = {
+        "contract_version": D4_COVARIANCE_VERSION,
+        "nu": initialization_evidence.get("nu"),
+        "bound_tolerance": 0.005,
+        "mstep_relative_residual_max": 0.02,
+        "lower_formula": "nu*R_sj/(nu+M_k)",
+        "upper_formula": "(nu+N_train)*R_sj/(nu+M_k)",
+        "mstep_expected_formula": "(nu*R_sj+M_k*W_kj)/(nu+M_k)",
+        "postfit_projection_allowed": False,
+    }
+    expected_cell_count = 3 * len(feature_names)
+    diagnostic_evidence_complete = bool(
+        frame_eligible
+        and capture_expected_shape == expected_shape
+        and actual_shape == expected_shape
+        and len(cells) == expected_cell_count
+        and derived_status
+        in {
+            "computed",
+            "not_computable_raw_covariance_invalid",
+            "not_computable_posterior_audit_unavailable",
+            "not_computable_posterior_audit_invalid",
+        }
+    )
+    body = {
+        "schema_version": REFIT03_COVARIANCE_EVIDENCE_SCHEMA_VERSION,
+        "raw_authority": REFIT03_RAW_COVARIANCE_AUTHORITY,
+        "role": role,
+        "expected_shape": expected_shape,
+        "capture_expected_shape": capture_expected_shape,
+        "actual_python_type": capture.get("actual_python_type"),
+        "actual_dtype": capture.get("actual_dtype"),
+        "actual_shape": actual_shape,
+        "actual_strides": capture.get("actual_strides"),
+        "actual_nbytes": capture.get("actual_nbytes"),
+        "actual_byteorder": capture.get("actual_byteorder"),
+        "c_contiguous": capture.get("c_contiguous"),
+        "feature_names": list(feature_names),
+        "feature_order_sha256": feature_order_sha256,
+        "inactive_mask": list(inactive_mask),
+        "inactive_mask_sha256": inactive_mask_sha256,
+        "cells": cells,
+        "classification_count_by_state": classification_by_state,
+        "classification_count_by_feature": classification_by_feature,
+        "raw_invalid_feature_indices": sorted(raw_invalid_feature_indices),
+        "d4_bound_anomaly_feature_indices": sorted(bound_anomaly_feature_indices),
+        "d4_residual_failure_feature_indices": sorted(residual_failure_feature_indices),
+        "invalid_feature_indices": sorted(invalid_feature_indices),
+        "raw_reason_codes": list(capture.get("reason_codes") or ()),
+        "derived_failure_reason_codes": derived_failure_reason_codes,
+        "derived_warning_reason_codes": derived_warning_reason_codes,
+        "derived_reason_codes": derived_reason_codes,
+        "evidence_unavailable_reason": (
+            stage_cause.get("evidence_unavailable_reason") or capture.get("evidence_unavailable_reason")
+        ),
+        "raw_frame_header": frame_header if frame_eligible else None,
+        "raw_covariance_payload_sha256": payload_sha256,
+        "raw_capture_receipt_sha256": capture.get("capture_receipt_sha256"),
+        "sector_local_reference_variance_R_sj": initialization_evidence.get("sector_local_reference_variance_R_sj"),
+        "covariance_prior_nu": initialization_evidence.get("nu"),
+        "d4_threshold_version": D4_COVARIANCE_VERSION,
+        "d4_formula_identity": d4_formula_identity,
+        "d4_formula_identity_sha256": canonical_sha256(d4_formula_identity),
+        "d4_derived_evidence_status": derived_status,
+        "covariance_status": covariance_status,
+        "covariance_valid": covariance_valid,
+        **derived_fields,
+        "diagnostic_evidence_complete": diagnostic_evidence_complete,
+        "cross_role_state_alignment_performed": False,
+        "semantic_label_accessed": False,
+    }
+    return {**body, "covariance_evidence_sha256": canonical_sha256(body)}
+
+
+def _bind_refit03_stage_evidence(value: Mapping[str, Any], *, role: str) -> dict[str, Any]:
+    normalized = dict(value)
+    body = {key: item for key, item in normalized.items() if key != "stage_evidence_sha256"}
+    completed_stages = normalized.get("completed_stages")
+    ordered_stages = [
+        "initialization",
+        "fit",
+        "raw_covariance_capture",
+        "monitor",
+        "likelihood",
+        "covariance",
+        "train_posterior",
+    ]
+    if (
+        normalized.get("schema_version") != REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION
+        or not isinstance(normalized.get("fit_invoked"), bool)
+        or not isinstance(normalized.get("fit_returned"), bool)
+        or normalized.get("fit_returned") is True
+        and normalized.get("fit_invoked") is not True
+        or not isinstance(completed_stages, list)
+        or completed_stages != ordered_stages[: len(completed_stages)]
+        or not isinstance(normalized.get("initialization_evidence"), Mapping)
+        or not isinstance(normalized.get("stage_specific_cause_evidence"), Mapping)
+        or (normalized.get("fit_invoked") is False and completed_stages not in ([], ["initialization"]))
+        or (
+            normalized.get("fit_invoked") is True
+            and normalized.get("fit_returned") is False
+            and completed_stages != ["initialization"]
+        )
+        or (normalized.get("fit_returned") is True and completed_stages[:2] != ["initialization", "fit"])
+        or (
+            "raw_covariance_capture" in completed_stages
+            and not isinstance(normalized.get("raw_covariance_evidence"), Mapping)
+        )
+        or (
+            isinstance(normalized.get("raw_covariance_evidence"), Mapping)
+            and normalized.get("fit_returned") is not True
+        )
+        or ("monitor" in completed_stages and not isinstance(normalized.get("monitor_evidence"), Mapping))
+        or ("likelihood" in completed_stages and not isinstance(normalized.get("likelihood_evidence"), Mapping))
+        or ("covariance" in completed_stages and not isinstance(normalized.get("covariance_evidence"), Mapping))
+        or canonical_sha256(body) != normalized.get("stage_evidence_sha256")
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_training_stage_evidence_incomplete",
+            "REFIT-03 training-stage evidence is invalid",
+        )
+    raw_capture = normalized.get("raw_covariance_evidence")
+    if not isinstance(raw_capture, Mapping):
+        return normalized
+    bound = _bind_refit03_covariance_evidence(
+        raw_capture,
+        role=role,
+        stage_evidence=normalized,
+    )
+    rebound = {
+        **body,
+        "raw_covariance_evidence": bound,
+    }
+    return {**rebound, "stage_evidence_sha256": canonical_sha256(rebound)}
+
+
 def fit_refit02_attempt(
     item: B3TrainOnlySeries,
     *,
@@ -1854,20 +2320,185 @@ def fit_refit02_attempt(
     failure_reason_codes: list[str] = []
     failure_message: str | None = None
     hmm_fit_invoked = False
+    training_stage_evidence: dict[str, Any] | None = None
     try:
         core = fit_b3_preprocessed_train_only(item, train=projected, seed=seed)
         hmm_fit_invoked = True
+        if isinstance(core.training_stage_evidence, Mapping):
+            training_stage_evidence = _bind_refit03_stage_evidence(
+                core.training_stage_evidence,
+                role=role,
+            )
         _validate_projected_parameter_shapes(core, feature_count=int(projected.shape[1]))
     except D1InactiveDimensionError as exc:
         hmm_fit_invoked = True
-        failure_stage = "parameter_shape"
+        failure_stage = (
+            "training_stage_evidence"
+            if exc.reason_code
+            in {
+                "hmm_risk_model_training_stage_evidence_incomplete",
+                "hmm_risk_model_covariance_evidence_incomplete",
+                "hmm_risk_model_covariance_bitpattern_conflict",
+            }
+            else "parameter_shape"
+        )
         failure_reason_codes.append(exc.reason_code)
         failure_message = str(exc)
     except B3TrainingStageError as exc:
-        hmm_fit_invoked = exc.stage != "initialization"
+        if isinstance(exc.stage_evidence, Mapping) and exc.stage_evidence:
+            try:
+                training_stage_evidence = _bind_refit03_stage_evidence(exc.stage_evidence, role=role)
+                hmm_fit_invoked = training_stage_evidence.get("fit_invoked") is True
+            except D1InactiveDimensionError as binding_exc:
+                failure_reason_codes.append(binding_exc.reason_code)
+                hmm_fit_invoked = exc.stage != "initialization"
+                fallback_body = {
+                    "schema_version": REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION,
+                    "fit_invoked": hmm_fit_invoked,
+                    "fit_returned": exc.stage not in {"initialization", "fit"},
+                    "completed_stages": [],
+                    "initialization_evidence": {},
+                    "monitor_evidence": None,
+                    "likelihood_evidence": None,
+                    "raw_covariance_evidence": None,
+                    "covariance_evidence": None,
+                    "stage_specific_cause_evidence": {
+                        "error_type": binding_exc.__class__.__name__,
+                        "error": str(binding_exc),
+                        "evidence_status": "invalid_training_stage_evidence",
+                    },
+                }
+                training_stage_evidence = {
+                    **fallback_body,
+                    "stage_evidence_sha256": canonical_sha256(fallback_body),
+                }
+        else:
+            hmm_fit_invoked = exc.stage != "initialization"
+            fallback_body = {
+                "schema_version": REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION,
+                "fit_invoked": hmm_fit_invoked,
+                "fit_returned": exc.stage not in {"initialization", "fit"},
+                "completed_stages": [],
+                "initialization_evidence": {},
+                "monitor_evidence": None,
+                "likelihood_evidence": None,
+                "raw_covariance_evidence": None,
+                "covariance_evidence": None,
+                "stage_specific_cause_evidence": {
+                    "error_type": exc.cause_type,
+                    "error": str(exc),
+                    "evidence_status": "missing_from_training_stage_error",
+                },
+            }
+            training_stage_evidence = {
+                **fallback_body,
+                "stage_evidence_sha256": canonical_sha256(fallback_body),
+            }
         failure_stage = exc.stage
         failure_reason_codes.append(exc.reason_code)
         failure_message = str(exc)
+    if core is not None and training_stage_evidence is None:
+        fallback_body = {
+            "schema_version": REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION,
+            "fit_invoked": True,
+            "fit_returned": True,
+            "completed_stages": [],
+            "initialization_evidence": dict(core.initialization),
+            "monitor_evidence": dict(core.monitor_evidence),
+            "likelihood_evidence": dict(core.likelihood),
+            "raw_covariance_evidence": None,
+            "covariance_evidence": dict(core.covariance),
+            "stage_specific_cause_evidence": {
+                "evidence_status": "missing_from_successful_core_fit_evidence",
+            },
+        }
+        training_stage_evidence = {
+            **fallback_body,
+            "stage_evidence_sha256": canonical_sha256(fallback_body),
+        }
+    raw_covariance_evidence = (
+        None
+        if not isinstance(training_stage_evidence, Mapping)
+        else training_stage_evidence.get("raw_covariance_evidence")
+    )
+    if isinstance(raw_covariance_evidence, Mapping):
+        failure_reason_codes.extend(raw_covariance_evidence.get("raw_reason_codes") or ())
+        failure_reason_codes.extend(raw_covariance_evidence.get("derived_failure_reason_codes") or ())
+        if core is not None and failure_reason_codes and failure_stage is None:
+            failure_stage = "covariance"
+            failure_message = "D4 covariance evidence did not satisfy the existing acceptance contract"
+    initialization_evidence = (
+        dict(core.initialization)
+        if core is not None
+        else (
+            dict(training_stage_evidence.get("initialization_evidence") or {})
+            if isinstance(training_stage_evidence, Mapping)
+            else None
+        )
+    )
+    monitor_evidence = (
+        dict(core.monitor_evidence)
+        if core is not None
+        else (
+            dict(training_stage_evidence.get("monitor_evidence") or {})
+            if isinstance(training_stage_evidence, Mapping)
+            and isinstance(training_stage_evidence.get("monitor_evidence"), Mapping)
+            else None
+        )
+    )
+    likelihood_evidence = (
+        dict(core.likelihood)
+        if core is not None
+        else (
+            dict(training_stage_evidence.get("likelihood_evidence") or {})
+            if isinstance(training_stage_evidence, Mapping)
+            and isinstance(training_stage_evidence.get("likelihood_evidence"), Mapping)
+            else None
+        )
+    )
+    covariance_evidence = dict(core.covariance) if core is not None else raw_covariance_evidence
+    stage_evidence_status = (
+        (training_stage_evidence.get("stage_specific_cause_evidence") or {}).get("evidence_status")
+        if isinstance(training_stage_evidence, Mapping)
+        else None
+    )
+    stage_evidence_complete = bool(
+        isinstance(training_stage_evidence, Mapping)
+        and stage_evidence_status
+        not in {
+            "missing_from_training_stage_error",
+            "missing_from_successful_core_fit_evidence",
+            "invalid_training_stage_evidence",
+        }
+    )
+    if core is not None:
+        diagnostic_evidence_complete = bool(
+            stage_evidence_complete
+            and isinstance(raw_covariance_evidence, Mapping)
+            and raw_covariance_evidence.get("diagnostic_evidence_complete") is True
+        )
+    elif failure_stage in {"initialization", "fit"}:
+        diagnostic_evidence_complete = stage_evidence_complete
+    elif failure_stage == "likelihood":
+        diagnostic_evidence_complete = bool(
+            stage_evidence_complete
+            and isinstance(initialization_evidence, Mapping)
+            and isinstance(raw_covariance_evidence, Mapping)
+            and raw_covariance_evidence.get("diagnostic_evidence_complete") is True
+        )
+    elif failure_stage in {"covariance", "train_posterior"}:
+        diagnostic_evidence_complete = bool(
+            stage_evidence_complete
+            and isinstance(initialization_evidence, Mapping)
+            and isinstance(monitor_evidence, Mapping)
+            and isinstance(likelihood_evidence, Mapping)
+            and isinstance(raw_covariance_evidence, Mapping)
+            and raw_covariance_evidence.get("diagnostic_evidence_complete") is True
+        )
+    else:
+        diagnostic_evidence_complete = False
+    if not diagnostic_evidence_complete:
+        failure_reason_codes.append("hmm_risk_model_training_stage_evidence_incomplete")
     if role == REFIT02_TREATMENT_ROLE:
         role_outcome = (
             "treatment_fit_completed" if core is not None and not failure_reason_codes else "treatment_failed"
@@ -1916,17 +2547,26 @@ def fit_refit02_attempt(
         "parameter_payload": parameter_payload,
         "numeric_environment": dict(numeric_environment),
         "numeric_environment_sha256": canonical_sha256(dict(numeric_environment)),
-        "initialization_evidence": dict(core.initialization) if core else None,
-        "monitor_evidence": dict(core.monitor_evidence) if core else None,
-        "likelihood": dict(core.likelihood) if core else None,
-        "covariance": dict(core.covariance) if core else None,
+        "training_stage_evidence": training_stage_evidence,
+        "diagnostic_evidence_complete": diagnostic_evidence_complete,
+        "raw_covariance_evidence": raw_covariance_evidence,
+        "initialization_evidence": initialization_evidence,
+        "monitor_evidence": monitor_evidence,
+        "likelihood": likelihood_evidence,
+        "covariance": covariance_evidence,
         "train_occupancy": dict(core.train_occupancy) if core else None,
-        "final_train_log_likelihood": core.terminal_likelihood if core else None,
+        "final_train_log_likelihood": (
+            core.terminal_likelihood
+            if core is not None
+            else ((monitor_evidence.get("history") or [None])[-1] if isinstance(monitor_evidence, Mapping) else None)
+        ),
         "validation_accessed": False,
         "future_utility_accessed": False,
         "semantic_labelability_accessed": False,
         "d6_status_accessed": False,
         "selection_performed": False,
+        "formal_model_set_acceptance_performed": False,
+        "hard_semantic_authority_changed": False,
         "model_write_performed": False,
         "ready_artifact_write_performed": False,
         "database_write_performed": False,
@@ -1958,6 +2598,7 @@ def _validate_refit02_attempt_receipt(
     normalized = dict(attempt)
     schema_version = normalized.get("schema_version")
     current_schema = schema_version == REFIT02_ATTEMPT_SCHEMA_VERSION
+    matched_fit_schema = schema_version == REFIT02_ATTEMPT_SCHEMA_VERSION_MATCHED_FIT
     previous_schema = schema_version == REFIT02_ATTEMPT_SCHEMA_VERSION_LEGACY
     original_schema = schema_version == REFIT02_ATTEMPT_SCHEMA_VERSION_ORIGINAL
     role = normalized.get("role")
@@ -1978,8 +2619,12 @@ def _validate_refit02_attempt_receipt(
         "database_write_performed",
         "runtime_action_performed",
     )
+    current_false_flags = false_flags + (
+        "formal_model_set_acceptance_performed",
+        "hard_semantic_authority_changed",
+    )
     if (
-        not (current_schema or previous_schema or original_schema)
+        not (current_schema or matched_fit_schema or previous_schema or original_schema)
         or normalized.get("algorithm_version") != REFIT02_ALGORITHM_VERSION
         or normalized.get("process_identity") != process_identity
         or role not in REFIT02_ROLES
@@ -1992,7 +2637,10 @@ def _validate_refit02_attempt_receipt(
         or normalized.get("likelihood_feature_count") != expected_feature_count
         or normalized.get("status") not in {"fit_completed", "fit_failed"}
         or normalized.get("fit_status") not in {"accepted", "failed"}
-        or (current_schema and normalized.get("fit_budget_contract_version") != REFIT02_FIT_BUDGET_CONTRACT_VERSION)
+        or (
+            (current_schema or matched_fit_schema)
+            and normalized.get("fit_budget_contract_version") != REFIT02_FIT_BUDGET_CONTRACT_VERSION
+        )
         or (
             previous_schema
             and normalized.get("fit_budget_contract_version") != REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
@@ -2012,11 +2660,23 @@ def _validate_refit02_attempt_receipt(
         != projection.get("projection_sha256")
         or normalized.get("projection_sha256") != projection.get("projection_sha256")
         or canonical_sha256(body) != normalized.get("attempt_receipt_sha256")
-        or any(normalized.get(field) is not False for field in false_flags)
+        or any(normalized.get(field) is not False for field in (current_false_flags if current_schema else false_flags))
     ):
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_contract_invalid",
             "REFIT-02 attempt receipt is invalid",
+        )
+    refit03_only_fields = {
+        "training_stage_evidence",
+        "diagnostic_evidence_complete",
+        "raw_covariance_evidence",
+        "formal_model_set_acceptance_performed",
+        "hard_semantic_authority_changed",
+    }
+    if not current_schema and any(field in normalized for field in refit03_only_fields):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "REFIT-02 historical attempt schema contains REFIT-03-only evidence",
         )
     completed = normalized.get("status") == "fit_completed"
     accepted = normalized.get("fit_status") == "accepted"
@@ -2052,7 +2712,7 @@ def _validate_refit02_attempt_receipt(
                 "hmm_risk_model_inactive_dimension_contract_invalid",
                 "REFIT-02 completed attempt lacks full train-only evidence",
             )
-        if current_schema:
+        if current_schema or matched_fit_schema:
             _validate_refit02_current_initialization_evidence(normalized["initialization_evidence"])
         expected_shapes = {
             "startprob": [3],
@@ -2083,7 +2743,7 @@ def _validate_refit02_attempt_receipt(
         )
     if role == REFIT02_MATCHED_NEGATIVE_ROLE:
         current_matched_contract = (
-            current_schema
+            (current_schema or matched_fit_schema)
             and normalized.get("negative_control_blocker_reproduced") is None
             and normalized.get("fit_budget_contract_version") == REFIT02_FIT_BUDGET_CONTRACT_VERSION
             and normalized.get("role_outcome")
@@ -2095,7 +2755,7 @@ def _validate_refit02_attempt_receipt(
         )
         reproduced = normalized.get("negative_control_blocker_reproduced") is True
         reproduced_contract = (
-            not current_schema
+            not (current_schema or matched_fit_schema)
             and reproduced
             and normalized.get("fit_performed") is False
             and normalized.get("status") == "fit_failed"
@@ -2156,6 +2816,150 @@ def _validate_refit02_attempt_receipt(
             "hmm_risk_model_inactive_dimension_contract_invalid",
             "REFIT-02 role outcome disagrees with its fit status",
         )
+    if current_schema:
+        stage_evidence = normalized.get("training_stage_evidence")
+        raw_evidence = normalized.get("raw_covariance_evidence")
+        stage_body = (
+            {key: item for key, item in stage_evidence.items() if key != "stage_evidence_sha256"}
+            if isinstance(stage_evidence, Mapping)
+            else None
+        )
+        raw_body = (
+            {key: item for key, item in raw_evidence.items() if key != "covariance_evidence_sha256"}
+            if isinstance(raw_evidence, Mapping)
+            else None
+        )
+        if (
+            not isinstance(stage_evidence, Mapping)
+            or stage_evidence.get("schema_version") != REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION
+            or canonical_sha256(stage_body) != stage_evidence.get("stage_evidence_sha256")
+            or not isinstance(normalized.get("diagnostic_evidence_complete"), bool)
+            or (
+                isinstance(raw_evidence, Mapping)
+                and raw_evidence.get("schema_version") != REFIT03_COVARIANCE_EVIDENCE_SCHEMA_VERSION
+            )
+            or (
+                isinstance(raw_evidence, Mapping)
+                and canonical_sha256(raw_body) != raw_evidence.get("covariance_evidence_sha256")
+            )
+            or (
+                isinstance(raw_evidence, Mapping)
+                and raw_evidence.get("cross_role_state_alignment_performed") is not False
+            )
+            or (isinstance(raw_evidence, Mapping) and raw_evidence.get("semantic_label_accessed") is not False)
+            or (
+                normalized.get("diagnostic_evidence_complete") is True
+                and normalized.get("failure_stage") in {"covariance", "train_posterior"}
+                and not isinstance(raw_evidence, Mapping)
+            )
+            or (
+                normalized.get("diagnostic_evidence_complete") is True
+                and stage_evidence.get("fit_returned") is True
+                and not isinstance(raw_evidence, Mapping)
+            )
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_training_stage_evidence_incomplete",
+                "REFIT-03 attempt lacks complete covariance-stage evidence",
+            )
+        if normalized["diagnostic_evidence_complete"] is False and (
+            normalized.get("status") != "fit_failed"
+            or "hmm_risk_model_training_stage_evidence_incomplete" not in normalized.get("failure_reason_codes", [])
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_training_stage_evidence_incomplete",
+                "REFIT-03 incomplete evidence is not represented as a terminal failure",
+            )
+    return normalized
+
+
+def _build_refit03_pair_receipt(
+    *,
+    seed: int,
+    attempts_by_key: Mapping[tuple[str, int], Mapping[str, Any]],
+) -> dict[str, Any]:
+    role_attempts = {role: dict(attempts_by_key[(role, seed)]) for role in REFIT02_ROLES}
+    evidence_by_role = {role: attempt.get("raw_covariance_evidence") for role, attempt in role_attempts.items()}
+    complete = all(
+        attempt.get("diagnostic_evidence_complete") is True
+        and (isinstance(evidence_by_role[role], Mapping) or attempt.get("failure_stage") in {"initialization", "fit"})
+        for role, attempt in role_attempts.items()
+    )
+    invalid_by_role = {
+        role: (list(evidence.get("invalid_feature_indices") or ()) if isinstance(evidence, Mapping) else [])
+        for role, evidence in evidence_by_role.items()
+    }
+    labels: list[str] = []
+    if not complete:
+        labels.append("evidence_incomplete")
+    else:
+        treatment_invalid = set(invalid_by_role[REFIT02_TREATMENT_ROLE])
+        matched_invalid = set(invalid_by_role[REFIT02_MATCHED_NEGATIVE_ROLE])
+        harness_invalid = set(invalid_by_role[REFIT02_HARNESS_ROLE])
+        covariance_stage_failures = {
+            role for role, attempt in role_attempts.items() if attempt.get("failure_stage") == "covariance"
+        }
+        inactive_only_failure = (
+            covariance_stage_failures == {REFIT02_MATCHED_NEGATIVE_ROLE}
+            and matched_invalid == {INACTIVE_FEATURE_INDEX}
+            and not treatment_invalid
+            and not harness_invalid
+        )
+        if treatment_invalid or harness_invalid or (covariance_stage_failures and not inactive_only_failure):
+            labels.append("cross_role_failure_present")
+        if matched_invalid - {INACTIVE_FEATURE_INDEX}:
+            labels.append("active_coordinate_failure_present")
+        if inactive_only_failure:
+            labels.append("inactive_coordinate_pattern_consistent")
+    body = {
+        "schema_version": "hmm_risk_c008_b3_d1_covariance_pair_receipt_v1",
+        "seed": seed,
+        "comparison_domain": "feature_level_invalid_coordinate_set_only",
+        "cross_role_state_alignment_performed": False,
+        "semantic_label_accessed": False,
+        "role_attempt_receipt_sha256": {
+            role: attempt.get("attempt_receipt_sha256") for role, attempt in role_attempts.items()
+        },
+        "role_projection_sha256": {role: attempt.get("projection_sha256") for role, attempt in role_attempts.items()},
+        "role_raw_input_identity": {
+            role: (attempt.get("projection_receipt") or {}).get("raw_full20_identity")
+            for role, attempt in role_attempts.items()
+        },
+        "role_preprocessed_input_identity": {
+            role: (attempt.get("projection_receipt") or {}).get("preprocessed_full20_identity")
+            for role, attempt in role_attempts.items()
+        },
+        "role_invalid_feature_indices": invalid_by_role,
+        "diagnostic_labels": sorted(labels),
+        "diagnostic_evidence_complete": complete,
+    }
+    return {**body, "pair_receipt_sha256": canonical_sha256(body)}
+
+
+def _validate_refit03_pair_receipt(value: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(value)
+    body = {key: item for key, item in normalized.items() if key != "pair_receipt_sha256"}
+    allowed_labels = {
+        "inactive_coordinate_pattern_consistent",
+        "active_coordinate_failure_present",
+        "cross_role_failure_present",
+        "mixed_seed_pattern",
+        "evidence_incomplete",
+    }
+    if (
+        normalized.get("schema_version") != "hmm_risk_c008_b3_d1_covariance_pair_receipt_v1"
+        or normalized.get("seed") not in RESTART_SCHEDULE
+        or normalized.get("comparison_domain") != "feature_level_invalid_coordinate_set_only"
+        or normalized.get("cross_role_state_alignment_performed") is not False
+        or normalized.get("semantic_label_accessed") is not False
+        or not isinstance(normalized.get("diagnostic_labels"), list)
+        or not set(normalized["diagnostic_labels"]).issubset(allowed_labels)
+        or canonical_sha256(body) != normalized.get("pair_receipt_sha256")
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_evidence_incomplete",
+            "REFIT-03 covariance pair receipt is invalid",
+        )
     return normalized
 
 
@@ -2200,6 +3004,9 @@ def build_refit02_process_receipt(
     if attempt_schema_versions == {REFIT02_ATTEMPT_SCHEMA_VERSION}:
         process_schema_version = REFIT02_PROCESS_SCHEMA_VERSION
         fit_budget_contract_version: str | None = REFIT02_FIT_BUDGET_CONTRACT_VERSION
+    elif attempt_schema_versions == {REFIT02_ATTEMPT_SCHEMA_VERSION_MATCHED_FIT}:
+        process_schema_version = REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT
+        fit_budget_contract_version = REFIT02_FIT_BUDGET_CONTRACT_VERSION
     elif attempt_schema_versions == {REFIT02_ATTEMPT_SCHEMA_VERSION_LEGACY}:
         process_schema_version = REFIT02_PROCESS_SCHEMA_VERSION_LEGACY
         fit_budget_contract_version = REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
@@ -2238,12 +3045,21 @@ def build_refit02_process_receipt(
                     "hmm_risk_model_inactive_dimension_matched_input_mismatch",
                     "REFIT-02 treatment and negative control do not share identical full20 input",
                 )
+    pair_receipts = (
+        [_build_refit03_pair_receipt(seed=seed, attempts_by_key=attempts_by_key) for seed in RESTART_SCHEDULE]
+        if process_schema_version == REFIT02_PROCESS_SCHEMA_VERSION
+        else []
+    )
     comparable = [
         {key: value for key, value in attempt.items() if key not in {"process_identity", "attempt_receipt_sha256"}}
         for attempt in ordered
     ]
+    comparable_pairs = [
+        {key: value for key, value in pair.items() if key not in {"pair_receipt_sha256", "role_attempt_receipt_sha256"}}
+        for pair in pair_receipts
+    ]
     actual_hmm_fit_invocation_count = sum(value.get("fit_performed") is True for value in ordered)
-    if process_schema_version == REFIT02_PROCESS_SCHEMA_VERSION:
+    if process_schema_version in {REFIT02_PROCESS_SCHEMA_VERSION, REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT}:
         if actual_hmm_fit_invocation_count > 24:
             raise D1InactiveDimensionError(
                 "hmm_risk_model_inactive_dimension_fit_budget_exceeded",
@@ -2278,13 +3094,34 @@ def build_refit02_process_receipt(
         "planned_hmm_fit_count": planned_hmm_fit_count,
         "actual_hmm_fit_invocation_count": actual_hmm_fit_invocation_count,
         "numeric_environment_sha256": canonical_sha256(dict(ordered[0].get("numeric_environment") or {})),
-        "comparable_payload_sha256": canonical_sha256(comparable),
+        "comparable_payload_sha256": canonical_sha256(
+            {"attempts": comparable, "pair_receipts": comparable_pairs}
+            if process_schema_version == REFIT02_PROCESS_SCHEMA_VERSION
+            else comparable
+        ),
         "selection_performed": False,
         "model_write_performed": False,
         "ready_artifact_write_performed": False,
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
+    if process_schema_version == REFIT02_PROCESS_SCHEMA_VERSION:
+        body.update(
+            {
+                "diagnostic_contract": REFIT02_DIAGNOSTIC_CONTRACT,
+                "pair_receipts": pair_receipts,
+                "diagnostic_evidence_complete": all(
+                    value.get("diagnostic_evidence_complete") is True for value in ordered
+                )
+                and all(value.get("diagnostic_evidence_complete") is True for value in pair_receipts),
+                "formal_model_set_acceptance_performed": False,
+                "hard_semantic_authority_changed": False,
+                "validation_accessed": False,
+                "future_utility_accessed": False,
+                "semantic_labelability_accessed": False,
+                "d6_status_accessed": False,
+            }
+        )
     if fit_budget_contract_version is not None:
         body["fit_budget_contract_version"] = fit_budget_contract_version
     return {**body, "process_receipt_sha256": canonical_sha256(body)}
@@ -2302,6 +3139,7 @@ def validate_refit02_process_receipt(
         schema_version
         not in {
             REFIT02_PROCESS_SCHEMA_VERSION,
+            REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT,
             REFIT02_PROCESS_SCHEMA_VERSION_LEGACY,
             REFIT02_PROCESS_SCHEMA_VERSION_ORIGINAL,
         }
@@ -2397,6 +3235,11 @@ def build_refit02_report(
         fit_budget_contract_version: str | None = REFIT02_FIT_BUDGET_CONTRACT_VERSION
         planned_hmm_fit_count = 48
         current_matched_fit_contract = True
+    elif process_schema_versions == {REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT}:
+        report_schema_version = REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT
+        fit_budget_contract_version = REFIT02_FIT_BUDGET_CONTRACT_VERSION
+        planned_hmm_fit_count = 48
+        current_matched_fit_contract = True
     elif process_schema_versions == {REFIT02_PROCESS_SCHEMA_VERSION_LEGACY}:
         report_schema_version = REFIT02_REPORT_SCHEMA_VERSION_LEGACY
         fit_budget_contract_version = REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
@@ -2429,6 +3272,7 @@ def build_refit02_report(
     by_role = {role: [value for value in attempts if value.get("role") == role] for role in REFIT02_ROLES}
     if any(len(values) != 8 for values in by_role.values()):
         reasons.add("hmm_risk_model_inactive_dimension_attempt_set_incomplete")
+    diagnostic_reasons = set(reasons)
     matched = by_role[REFIT02_MATCHED_NEGATIVE_ROLE]
     negative_ok = all(
         value.get("negative_control_blocker_reproduced") is True
@@ -2466,10 +3310,50 @@ def build_refit02_report(
         for attempt in role_attempts
         for reason in (attempt.get("failure_reason_codes") or ())
     }
+    covariance_pattern_assessment: str | None = None
+    pattern_reason_codes: set[str] = set()
+    if report_schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+        pair_receipts = list(first.get("pair_receipts") or ())
+        if len(pair_receipts) != 8:
+            diagnostic_reasons.add("hmm_risk_model_covariance_evidence_incomplete")
+        validated_pairs: list[dict[str, Any]] = []
+        for pair in pair_receipts:
+            try:
+                validated_pairs.append(_validate_refit03_pair_receipt(pair))
+            except D1InactiveDimensionError as exc:
+                diagnostic_reasons.add(exc.reason_code)
+        if (
+            first.get("diagnostic_evidence_complete") is not True
+            or second.get("diagnostic_evidence_complete") is not True
+            or any(value.get("diagnostic_evidence_complete") is not True for value in validated_pairs)
+        ):
+            diagnostic_reasons.add("hmm_risk_model_covariance_evidence_incomplete")
+        label_sets = {tuple(value.get("diagnostic_labels") or ()) for value in validated_pairs}
+        labels = {label for values in label_sets for label in values}
+        if "evidence_incomplete" in labels or diagnostic_reasons:
+            covariance_pattern_assessment = "evidence_incomplete"
+        elif len(label_sets) > 1:
+            covariance_pattern_assessment = "mixed_seed_pattern"
+            pattern_reason_codes.add("hmm_risk_model_inactive_dimension_covariance_pattern_mixed")
+        elif "active_coordinate_failure_present" in labels:
+            covariance_pattern_assessment = "active_coordinate_failure_present"
+        elif "cross_role_failure_present" in labels:
+            covariance_pattern_assessment = "cross_role_failure_present"
+        elif labels == {"inactive_coordinate_pattern_consistent"}:
+            covariance_pattern_assessment = "inactive_coordinate_pattern_consistent"
+        else:
+            covariance_pattern_assessment = None
+        status_reasons = diagnostic_reasons
+    else:
+        status_reasons = reasons
     mechanism_reason_codes: set[str] = set()
-    if any(value.get("fit_performed") is not True for value in treatment):
+    if report_schema_version != REFIT02_REPORT_SCHEMA_VERSION and any(
+        value.get("fit_performed") is not True for value in treatment
+    ):
         reasons.update(treatment_reasons or {"hmm_risk_model_initialization_failed"})
-    if current_matched_fit_contract:
+    if report_schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+        mechanism = "inconclusive"
+    elif current_matched_fit_contract:
         if not matched_fit_ok and not matched_blocker_ok:
             reasons.add("hmm_risk_model_inactive_dimension_matched_control_inconclusive")
         if reasons:
@@ -2500,18 +3384,20 @@ def build_refit02_report(
     )
     body = {
         "schema_version": report_schema_version,
-        "diagnostic_contract": (
-            REFIT02_DIAGNOSTIC_CONTRACT
-            if report_schema_version == REFIT02_REPORT_SCHEMA_VERSION
-            else REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
-        ),
+        "diagnostic_contract": _refit_diagnostic_contract_for_report(report_schema_version),
         "producer_commit": _require_commit(producer_commit, "producer_commit"),
         "source_authority": dict(SOURCE_AUTHORITY),
-        "status": "diagnostic_complete" if not reasons else "diagnostic_failed",
+        "status": "diagnostic_complete" if not status_reasons else "diagnostic_failed",
         "mechanism_assessment": mechanism,
-        "mechanism_assessment_reason_codes": sorted(reasons | all_attempt_reasons | mechanism_reason_codes),
+        "mechanism_assessment_reason_codes": sorted(
+            status_reasons | all_attempt_reasons | mechanism_reason_codes | pattern_reason_codes
+        ),
         "d5_compatibility_evidence_ready": bool(
-            not reasons and repeat_equal and d4_ready and mechanism == "constant_dimension_effect_supported"
+            report_schema_version != REFIT02_REPORT_SCHEMA_VERSION
+            and not reasons
+            and repeat_equal
+            and d4_ready
+            and mechanism == "constant_dimension_effect_supported"
         ),
         "process_receipts": processes,
         "canonical_payload_bitwise_equal": repeat_equal,
@@ -2529,6 +3415,17 @@ def build_refit02_report(
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
+    if report_schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+        body.update(
+            {
+                "covariance_pattern_assessment": covariance_pattern_assessment,
+                "diagnostic_evidence_complete": not status_reasons,
+                "validation_accessed": False,
+                "future_utility_accessed": False,
+                "semantic_labelability_accessed": False,
+                "d6_status_accessed": False,
+            }
+        )
     if fit_budget_contract_version is not None:
         body["fit_budget_contract_version"] = fit_budget_contract_version
     return {**body, "receipt_sha256": canonical_sha256(body)}
@@ -2553,6 +3450,7 @@ def build_refit02_not_applicable_report(
         )
     if schema_version not in {
         REFIT02_REPORT_SCHEMA_VERSION,
+        REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
         REFIT02_REPORT_SCHEMA_VERSION_LEGACY,
         REFIT02_REPORT_SCHEMA_VERSION_ORIGINAL,
     }:
@@ -2562,11 +3460,7 @@ def build_refit02_not_applicable_report(
         )
     body = {
         "schema_version": schema_version,
-        "diagnostic_contract": (
-            REFIT02_DIAGNOSTIC_CONTRACT
-            if schema_version == REFIT02_REPORT_SCHEMA_VERSION
-            else REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
-        ),
+        "diagnostic_contract": _refit_diagnostic_contract_for_report(schema_version),
         "producer_commit": _require_commit(producer_commit, "producer_commit"),
         "source_authority": dict(SOURCE_AUTHORITY),
         "status": "not_applicable",
@@ -2590,6 +3484,17 @@ def build_refit02_not_applicable_report(
         "runtime_action_performed": False,
     }
     if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+        body.update(
+            {
+                "covariance_pattern_assessment": None,
+                "diagnostic_evidence_complete": False,
+                "validation_accessed": False,
+                "future_utility_accessed": False,
+                "semantic_labelability_accessed": False,
+                "d6_status_accessed": False,
+            }
+        )
+    if _refit_report_uses_v2_fit_budget(schema_version):
         body["fit_budget_contract_version"] = REFIT02_FIT_BUDGET_CONTRACT_VERSION
     elif schema_version == REFIT02_REPORT_SCHEMA_VERSION_LEGACY:
         body["fit_budget_contract_version"] = REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
@@ -2634,6 +3539,7 @@ def build_refit02_execution_failure_report(
     attempt_count = sum(int(value.get("attempt_count") or 0) for value in completed)
     if schema_version not in {
         REFIT02_REPORT_SCHEMA_VERSION,
+        REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
         REFIT02_REPORT_SCHEMA_VERSION_LEGACY,
         REFIT02_REPORT_SCHEMA_VERSION_ORIGINAL,
     }:
@@ -2641,15 +3547,7 @@ def build_refit02_execution_failure_report(
             "hmm_risk_model_inactive_dimension_contract_invalid",
             "REFIT-02 execution-failure report schema is invalid",
         )
-    expected_process_schema = (
-        REFIT02_PROCESS_SCHEMA_VERSION
-        if schema_version == REFIT02_REPORT_SCHEMA_VERSION
-        else (
-            REFIT02_PROCESS_SCHEMA_VERSION_LEGACY
-            if schema_version == REFIT02_REPORT_SCHEMA_VERSION_LEGACY
-            else REFIT02_PROCESS_SCHEMA_VERSION_ORIGINAL
-        )
-    )
+    expected_process_schema = _refit_process_schema_for_report(schema_version)
     if any(value.get("schema_version") != expected_process_schema for value in completed):
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_contract_invalid",
@@ -2657,11 +3555,7 @@ def build_refit02_execution_failure_report(
         )
     body = {
         "schema_version": schema_version,
-        "diagnostic_contract": (
-            REFIT02_DIAGNOSTIC_CONTRACT
-            if schema_version == REFIT02_REPORT_SCHEMA_VERSION
-            else REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
-        ),
+        "diagnostic_contract": _refit_diagnostic_contract_for_report(schema_version),
         "producer_commit": normalized_commit,
         "source_authority": dict(SOURCE_AUTHORITY),
         "status": "diagnostic_failed",
@@ -2675,7 +3569,7 @@ def build_refit02_execution_failure_report(
         "failed_process_receipt": failed,
         "canonical_payload_bitwise_equal": False,
         "attempt_count": attempt_count,
-        "planned_hmm_fit_count": 48 if schema_version == REFIT02_REPORT_SCHEMA_VERSION else 32,
+        "planned_hmm_fit_count": 48 if _refit_report_uses_v2_fit_budget(schema_version) else 32,
         "actual_hmm_fit_invocation_count": sum(
             int(value.get("actual_hmm_fit_invocation_count") or 0) for value in completed
         ),
@@ -2690,6 +3584,17 @@ def build_refit02_execution_failure_report(
         "runtime_action_performed": False,
     }
     if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+        body.update(
+            {
+                "covariance_pattern_assessment": "evidence_incomplete",
+                "diagnostic_evidence_complete": False,
+                "validation_accessed": False,
+                "future_utility_accessed": False,
+                "semantic_labelability_accessed": False,
+                "d6_status_accessed": False,
+            }
+        )
+    if _refit_report_uses_v2_fit_budget(schema_version):
         body["fit_budget_contract_version"] = REFIT02_FIT_BUDGET_CONTRACT_VERSION
     elif schema_version == REFIT02_REPORT_SCHEMA_VERSION_LEGACY:
         body["fit_budget_contract_version"] = REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
@@ -2706,6 +3611,7 @@ def build_refit02_preflight_failure_report(
 ) -> dict[str, Any]:
     if schema_version not in {
         REFIT02_REPORT_SCHEMA_VERSION,
+        REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
         REFIT02_REPORT_SCHEMA_VERSION_LEGACY,
         REFIT02_REPORT_SCHEMA_VERSION_ORIGINAL,
     }:
@@ -2715,11 +3621,7 @@ def build_refit02_preflight_failure_report(
         )
     body = {
         "schema_version": schema_version,
-        "diagnostic_contract": (
-            REFIT02_DIAGNOSTIC_CONTRACT
-            if schema_version == REFIT02_REPORT_SCHEMA_VERSION
-            else REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
-        ),
+        "diagnostic_contract": _refit_diagnostic_contract_for_report(schema_version),
         "producer_commit": _require_commit(producer_commit, "producer_commit"),
         "source_authority": dict(SOURCE_AUTHORITY),
         "status": "diagnostic_failed",
@@ -2748,6 +3650,17 @@ def build_refit02_preflight_failure_report(
         "runtime_action_performed": False,
     }
     if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+        body.update(
+            {
+                "covariance_pattern_assessment": "evidence_incomplete",
+                "diagnostic_evidence_complete": False,
+                "validation_accessed": False,
+                "future_utility_accessed": False,
+                "semantic_labelability_accessed": False,
+                "d6_status_accessed": False,
+            }
+        )
+    if _refit_report_uses_v2_fit_budget(schema_version):
         body["fit_budget_contract_version"] = REFIT02_FIT_BUDGET_CONTRACT_VERSION
     elif schema_version == REFIT02_REPORT_SCHEMA_VERSION_LEGACY:
         body["fit_budget_contract_version"] = REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY
@@ -2761,15 +3674,11 @@ def validate_refit02_report(report: Mapping[str, Any]) -> dict[str, Any]:
         schema_version
         not in {
             REFIT02_REPORT_SCHEMA_VERSION,
+            REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
             REFIT02_REPORT_SCHEMA_VERSION_LEGACY,
             REFIT02_REPORT_SCHEMA_VERSION_ORIGINAL,
         }
-        or normalized.get("diagnostic_contract")
-        != (
-            REFIT02_DIAGNOSTIC_CONTRACT
-            if schema_version == REFIT02_REPORT_SCHEMA_VERSION
-            else REFIT02_DIAGNOSTIC_CONTRACT_LEGACY
-        )
+        or normalized.get("diagnostic_contract") != _refit_diagnostic_contract_for_report(str(schema_version))
         or normalized.get("status") not in {"not_applicable", "diagnostic_complete", "diagnostic_failed"}
         or normalized.get("source_authority") != SOURCE_AUTHORITY
     ):
@@ -2955,6 +3864,7 @@ def write_controlled_refit_report(path: Path, report: Mapping[str, Any]) -> str:
     normalized = dict(report)
     if normalized.get("schema_version") in {
         REFIT02_REPORT_SCHEMA_VERSION,
+        REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
         REFIT02_REPORT_SCHEMA_VERSION_LEGACY,
         REFIT02_REPORT_SCHEMA_VERSION_ORIGINAL,
     }:

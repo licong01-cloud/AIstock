@@ -2090,12 +2090,13 @@ def test_main_d1_controlled_mode_persists_diagnostic_without_selection_or_model_
     args = _d1_args(tmp_path)
     body = {
         "schema_version": subject.B3_D1_REFIT02_REPORT_SCHEMA_VERSION,
-        "diagnostic_contract": "C-008-B3-REMEDIATION-D1-B-REFIT-02-A",
+        "diagnostic_contract": "C-008-B3-D1-REFIT-03-COVARIANCE-DIAG-01",
         "producer_commit": "d" * 40,
         "status": "diagnostic_complete",
-        "mechanism_assessment": "constant_dimension_effect_supported",
-        "d5_compatibility_evidence_ready": True,
-        "attempt_count": 32,
+        "mechanism_assessment": "inconclusive",
+        "covariance_pattern_assessment": "inactive_coordinate_pattern_consistent",
+        "d5_compatibility_evidence_ready": False,
+        "attempt_count": 48,
         "selection_performed": False,
         "model_write_performed": False,
         "ready_artifact_write_performed": False,
@@ -2120,7 +2121,7 @@ def test_main_d1_controlled_mode_persists_diagnostic_without_selection_or_model_
     persisted = json.loads((tmp_path / "model-sets" / "d1-controlled-refit.json").read_text(encoding="utf-8"))
     receipt = json.loads(capsys.readouterr().out)
     assert persisted == report
-    assert receipt["attempt_count"] == 32
+    assert receipt["attempt_count"] == 48
     assert receipt["selection_performed"] is False
     assert receipt["model_write_performed"] is False
     assert receipt["ready_artifact_write_performed"] is False

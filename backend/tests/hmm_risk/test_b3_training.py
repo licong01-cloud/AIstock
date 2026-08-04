@@ -646,7 +646,7 @@ def test_formal_fit_uses_monitor_terminal_likelihood_and_never_validation(monkey
 
         @property
         def covars_(self):
-            return self._covars_
+            raise AssertionError("public covariance representation must not be read after fit")
 
         @covars_.setter
         def covars_(self, value):
@@ -676,15 +676,18 @@ def test_formal_fit_uses_monitor_terminal_likelihood_and_never_validation(monkey
         "nu": 1.0,
         "postfit_projection_performed": False,
     }
-    monkeypatch.setattr(
-        training_subject,
-        "_b3_diag04_covariance_evidence",
-        lambda model, train, raw_covars, sector_reference_variance: (
+    observed_raw_covariance = {}
+
+    def covariance_audit(model, train, raw_covars, sector_reference_variance):
+        del model, train, sector_reference_variance
+        observed_raw_covariance["value"] = raw_covars.copy()
+        return (
             covariance_evidence,
             np.full((180, 3), 1 / 3),
             -123.0,
-        ),
-    )
+        )
+
+    monkeypatch.setattr(training_subject, "_b3_diag04_covariance_evidence", covariance_audit)
     states = np.asarray([index % 3 for index in range(180)])
     train_posteriors = np.zeros((180, 3))
     train_posteriors[np.arange(180), states] = 1.0
@@ -717,6 +720,190 @@ def test_formal_fit_uses_monitor_terminal_likelihood_and_never_validation(monkey
     assert entry["validation_accessed"] is False
     assert entry["future_utility_accessed"] is False
     assert entry["parameter_profile"]["numeric_contract_status"] == "USER_APPROVED_FORMAL_CONTRACT"
+    assert np.array_equal(observed_raw_covariance["value"], np.ones((3, 7)))
+
+
+def _refit03_training_item(feature_count: int = 2) -> B3TrainOnlySeries:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(120))
+    observations = np.ones((120, feature_count), dtype=np.float64)
+    return B3TrainOnlySeries(
+        sector_code="S001",
+        sector_name="Sector 1",
+        train_observations=observations,
+        train_dates=dates,
+        pit_l2_constituents=("L2-001",),
+        pit_constituent_manifest_hash="a" * 64,
+        observation_manifest_hash="b" * 64,
+        train_input_manifest=_train_manifest(dates, observations),
+    )
+
+
+def _install_refit03_training_model(monkeypatch, *, feature_count: int, raw_after_fit):
+    class _Monitor:
+        converged = True
+        iter = 2
+        n_iter = 300
+        tol = 0.01
+        history = deque([-1.0, -0.995])
+
+    class _GaussianHMM:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+            self.monitor_ = _Monitor()
+
+        @property
+        def covars_(self):
+            raise AssertionError("public covariance representation must not be read after fit")
+
+        @covars_.setter
+        def covars_(self, value):
+            self.initial_covars = np.asarray(value, dtype=np.float64)
+
+        def fit(self, train):
+            del train
+            if raw_after_fit is not None:
+                self._covars_ = np.asarray(raw_after_fit, dtype=np.float64)
+            return self
+
+    monkeypatch.setattr("hmmlearn.hmm.GaussianHMM", _GaussianHMM)
+    monkeypatch.setattr(training_subject, "_sector_local_reference_variance", lambda train: np.ones(feature_count))
+    monkeypatch.setattr(
+        training_subject,
+        "_manual_b3_diag04_initialization",
+        lambda train, sector_reference_variance, random_seed: (
+            np.full(3, 1 / 3),
+            np.asarray([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]),
+            np.asarray([[-1.0] * feature_count, [0.0] * feature_count, [1.0] * feature_count]),
+            np.ones((3, feature_count)),
+            {
+                "schema_version": "hmm_risk_c008_b3_diag04_manual_initialization_v1",
+                "cluster_counts": [40, 40, 40],
+                "sector_local_reference_variance_R_sj": [1.0] * feature_count,
+                "nu": 1.0,
+            },
+        ),
+    )
+
+
+def test_refit03_missing_private_covariance_never_falls_back_to_public_representation(monkeypatch) -> None:
+    item = _refit03_training_item()
+    _install_refit03_training_model(monkeypatch, feature_count=2, raw_after_fit=None)
+
+    with pytest.raises(B3TrainingStageError) as exc_info:
+        training_subject.fit_b3_preprocessed_train_only(
+            item,
+            train=item.train_observations,
+            seed=42,
+        )
+
+    error = exc_info.value
+    assert error.stage == "covariance"
+    assert error.reason_code == "hmm_risk_model_covariance_raw_type_invalid"
+    raw = error.stage_evidence["raw_covariance_evidence"]
+    assert raw["actual_python_type"] == "builtins.NoneType"
+    assert raw["evidence_unavailable_reason"] == "gaussian_hmm_internal_diag_covars_missing"
+    assert error.stage_evidence["stage_specific_cause_evidence"]["covariance_status"] == "failed"
+
+
+def test_refit03_likelihood_failure_preserves_raw_covariance_and_marks_d4_unavailable(monkeypatch) -> None:
+    item = _refit03_training_item()
+    _install_refit03_training_model(
+        monkeypatch,
+        feature_count=2,
+        raw_after_fit=np.full((3, 2), 0.5, dtype=np.float64),
+    )
+    monkeypatch.setattr(
+        training_subject,
+        "evaluate_likelihood_acceptance",
+        lambda evidence: (_ for _ in ()).throw(ValueError("likelihood receipt invalid")),
+    )
+
+    with pytest.raises(B3TrainingStageError) as exc_info:
+        training_subject.fit_b3_preprocessed_train_only(
+            item,
+            train=item.train_observations,
+            seed=42,
+        )
+
+    evidence = exc_info.value.stage_evidence
+    assert exc_info.value.stage == "likelihood"
+    assert evidence["completed_stages"] == ["initialization", "fit", "raw_covariance_capture", "monitor"]
+    assert evidence["raw_covariance_evidence"]["raw_validity"] is True
+    cause = evidence["stage_specific_cause_evidence"]
+    assert cause["d4_derived_evidence_status"] == "not_computable_posterior_audit_unavailable"
+    assert cause["covariance_status"] == "insufficient_evidence"
+    assert cause["dynamic_lower_reference"] is None
+
+
+@pytest.mark.parametrize(
+    ("raw_after_fit", "posterior_failure_kind", "derived_status", "covariance_status"),
+    [
+        (
+            np.zeros((3, 2), dtype=np.float64),
+            None,
+            "not_computable_raw_covariance_invalid",
+            "failed",
+        ),
+        (
+            np.full((3, 2), 0.5, dtype=np.float64),
+            "unavailable",
+            "not_computable_posterior_audit_unavailable",
+            "insufficient_evidence",
+        ),
+        (
+            np.full((3, 2), 0.5, dtype=np.float64),
+            "invalid",
+            "not_computable_posterior_audit_invalid",
+            "failed",
+        ),
+    ],
+)
+def test_refit03_actual_covariance_failure_mapping_is_typed_and_never_fabricates_derived_fields(
+    monkeypatch,
+    raw_after_fit,
+    posterior_failure_kind,
+    derived_status,
+    covariance_status,
+) -> None:
+    item = _refit03_training_item()
+    _install_refit03_training_model(monkeypatch, feature_count=2, raw_after_fit=raw_after_fit)
+    if posterior_failure_kind is not None:
+        failure = StateModelSetError("posterior audit failed")
+        failure.stage = "smoothed_posterior_audit"
+        failure.evidence = (
+            {"error_type": "ValueError", "error": "unavailable"}
+            if posterior_failure_kind == "unavailable"
+            else {"shape": [120, 2]}
+        )
+        monkeypatch.setattr(
+            training_subject,
+            "_b3_diag04_covariance_evidence",
+            lambda *args, **kwargs: (_ for _ in ()).throw(failure),
+        )
+
+    with pytest.raises(B3TrainingStageError) as exc_info:
+        training_subject.fit_b3_preprocessed_train_only(
+            item,
+            train=item.train_observations,
+            seed=42,
+        )
+
+    evidence = exc_info.value.stage_evidence
+    assert exc_info.value.stage == "covariance"
+    assert evidence["completed_stages"] == [
+        "initialization",
+        "fit",
+        "raw_covariance_capture",
+        "monitor",
+        "likelihood",
+    ]
+    cause = evidence["stage_specific_cause_evidence"]
+    assert cause["d4_derived_evidence_status"] == derived_status
+    assert cause["covariance_status"] == covariance_status
+    assert cause["covariance_valid"] is False
+    assert cause["state_posterior_mass"] is None
+    assert cause["dynamic_lower_reference"] is None
+    assert cause["dynamic_upper_reference"] is None
 
 
 def test_preprocessed_initialization_probe_uses_formal_authority_without_hmm_fit(monkeypatch) -> None:

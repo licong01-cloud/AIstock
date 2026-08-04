@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
@@ -49,15 +50,29 @@ from backend.services.hmm_risk.state_model_set import (
 from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
 
 
+REFIT03_RAW_COVARIANCE_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_covariance_raw_capture_v1"
+REFIT03_RAW_COVARIANCE_AUTHORITY = "gaussian_hmm_internal_diag_covars_v1"
+REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION = "hmm_risk_b3_training_stage_evidence_v1"
+
+
 class B3TrainingStageError(StateModelSetError):
     """Expected candidate-local failure with a stable stage and reason code."""
 
-    def __init__(self, stage: str, reason_code: str, cause: Exception) -> None:
+    def __init__(
+        self,
+        stage: str,
+        reason_code: str,
+        cause: Exception,
+        *,
+        stage_evidence: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(f"{stage}: {cause}")
         self.stage = stage
         self.reason_code = reason_code
         self.cause_type = type(cause).__name__
         self.cause_evidence = dict(getattr(cause, "evidence", {}) or {})
+        self.cause_stage = str(getattr(cause, "stage", "") or "") or None
+        self.stage_evidence = dict(stage_evidence or {})
 
 
 @dataclass(frozen=True)
@@ -163,6 +178,7 @@ class B3CoreFitEvidence:
     terminal_likelihood: float | None
     model_entry_status: str
     model_entry_valid: bool
+    training_stage_evidence: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -437,6 +453,137 @@ def prepare_b3_preprocessed_train_only_initialization(
     return dict(prepared.evidence)
 
 
+def _raw_covariance_value_classification(bits: int) -> str:
+    sign = (bits >> 63) & 1
+    exponent = (bits >> 52) & 0x7FF
+    fraction = bits & ((1 << 52) - 1)
+    if exponent == 0x7FF:
+        if fraction:
+            return "nan"
+        return "negative_infinity" if sign else "positive_infinity"
+    if exponent == 0 and fraction == 0:
+        return "negative_zero" if sign else "positive_zero"
+    return "finite_negative" if sign else "finite_positive"
+
+
+def capture_raw_diag_covariance_evidence(
+    value: Any,
+    *,
+    expected_shape: tuple[int, int],
+    evidence_unavailable_reason: str | None = None,
+) -> dict[str, Any]:
+    """Capture the private diagonal covariance buffer without coercion or repair."""
+
+    python_type = f"{type(value).__module__}.{type(value).__qualname__}"
+    body: dict[str, Any] = {
+        "schema_version": REFIT03_RAW_COVARIANCE_SCHEMA_VERSION,
+        "raw_authority": REFIT03_RAW_COVARIANCE_AUTHORITY,
+        "expected_shape": list(expected_shape),
+        "actual_python_type": python_type,
+        "actual_dtype": None,
+        "actual_shape": None,
+        "actual_strides": None,
+        "actual_nbytes": None,
+        "actual_byteorder": None,
+        "c_contiguous": None,
+        "cells": [],
+        "reason_codes": [],
+        "raw_validity": False,
+        "evidence_unavailable_reason": None,
+    }
+    if not isinstance(value, np.ndarray):
+        body["reason_codes"] = ["hmm_risk_model_covariance_raw_type_invalid"]
+        body["evidence_unavailable_reason"] = evidence_unavailable_reason or "raw_authority_is_not_numpy_ndarray"
+        return {**body, "capture_receipt_sha256": canonical_sha256(body)}
+
+    raw_view = value.view(np.ndarray)
+    body.update(
+        {
+            "actual_dtype": raw_view.dtype.str,
+            "actual_shape": list(raw_view.shape),
+            "actual_strides": list(raw_view.strides),
+            "actual_nbytes": int(raw_view.nbytes),
+            "actual_byteorder": raw_view.dtype.byteorder,
+            "c_contiguous": bool(raw_view.flags.c_contiguous),
+        }
+    )
+    reasons: list[str] = []
+    if type(value) is not np.ndarray:
+        reasons.append("hmm_risk_model_covariance_raw_type_invalid")
+    if raw_view.dtype.kind != "f" or raw_view.dtype.itemsize != 8:
+        reasons.append("hmm_risk_model_covariance_raw_dtype_invalid")
+        body["evidence_unavailable_reason"] = "raw_authority_is_not_ieee754_float64"
+    if raw_view.ndim != 2 or tuple(raw_view.shape) != expected_shape:
+        reasons.append("hmm_risk_model_covariance_raw_shape_invalid")
+    if not raw_view.flags.c_contiguous:
+        reasons.append("hmm_risk_model_covariance_raw_layout_invalid")
+
+    cells: list[dict[str, Any]] = []
+    non_finite = False
+    non_positive = False
+    if raw_view.dtype.kind == "f" and raw_view.dtype.itemsize == 8 and raw_view.ndim == 2:
+        byteorder = raw_view.dtype.byteorder
+        if byteorder == "=":
+            byteorder = "<" if sys.byteorder == "little" else ">"
+        semantic_byteorder = "little" if byteorder == "<" else "big"
+        for state_index in range(raw_view.shape[0]):
+            for feature_index in range(raw_view.shape[1]):
+                scalar = raw_view[state_index, feature_index]
+                raw_bytes = np.asarray(scalar, dtype=raw_view.dtype).tobytes()
+                bits = int.from_bytes(raw_bytes, byteorder=semantic_byteorder, signed=False)
+                classification = _raw_covariance_value_classification(bits)
+                finite = classification not in {"nan", "positive_infinity", "negative_infinity"}
+                positive = classification == "finite_positive"
+                if not finite:
+                    non_finite = True
+                if finite and not positive:
+                    non_positive = True
+                cells.append(
+                    {
+                        "state_index": state_index,
+                        "feature_index": feature_index,
+                        "semantic_bit_pattern_hex": f"{bits:016x}",
+                        "classification": classification,
+                        "float_hex": float(scalar).hex() if finite else None,
+                    }
+                )
+    body["cells"] = cells
+    if non_finite:
+        reasons.append("hmm_risk_model_covariance_raw_non_finite")
+    if non_positive:
+        reasons.append("hmm_risk_model_covariance_raw_non_positive")
+    body["reason_codes"] = list(dict.fromkeys(reasons))
+    body["raw_validity"] = not reasons
+    return {**body, "capture_receipt_sha256": canonical_sha256(body)}
+
+
+def _training_stage_evidence(
+    *,
+    fit_invoked: bool,
+    fit_returned: bool,
+    completed_stages: Sequence[str],
+    initialization: Mapping[str, Any],
+    monitor_evidence: Mapping[str, Any] | None = None,
+    likelihood: Mapping[str, Any] | None = None,
+    raw_covariance_evidence: Mapping[str, Any] | None = None,
+    covariance_evidence: Mapping[str, Any] | None = None,
+    stage_specific_cause_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    body = {
+        "schema_version": REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION,
+        "fit_invoked": bool(fit_invoked),
+        "fit_returned": bool(fit_returned),
+        "completed_stages": list(completed_stages),
+        "initialization_evidence": dict(initialization),
+        "monitor_evidence": None if monitor_evidence is None else dict(monitor_evidence),
+        "likelihood_evidence": None if likelihood is None else dict(likelihood),
+        "raw_covariance_evidence": (None if raw_covariance_evidence is None else dict(raw_covariance_evidence)),
+        "covariance_evidence": None if covariance_evidence is None else dict(covariance_evidence),
+        "stage_specific_cause_evidence": dict(stage_specific_cause_evidence or {}),
+    }
+    return {**body, "stage_evidence_sha256": canonical_sha256(body)}
+
+
 def fit_b3_preprocessed_train_only(
     item: B3TrainOnlySeries,
     *,
@@ -449,7 +596,25 @@ def fit_b3_preprocessed_train_only(
         from hmmlearn.hmm import GaussianHMM
     except ImportError as exc:  # pragma: no cover - dependency gate is explicit.
         raise StateModelSetError("hmmlearn==0.3.3 is required for formal B3 training") from exc
-    prepared_initialization = _prepare_b3_preprocessed_train_only_initialization(item, train=train, seed=seed)
+    try:
+        prepared_initialization = _prepare_b3_preprocessed_train_only_initialization(item, train=train, seed=seed)
+    except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+        stage_evidence = _training_stage_evidence(
+            fit_invoked=False,
+            fit_returned=False,
+            completed_stages=[],
+            initialization={},
+            stage_specific_cause_evidence={
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+        raise B3TrainingStageError(
+            "initialization",
+            "hmm_risk_model_initialization_failed",
+            exc,
+            stage_evidence=stage_evidence,
+        ) from exc
     prepared = prepared_initialization.train
     reference = prepared_initialization.reference
     startprob = prepared_initialization.startprob
@@ -458,6 +623,7 @@ def fit_b3_preprocessed_train_only(
     initialized_covars = prepared_initialization.covars
     prior = prepared_initialization.prior
     initialization = dict(prepared_initialization.evidence)
+    fit_invoked = False
     try:
         model = GaussianHMM(
             n_components=3,
@@ -482,20 +648,96 @@ def fit_b3_preprocessed_train_only(
         model.transmat_ = transmat.copy()
         model.means_ = means.copy()
         model.covars_ = initialized_covars.copy()
+        fit_invoked = True
         model.fit(prepared)
     except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
-        raise B3TrainingStageError("fit", "hmm_risk_model_fit_failed", exc) from exc
+        stage_evidence = _training_stage_evidence(
+            fit_invoked=fit_invoked,
+            fit_returned=False,
+            completed_stages=["initialization"],
+            initialization=initialization,
+            stage_specific_cause_evidence={
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+        raise B3TrainingStageError(
+            "fit",
+            "hmm_risk_model_fit_failed",
+            exc,
+            stage_evidence=stage_evidence,
+        ) from exc
+    try:
+        raw_covariance_source = model._covars_
+    except AttributeError as exc:
+        raw_covariance_evidence = capture_raw_diag_covariance_evidence(
+            None,
+            expected_shape=(3, prepared.shape[1]),
+            evidence_unavailable_reason="gaussian_hmm_internal_diag_covars_missing",
+        )
+        cause_evidence = {
+            "d4_derived_evidence_status": "not_computable_raw_covariance_invalid",
+            "covariance_status": "failed",
+            "covariance_valid": False,
+            "evidence_unavailable_reason": "gaussian_hmm_internal_diag_covars_missing",
+        }
+        stage_evidence = _training_stage_evidence(
+            fit_invoked=True,
+            fit_returned=True,
+            completed_stages=["initialization", "fit"],
+            initialization=initialization,
+            raw_covariance_evidence=raw_covariance_evidence,
+            stage_specific_cause_evidence=cause_evidence,
+        )
+        raise B3TrainingStageError(
+            "covariance",
+            "hmm_risk_model_covariance_raw_type_invalid",
+            exc,
+            stage_evidence=stage_evidence,
+        ) from exc
+    raw_covariance_evidence = capture_raw_diag_covariance_evidence(
+        raw_covariance_source,
+        expected_shape=(3, prepared.shape[1]),
+    )
+    monitor_evidence: Mapping[str, Any] | None = None
     try:
         monitor_evidence = _monitor_diagnostic(model)
         likelihood = evaluate_likelihood_acceptance(monitor_evidence)
     except (StateModelSetError, ValueError, FloatingPointError) as exc:
+        cause_evidence = {
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "d4_derived_evidence_status": "not_computable_posterior_audit_unavailable",
+            "covariance_status": "insufficient_evidence",
+            "covariance_valid": False,
+            "state_posterior_mass": None,
+            "posterior_weighted_variance_about_weighted_mean": None,
+            "posterior_second_moment_about_fitted_mean": None,
+            "mstep_expected_covariance": None,
+            "dynamic_lower_reference": None,
+            "dynamic_upper_reference": None,
+            "mstep_relative_residual": None,
+        }
+        completed_stages = ["initialization", "fit", "raw_covariance_capture"]
+        if monitor_evidence is not None:
+            completed_stages.append("monitor")
+        stage_evidence = _training_stage_evidence(
+            fit_invoked=True,
+            fit_returned=True,
+            completed_stages=completed_stages,
+            initialization=initialization,
+            monitor_evidence=monitor_evidence,
+            raw_covariance_evidence=raw_covariance_evidence,
+            stage_specific_cause_evidence=cause_evidence,
+        )
         raise B3TrainingStageError(
             "likelihood",
             "hmm_risk_model_likelihood_evidence_invalid",
             exc,
+            stage_evidence=stage_evidence,
         ) from exc
     try:
-        raw_covars = np.asarray(model._covars_, dtype=np.float64)
+        raw_covars = np.asarray(raw_covariance_source, dtype=np.float64)
         covariance_evidence, _, smoothed_audit_log_likelihood = _b3_diag04_covariance_evidence(
             model,
             prepared,
@@ -503,10 +745,51 @@ def fit_b3_preprocessed_train_only(
             sector_reference_variance=reference,
         )
     except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+        if raw_covariance_evidence.get("raw_validity") is not True:
+            derived_status = "not_computable_raw_covariance_invalid"
+            covariance_status = "failed"
+        elif getattr(exc, "stage", None) == "smoothed_posterior_audit" and (
+            (getattr(exc, "evidence", {}) or {}).get("error_type")
+        ):
+            derived_status = "not_computable_posterior_audit_unavailable"
+            covariance_status = "insufficient_evidence"
+        else:
+            derived_status = "not_computable_posterior_audit_invalid"
+            covariance_status = "failed"
+        cause_evidence = {
+            **dict(getattr(exc, "evidence", {}) or {}),
+            "d4_derived_evidence_status": derived_status,
+            "covariance_status": covariance_status,
+            "covariance_valid": False,
+            "state_posterior_mass": None,
+            "posterior_weighted_variance_about_weighted_mean": None,
+            "posterior_second_moment_about_fitted_mean": None,
+            "mstep_expected_covariance": None,
+            "dynamic_lower_reference": None,
+            "dynamic_upper_reference": None,
+            "mstep_relative_residual": None,
+        }
+        stage_evidence = _training_stage_evidence(
+            fit_invoked=True,
+            fit_returned=True,
+            completed_stages=[
+                "initialization",
+                "fit",
+                "raw_covariance_capture",
+                "monitor",
+                "likelihood",
+            ],
+            initialization=initialization,
+            monitor_evidence=monitor_evidence,
+            likelihood=likelihood,
+            raw_covariance_evidence=raw_covariance_evidence,
+            stage_specific_cause_evidence=cause_evidence,
+        )
         raise B3TrainingStageError(
             "covariance",
             "hmm_risk_model_covariance_invalid",
             exc,
+            stage_evidence=stage_evidence,
         ) from exc
     covariance_evidence = {
         **covariance_evidence,
@@ -515,6 +798,10 @@ def fit_b3_preprocessed_train_only(
         "smoothed_audit_log_likelihood": smoothed_audit_log_likelihood,
     }
     covariance = evaluate_covariance_acceptance(covariance_evidence)
+    covariance_stage_evidence = {
+        **covariance_evidence,
+        "acceptance": dict(covariance),
+    }
     try:
         fitted_startprob = _probability_vector(model.startprob_, f"{item.sector_code}.startprob", 3)
         fitted_transmat = _transition_matrix(model.transmat_, f"{item.sector_code}.transmat", 3)
@@ -532,10 +819,32 @@ def fit_b3_preprocessed_train_only(
             frozen_input_manifest=item.train_input_manifest,
         )
     except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+        stage_evidence = _training_stage_evidence(
+            fit_invoked=True,
+            fit_returned=True,
+            completed_stages=[
+                "initialization",
+                "fit",
+                "raw_covariance_capture",
+                "monitor",
+                "likelihood",
+                "covariance",
+            ],
+            initialization=initialization,
+            monitor_evidence=monitor_evidence,
+            likelihood=likelihood,
+            raw_covariance_evidence=raw_covariance_evidence,
+            covariance_evidence=covariance_stage_evidence,
+            stage_specific_cause_evidence={
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
         raise B3TrainingStageError(
             "train_posterior",
             "hmm_risk_model_posterior_invalid",
             exc,
+            stage_evidence=stage_evidence,
         ) from exc
     monitor_history = list(monitor_evidence.get("history") or ())
     terminal_likelihood = monitor_history[-1] if monitor_history else None
@@ -557,6 +866,24 @@ def fit_b3_preprocessed_train_only(
         model_entry_status = "insufficient_evidence"
     else:
         model_entry_status = "failed"
+    training_stage_evidence = _training_stage_evidence(
+        fit_invoked=True,
+        fit_returned=True,
+        completed_stages=[
+            "initialization",
+            "fit",
+            "raw_covariance_capture",
+            "monitor",
+            "likelihood",
+            "covariance",
+            "train_posterior",
+        ],
+        initialization=initialization,
+        monitor_evidence=monitor_evidence,
+        likelihood=likelihood,
+        raw_covariance_evidence=raw_covariance_evidence,
+        covariance_evidence=covariance_stage_evidence,
+    )
     return B3CoreFitEvidence(
         initialization=initialization,
         monitor_evidence=monitor_evidence,
@@ -570,6 +897,7 @@ def fit_b3_preprocessed_train_only(
         terminal_likelihood=terminal_likelihood,
         model_entry_status=model_entry_status,
         model_entry_valid=independent_valid,
+        training_stage_evidence=training_stage_evidence,
     )
 
 
