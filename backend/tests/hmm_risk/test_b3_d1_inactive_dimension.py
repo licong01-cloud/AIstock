@@ -146,7 +146,7 @@ def _projection_kwargs(role: str) -> dict[str, str]:
 def _core(feature_count: int) -> B3CoreFitEvidence:
     status = {"status": "accepted"}
     return B3CoreFitEvidence(
-        initialization={"status": "accepted"},
+        initialization=_current_initialization_evidence(),
         monitor_evidence={"history": [-2.0, -1.0], "status": "accepted"},
         likelihood={"status": "accepted"},
         covariance={"status": "accepted"},
@@ -159,6 +159,15 @@ def _core(feature_count: int) -> B3CoreFitEvidence:
         model_entry_status=status["status"],
         model_entry_valid=True,
     )
+
+
+def _current_initialization_evidence() -> dict[str, object]:
+    return {
+        "schema_version": "hmm_risk_b3_manual_initialization_v1",
+        "contract_version": training_subject.D3_CONTRACT_VERSION,
+        "diagnostic_source_contract": "hmm_risk_c008_b3_diag04_manual_initialization_v1",
+        "formal_initialization_contract_applied": True,
+    }
 
 
 def test_treatment_projects_full20_after_preprocess_and_never_fabricates_inactive_parameters(monkeypatch):
@@ -1031,6 +1040,22 @@ def _refit02_process(monkeypatch: pytest.MonkeyPatch, process_identity: str) -> 
     )
 
 
+def _as_legacy_refit02_process(process: dict) -> dict:
+    attempts = deepcopy(process["attempts"])
+    for attempt in attempts:
+        attempt["schema_version"] = subject.REFIT02_ATTEMPT_SCHEMA_VERSION_LEGACY
+        attempt.pop("fit_budget_contract_version", None)
+        body = {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+        attempt["attempt_receipt_sha256"] = canonical_sha256(body)
+    return subject.build_refit02_process_receipt(
+        process_identity=process["process_identity"],
+        producer_commit=process["producer_commit"],
+        attempts=attempts,
+        current_authority=process["current_authority"],
+        historical_reference=process["historical_reference"],
+    )
+
+
 def test_refit02_current_authority_binds_matched_input_and_historical_drift(monkeypatch):
     treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
 
@@ -1117,6 +1142,56 @@ def test_refit02_process_runs_24_terminal_attempts_with_16_planned_true_fits(mon
     assert process["ready_artifact_write_performed"] is False
 
 
+def test_refit02_under_budget_initialization_failure_preserves_terminal_evidence(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_one_initialization_failure(item, *, train, seed):
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 19 and seed == 42:
+            raise training_subject.B3TrainingStageError(
+                "initialization",
+                "hmm_risk_model_initialization_failed",
+                ValueError("treatment initialization failed before HMM fit"),
+            )
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_one_initialization_failure)
+    monkeypatch.setattr(
+        subject,
+        "prepare_b3_preprocessed_train_only_initialization",
+        _refit02_negative_initialization_blocker,
+    )
+    processes = [
+        subject.run_refit02_process(
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+            process_identity=identity,
+            producer_commit="1" * 40,
+            numeric_environment={"environment": "fixed-single-thread"},
+            current_authority=authority,
+            historical_reference=historical,
+        )
+        for identity in ("fresh_process_1", "fresh_process_2")
+    ]
+
+    assert all(process["attempt_count"] == 24 for process in processes)
+    assert all(process["terminal_attempt_count"] == 24 for process in processes)
+    assert all(process["actual_hmm_fit_invocation_count"] == 15 for process in processes)
+    failed = [
+        attempt
+        for attempt in processes[0]["attempts"]
+        if attempt["role"] == subject.REFIT02_TREATMENT_ROLE and attempt["seed"] == 42
+    ]
+    assert len(failed) == 1
+    assert failed[0]["fit_performed"] is False
+    assert failed[0]["failure_stage"] == "initialization"
+    report = subject.build_refit02_report(processes[0], processes[1], producer_commit="1" * 40)
+    assert report["status"] == "diagnostic_failed"
+    assert report["mechanism_assessment"] == "inconclusive"
+    assert report["actual_hmm_fit_invocation_count"] == 30
+    assert "hmm_risk_model_initialization_failed" in report["mechanism_assessment_reason_codes"]
+
+
 def test_refit02_two_process_report_separates_completion_mechanism_and_d5_readiness(monkeypatch):
     first = _refit02_process(monkeypatch, "fresh_process_1")
     second = _refit02_process(monkeypatch, "fresh_process_2")
@@ -1167,7 +1242,7 @@ def test_refit02_v4_writer_persists_complete_two_process_diagnostic_failed_repor
     monkeypatch.setattr(
         subject,
         "prepare_b3_preprocessed_train_only_initialization",
-        lambda item, train, seed: {"initialization_status": "completed"},
+        lambda item, train, seed: _current_initialization_evidence(),
     )
     processes = [
         subject.run_refit02_process(
@@ -1251,7 +1326,7 @@ def test_refit02_negative_control_not_reproduced_is_durable_inconclusive_evidenc
     monkeypatch.setattr(
         subject,
         "prepare_b3_preprocessed_train_only_initialization",
-        lambda item, train, seed: {"initialization_status": "completed", "seed": seed},
+        lambda item, train, seed: {**_current_initialization_evidence(), "seed": seed},
     )
     process = subject.run_refit02_process(
         treatment_item=treatment,
@@ -1270,8 +1345,83 @@ def test_refit02_negative_control_not_reproduced_is_durable_inconclusive_evidenc
     assert all(value["negative_control_blocker_reproduced"] is False for value in negative)
     assert all(value["fit_performed"] is False for value in negative)
     assert all(value["failure_stage"] == "initialization" for value in negative)
-    assert all(value["initialization_evidence"]["initialization_status"] == "completed" for value in negative)
+    assert all(value["initialization_evidence"]["formal_initialization_contract_applied"] is True for value in negative)
     assert all(
         "hmm_risk_model_inactive_dimension_negative_control_not_reproduced" in value["failure_reason_codes"]
         for value in negative
     )
+
+
+def test_refit02_current_negative_fit_and_initialization_tamper_fail_closed(monkeypatch):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+    negative = next(value for value in process["attempts"] if value["role"] == subject.REFIT02_MATCHED_NEGATIVE_ROLE)
+
+    fit_tampered = deepcopy(negative)
+    fit_tampered["fit_performed"] = True
+    fit_tampered["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in fit_tampered.items() if key != "attempt_receipt_sha256"}
+    )
+    with pytest.raises(subject.D1InactiveDimensionError) as fit_error:
+        subject._validate_refit02_attempt_receipt(
+            fit_tampered,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+    assert fit_error.value.reason_code == "hmm_risk_model_inactive_dimension_fit_budget_exceeded"
+
+    initialization_tampered = deepcopy(negative)
+    initialization_tampered["negative_control_blocker_reproduced"] = False
+    initialization_tampered["role_outcome"] = "negative_control_not_reproduced"
+    initialization_tampered["failure_reason_codes"].append(
+        "hmm_risk_model_inactive_dimension_negative_control_not_reproduced"
+    )
+    initialization_tampered["initialization_evidence"] = {
+        **_current_initialization_evidence(),
+        "formal_initialization_contract_applied": False,
+    }
+    initialization_tampered["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in initialization_tampered.items() if key != "attempt_receipt_sha256"}
+    )
+    with pytest.raises(subject.D1InactiveDimensionError, match="initialization evidence is not authoritative"):
+        subject._validate_refit02_attempt_receipt(
+            initialization_tampered,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+
+
+def test_refit02_current_and_legacy_schemas_are_explicit_and_cannot_mix(monkeypatch):
+    current_first = _refit02_process(monkeypatch, "fresh_process_1")
+    current_second = _refit02_process(monkeypatch, "fresh_process_2")
+    legacy_first = _as_legacy_refit02_process(current_first)
+    legacy_second = _as_legacy_refit02_process(current_second)
+
+    assert legacy_first["schema_version"] == subject.REFIT02_PROCESS_SCHEMA_VERSION_LEGACY
+    assert "fit_budget_contract_version" not in legacy_first
+    legacy_report = subject.build_refit02_report(legacy_first, legacy_second, producer_commit="1" * 40)
+    assert legacy_report["schema_version"] == subject.REFIT02_REPORT_SCHEMA_VERSION_LEGACY
+    assert "fit_budget_contract_version" not in legacy_report
+    assert subject.validate_refit02_report(legacy_report) == legacy_report
+
+    mixed_attempts = deepcopy(current_first["attempts"])
+    mixed_attempts[0] = deepcopy(legacy_first["attempts"][0])
+    with pytest.raises(subject.D1InactiveDimensionError, match="cannot mix current and legacy"):
+        subject.build_refit02_process_receipt(
+            process_identity="fresh_process_1",
+            producer_commit="1" * 40,
+            attempts=mixed_attempts,
+            current_authority=current_first["current_authority"],
+            historical_reference=current_first["historical_reference"],
+        )
+
+    downgraded_current = deepcopy(current_first["attempts"][0])
+    downgraded_current.pop("fit_budget_contract_version")
+    downgraded_current["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in downgraded_current.items() if key != "attempt_receipt_sha256"}
+    )
+    with pytest.raises(subject.D1InactiveDimensionError, match="attempt receipt is invalid"):
+        subject._validate_refit02_attempt_receipt(
+            downgraded_current,
+            process_identity="fresh_process_1",
+            current_authority=current_first["current_authority"],
+        )
