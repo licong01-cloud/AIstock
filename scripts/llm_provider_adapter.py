@@ -46,6 +46,7 @@ DISCOVERY_HYPOTHESIS_SCHEMA_VERSION = "aistock_llm_discovery_hypothesis_v1"
 PROMPT_EVALUATION_SCHEMA_VERSION = "aistock_validation_llm_prompt_evaluation_v1"
 GUARDED_ROLLOUT_SCHEMA_VERSION = "aistock_validation_llm_guarded_rollout_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
+LLM_FAILURE_RECEIPT_SCHEMA_VERSION = "aistock_llm_failure_receipt_v1"
 ADVISORY_LLM_PURPOSES = {"test_plan_advice", "nightly_scheduler_advice", "nightly_discovery_hypothesis"}
 NON_PLAN_ADVISORY_LLM_PURPOSES = {"design_drift_audit", "silent_degradation_audit"}
 FORBIDDEN_FRONTEND_PORTS = {3000}
@@ -2661,6 +2662,18 @@ def public_advisory_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     """Build an allowlisted compact artifact for CI/Nightly LLM advisory outputs."""
 
     llm_summary = llm_invocation_public_summary(payload.get("llm_invocation_evidence"))
+    if payload.get("schema_version") == LLM_FAILURE_RECEIPT_SCHEMA_VERSION:
+        return {
+            "schema_version": payload.get("schema_version"),
+            "workflow_gate": payload.get("workflow_gate"),
+            "planner_status": payload.get("planner_status"),
+            "command": payload.get("command"),
+            "provider": payload.get("provider"),
+            "error": redact_secret_text(str(payload.get("error") or "")),
+            "warning_only": bool(payload.get("warning_only")),
+            "selected_plan_keys": payload.get("selected_plan_keys") or [],
+            "selected_plans": payload.get("selected_plans") or [],
+        }
     if payload.get("schema_version") == TEST_PLAN_ADVICE_SCHEMA_VERSION:
         gate = payload.get("deterministic_gate") if isinstance(payload.get("deterministic_gate"), dict) else {}
         return {
@@ -3205,7 +3218,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ProviderAdapterError, DeepSeekConfigError) as exc:
         message = _redact_llm_error(exc)
         failure_receipt = {
-            "schema_version": "aistock_llm_failure_receipt_v1",
+            "schema_version": LLM_FAILURE_RECEIPT_SCHEMA_VERSION,
             "workflow_gate": "failed",
             "planner_status": "failed",
             "command": getattr(args, "command", None),

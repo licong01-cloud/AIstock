@@ -39,6 +39,9 @@ def test_failed_discovery_writes_loud_receipts_for_deterministic_continuation(
     selected_payload = json.loads(selected.read_text(encoding="utf-8"))
     assert failure["workflow_gate"] == "failed"
     assert failure["planner_status"] == "failed"
+    assert failure["error"] == "deepseek_api unavailable"
+    assert selected_payload["workflow_gate"] == "failed"
+    assert selected_payload["planner_status"] == "failed"
     assert selected_payload["selected_plan_keys"] == []
     assert selected_payload["warning_only"] is True
 
