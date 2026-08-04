@@ -27,7 +27,8 @@
     }
   ],
   "evidence_uris": [
-    "Production batch ahrb_907074c8d4cfb5cfb8791880cf3a72b7 operation ahrop_2392df53ecef04ba0747e2d0a5abffb2"
+    "Production batch ahrb_907074c8d4cfb5cfb8791880cf3a72b7 operation ahrop_2392df53ecef04ba0747e2d0a5abffb2",
+    "Read-only ordinal 10081-10112 benchmark: 32 requirements in 549.885s, 209.5 requirements/hour, peak RSS 167.4 MB, cumulative chain hash exactly matched the existing checkpoint"
   ],
   "expected": "Exact existing PIT, canonical content hash, lineage, drift detection and checkpoint semantics complete multi-year DISCOVER plus VERIFY in hours with measured peak RSS below 8 GB, bounded connections, restart-safe files and no silent fallback.",
   "file_scope_contract": {
@@ -129,7 +130,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded source integration HEAD 62ca1bb30af215c9d7ede504b511d0714e1520e5 and passed 11 BUG-978 performance/transaction/hash contract tests"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
