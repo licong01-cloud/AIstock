@@ -64,6 +64,8 @@ from .runtime_factories import HistoricalRangeOutcomeCommandPlan
 LOGGER = logging.getLogger(__name__)
 
 _BRIDGE_PARENT_LEASE_DURATION = timedelta(minutes=30)
+# Live catalog workers renew this lease; the duration bounds orphan takeover latency.
+_CATALOG_LEASE_DURATION = timedelta(minutes=5)
 
 
 class BackgroundTaskRegistrar(Protocol):
@@ -833,7 +835,7 @@ class ResponseBoundHistoricalRangeDispatcher:
             lease_token=derive_prefixed_id(
                 "ahrclease", {"operation_id": operation_id, "worker_id": worker_id, "attempt_no": attempt_no}
             ),
-            lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            lease_expires_at=datetime.now(UTC) + _CATALOG_LEASE_DURATION,
             expired_attempt=expired_attempt,
         )
         while True:
@@ -848,7 +850,7 @@ class ResponseBoundHistoricalRangeDispatcher:
                     "ahrclease",
                     {"operation_id": operation_id, "worker_id": worker_id, "row_version": next_row_version + 1},
                 ),
-                next_lease_duration=timedelta(minutes=5),
+                next_lease_duration=_CATALOG_LEASE_DURATION,
             )
             claimed = result.operation
             if result.sealed_batch is not None:

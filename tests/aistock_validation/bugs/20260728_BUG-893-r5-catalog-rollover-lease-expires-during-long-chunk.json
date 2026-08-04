@@ -26,7 +26,8 @@
     }
   ],
   "evidence_uris": [
-    "DEV batch ahrb_fe4b87fe2c8b513e112cc49c00a354c0 operation ahrop_34a58550479c6f21ec4ab3e611fe9f6a"
+    "DEV batch ahrb_fe4b87fe2c8b513e112cc49c00a354c0 operation ahrop_34a58550479c6f21ec4ab3e611fe9f6a",
+    "Production Batch B batch ahrb_634ad62c95496f0fbe8b49bf9684d387 operation ahrop_698fe1bae94324fb04e150015312b85d stopped at 9088/16364 resolved requirements with catalog rollover requires a future timezone-aware lease on 2026-08-04"
   ],
   "expected": "Long valid catalog chunks persist their checkpoint and renew a future lease before continuing.",
   "file_scope_contract": {
@@ -98,7 +99,7 @@
   "fixed_at": null,
   "github_issue_number": 2825,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2825",
-  "last_seen_at": "2026-07-28T03:19:34.718192Z",
+  "last_seen_at": "2026-08-03T17:30:15.171075Z",
   "module": "advisory_historical_range",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
@@ -106,6 +107,25 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "fresh_process_evidence": [
+      "Fresh Python nox process imported the persisted BUG-893 heartbeat implementation and passed the advisory_historical_range backend matrix; no backend process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
   "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r5_background_lifecycle.py -q",
   "required_verification": [
     "l0",
