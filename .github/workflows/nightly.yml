@@ -313,17 +313,12 @@ jobs:
           QE_READ_L3_SKIP_UI: '1'
         run: |
           $outDir = "tmp/validation/nightly_l3"
-          $plan = Get-Content -Raw "$outDir/execution-plan.json" | ConvertFrom-Json
-          $rows = @()
-          foreach ($session in $plan.selected_sessions) {
-            conda run -n AIstock python -m nox -s $session
-            $result = if ($LASTEXITCODE -eq 0) { "success" } else { "failure" }
-            $rows += [pscustomobject]@{ session = $session; result = $result }
-          }
-          $rows | ConvertTo-Json | Set-Content -Path "$outDir/session-results.json" -Encoding UTF8
-          "# Nightly selected session results" | Set-Content -Path "$outDir/session-results.md" -Encoding UTF8
-          foreach ($row in $rows) { "- $($row.session): $($row.result)" | Add-Content -Path "$outDir/session-results.md" -Encoding UTF8 }
-          if ($rows.result -contains "failure") { exit 1 }
+          conda run -n AIstock python scripts/nightly_session_runner.py `
+            --plan "$outDir/execution-plan.json" `
+            --output-json "$outDir/session-results.json" `
+            --output-md "$outDir/session-results.md" `
+            --session-timeout-seconds 1200 `
+            --total-timeout-seconds 6300
 
       - name: Print validation history manifest
         if: always()
@@ -580,6 +575,8 @@ jobs:
             --output "$outDir/llm-triage-quality.json"
 
       - name: Build LLM test-plan advisor smoke
+        id: nightly_llm_test_plan
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -601,6 +598,8 @@ jobs:
           }
 
       - name: Build LLM nightly scheduler advice smoke
+        id: nightly_llm_scheduler_advice
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -623,6 +622,8 @@ jobs:
           }
 
       - name: Build LLM nightly discovery hypotheses
+        id: nightly_discovery_hypotheses
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -706,6 +707,8 @@ jobs:
           }
 
       - name: Build Nightly adaptive scheduler warning report
+        id: nightly_llm_adaptive_scheduler
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -770,6 +773,8 @@ jobs:
             --output "$outDir/llm-guarded-rollout-gate.json"
 
       - name: Build Nightly LLM design drift audit
+        id: nightly_llm_design_drift
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -787,6 +792,8 @@ jobs:
           }
 
       - name: Build Nightly LLM silent degradation audit
+        id: nightly_llm_silent_degradation
+        continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -802,6 +809,41 @@ jobs:
           if (Test-Path -LiteralPath "$outDir/silent-degradation-audit.md") {
             Get-Content -LiteralPath "$outDir/silent-degradation-audit.md"
           }
+
+      - name: Record advisory LLM step outcomes
+        id: nightly_llm_outcomes
+        if: always()
+        env:
+          TEST_PLAN_OUTCOME: ${{ steps.nightly_llm_test_plan.outcome }}
+          SCHEDULER_ADVICE_OUTCOME: ${{ steps.nightly_llm_scheduler_advice.outcome }}
+          DISCOVERY_OUTCOME: ${{ steps.nightly_discovery_hypotheses.outcome }}
+          ADAPTIVE_SCHEDULER_OUTCOME: ${{ steps.nightly_llm_adaptive_scheduler.outcome }}
+          DESIGN_DRIFT_OUTCOME: ${{ steps.nightly_llm_design_drift.outcome }}
+          SILENT_DEGRADATION_OUTCOME: ${{ steps.nightly_llm_silent_degradation.outcome }}
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $outcomes = [ordered]@{
+            schema_version = "aistock_nightly_llm_step_outcomes_v1"
+            workflow_gate = "ready"
+            planner_status = "ready"
+            steps = [ordered]@{
+              test_plan_advice = $env:TEST_PLAN_OUTCOME
+              scheduler_advice = $env:SCHEDULER_ADVICE_OUTCOME
+              discovery_hypotheses = $env:DISCOVERY_OUTCOME
+              adaptive_scheduler = $env:ADAPTIVE_SCHEDULER_OUTCOME
+              design_drift_audit = $env:DESIGN_DRIFT_OUTCOME
+              silent_degradation_audit = $env:SILENT_DEGRADATION_OUTCOME
+            }
+          }
+          $failed = @($outcomes.steps.GetEnumerator() | Where-Object { $_.Value -eq "failure" })
+          if ($failed.Count -gt 0) {
+            $outcomes.workflow_gate = "warning"
+            $outcomes.planner_status = "failed"
+            $names = @($failed | ForEach-Object { $_.Key }) -join ","
+            Write-Host "::warning title=Nightly advisory LLM degraded::planner_status=failed failed_steps=$names; deterministic tests and discovery continue"
+          }
+          $outcomes | ConvertTo-Json -Depth 5 | Set-Content -Path "$outDir/llm-step-outcomes.json" -Encoding UTF8
 
       - name: Build Repo hygiene orphan audit
         run: |

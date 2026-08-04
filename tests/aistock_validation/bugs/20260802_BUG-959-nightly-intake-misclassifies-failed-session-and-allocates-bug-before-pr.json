@@ -1,9 +1,13 @@
 {
-  "actual": "Issue #3005 is labeled paper_v2 although advisory_historical_range_backend failed; BUG-949 was exposed from an unmerged registry branch after PR creation was denied.",
+  "actual": "Issues #3005/#3064 are labeled paper_v2 although advisory_historical_range_backend failed; run 30850885541 lost the concrete four-test failure when a later session stalled until the two-hour job cancellation; an advisory LLM provider-chain failure also aborted deterministic discovery; BUG-949/BUG-977 draft ids were exposed before registry persistence and collided with canonical allocation.",
   "allowed_write_scope": [
     ".github/workflows/nightly.yml",
     "scripts/ci_failure_issue_summary.py",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "scripts/nightly_session_runner.py",
+    "backend/tests/scripts/test_nightly_session_runner.py",
+    "scripts/llm_provider_adapter.py",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
     "scripts/aistock_issue_workflow.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
     "tests/aistock_validation/bugs/20260802_BUG-959-nightly-intake-misclassifies-failed-session-and-allocates-bug-before-pr.json",
@@ -18,7 +22,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-02T18:51:19.602816Z",
-  "description": "Issue #3005 is labeled paper_v2 although advisory_historical_range_backend failed; BUG-949 was exposed from an unmerged registry branch after PR creation was denied.",
+  "description": "Nightly must preserve each failed session identity as soon as it is observed, bound runner-owned session duration, continue deterministic discovery when advisory LLM planning fails loudly, and defer BUG allocation until registry persistence is possible.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,7 +35,7 @@
     "GitHub Issue #3005",
     "Nightly run 30716465695"
   ],
-  "expected": "Use the failed nox session to identify module and reproduce context. If Actions cannot persist the registry PR, retain an Issue with BUG ID pending and allocate only during a successful promotion.",
+  "expected": "Use every failed nox session to identify module and reproduce context, checkpoint receipts after each session, emit explicit timeout/failure results before the job deadline, keep advisory LLM failure as planner_status=failed while deterministic discovery continues, and retain an Issue with BUG ID pending when Actions cannot persist the registry PR.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [

@@ -1581,7 +1581,14 @@ def _maybe_invoke_advisory_llm(
             )
     else:
         if not fallback_on_error:
-            raise last_error or ProviderAdapterError(f"{kind} live provider failed")
+            provider_errors = "; ".join(
+                f"{item.get('provider')}: {item.get('error')}"
+                for item in attempts
+                if item.get("status") == "failed"
+            )
+            raise ProviderAdapterError(
+                f"{kind} provider chain failed: {provider_errors or str(last_error or 'unknown provider failure')}"
+            )
         return None, _llm_evidence(
             provider_summary=provider_summary,
             invoked=False,
@@ -3197,8 +3204,30 @@ def main(argv: list[str] | None = None) -> int:
         return int(args.func(args))
     except (ProviderAdapterError, DeepSeekConfigError) as exc:
         message = _redact_llm_error(exc)
+        failure_receipt = {
+            "schema_version": "aistock_llm_failure_receipt_v1",
+            "workflow_gate": "failed",
+            "planner_status": "failed",
+            "command": getattr(args, "command", None),
+            "provider": getattr(args, "provider", None),
+            "error": message,
+        }
+        output = getattr(args, "output", None)
+        if output:
+            _write_public_json_artifact(output, failure_receipt)
+        selected_plans_output = getattr(args, "selected_plans_output", None)
+        if selected_plans_output:
+            _write_public_json_artifact(
+                selected_plans_output,
+                {
+                    **failure_receipt,
+                    "warning_only": True,
+                    "selected_plan_keys": [],
+                    "selected_plans": [],
+                },
+            )
         if args.json:
-            print(json.dumps({"gate": "failed", "error": message}, ensure_ascii=False), file=sys.stderr)
+            print(json.dumps(failure_receipt, ensure_ascii=False), file=sys.stderr)
         else:
             print(f"gate=failed error={message}", file=sys.stderr)
         return 2
