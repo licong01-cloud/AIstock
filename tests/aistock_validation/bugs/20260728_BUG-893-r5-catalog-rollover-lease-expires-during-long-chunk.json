@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-893",
-  "closed_at": null,
+  "closed_at": "2026-08-04T02:56:16.220646Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -95,8 +95,8 @@
   },
   "first_seen_at": "2026-07-28T03:19:34.718192Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2113150e19bdaa514a5de041a34f934747ad9056",
+  "fixed_at": "2026-08-04T01:56:11Z",
   "github_issue_number": 2825,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2825",
   "last_seen_at": "2026-08-03T17:30:15.171075Z",
@@ -104,6 +104,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2826",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -123,9 +124,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-893\\post-restart-verify.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -135,7 +136,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -144,6 +145,9 @@
     "fingerprint": "516a1b530f46d615ed69f973",
     "source_event_id": "FE-20260728-516a1b530f46"
   },
+  "validation_evidence": [
+    "nox -s advisory_historical_range_backend -> passed: 325 passed, 5 skipped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
