@@ -83,7 +83,8 @@
       "Fresh pytest process completed the durable-adapter plus remote-dispatch matrix: 63 passed, 1 skipped.",
       "Fresh Python process loaded the persistent source and verified deployed rdagent-gpu activation precedes python -c; fresh WSL probe resolved Python 3.10.19",
       "Fresh Python process loaded commit 79fddeb3ecdf71b2016861a4d51a620f5e6571fd and verified deployed rdagent-gpu activation precedes python -c; fresh WSL probe resolved Python 3.10.19",
-      "Fresh WSL shell executed set -euo pipefail, disabled nounset only for rdagent-gpu activation, restored nounset, and resolved Python 3.10.19 successfully."
+      "Fresh WSL shell executed set -euo pipefail, disabled nounset only for rdagent-gpu activation, restored nounset, and resolved Python 3.10.19 successfully.",
+      "Fresh Python process loaded commit 6b1e00c4c8f06a657c6e74423d140d3aac191bc6 and verified set +u precedes conda activate, set -u is restored before the Python availability probe, and fresh WSL rdagent-gpu activation resolved Python 3.10.19"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
