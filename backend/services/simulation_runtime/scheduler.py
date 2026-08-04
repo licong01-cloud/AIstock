@@ -87,7 +87,6 @@ from .bridges import (
     LocalSimExecutionBridge,
     LocalSimExecutionSnapshot,
     LocalSimPlanSubmitResult,
-    MiniQMTExecutionBridge,
 )
 from .lifecycle import (
     DEFAULT_SCHEDULER_WINDOWS,
@@ -118,8 +117,12 @@ from .models import (
     SimulationReleaseBinding,
     StrategyRuntimeRelease,
     canonical_json_sha256,
+    miniqmt_kernel_runtime_id,
 )
-from .miniqmt_quote_activation import build_miniqmt_quote_ingress_activation_from_env
+from .miniqmt_quote_activation import (
+    MiniQMTKernelProductSyncError,
+    build_miniqmt_quote_ingress_activation_from_env,
+)
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .selection import StrategyPackageSelectionResult, StrategyPackageSelectionService
 from .service import StrategyRuntimeReleaseService
@@ -149,8 +152,6 @@ DEFAULT_MINIQMT_SUBMIT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MINIQMT_RECONCILE_TIMEOUT_SECONDS = 120.0
 DEFAULT_MINIQMT_TICK_DRIVER_TIMEOUT_SECONDS = 30.0
 _MINIQMT_QUOTE_CONTEXT_PREPARE_FAILURE_STAGE = "MINIQMT_QUOTE_CONTEXT_PREPARE_FAILED"
-_LEGACY_B0_CONTEXT_MISSING_FAILURE_STAGE = "MINIQMT_EVENT_LOOP_SUBMIT_FAILED"
-_LEGACY_B0_CONTEXT_MISSING_MESSAGE = "B0_QUOTE_V2 controller requires scheduler-published context"
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
 _POST_CLOSE_RECONCILE_TIME = time(15, 0)
@@ -2603,6 +2604,40 @@ class SimulationLifecycleScheduler:
         self._miniqmt_quote_context_adapter = miniqmt_quote_context_adapter or activation_context_adapter
         self._miniqmt_quote_ingress_activation = miniqmt_quote_ingress_activation
         self._b0_quote_v2_controller_factory = effective_b0_factory
+        if getattr(self.orchestrator, "miniqmt_product_runtime_factory", None) is None:
+            self.orchestrator.miniqmt_product_runtime_factory = self._build_miniqmt_kernel_product_runtime
+
+    def _build_miniqmt_kernel_product_runtime(
+        self,
+        *,
+        plan: ExecutionPlan,
+        binding: SimulationReleaseBinding,
+        managed_order_service: QmtManagedOrderService | None,
+        as_of_time: datetime | None,
+    ) -> Any:
+        """Build the sole KERNEL_V2 product root from live durable authorities."""
+
+        from .miniqmt_kernel_product import build_simulation_miniqmt_product_runtime_v1
+
+        adapter = (
+            self._miniqmt_quote_ingress_activation.quote_context_adapter
+            if self._miniqmt_quote_ingress_activation is not None
+            else self._miniqmt_quote_context_adapter
+        )
+        return build_simulation_miniqmt_product_runtime_v1(
+            simulation_repository=self.repository,
+            execution_plan=plan,
+            binding=binding,
+            managed_order_service=managed_order_service,
+            quote_context_adapter=adapter,
+            quote_ingress_activation=self._miniqmt_quote_ingress_activation,
+            observed_at=scheduler_time(as_of_time),
+            broker_side_effects_enabled=(
+                managed_order_service is not None
+                and getattr(managed_order_service, "_broker", None) is not None
+                and not bool(getattr(managed_order_service, "preview_only", False))
+            ),
+        )
 
     def status(self) -> dict[str, Any]:
         provider_status = _context_provider_status(self.context_provider)
@@ -2628,9 +2663,9 @@ class SimulationLifecycleScheduler:
                 "post_close_reconcile": "post_close_terminalization",
             },
             "miniqmt_sim_runtime": {
-                "sim_runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
-                "runtime_selector_effect": "event_loop_only_no_runtime_switch",
-                "compiler_route_retired": True,
+                "sim_runtime_kind": "KERNEL_V2",
+                "runtime_selector_effect": "code_owned_kernel_v2_only",
+                "legacy_product_route_retired": True,
                 "live_forbidden": True,
             },
             "miniqmt_quote_context": self._miniqmt_quote_context_health(),
@@ -2776,7 +2811,11 @@ class SimulationLifecycleScheduler:
                     "legacy_fallback": False,
                 },
             )
-        runtime_id = MiniQMTExecutionBridge._runtime_id(plan=plan, binding=binding)
+        runtime_id = miniqmt_kernel_runtime_id(
+            plan_id=plan.plan_id,
+            binding_id=binding.binding_id,
+            trade_date=plan.target_trade_date,
+        )
         clock_at_utc = (
             as_of_time.astimezone(UTC)
             if isinstance(as_of_time, datetime) and as_of_time.tzinfo is not None
@@ -2818,10 +2857,10 @@ class SimulationLifecycleScheduler:
             )
         return dict(payload)
 
-    def _advance_miniqmt_quote_ingress_lifecycle(self) -> None:
+    def _advance_miniqmt_quote_ingress_lifecycle(self) -> tuple[dict[str, Any], ...]:
         activation = self._miniqmt_quote_ingress_activation
         if activation is None:
-            return
+            return ()
         begin_epoch = getattr(activation, "begin_lifecycle_epoch", None)
         if not callable(begin_epoch):
             raise RuntimeConfigInvalidError(
@@ -2832,6 +2871,34 @@ class SimulationLifecycleScheduler:
                 },
             )
         begin_epoch()
+        watchdog = getattr(activation, "watchdog_tick", None)
+        if not callable(watchdog):
+            raise RuntimeConfigInvalidError(
+                "configured MiniQMT quote ingress activation lacks its watchdog method",
+                context={
+                    "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_INVALID",
+                    "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_WATCHDOG",
+                },
+            )
+        # The same scheduler-owned lifecycle tick that maintains the physical
+        # B0 feed also pumps real QMT order/trade snapshots into each durable
+        # KERNEL_V2 runtime.  The activation isolates every runtime and raises
+        # one aggregate only after all registered runtimes were attempted.
+        try:
+            watchdog()
+        except MiniQMTKernelProductSyncError as exc:
+            failures = exc.context.get("ordered_failures")
+            if not isinstance(failures, list) or any(
+                not isinstance(item, dict)
+                or type(item.get("runtime_id")) is not str
+                or not item["runtime_id"]
+                or type(item.get("binding_id")) is not str
+                or not item["binding_id"]
+                for item in failures
+            ):
+                raise
+            return tuple(dict(item) for item in failures)
+        return ()
 
     def shutdown_miniqmt_quote_ingress(self) -> None:
         activation = self._miniqmt_quote_ingress_activation
@@ -2991,7 +3058,7 @@ class SimulationLifecycleScheduler:
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         as_of_time = self._scheduler_time(as_of_time)
         self._refresh_miniqmt_quote_context_lifecycle()
-        self._advance_miniqmt_quote_ingress_lifecycle()
+        kernel_product_tick_failures = self._advance_miniqmt_quote_ingress_lifecycle()
         stale_run_results = self._run_recovery_stage_isolated(
             stage="STALE_MINIQMT_TERMINALIZATION",
             raise_on_error=raise_on_error,
@@ -3095,6 +3162,21 @@ class SimulationLifecycleScheduler:
                 results.append(eod_result)
                 continue
             try:
+                binding_tick_failures = tuple(
+                    item for item in kernel_product_tick_failures if item["binding_id"] == binding.binding_id
+                )
+                if binding_tick_failures:
+                    raise RuntimeConfigInvalidError(
+                        "KERNEL_V2 callback or exchange-clock ingress failed for this MiniQMT binding",
+                        context={
+                            "reason_code": "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED",
+                            "stage": "MINIQMT_K6_PRODUCT_SCHEDULER_TICK",
+                            "binding_id": binding.binding_id,
+                            "ordered_failures": [dict(item) for item in binding_tick_failures],
+                            "broker_called": False,
+                            "execution_gate": False,
+                        },
+                    )
                 results.append(
                     self._run_binding_with_watchdog(
                         binding=binding,
@@ -5586,7 +5668,6 @@ class SimulationLifecycleScheduler:
                     managed_order_service=context.managed_order_service,
                     mode=mode,
                     price_by_symbol=context.price_by_symbol or context.current_prices,
-                    miniqmt_runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
                     as_of_time=as_of_time,
                 ),
             )
@@ -5648,18 +5729,14 @@ class SimulationLifecycleScheduler:
                     default_data_source=data_source,
                 ),
             )
-        if (
-            binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
-            and self._mini_qmt_event_loop_has_pending_algos(execution.run.run_payload_json)
-            and not self._mini_qmt_event_loop_has_submitted_children(execution.run.run_payload_json)
-        ):
+        if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and execution.status == "KERNEL_V2_STARTED":
             self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
             latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
             return SimulationSchedulerBindingResult(
                 binding_id=binding.binding_id,
                 strategy_id=binding.strategy_id,
                 broker_backend=binding.broker_backend,
-                status="MINIQMT_EVENT_LOOP_PENDING",
+                status="MINIQMT_KERNEL_V2_ACTIVE",
                 run=latest_run,
                 execution_plan=execution.execution_plan,
                 execution_result=execution,
@@ -5815,7 +5892,6 @@ class SimulationLifecycleScheduler:
                 managed_order_service=context.managed_order_service,
                 mode=mode,
                 price_by_symbol=context.price_by_symbol or context.current_prices,
-                miniqmt_runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
                 as_of_time=as_of_time,
             ),
         )
@@ -5844,18 +5920,14 @@ class SimulationLifecycleScheduler:
                     default_data_source=data_source,
                 ),
             )
-        if (
-            binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
-            and self._mini_qmt_event_loop_has_pending_algos(execution.run.run_payload_json)
-            and not self._mini_qmt_event_loop_has_submitted_children(execution.run.run_payload_json)
-        ):
+        if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and execution.status == "KERNEL_V2_STARTED":
             self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
             latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
             return SimulationSchedulerBindingResult(
                 binding_id=binding.binding_id,
                 strategy_id=binding.strategy_id,
                 broker_backend=binding.broker_backend,
-                status="MINIQMT_EVENT_LOOP_PENDING",
+                status="MINIQMT_KERNEL_V2_ACTIVE",
                 run=latest_run,
                 execution_plan=execution.execution_plan,
                 execution_result=execution,
@@ -6042,7 +6114,6 @@ class SimulationLifecycleScheduler:
                 managed_order_service=context.managed_order_service,
                 mode=mode,
                 price_by_symbol=context.price_by_symbol or context.current_prices,
-                miniqmt_runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
                 as_of_time=as_of_time,
             ),
         )
@@ -6121,12 +6192,6 @@ class SimulationLifecycleScheduler:
             evidence=existing_evidence,
             trade_date=trade_date,
             runtime_config=StrategyPackageSelectionService.release_selection_runtime_config(runtime_release),
-        )
-        run = self._recover_legacy_b0_context_missing_run_if_safe(
-            binding=binding,
-            run=run,
-            plan=plan,
-            submit=submit,
         )
         status = "REUSED_EXISTING_PLAN"
         if run.status == SimulationDailyRunStatus.SUCCEEDED and not plan.intents:
@@ -6246,28 +6311,6 @@ class SimulationLifecycleScheduler:
                 as_of_time=as_of_time,
             )
         context: SimulationRunContext | None = None
-        tick_driver_result = None
-        if self._should_drive_existing_miniqmt_event_loop(
-            binding=binding,
-            run=run,
-            plan=plan,
-            submit=submit,
-        ):
-            context = self._load_run_context(
-                runtime_release=runtime_release,
-                binding=binding,
-                trade_date=trade_date,
-                as_of_time=as_of_time,
-            )
-            tick_driver_result = self._drive_miniqmt_event_loop_ticks_with_timeout(
-                binding=binding,
-                run=run,
-                plan=plan,
-                context=context,
-                mode=mode,
-                as_of_time=as_of_time,
-            )
-            run = self.repository.get_simulation_daily_run(run.run_id)
         if self._should_reconcile_existing_miniqmt_run(binding=binding, run=run, submit=submit):
             if context is None:
                 context = self._load_run_context(
@@ -6297,22 +6340,6 @@ class SimulationLifecycleScheduler:
                 sync_result=sync_result,
                 reconciliation_result=reconciliation,
                 data_source=context.market_data_source
-                or self._effective_market_data_source_for_binding(
-                    binding=binding,
-                    trade_date=trade_date,
-                    default_data_source=data_source,
-                ),
-            )
-        if tick_driver_result is not None:
-            latest_run = self.repository.get_simulation_daily_run(run.run_id)
-            return SimulationSchedulerBindingResult(
-                binding_id=binding.binding_id,
-                strategy_id=binding.strategy_id,
-                broker_backend=binding.broker_backend,
-                status="MINIQMT_EVENT_LOOP_TICK_DRIVEN",
-                run=latest_run,
-                execution_plan=plan,
-                data_source=(context.market_data_source if context is not None else None)
                 or self._effective_market_data_source_for_binding(
                     binding=binding,
                     trade_date=trade_date,
@@ -6376,7 +6403,6 @@ class SimulationLifecycleScheduler:
                         managed_order_service=context.managed_order_service,
                         mode=mode,
                         price_by_symbol=context.price_by_symbol or context.current_prices,
-                        miniqmt_runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
                         as_of_time=as_of_time,
                     ),
                 )
@@ -6440,8 +6466,7 @@ class SimulationLifecycleScheduler:
                 )
             if (
                 binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
-                and self._mini_qmt_event_loop_has_pending_algos(execution.run.run_payload_json)
-                and not self._mini_qmt_event_loop_has_submitted_children(execution.run.run_payload_json)
+                and execution.status == "KERNEL_V2_STARTED"
             ):
                 self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
                 latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
@@ -6449,7 +6474,7 @@ class SimulationLifecycleScheduler:
                     binding_id=binding.binding_id,
                     strategy_id=binding.strategy_id,
                     broker_backend=binding.broker_backend,
-                    status="MINIQMT_EVENT_LOOP_PENDING",
+                    status="MINIQMT_KERNEL_V2_ACTIVE",
                     run=latest_run,
                     execution_plan=execution.execution_plan,
                     execution_result=execution,
@@ -12908,36 +12933,6 @@ class SimulationLifecycleScheduler:
         return False
 
     @staticmethod
-    def _should_drive_existing_miniqmt_event_loop(
-        *,
-        binding: SimulationReleaseBinding,
-        run: SimulationDailyRun,
-        plan: ExecutionPlan,
-        submit: bool,
-    ) -> bool:
-        if not submit or binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
-            return False
-        if run.status == SimulationDailyRunStatus.FAILED_RETRYABLE:
-            return bool(
-                SimulationLifecycleScheduler._miniqmt_failed_run_durable_pending_recovery_evidence(
-                    binding=binding,
-                    run=run,
-                    plan=plan,
-                )["eligible"]
-            )
-        if run.status not in {
-            SimulationDailyRunStatus.SUBMITTING,
-            SimulationDailyRunStatus.INTRADAY_RUNNING,
-            SimulationDailyRunStatus.RECONCILING,
-        }:
-            return False
-        payload = run.run_payload_json
-        route = payload.get("miniqmt_runtime_route") if isinstance(payload.get("miniqmt_runtime_route"), dict) else {}
-        if str(route.get("route") or "").upper() not in {"", "A_EVENT_LOOP"}:
-            return False
-        return SimulationLifecycleScheduler._mini_qmt_event_loop_has_pending_algos(payload)
-
-    @staticmethod
     def _miniqmt_failed_run_durable_pending_recovery_evidence(
         *,
         binding: SimulationReleaseBinding,
@@ -12975,7 +12970,11 @@ class SimulationLifecycleScheduler:
             conflicts.append("batch_status_not_recoverable")
 
         runtime_id = str(runtime_evidence.get("runtime_id") or "").strip()
-        expected_runtime_id = MiniQMTExecutionBridge._runtime_id(plan=plan, binding=binding)
+        expected_runtime_id = miniqmt_kernel_runtime_id(
+            plan_id=plan.plan_id,
+            binding_id=binding.binding_id,
+            trade_date=plan.target_trade_date,
+        )
         if not runtime_id:
             conflicts.append("runtime_id_missing")
         elif runtime_id != expected_runtime_id:
@@ -13108,94 +13107,6 @@ class SimulationLifecycleScheduler:
             field_path="qmt_batch_result.runtime_evidence.pending_algo_count",
         )
         return parsed is not None and parsed > 0
-
-    def _drive_miniqmt_event_loop_ticks_with_timeout(
-        self,
-        *,
-        binding: SimulationReleaseBinding,
-        run: SimulationDailyRun,
-        plan: ExecutionPlan,
-        context: SimulationRunContext,
-        mode: str,
-        as_of_time: datetime | None,
-    ) -> Any | None:
-        self._prepare_miniqmt_quote_context_for_plan(
-            binding=binding,
-            plan=plan,
-            as_of_time=as_of_time,
-            recovering_active=True,
-        )
-        try:
-            result = self._run_callable_with_timeout(
-                stage="MINIQMT_EVENT_LOOP_TICK_DRIVER",
-                reason_code="MINIQMT_EVENT_LOOP_TICK_DRIVER_TIMEOUT",
-                timeout_env_var=SIMULATION_MINIQMT_TICK_DRIVER_TIMEOUT_ENV,
-                default_timeout_seconds=DEFAULT_MINIQMT_TICK_DRIVER_TIMEOUT_SECONDS,
-                context={
-                    "run_id": run.run_id,
-                    "plan_id": plan.plan_id,
-                    "binding_id": binding.binding_id,
-                    "strategy_id": binding.strategy_id,
-                    "broker_backend": binding.broker_backend.value,
-                    "trade_date": run.trade_date.isoformat(),
-                    "qmt_batch_id": run.run_payload_json.get("qmt_batch_id"),
-                    "pending_intents": run.run_payload_json.get("pending_intents"),
-                    "as_of_time": as_of_time.isoformat() if isinstance(as_of_time, datetime) else None,
-                },
-                func=lambda: self._drive_miniqmt_event_loop_ticks(
-                    binding=binding,
-                    run=run,
-                    plan=plan,
-                    context=context,
-                    mode=mode,
-                    as_of_time=as_of_time,
-                ),
-            )
-        except RuntimeConfigInvalidError as exc:
-            if self._exception_context(exc).get("reason_code") == "MINIQMT_EVENT_LOOP_TICK_DRIVER_TIMEOUT":
-                self._mark_miniqmt_tick_driver_timeout(binding=binding, run=run, plan=plan, exc=exc)
-                return None
-            raise
-        self._persist_miniqmt_tick_driver_result(
-            binding=binding,
-            run=run,
-            plan=plan,
-            result=result,
-        )
-        return result
-
-    def _drive_miniqmt_event_loop_ticks(
-        self,
-        *,
-        binding: SimulationReleaseBinding,
-        run: SimulationDailyRun,
-        plan: ExecutionPlan,
-        context: SimulationRunContext,
-        mode: str,
-        as_of_time: datetime | None,
-    ) -> Any:
-        if context.managed_order_service is None:
-            raise DataUnavailableError(
-                "MiniQMT event_loop tick driver requires QmtManagedOrderService",
-                context={
-                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SERVICE_MISSING",
-                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_CONTEXT",
-                    "run_id": run.run_id,
-                    "plan_id": plan.plan_id,
-                    "binding_id": binding.binding_id,
-                },
-            )
-        bridge = MiniQMTExecutionBridge(
-            managed_order_service=context.managed_order_service,
-            b0_quote_v2_controller_factory=self._b0_quote_v2_controller_factory,
-        )
-        return bridge.drive_event_loop_ticks(
-            plan=plan,
-            binding=binding,
-            mode=mode,
-            price_by_symbol=context.price_by_symbol or context.current_prices,
-            as_of_time=as_of_time,
-        )
 
     def _persist_miniqmt_tick_driver_result(
         self,
@@ -13942,8 +13853,8 @@ class SimulationLifecycleScheduler:
             raise
         try:
             return self._run_callable_with_timeout(
-                stage="MINIQMT_EVENT_LOOP_SUBMIT",
-                reason_code="MINIQMT_EVENT_LOOP_SUBMIT_TIMEOUT",
+                stage="MINIQMT_KERNEL_V2_PLAN_START",
+                reason_code="MINIQMT_KERNEL_V2_PLAN_START_TIMEOUT",
                 timeout_env_var=SIMULATION_MINIQMT_SUBMIT_TIMEOUT_ENV,
                 default_timeout_seconds=DEFAULT_MINIQMT_SUBMIT_TIMEOUT_SECONDS,
                 context={
@@ -13956,13 +13867,13 @@ class SimulationLifecycleScheduler:
                     "mode": str(mode or "SIM").strip().upper(),
                     "as_of_time": as_of_time.isoformat() if isinstance(as_of_time, datetime) else None,
                     "execution_plan_intent_count": len(plan.intents),
-                    "runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
+                    "runtime_kind": "KERNEL_V2",
                     "build_result_present": build_result is not None,
                 },
                 func=submit_callable,
             )
         except RuntimeConfigInvalidError as exc:
-            if self._exception_context(exc).get("reason_code") == "MINIQMT_EVENT_LOOP_SUBMIT_TIMEOUT":
+            if self._exception_context(exc).get("reason_code") == "MINIQMT_KERNEL_V2_PLAN_START_TIMEOUT":
                 self._mark_miniqmt_submit_timeout(binding=binding, run=run, plan=plan, exc=exc)
             raise
 
@@ -14020,61 +13931,6 @@ class SimulationLifecycleScheduler:
                     "stage": _MINIQMT_QUOTE_CONTEXT_PREPARE_FAILURE_STAGE,
                     "type": type(exc).__name__,
                     "message": str(exc),
-                    "context": diagnostic,
-                },
-            },
-        )
-
-    def _recover_legacy_b0_context_missing_run_if_safe(
-        self,
-        *,
-        binding: SimulationReleaseBinding,
-        run: SimulationDailyRun,
-        plan: ExecutionPlan,
-        submit: bool,
-    ) -> SimulationDailyRun:
-        if (
-            not submit
-            or binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM
-            or run.status != SimulationDailyRunStatus.RECONCILING
-        ):
-            return run
-        payload = run.run_payload_json if isinstance(run.run_payload_json, dict) else {}
-        submit_failure = payload.get("submit_failure") if isinstance(payload.get("submit_failure"), dict) else {}
-        if (
-            submit_failure.get("stage") != _LEGACY_B0_CONTEXT_MISSING_FAILURE_STAGE
-            or submit_failure.get("message") != _LEGACY_B0_CONTEXT_MISSING_MESSAGE
-        ):
-            return run
-        if self._run_has_broker_side_effect_evidence(run) or self._mini_qmt_run_has_runtime_execution_evidence(payload):
-            return run
-        diagnostic = {
-            "schema_version": "miniqmt_legacy_b0_context_missing_recovery_v1",
-            "reason_code": "MINIQMT_LEGACY_B0_CONTEXT_MISSING_RECOVERED",
-            "run_id": run.run_id,
-            "plan_id": plan.plan_id,
-            "binding_id": binding.binding_id,
-            "strategy_id": binding.strategy_id,
-            "trade_date": run.trade_date.isoformat(),
-            "previous_status": run.status.value,
-            "next_status": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
-            "broker_called": False,
-            "submitted_intents": 0,
-            "broker_side_effect_evidence": False,
-            "runtime_execution_evidence": False,
-            "matched_failure": dict(submit_failure),
-            "automatic_recovery_scope": "exact_pre_context_legacy_failure_only",
-        }
-        return self.repository.update_simulation_daily_run(
-            run.run_id,
-            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
-            payload_patch={
-                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
-                "miniqmt_legacy_b0_context_missing_recovery": diagnostic,
-                "submit_failure": {
-                    "stage": "MINIQMT_LEGACY_B0_CONTEXT_MISSING_RECOVERY",
-                    "type": "AutomaticNoSideEffectRecovery",
-                    "message": "exact legacy pre-context MiniQMT failure recovered for standard retry",
                     "context": diagnostic,
                 },
             },

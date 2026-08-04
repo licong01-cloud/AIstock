@@ -10,13 +10,14 @@ bindings continue on their unchanged path.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import logging
 import os
 import threading
 import time as monotonic_time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Callable, Mapping
+from zoneinfo import ZoneInfo
 
 from backend.miniqmt_quote_contract_config import QuoteContractPolicy, QuoteIngressRuntimeConfig
 from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
@@ -28,6 +29,7 @@ from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
 )
 from backend.execution_algos.adaptive_is.reasons import QuoteContractReasonCode, quote_contract_error
 from backend.services.miniqmt_execution_runtime.quote_eligibility import QuoteEvaluationContextStore
+from backend.services.miniqmt_execution_runtime.plugin_contracts import bounded_exception_summary_v1
 from backend.services.miniqmt_execution_runtime.repository import (
     default_miniqmt_execution_runtime_repository,
 )
@@ -48,6 +50,26 @@ logger = logging.getLogger("aistock.simulation_runtime.miniqmt_quote_activation"
 
 MINIQMT_B0_QUOTE_V2_SIM_DATA_SESSION_KEY = "SIM:B0_QUOTE_V2:simulation_scheduler"
 MINIQMT_QUOTE_EVENT_SCHEMA_GATE_APPLIED = "applied_and_verified"
+_CHINA_TZ = ZoneInfo("Asia/Shanghai")
+
+
+class MiniQMTKernelProductSyncError(RuntimeError):
+    def __init__(self, failures: tuple[dict[str, Any], ...]) -> None:
+        self.reason_code = "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED"
+        self.context = {"ordered_failures": list(failures), "broker_called": False}
+        super().__init__("one or more KERNEL_V2 runtimes failed callback or exchange-clock ingress")
+
+
+class MiniQMTKernelProductRegistryRollbackError(RuntimeError):
+    def __init__(self, *, operation: str, primary: Exception, rollback: Exception) -> None:
+        self.reason_code = "MINIQMT_K6_PRODUCT_REGISTRY_ROLLBACK_FAILED"
+        self.context = {
+            "operation": operation,
+            "primary_failure": bounded_exception_summary_v1(primary),
+            "rollback_failure": bounded_exception_summary_v1(rollback),
+            "broker_called": False,
+        }
+        super().__init__("KERNEL_V2 product registry operation and its exact rollback both failed")
 
 
 def _production_quote_event_schema_gate() -> str:
@@ -306,6 +328,7 @@ class MiniQMTQuoteIngressActivation:
     controller_factory: Any | None = None
     context_adapter: MiniQMTQuoteContextAuthorityAdapter | None = None
     _shutdown: bool = False
+    _kernel_product_runtimes: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.status == "READY":
@@ -360,6 +383,20 @@ class MiniQMTQuoteIngressActivation:
             payload["quote_context"] = context_adapter.health()
         if isinstance(self.controller_factory, DrainOnlyB0QuoteV2ControllerFactory):
             payload["drain_factory"] = self.controller_factory.health()
+        payload["kernel_product_runtimes"] = [
+            {
+                "runtime_id": runtime_id,
+                "binding_id": getattr(runtime, "binding_id", None),
+                "trade_date": (
+                    getattr(runtime, "trade_date").isoformat()
+                    if getattr(runtime, "trade_date", None) is not None
+                    else None
+                ),
+                "symbols": list(getattr(runtime, "symbols", ())),
+                "source_capability_sha256": getattr(runtime, "source_capability_sha256", None),
+            }
+            for runtime_id, runtime in sorted(self._kernel_product_runtimes.items())
+        ]
         return payload
 
     def begin_lifecycle_epoch(self) -> dict[str, Any]:
@@ -376,6 +413,53 @@ class MiniQMTQuoteIngressActivation:
         supervisor = self._current_supervisor()
         if supervisor is not None:
             supervisor.watchdog_tick()
+        observed_at = datetime.now(UTC)
+        monotonic_ns = monotonic_time.monotonic_ns()
+        failures: list[dict[str, Any]] = []
+        release_after_success: list[str] = []
+        for runtime_id, runtime in sorted(tuple(self._kernel_product_runtimes.items())):
+            binding_id = getattr(runtime, "binding_id", None)
+            tick = getattr(runtime, "scheduler_tick_v1", None)
+            if not callable(tick):
+                failures.append(
+                    {
+                        "runtime_id": runtime_id,
+                        "binding_id": binding_id,
+                        "reason_code": "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_MISSING",
+                        "exception_type": None,
+                        "exception_message": "registered runtime lacks callback and exchange-clock tick ingress",
+                    }
+                )
+                continue
+            try:
+                tick(observed_at=observed_at, monotonic_ns=monotonic_ns)
+                runtime_trade_date = getattr(runtime, "trade_date", None)
+                if runtime_trade_date is not None and runtime_trade_date < observed_at.astimezone(_CHINA_TZ).date():
+                    release_after_success.append(runtime_id)
+            except Exception as exc:  # noqa: BLE001 - isolate all durable runtimes, then raise aggregate.
+                failures.append(
+                    {
+                        "runtime_id": runtime_id,
+                        "binding_id": binding_id,
+                        "reason_code": getattr(exc, "reason_code", "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED"),
+                        **bounded_exception_summary_v1(exc),
+                    }
+                )
+        for runtime_id in release_after_success:
+            runtime = self._kernel_product_runtimes[runtime_id]
+            try:
+                self.release_kernel_product_runtime(runtime_id)
+            except Exception as exc:  # noqa: BLE001 - retain peer isolation and surface exact release failure.
+                failures.append(
+                    {
+                        "runtime_id": runtime_id,
+                        "binding_id": getattr(runtime, "binding_id", None),
+                        "reason_code": "MINIQMT_K6_PRODUCT_RUNTIME_RELEASE_FAILED",
+                        **bounded_exception_summary_v1(exc),
+                    }
+                )
+        if failures:
+            raise MiniQMTKernelProductSyncError(tuple(failures))
         return self.health()
 
     def shutdown(self) -> dict[str, Any]:
@@ -389,7 +473,137 @@ class MiniQMTQuoteIngressActivation:
             if self.supervisor is not None:
                 self.supervisor.shutdown()
         self._shutdown = True
+        self._kernel_product_runtimes.clear()
         return self.health()
+
+    def register_kernel_product_runtime(self, *, runtime: Any, symbols: tuple[str, ...]) -> Any:
+        """Attach one final KERNEL_V2 source publisher to the shared physical feed."""
+
+        if self._shutdown:
+            raise RuntimeError("stopped MiniQMT quote activation cannot register a product runtime")
+        runtime_id = str(getattr(runtime, "runtime_id", "") or "").strip()
+        sink = getattr(runtime, "observe_b0_quote_v1", None)
+        if not runtime_id or not callable(sink):
+            raise TypeError("kernel product runtime must expose identity and observe_b0_quote_v1")
+        if (
+            type(symbols) is not tuple
+            or not symbols
+            or len(symbols) != len(set(symbols))
+            or any(type(item) is not str or not item or item != item.strip() for item in symbols)
+        ):
+            raise ValueError("kernel product runtime requires a non-empty exact unique symbol tuple")
+        normalized_symbols = symbols
+        if tuple(getattr(runtime, "symbols", ())) != normalized_symbols:
+            raise RuntimeError("kernel product runtime registration differs from its frozen symbol owner")
+        existing = self._kernel_product_runtimes.get(runtime_id)
+        if existing is not None:
+            if existing is not runtime:
+                raise RuntimeError("kernel product runtime identity is already registered to another owner")
+            if tuple(getattr(existing, "symbols", normalized_symbols)) != normalized_symbols:
+                raise RuntimeError("kernel product runtime registration symbol set drifted")
+            return existing
+        supervisor = self._current_supervisor()
+        if supervisor is None:
+            raise RuntimeError("KERNEL_V2 product publisher requires the active B0 quote supervisor")
+        consumer_id = f"k6d-kernel-v2:{runtime_id}"
+        supervisor.register_observation_sink(consumer_id=consumer_id, sink=sink)
+        try:
+            supervisor.acquire_consumer(consumer_id=consumer_id, symbols=list(normalized_symbols))
+        except Exception as primary:
+            try:
+                supervisor.unregister_observation_sink(consumer_id=consumer_id)
+            except Exception as rollback:
+                raise MiniQMTKernelProductRegistryRollbackError(
+                    operation="REGISTER_ACQUIRE_CONSUMER",
+                    primary=primary,
+                    rollback=rollback,
+                ) from primary
+            raise
+        self._kernel_product_runtimes[runtime_id] = runtime
+        return runtime
+
+    def get_kernel_product_runtime(self, runtime_id: str) -> Any | None:
+        if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():
+            raise TypeError("runtime_id must be a canonical identity")
+        return self._kernel_product_runtimes.get(runtime_id)
+
+    def release_kernel_product_runtime(self, runtime_id: str) -> None:
+        """Release one completed prior-day product runtime from the shared feed."""
+
+        runtime = self._kernel_product_runtime(runtime_id)
+        supervisor = self._current_supervisor()
+        if supervisor is None:
+            raise RuntimeError("KERNEL_V2 product runtime release requires the active B0 quote supervisor")
+        consumer_id = f"k6d-kernel-v2:{runtime_id}"
+        symbols = tuple(getattr(runtime, "symbols", ()))
+        supervisor.release_consumer(consumer_id=consumer_id)
+        try:
+            supervisor.unregister_observation_sink(consumer_id=consumer_id)
+        except Exception as primary:
+            # Restore the exact logical lease if the second in-memory registry
+            # operation failed; never report a half-released runtime as clean.
+            try:
+                supervisor.acquire_consumer(consumer_id=consumer_id, symbols=list(symbols))
+            except Exception as rollback:
+                raise MiniQMTKernelProductRegistryRollbackError(
+                    operation="RELEASE_UNREGISTER_SINK",
+                    primary=primary,
+                    rollback=rollback,
+                ) from primary
+            raise
+        removed = self._kernel_product_runtimes.pop(runtime_id, None)
+        if removed is not runtime:
+            raise RuntimeError("KERNEL_V2 product runtime registry changed during exact release")
+
+    def ingest_kernel_order_callback_v1(
+        self,
+        *,
+        runtime_id: str,
+        broker_order_id: str,
+        raw_payload: dict[str, Any],
+        observed_at: datetime,
+    ) -> Any:
+        runtime = self._kernel_product_runtime(runtime_id)
+        ingress = getattr(runtime, "ingest_order_callback_v1", None)
+        if not callable(ingress):
+            raise TypeError("registered kernel product runtime lacks order callback ingress")
+        return ingress(
+            broker_order_id=broker_order_id,
+            raw_payload=raw_payload,
+            observed_at=observed_at,
+        )
+
+    def ingest_kernel_trade_callback_v1(
+        self,
+        *,
+        runtime_id: str,
+        broker_order_id: str,
+        trade_quantity: int,
+        trade_price_decimal: Any,
+        cumulative_quantity: int,
+        raw_payload: dict[str, Any],
+        observed_at: datetime,
+    ) -> Any:
+        runtime = self._kernel_product_runtime(runtime_id)
+        ingress = getattr(runtime, "ingest_trade_callback_v1", None)
+        if not callable(ingress):
+            raise TypeError("registered kernel product runtime lacks trade callback ingress")
+        return ingress(
+            broker_order_id=broker_order_id,
+            trade_quantity=trade_quantity,
+            trade_price_decimal=trade_price_decimal,
+            cumulative_quantity=cumulative_quantity,
+            raw_payload=raw_payload,
+            observed_at=observed_at,
+        )
+
+    def _kernel_product_runtime(self, runtime_id: str) -> Any:
+        if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():
+            raise TypeError("runtime_id must be a canonical identity")
+        try:
+            return self._kernel_product_runtimes[runtime_id]
+        except KeyError as exc:
+            raise KeyError(f"no registered KERNEL_V2 product runtime for {runtime_id}") from exc
 
     def prepare_runtime_context(
         self,

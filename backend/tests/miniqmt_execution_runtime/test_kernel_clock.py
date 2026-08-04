@@ -45,7 +45,12 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
 def _authority(
     segments: tuple[SessionSegment, ...] | None = None,
 ) -> ExchangeSessionAuthorityV1:
-    segments = segments or (SessionSegment(time(9, 30), time(11, 30)), SessionSegment(time(13), time(15)))
+    segments = segments or (
+        SessionSegment(time(9, 15), time(9, 25)),
+        SessionSegment(time(9, 30), time(11, 30)),
+        SessionSegment(time(13), time(14, 57)),
+        SessionSegment(time(14, 57), time(15)),
+    )
     effective_at = datetime(2026, 7, 26, 16, tzinfo=UTC)
     snapshots = {
         market: CalendarSnapshot(
@@ -166,11 +171,12 @@ def _claimed_pair(
 @pytest.mark.parametrize(
     ("observed", "phase", "active_seconds"),
     [
-        ("2026-07-27T01:20:00Z", SessionPhaseV1.CLOSED, 0),
+        ("2026-07-27T01:20:00Z", SessionPhaseV1.OPEN_AUCTION, 0),
         ("2026-07-27T02:30:00Z", SessionPhaseV1.CONTINUOUS_AM, 3600),
         ("2026-07-27T04:00:00Z", SessionPhaseV1.LUNCH_BREAK, 7200),
         ("2026-07-27T06:00:00Z", SessionPhaseV1.CONTINUOUS_PM, 10800),
-        ("2026-07-27T07:10:00Z", SessionPhaseV1.CLOSED, 14400),
+        ("2026-07-27T06:58:00Z", SessionPhaseV1.CLOSE_AUCTION, 14220),
+        ("2026-07-27T07:10:00Z", SessionPhaseV1.CLOSED, 14220),
     ],
 )
 def test_exchange_session_projection_uses_only_durable_segments(
@@ -202,7 +208,7 @@ def test_session_and_eod_identities_are_deterministic_and_authority_bound() -> N
         session_phase=SessionPhaseV1.CONTINUOUS_PM,
         phase_boundary_at_utc="2026-07-27T05:00:00Z",
     )
-    eod = build_eod_event_v1(authority=authority, sequence=3, phase_boundary_at_utc="2026-07-27T07:00:00Z")
+    eod = build_eod_event_v1(authority=authority, sequence=3, phase_boundary_at_utc="2026-07-27T06:57:00Z")
     assert thaw_json_v1(session_event.source_identity) == {"session_event_id": event_id}
     assert thaw_json_v1(eod.source_identity) == {
         "runtime_id": authority.runtime_id,

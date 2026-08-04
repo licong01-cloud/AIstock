@@ -6,7 +6,7 @@ import ast
 
 import pytest
 
-import backend.services.miniqmt_execution_runtime.k5_shadow_catalog as shadow_module
+import backend.services.miniqmt_execution_runtime.full_five_catalog_authority as full_five_module
 from backend.execution_algos.vnpy_compat.facade_characterization import _stable_ast_dump_v1
 from backend.execution_algos.vnpy_compat.facade_contracts import VnpyFacadeContractError
 from backend.execution_algos.vnpy_compat.facade_source_execution import _source_executor_signature_payload_v1
@@ -112,7 +112,7 @@ def test_k5_shadow_catalog_rejects_literal_drift_and_authority_readback_drift(
 ) -> None:
     candidate = build_k5_shadow_catalog_runtime_v1(gateway_catalog=_gateway())
     monkeypatch.setattr(
-        shadow_module,
+        full_five_module,
         "k5_facade_algorithm_bindings_v2",
         lambda: candidate.k5_algorithm_bindings[:1],
     )

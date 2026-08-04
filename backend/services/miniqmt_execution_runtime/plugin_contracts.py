@@ -1291,10 +1291,10 @@ _STRICT_EVENT_PAYLOAD_MODELS: dict[EventTypeV2, type[FrozenStrictModel]] = {
 }
 
 
-_EVENT_COMPOSITE: dict[EventTypeV2, tuple[EventSourceV2, str, tuple[str, ...]]] = {
+_EVENT_COMPOSITE: dict[EventTypeV2, tuple[EventSourceV2, str | tuple[str, ...], tuple[str, ...]]] = {
     EventTypeV2.ALGO_START: (
         EventSourceV2.MINIQMT_EXECUTION_KERNEL,
-        "miniqmt_algo_start_v1",
+        ("miniqmt_algo_start_v1", "miniqmt_algo_start_v2"),
         (
             "algo_instance_id",
             "runtime_id",
@@ -1338,6 +1338,82 @@ _EVENT_COMPOSITE: dict[EventTypeV2, tuple[EventSourceV2, str, tuple[str, ...]]] 
         ("operator_command_id",),
     ),
 }
+
+
+_ALGO_START_V2_PAYLOAD_FIELDS = frozenset(
+    {
+        "parent_intent_id",
+        "strategy_slot_id",
+        "target_quantity",
+        "execution_plan_id",
+        "execution_plan_sha256",
+        "release_id",
+        "release_sha256",
+        "policy_id",
+        "policy_sha256",
+        "gateway_capability_catalog",
+        "plugin_catalog_sha256",
+        "plugin_route_compatibility_receipt_sha256",
+        "plugin_route_compatibility_receipt",
+        "product_route_cutover_receipt_sha256",
+        "product_route_owner_sha256",
+        "product_route_epoch",
+        "effective_new_instance_sequence",
+        "binding_id",
+        "creation_request_sha256",
+    }
+)
+
+
+def _validate_algo_start_v2_payload_v1(payload: dict[str, Any]) -> None:
+    """Validate the final product ALGO_START payload without admitting a V1 route alias."""
+
+    actual_fields = set(payload)
+    if actual_fields != _ALGO_START_V2_PAYLOAD_FIELDS:
+        raise ValueError(
+            "ALGO_START V2 payload must contain its exact final route fields; "
+            f"missing={sorted(_ALGO_START_V2_PAYLOAD_FIELDS - actual_fields)}, "
+            f"extra={sorted(actual_fields - _ALGO_START_V2_PAYLOAD_FIELDS)}"
+        )
+    for field_name in (
+        "parent_intent_id",
+        "strategy_slot_id",
+        "execution_plan_id",
+        "release_id",
+        "policy_id",
+        "binding_id",
+    ):
+        require_identity_v1(payload[field_name], field_name=f"payload.{field_name}")
+    for field_name in (
+        "execution_plan_sha256",
+        "release_sha256",
+        "policy_sha256",
+        "plugin_catalog_sha256",
+        "plugin_route_compatibility_receipt_sha256",
+        "product_route_cutover_receipt_sha256",
+        "product_route_owner_sha256",
+        "creation_request_sha256",
+    ):
+        require_sha256_v1(payload[field_name], field_name=f"payload.{field_name}")
+    if type(payload["target_quantity"]) is not int or payload["target_quantity"] <= 0:
+        raise ValueError("ALGO_START V2 target_quantity must be a positive strict integer")
+    for field_name in ("product_route_epoch", "effective_new_instance_sequence"):
+        if type(payload[field_name]) is not int or payload[field_name] <= 0:
+            raise ValueError(f"ALGO_START V2 {field_name} must be a positive strict integer")
+    try:
+        gateway = GatewayCapabilityCatalogV1.model_validate_json(
+            json.dumps(payload["gateway_capability_catalog"], sort_keys=True, separators=(",", ":"))
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ALGO_START V2 gateway capability catalog is not strict") from exc
+    if gateway.quote_source != "B0_QUOTE_V2":
+        raise ValueError("ALGO_START V2 requires B0_QUOTE_V2 gateway authority")
+    receipt = payload["plugin_route_compatibility_receipt"]
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("receipt_sha256") != payload["plugin_route_compatibility_receipt_sha256"]
+    ):
+        raise ValueError("ALGO_START V2 plugin route receipt does not close to its explicit hash")
 
 
 class RuntimeEventEnvelopeV2(FrozenStrictModel):
@@ -1403,7 +1479,10 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
     @model_validator(mode="after")
     def _validate_event(self) -> Self:
         expected_source, expected_schema, required_identity_fields = _EVENT_COMPOSITE[self.event_type]
-        if self.source is not expected_source or self.payload_schema_version != expected_schema:
+        accepted_schemas = (
+            frozenset(expected_schema) if isinstance(expected_schema, tuple) else frozenset((expected_schema,))
+        )
+        if self.source is not expected_source or self.payload_schema_version not in accepted_schemas:
             raise ValueError("event/source/payload schema combination is not registered")
         identity = thaw_json_v1(self.source_identity)
         expected_identity_fields = set(required_identity_fields)
@@ -1479,6 +1558,8 @@ class RuntimeEventEnvelopeV2(FrozenStrictModel):
             )
             if identity["algo_instance_id"] != expected_algo_instance_id:
                 raise ValueError("ALGO_START algo_instance_id does not match complete source identity closure")
+            if self.payload_schema_version == "miniqmt_algo_start_v2":
+                _validate_algo_start_v2_payload_v1(thaw_json_v1(self.payload))
         expected_payload_hash = hash_hex_v1("miniqmt_runtime_event_payload_v2", thaw_json_v1(self.payload))
         if self.payload_sha256 != expected_payload_hash:
             raise ValueError("payload_sha256 does not match payload closure")
@@ -4678,7 +4759,10 @@ class ExecutionCommandChildMappingV1(FrozenStrictModel):
                 CommandChildMappingStatusV1.BROKER_REJECTED,
                 CommandChildMappingStatusV1.TERMINAL,
             },
-            CommandChildMappingStatusV1.TERMINAL: set(),
+            # Terminal economic ownership is irreversible, but later distinct
+            # broker callback facts may extend ORDER/TRADE lineage while the
+            # mapping remains terminal.  This is not a route/state reopening.
+            CommandChildMappingStatusV1.TERMINAL: {CommandChildMappingStatusV1.TERMINAL},
         }
         if self.mapping_status not in allowed[previous.mapping_status]:
             raise ValueError("illegal command-child mapping status transition")

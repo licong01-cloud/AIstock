@@ -353,7 +353,9 @@ def evaluate_product_command_authority_v3(
             reason_code=reject_reason,
             source="ROUTE_COMPATIBILITY",
         )
-    elif bool(kill_switch["active"]) or risk.action is RiskDecisionActionV1.KILL_SWITCH:
+    elif command.command_type is BrokerCommandTypeV2.SUBMIT_LIMIT and (
+        bool(kill_switch["active"]) or risk.action is RiskDecisionActionV1.KILL_SWITCH
+    ):
         disposition = ProductCommandDispositionV3.REJECT_SYNCHRONOUS
         reject_reason = (
             risk.reason_code if risk.action is RiskDecisionActionV1.KILL_SWITCH else "MINIQMT_KILL_SWITCH_ACTIVE"

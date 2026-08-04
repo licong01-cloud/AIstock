@@ -31,7 +31,6 @@ def _load_registry_exports() -> None:
     from . import v25_1_small_cap_algo as _v25_1_small_cap_algo  # noqa: F401
     from . import v25_two_stage_algo as _v25_two_stage_algo  # noqa: F401
     from . import vwap_algo as _vwap_algo  # noqa: F401
-    from .vnpy_style import legacy_adapter as _legacy_adapter  # noqa: F401
 
     globals()["ALGO_REGISTRY"] = registry
     globals()["get_algo"] = registry_get_algo

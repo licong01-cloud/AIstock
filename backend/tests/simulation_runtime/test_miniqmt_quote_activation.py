@@ -29,6 +29,8 @@ from backend.services.simulation_runtime.miniqmt_quote_activation import (
     MINIQMT_B0_QUOTE_V2_SIM_DATA_SESSION_KEY,
     DrainOnlyB0QuoteV2ControllerFactory,
     MiniQMTQuoteIngressActivation,
+    MiniQMTKernelProductRegistryRollbackError,
+    MiniQMTKernelProductSyncError,
     _build_bootstrap_fetcher,
     build_miniqmt_quote_ingress_activation_from_env,
 )
@@ -89,6 +91,7 @@ class _LifecycleActivation:
 
     def __init__(self) -> None:
         self.epoch_count = 0
+        self.watchdog_count = 0
         self.shutdown_count = 0
 
     def health(self) -> dict[str, object]:
@@ -96,6 +99,10 @@ class _LifecycleActivation:
 
     def begin_lifecycle_epoch(self) -> dict[str, object]:
         self.epoch_count += 1
+        return self.health()
+
+    def watchdog_tick(self) -> dict[str, object]:
+        self.watchdog_count += 1
         return self.health()
 
     def shutdown(self) -> dict[str, object]:
@@ -500,6 +507,148 @@ def test_applied_schema_builds_single_scheduler_factory_and_bootstrap_avoids_leg
         activation.begin_lifecycle_epoch()
     with pytest.raises(RuntimeError, match="cannot run watchdog"):
         activation.watchdog_tick()
+
+
+def test_watchdog_syncs_every_kernel_product_runtime_and_raises_aggregate_after_isolation() -> None:
+    activation = build_miniqmt_quote_ingress_activation_from_env(
+        environ={"MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED": "false"},
+        schema_gate_reader=lambda: "applied_and_verified",
+    )
+    calls: list[str] = []
+
+    class _Runtime:
+        def __init__(self, runtime_id: str, *, fail: bool) -> None:
+            self.runtime_id = runtime_id
+            self.binding_id = f"binding_{runtime_id}"
+            self.fail = fail
+
+        def scheduler_tick_v1(self, *, observed_at: datetime, monotonic_ns: int) -> tuple[str, ...]:
+            assert observed_at.tzinfo is not None
+            assert monotonic_ns > 0
+            calls.append(self.runtime_id)
+            if self.fail:
+                raise RuntimeError(f"snapshot failure for {self.runtime_id}")
+            return ()
+
+    activation._kernel_product_runtimes = {
+        "runtime_a": _Runtime("runtime_a", fail=True),
+        "runtime_b": _Runtime("runtime_b", fail=False),
+    }
+    with pytest.raises(MiniQMTKernelProductSyncError) as caught:
+        activation.watchdog_tick()
+    assert calls == ["runtime_a", "runtime_b"]
+    assert caught.value.reason_code == "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED"
+    assert caught.value.context["ordered_failures"][0]["runtime_id"] == "runtime_a"
+
+
+def test_watchdog_releases_successful_prior_day_kernel_runtime_after_final_clock_tick() -> None:
+    activation = build_miniqmt_quote_ingress_activation_from_env(
+        environ={"MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED": "false"},
+        schema_gate_reader=lambda: "applied_and_verified",
+    )
+    operations: list[tuple[str, str]] = []
+
+    class _Supervisor:
+        def health(self) -> dict[str, object]:
+            return {"status": "READY"}
+
+        def watchdog_tick(self) -> None:
+            return None
+
+        def release_consumer(self, *, consumer_id: str) -> None:
+            operations.append(("release", consumer_id))
+
+        def unregister_observation_sink(self, *, consumer_id: str) -> None:
+            operations.append(("unregister", consumer_id))
+
+        def acquire_consumer(self, *, consumer_id: str, symbols: list[str]) -> None:
+            raise AssertionError((consumer_id, symbols))
+
+    class _Runtime:
+        runtime_id = "runtime_prior_day"
+        binding_id = "binding_prior_day"
+        trade_date = date(2026, 8, 3)
+        symbols = ("600000.SH",)
+
+        def scheduler_tick_v1(self, *, observed_at: datetime, monotonic_ns: int) -> tuple[str, ...]:
+            assert observed_at.tzinfo is not None
+            assert monotonic_ns > 0
+            operations.append(("tick", self.runtime_id))
+            return ()
+
+    activation.controller_factory = None
+    activation.supervisor = _Supervisor()  # type: ignore[assignment]
+    activation._kernel_product_runtimes = {"runtime_prior_day": _Runtime()}
+    activation.watchdog_tick()
+    assert operations == [
+        ("tick", "runtime_prior_day"),
+        ("release", "k6d-kernel-v2:runtime_prior_day"),
+        ("unregister", "k6d-kernel-v2:runtime_prior_day"),
+    ]
+    assert activation._kernel_product_runtimes == {}
+
+
+def test_kernel_product_registry_is_strict_and_preserves_primary_and_rollback_failures() -> None:
+    activation = build_miniqmt_quote_ingress_activation_from_env(
+        environ={"MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED": "false"},
+        schema_gate_reader=lambda: "applied_and_verified",
+    )
+
+    class Runtime:
+        runtime_id = "runtime_registry"
+        symbols = ("600000.SH",)
+
+        @staticmethod
+        def observe_b0_quote_v1(*_values):
+            return None
+
+    runtime = Runtime()
+    with pytest.raises(ValueError, match="exact unique symbol tuple"):
+        activation.register_kernel_product_runtime(runtime=runtime, symbols=("600000.SH", "600000.SH"))
+    with pytest.raises(RuntimeError, match="frozen symbol owner"):
+        activation.register_kernel_product_runtime(runtime=runtime, symbols=("000001.SZ",))
+
+    class RegisterSupervisor:
+        @staticmethod
+        def register_observation_sink(**_values):
+            return None
+
+        @staticmethod
+        def acquire_consumer(**_values):
+            raise RuntimeError("primary acquire failure")
+
+        @staticmethod
+        def unregister_observation_sink(**_values):
+            raise RuntimeError("rollback unregister failure")
+
+    activation.controller_factory = None
+    activation.supervisor = RegisterSupervisor()  # type: ignore[assignment]
+    with pytest.raises(MiniQMTKernelProductRegistryRollbackError) as register_failure:
+        activation.register_kernel_product_runtime(runtime=runtime, symbols=runtime.symbols)
+    assert register_failure.value.context["operation"] == "REGISTER_ACQUIRE_CONSUMER"
+    assert register_failure.value.context["primary_failure"]["exception_message"] == "primary acquire failure"
+    assert register_failure.value.context["rollback_failure"]["exception_message"] == "rollback unregister failure"
+
+    class ReleaseSupervisor:
+        @staticmethod
+        def release_consumer(**_values):
+            return None
+
+        @staticmethod
+        def unregister_observation_sink(**_values):
+            raise RuntimeError("primary unregister failure")
+
+        @staticmethod
+        def acquire_consumer(**_values):
+            raise RuntimeError("rollback acquire failure")
+
+    activation.supervisor = ReleaseSupervisor()  # type: ignore[assignment]
+    activation._kernel_product_runtimes = {runtime.runtime_id: runtime}
+    with pytest.raises(MiniQMTKernelProductRegistryRollbackError) as release_failure:
+        activation.release_kernel_product_runtime(runtime.runtime_id)
+    assert release_failure.value.context["operation"] == "RELEASE_UNREGISTER_SINK"
+    assert release_failure.value.context["primary_failure"]["exception_message"] == "primary unregister failure"
+    assert release_failure.value.context["rollback_failure"]["exception_message"] == "rollback acquire failure"
 
 
 def test_activation_parses_frozen_plan_and_publishes_exact_runtime_context() -> None:

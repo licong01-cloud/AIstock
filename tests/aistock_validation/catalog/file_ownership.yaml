@@ -610,6 +610,7 @@ rules:
       - backend/execution_algos/**
       - configs/execution_algos/**
       - backend/tests/trading_core/test_vnpy_style_execution_assets.py
+      - backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py
     primary_module: paper_v2
     impact_modules: [miniqmt_execution_runtime, simulation_runtime, qe.core, strategy_package]
     layer: execution_algo

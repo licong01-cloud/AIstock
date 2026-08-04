@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Protocol
 
+from pydantic import ValidationError
+
 from .kernel_product_contracts import (
     KernelProductContractError,
     ProductRouteOwnerKindV1,
@@ -34,7 +36,7 @@ class KernelProductCutoverCoordinator:
     """Expose the sole product entry for K6-D route activation."""
 
     def __init__(self, *, repository: KernelProductCutoverRepositoryV1) -> None:
-        if not hasattr(repository, "activate_kernel_v2_route_v1"):
+        if not callable(getattr(repository, "activate_kernel_v2_route_v1", None)):
             raise TypeError("repository must implement activate_kernel_v2_route_v1")
         self._repository = repository
 
@@ -69,7 +71,19 @@ class KernelProductCutoverCoordinator:
                     "broker_called": False,
                 },
             )
-        strict_owner = ProductRouteOwnerV1.model_validate(owner.model_dump(mode="python"), strict=True)
+        try:
+            strict_owner = ProductRouteOwnerV1.model_validate(owner.model_dump(mode="python"), strict=True)
+        except ValidationError as exc:
+            raise KernelProductContractError(
+                "MINIQMT_K6_ROUTE_OWNER_READBACK_INVALID",
+                "route activation returned a malformed product route owner",
+                context={
+                    "runtime_id": runtime_id,
+                    "binding_id": binding_id,
+                    "trade_date": trade_date.isoformat(),
+                    "broker_called": False,
+                },
+            ) from exc
         if (
             strict_owner.runtime_id,
             strict_owner.binding_id,
@@ -105,7 +119,7 @@ class KernelProductCutoverCoordinator:
         if strict_owner.route_owner is not ProductRouteOwnerKindV1.KERNEL_V2:
             raise KernelProductContractError(
                 "MINIQMT_K6_ROUTE_OWNER_INVALID",
-                "route activation returned an unsupported route owner",
+                "route activation returned an unsupported product route owner",
                 context={
                     "runtime_id": runtime_id,
                     "binding_id": binding_id,

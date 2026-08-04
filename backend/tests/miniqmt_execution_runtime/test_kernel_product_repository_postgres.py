@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import os
 
 import psycopg2
@@ -28,6 +28,16 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
     KernelRepositoryConflict,
     KernelRepositorySchemaError,
     PostgresMiniQMTKernelRepository,
+)
+from backend.services.miniqmt_execution_runtime.kernel_product_repository import (
+    K6B_CATALOG_SHA256,
+    K6C0_CATALOG_SHA256_K6B,
+    K6_CATALOG_SHA256_K6B,
+    K6_TABLES,
+    KernelProductRepositoryMixin,
+    _assert_route_successor_authority_v1,
+    migration_readback_sha256_v1,
+    product_authority_schema_sha256_v3,
 )
 from backend.tests.miniqmt_execution_runtime.test_kernel_k6_migration_postgres import (
     K6C_FORWARD,
@@ -221,6 +231,50 @@ def _route_receipt(*, epoch: int, owner: ProductRouteOwnerKindV1, previous: str 
     )
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "exchange_session_authority_sha256",
+        "migration_readback_sha256",
+        "product_authority_schema_sha256",
+    ),
+)
+def test_product_route_successor_rejects_non_catalog_authority_drift(field_name: str) -> None:
+    """A successor may refresh catalog facts, never session or schema facts."""
+
+    predecessor = _route_receipt(epoch=1, owner=ProductRouteOwnerKindV1.KERNEL_V2, previous=None)
+    successor = {
+        "catalog_sha256": predecessor.catalog_sha256,
+        "gateway_capability_catalog_sha256": predecessor.gateway_capability_catalog_sha256,
+        "exchange_session_authority_sha256": predecessor.exchange_session_authority_sha256,
+        "migration_readback_sha256": predecessor.migration_readback_sha256,
+        "product_authority_schema_sha256": predecessor.product_authority_schema_sha256,
+    }
+    successor[field_name] = _sha("f")
+
+    with pytest.raises(KernelRepositoryConflict, match="MINIQMT_K6_ROUTE_AUTHORITY_DRIFT"):
+        _assert_route_successor_authority_v1(predecessor=predecessor, **successor)
+
+
+def test_product_route_successor_allows_only_exact_retry_or_catalog_gateway_renewal() -> None:
+    predecessor = _route_receipt(epoch=1, owner=ProductRouteOwnerKindV1.KERNEL_V2, previous=None)
+    exact = {
+        "catalog_sha256": predecessor.catalog_sha256,
+        "gateway_capability_catalog_sha256": predecessor.gateway_capability_catalog_sha256,
+        "exchange_session_authority_sha256": predecessor.exchange_session_authority_sha256,
+        "migration_readback_sha256": predecessor.migration_readback_sha256,
+        "product_authority_schema_sha256": predecessor.product_authority_schema_sha256,
+    }
+    assert _assert_route_successor_authority_v1(predecessor=predecessor, **exact) is True
+    assert (
+        _assert_route_successor_authority_v1(
+            predecessor=predecessor,
+            **(exact | {"catalog_sha256": _sha("f"), "gateway_capability_catalog_sha256": _sha("0")}),
+        )
+        is False
+    )
+
+
 def _seed_schema(cur: object, schema: str) -> None:
     _apply_k2_and_k6(cur, schema)
     _insert_valid_k2_constraint_graph(cur, schema)
@@ -281,10 +335,63 @@ def test_k6_repository_public_surface_is_complete() -> None:
         "read_dependent_buy_decision_evidence_v1",
         "write_product_command_authority_set_v2",
         "read_product_command_authority_set_v2",
+        "activate_kernel_v2_route_v1",
         "write_product_route_cutover_v1",
         "read_product_route_owner_v1",
     }
     assert expected <= set(dir(PostgresMiniQMTKernelRepository))
+
+
+def test_k6d_route_commit_unknown_uses_one_readback_without_reentering_writer() -> None:
+    receipt = _route_receipt(epoch=1, owner=ProductRouteOwnerKindV1.KERNEL_V2, previous=None)
+    expected = ProductRouteOwnerV1.create(receipt=receipt, row_version=1)
+
+    class CommitUnknownRouteRepository:
+        activate_kernel_v2_route_v1 = KernelProductRepositoryMixin.activate_kernel_v2_route_v1
+
+        def __init__(self) -> None:
+            self.write_attempts = 0
+            self.read_attempts = 0
+
+        def _activate_kernel_v2_route_transaction_v1(self, **_: object) -> ProductRouteOwnerV1:
+            self.write_attempts += 1
+            raise KernelRepositoryCommitUnknown("commit return was not observed")
+
+        def _read_route_after_commit_unknown_v1(self, **_: object) -> ProductRouteOwnerV1:
+            self.read_attempts += 1
+            return expected
+
+    repository = CommitUnknownRouteRepository()
+    assert (
+        repository.activate_kernel_v2_route_v1(
+            runtime_id=receipt.runtime_id,
+            binding_id=receipt.binding_id,
+            trade_date=receipt.trade_date,
+            worker_incarnation_id="process_k6",
+        )
+        == expected
+    )
+    assert (repository.write_attempts, repository.read_attempts) == (1, 1)
+
+
+def test_k6d_route_commit_unknown_fails_loud_when_independent_readback_does_not_close() -> None:
+    class MissingCommitReadbackRepository:
+        activate_kernel_v2_route_v1 = KernelProductRepositoryMixin.activate_kernel_v2_route_v1
+
+        def _activate_kernel_v2_route_transaction_v1(self, **_: object) -> ProductRouteOwnerV1:
+            raise KernelRepositoryCommitUnknown("commit return was not observed")
+
+        def _read_route_after_commit_unknown_v1(self, **_: object) -> ProductRouteOwnerV1:
+            raise KernelRepositoryConflict("owner missing")
+
+    with pytest.raises(KernelRepositoryCommitUnknown, match="independent authority readback did not close") as exc:
+        MissingCommitReadbackRepository().activate_kernel_v2_route_v1(
+            runtime_id="runtime_constraints",
+            binding_id="binding_k6",
+            trade_date=date(2026, 7, 25),
+            worker_incarnation_id="process_k6",
+        )
+    assert isinstance(exc.value.__cause__, KernelRepositoryCommitUnknown)
 
 
 @pytest.mark.parametrize("bad", [None, True, 1, [], {}, " ", "g" * 64])
@@ -320,6 +427,40 @@ def test_k6_repository_rejects_non_carrier_writes_before_database() -> None:
         repository.write_product_command_authority_set_v2({})  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="strict K6 route carriers"):
         repository.write_product_route_cutover_v1(receipt={}, owner={})  # type: ignore[arg-type]
+    with pytest.raises(KernelRepositoryConflict, match="strict product gateway authority"):
+        repository.activate_kernel_v2_route_v1(
+            runtime_id="runtime_constraints",
+            binding_id="binding_k6",
+            trade_date=date(2026, 7, 25),
+            worker_incarnation_id="product_process_k6",
+        )
+
+
+def test_k6d_route_schema_and_migration_identity_reject_partial_preflight() -> None:
+    complete = {
+        **{name: True for name in K6_TABLES},
+        "k6c0_schema_catalog_fingerprint": True,
+        "k6b_schema_catalog_fingerprint": True,
+    }
+    hashes = {
+        "k6_catalog_sha256": K6_CATALOG_SHA256_K6B,
+        "k6c_catalog_sha256": K6C0_CATALOG_SHA256_K6B,
+        "k6b_catalog_sha256": K6B_CATALOG_SHA256,
+    }
+    assert product_authority_schema_sha256_v3() == product_authority_schema_sha256_v3()
+    assert migration_readback_sha256_v1(dict(complete), **hashes) == migration_readback_sha256_v1(
+        dict(complete), **hashes
+    )
+    for invalid in (
+        {key: value for key, value in complete.items() if key != "k6b_schema_catalog_fingerprint"},
+        {**complete, "k6b_schema_catalog_fingerprint": False},
+        {**complete, "unexpected": True},
+    ):
+        with pytest.raises(KernelRepositorySchemaError, match="complete exact all-true"):
+            migration_readback_sha256_v1(invalid, **hashes)
+    for field_name in hashes:
+        with pytest.raises(KernelRepositorySchemaError, match=field_name):
+            migration_readback_sha256_v1(complete, **(hashes | {field_name: _sha("f")}))
 
 
 def test_k6_repository_writer_readback_cas_and_drift_on_dev_postgres() -> None:
@@ -399,7 +540,6 @@ def test_k6_repository_writer_readback_cas_and_drift_on_dev_postgres() -> None:
             )
             == owner2
         )
-
         receipt3 = _route_receipt(
             epoch=3,
             owner=ProductRouteOwnerKindV1.LEGACY_DRAIN_ONLY,

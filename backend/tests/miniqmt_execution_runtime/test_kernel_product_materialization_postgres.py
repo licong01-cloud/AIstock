@@ -109,7 +109,12 @@ _K6B_DEV_MODES = frozenset(
 
 
 def _k6b_session_authority() -> ExchangeSessionAuthorityV1:
-    segments = (SessionSegment(time(9, 30), time(11, 30)), SessionSegment(time(13), time(15)))
+    segments = (
+        SessionSegment(time(9, 15), time(9, 25)),
+        SessionSegment(time(9, 30), time(11, 30)),
+        SessionSegment(time(13), time(14, 57)),
+        SessionSegment(time(14, 57), time(15)),
+    )
     effective_at = datetime(2026, 7, 31, 16, tzinfo=UTC)
     snapshots = {
         market: CalendarSnapshot(

@@ -57,6 +57,7 @@ from .plugin_contracts import (
     Sha256V1,
     SideV1,
     ConsumedLineageRefV1,
+    ConsumedLineageTypeV1,
     kernel_lease_fence_token_v1,
     safe_exception_summary_v1,
     stable_exception_reason_code_v1,
@@ -348,6 +349,8 @@ def build_command_lifecycle_projection_v1(
 
 
 class KernelDeliveryRepositoryV1(Protocol):
+    def read_runtime_event(self, event_id: str) -> RuntimeEventEnvelopeV2: ...
+
     def read_delivery(self, delivery_id: str) -> AlgoDeliveryPersistenceV1: ...
 
     def read_algo_instance(self, algo_instance_id: str) -> ExecutionAlgoInstancePersistenceV2: ...
@@ -355,6 +358,8 @@ class KernelDeliveryRepositoryV1(Protocol):
     def claim_delivery(self, **values: Any) -> AlgoDeliveryPersistenceV1: ...
 
     def apply_claimed_delivery_atomic(self, **values: Any) -> dict[str, Any]: ...
+
+    def apply_claimed_product_delivery_atomic_v3(self, **values: Any) -> dict[str, Any]: ...
 
     def mark_delivery_retryable(self, **values: Any) -> AlgoDeliveryPersistenceV1: ...
 
@@ -388,6 +393,60 @@ def validate_vnpy_facade_k2_shadow_command_authority_v1(
         )
 
 
+def validate_vnpy_facade_k6_product_command_trace_v1(
+    transition: AlgoTransitionV1 | AlgoInitializationV1,
+) -> None:
+    """Validate the final route's complete 0..N command trace.
+
+    This is intentionally not a product-authority evaluator and does not
+    authorize a broker side effect.  It establishes the exact ordered plugin
+    trace that the K6 V3 authority/materializer must consume.  The historical
+    K2 shadow validator above remains single-command by design and must never
+    be repurposed as a final-route compatibility switch.
+    """
+
+    if not isinstance(transition, (AlgoTransitionV1, AlgoInitializationV1)):
+        raise TypeError("transition must be AlgoTransitionV1 or AlgoInitializationV1")
+    commands = transition.broker_commands
+    ordinals = tuple(item.ordinal for item in commands)
+    command_ids = tuple(item.command_id for item in commands)
+    if (
+        ordinals != tuple(sorted(ordinals))
+        or len(ordinals) != len(set(ordinals))
+        or len(command_ids) != len(set(command_ids))
+    ):
+        raise KernelPluginInvocationError(
+            "MINIQMT_K6_PRODUCT_COMMAND_TRACE_INVALID",
+            "final K6 product command trace must retain the ordered unique command subset of the complete effect trace",
+            context={
+                "command_count": len(commands),
+                "ordered_ordinals": list(ordinals),
+                "ordered_command_ids": list(command_ids),
+                "effect_set_sha256": transition.effect_set_sha256,
+            },
+            broker_called=False,
+        )
+
+
+@dataclass(frozen=True)
+class ProductDeliveryProposalV3:
+    transition_bundle: Any
+    base_services: AlgoReadOnlyServicesV1
+    creation_binding: VnpyFacadeAuthorityInputV2
+    route_receipt: PluginRouteCompatibilityReceiptV1
+    replay_builder: Callable[[AlgoReadOnlyServicesV1], Any]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.base_services, AlgoReadOnlyServicesV1):
+            raise TypeError("base_services must be AlgoReadOnlyServicesV1")
+        if not isinstance(self.creation_binding, VnpyFacadeAuthorityInputV2):
+            raise TypeError("creation_binding must be VnpyFacadeAuthorityInputV2")
+        if not isinstance(self.route_receipt, PluginRouteCompatibilityReceiptV1):
+            raise TypeError("route_receipt must be PluginRouteCompatibilityReceiptV1")
+        if not callable(self.replay_builder):
+            raise TypeError("replay_builder must be callable")
+
+
 class KernelDeliveryWorkerV1:
     def __init__(
         self,
@@ -398,6 +457,8 @@ class KernelDeliveryWorkerV1:
         process_incarnation_id: str,
         facade_authority: VnpyFacadeConformanceAuthorityV2 | None = None,
         gateway_catalog: GatewayCapabilityCatalogV1 | None = None,
+        product_mode: bool = False,
+        product_evidence_provider: Any | None = None,
     ) -> None:
         if not worker_id or not process_incarnation_id:
             raise ValueError("worker and process incarnation identities are required")
@@ -418,6 +479,19 @@ class KernelDeliveryWorkerV1:
             if gateway_catalog is None
             else GatewayCapabilityCatalogV1.model_validate(gateway_catalog.model_dump(mode="python"), strict=True)
         )
+        if type(product_mode) is not bool:
+            raise TypeError("product_mode must be bool")
+        if product_mode and (
+            self._facade_authority is None
+            or self._gateway_catalog is None
+            or not callable(getattr(product_evidence_provider, "build_with_cursor_v1", None))
+            or not callable(getattr(repository, "apply_claimed_product_delivery_atomic_v3", None))
+        ):
+            raise TypeError("product delivery requires sealed authority, gateway, evidence provider and V3 repository")
+        if not product_mode and product_evidence_provider is not None:
+            raise TypeError("shadow delivery cannot receive a product evidence provider")
+        self._product_mode = product_mode
+        self._product_evidence_provider = product_evidence_provider
         self._lease_owner = f"{worker_id}:{process_incarnation_id}"
 
     def process_once(
@@ -440,7 +514,8 @@ class KernelDeliveryWorkerV1:
                 VnpyFacadeRepositoryReadSetV1 | None,
             ],
             KernelDeliveryExecutionInputV1,
-        ],
+        ]
+        | None = None,
     ) -> dict[str, Any]:
         from .kernel_materializer import (
             materialize_applied_transition_v1,
@@ -464,6 +539,20 @@ class KernelDeliveryWorkerV1:
                 broker_called=False,
             )
         algo = self._repository.read_algo_instance(current.algo_instance_id)
+        if self._product_mode and facade_read_request is None:
+            event = self._repository.read_runtime_event(current.event_id)
+            correlation = thaw_json_v1(event.correlation)
+            facade_read_request = VnpyFacadeRepositoryReadRequestV1.create(
+                runtime_id=event.runtime_id,
+                algo_instance_id=algo.algo_instance_id,
+                current_event_id=event.event_id,
+                current_event_sequence=event.sequence,
+                current_delivery_id=current.delivery_id,
+                current_delivery_sequence=current.algo_delivery_sequence,
+                exchange_trade_date=correlation["exchange_trade_date"],
+                session_epoch=correlation["session_epoch"],
+                session_phase=SessionPhaseV1(correlation["session_phase"]),
+            )
         if facade_read_request is not None and not isinstance(facade_read_request, VnpyFacadeRepositoryReadRequestV1):
             raise TypeError("facade_read_request must be VnpyFacadeRepositoryReadRequestV1 or None")
         if facade_read_request is not None and self._facade_authority is None:
@@ -520,6 +609,7 @@ class KernelDeliveryWorkerV1:
             active_command_outboxes: tuple[BrokerCommandOutboxV1, ...],
             active_timers: tuple[ExecutionAlgoTimerScheduleV1, ...],
             facade_read_set: VnpyFacadeRepositoryReadSetV1 | None,
+            product_base_services: AlgoReadOnlyServicesV1 | None = None,
         ) -> KernelTransitionWriteBundleV1:
             failure_mapping_statuses = {
                 "RESERVED",
@@ -613,17 +703,66 @@ class KernelDeliveryWorkerV1:
                     context={"stage": "DELIVERY_LIFECYCLE_PROJECTION_READBACK"},
                 )
             try:
-                inputs = input_builder(
-                    event,
-                    locked_delivery,
-                    locked_algo,
-                    previous_state,
-                    active_mappings,
-                    active_command_outboxes,
-                    active_timers,
-                    lifecycle_projection,
-                    facade_read_set,
-                )
+                if self._product_mode:
+                    if not isinstance(product_base_services, AlgoReadOnlyServicesV1):
+                        raise TypeError("product repository did not supply same-cursor base services")
+                    correlation = thaw_json_v1(event.correlation)
+                    deterministic_context = DeterministicExecutionContextV1.create(
+                        runtime_id=event.runtime_id,
+                        algo_instance_id=locked_algo.algo_instance_id,
+                        event_id=event.event_id,
+                        delivery_id=locked_delivery.delivery_id,
+                        plugin_manifest_sha256=locked_algo.plugin_manifest_sha256,
+                        transition_sequence=previous_state.transition_sequence + 1,
+                        logical_time_utc=event.event_time_utc,
+                        exchange_trade_date=correlation["exchange_trade_date"],
+                        session_epoch=correlation["session_epoch"],
+                        session_phase=SessionPhaseV1(correlation["session_phase"]),
+                        input_projection_sha256=(product_base_services.execution_projection_set.projection_set_sha256),
+                    )
+                    lineages = [
+                        ConsumedLineageRefV1.create(
+                            lineage_type=ConsumedLineageTypeV1.EVENT,
+                            identity=event.event_id,
+                            payload_sha256=event.payload_sha256,
+                        )
+                    ]
+                    market_ref = next(
+                        (
+                            item
+                            for item in product_base_services.execution_projection_set.ordered_projection_refs
+                            if item.projection_type is KernelProjectionTypeV1.MARKET_DATA
+                        ),
+                        None,
+                    )
+                    if market_ref is not None:
+                        lineages.append(
+                            ConsumedLineageRefV1.create(
+                                lineage_type=ConsumedLineageTypeV1.MARKET_DATA,
+                                identity=market_ref.projection_id,
+                                payload_sha256=market_ref.payload_sha256,
+                            )
+                        )
+                    inputs = KernelDeliveryExecutionInputV1(
+                        services=product_base_services,
+                        deterministic_context=deterministic_context,
+                        consumed_lineage_refs=tuple(lineages),
+                        command_lifecycle_projection=lifecycle_projection,
+                    )
+                else:
+                    if not callable(input_builder):
+                        raise TypeError("shadow delivery requires a callable input_builder")
+                    inputs = input_builder(
+                        event,
+                        locked_delivery,
+                        locked_algo,
+                        previous_state,
+                        active_mappings,
+                        active_command_outboxes,
+                        active_timers,
+                        lifecycle_projection,
+                        facade_read_set,
+                    )
             except KernelRequiredProviderUnavailable as exc:
                 if locked_delivery.attempt_count < 5:
                     raise
@@ -671,41 +810,19 @@ class KernelDeliveryWorkerV1:
                     canonical_plugin_config=thaw_json_v1(locked_algo.plugin_config_json),
                     plugin_config_sha256=locked_algo.plugin_config_sha256,
                 )
-                facade_input = None
-                if isinstance(resolved.plugin, VnpyFacadeBackedPluginAdapterV1):
-                    if self._facade_authority is None or self._gateway_catalog is None:
-                        raise KernelPluginInvocationError(
-                            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
-                            "facade-backed transition requires sealed authority and strict gateway catalog",
-                            context={
-                                "runtime_id": event.runtime_id,
-                                "algo_instance_id": locked_algo.algo_instance_id,
-                                "delivery_id": locked_delivery.delivery_id,
-                            },
-                            broker_called=False,
-                        )
-                    if facade_read_request is None or facade_read_set is None:
-                        raise KernelPluginInvocationError(
-                            "MINIQMT_VNPY_FACADE_REPOSITORY_READ_INVALID",
-                            "facade-backed transition requires its exact same-cursor repository read set",
-                            context={
-                                "runtime_id": event.runtime_id,
-                                "algo_instance_id": locked_algo.algo_instance_id,
-                                "delivery_id": locked_delivery.delivery_id,
-                            },
-                            broker_called=False,
-                        )
-                    facade_read_set.validate_against_request_v1(facade_read_request)
-                    plugin_key = resolved.descriptor.plugin_key
-                    k1_receipts = tuple(
-                        item
-                        for item in self._catalog_snapshot.pinned_compatibility_receipts
-                        if item.plugin_key == plugin_key
-                    )
-                    if len(k1_receipts) != 1:
+                plugin_key = resolved.descriptor.plugin_key
+                k1_receipts = tuple(
+                    item
+                    for item in self._catalog_snapshot.pinned_compatibility_receipts
+                    if item.plugin_key == plugin_key
+                )
+                route_receipt = None
+                authority_input = None
+                if self._product_mode or isinstance(resolved.plugin, VnpyFacadeBackedPluginAdapterV1):
+                    if self._facade_authority is None or self._gateway_catalog is None or len(k1_receipts) != 1:
                         raise KernelPluginInvocationError(
                             "MINIQMT_VNPY_FACADE_CONFORMANCE_AUTHORITY_INVALID",
-                            "facade transition requires one exact K1 compatibility receipt",
+                            "product/facade transition requires one exact sealed compatibility authority",
                             context={"plugin_key": plugin_key.canonical_payload_v1()},
                             broker_called=False,
                         )
@@ -720,7 +837,7 @@ class KernelDeliveryWorkerV1:
                     if route_receipt.status is not CompatibilityStatusV1.PASSED:
                         raise KernelPluginInvocationError(
                             "MINIQMT_ALGO_ROUTE_COMPATIBILITY_FAILED",
-                            "facade transition route compatibility receipt is not PASSED",
+                            "transition route compatibility receipt is not PASSED",
                             context={
                                 "plugin_key": plugin_key.canonical_payload_v1(),
                                 "route_receipt_sha256": route_receipt.receipt_sha256,
@@ -736,61 +853,119 @@ class KernelDeliveryWorkerV1:
                         pinned_compatibility_receipt=k1_receipts[0],
                         route_compatibility_receipt=route_receipt,
                     )
-                    facade_input = VnpyFacadeTransitionInputV2.create(
-                        runtime_event=event,
-                        claimed_delivery=locked_delivery,
-                        algo_instance=locked_algo,
-                        manifest=resolved.descriptor.manifest,
-                        authority_input=authority_input,
-                        before_state=previous_state,
-                        read_only_services=inputs.services,
+
+                def evaluate_transition(
+                    services: AlgoReadOnlyServicesV1,
+                    deterministic_context: DeterministicExecutionContextV1,
+                ) -> AlgoTransitionV1:
+                    facade_input = None
+                    if isinstance(resolved.plugin, VnpyFacadeBackedPluginAdapterV1):
+                        if facade_read_request is None or facade_read_set is None or authority_input is None:
+                            raise KernelPluginInvocationError(
+                                "MINIQMT_VNPY_FACADE_REPOSITORY_READ_INVALID",
+                                "facade-backed transition requires its exact same-cursor repository read set",
+                                context={
+                                    "runtime_id": event.runtime_id,
+                                    "algo_instance_id": locked_algo.algo_instance_id,
+                                    "delivery_id": locked_delivery.delivery_id,
+                                },
+                                broker_called=False,
+                            )
+                        facade_read_set.validate_against_request_v1(facade_read_request)
+                        facade_input = VnpyFacadeTransitionInputV2.create(
+                            runtime_event=event,
+                            claimed_delivery=locked_delivery,
+                            algo_instance=locked_algo,
+                            manifest=resolved.descriptor.manifest,
+                            authority_input=authority_input,
+                            before_state=previous_state,
+                            read_only_services=services,
+                            command_lifecycle_projection=lifecycle_projection,
+                            ordered_active_mappings=active_mappings,
+                            deterministic_context=deterministic_context,
+                            transition_sequence=deterministic_context.transition_sequence,
+                        )
+                    elif facade_read_set is not None or facade_read_request is not None:
+                        raise KernelPluginInvocationError(
+                            "MINIQMT_VNPY_FACADE_BINDING_INVALID",
+                            "ordinary pure plugin cannot consume facade repository authority",
+                            context={
+                                "plugin_id": resolved.descriptor.plugin_key.plugin_id,
+                                "algo_instance_id": locked_algo.algo_instance_id,
+                            },
+                            broker_called=False,
+                        )
+                    result = invoke_plugin_transition_v1(
+                        plugin=resolved.plugin,
+                        expected_manifest=resolved.descriptor.manifest,
+                        state_codec=resolved.state_codec,
+                        state=previous_state,
+                        event=event,
+                        services=services,
+                        deterministic_context=deterministic_context,
+                        facade_input=facade_input,
+                    )
+                    if self._product_mode:
+                        validate_vnpy_facade_k6_product_command_trace_v1(result)
+                    elif facade_input is not None:
+                        validate_vnpy_facade_k2_shadow_command_authority_v1(result)
+                    return result
+
+                def materialize(
+                    transition: AlgoTransitionV1,
+                    services: AlgoReadOnlyServicesV1,
+                ) -> KernelTransitionWriteBundleV1:
+                    return materialize_applied_transition_v1(
+                        event=event,
+                        predecessor_delivery=locked_delivery,
+                        previous_algo=locked_algo,
+                        transition=transition,
+                        projection_set=services.execution_projection_set,
+                        consumed_lineage_refs=inputs.consumed_lineage_refs,
+                        strategy_slot_id=locked_algo.strategy_slot_id,
+                        parent_intent_id=locked_algo.parent_intent_id,
+                        compatibility_receipt_sha256=locked_algo.compatibility_receipt_sha256,
+                        plugin_config=thaw_json_v1(locked_algo.plugin_config_json),
+                        plugin_config_sha256=locked_algo.plugin_config_sha256,
+                        target_quantity=locked_algo.target_quantity,
+                        algo_code=locked_algo.algo_code,
+                        symbol=locked_algo.symbol,
+                        side=locked_algo.side,
                         command_lifecycle_projection=lifecycle_projection,
-                        ordered_active_mappings=active_mappings,
-                        deterministic_context=inputs.deterministic_context,
-                        transition_sequence=inputs.deterministic_context.transition_sequence,
+                        existing_mappings_by_local_vt_orderid={item.local_vt_orderid: item for item in active_mappings},
+                        existing_timer_schedules={item.schedule_id: item for item in active_timers},
+                        initialization=False,
                     )
-                elif facade_read_set is not None or facade_read_request is not None:
-                    raise KernelPluginInvocationError(
-                        "MINIQMT_VNPY_FACADE_BINDING_INVALID",
-                        "ordinary pure plugin cannot consume facade repository authority",
-                        context={
-                            "plugin_id": resolved.descriptor.plugin_key.plugin_id,
-                            "algo_instance_id": locked_algo.algo_instance_id,
-                        },
-                        broker_called=False,
+
+                transition = evaluate_transition(inputs.services, inputs.deterministic_context)
+                proposal_bundle = materialize(transition, inputs.services)
+                if not self._product_mode:
+                    return proposal_bundle
+                assert authority_input is not None and route_receipt is not None
+
+                def replay_builder(services: AlgoReadOnlyServicesV1) -> KernelTransitionWriteBundleV1:
+                    base = inputs.deterministic_context
+                    replay_context = DeterministicExecutionContextV1.create(
+                        runtime_id=base.runtime_id,
+                        algo_instance_id=base.algo_instance_id,
+                        event_id=base.event_id,
+                        delivery_id=base.delivery_id,
+                        plugin_manifest_sha256=base.plugin_manifest_sha256,
+                        transition_sequence=base.transition_sequence,
+                        logical_time_utc=base.logical_time_utc,
+                        exchange_trade_date=base.exchange_trade_date,
+                        session_epoch=base.session_epoch,
+                        session_phase=base.session_phase,
+                        input_projection_sha256=services.execution_projection_set.projection_set_sha256,
                     )
-                transition = invoke_plugin_transition_v1(
-                    plugin=resolved.plugin,
-                    expected_manifest=resolved.descriptor.manifest,
-                    state_codec=resolved.state_codec,
-                    state=previous_state,
-                    event=event,
-                    services=inputs.services,
-                    deterministic_context=inputs.deterministic_context,
-                    facade_input=facade_input,
-                )
-                if facade_input is not None:
-                    validate_vnpy_facade_k2_shadow_command_authority_v1(transition)
-                return materialize_applied_transition_v1(
-                    event=event,
-                    predecessor_delivery=locked_delivery,
-                    previous_algo=locked_algo,
-                    transition=transition,
-                    projection_set=inputs.services.execution_projection_set,
-                    consumed_lineage_refs=inputs.consumed_lineage_refs,
-                    strategy_slot_id=locked_algo.strategy_slot_id,
-                    parent_intent_id=locked_algo.parent_intent_id,
-                    compatibility_receipt_sha256=locked_algo.compatibility_receipt_sha256,
-                    plugin_config=thaw_json_v1(locked_algo.plugin_config_json),
-                    plugin_config_sha256=locked_algo.plugin_config_sha256,
-                    target_quantity=locked_algo.target_quantity,
-                    algo_code=locked_algo.algo_code,
-                    symbol=locked_algo.symbol,
-                    side=locked_algo.side,
-                    command_lifecycle_projection=lifecycle_projection,
-                    existing_mappings_by_local_vt_orderid={item.local_vt_orderid: item for item in active_mappings},
-                    existing_timer_schedules={item.schedule_id: item for item in active_timers},
-                    initialization=False,
+                    return materialize(evaluate_transition(services, replay_context), services)
+
+                return ProductDeliveryProposalV3(
+                    transition_bundle=proposal_bundle,
+                    base_services=inputs.services,
+                    creation_binding=authority_input,
+                    route_receipt=route_receipt,
+                    replay_builder=replay_builder,
                 )
             except Exception as exc:
                 return terminal_failure(
@@ -801,16 +976,28 @@ class KernelDeliveryWorkerV1:
                 )
 
         try:
-            return self._repository.apply_claimed_delivery_atomic(
+            apply_method = (
+                self._repository.apply_claimed_product_delivery_atomic_v3
+                if self._product_mode
+                else self._repository.apply_claimed_delivery_atomic
+            )
+            apply_kwargs = dict(
                 delivery_id=delivery_id,
                 expected_delivery_row_version=claimed.row_version,
                 expected_algo_row_version=algo.row_version,
                 expected_lease_owner=self._lease_owner,
                 expected_lease_epoch=lease_epoch,
                 expected_lease_fence_token=fence,
-                bundle_builder=build,
                 facade_read_request=facade_read_request,
             )
+            if self._product_mode:
+                apply_kwargs.update(
+                    proposal_builder=build,
+                    product_evidence_provider=self._product_evidence_provider,
+                )
+            else:
+                apply_kwargs["bundle_builder"] = build
+            return apply_method(**apply_kwargs)
         except KernelRequiredProviderUnavailable as exc:
             evidence = KernelErrorEvidenceV1.create(
                 stage="DELIVERY_REQUIRED_PROVIDER",
@@ -840,6 +1027,48 @@ class KernelDeliveryWorkerV1:
             return {"delivery": retryable, "retry_scheduled": True, "error_evidence": evidence}
 
 
+class KernelProductDeliveryWorkerV3(KernelDeliveryWorkerV1):
+    """Final product worker; the K2-only materializer is not reachable."""
+
+    def __init__(
+        self,
+        *,
+        repository: KernelDeliveryRepositoryV1,
+        catalog_runtime: PluginCatalogRuntimeV2,
+        worker_id: str,
+        process_incarnation_id: str,
+        facade_authority: VnpyFacadeConformanceAuthorityV2,
+        gateway_catalog: GatewayCapabilityCatalogV1,
+        product_evidence_provider: Any,
+    ) -> None:
+        super().__init__(
+            repository=repository,
+            catalog_runtime=catalog_runtime,
+            worker_id=worker_id,
+            process_incarnation_id=process_incarnation_id,
+            facade_authority=facade_authority,
+            gateway_catalog=gateway_catalog,
+            product_mode=True,
+            product_evidence_provider=product_evidence_provider,
+        )
+
+    def process_committed_delivery_v3(
+        self,
+        *,
+        delivery_id: str,
+        lease_expires_at: Any,
+        logical_time_utc: Any,
+    ) -> dict[str, Any]:
+        current = self._repository.read_delivery(delivery_id)
+        if current.status.value in {"APPLIED", "FAILED_TERMINAL", "SKIPPED_TERMINAL"}:
+            return {"delivery": current, "idempotent": True}
+        return self.process_once(
+            delivery_id=delivery_id,
+            lease_expires_at=lease_expires_at,
+            logical_time_utc=logical_time_utc,
+        )
+
+
 @dataclass(frozen=True)
 class KernelTransitionWriteBundleV1:
     algo_instance: ExecutionAlgoInstancePersistenceV2
@@ -847,6 +1076,7 @@ class KernelTransitionWriteBundleV1:
     receipt: AlgoTransitionReceiptV1 | AlgoFailureReceiptV1 | AlgoSkipReceiptV1
     projection_set: ExecutionProjectionSetV1 | None
     after_state: AlgoStateSnapshotV2 | None
+    applied_transition: AlgoTransitionV1 | None = None
     new_child_mappings: tuple[ExecutionCommandChildMappingV1, ...] = ()
     command_outboxes: tuple[BrokerCommandOutboxV1, ...] = ()
     updated_child_mappings: tuple[ExecutionCommandChildMappingV1, ...] = ()
@@ -864,6 +1094,7 @@ class KernelTransitionWriteBundleV1:
         receipt: AlgoTransitionReceiptV1 | AlgoFailureReceiptV1 | AlgoSkipReceiptV1,
         projection_set: ExecutionProjectionSetV1 | None,
         after_state: AlgoStateSnapshotV2 | None,
+        applied_transition: AlgoTransitionV1 | None = None,
         new_child_mappings: Sequence[ExecutionCommandChildMappingV1] = (),
         command_outboxes: Sequence[BrokerCommandOutboxV1] = (),
         updated_child_mappings: Sequence[ExecutionCommandChildMappingV1] = (),
@@ -893,12 +1124,17 @@ class KernelTransitionWriteBundleV1:
         for name, items, item_type in typed:
             if any(not isinstance(item, item_type) for item in items):
                 raise TypeError(f"{name} contains an invalid carrier")
+        if applied_transition is not None and not isinstance(applied_transition, AlgoTransitionV1):
+            raise TypeError("applied_transition must be AlgoTransitionV1 or None")
+        if applied_transition is not None and not isinstance(receipt, AlgoTransitionReceiptV1):
+            raise ValueError("applied transition carrier requires an APPLIED receipt")
         return cls(
             algo_instance=algo_instance,
             delivery=delivery,
             receipt=receipt,
             projection_set=projection_set,
             after_state=after_state,
+            applied_transition=applied_transition,
             **values,
         )
 
@@ -1295,12 +1531,16 @@ __all__ = [
     "KernelAlgoCreationRequestV1",
     "KernelAlgoCreationRequestV2",
     "KernelDeliveryExecutionInputV1",
+    "KernelDeliveryWorkerV1",
+    "KernelProductDeliveryWorkerV3",
     "KernelPluginInvocationError",
     "KernelTransitionWriteBundleV1",
+    "ProductDeliveryProposalV3",
     "ResolvedKernelPluginV1",
     "build_command_lifecycle_projection_v1",
     "invoke_plugin_initialize_v1",
     "invoke_plugin_transition_v1",
     "resolve_plugin_for_restore_v1",
+    "validate_vnpy_facade_k6_product_command_trace_v1",
     "validate_vnpy_facade_k2_shadow_command_authority_v1",
 ]

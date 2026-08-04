@@ -226,6 +226,24 @@ def canonical_json_sha256(payload: dict[str, Any] | list[Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def miniqmt_kernel_runtime_id(*, plan_id: str, binding_id: str, trade_date: date) -> str:
+    """Single stable runtime identity for the final MiniQMT product route."""
+
+    for field_name, value in (("plan_id", plan_id), ("binding_id", binding_id)):
+        if type(value) is not str or not value or value != value.strip():
+            raise TypeError(f"{field_name} must be a canonical identity")
+    if type(trade_date) is not date:
+        raise TypeError("trade_date must be an exact date")
+    digest = canonical_json_sha256(
+        {
+            "binding_id": binding_id,
+            "plan_id": plan_id,
+            "trade_date": trade_date.isoformat(),
+        }
+    )
+    return f"mqrt_sim_{digest[:24]}"
+
+
 def find_forbidden_key_paths(payload: Any, forbidden_keys: frozenset[str], *, path: str = "") -> list[str]:
     matches: list[str] = []
     if isinstance(payload, dict):
@@ -1185,7 +1203,9 @@ class LocalSimEconomicReceiptV1(BaseModel):
         if self.economic_hash and self.economic_hash != economic_hash:
             raise ValueError("economic_hash does not match LocalSIM economic facts")
         object.__setattr__(self, "economic_hash", economic_hash)
-        idempotency_key = canonical_json_sha256(["local_sim_economic_event_v1", self.run_id, self.plan_id, economic_hash])
+        idempotency_key = canonical_json_sha256(
+            ["local_sim_economic_event_v1", self.run_id, self.plan_id, economic_hash]
+        )
         if self.idempotency_key and self.idempotency_key != idempotency_key:
             raise ValueError("idempotency_key does not match LocalSIM economic event")
         object.__setattr__(self, "idempotency_key", idempotency_key)
@@ -1224,16 +1244,24 @@ class LocalSimProjectionOutboxV1(BaseModel):
         if self.projection_payload_hash and self.projection_payload_hash != payload_hash:
             raise ValueError("projection_payload_hash does not match LocalSIM outbox payload")
         object.__setattr__(self, "projection_payload_hash", payload_hash)
-        outbox_id = "lsout_" + canonical_json_sha256([self.run_id, self.generation, self.receipt_id, self.economic_hash, payload_hash])
+        outbox_id = "lsout_" + canonical_json_sha256(
+            [self.run_id, self.generation, self.receipt_id, self.economic_hash, payload_hash]
+        )
         if self.outbox_id and self.outbox_id != outbox_id:
             raise ValueError("outbox_id does not match LocalSIM projection outbox identity")
         object.__setattr__(self, "outbox_id", outbox_id)
-        outbox_hash = canonical_json_sha256({
-            "schema_version": self.schema_version, "outbox_id": outbox_id,
-            "receipt_id": self.receipt_id, "run_id": self.run_id,
-            "plan_id": self.plan_id, "generation": self.generation,
-            "economic_hash": self.economic_hash, "projection_payload_hash": payload_hash,
-        })
+        outbox_hash = canonical_json_sha256(
+            {
+                "schema_version": self.schema_version,
+                "outbox_id": outbox_id,
+                "receipt_id": self.receipt_id,
+                "run_id": self.run_id,
+                "plan_id": self.plan_id,
+                "generation": self.generation,
+                "economic_hash": self.economic_hash,
+                "projection_payload_hash": payload_hash,
+            }
+        )
         if self.outbox_hash and self.outbox_hash != outbox_hash:
             raise ValueError("outbox_hash does not match LocalSIM projection outbox")
         object.__setattr__(self, "outbox_hash", outbox_hash)
@@ -1255,7 +1283,9 @@ class LocalSimProjectionReceiptV1(BaseModel):
 
     @model_validator(mode="after")
     def _validate_identity_and_hashes(self) -> "LocalSimProjectionReceiptV1":
-        receipt_id = "lsproj_" + canonical_json_sha256([self.run_id, self.generation, self.outbox_id, self.projection_hash])
+        receipt_id = "lsproj_" + canonical_json_sha256(
+            [self.run_id, self.generation, self.outbox_id, self.projection_hash]
+        )
         if self.projection_receipt_id and self.projection_receipt_id != receipt_id:
             raise ValueError("projection_receipt_id does not match LocalSIM projection identity")
         object.__setattr__(self, "projection_receipt_id", receipt_id)
@@ -1352,11 +1382,15 @@ class LocalSimExecutionStateV1(BaseModel):
                 raise ValueError("EXPIRED_WITH_RESIDUAL requires remaining quantity")
             if not self.terminal_reason or not self.residual_classification:
                 raise ValueError("EXPIRED_WITH_RESIDUAL requires terminal reason and residual classification")
-        if self.runtime_status in {
-            LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_DATA,
-            LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_STATE,
-            LocalSimExecutionRuntimeStatus.WAITING_FOR_CAPITAL,
-        } and not self.waiting_reason_code:
+        if (
+            self.runtime_status
+            in {
+                LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_DATA,
+                LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_STATE,
+                LocalSimExecutionRuntimeStatus.WAITING_FOR_CAPITAL,
+            }
+            and not self.waiting_reason_code
+        ):
             raise ValueError(f"{self.runtime_status.value} requires waiting_reason_code")
         if self.runtime_status == LocalSimExecutionRuntimeStatus.FAILED_TERMINAL:
             if not self.terminal_reason or not self.residual_classification:
@@ -1373,7 +1407,12 @@ class LocalSimExecutionStateV1(BaseModel):
 
 
 def local_sim_execution_state_id(
-    *, binding_id: str, trade_date: date, plan_id: str, intent_id: str, algo_instance_id: str,
+    *,
+    binding_id: str,
+    trade_date: date,
+    plan_id: str,
+    intent_id: str,
+    algo_instance_id: str,
 ) -> str:
     digest = canonical_json_sha256(
         ["localsim_execution_state_v1", binding_id, trade_date.isoformat(), plan_id, intent_id, algo_instance_id]

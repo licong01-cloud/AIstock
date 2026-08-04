@@ -3,22 +3,36 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 import psycopg2.extras
 
 from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeAuthorityInputV2,
     VnpyFacadeContractError,
     VnpyFacadeRepositoryReadRequestV1,
     VnpyFacadeRepositoryReadSetV1,
 )
+from .kernel_product_authority import (
+    bind_product_transition_receipt_v3,
+    build_product_command_authority_set_v3,
+)
+from .kernel_product_contracts import ProductCommandAuthorityEnvelopeV3
+from .kernel_product_evidence import (
+    KernelProductEvidenceProviderV3,
+    bind_product_transition_bundle_v3,
+)
 
 from .kernel_delivery import (
     KernelAlgoCreationRequestV1,
+    KernelAlgoCreationRequestV2,
     KernelAlgoStartWriteBundleV1,
     KernelTransitionWriteBundleV1,
+    ProductDeliveryProposalV3,
     build_command_lifecycle_projection_v1,
 )
+from .kernel_product_contracts import ProductRouteOwnerKindV1
 from .kernel_materializer import _validate_projection_lineage_v1
 from .kernel_repository_common import KernelRepositoryConflict, _json, _model_from_json, _row_json
 from .kernel_repository_projection import (
@@ -61,23 +75,83 @@ class KernelRepositoryK2BMixin:
         creation_authority: KernelAlgoCreationRequestV1,
         bundle_builder: Callable[[int], KernelAlgoStartWriteBundleV1],
     ) -> dict[str, Any]:
+        return self._initialize_algo_atomic_v2_aware(
+            runtime_id=runtime_id,
+            event_key_sha256=event_key_sha256,
+            creation_authority=creation_authority,
+            bundle_builder=bundle_builder,
+            final_product_route=False,
+        )
+
+    def initialize_product_algo_atomic_v3(
+        self,
+        *,
+        runtime_id: str,
+        worker_incarnation_id: str,
+        event_key_sha256: str,
+        creation_authority: KernelAlgoCreationRequestV2,
+        creation_binding: VnpyFacadeAuthorityInputV2,
+        bundle_builder: Callable[[int], KernelAlgoStartWriteBundleV1],
+    ) -> dict[str, Any]:
+        """Persist ALGO_START and its zero-command V3 envelope atomically."""
+
+        if not isinstance(creation_binding, VnpyFacadeAuthorityInputV2):
+            raise TypeError("creation_binding must be VnpyFacadeAuthorityInputV2")
+        return self._initialize_algo_atomic_v2_aware(
+            runtime_id=runtime_id,
+            worker_incarnation_id=worker_incarnation_id,
+            event_key_sha256=event_key_sha256,
+            creation_authority=creation_authority,
+            creation_binding=creation_binding,
+            bundle_builder=bundle_builder,
+            final_product_route=True,
+        )
+
+    def _initialize_algo_atomic_v2_aware(
+        self,
+        *,
+        runtime_id: str,
+        worker_incarnation_id: str | None = None,
+        event_key_sha256: str,
+        creation_authority: KernelAlgoCreationRequestV1 | KernelAlgoCreationRequestV2,
+        creation_binding: VnpyFacadeAuthorityInputV2 | None = None,
+        bundle_builder: Callable[[int], KernelAlgoStartWriteBundleV1],
+        final_product_route: bool,
+    ) -> dict[str, Any]:
         if type(runtime_id) is not str or not runtime_id.strip():
             raise TypeError("runtime_id must be a non-empty string")
         if type(event_key_sha256) is not str or len(event_key_sha256) != 64:
             raise TypeError("event_key_sha256 must be a SHA-256 hex string")
         if not callable(bundle_builder):
             raise TypeError("bundle_builder must be callable")
-        if not isinstance(creation_authority, KernelAlgoCreationRequestV1):
-            raise TypeError("creation_authority must be KernelAlgoCreationRequestV1")
-        creation_authority.validate_hashes_v1()
+        if final_product_route:
+            if type(creation_authority) is not KernelAlgoCreationRequestV2:
+                raise TypeError("final product creation requires KernelAlgoCreationRequestV2")
+            if type(worker_incarnation_id) is not str or not worker_incarnation_id.strip():
+                raise TypeError("final product creation requires worker_incarnation_id")
+            creation_authority.validate_hashes_v2()
+            if not isinstance(creation_binding, VnpyFacadeAuthorityInputV2):
+                raise TypeError("final product creation requires creation_binding")
+        elif type(creation_authority) is not KernelAlgoCreationRequestV1:
+            raise TypeError("shadow creation requires KernelAlgoCreationRequestV1")
+        else:
+            creation_authority.validate_hashes_v1()
         if creation_authority.runtime_id != runtime_id:
             raise ValueError("creation authority runtime differs from repository owner")
         expected_start: KernelAlgoStartWriteBundleV1 | None = None
         transition_identity: str | None = None
+        product_authority_sha256: str | None = None
         with self._connection(transaction=True) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                binding_account_group: str | None = None
+                if final_product_route:
+                    assert type(creation_authority) is KernelAlgoCreationRequestV2
+                    binding_account_group = self._lock_and_validate_product_binding_v2_with_cursor(
+                        cur, authority=creation_authority
+                    )
                 cur.execute(
-                    "SELECT last_event_sequence,archived_at FROM qmt_strategy.execution_runtime "
+                    "SELECT last_event_sequence,archived_at,trade_date,mode,account_group_id "
+                    "FROM qmt_strategy.execution_runtime "
                     "WHERE runtime_id=%s FOR UPDATE",
                     (runtime_id,),
                 )
@@ -86,6 +160,19 @@ class KernelRepositoryK2BMixin:
                     raise KeyError(runtime_id)
                 if runtime_row["archived_at"] is not None:
                     raise KernelRepositoryConflict("cannot initialize an algo under an archived runtime")
+                if final_product_route:
+                    assert type(creation_authority) is KernelAlgoCreationRequestV2
+                    if runtime_row["account_group_id"] != binding_account_group:
+                        raise KernelRepositoryConflict(
+                            "K6-D execution runtime account group differs from locked MiniQMT binding"
+                        )
+                    self._lock_and_validate_product_route_v2_with_cursor(
+                        cur,
+                        authority=creation_authority,
+                        runtime_trade_date=runtime_row["trade_date"],
+                        runtime_mode=runtime_row["mode"],
+                        worker_incarnation_id=worker_incarnation_id,
+                    )
                 existing_parent_slot_algos = self._lock_and_validate_creation_authority_with_cursor(
                     cur, creation_authority
                 )
@@ -98,6 +185,10 @@ class KernelRepositoryK2BMixin:
                 runtime_sequence = (
                     int(existing["sequence"]) if existing is not None else int(runtime_row["last_event_sequence"]) + 1
                 )
+                if final_product_route and runtime_sequence < creation_authority.effective_new_instance_sequence:
+                    raise KernelRepositoryConflict(
+                        "K6-D ALGO_START sequence predates the durable product route cutover"
+                    )
                 start = bundle_builder(runtime_sequence)
                 if not isinstance(start, KernelAlgoStartWriteBundleV1):
                     raise TypeError("bundle_builder must return KernelAlgoStartWriteBundleV1")
@@ -141,6 +232,54 @@ class KernelRepositoryK2BMixin:
                     transition_identity = receipt.transition_id
                     if bundle.projection_set is None or bundle.after_state is None:
                         raise ValueError("successful ALGO_START requires projection set and state")
+                    if final_product_route:
+                        if bundle.applied_transition is None:
+                            raise KernelRepositoryConflict("product ALGO_START lacks the applied transition carrier")
+                        if bundle.applied_transition.broker_commands:
+                            raise KernelRepositoryConflict("product ALGO_START cannot carry broker commands")
+                        assert creation_binding is not None
+                        bound_receipt = bind_product_transition_receipt_v3(
+                            transition=bundle.applied_transition,
+                            transition_receipt=receipt,
+                            ordered_evidence=(),
+                            timer_schedules=bundle.timer_schedules,
+                        )
+                        bundle = KernelTransitionWriteBundleV1.create(
+                            algo_instance=bundle.algo_instance,
+                            delivery=bundle.delivery,
+                            receipt=bound_receipt,
+                            projection_set=bundle.projection_set,
+                            after_state=bundle.after_state,
+                            applied_transition=bundle.applied_transition,
+                            new_child_mappings=bundle.new_child_mappings,
+                            command_outboxes=bundle.command_outboxes,
+                            updated_child_mappings=bundle.updated_child_mappings,
+                            updated_command_outboxes=bundle.updated_command_outboxes,
+                            timer_mutations=bundle.timer_mutations,
+                            timer_schedules=bundle.timer_schedules,
+                            diagnostic_observations=bundle.diagnostic_observations,
+                        )
+                        receipt = bound_receipt
+                        authority = build_product_command_authority_set_v3(
+                            transition=bundle.applied_transition,
+                            transition_receipt=bound_receipt,
+                            projection_set=bundle.projection_set,
+                            ordered_evidence=(),
+                            catalog=creation_binding.plugin_catalog_snapshot,
+                            creation_binding=creation_binding,
+                            timer_schedules=bundle.timer_schedules,
+                        )
+                        product_envelope = ProductCommandAuthorityEnvelopeV3.create(
+                            authority_set=authority,
+                            creation_authority=creation_binding,
+                            ordered_timer_schedules=bundle.timer_schedules,
+                        )
+                        product_authority_sha256 = authority.authority_set_sha256
+                        start = KernelAlgoStartWriteBundleV1(
+                            event=start.event,
+                            initial_delivery=start.initial_delivery,
+                            transition_bundle=bundle,
+                        )
                     lifecycle_projection = KernelCommandLifecycleProjectionV1.create(
                         runtime_id=event.runtime_id,
                         algo_instance_id=bundle.algo_instance.algo_instance_id,
@@ -177,25 +316,29 @@ class KernelRepositoryK2BMixin:
                     ordered_delivery_ids=(initial.delivery_id,),
                     transaction_commit_identity="mqtx_pending_algo_start",
                 )
-                tx_identity = transaction_commit_identity_v1(
-                    operation=f"INITIALIZE_ALGO_ATOMIC_{kind}",
-                    owner_identities=(
-                        runtime_id,
-                        bundle.algo_instance.algo_instance_id,
-                        event.event_id,
-                        initial.delivery_id,
-                    ),
-                    input_hashes=(event.event_key_sha256, event.payload_sha256, *transition_inputs),
-                    output_identities=(
-                        event.event_id,
-                        provisional_ingress.ingress_receipt_id,
-                        initial.delivery_id,
-                        transition_identity,
-                        *(item.mapping_id for item in bundle.new_child_mappings),
-                        *(item.command_id for item in bundle.command_outboxes),
-                        *(item.schedule_id for item in bundle.timer_schedules),
-                        *(item.observation_id for item in bundle.diagnostic_observations),
-                    ),
+                tx_identity = (
+                    receipt.transaction_commit_identity
+                    if final_product_route and isinstance(receipt, AlgoTransitionReceiptV1)
+                    else transaction_commit_identity_v1(
+                        operation=f"INITIALIZE_ALGO_ATOMIC_{kind}",
+                        owner_identities=(
+                            runtime_id,
+                            bundle.algo_instance.algo_instance_id,
+                            event.event_id,
+                            initial.delivery_id,
+                        ),
+                        input_hashes=(event.event_key_sha256, event.payload_sha256, *transition_inputs),
+                        output_identities=(
+                            event.event_id,
+                            provisional_ingress.ingress_receipt_id,
+                            initial.delivery_id,
+                            transition_identity,
+                            *(item.mapping_id for item in bundle.new_child_mappings),
+                            *(item.command_id for item in bundle.command_outboxes),
+                            *(item.schedule_id for item in bundle.timer_schedules),
+                            *(item.observation_id for item in bundle.diagnostic_observations),
+                        ),
+                    )
                 )
                 ingress_receipt = RuntimeEventIngressReceiptV1.create(
                     runtime_id=runtime_id,
@@ -291,13 +434,29 @@ class KernelRepositoryK2BMixin:
                             _json(initial.model_dump(mode="json")),
                         ),
                     )
-                    self._write_k2b_bundle_with_cursor(
-                        cur,
-                        bundle,
-                        previous_delivery=initial,
-                        expected_delivery_row_version=1,
-                        expected_algo_row_version=0,
-                    )
+                    if final_product_route and isinstance(receipt, AlgoTransitionReceiptV1):
+                        prepared = self._prepare_product_materialization_v3(
+                            envelope=product_envelope,
+                            transition_bundle=bundle,
+                            strategy_slot_id=creation_authority.strategy_slot_id,
+                        )
+                        self._write_prepared_product_materialization_with_cursor(
+                            cur,
+                            envelope=product_envelope,
+                            transition_bundle=bundle,
+                            prepared=prepared,
+                            previous_delivery=initial,
+                            expected_row_version=0,
+                            expected_delivery_row_version=1,
+                        )
+                    else:
+                        self._write_k2b_bundle_with_cursor(
+                            cur,
+                            bundle,
+                            previous_delivery=initial,
+                            expected_delivery_row_version=1,
+                            expected_algo_row_version=0,
+                        )
                     cur.execute(
                         "UPDATE qmt_strategy.execution_runtime SET last_event_sequence=%s,updated_at=%s "
                         "WHERE runtime_id=%s AND last_event_sequence=%s",
@@ -318,7 +477,116 @@ class KernelRepositoryK2BMixin:
         ):
             raise KernelRepositoryConflict("ALGO_START event/receipt/delivery post-commit closure differs")
         transition_readback = self._readback_k2b_bundle(transition_identity, expected_start.transition_bundle)
-        return {"event": event_readback["event"], "ingress_receipt": event_readback["receipt"], **transition_readback}
+        result = {"event": event_readback["event"], "ingress_receipt": event_readback["receipt"], **transition_readback}
+        if product_authority_sha256 is not None:
+            result["product_materialization"] = self.read_product_materialization_v3(product_authority_sha256)[2]
+        return result
+
+    @staticmethod
+    def _lock_and_validate_product_binding_v2_with_cursor(cur: Any, *, authority: KernelAlgoCreationRequestV2) -> str:
+        """Read the immutable MiniQMT SIM binding before taking the runtime lock."""
+
+        cur.execute(
+            "SELECT binding_id,release_id,release_hash,broker_backend,broker_account_id,account_group_id,"
+            "effective_from,effective_to,binding_hash FROM paper_v2.simulation_release_binding "
+            "WHERE binding_id=%s FOR SHARE",
+            (authority.binding_id,),
+        )
+        binding = cur.fetchone()
+        if binding is None:
+            raise KernelRepositoryConflict("K6-D MiniQMT binding authority is missing")
+        if (
+            binding["release_id"] != authority.release_id
+            or binding["release_hash"] != authority.release_sha256
+            or binding["broker_backend"] != "minqmt_sim"
+        ):
+            raise KernelRepositoryConflict("K6-D binding/release/backend authority differs from creation request")
+        account_group_id = binding["account_group_id"]
+        broker_account_id = binding["broker_account_id"]
+        if (
+            type(account_group_id) is not str
+            or not account_group_id.strip()
+            or type(broker_account_id) is not str
+            or not broker_account_id.strip()
+        ):
+            raise KernelRepositoryConflict("K6-D MiniQMT binding lacks exact account authority")
+        trade_date = date.fromisoformat(authority.exchange_trade_date)
+        effective_from = binding["effective_from"]
+        effective_to = binding["effective_to"]
+        if effective_from is not None and (type(effective_from) is not date or trade_date < effective_from):
+            raise KernelRepositoryConflict("K6-D binding is not effective on the creation trade date")
+        if effective_to is not None and (type(effective_to) is not date or trade_date > effective_to):
+            raise KernelRepositoryConflict("K6-D binding is not effective on the creation trade date")
+        cur.execute(
+            "SELECT release_hash FROM strategy_pkg.strategy_runtime_release WHERE release_id=%s FOR SHARE",
+            (authority.release_id,),
+        )
+        release = cur.fetchone()
+        if release is None or release["release_hash"] != authority.release_sha256:
+            raise KernelRepositoryConflict("K6-D runtime release strict readback differs from binding authority")
+        return account_group_id
+
+    def _lock_and_validate_product_route_v2_with_cursor(
+        self,
+        cur: Any,
+        *,
+        authority: KernelAlgoCreationRequestV2,
+        runtime_trade_date: Any,
+        runtime_mode: Any,
+        worker_incarnation_id: str,
+    ) -> None:
+        """Lock and compare the sole K6-D owner before an ALGO_START write."""
+
+        if type(runtime_trade_date) is not date:
+            raise KernelRepositoryConflict("K6-D runtime trade date readback is invalid")
+        if runtime_mode != "SIM":
+            raise KernelRepositoryConflict("K6-D product ALGO_START requires a SIM execution runtime")
+        if authority.exchange_trade_date != runtime_trade_date.isoformat():
+            raise KernelRepositoryConflict("K6-D request trade date differs from locked runtime")
+        self._verify_k6_product_process_cursor(cur, worker_incarnation_id)
+        owner, receipt = self._read_product_route_owner_with_cursor(
+            cur,
+            runtime_id=authority.runtime_id,
+            binding_id=authority.binding_id,
+            trade_date=runtime_trade_date,
+            lock=True,
+        )
+        if owner.route_owner is not ProductRouteOwnerKindV1.KERNEL_V2:
+            raise KernelRepositoryConflict("K6-D product route owner is not KERNEL_V2")
+        if (
+            owner.owner_sha256,
+            owner.current_receipt_sha256,
+            owner.current_route_epoch,
+            owner.effective_new_instance_sequence,
+        ) != (
+            authority.product_route_owner_sha256,
+            authority.product_route_cutover_receipt_sha256,
+            authority.product_route_epoch,
+            authority.effective_new_instance_sequence,
+        ):
+            raise KernelRepositoryConflict("K6-D creation request route lineage differs from locked owner")
+        if (
+            receipt.route_owner is not ProductRouteOwnerKindV1.KERNEL_V2
+            or receipt.runtime_id != authority.runtime_id
+            or receipt.binding_id != authority.binding_id
+            or receipt.trade_date != runtime_trade_date
+        ):
+            raise KernelRepositoryConflict("K6-D locked product route receipt identity is invalid")
+
+    @staticmethod
+    def _verify_k6_product_process_cursor(cur: Any, process_incarnation_id: str) -> None:
+        cur.execute(
+            "SELECT incarnation.worker_id FROM qmt_strategy.execution_kernel_worker_incarnation AS incarnation "
+            "JOIN qmt_strategy.execution_kernel_worker_epoch AS epoch "
+            "ON epoch.worker_id=incarnation.worker_id AND epoch.process_role=incarnation.process_role "
+            "AND epoch.incarnation_sequence=incarnation.incarnation_sequence "
+            "WHERE incarnation.process_incarnation_id=%s AND incarnation.process_role='PRODUCT_COORDINATOR' "
+            "FOR SHARE OF incarnation,epoch",
+            (process_incarnation_id,),
+        )
+        rows = cur.fetchall()
+        if len(rows) != 1:
+            raise KernelRepositoryConflict("K6-D product creation uses a stale or ambiguous worker incarnation")
 
     def _lock_and_validate_creation_authority_with_cursor(
         self,
@@ -331,7 +599,7 @@ class KernelRepositoryK2BMixin:
         )
         cur.execute(
             """
-            SELECT runtime_id,execution_plan_id,execution_plan_hash,release_id,symbol,side,
+            SELECT runtime_id,execution_plan_id,execution_plan_hash,release_id,binding_id,trade_date,symbol,side,
                    emitted_parent_quantity,execution_policy_id,execution_policy_sha256
             FROM qmt_strategy.execution_parent_benchmark
             WHERE parent_intent_id=%s
@@ -357,6 +625,11 @@ class KernelRepositoryK2BMixin:
         actual_parent["emitted_parent_quantity"] = int(actual_parent["emitted_parent_quantity"])
         if actual_parent != expected_parent:
             raise KernelRepositoryConflict("ALGO_START parent benchmark authority conflicts with request")
+        if type(authority) is KernelAlgoCreationRequestV2 and (
+            parent["binding_id"] != authority.binding_id
+            or parent["trade_date"] != date.fromisoformat(authority.exchange_trade_date)
+        ):
+            raise KernelRepositoryConflict("K6-D parent benchmark binding/date authority conflicts with request")
         cur.execute(
             """
             SELECT release_hash,execution_policy_version_id,execution_policy_sha256
@@ -411,6 +684,58 @@ class KernelRepositoryK2BMixin:
         ],
         facade_read_request: VnpyFacadeRepositoryReadRequestV1 | None = None,
     ) -> dict[str, Any]:
+        return self._apply_claimed_delivery_atomic_v3_aware(
+            delivery_id=delivery_id,
+            expected_delivery_row_version=expected_delivery_row_version,
+            expected_algo_row_version=expected_algo_row_version,
+            expected_lease_owner=expected_lease_owner,
+            expected_lease_epoch=expected_lease_epoch,
+            expected_lease_fence_token=expected_lease_fence_token,
+            bundle_builder=bundle_builder,
+            facade_read_request=facade_read_request,
+            product_evidence_provider=None,
+        )
+
+    def apply_claimed_product_delivery_atomic_v3(
+        self,
+        *,
+        delivery_id: str,
+        expected_delivery_row_version: int,
+        expected_algo_row_version: int,
+        expected_lease_owner: str,
+        expected_lease_epoch: int,
+        expected_lease_fence_token: str,
+        proposal_builder: Callable[..., ProductDeliveryProposalV3 | KernelTransitionWriteBundleV1],
+        product_evidence_provider: KernelProductEvidenceProviderV3,
+        facade_read_request: VnpyFacadeRepositoryReadRequestV1 | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(product_evidence_provider, KernelProductEvidenceProviderV3):
+            raise TypeError("product_evidence_provider must be KernelProductEvidenceProviderV3")
+        return self._apply_claimed_delivery_atomic_v3_aware(
+            delivery_id=delivery_id,
+            expected_delivery_row_version=expected_delivery_row_version,
+            expected_algo_row_version=expected_algo_row_version,
+            expected_lease_owner=expected_lease_owner,
+            expected_lease_epoch=expected_lease_epoch,
+            expected_lease_fence_token=expected_lease_fence_token,
+            bundle_builder=proposal_builder,
+            facade_read_request=facade_read_request,
+            product_evidence_provider=product_evidence_provider,
+        )
+
+    def _apply_claimed_delivery_atomic_v3_aware(
+        self,
+        *,
+        delivery_id: str,
+        expected_delivery_row_version: int,
+        expected_algo_row_version: int,
+        expected_lease_owner: str,
+        expected_lease_epoch: int,
+        expected_lease_fence_token: str,
+        bundle_builder: Callable[..., Any],
+        facade_read_request: VnpyFacadeRepositoryReadRequestV1 | None,
+        product_evidence_provider: KernelProductEvidenceProviderV3 | None,
+    ) -> dict[str, Any]:
         if type(delivery_id) is not str or not delivery_id.strip():
             raise TypeError("delivery_id must be a non-empty string")
         if not callable(bundle_builder):
@@ -419,6 +744,7 @@ class KernelRepositoryK2BMixin:
             raise TypeError("facade_read_request must be VnpyFacadeRepositoryReadRequestV1 or None")
         transition_identity: str | None = None
         expected_bundle: KernelTransitionWriteBundleV1 | None = None
+        product_authority_sha256: str | None = None
         with self._connection(transaction=True) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -611,7 +937,7 @@ class KernelRepositoryK2BMixin:
                         algo_start_read=algo_start_read,
                         latest_prior_tick_read_or_null=latest_tick,
                     )
-                bundle = bundle_builder(
+                builder_args = (
                     event,
                     claimed,
                     algo,
@@ -621,8 +947,29 @@ class KernelRepositoryK2BMixin:
                     active_timer_schedules,
                     facade_read_set,
                 )
+                if product_evidence_provider is not None:
+                    product_base_services = product_evidence_provider.build_base_services_with_cursor_v1(
+                        cur=cur,
+                        event=event,
+                        delivery=claimed,
+                        algo=algo,
+                    )
+                    built = bundle_builder(*builder_args, product_base_services)
+                else:
+                    built = bundle_builder(*builder_args)
+                proposal = built if isinstance(built, ProductDeliveryProposalV3) else None
+                bundle = proposal.transition_bundle if proposal is not None else built
                 if not isinstance(bundle, KernelTransitionWriteBundleV1):
-                    raise TypeError("bundle_builder must return KernelTransitionWriteBundleV1")
+                    raise TypeError(
+                        "bundle_builder must return KernelTransitionWriteBundleV1 or ProductDeliveryProposalV3"
+                    )
+                if product_evidence_provider is None and proposal is not None:
+                    raise TypeError("shadow delivery cannot supply a product proposal")
+                if product_evidence_provider is not None:
+                    if isinstance(bundle.receipt, AlgoTransitionReceiptV1) and proposal is None:
+                        raise TypeError("applied product delivery requires one exact V3 proposal")
+                    if not isinstance(bundle.receipt, AlgoTransitionReceiptV1) and proposal is not None:
+                        raise TypeError("terminal product failure/skip cannot manufacture a command proposal")
                 if isinstance(bundle.receipt, AlgoFailureReceiptV1):
                     durable_active_child_ids = tuple(item.child_order_id for item in active_mappings)
                     if bundle.receipt.ordered_active_child_ids != durable_active_child_ids:
@@ -681,16 +1028,72 @@ class KernelRepositoryK2BMixin:
                     expected_algo_row_version=expected_algo_row_version,
                     command_lifecycle_projection_sha256=lifecycle_projection.projection_sha256,
                 )
-                transition_identity = self._write_k2b_bundle_with_cursor(
-                    cur,
-                    bundle,
-                    previous_delivery=claimed,
-                    expected_delivery_row_version=expected_delivery_row_version,
-                    expected_algo_row_version=expected_algo_row_version,
-                )
+                if proposal is not None and isinstance(bundle.receipt, AlgoTransitionReceiptV1):
+                    if bundle.applied_transition is None:
+                        raise KernelRepositoryConflict("product proposal lacks applied transition authority")
+                    assert product_evidence_provider is not None
+                    evidence = product_evidence_provider.build_with_cursor_v1(
+                        cur=cur,
+                        event=event,
+                        delivery=claimed,
+                        algo=algo,
+                        transition=bundle.applied_transition,
+                        base_services=proposal.base_services,
+                        route_receipt=proposal.route_receipt,
+                    )
+                    replay_bundle = proposal.replay_builder(evidence.services)
+                    bound = bind_product_transition_bundle_v3(
+                        proposal_bundle=bundle,
+                        replay_bundle=replay_bundle,
+                        evidence=evidence,
+                        creation_binding=proposal.creation_binding,
+                    )
+                    bundle = bound.transition_bundle
+                    self._validate_k2b_bundle(
+                        bundle,
+                        event=event,
+                        previous_delivery=claimed,
+                        previous_algo=algo,
+                        expected_delivery_row_version=expected_delivery_row_version,
+                        expected_algo_row_version=expected_algo_row_version,
+                        command_lifecycle_projection_sha256=lifecycle_projection.projection_sha256,
+                    )
+                    prepared = self._prepare_product_materialization_v3(
+                        envelope=bound.authority_envelope,
+                        transition_bundle=bundle,
+                        strategy_slot_id=algo.strategy_slot_id,
+                    )
+                    self._write_prepared_product_materialization_with_cursor(
+                        cur,
+                        envelope=bound.authority_envelope,
+                        transition_bundle=bundle,
+                        prepared=prepared,
+                        previous_delivery=claimed,
+                        expected_row_version=expected_algo_row_version,
+                        expected_delivery_row_version=expected_delivery_row_version,
+                    )
+                    product_authority_sha256 = bound.authority_envelope.authority_set.authority_set_sha256
+                    transition_identity = bundle.receipt.transition_id
+                else:
+                    transition_identity = self._write_k2b_bundle_with_cursor(
+                        cur,
+                        bundle,
+                        previous_delivery=claimed,
+                        expected_delivery_row_version=expected_delivery_row_version,
+                        expected_algo_row_version=expected_algo_row_version,
+                    )
                 expected_bundle = bundle
         if transition_identity is None or expected_bundle is None:
             raise KernelRepositoryConflict("delivery transaction exited without a durable transition identity")
+        if product_authority_sha256 is not None:
+            authority, lifecycle, receipt = self.read_product_materialization_v3(product_authority_sha256)
+            return {
+                "algo": self.read_algo_instance(authority.algo_instance_id),
+                "delivery": self.read_delivery(authority.delivery_id),
+                "receipt": receipt,
+                "product_authority": authority,
+                "product_lifecycle": lifecycle,
+            }
         return self._readback_k2b_bundle(transition_identity, expected_bundle)
 
     def _validate_k2b_bundle(

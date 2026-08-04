@@ -178,6 +178,8 @@ def test_k2b_public_entry_guards_fail_before_database_access() -> None:
             creation_authority=_request(),
             bundle_builder=None,
         )
+    assert not hasattr(repository, "initialize_algo_atomic_v2")
+    assert callable(repository.initialize_product_algo_atomic_v3)
     with pytest.raises(TypeError, match="delivery_id"):
         repository.apply_claimed_delivery_atomic(
             delivery_id="",

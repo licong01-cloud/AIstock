@@ -175,7 +175,7 @@ curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/execution-parents/
 
 ## 4. Metrics 与 cardinality
 
-metric labels 只允许：`backend/control_revision/status/reason_code/market_phase/source/plugin_id/event_type/command_type/reason_family`。
+metric labels 只允许：`backend/control_revision/status/reason_code/market_phase/source/plugin_id/event_type/command_type/reason_family/route`。
 禁止 `run/order/symbol/package/strategy/binding/runtime/plan` 等高基数 label。单次响应最多 256 个 series；超限 typed fail loud，不裁剪后报成功。
 
 平台至少投影：scheduler success/failure/tick lag、binding/run status、LocalSIM active/partial/residual/bar lag/transaction failure/outbox backlog、MiniQMT callback age/recent normalized/rejected/pending/submitted/reconcile mismatch、K2 schema/event/outbox/command/predecessor/diagnostic reason family、invalid payload、false-green prevention、durable readback mismatch。
@@ -202,3 +202,51 @@ metric labels 只允许：`backend/control_revision/status/reason_code/market_ph
 以下状态必须分别报告，不能互相替代：source merge、CI、production DDL、production dependency/config、restart、binding DML、runtime readback、正常交易日 LocalSIM、正常交易日 MiniQMT、broker/reconcile/TCA。
 
 BUG-687 source PR 不新增 DB object、dependency 或生产配置，不执行 DDL/DML，不调用 broker，不重启服务。合入不等于 runtime 已激活；用户重启后再做本 runbook 的生产只读 readback。
+
+## 7. K6-D final KERNEL_V2 route read-only checks
+
+K6-D does not add an operator write API, approval, acknowledge, force-route,
+force-release, replay, repair or restart action. Backend process control remains
+user-owned. Source merge and a user restart must be reported separately before
+using the following normal-trading-day observations.
+
+```powershell
+curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status"
+curl.exe -sS "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?runtime_id=<runtime_id>&trade_date=<YYYY-MM-DD>&limit=100"
+```
+
+Pre-open and first activation:
+
+- `scheduler.miniqmt_quote_ingress_activation.kernel_product_runtimes` must
+  contain exactly the expected runtime/binding/date and one lowercase
+  `source_capability_sha256` from the running source.
+- `layers.miniqmt_k6d` must use
+  `miniqmt_k6d_platform_diagnostics_v1`, be read-only, and close the same
+  runtime/binding/date to `route_owner=KERNEL_V2`, route epoch, cutoff, owner and
+  receipt hashes. `legacy_active_instance_count` must be zero.
+- Current active instance counts and cutover-snapshot counts are different
+  facts; do not substitute the receipt snapshot for the current inventory.
+- K6-D adds no DDL. The existing K6-B production schema/readback remains the
+  authority and must not be repaired from this endpoint.
+
+Intraday, lunch and EOD:
+
+- The scheduler lifecycle tick first reads real QMT order/trade snapshots and
+  persists owned TRADE/ORDER callback facts, then advances the exchange clock.
+  SESSION/TIMER/EOD therefore must continue even when no new quote arrives.
+- One runtime callback/clock failure is recorded against its exact binding as
+  `MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED`; other MiniQMT and LocalSIM
+  bindings must continue. It is not a global stop or manual approval state.
+- Repeated broker snapshots must not create duplicate events, children or
+  broker calls. A distinct late TRADE after terminal ORDER may extend trade
+  lineage while the mapping remains `TERMINAL`; it must never reopen the child.
+- A successful first scheduler tick on the following trade date finalizes the
+  prior-day exchange clock and releases the old B0 logical consumer/sink. A
+  retained prior-day runtime or release failure remains explicit.
+
+Healthy readback has no active K6-D alert and exposes only low-cardinality
+`route/status/reason_family/source` metric labels. Any missing live source,
+non-KERNEL owner, legacy active instance, route/hash drift, malformed callback
+carrier or readback failure is visible and automatically clears only after the
+next clean readback. Never edit durable rows, synthesize a callback, replay a
+broker command or restart a service from this runbook.

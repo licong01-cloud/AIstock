@@ -42,6 +42,7 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import thaw_jso
 from backend.services.miniqmt_execution_runtime.vnpy_facade_characterization_runner import (
     _MAX_WORKER_CARRIER_BYTES,
     _decode_artifact_json_v1,
+    rebuild_vnpy_facade_characterization_vector_artifact_v2,
     _safe_failure_v1,
     _send_worker_carrier_v1,
     _worker_v1,
@@ -125,6 +126,21 @@ def test_repository_artifact_is_separate_from_k1_source_and_rebuilds_all_k3_mate
     assert characterization_module._VECTOR_ARTIFACT_PATH.parent.name == "characterization_artifacts"
     assert not characterization_module._VECTOR_ARTIFACT_PATH.is_relative_to(PINNED_SOURCE_ROOT)
     validate_vnpy_facade_k3_expected_trace_materials_v1(authority)
+
+
+def test_artifact_regeneration_reexecutes_k3_facts_and_seals_a_fresh_readback(tmp_path: Path) -> None:
+    original = readback_vnpy_facade_characterization_vector_artifact_v2()
+    rebuilt = rebuild_vnpy_facade_characterization_vector_artifact_v2(artifact_authority=original)
+    artifact_path = tmp_path / "facade_characterization_vectors_v2.json"
+    artifact_path.write_text(
+        json.dumps(rebuilt.model_dump(mode="json"), sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    regenerated = readback_vnpy_facade_characterization_vector_artifact_v2(artifact_path=artifact_path)
+
+    assert regenerated.artifact == rebuilt
+    assert rebuilt == original.artifact
+    validate_vnpy_facade_k3_expected_trace_materials_v1(regenerated)
 
 
 def test_fresh_process_authority_executes_exact_five_algorithms_without_partial_publication(

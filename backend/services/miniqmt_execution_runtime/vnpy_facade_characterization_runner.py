@@ -15,7 +15,10 @@ from backend.execution_algos.vnpy_compat.facade_characterization import (
     readback_vnpy_facade_characterization_vector_artifact_v2,
 )
 from backend.execution_algos.vnpy_compat.facade_contracts import (
+    VnpyFacadeExpectedTraceAuthorityRefV1,
+    VnpyFacadeK3ExpectedTraceMaterialV1,
     VnpyFacadeCharacterizationRequirementV1,
+    VnpyFacadeCharacterizationVectorArtifactV2,
     VnpyFacadeCharacterizationVectorV2,
     VnpyFacadeContractError,
     VnpyFacadeContractV1,
@@ -121,6 +124,129 @@ def _live_k3_contract_binding_sha256_v1() -> str:
             "creation_bindings": [item.canonical_payload_v1() for item in current_three_creation_bindings_v3()],
             "process_bindings": process_items,
         },
+    )
+
+
+def rebuild_vnpy_facade_characterization_vector_artifact_v2(
+    *,
+    artifact_authority: VnpyFacadeCharacterizationArtifactAuthorityV2,
+) -> VnpyFacadeCharacterizationVectorArtifactV2:
+    """Re-execute the six committed K3 inputs and rebuild their K4 artifact.
+
+    Regeneration deliberately lives in this runtime orchestration module.  The
+    lower-level ``execution_algos.vnpy_compat.facade_characterization`` module
+    remains repository/runtime independent and only owns source contracts and
+    pure readback.
+    """
+
+    if not isinstance(artifact_authority, VnpyFacadeCharacterizationArtifactAuthorityV2):
+        raise TypeError("artifact_authority must be VnpyFacadeCharacterizationArtifactAuthorityV2")
+    from backend.services.miniqmt_execution_runtime.kernel_current_three_contracts import (
+        CurrentThreeParityInputV1,
+        CurrentThreeParityReceiptV1,
+        CurrentThreeShadowSourceSnapshotV1,
+    )
+    from backend.services.miniqmt_execution_runtime.kernel_current_three_shadow_runner import (
+        build_current_three_parity_input_from_shadow_v1,
+        run_current_three_committed_parity_v1,
+    )
+    from backend.services.miniqmt_execution_runtime.kernel_current_three_shadow_source import (
+        build_current_three_shadow_repository_read_v1,
+    )
+    from backend.services.miniqmt_execution_runtime.models import (
+        MiniQMTChildOrder,
+        MiniQMTExecutionAlgoInstance,
+        MiniQMTExecutionEvent,
+        MiniQMTExecutionRuntimeRecord,
+    )
+
+    artifact = artifact_authority.artifact
+
+    def decode_model(model_type: Any, carrier: Any) -> Any:
+        decoded = _decode_artifact_json_v1(thaw_json_v1(carrier))
+        return model_type.model_validate_json(
+            json.dumps(decoded, sort_keys=True, separators=(",", ":")),
+            strict=True,
+        )
+
+    rebuilt_materials: list[VnpyFacadeK3ExpectedTraceMaterialV1] = []
+    for material in artifact.ordered_k3_expected_trace_materials:
+        snapshot = decode_model(CurrentThreeShadowSourceSnapshotV1, material.source_snapshot)
+        runtime = decode_model(MiniQMTExecutionRuntimeRecord, material.repository_runtime)
+        events = tuple(decode_model(MiniQMTExecutionEvent, item) for item in material.ordered_repository_events)
+        algos = tuple(decode_model(MiniQMTExecutionAlgoInstance, item) for item in material.ordered_repository_algos)
+        children = tuple(decode_model(MiniQMTChildOrder, item) for item in material.ordered_repository_children)
+        if len(algos) != 1:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+                "K3 artifact regeneration requires exactly one algorithm per committed material",
+                context={"algo_code": material.algo_code, "side": material.side.value, "algo_count": len(algos)},
+            )
+        read = build_current_three_shadow_repository_read_v1(
+            repository_commit_sha=artifact.k3_source_commit_sha,
+            runtime=runtime,
+            events=events,
+            algos=algos,
+            children=children,
+            database_snapshot_at_utc=datetime.fromisoformat(snapshot.database_snapshot_at_utc.replace("Z", "+00:00")),
+        )
+        if read.snapshot != snapshot:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+                "K3 artifact regeneration source facts do not reproduce the frozen snapshot",
+                context={"algo_code": material.algo_code, "side": material.side.value},
+            )
+        parity_input, _ = build_current_three_parity_input_from_shadow_v1(
+            read,
+            legacy_algo_instance_id=algos[0].algo_instance_id,
+        )
+        receipt = run_current_three_committed_parity_v1(
+            read,
+            legacy_algo_instance_id=algos[0].algo_instance_id,
+        )
+        if not isinstance(parity_input, CurrentThreeParityInputV1) or not isinstance(
+            receipt,
+            CurrentThreeParityReceiptV1,
+        ):
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CHARACTERIZATION_FAILED",
+                "K3 public parity re-execution returned an invalid carrier",
+                context={"algo_code": material.algo_code, "side": material.side.value},
+            )
+        values = material.model_dump(mode="python", exclude={"schema_version", "material_sha256"})
+        values["parity_input"] = parity_input.model_dump(mode="json")
+        values["parity_receipt"] = receipt.model_dump(mode="json")
+        rebuilt_materials.append(VnpyFacadeK3ExpectedTraceMaterialV1.create(**values))
+
+    material_by_owner = {(item.algo_code, item.side): item for item in rebuilt_materials}
+    rebuilt_vectors = []
+    for vector in artifact.ordered_vectors:
+        material = material_by_owner.get((vector.algo_code, vector.side))
+        if material is None:
+            rebuilt_vectors.append(vector)
+            continue
+        snapshot = thaw_json_v1(material.source_snapshot)
+        parity_input = thaw_json_v1(material.parity_input)
+        parity_receipt = thaw_json_v1(material.parity_receipt)
+        reference = VnpyFacadeExpectedTraceAuthorityRefV1.create(
+            authority_kind="K3_COMMITTED_PARITY",
+            authority_identity_sha256=material.material_sha256,
+            source_snapshot_sha256_or_null=snapshot["source_set_sha256"],
+            parity_input_sha256_or_null=parity_input["input_sha256"],
+            parity_receipt_sha256_or_null=parity_receipt["receipt_sha256"],
+        )
+        values = {
+            field_name: getattr(vector, field_name)
+            for field_name in VnpyFacadeCharacterizationVectorV2.model_fields
+            if field_name not in {"schema_version", "vector_sha256"}
+        }
+        values["expected_trace_authority_ref"] = reference
+        rebuilt_vectors.append(VnpyFacadeCharacterizationVectorV2.create(**values))
+    return VnpyFacadeCharacterizationVectorArtifactV2.create(
+        k3_source_commit_sha=artifact.k3_source_commit_sha,
+        k3_contract_binding_sha256=_live_k3_contract_binding_sha256_v1(),
+        ordered_k3_expected_trace_materials=tuple(rebuilt_materials),
+        ordered_vectors=tuple(rebuilt_vectors),
     )
 
 
@@ -655,6 +781,7 @@ def validate_vnpy_facade_conformance_set_fresh_process_v2(
 
 __all__ = [
     "build_vnpy_facade_characterization_authority_fresh_process_v2",
+    "rebuild_vnpy_facade_characterization_vector_artifact_v2",
     "run_vnpy_facade_source_execution_sets_v1",
     "validate_vnpy_facade_characterization_authority_fresh_process_v2",
     "validate_vnpy_facade_conformance_set_fresh_process_v2",

@@ -84,6 +84,97 @@ class KernelRepositoryTransitionOutboxMixin:
         )
         return outbox
 
+    def list_dispatchable_outbox_commands(
+        self,
+        *,
+        runtime_id: str,
+        observed_at_utc: Any,
+        limit: int,
+    ) -> tuple[BrokerCommandOutboxV1, ...]:
+        """Read the exact due broker-call candidates for one runtime.
+
+        Recovery inventory is intentionally broader and includes future retry
+        rows.  The product dispatcher must not infer due state in process or
+        let future retries at the head of a page starve later PENDING rows.
+        """
+
+        if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():
+            raise ValueError("runtime_id must be a canonical identity")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("dispatchable outbox limit must be between 1 and 100")
+        observed = canonical_utc_datetime_v1(observed_at_utc, field_name="observed_at_utc")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT carrier_json
+                    FROM qmt_strategy.execution_algo_command_outbox
+                    WHERE runtime_id=%s
+                      AND status IN ('PENDING','FAILED_RETRYABLE')
+                      AND (next_attempt_at_utc IS NULL OR next_attempt_at_utc<=%s)
+                    ORDER BY created_at_utc,ordinal,command_id
+                    LIMIT %s
+                    """,
+                    (runtime_id, observed, limit),
+                )
+                rows = cur.fetchall()
+        commands = tuple(_model_from_json(BrokerCommandOutboxV1, _row_json(row, "carrier_json")) for row in rows)
+        if any(
+            item.runtime_id != runtime_id
+            or item.status
+            not in {
+                BrokerCommandOutboxStatusV1.PENDING,
+                BrokerCommandOutboxStatusV1.FAILED_RETRYABLE,
+            }
+            or (item.next_attempt_at_utc is not None and item.next_attempt_at_utc > observed)
+            for item in commands
+        ):
+            raise KernelRepositoryConflict("dispatchable outbox query returned a non-due command")
+        return commands
+
+    def list_reconcilable_outbox_commands(
+        self,
+        *,
+        runtime_id: str,
+        observed_at_utc: Any,
+        limit: int,
+    ) -> tuple[BrokerCommandOutboxV1, ...]:
+        """Read due unknown-outcome commands without inferring broker truth in process."""
+
+        if type(runtime_id) is not str or not runtime_id or runtime_id != runtime_id.strip():
+            raise ValueError("runtime_id must be a canonical identity")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("reconcilable outbox limit must be between 1 and 100")
+        observed = canonical_utc_datetime_v1(observed_at_utc, field_name="observed_at_utc")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT carrier_json
+                    FROM qmt_strategy.execution_algo_command_outbox
+                    WHERE runtime_id=%s
+                      AND status IN ('OUTCOME_UNKNOWN','RECONCILING')
+                      AND (next_attempt_at_utc IS NULL OR next_attempt_at_utc<=%s)
+                    ORDER BY created_at_utc,ordinal,command_id
+                    LIMIT %s
+                    """,
+                    (runtime_id, observed, limit),
+                )
+                rows = cur.fetchall()
+        commands = tuple(_model_from_json(BrokerCommandOutboxV1, _row_json(row, "carrier_json")) for row in rows)
+        if any(
+            item.runtime_id != runtime_id
+            or item.status
+            not in {
+                BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN,
+                BrokerCommandOutboxStatusV1.RECONCILING,
+            }
+            or (item.next_attempt_at_utc is not None and item.next_attempt_at_utc > observed)
+            for item in commands
+        ):
+            raise KernelRepositoryConflict("reconcilable outbox query returned a non-due command")
+        return commands
+
     def read_reconciliation_receipt(
         self,
         command_id: str,
@@ -806,6 +897,80 @@ class KernelRepositoryTransitionOutboxMixin:
             carrier_name="mapping",
         )
         return {"outbox": self.read_outbox_command(command_id), "mapping": mapping}
+
+    def read_callback_identity_chain(
+        self,
+        *,
+        runtime_id: str,
+        broker_order_id: str,
+    ) -> dict[str, Any]:
+        """Resolve one broker callback to its exact durable K2 owners."""
+
+        for field_name, value in (("runtime_id", runtime_id), ("broker_order_id", broker_order_id)):
+            if type(value) is not str or not value or value != value.strip():
+                raise ValueError(f"{field_name} must be a canonical identity")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT child.mapping_json,
+                           submit.carrier_json AS submit_outbox_json,
+                           reference.carrier_json AS reference_outbox_json,
+                           algo.kernel_carrier_json AS algo_json
+                    FROM qmt_strategy.execution_child_order AS child
+                    JOIN qmt_strategy.execution_algo_command_outbox AS submit
+                      ON submit.command_id=child.command_id AND submit.mapping_id=child.mapping_id
+                    JOIN qmt_strategy.execution_algo_instance AS algo
+                      ON algo.runtime_id=child.runtime_id
+                     AND algo.algo_instance_id=child.algo_instance_id
+                    JOIN LATERAL (
+                        SELECT candidate.carrier_json
+                        FROM qmt_strategy.execution_algo_command_outbox AS candidate
+                        WHERE candidate.mapping_id=child.mapping_id
+                        ORDER BY candidate.created_at_utc DESC,candidate.ordinal DESC,candidate.command_id DESC
+                        LIMIT 1
+                    ) AS reference ON TRUE
+                    WHERE child.runtime_id=%s
+                      AND (child.broker_order_id=%s OR submit.broker_order_id=%s)
+                      AND child.kernel_contract_version='KERNEL_V2'
+                    """,
+                    (runtime_id, broker_order_id, broker_order_id),
+                )
+                rows = cur.fetchall()
+        if not rows:
+            raise KeyError((runtime_id, broker_order_id))
+        if len(rows) != 1:
+            raise KernelRepositoryConflict("broker callback identity matches multiple durable mappings")
+        row = rows[0]
+        mapping = _model_from_json(ExecutionCommandChildMappingV1, _row_json(row, "mapping_json"))
+        submit_outbox = _model_from_json(BrokerCommandOutboxV1, _row_json(row, "submit_outbox_json"))
+        reference_outbox = _model_from_json(BrokerCommandOutboxV1, _row_json(row, "reference_outbox_json"))
+        algo = _model_from_json(ExecutionAlgoInstancePersistenceV2, _row_json(row, "algo_json"))
+        if (
+            mapping.runtime_id != runtime_id
+            or (
+                mapping.broker_order_id != broker_order_id
+                and not (
+                    mapping.broker_order_id is None
+                    and submit_outbox.status is BrokerCommandOutboxStatusV1.ACKED
+                    and submit_outbox.broker_order_id == broker_order_id
+                    and submit_outbox.ack_receipt_json is not None
+                    and submit_outbox.ack_receipt_json.accepted
+                )
+            )
+            or submit_outbox.command_id != mapping.command_id
+            or submit_outbox.mapping_id != mapping.mapping_id
+            or reference_outbox.mapping_id != mapping.mapping_id
+            or algo.runtime_id != runtime_id
+            or algo.algo_instance_id != mapping.algo_instance_id
+        ):
+            raise KernelRepositoryConflict("callback identity-chain readback is not closed")
+        return {
+            "mapping": mapping,
+            "submit_outbox": submit_outbox,
+            "reference_outbox": reference_outbox,
+            "algo": algo,
+        }
 
     def compare_and_swap_mapping_outbox(
         self,

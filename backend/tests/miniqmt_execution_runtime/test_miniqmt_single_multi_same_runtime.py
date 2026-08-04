@@ -7,10 +7,6 @@ from typing import Any
 
 import pytest
 
-from backend.services.miniqmt_execution_runtime import (
-    InMemoryMiniQMTExecutionRuntimeRepository,
-    MiniQMTExecutionRuntimeClient,
-)
 from backend.services.paper_trading_v2.broker import (
     BrokerAccountSnapshot,
     OrderHandle,
@@ -29,12 +25,10 @@ from backend.services.qmt_strategy_ledger.models import (
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
-from backend.services.simulation_runtime import ExecutionPathNotCanonicalError, MiniQMTExecutionBridge, SimulationBrokerBackend
-from backend.services.trading_core.errors import BrokerSubmitError
+from backend.services.simulation_runtime import ExecutionPathNotCanonicalError, MiniQMTExecutionBridge
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
 from backend.tests.paper_trading_v2.test_minqmtsim_backend import _SnapshotOnlyRepository
-from backend.tests.simulation_runtime.test_target_rebalance_shared import _compiled_plan_for_bridge
 
 
 TRADE_DATE = date(2026, 6, 9)
@@ -209,7 +203,9 @@ def _vnpy_execution_policy_context(algo_code: str = "SNIPER_MINIQMT") -> dict[st
     }
 
 
-def _managed_order_service(binding_strategy_id: str, binding_strategy_name: str, account_id: str) -> tuple[QmtManagedOrderService, RecordingManagedOrderBroker]:
+def _managed_order_service(
+    binding_strategy_id: str, binding_strategy_name: str, account_id: str
+) -> tuple[QmtManagedOrderService, RecordingManagedOrderBroker]:
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
         VirtualAccount(
@@ -248,10 +244,7 @@ def _managed_order_service(binding_strategy_id: str, binding_strategy_name: str,
     return service, broker
 
 
-def test_simulation_runtime_event_loop_a_remains_canonical_and_paper_v2_legacy_path_rejects() -> None:
-    runtime_client = MiniQMTExecutionRuntimeClient(
-        repository=InMemoryMiniQMTExecutionRuntimeRepository(),
-    )
+def test_only_kernel_v2_product_route_remains_and_paper_v2_legacy_path_rejects() -> None:
     manifest = make_paper_enabled_manifest()
     portfolio = _paper_portfolio(manifest)
     paper_repo = _SnapshotOnlyRepository(portfolio)
@@ -271,32 +264,8 @@ def test_simulation_runtime_event_loop_a_remains_canonical_and_paper_v2_legacy_p
     assert exc_info.value.context["broker_called"] is False
     assert paper_broker.submitted == []
 
-    _release, binding, plan = _compiled_plan_for_bridge(
-        backend=SimulationBrokerBackend.MINIQMT_SIM,
-        execution_policy_payload={
-            "algo_code": "SNIPER_MINIQMT",
-            "algo_config": {},
-            "schedule_window": {"mode": "open_to_close"},
-        },
-        execution_policy_version_id="vnpy_asset:SNIPER_MINIQMT",
-        execution_policy_sha256="exec_policy_hash_sniper_miniqmt",
-    )
-    service, managed_broker = _managed_order_service(
-        binding_strategy_id=binding.strategy_id,
-        binding_strategy_name=binding.strategy_name or binding.strategy_id,
-        account_id=binding.broker_account_id or "QMT_SIM_ACCOUNT",
-    )
-    with pytest.raises(BrokerSubmitError) as controller_missing:
-        MiniQMTExecutionBridge(
-            managed_order_service=service,
-            runtime_client=runtime_client,
-        ).submit_event_loop_plan(
-            plan=plan,
-            binding=binding,
-        )
-    assert controller_missing.value.context["reason_code"] == "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT"
-    assert controller_missing.value.context["broker_called"] is False
-    assert managed_broker.calls == []
+    assert not hasattr(MiniQMTExecutionBridge, "submit_event_loop_plan")
+    assert not hasattr(MiniQMTExecutionBridge, "drive_event_loop_ticks")
 
 
 def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls() -> None:
@@ -307,7 +276,12 @@ def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls()
         root / "backend/services/simulation_runtime/lifecycle.py",
     ]
     forbidden_by_file = {
-        "day_runner.py": ("broker.submit_order_intent(", "XtQuantQMTClient(", ".place_order(", "MiniQMTLiveAlgoAdapter"),
+        "day_runner.py": (
+            "broker.submit_order_intent(",
+            "XtQuantQMTClient(",
+            ".place_order(",
+            "MiniQMTLiveAlgoAdapter",
+        ),
         "bridges.py": (
             "self._managed_order_service.submit_batch(",
             "XtQuantQMTClient(",
@@ -316,7 +290,12 @@ def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls()
             "QmtManagedOrderSubmitter",
             "MiniQMTChildOrderRequest",
         ),
-        "lifecycle.py": ("QmtManagedOrderService.submit_batch(", "XtQuantQMTClient(", ".place_order(", "MiniQMTLiveAlgoAdapter"),
+        "lifecycle.py": (
+            "QmtManagedOrderService.submit_batch(",
+            "XtQuantQMTClient(",
+            ".place_order(",
+            "MiniQMTLiveAlgoAdapter",
+        ),
     }
 
     for path in product_files:
@@ -325,6 +304,11 @@ def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls()
             assert forbidden not in text, f"{path.name} still owns MiniQMT broker submit path via {forbidden}"
         if path.name == "day_runner.py":
             assert "MINIQMT_PAPER_DAY_RUNNER_ROUTE_RETIRED" in text
+        elif path.name == "lifecycle.py":
+            assert "MiniQMTKernelV2ProductCoordinator" not in text
+            assert "start_execution_plan_v1" in text
+            assert "MiniQMTExecutionRuntimeClient" not in text
+            assert "MiniQMTExecutionBridge" not in text
         else:
             assert "MiniQMTExecutionRuntimeClient" in text or "MiniQMTExecutionBridge" in text
 
@@ -348,7 +332,9 @@ def test_legacy_paper_v2_miniqmt_live_adapter_is_removed() -> None:
 
     execution_init = (root / "backend/services/paper_trading_v2/execution/__init__.py").read_text(encoding="utf-8")
     assert "MiniQMTLiveAlgoAdapter" not in execution_init
-    legacy_file = (root / "backend/services/paper_trading_v2/execution/minqmt_live_algo_adapter.py").read_text(encoding="utf-8")
+    legacy_file = (root / "backend/services/paper_trading_v2/execution/minqmt_live_algo_adapter.py").read_text(
+        encoding="utf-8"
+    )
     assert "ExecutionPathNotCanonicalError" in legacy_file
 
     from backend.services.paper_trading_v2.execution.minqmt_live_algo_adapter import MiniQMTLiveAlgoAdapter
