@@ -1203,7 +1203,12 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         root=isolated_workflow_root,
     )
     nightly_intake = workflow._classify_runtime_impact(
-        [".github/workflows/nightly.yml", "scripts/ci_failure_issue_summary.py"],
+        [
+            ".github/workflows/nightly.yml",
+            "scripts/ci_failure_issue_summary.py",
+            "scripts/llm_provider_adapter.py",
+            "scripts/nightly_session_runner.py",
+        ],
         root=isolated_workflow_root,
     )
 
