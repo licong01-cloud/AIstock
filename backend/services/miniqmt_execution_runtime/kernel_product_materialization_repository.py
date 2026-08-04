@@ -162,17 +162,27 @@ def _assert_coordination_authority_v2(
         "buy_algo_instance_id",
         "buy_parent_intent_id",
         "required_cash",
+        "virtual_account_id",
+        "session_authority_sha256",
         "release_command_id",
         "release_transition_id",
         "release_command_authority_item_sha256",
         "release_command_payload_sha256",
-        "ordered_sell_dependencies",
         "created_at_utc",
     )
     if any(getattr(current, field) != getattr(initial, field) for field in immutable_fields):
         raise KernelRepositoryConflict("deferred product coordination changes immutable authority")
     if current.row_version < initial.row_version or current.decision_sequence < initial.decision_sequence:
         raise KernelRepositoryConflict("deferred product coordination regresses durable version authority")
+    current_dependencies = {item.sell_parent_intent_id: item for item in current.ordered_sell_dependencies}
+    initial_dependencies = {item.sell_parent_intent_id: item for item in initial.ordered_sell_dependencies}
+    if set(current_dependencies) != set(initial_dependencies):
+        raise KernelRepositoryConflict("deferred product coordination changes frozen SELL dependency set")
+    try:
+        for parent_intent_id, initial_dependency in initial_dependencies.items():
+            current_dependencies[parent_intent_id].validate_successor_v2(initial_dependency)
+    except (TypeError, ValueError) as exc:
+        raise KernelRepositoryConflict("deferred product coordination dependency evidence is not monotonic") from exc
 
 
 def _strict_roundtrip_v1(model_type: type[Any], value: Any, *, field_name: str) -> Any:
@@ -320,6 +330,8 @@ def _coordination_v2(item: ProductCommandAuthorityItemV3, *, created_at_utc: Any
         buy_algo_instance_id=candidate.buy_algo_instance_id,
         buy_parent_intent_id=candidate.buy_parent_intent_id,
         required_cash=candidate.required_cash,
+        virtual_account_id=candidate.virtual_account_id,
+        session_authority_sha256=candidate.session_authority_sha256,
         release_command_id=item.command_id,
         release_transition_id=item.transition_id,
         release_command_authority_item_sha256=item.item_sha256,

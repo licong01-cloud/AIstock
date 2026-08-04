@@ -46,10 +46,15 @@ K6_TABLES = (
 )
 K6_CATALOG_SHA256 = "546a209dc2f8721ccee8b5e905117788486307147dfb4fc6bc396842f5cf84ad"
 K6_CATALOG_SHA256_K6C0 = "6e33248ad909c59db11059f723adbe39c4c8a151c902e9af0fe0fd3637adacc9"
-K6_CATALOG_SHA256S = frozenset({K6_CATALOG_SHA256, K6_CATALOG_SHA256_K6C0})
+K6_CATALOG_SHA256_K6B = "6eeff2d2887049a7b3e3c93dd93e56e9af6241e0be1caf2c7ef535cbbde5d9f6"
+K6_CATALOG_SHA256S = frozenset({K6_CATALOG_SHA256, K6_CATALOG_SHA256_K6C0, K6_CATALOG_SHA256_K6B})
 K6_CATALOG_FUNCTION_BODY_SHA256 = "bcb0b57b1cb425f4eb3d34b2ce5ca24c9f430986665871384482dfc056f5628a"
 K6C0_CATALOG_SHA256 = "f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d"
+K6C0_CATALOG_SHA256_K6B = "ef09f8ab2f3e6a1563cd536327ee1d9c04273806c3fdfdea2e704600f330d912"
+K6C0_CATALOG_SHA256S = frozenset({K6C0_CATALOG_SHA256, K6C0_CATALOG_SHA256_K6B})
 K6C0_CATALOG_FUNCTION_BODY_SHA256 = "0b9889bc7c4bdfa980e3deddfc87edfd7379047778f837a2c4d6b1eecee272f4"
+K6B_CATALOG_SHA256 = "10ae5be030612f923f2fe23f17f1f8b4891358cc8bd9565d54ad27ee3d18393c"
+K6B_CATALOG_FUNCTION_BODY_SHA256 = "7a57ccdf81f8ff2c549f5f2e2a77a168663274de37d6f08919eebbd4e5d74067"
 
 
 def _strict_identity(value: Any, *, field_name: str) -> str:
@@ -201,6 +206,57 @@ WITH target_columns(relname,attname) AS (
                              replace(p.prosrc,n.nspname||'.','<schema>.'))
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
     WHERE n.nspname='qmt_strategy' AND p.proname='miniqmt_k6_validate_coordination_update'
+), canonical_catalog AS (
+    SELECT coalesce(jsonb_agg(item ORDER BY sort_key),'[]'::jsonb)::TEXT AS payload FROM catalog_items
+)
+SELECT payload FROM canonical_catalog
+"""
+
+_K6B_CATALOG_PAYLOAD_SQL = """
+WITH target_columns(relname,attname) AS (
+    VALUES
+        ('execution_dependent_buy_coordination','virtual_account_id'),
+        ('execution_dependent_buy_coordination','session_authority_sha256')
+), target_constraints(relname,conname) AS (
+    VALUES ('execution_dependent_buy_coordination','ck_miniqmt_k6b_coordination_authority')
+), target_triggers(relname,tgname) AS (
+    VALUES
+        ('execution_dependent_buy_coordination','trg_miniqmt_k6_coordination_cas'),
+        ('execution_dependent_buy_dependency','trg_miniqmt_k6_dependency_successor')
+), target_functions(proname) AS (
+    VALUES
+        ('miniqmt_k6_validate_coordination_update'),
+        ('miniqmt_k6b_validate_dependency_successor')
+), catalog_items(sort_key,item) AS (
+    SELECT format('column:%s:%s',c.relname,a.attname),
+           jsonb_build_array('column',c.relname,a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull,
+                             coalesce(pg_get_expr(d.adbin,d.adrelid),''),coalesce(col_description(c.oid,a.attnum),''))
+    FROM target_columns tc JOIN pg_class c ON c.relname=tc.relname
+    JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='qmt_strategy'
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname=tc.attname AND a.attnum>0 AND NOT a.attisdropped
+    LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
+    UNION ALL
+    SELECT format('constraint:%s:%s',c.relname,k.conname),
+           jsonb_build_array('constraint',c.relname,k.conname,k.contype,k.condeferrable,k.condeferred,k.convalidated,
+                             replace(pg_get_constraintdef(k.oid,true),n.nspname||'.','<schema>.'))
+    FROM target_constraints tc JOIN pg_class c ON c.relname=tc.relname
+    JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='qmt_strategy'
+    JOIN pg_constraint k ON k.conrelid=c.oid AND k.conname=tc.conname
+    UNION ALL
+    SELECT format('trigger:%s:%s',c.relname,t.tgname),
+           jsonb_build_array('trigger',c.relname,t.tgname,t.tgenabled,
+                             replace(pg_get_triggerdef(t.oid,true),n.nspname||'.','<schema>.'))
+    FROM target_triggers target JOIN pg_class c ON c.relname=target.relname
+    JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='qmt_strategy'
+    JOIN pg_trigger t ON t.tgrelid=c.oid AND t.tgname=target.tgname AND NOT t.tgisinternal
+    UNION ALL
+    SELECT format('function:%s',p.proname),
+           jsonb_build_array('function',p.proname,l.lanname,p.provolatile,p.prokind,
+                             pg_get_function_identity_arguments(p.oid),
+                             replace(p.prosrc,n.nspname||'.','<schema>.'))
+    FROM target_functions target JOIN pg_proc p ON p.proname=target.proname
+    JOIN pg_namespace n ON n.oid=p.pronamespace AND n.nspname='qmt_strategy'
+    JOIN pg_language l ON l.oid=p.prolang
 ), canonical_catalog AS (
     SELECT coalesce(jsonb_agg(item ORDER BY sort_key),'[]'::jsonb)::TEXT AS payload FROM catalog_items
 )
@@ -460,17 +516,71 @@ class KernelProductRepositoryMixin:
                 "K6-C0 catalog fingerprint function definition drift: "
                 f"metadata={metadata} expected_body={K6C0_CATALOG_FUNCTION_BODY_SHA256} actual_body={body_sha256}"
             )
-        if k6_catalog_sha256 != K6_CATALOG_SHA256_K6C0:
+        if k6_catalog_sha256 not in {K6_CATALOG_SHA256_K6C0, K6_CATALOG_SHA256_K6B}:
             raise KernelRepositorySchemaError(
                 "K6-C0 requires the exact successor K6 catalog: "
-                f"expected={K6_CATALOG_SHA256_K6C0} actual={k6_catalog_sha256}"
+                f"expected_one_of={sorted({K6_CATALOG_SHA256_K6C0, K6_CATALOG_SHA256_K6B})} "
+                f"actual={k6_catalog_sha256}"
             )
-        if independent != K6C0_CATALOG_SHA256 or function_value != independent:
+        if independent not in K6C0_CATALOG_SHA256S or function_value != independent:
             raise KernelRepositorySchemaError(
                 "K6-C0 catalog fingerprint mismatch: "
-                f"expected={K6C0_CATALOG_SHA256} independent={independent} function={function_value}"
+                f"expected_one_of={sorted(K6C0_CATALOG_SHA256S)} independent={independent} "
+                f"function={function_value}"
             )
         result["k6c0_schema_catalog_fingerprint"] = True
+        return result
+
+    def preflight_k6b_schema(self) -> dict[str, bool]:
+        """Require the exact K6-B successor catalog and independent function readback."""
+
+        result = self.preflight_k6c_schema()
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(_K6B_CATALOG_PAYLOAD_SQL)
+                independent_row = cur.fetchone()
+                cur.execute(
+                    "SELECT n.nspname,l.lanname,p.provolatile,p.prokind,"
+                    "pg_get_function_identity_arguments(p.oid) AS identity_arguments,p.prosrc "
+                    "FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+                    "JOIN pg_language l ON l.oid=p.prolang "
+                    "WHERE n.nspname='qmt_strategy' AND p.proname='miniqmt_k6b_catalog_fingerprint'"
+                )
+                definition_row = cur.fetchone()
+                function_row = None
+                if definition_row is not None:
+                    cur.execute("SELECT qmt_strategy.miniqmt_k6b_catalog_fingerprint() AS catalog_sha256")
+                    function_row = cur.fetchone()
+        if independent_row is None or type(independent_row["payload"]) is not str:
+            raise KernelRepositorySchemaError("K6-B independent catalog payload is unavailable")
+        if function_row is None or definition_row is None:
+            raise KernelRepositorySchemaError("K6-B catalog fingerprint function definition is missing")
+        independent = hashlib.sha256(independent_row["payload"].encode("utf-8")).hexdigest()
+        function_value = function_row["catalog_sha256"]
+        normalized_body = (
+            str(definition_row["prosrc"])
+            .replace(str(definition_row["nspname"]), "<schema>")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        )
+        body_sha256 = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest()
+        metadata = (
+            definition_row["lanname"],
+            definition_row["provolatile"],
+            definition_row["prokind"],
+            definition_row["identity_arguments"],
+        )
+        if metadata != ("sql", "s", "f", "") or body_sha256 != K6B_CATALOG_FUNCTION_BODY_SHA256:
+            raise KernelRepositorySchemaError(
+                "K6-B catalog fingerprint function definition drift: "
+                f"metadata={metadata} expected_body={K6B_CATALOG_FUNCTION_BODY_SHA256} actual_body={body_sha256}"
+            )
+        if independent != K6B_CATALOG_SHA256 or function_value != independent:
+            raise KernelRepositorySchemaError(
+                "K6-B catalog fingerprint mismatch: "
+                f"expected={K6B_CATALOG_SHA256} independent={independent} function={function_value}"
+            )
+        result["k6b_schema_catalog_fingerprint"] = True
         return result
 
     def read_dependent_buy_coordination_v1(self, coordination_id: str) -> DependentBuyCoordinationV1:

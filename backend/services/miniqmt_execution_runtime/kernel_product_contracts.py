@@ -606,6 +606,7 @@ class DependentBuySettledProceedsRefV2(FrozenStrictModel):
     schema_version: Literal["miniqmt_dependent_buy_settled_proceeds_ref_v2"]
     broker_trade_id: IdentityV1
     qmt_trade_ledger_id: IdentityV1
+    qmt_trade_account_id: IdentityV1
     qmt_trade_fact_sha256: Sha256V1
     cash_ledger_id: IdentityV1
     cash_ledger_sequence: PositiveIntV1
@@ -693,6 +694,67 @@ class DependentBuySellDependencyV2(FrozenStrictModel):
         if self.dependency_sha256 != expected:
             raise ValueError("dependent-BUY V2 dependency hash mismatch")
         return self
+
+    def validate_successor_v2(self, previous: "DependentBuySellDependencyV2") -> "DependentBuySellDependencyV2":
+        if not isinstance(previous, DependentBuySellDependencyV2):
+            raise TypeError("previous must be DependentBuySellDependencyV2")
+        type(self).model_validate_json(self.model_dump_json())
+        type(self).model_validate_json(previous.model_dump_json())
+        _validate_dependent_buy_dependency_successor_v2(self, previous)
+        return self
+
+
+def _validate_dependent_buy_dependency_successor_v2(
+    current: DependentBuySellDependencyV2,
+    previous: DependentBuySellDependencyV2,
+) -> None:
+    """Reject any non-monotonic mutation of one frozen SELL dependency.
+
+    Settled proceeds are discovered after the BUY is deferred, so a
+    coordination successor may append durable trade/cash pairs and advance the
+    dependency to its terminal outcome.  It may never alter the frozen SELL
+    owner, remove or replace an observed proceeds fact, or reopen a terminal
+    dependency.
+    """
+
+    immutable = (
+        "runtime_id",
+        "strategy_id",
+        "sell_parent_intent_id",
+        "sell_algo_instance_id",
+        "required_terminal_policy",
+    )
+    if any(getattr(current, field) != getattr(previous, field) for field in immutable):
+        raise ValueError("dependent-BUY successor changes frozen SELL dependency owner")
+    allowed_statuses = {
+        DependentBuyDependencyStatusV1.OPEN: {
+            DependentBuyDependencyStatusV1.OPEN,
+            DependentBuyDependencyStatusV1.PROCEEDS_SETTLED,
+            DependentBuyDependencyStatusV1.TERMINAL_WITHOUT_SUFFICIENT_PROCEEDS,
+        },
+        DependentBuyDependencyStatusV1.PROCEEDS_SETTLED: {
+            DependentBuyDependencyStatusV1.PROCEEDS_SETTLED,
+            DependentBuyDependencyStatusV1.TERMINAL_WITHOUT_SUFFICIENT_PROCEEDS,
+        },
+        DependentBuyDependencyStatusV1.TERMINAL_WITHOUT_SUFFICIENT_PROCEEDS: {
+            DependentBuyDependencyStatusV1.TERMINAL_WITHOUT_SUFFICIENT_PROCEEDS,
+        },
+    }
+    if current.dependency_status not in allowed_statuses[previous.dependency_status]:
+        raise ValueError("dependent-BUY successor reopens or regresses one SELL dependency")
+    previous_refs = {item.sort_key_v2(): item for item in previous.ordered_settled_proceeds_refs}
+    current_refs = {item.sort_key_v2(): item for item in current.ordered_settled_proceeds_refs}
+    if any(current_refs.get(key) != value for key, value in previous_refs.items()):
+        raise ValueError("dependent-BUY successor removes or changes settled proceeds evidence")
+    if (
+        current.latest_order_fact_id != previous.latest_order_fact_id
+        or current.latest_order_fact_sha256 != previous.latest_order_fact_sha256
+    ):
+        if (
+            previous.dependency_status is DependentBuyDependencyStatusV1.TERMINAL_WITHOUT_SUFFICIENT_PROCEEDS
+            or current.dependency_status is not DependentBuyDependencyStatusV1.TERMINAL_WITHOUT_SUFFICIENT_PROCEEDS
+        ):
+            raise ValueError("dependent-BUY successor changes latest order fact outside terminal closure")
 
 
 class DependentBuyLedgerObservationV2(FrozenStrictModel):
@@ -840,6 +902,11 @@ class DependentBuyCandidateAuthorityV2(FrozenStrictModel):
                 raise ValueError("candidate SELL dependency owner differs from candidate")
             if any(item.trade_date != self.trade_date for item in dependency.ordered_settled_proceeds_refs):
                 raise ValueError("candidate SELL dependency trade date differs from candidate")
+            if any(
+                item.qmt_trade_account_id != self.virtual_account_id
+                for item in dependency.ordered_settled_proceeds_refs
+            ):
+                raise ValueError("candidate settled proceeds account differs from virtual-account authority")
         if (
             not self.ordered_error_codes
             or self.ordered_error_codes != tuple(sorted(set(self.ordered_error_codes)))
@@ -943,6 +1010,8 @@ class DependentBuyCoordinationV2(FrozenStrictModel):
     buy_algo_instance_id: IdentityV1
     buy_parent_intent_id: IdentityV1
     required_cash: CanonicalDecimalV1
+    virtual_account_id: IdentityV1
+    session_authority_sha256: Sha256V1
     release_command_id: IdentityV1
     release_transition_id: IdentityV1
     release_command_authority_item_sha256: Sha256V1
@@ -973,6 +1042,7 @@ class DependentBuyCoordinationV2(FrozenStrictModel):
                 "buy_parent_intent_id": values["buy_parent_intent_id"],
                 "strategy_id": values["strategy_id"],
                 "trade_date": trade_date.isoformat(),
+                "virtual_account_id": values["virtual_account_id"],
             },
         )
         payload = {
@@ -1063,17 +1133,27 @@ class DependentBuyCoordinationV2(FrozenStrictModel):
             "buy_algo_instance_id",
             "buy_parent_intent_id",
             "required_cash",
+            "virtual_account_id",
+            "session_authority_sha256",
             "release_command_id",
             "release_transition_id",
             "release_command_authority_item_sha256",
             "release_command_payload_sha256",
-            "ordered_sell_dependencies",
             "created_at_utc",
         )
         if any(getattr(self, field) != getattr(previous, field) for field in immutable):
             raise ValueError("dependent-BUY V2 successor changes immutable owner, command, or payload")
         if self.row_version != previous.row_version + 1:
             raise ValueError("dependent-BUY V2 successor row_version must increase by one")
+        previous_dependencies = {item.sell_parent_intent_id: item for item in previous.ordered_sell_dependencies}
+        current_dependencies = {item.sell_parent_intent_id: item for item in self.ordered_sell_dependencies}
+        if tuple(current_dependencies) != tuple(previous_dependencies):
+            raise ValueError("dependent-BUY successor changes the frozen SELL dependency set")
+        for sell_parent_intent_id, previous_dependency in previous_dependencies.items():
+            _validate_dependent_buy_dependency_successor_v2(
+                current_dependencies[sell_parent_intent_id],
+                previous_dependency,
+            )
         if self.decision_sequence < previous.decision_sequence:
             raise ValueError("dependent-BUY V2 decision sequence cannot decrease")
         terminal = {

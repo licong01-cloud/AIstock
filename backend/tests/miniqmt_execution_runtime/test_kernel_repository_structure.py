@@ -16,8 +16,9 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
 )
 
 
-_PUBLIC_SIGNATURE_SHA256 = "948c91ec8c214cd9e7cbe41722b1924a1632525213bdada1535c37b464975880"
+_PUBLIC_SIGNATURE_SHA256 = "4e93e89b12267869e93f0dccd0f0061339077d7e7a85441ffde001f922e005a6"
 _PRIVATE_MODULES = (
+    "backend.services.miniqmt_execution_runtime.kernel_dependent_buy_repository",
     "backend.services.miniqmt_execution_runtime.kernel_product_materialization_repository",
     "backend.services.miniqmt_execution_runtime.kernel_product_repository",
     "backend.services.miniqmt_execution_runtime.kernel_repository_common",
@@ -56,6 +57,15 @@ _MIGRATION_SHA256 = {
     ),
     "backend/migrations/miniqmt_execution_kernel_k2d_reconcile_history_20260727.rollback.sql": (
         "b532078e3fcd9efbd39444f9bfe7f8bbd85337a1f2c4ced1f10e05ada41ad65e"
+    ),
+    "backend/migrations/miniqmt_execution_kernel_k6b_20260803.preflight.sql": (
+        "73e004f022d0ad6e3b16a03b38dc36711078cc43fa6e56909322b9c05cebd36d"
+    ),
+    "backend/migrations/miniqmt_execution_kernel_k6b_20260803.sql": (
+        "e09fdd48362db5d957f4caede8dce9d1cb52863a0e965c1e662ad54700f0f885"
+    ),
+    "backend/migrations/miniqmt_execution_kernel_k6b_20260803.rollback.sql": (
+        "2cf6abcf925efd233b17b6a601f8f8dee66cf5cfe38568826d5f78f577ab4aa0"
     ),
 }
 
@@ -101,6 +111,7 @@ def test_repository_private_responsibility_modules_have_one_public_facade() -> N
 
     assert [base.__name__ for base in PostgresMiniQMTKernelRepository.__mro__] == [
         "PostgresMiniQMTKernelRepository",
+        "KernelDependentBuyRepositoryMixin",
         "KernelProductMaterializationRepositoryMixin",
         "KernelProductRepositoryMixin",
         "KernelRepositorySchemaMixin",

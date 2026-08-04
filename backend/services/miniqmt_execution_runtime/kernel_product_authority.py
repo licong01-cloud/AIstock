@@ -293,6 +293,7 @@ def _dependent_buy_coordination_id_v3(candidate: DependentBuyCandidateAuthorityV
             "buy_parent_intent_id": candidate.buy_parent_intent_id,
             "strategy_id": candidate.strategy_id,
             "trade_date": candidate.trade_date.isoformat(),
+            "virtual_account_id": candidate.virtual_account_id,
         },
     )
 

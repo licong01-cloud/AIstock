@@ -9,6 +9,10 @@ from pathlib import Path
 import psycopg2
 import pytest
 
+from backend.services.miniqmt_execution_runtime.kernel_repository import (
+    KernelRepositorySchemaError,
+    PostgresMiniQMTKernelRepository,
+)
 from backend.tests.miniqmt_execution_runtime.test_kernel_migration_postgres import (
     FORWARD as K2_FORWARD,
     K2C_FORWARD,
@@ -19,6 +23,7 @@ from backend.tests.miniqmt_execution_runtime.test_kernel_migration_postgres impo
     _fixture_schema,
     _insert_valid_k2_constraint_graph,
 )
+from backend.tests.miniqmt_execution_runtime.test_kernel_repository_postgres import _conn_factory
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -29,8 +34,14 @@ ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k6_20260801.rollback.sql"
 K6C_PREFLIGHT = MIGRATION_ROOT / "miniqmt_execution_kernel_k6c_20260802.preflight.sql"
 K6C_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k6c_20260802.sql"
 K6C_ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k6c_20260802.rollback.sql"
+K6B_PREFLIGHT = MIGRATION_ROOT / "miniqmt_execution_kernel_k6b_20260803.preflight.sql"
+K6B_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k6b_20260803.sql"
+K6B_ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k6b_20260803.rollback.sql"
 CATALOG_SHA256 = "546a209dc2f8721ccee8b5e905117788486307147dfb4fc6bc396842f5cf84ad"
 K6C0_CATALOG_SHA256 = "f4fc093c83642577009dc5ce8c03550bbb75e00f09ada7bf2489272ddd67bd7d"
+K6B_BASE_CATALOG_SHA256 = "6eeff2d2887049a7b3e3c93dd93e56e9af6241e0be1caf2c7ef535cbbde5d9f6"
+K6B_K6C_CATALOG_SHA256 = "ef09f8ab2f3e6a1563cd536327ee1d9c04273806c3fdfdea2e704600f330d912"
+K6B_CATALOG_SHA256 = "10ae5be030612f923f2fe23f17f1f8b4891358cc8bd9565d54ad27ee3d18393c"
 
 
 def _canonical_lf_sha256(path: Path) -> str:
@@ -75,6 +86,98 @@ def _apply_k2_only(cur: object, schema: str) -> None:
     _apply_base_forward(cur, K2_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
     cur.execute(K2C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))  # type: ignore[attr-defined]
     cur.execute(K2D_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))  # type: ignore[attr-defined]
+
+
+def test_k6b_dependency_successor_migration_is_idempotent_and_guarded_on_dev() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K6-B DEV PostgreSQL fixture")
+    schema = _fixture_schema().replace("k2a_", "k6b_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            _apply_k2_and_k6(cur, schema)
+            cur.execute(K6C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(K6B_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            forward = K6B_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            cur.execute(forward)
+            cur.execute(forward)
+            cur.execute(K6B_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(
+                f"SELECT {schema}.miniqmt_k6_catalog_fingerprint(),"
+                f"{schema}.miniqmt_k6c_catalog_fingerprint(),"
+                f"{schema}.miniqmt_k6b_catalog_fingerprint()"
+            )
+            assert tuple(cur.fetchone()) == (
+                K6B_BASE_CATALOG_SHA256,
+                K6B_K6C_CATALOG_SHA256,
+                K6B_CATALOG_SHA256,
+            )
+            repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+            assert repository.preflight_k6b_schema()["k6b_schema_catalog_fingerprint"] is True
+            cur.execute(
+                "SELECT column_name,is_nullable FROM information_schema.columns "
+                "WHERE table_schema=%s AND table_name='execution_dependent_buy_coordination' "
+                "AND column_name IN ('virtual_account_id','session_authority_sha256') ORDER BY column_name",
+                (schema,),
+            )
+            assert tuple(cur.fetchall()) == (
+                ("session_authority_sha256", "NO"),
+                ("virtual_account_id", "NO"),
+            )
+            cur.execute(
+                "SELECT pg_get_triggerdef(t.oid, true) FROM pg_trigger t "
+                "JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname=%s AND c.relname='execution_dependent_buy_dependency' "
+                "AND t.tgname='trg_miniqmt_k6_dependency_successor' AND NOT t.tgisinternal",
+                (schema,),
+            )
+            trigger = cur.fetchone()
+            assert trigger is not None and "miniqmt_k6b_validate_dependency_successor" in str(trigger[0])
+
+            cur.execute(
+                f"COMMENT ON COLUMN {schema}.execution_dependent_buy_coordination.virtual_account_id "
+                "IS 'drifted K6-B authority comment'"
+            )
+            with pytest.raises(psycopg2.errors.RaiseException, match="successor catalog drift"):
+                cur.execute(K6B_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute("ROLLBACK")
+            with pytest.raises(KernelRepositorySchemaError, match="catalog fingerprint mismatch"):
+                repository.preflight_k6b_schema()
+            cur.execute(forward)
+            assert repository.preflight_k6b_schema()["k6b_schema_catalog_fingerprint"] is True
+
+            cur.execute(
+                f"CREATE OR REPLACE FUNCTION {schema}.miniqmt_k6b_catalog_fingerprint() "
+                f"RETURNS TEXT LANGUAGE sql STABLE AS $$ SELECT '{K6B_CATALOG_SHA256}'::TEXT $$"
+            )
+            with pytest.raises(KernelRepositorySchemaError, match="function definition drift"):
+                repository.preflight_k6b_schema()
+            cur.execute(forward)
+            assert repository.preflight_k6b_schema()["k6b_schema_catalog_fingerprint"] is True
+            cur.execute(K6B_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            cur.execute(
+                "SELECT pg_get_triggerdef(t.oid, true) FROM pg_trigger t "
+                "JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname=%s AND c.relname='execution_dependent_buy_dependency' "
+                "AND t.tgname='trg_miniqmt_k6_dependency_append_only' AND NOT t.tgisinternal",
+                (schema,),
+            )
+            restored = cur.fetchone()
+            assert restored is not None and "miniqmt_k6_reject_immutable_mutation" in str(restored[0])
+            cur.execute(
+                "SELECT count(*) FROM information_schema.columns WHERE table_schema=%s "
+                "AND table_name='execution_dependent_buy_coordination' "
+                "AND column_name IN ('virtual_account_id','session_authority_sha256')",
+                (schema,),
+            )
+            assert cur.fetchone()[0] == 0
+    finally:
+        if not conn.closed:
+            conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
 
 
 def _insert_k6_route_row(cur: object, schema: str, *, binding_id: str) -> None:
