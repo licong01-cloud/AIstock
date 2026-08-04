@@ -1,5 +1,5 @@
 {
-  "actual": "Two post-restart MA-E05 exact-snapshot retries successfully passed CAS path admission, created durable attempts, and reserved real QE Workspace tasks on wsl2-5080, proving BUG-963/BUG-967 effective. Both remote tasks then failed immediately with return code 127 because _remote_wsl_command invoked python without activating the configured WSL conda runtime: run.log says 'bash: python: command not found'. The loopback WSL deployment already declares QLIB_WSL_CONDA_SH and QLIB_WSL_CONDA_ENV in the canonical backend environment, while the frozen run config contains only node_id. Expected: loopback local-WSL durable dispatch consumes the explicit deployed WSL conda settings, validates them, and activates that environment before any Python command; genuine remote Linux behavior remains unchanged and missing local-WSL runtime configuration fails closed. No backend process control or database change.",
+  "actual": "The first BUG-974 fix correctly activates rdagent-gpu, but post-restart MA-E05 exact-snapshot retries macb_...941835ce and macb_...c84653ec both fail before Python starts. The generated command begins with set -euo pipefail, so conda activate executes under nounset and /home/lc999/miniconda3/envs/rdagent-gpu/etc/conda/activate.d/cuda_env.sh aborts on an unset LD_LIBRARY_PATH. Both QE Workspace tasks return code 1. Expected: conda activation follows the established local WSL contract by temporarily disabling nounset during activation and restoring it before runtime execution, while all other fail-closed checks remain unchanged.",
   "allowed_write_scope": [
     "backend/services/multi_alpha/remote_dispatch.py",
     "backend/tests/multi_alpha/test_durable_execution_adapter.py",
@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-974",
-  "closed_at": "2026-08-04T02:53:04.833395Z",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -23,11 +23,19 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260803-faff7284a67c",
       "timestamp": "2026-08-03T18:06:46.341883Z"
+    },
+    {
+      "action": "reopen_after_runtime_reproduction",
+      "actor": "codex",
+      "note": "Post-restart exact MA-E05 retries proved conda activation runs under set -u and aborts in cuda_env.sh before Python starts.",
+      "timestamp": "2026-08-04T03:23:58.386524Z"
     }
   ],
   "evidence_uris": [
     "run=macb_453ca2d0c5b21b40_20240701_20260629_20260803T172627118865Z_1a6c55b6 attempt=macba_0d281cc897eb0c56c016599e601825bf9f1db2b4750e01e660b211c605bd54ab qe_task=macb_remote_3459b1322bee_aecfff9130ea_a1 return_code=127",
-    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260803T172628379750Z_2491f875 qe_task=macb_remote_4441b7cb7939_673a6d6499ff_a1 return_code=127"
+    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260803T172628379750Z_2491f875 qe_task=macb_remote_4441b7cb7939_673a6d6499ff_a1 return_code=127",
+    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260804T025936797524Z_941835ce qe_task=macb_remote_3104f4ab901e_92058829c219_a1 return_code=1 error=LD_LIBRARY_PATH unbound during conda activate",
+    "run=macb_453ca2d0c5b21b40_20240701_20260629_20260804T025937857264Z_c84653ec qe_task=macb_remote_77e00fc834e7_50828a8c1b02_a1 return_code=1 error=LD_LIBRARY_PATH unbound during conda activate"
   ],
   "expected": "Loopback local-WSL durable dispatch activates the explicitly configured QLIB WSL conda environment before all Python commands and fails closed when that deployment contract is missing; genuine remote Linux behavior is unchanged.",
   "file_scope_contract": {
@@ -46,20 +54,20 @@
   },
   "first_seen_at": "2026-08-03T18:06:46.341883Z",
   "fix_branch": null,
-  "fix_commit": "a7e679376cfbdad3a0367ad0d8f3d36178e9eae6",
-  "fixed_at": "2026-08-03T19:02:02Z",
+  "fix_commit": null,
+  "fixed_at": null,
   "github_issue_number": 3118,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3118",
-  "last_seen_at": "2026-08-03T18:06:46.341883Z",
+  "last_seen_at": "2026-08-04T03:23:58.386524Z",
   "module": "multi_alpha",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3119",
+  "pr_url": null,
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "GET http://127.0.0.1:9000/api/v1/qe_workspace/tasks/macb_remote_3459b1322bee_aecfff9130ea_a1/loops/Loop1/files/run.log",
+  "reproduce_command": "GET http://127.0.0.1:9000/api/v1/qe_workspace/tasks/macb_remote_3104f4ab901e_92058829c219_a1/loops/Loop1/files/run.log",
   "required_verification": [
     "l0"
   ],
@@ -74,14 +82,16 @@
       "Fresh WSL shell sourced /home/lc999/miniconda3/etc/profile.d/conda.sh, activated rdagent-gpu, and resolved Python 3.10.19 at /home/lc999/miniconda3/envs/rdagent-gpu/bin/python.",
       "Fresh pytest process completed the durable-adapter plus remote-dispatch matrix: 63 passed, 1 skipped.",
       "Fresh Python process loaded the persistent source and verified deployed rdagent-gpu activation precedes python -c; fresh WSL probe resolved Python 3.10.19",
-      "Fresh Python process loaded commit 79fddeb3ecdf71b2016861a4d51a620f5e6571fd and verified deployed rdagent-gpu activation precedes python -c; fresh WSL probe resolved Python 3.10.19"
+      "Fresh Python process loaded commit 79fddeb3ecdf71b2016861a4d51a620f5e6571fd and verified deployed rdagent-gpu activation precedes python -c; fresh WSL probe resolved Python 3.10.19",
+      "Fresh WSL shell executed set -euo pipefail, disabled nounset only for rdagent-gpu activation, restored nounset, and resolved Python 3.10.19 successfully.",
+      "Fresh Python process loaded commit 6b1e00c4c8f06a657c6e74423d140d3aac191bc6 and verified set +u precedes conda activate, set -u is restored before the Python availability probe, and fresh WSL rdagent-gpu activation resolved Python 3.10.19"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "passed",
-    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-974\\post-restart-verify.json",
-    "runtime_identity_match": true,
+    "post_restart_effective_gate": "pending",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -91,7 +101,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "verified",
+  "status": "open",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -113,7 +123,15 @@
     "python -m pytest backend/tests/multi_alpha/test_durable_execution_adapter.py backend/tests/test_multi_alpha_remote_dispatch.py -q -p no:cacheprovider -> 63 passed, 1 skipped",
     "python -m nox -s l0 -> passed",
     "python -m nox -s validation_module_registry_l0 -> 8 passed",
-    "python -m nox -s qe_read_backend -> 14 passed"
+    "python -m nox -s qe_read_backend -> 14 passed",
+    "post-restart MA-E05 retries macb_...941835ce and macb_...c84653ec -> reproduced LD_LIBRARY_PATH unbound in conda activate under set -u",
+    "rtk pytest three nounset/conda durable command nodeids -> 3 passed",
+    "fresh WSL nounset-safe conda activation probe -> Python 3.10.19",
+    "rtk pytest backend/tests/multi_alpha/test_durable_execution_adapter.py backend/tests/test_multi_alpha_remote_dispatch.py -> 63 passed, 1 skipped",
+    "ruff check plus py_compile plus git diff --check -> passed",
+    "rtk nox -s l0 -> passed with 0 blocking findings",
+    "rtk nox -s validation_module_registry_l0 -> passed (8 tests)",
+    "rtk nox -s qe_read_backend -> passed (14 tests)"
   ],
   "verification_budget": {
     "budget": "standard",
