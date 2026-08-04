@@ -1223,13 +1223,13 @@ def _remote_conda_activation(
 
     activation_script = _shell_quote(conda_sh) if conda_sh else "~/miniconda3/etc/profile.d/conda.sh"
     return (
-        "test -f "
+        "set +u; test -f "
         + activation_script
         + "; source "
         + activation_script
         + "; conda activate "
         + _shell_quote(conda_env)
-        + "; command -v python >/dev/null; "
+        + "; set -u; command -v python >/dev/null; "
     )
 
 

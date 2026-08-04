@@ -1065,6 +1065,9 @@ def test_remote_wsl_command_activates_deployed_conda_before_python_for_loopback_
     assert "/home/lc999/miniconda3/etc/profile.d/conda.sh" in command
     assert "conda activate" in command and "rdagent-gpu" in command
     assert command.index("export PATH=") < command.index("conda activate")
+    assert command.index("set +u") < command.index("conda activate")
+    assert command.index("conda activate") < command.index("set -u")
+    assert command.index("set -u") < command.index("command -v python")
     assert command.index("conda activate") < command.index("python -c")
     assert "command -v python" in command
 

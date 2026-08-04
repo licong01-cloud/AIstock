@@ -1004,6 +1004,8 @@ def test_durable_submit_allows_loopback_wsl_drive_mount_runtime_artifact(
     assert artifact_client.paths[-1] == nested_runtime
     assert binding["remote_path"] == expected_remote_path
     assert expected_remote_path in payload.wsl_command
+    assert payload.wsl_command.index("set +u") < payload.wsl_command.index("conda activate")
+    assert payload.wsl_command.index("conda activate") < payload.wsl_command.index("set -u")
     assert payload.wsl_command.index("conda activate") < payload.wsl_command.index("python -c")
 
 
