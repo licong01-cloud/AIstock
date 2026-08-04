@@ -780,7 +780,10 @@ def test_bridge_dispatcher_closes_parent_from_authoritative_child_receipt(child_
     assert child_heartbeat["stable_keyset_cursor_json"] == {
         "phase": "CHILD_TERMINAL"
     }
-    assert child_heartbeat["lease_expires_at"] > claim["lease_expires_at"]
+    assert (
+        child_heartbeat["lease_expires_at"] - claim["lease_expires_at"]
+        >= timedelta(minutes=30)
+    )
     assert receipt_heartbeat["attempt_no"] == claim["attempt_no"]
     assert receipt_heartbeat["worker_id"] == claim["worker_id"]
     assert receipt_heartbeat["lease_token"] == claim["lease_token"]
@@ -790,7 +793,8 @@ def test_bridge_dispatcher_closes_parent_from_authoritative_child_receipt(child_
     }
     assert (
         receipt_heartbeat["lease_expires_at"]
-        > child_heartbeat["lease_expires_at"]
+        - child_heartbeat["lease_expires_at"]
+        >= timedelta(minutes=30)
     )
     assert child_heartbeat["expected_row_version"] == 2
     assert receipt_heartbeat["expected_row_version"] == 3
