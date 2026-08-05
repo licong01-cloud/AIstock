@@ -1,5 +1,5 @@
 {
-  "actual": "The Batch B materialization CLI reads only TDX_DB_* and the shared runtime roots from --env-file. The mandatory DEV-first materialization cannot select TDX_DB_DEV_* or an isolated DEV Historical Range root without manually generating a secret-bearing remapped env file. Add an explicit, typed DEV target/root selection path that derives only from the supplied .env, preserves production defaults, and fails visibly on incomplete or mixed targets. Do not add DDL, manual approvals, package re-admission, Selection/Paper/simulation changes, or silent fallback.",
+  "actual": "The Batch B materialization CLI reads only TDX_DB_* and the shared runtime roots from --env-file. The mandatory DEV-first materialization cannot select TDX_DB_DEV_* without manually generating a secret-bearing remapped env file. Add an explicit, typed DEV target path that derives DEV Historical Range roots only from the existing explicit repo-external --artifact-root, preserves production defaults, and fails visibly on incomplete configuration. Do not add DDL, manual approvals, package re-admission, Selection/Paper/simulation changes, or silent fallback.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260805_BUG-983-batch-b-cli-cannot-select-explicit-dev-database-and-isolated-runtime-roo.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
@@ -15,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-05T09:40:10.850274Z",
-  "description": "The Batch B materialization CLI reads only TDX_DB_* and the shared runtime roots from --env-file. The mandatory DEV-first materialization cannot select TDX_DB_DEV_* or an isolated DEV Historical Range root without manually generating a secret-bearing remapped env file. Add an explicit, typed DEV target/root selection path that derives only from the supplied .env, preserves production defaults, and fails visibly on incomplete or mixed targets. Do not add DDL, manual approvals, package re-admission, Selection/Paper/simulation changes, or silent fallback.",
+  "description": "The Batch B materialization CLI reads only TDX_DB_* and the shared runtime roots from --env-file. The mandatory DEV-first materialization cannot select TDX_DB_DEV_* without manually generating a secret-bearing remapped env file. Add an explicit, typed DEV target path that derives DEV Historical Range roots only from the existing explicit repo-external --artifact-root, preserves production defaults, and fails visibly on incomplete configuration. Do not add DDL, manual approvals, package re-admission, Selection/Paper/simulation changes, or silent fallback.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -76,7 +76,7 @@
   "suspected_modules": [
     "advisory_modeling"
   ],
-  "title": "Batch B CLI cannot select explicit DEV database and isolated runtime roots",
+  "title": "Batch B CLI cannot select explicit DEV database and artifact-root runtime",
   "trigger_condition": {
     "fingerprint": "b59023adbc5e033b71dddd0f",
     "source_event_id": "FE-20260805-b59023adbc5e"

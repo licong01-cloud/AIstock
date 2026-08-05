@@ -134,7 +134,7 @@ REQUIRED_RUNTIME_KEYS = (
     "AISTOCK_ADVISORY_DATASET_STORE_ROOT",
 )
 _DEV_SHARED_RUNTIME_KEYS = ("AISTOCK_PACKAGE_ASSET_STORE_ROOT",)
-_DEV_RUNTIME_ROOT_LAYOUT = {
+_DEV_ARTIFACT_ROOT_LAYOUT = {
     "AISTOCK_ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT": "historical-range-artifacts",
     "AISTOCK_ADVISORY_HISTORICAL_RANGE_TASK_RUNTIME_ROOT": "historical-range-task-runtime",
     "AISTOCK_ADVISORY_HISTORICAL_RANGE_POLICY_COMPONENT_ROOT": "historical-range-policy-components",
@@ -554,19 +554,18 @@ def _dev_runtime_values(
     values: dict[str, str],
     *,
     repository_root: Path | None,
-    dev_historical_range_runtime_root: Path | None,
+    artifact_root: Path | None,
 ) -> dict[str, str]:
     if repository_root is None:
         raise ValueError("repository_root is required for DEV Batch B materialization")
-    if dev_historical_range_runtime_root is None:
+    if artifact_root is None:
         raise ValueError(
-            "dev_historical_range_runtime_root is required when database_target=dev "
-            "for Batch B materialization"
+            "artifact_root is required when database_target=dev for Batch B materialization"
         )
     runtime_root = _external_runtime_root(
-        dev_historical_range_runtime_root,
+        artifact_root,
         repository_root=repository_root,
-        field_name="dev_historical_range_runtime_root",
+        field_name="artifact_root",
     )
     package_asset_root = _existing_directory(
         Path(values["AISTOCK_PACKAGE_ASSET_STORE_ROOT"]),
@@ -574,7 +573,7 @@ def _dev_runtime_values(
     )
     derived = {
         key: str((runtime_root / relative).resolve())
-        for key, relative in _DEV_RUNTIME_ROOT_LAYOUT.items()
+        for key, relative in _DEV_ARTIFACT_ROOT_LAYOUT.items()
     }
     derived["AISTOCK_PACKAGE_ASSET_STORE_ROOT"] = str(package_asset_root)
     derived["AISTOCK_REPOSITORY_ROOT"] = str(repository_root)
@@ -587,7 +586,7 @@ def _load_environment(
     require_runtime: bool = True,
     database_target: str = DATABASE_TARGET_PRODUCTION,
     repository_root: Path | None = None,
-    dev_historical_range_runtime_root: Path | None = None,
+    artifact_root: Path | None = None,
 ) -> tuple[dict[str, str], Path]:
     env_path = path.expanduser().resolve(strict=True)
     if not env_path.is_file():
@@ -598,13 +597,6 @@ def _load_environment(
         if key and value is not None
     }
     database_key_map = _database_target_key_map(database_target)
-    if (
-        database_target == DATABASE_TARGET_PRODUCTION
-        and dev_historical_range_runtime_root is not None
-    ):
-        raise ValueError(
-            "dev_historical_range_runtime_root is only valid when database_target=dev"
-        )
     required_keys = tuple(database_key_map.values())
     if require_runtime:
         required_keys += (
@@ -623,7 +615,7 @@ def _load_environment(
             _dev_runtime_values(
                 values,
                 repository_root=repository_root,
-                dev_historical_range_runtime_root=dev_historical_range_runtime_root,
+                artifact_root=artifact_root,
             )
         )
     for key in (*DB_KEYS, *(REQUIRED_RUNTIME_KEYS if require_runtime else ())):
@@ -695,14 +687,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=DATABASE_TARGET_PRODUCTION,
         help="database profile in --env-file; dev uses TDX_DB_DEV_* only",
     )
-    parser.add_argument(
-        "--dev-historical-range-runtime-root",
-        type=Path,
-        help=(
-            "existing external root for DEV Historical Range mutable artifacts; "
-            "required for DEV materialization"
-        ),
-    )
     parser.add_argument("--spool-root", type=Path)
     parser.add_argument("--decision-date-start", type=_date)
     parser.add_argument("--decision-date-end", type=_date)
@@ -721,7 +705,7 @@ def main(argv: list[str] | None = None) -> int:
             require_runtime=args.prepare_program_id is None,
             database_target=args.database_target,
             repository_root=repository_root,
-            dev_historical_range_runtime_root=args.dev_historical_range_runtime_root,
+            artifact_root=artifact_root,
         )
         config = _database_config(values)
 
