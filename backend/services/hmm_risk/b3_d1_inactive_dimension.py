@@ -15,6 +15,7 @@ from backend.services.hmm_risk.b3_acceptance import (
     D4_COVARIANCE_VERSION,
     L2_RETRAIN_VERSION,
     RESTART_SCHEDULE,
+    evaluate_covariance_acceptance,
 )
 from backend.services.hmm_risk.b3_training import (
     B3CoreFitEvidence,
@@ -1895,12 +1896,63 @@ def _validate_refit03_raw_capture(value: Mapping[str, Any]) -> dict[str, Any]:
             dtype = np.dtype(str(normalized["actual_dtype"]))
         except (TypeError, ValueError):
             dtype = None
+    if actual_shape is None:
+        if (
+            any(
+                normalized.get(field) is not None
+                for field in (
+                    "actual_dtype",
+                    "actual_strides",
+                    "actual_nbytes",
+                    "actual_byteorder",
+                    "c_contiguous",
+                )
+            )
+            or cells
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_covariance_evidence_incomplete",
+                "REFIT-03 unavailable raw covariance contains fabricated array metadata",
+            )
+    else:
+        actual_strides = normalized.get("actual_strides")
+        actual_nbytes = normalized.get("actual_nbytes")
+        if (
+            not isinstance(normalized.get("actual_python_type"), str)
+            or not normalized["actual_python_type"]
+            or dtype is None
+            or not isinstance(actual_strides, list)
+            or len(actual_strides) != len(actual_shape)
+            or any(not isinstance(item, int) or isinstance(item, bool) for item in actual_strides)
+            or not isinstance(actual_nbytes, int)
+            or isinstance(actual_nbytes, bool)
+            or actual_nbytes < 0
+            or actual_nbytes != math.prod(actual_shape) * dtype.itemsize
+            or not isinstance(normalized.get("c_contiguous"), bool)
+            or normalized.get("actual_byteorder") not in {dtype.byteorder, "=" if dtype.isnative else dtype.byteorder}
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_covariance_bitpattern_conflict",
+                "REFIT-03 raw covariance array metadata is internally inconsistent",
+            )
     if actual_shape is not None and (dtype is None or dtype.kind != "f" or dtype.itemsize != 8):
         inferred_reasons.append("hmm_risk_model_covariance_raw_dtype_invalid")
     if actual_shape is not None and (len(actual_shape) != 2 or actual_shape != expected_shape):
         inferred_reasons.append("hmm_risk_model_covariance_raw_shape_invalid")
     if actual_shape is not None and normalized.get("c_contiguous") is not True:
         inferred_reasons.append("hmm_risk_model_covariance_raw_layout_invalid")
+    if (
+        actual_shape == expected_shape
+        and dtype is not None
+        and dtype.kind == "f"
+        and dtype.itemsize == 8
+        and normalized.get("c_contiguous") is True
+        and normalized.get("actual_strides") != [expected_shape[1] * dtype.itemsize, dtype.itemsize]
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_bitpattern_conflict",
+            "REFIT-03 authoritative C-contiguous covariance strides are inconsistent",
+        )
 
     allowed_classifications = {
         "finite_positive",
@@ -1912,6 +1964,7 @@ def _validate_refit03_raw_capture(value: Mapping[str, Any]) -> dict[str, Any]:
         "negative_infinity",
     }
     coordinates: set[tuple[int, int]] = set()
+    ordered_coordinates: list[tuple[int, int]] = []
     non_finite = False
     non_positive = False
     for raw_cell in cells:
@@ -1942,6 +1995,7 @@ def _validate_refit03_raw_capture(value: Mapping[str, Any]) -> dict[str, Any]:
                 "REFIT-03 raw covariance cell identity is invalid",
             )
         coordinates.add((state_index, feature_index))
+        ordered_coordinates.append((state_index, feature_index))
         bits = int(bit_pattern, 16)
         sign = (bits >> 63) & 1
         exponent = (bits >> 52) & 0x7FF
@@ -1984,10 +2038,19 @@ def _validate_refit03_raw_capture(value: Mapping[str, Any]) -> dict[str, Any]:
 
     if dtype is not None and dtype.kind == "f" and dtype.itemsize == 8 and isinstance(actual_shape, list):
         expected_cell_count = math.prod(actual_shape) if len(actual_shape) == 2 else 0
-        if len(cells) != expected_cell_count:
+        expected_coordinates = (
+            [
+                (state_index, feature_index)
+                for state_index in range(actual_shape[0])
+                for feature_index in range(actual_shape[1])
+            ]
+            if len(actual_shape) == 2
+            else []
+        )
+        if len(cells) != expected_cell_count or ordered_coordinates != expected_coordinates:
             raise D1InactiveDimensionError(
-                "hmm_risk_model_covariance_evidence_incomplete",
-                "REFIT-03 raw covariance logical-cell evidence is incomplete",
+                "hmm_risk_model_covariance_bitpattern_conflict",
+                "REFIT-03 raw covariance logical-cell order is not C logical order",
             )
     elif cells:
         raise D1InactiveDimensionError(
@@ -2201,6 +2264,116 @@ def _bind_refit03_covariance_evidence(
     return {**body, "covariance_evidence_sha256": canonical_sha256(body)}
 
 
+def _reconstruct_refit03_raw_capture_from_bound(value: Mapping[str, Any]) -> dict[str, Any]:
+    raw_cells = [
+        {
+            "state_index": cell.get("state_index"),
+            "feature_index": cell.get("feature_index"),
+            "semantic_bit_pattern_hex": cell.get("semantic_bit_pattern_hex"),
+            "classification": cell.get("classification"),
+            "float_hex": cell.get("float_hex"),
+        }
+        for cell in (value.get("cells") or ())
+        if isinstance(cell, Mapping)
+    ]
+    raw_reasons = list(value.get("raw_reason_codes") or ())
+    body = {
+        "schema_version": REFIT03_RAW_COVARIANCE_SCHEMA_VERSION,
+        "raw_authority": REFIT03_RAW_COVARIANCE_AUTHORITY,
+        "expected_shape": value.get("capture_expected_shape"),
+        "actual_python_type": value.get("actual_python_type"),
+        "actual_dtype": value.get("actual_dtype"),
+        "actual_shape": value.get("actual_shape"),
+        "actual_strides": value.get("actual_strides"),
+        "actual_nbytes": value.get("actual_nbytes"),
+        "actual_byteorder": value.get("actual_byteorder"),
+        "c_contiguous": value.get("c_contiguous"),
+        "cells": raw_cells,
+        "reason_codes": raw_reasons,
+        "raw_validity": not raw_reasons,
+        "evidence_unavailable_reason": value.get("evidence_unavailable_reason"),
+    }
+    return {**body, "capture_receipt_sha256": value.get("raw_capture_receipt_sha256")}
+
+
+def _validate_refit03_bound_covariance_evidence(
+    value: Mapping[str, Any],
+    *,
+    role: str,
+    stage_evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(value)
+    body = {key: item for key, item in normalized.items() if key != "covariance_evidence_sha256"}
+    if (
+        normalized.get("schema_version") != REFIT03_COVARIANCE_EVIDENCE_SCHEMA_VERSION
+        or normalized.get("role") != role
+        or normalized.get("raw_authority") != REFIT03_RAW_COVARIANCE_AUTHORITY
+        or normalized.get("cross_role_state_alignment_performed") is not False
+        or normalized.get("semantic_label_accessed") is not False
+        or canonical_sha256(body) != normalized.get("covariance_evidence_sha256")
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_evidence_incomplete",
+            "REFIT-03 bound covariance evidence envelope is invalid",
+        )
+    reconstructed_capture = _reconstruct_refit03_raw_capture_from_bound(normalized)
+    _validate_refit03_raw_capture(reconstructed_capture)
+    rebuilt = _bind_refit03_covariance_evidence(
+        reconstructed_capture,
+        role=role,
+        stage_evidence=stage_evidence,
+    )
+    if rebuilt != normalized:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_bitpattern_conflict",
+            "REFIT-03 bound covariance evidence differs from writer authority reconstruction",
+        )
+    derived_status = normalized.get("d4_derived_evidence_status")
+    raw_failure_reasons = set(normalized.get("raw_reason_codes") or ()) & {
+        "hmm_risk_model_covariance_raw_type_invalid",
+        "hmm_risk_model_covariance_raw_dtype_invalid",
+        "hmm_risk_model_covariance_raw_shape_invalid",
+        "hmm_risk_model_covariance_raw_layout_invalid",
+        "hmm_risk_model_covariance_raw_non_finite",
+        "hmm_risk_model_covariance_raw_non_positive",
+    }
+    derived_fields = (
+        "state_posterior_mass",
+        "posterior_weighted_variance_about_weighted_mean",
+        "posterior_second_moment_about_fitted_mean",
+        "mstep_expected_covariance",
+        "dynamic_lower_reference",
+        "dynamic_upper_reference",
+        "mstep_relative_residual",
+    )
+    if derived_status == "not_computable_raw_covariance_invalid":
+        expected_status = "failed"
+        relation_valid = bool(raw_failure_reasons)
+    elif derived_status == "not_computable_posterior_audit_unavailable":
+        expected_status = "insufficient_evidence"
+        relation_valid = not raw_failure_reasons
+    elif derived_status == "not_computable_posterior_audit_invalid":
+        expected_status = "failed"
+        relation_valid = not raw_failure_reasons
+    else:
+        expected_status = None
+        relation_valid = derived_status == "computed" and not raw_failure_reasons
+    if derived_status != "computed" and (
+        normalized.get("covariance_status") != expected_status
+        or normalized.get("covariance_valid") is not False
+        or any(normalized.get(field) is not None for field in derived_fields)
+        or "hmm_risk_model_covariance_derived_evidence_not_computable"
+        not in (normalized.get("derived_failure_reason_codes") or ())
+    ):
+        relation_valid = False
+    if not relation_valid:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_bitpattern_conflict",
+            "REFIT-03 covariance derived-status relation is inconsistent",
+        )
+    return normalized
+
+
 def _bind_refit03_stage_evidence(value: Mapping[str, Any], *, role: str) -> dict[str, Any]:
     normalized = dict(value)
     body = {key: item for key, item in normalized.items() if key != "stage_evidence_sha256"}
@@ -2261,6 +2434,158 @@ def _bind_refit03_stage_evidence(value: Mapping[str, Any], *, role: str) -> dict
         "raw_covariance_evidence": bound,
     }
     return {**rebound, "stage_evidence_sha256": canonical_sha256(rebound)}
+
+
+def _validate_refit03_computed_covariance_stage(
+    stage_evidence: Mapping[str, Any],
+    raw_evidence: Mapping[str, Any],
+) -> None:
+    if raw_evidence.get("d4_derived_evidence_status") != "computed":
+        return
+    covariance_stage = stage_evidence.get("covariance_evidence")
+    initialization = stage_evidence.get("initialization_evidence")
+    if not isinstance(covariance_stage, Mapping) or not isinstance(initialization, Mapping):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_evidence_incomplete",
+            "REFIT-03 computed covariance evidence lacks its source stage",
+        )
+    acceptance = covariance_stage.get("acceptance")
+    recomputed_acceptance = evaluate_covariance_acceptance(covariance_stage)
+    if not isinstance(acceptance, Mapping) or dict(acceptance) != recomputed_acceptance:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_bitpattern_conflict",
+            "REFIT-03 covariance acceptance differs from D4 writer authority",
+        )
+    try:
+        actual_shape = tuple(int(value) for value in raw_evidence.get("actual_shape") or ())
+        raw_from_cells = np.asarray(
+            [float.fromhex(str(cell["float_hex"])) for cell in raw_evidence.get("cells") or ()],
+            dtype=np.float64,
+        ).reshape(actual_shape)
+        raw = np.asarray(covariance_stage["raw_covars"], dtype=np.float64)
+        reference = np.asarray(covariance_stage["sector_local_reference_variance_R_sj"], dtype=np.float64)
+        masses = np.asarray(covariance_stage["state_posterior_mass"], dtype=np.float64)
+        second_moment = np.asarray(
+            covariance_stage["posterior_second_moment_about_fitted_mean"],
+            dtype=np.float64,
+        )
+        train_rows = int(covariance_stage["train_rows"])
+        nu = float(covariance_stage["nu"])
+        initialization_nu = float(initialization["nu"])
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_evidence_incomplete",
+            "REFIT-03 computed covariance source fields are invalid",
+        ) from exc
+    if (
+        raw.shape != actual_shape
+        or raw.tolist() != raw_from_cells.tolist()
+        or reference.tolist() != initialization.get("sector_local_reference_variance_R_sj")
+        or nu != initialization_nu
+        or masses.shape != (3,)
+        or second_moment.shape != raw.shape
+        or not all(np.isfinite(value).all() for value in (raw, reference, masses, second_moment))
+        or train_rows <= 0
+        or nu <= 0.0
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_bitpattern_conflict",
+            "REFIT-03 computed covariance inputs differ from raw or initialization authority",
+        )
+    denominator = nu + masses[:, None]
+    expected = (nu * reference[None, :] + masses[:, None] * second_moment) / denominator
+    lower = nu * reference[None, :] / denominator
+    upper = (nu + train_rows) * reference[None, :] / denominator
+    relative_residual = (raw - expected) / np.maximum(np.abs(expected), np.finfo(np.float64).tiny)
+    expected_fields = {
+        "mstep_expected_covariance": expected.tolist(),
+        "dynamic_lower_reference": lower.tolist(),
+        "dynamic_upper_reference": upper.tolist(),
+        "mstep_relative_residual": relative_residual.tolist(),
+    }
+    if any(covariance_stage.get(field) != expected_value for field, expected_value in expected_fields.items()):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_covariance_bitpattern_conflict",
+            "REFIT-03 computed covariance formulas differ from D4 source evidence",
+        )
+
+
+def _validate_refit03_bound_stage_evidence(
+    value: Mapping[str, Any],
+    *,
+    role: str,
+) -> dict[str, Any]:
+    normalized = dict(value)
+    body = {key: item for key, item in normalized.items() if key != "stage_evidence_sha256"}
+    completed_stages = normalized.get("completed_stages")
+    cause = normalized.get("stage_specific_cause_evidence")
+    ordered_stages = [
+        "initialization",
+        "fit",
+        "raw_covariance_capture",
+        "monitor",
+        "likelihood",
+        "covariance",
+        "train_posterior",
+    ]
+    if (
+        normalized.get("schema_version") != REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION
+        or not isinstance(normalized.get("fit_invoked"), bool)
+        or not isinstance(normalized.get("fit_returned"), bool)
+        or not isinstance(completed_stages, list)
+        or not isinstance(normalized.get("initialization_evidence"), Mapping)
+        or not isinstance(cause, Mapping)
+        or canonical_sha256(body) != normalized.get("stage_evidence_sha256")
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_training_stage_evidence_incomplete",
+            "REFIT-03 bound training-stage evidence envelope is invalid",
+        )
+    fallback = cause.get("evidence_status") in {
+        "missing_from_training_stage_error",
+        "missing_from_successful_core_fit_evidence",
+        "invalid_training_stage_evidence",
+    }
+    raw_evidence = normalized.get("raw_covariance_evidence")
+    if not fallback and (
+        normalized.get("fit_returned") is True
+        and normalized.get("fit_invoked") is not True
+        or completed_stages != ordered_stages[: len(completed_stages)]
+        or (normalized.get("fit_invoked") is False and completed_stages not in ([], ["initialization"]))
+        or (
+            normalized.get("fit_invoked") is True
+            and normalized.get("fit_returned") is False
+            and completed_stages != ["initialization"]
+        )
+        or (normalized.get("fit_returned") is True and completed_stages[:2] != ["initialization", "fit"])
+        or ("raw_covariance_capture" in completed_stages and not isinstance(raw_evidence, Mapping))
+        or (
+            isinstance(raw_evidence, Mapping)
+            and raw_evidence.get("schema_version") != REFIT03_COVARIANCE_EVIDENCE_SCHEMA_VERSION
+        )
+        or (isinstance(raw_evidence, Mapping) and normalized.get("fit_returned") is not True)
+        or ("monitor" in completed_stages) != isinstance(normalized.get("monitor_evidence"), Mapping)
+        or ("likelihood" in completed_stages) != isinstance(normalized.get("likelihood_evidence"), Mapping)
+        or ("covariance" in completed_stages) != isinstance(normalized.get("covariance_evidence"), Mapping)
+        or (normalized.get("fit_returned") is True and not isinstance(raw_evidence, Mapping))
+        or (
+            isinstance(raw_evidence, Mapping)
+            and "raw_covariance_capture" not in completed_stages
+            and not str(cause.get("evidence_unavailable_reason") or "")
+        )
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_training_stage_evidence_incomplete",
+            "REFIT-03 bound training-stage evidence lifecycle is invalid",
+        )
+    if isinstance(raw_evidence, Mapping):
+        _validate_refit03_bound_covariance_evidence(
+            raw_evidence,
+            role=role,
+            stage_evidence=normalized,
+        )
+        _validate_refit03_computed_covariance_stage(normalized, raw_evidence)
+    return normalized
 
 
 def fit_refit02_attempt(
@@ -2456,7 +2781,21 @@ def fit_refit02_attempt(
             else None
         )
     )
-    covariance_evidence = dict(core.covariance) if core is not None else raw_covariance_evidence
+    stage_covariance_evidence = (
+        training_stage_evidence.get("covariance_evidence") if isinstance(training_stage_evidence, Mapping) else None
+    )
+    stage_covariance_acceptance = (
+        stage_covariance_evidence.get("acceptance") if isinstance(stage_covariance_evidence, Mapping) else None
+    )
+    covariance_evidence = (
+        dict(core.covariance)
+        if core is not None
+        else (
+            dict(stage_covariance_acceptance)
+            if isinstance(stage_covariance_acceptance, Mapping)
+            else raw_covariance_evidence
+        )
+    )
     stage_evidence_status = (
         (training_stage_evidence.get("stage_specific_cause_evidence") or {}).get("evidence_status")
         if isinstance(training_stage_evidence, Mapping)
@@ -2847,6 +3186,7 @@ def _validate_refit02_attempt_receipt(
                 and raw_evidence.get("cross_role_state_alignment_performed") is not False
             )
             or (isinstance(raw_evidence, Mapping) and raw_evidence.get("semantic_label_accessed") is not False)
+            or (isinstance(raw_evidence, Mapping) and stage_evidence.get("raw_covariance_evidence") != raw_evidence)
             or (
                 normalized.get("diagnostic_evidence_complete") is True
                 and normalized.get("failure_stage") in {"covariance", "train_posterior"}
@@ -2869,6 +3209,31 @@ def _validate_refit02_attempt_receipt(
             raise D1InactiveDimensionError(
                 "hmm_risk_model_training_stage_evidence_incomplete",
                 "REFIT-03 incomplete evidence is not represented as a terminal failure",
+            )
+        validated_stage = _validate_refit03_bound_stage_evidence(
+            stage_evidence,
+            role=str(role),
+        )
+        stage_covariance = validated_stage.get("covariance_evidence")
+        stage_covariance_acceptance = (
+            stage_covariance.get("acceptance") if isinstance(stage_covariance, Mapping) else None
+        )
+        expected_attempt_covariance = (
+            stage_covariance_acceptance
+            if isinstance(stage_covariance_acceptance, Mapping)
+            else validated_stage.get("raw_covariance_evidence")
+        )
+        lineage_pairs = (
+            (normalized.get("initialization_evidence"), validated_stage.get("initialization_evidence")),
+            (normalized.get("monitor_evidence"), validated_stage.get("monitor_evidence")),
+            (normalized.get("likelihood"), validated_stage.get("likelihood_evidence")),
+            (normalized.get("raw_covariance_evidence"), validated_stage.get("raw_covariance_evidence")),
+            (normalized.get("covariance"), expected_attempt_covariance),
+        )
+        if any(attempt_value != stage_value for attempt_value, stage_value in lineage_pairs):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_training_stage_evidence_incomplete",
+                "REFIT-03 attempt evidence differs from its training-stage authority",
             )
     return normalized
 
@@ -2899,13 +3264,32 @@ def _build_refit03_pair_receipt(
         covariance_stage_failures = {
             role for role, attempt in role_attempts.items() if attempt.get("failure_stage") == "covariance"
         }
+        treatment_and_harness_fit_completed = all(
+            role_attempts[role].get("status") == "fit_completed"
+            and role_attempts[role].get("fit_performed") is True
+            and not role_attempts[role].get("failure_reason_codes")
+            and isinstance(role_attempts[role].get("likelihood"), Mapping)
+            and role_attempts[role]["likelihood"].get("convergence_valid") is True
+            and role_attempts[role]["likelihood"].get("likelihood_valid") is True
+            and isinstance(role_attempts[role].get("covariance"), Mapping)
+            and role_attempts[role]["covariance"].get("covariance_valid") is True
+            and isinstance(role_attempts[role].get("train_occupancy"), Mapping)
+            and role_attempts[role]["train_occupancy"].get("train_occupancy_valid") is True
+            for role in (REFIT02_TREATMENT_ROLE, REFIT02_HARNESS_ROLE)
+        )
         inactive_only_failure = (
             covariance_stage_failures == {REFIT02_MATCHED_NEGATIVE_ROLE}
             and matched_invalid == {INACTIVE_FEATURE_INDEX}
             and not treatment_invalid
             and not harness_invalid
+            and treatment_and_harness_fit_completed
         )
-        if treatment_invalid or harness_invalid or (covariance_stage_failures and not inactive_only_failure):
+        if (
+            treatment_invalid
+            or harness_invalid
+            or not treatment_and_harness_fit_completed
+            or (covariance_stage_failures and not inactive_only_failure)
+        ):
             labels.append("cross_role_failure_present")
         if matched_invalid - {INACTIVE_FEATURE_INDEX}:
             labels.append("active_coordinate_failure_present")

@@ -2123,6 +2123,16 @@ inactive/active coordinate正反例、三角色pair drift、两fresh-process bit
 与全部no-access/no-write flags。该测试只属于
 `hmm_risk` primary module；没有shared contract变化，不增加其他模块测试。
 
+2026-08-05 二次正式代码审核又补齐两项同一批准合同内的 fail-closed authority：第一，v6 attempt readback 必须从逐 cell
+bit-pattern 重建 raw capture、C-order 坐标/strides/nbytes、classification aggregate、payload hash、D4 formula/acceptance 与 partial-stage
+lineage；即使逐层重算 covariance/stage/attempt hash，任一内部关系漂移仍必须拒绝。第二，
+`inactive_coordinate_pattern_consistent` 除 matched 20D 仅 inactive coordinate 失败外，还必须要求同 seed 的 19D treatment 与 20D positive
+harness 均通过既有 likelihood/covariance/train-occupancy 路径；pre-covariance 或 D4 失败只能形成
+`cross_role_failure_present`，不得伪造 inactive-only pattern。这些是 writer/readback 与既有三角对照语义的确定性修复，不新增 D4/D5/D6
+门禁、人工审批或模型接受条件。第三次对抗性审核进一步固定 raw-authority/derived-status 双向关系：type、dtype、shape、layout、
+non-finite 或 non-positive 任一 raw failure 都可作为显式 `not_computable_raw_covariance_invalid/failed` 证据持久化并通过 readback；反之，
+存在任一 raw failure 时不得声称 D4 derived status 已 `computed`。这只修复 fail-closed evidence 的可读回与防伪关系，不改变验收语义。
+
 **6.3 REFIT-02-A/B实现与验收切片。** 用户已批准并完成 REFIT-02-A 独立源码任务；BUG-977 在同一受控 runner 上修订 matched-fit
 因果合同，不建设通用实验框架、scheduler、API/UI 或 runtime。直接测试至少覆盖 48-attempt/48-fit 上限、under-budget 初始化失败、
 matched fit success 导致 mechanism rejected、matched initialization blocker + treatment fit 导致 effect supported、D5 readiness 关系、

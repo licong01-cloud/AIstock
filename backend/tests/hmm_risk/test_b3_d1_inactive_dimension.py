@@ -152,34 +152,50 @@ def _projection_kwargs(role: str) -> dict[str, str]:
 def _core(
     feature_count: int,
     *,
-    covariance_acceptance: dict[str, object] | None = None,
+    covars: np.ndarray | None = None,
+    train_occupancy_valid: bool = True,
 ) -> B3CoreFitEvidence:
-    covariance_acceptance = covariance_acceptance or {
-        "covariance_status": "accepted",
-        "covariance_valid": True,
-        "failure_reason_codes": [],
-        "blocking_reason_codes": [],
-        "warning_reason_codes": [],
-        "evidence": {},
+    covars = (
+        np.full((3, feature_count), 0.5, dtype=np.float64) if covars is None else np.asarray(covars, dtype=np.float64)
+    )
+    reference = np.ones(feature_count, dtype=np.float64)
+    masses = np.full(3, 40.0, dtype=np.float64)
+    second_moment = np.full((3, feature_count), 0.4875, dtype=np.float64)
+    expected = (reference[None, :] + masses[:, None] * second_moment) / (1.0 + masses[:, None])
+    lower = reference[None, :] / (1.0 + masses[:, None])
+    upper = 121.0 * reference[None, :] / (1.0 + masses[:, None])
+    residual = (covars - expected) / np.maximum(np.abs(expected), np.finfo(np.float64).tiny)
+    covariance_source = {
+        "raw_covars": covars.tolist(),
+        "sector_local_reference_variance_R_sj": reference.tolist(),
+        "state_posterior_mass": masses.tolist(),
+        "posterior_second_moment_about_fitted_mean": second_moment.tolist(),
+        "train_rows": 120,
+        "nu": 1.0,
+        "postfit_projection_performed": False,
     }
-    model_entry_valid = covariance_acceptance.get("covariance_valid") is True
+    covariance_acceptance = training_subject.evaluate_covariance_acceptance(covariance_source)
+    model_entry_valid = covariance_acceptance.get("covariance_valid") is True and train_occupancy_valid
     status = {"status": "accepted" if model_entry_valid else "failed"}
     initialization = _current_initialization_evidence(feature_count)
     monitor = {"history": [-2.0, -1.0], "status": "accepted"}
-    likelihood = {"status": "accepted"}
-    covars = np.full((3, feature_count), 0.5)
+    likelihood = {
+        "monitor_status": "accepted",
+        "convergence_valid": True,
+        "likelihood_status": "accepted",
+        "likelihood_valid": True,
+    }
     raw_capture = training_subject.capture_raw_diag_covariance_evidence(
         covars,
         expected_shape=(3, feature_count),
     )
     covariance_stage = {
-        "state_posterior_mass": [40.0, 40.0, 40.0],
+        **covariance_source,
         "posterior_weighted_variance_about_weighted_mean": np.full((3, feature_count), 0.5).tolist(),
-        "posterior_second_moment_about_fitted_mean": np.full((3, feature_count), 0.5).tolist(),
-        "mstep_expected_covariance": np.full((3, feature_count), 0.5).tolist(),
-        "dynamic_lower_reference": np.full((3, feature_count), 0.01).tolist(),
-        "dynamic_upper_reference": np.full((3, feature_count), 2.0).tolist(),
-        "mstep_relative_residual": np.zeros((3, feature_count)).tolist(),
+        "mstep_expected_covariance": expected.tolist(),
+        "dynamic_lower_reference": lower.tolist(),
+        "dynamic_upper_reference": upper.tolist(),
+        "mstep_relative_residual": residual.tolist(),
         "acceptance": covariance_acceptance,
     }
     stage_evidence = training_subject._training_stage_evidence(
@@ -205,7 +221,10 @@ def _core(
         monitor_evidence=monitor,
         likelihood=likelihood,
         covariance=covariance_acceptance,
-        train_occupancy={"status": "accepted"},
+        train_occupancy={
+            "train_occupancy_status": "accepted" if train_occupancy_valid else "failed",
+            "train_occupancy_valid": train_occupancy_valid,
+        },
         startprob=np.array([0.2, 0.3, 0.5]),
         transmat=np.array([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]),
         means=np.ones((3, feature_count)),
@@ -1704,7 +1723,7 @@ def test_refit03_bound_covariance_frame_hash_uses_exact_header_and_cell_bits():
     assert evidence["cross_role_state_alignment_performed"] is False
     assert evidence["semantic_label_accessed"] is False
     assert evidence["posterior_weighted_variance_about_weighted_mean"] == np.full((3, 19), 0.5).tolist()
-    assert evidence["posterior_second_moment_about_fitted_mean"] == np.full((3, 19), 0.5).tolist()
+    assert evidence["posterior_second_moment_about_fitted_mean"] == np.full((3, 19), 0.4875).tolist()
 
 
 @pytest.mark.parametrize(
@@ -1748,6 +1767,61 @@ def test_refit03_derived_evidence_status_never_fabricates_bounds(raw_covars, der
     assert evidence["dynamic_lower_reference"] is None
     assert evidence["dynamic_upper_reference"] is None
     assert evidence["mstep_expected_covariance"] is None
+
+
+@pytest.mark.parametrize(
+    "raw_covars",
+    [
+        np.ones((3, 20), dtype=np.float32),
+        np.ones((3, 40), dtype=np.float64)[:, ::2],
+        np.ones((3, 20), dtype=np.float64).view(type("RawCovarianceSubclass", (np.ndarray,), {})),
+    ],
+)
+def test_refit03_raw_authority_failure_remains_valid_fail_closed_readback(raw_covars):
+    error = _covariance_stage_error(
+        20,
+        "raw covariance authority is invalid",
+        raw_covars=raw_covars,
+        derived_status="not_computable_raw_covariance_invalid",
+        covariance_status="failed",
+    )
+    bound_stage = subject._bind_refit03_stage_evidence(
+        error.stage_evidence,
+        role=subject.REFIT02_MATCHED_NEGATIVE_ROLE,
+    )
+
+    assert (
+        subject._validate_refit03_bound_stage_evidence(
+            bound_stage,
+            role=subject.REFIT02_MATCHED_NEGATIVE_ROLE,
+        )
+        == bound_stage
+    )
+
+
+def test_refit03_computed_d4_cannot_claim_valid_raw_authority_after_rehash():
+    stage = deepcopy(_core(20).training_stage_evidence)
+    raw_capture = stage["raw_covariance_evidence"]
+    raw_capture["actual_python_type"] = "forged.RawCovarianceSubclass"
+    raw_capture["reason_codes"] = ["hmm_risk_model_covariance_raw_type_invalid"]
+    raw_capture["raw_validity"] = False
+    raw_capture["capture_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in raw_capture.items() if key != "capture_receipt_sha256"}
+    )
+    stage["stage_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in stage.items() if key != "stage_evidence_sha256"}
+    )
+    bound_stage = subject._bind_refit03_stage_evidence(
+        stage,
+        role=subject.REFIT02_MATCHED_NEGATIVE_ROLE,
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError) as exc_info:
+        subject._validate_refit03_bound_stage_evidence(
+            bound_stage,
+            role=subject.REFIT02_MATCHED_NEGATIVE_ROLE,
+        )
+    assert exc_info.value.reason_code == "hmm_risk_model_covariance_bitpattern_conflict"
 
 
 def test_refit03_covariance_failure_preserves_stage_evidence_and_feature_level_pair(monkeypatch):
@@ -1900,28 +1974,12 @@ def test_refit03_likelihood_failure_keeps_raw_diagnostic_complete_without_fake_b
 
 def test_refit03_computed_d4_failure_is_terminal_model_failure_with_complete_raw_evidence(monkeypatch):
     treatment, _, authority, _ = _refit02_authorities(monkeypatch)
-    per_feature = [0] * 20
-    per_feature[subject.INACTIVE_FEATURE_INDEX] = 1
-    residual = np.zeros((3, 20), dtype=np.float64)
-    residual[0, subject.INACTIVE_FEATURE_INDEX] = 0.03
-    acceptance = {
-        "covariance_status": "failed",
-        "covariance_valid": False,
-        "failure_reason_codes": [
-            "hmm_risk_model_covariance_bounds_failed",
-            "hmm_risk_model_covariance_acceptance_failed",
-        ],
-        "blocking_reason_codes": [],
-        "warning_reason_codes": [],
-        "evidence": {
-            "per_feature_anomaly_count": per_feature,
-            "mstep_relative_residual": residual.tolist(),
-        },
-    }
+    covars = np.full((3, 20), 0.5, dtype=np.float64)
+    covars[0, subject.INACTIVE_FEATURE_INDEX] = 10.0
     monkeypatch.setattr(
         subject,
         "fit_b3_preprocessed_train_only",
-        lambda *args, **kwargs: _core(20, covariance_acceptance=acceptance),
+        lambda *args, **kwargs: _core(20, covars=covars),
     )
 
     attempt = subject.fit_refit02_attempt(
@@ -1945,6 +2003,196 @@ def test_refit03_computed_d4_failure_is_terminal_model_failure_with_complete_raw
         process_identity="fresh_process_1",
         current_authority=authority,
     )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "classification_count",
+        "invalid_feature_indices",
+        "raw_payload_hash",
+        "d4_formula_identity",
+        "cell_order",
+        "actual_nbytes",
+        "actual_strides",
+        "raw_capture_receipt",
+    ],
+)
+def test_refit03_rehashed_bound_covariance_internal_tamper_fails_readback(monkeypatch, tamper):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+    attempt = deepcopy(process["attempts"][0])
+    raw = attempt["raw_covariance_evidence"]
+    if tamper == "classification_count":
+        raw["classification_count_by_feature"] = {"forged": {"finite_positive": 999}}
+    elif tamper == "invalid_feature_indices":
+        raw["invalid_feature_indices"] = [0]
+    elif tamper == "raw_payload_hash":
+        raw["raw_covariance_payload_sha256"] = "0" * 64
+    elif tamper == "d4_formula_identity":
+        raw["d4_formula_identity"]["bound_tolerance"] = 0.5
+        raw["d4_formula_identity_sha256"] = canonical_sha256(raw["d4_formula_identity"])
+    elif tamper == "cell_order":
+        raw["cells"] = list(reversed(raw["cells"]))
+    elif tamper == "actual_nbytes":
+        raw["actual_nbytes"] += 8
+    elif tamper == "actual_strides":
+        raw["actual_strides"] = [8, 8]
+    elif tamper == "raw_capture_receipt":
+        raw["raw_capture_receipt_sha256"] = "0" * 64
+    raw["covariance_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in raw.items() if key != "covariance_evidence_sha256"}
+    )
+    stage = attempt["training_stage_evidence"]
+    stage["raw_covariance_evidence"] = raw
+    stage["stage_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in stage.items() if key != "stage_evidence_sha256"}
+    )
+    attempt["raw_covariance_evidence"] = raw
+    attempt["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError) as exc_info:
+        subject._validate_refit02_attempt_receipt(
+            attempt,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+    assert exc_info.value.reason_code in {
+        "hmm_risk_model_covariance_bitpattern_conflict",
+        "hmm_risk_model_covariance_evidence_incomplete",
+    }
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["stage_order", "stage_monitor", "attempt_monitor", "attempt_covariance"],
+)
+def test_refit03_rehashed_stage_or_attempt_lineage_tamper_fails_readback(monkeypatch, tamper):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+    attempt = deepcopy(process["attempts"][0])
+    stage = attempt["training_stage_evidence"]
+    if tamper == "stage_order":
+        stage["completed_stages"].remove("monitor")
+    elif tamper == "stage_monitor":
+        stage["monitor_evidence"] = {"history": [-999.0], "status": "accepted"}
+    elif tamper == "attempt_monitor":
+        attempt["monitor_evidence"] = {"history": [-999.0], "status": "accepted"}
+    elif tamper == "attempt_covariance":
+        attempt["covariance"] = {"covariance_status": "accepted", "covariance_valid": False}
+    stage["stage_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in stage.items() if key != "stage_evidence_sha256"}
+    )
+    attempt["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError) as exc_info:
+        subject._validate_refit02_attempt_receipt(
+            attempt,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+    assert exc_info.value.reason_code in {
+        "hmm_risk_model_training_stage_evidence_incomplete",
+        "hmm_risk_model_covariance_bitpattern_conflict",
+    }
+
+
+def test_refit03_rehashed_derived_covariance_formula_tamper_fails_readback(monkeypatch):
+    process = _refit02_process(monkeypatch, "fresh_process_1")
+    attempt = deepcopy(process["attempts"][0])
+    stage = attempt["training_stage_evidence"]
+    stage["covariance_evidence"]["state_posterior_mass"] = [999.0, 999.0, 999.0]
+    raw = attempt["raw_covariance_evidence"]
+    raw["state_posterior_mass"] = [999.0, 999.0, 999.0]
+    raw["covariance_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in raw.items() if key != "covariance_evidence_sha256"}
+    )
+    stage["raw_covariance_evidence"] = raw
+    stage["stage_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in stage.items() if key != "stage_evidence_sha256"}
+    )
+    attempt["raw_covariance_evidence"] = raw
+    attempt["attempt_receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in attempt.items() if key != "attempt_receipt_sha256"}
+    )
+
+    with pytest.raises(subject.D1InactiveDimensionError) as exc_info:
+        subject._validate_refit02_attempt_receipt(
+            attempt,
+            process_identity="fresh_process_1",
+            current_authority=process["current_authority"],
+        )
+    assert exc_info.value.reason_code == "hmm_risk_model_covariance_bitpattern_conflict"
+
+
+def test_refit03_positive_harness_pre_covariance_failure_cannot_claim_inactive_pattern(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_failed_harness(item, *, train, seed):
+        del seed
+        if item.sector_code == subject.CONTROL_SECTOR:
+            raise _initialization_stage_error("positive harness failed before covariance")
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
+            raw_covars = np.full((3, 20), 0.5, dtype=np.float64)
+            raw_covars[:, subject.INACTIVE_FEATURE_INDEX] = 0.0
+            raise _covariance_stage_error(
+                20,
+                "inactive covariance is zero",
+                raw_covars=raw_covars,
+                derived_status="not_computable_raw_covariance_invalid",
+            )
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_failed_harness)
+    process = subject.run_refit02_process(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=_preprocess(),
+        process_identity="fresh_process_1",
+        producer_commit="1" * 40,
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+        historical_reference=historical,
+    )
+
+    assert process["diagnostic_evidence_complete"] is True
+    assert all(pair["diagnostic_labels"] == ["cross_role_failure_present"] for pair in process["pair_receipts"])
+
+
+def test_refit03_positive_harness_d4_failure_cannot_claim_inactive_pattern(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(monkeypatch)
+
+    def fit_with_failed_harness_d4(item, *, train, seed):
+        del seed
+        if item.sector_code == subject.CONTROL_SECTOR:
+            return _core(int(train.shape[1]), train_occupancy_valid=False)
+        if item.sector_code == subject.TREATMENT_SECTOR and train.shape[1] == 20:
+            raw_covars = np.full((3, 20), 0.5, dtype=np.float64)
+            raw_covars[:, subject.INACTIVE_FEATURE_INDEX] = 0.0
+            raise _covariance_stage_error(
+                20,
+                "inactive covariance is zero",
+                raw_covars=raw_covars,
+                derived_status="not_computable_raw_covariance_invalid",
+            )
+        return _core(int(train.shape[1]))
+
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", fit_with_failed_harness_d4)
+    process = subject.run_refit02_process(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=_preprocess(),
+        process_identity="fresh_process_1",
+        producer_commit="1" * 40,
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+        historical_reference=historical,
+    )
+
+    assert process["diagnostic_evidence_complete"] is True
+    assert all(pair["diagnostic_labels"] == ["cross_role_failure_present"] for pair in process["pair_receipts"])
 
 
 def test_refit03_invalid_stage_envelope_is_persisted_as_incomplete_not_raised(monkeypatch):
