@@ -18,14 +18,14 @@ from backend.services.miniqmt_execution_runtime.kernel_diagnostics import (
     project_k6d_product_diagnostics_v1,
     project_kernel_diagnostics_v1,
 )
-from backend.services.trading_core.errors import RuntimeConfigInvalidError
+from backend.services.trading_core.errors import InvalidStateTransitionError, RuntimeConfigInvalidError
 
 from .models import (
-    LocalSimExecutionStateV1,
     SimulationBrokerBackend,
     SimulationDailyRun,
     SimulationDailyRunStatus,
 )
+from .repository import _local_sim_state_map
 
 
 PLATFORM_DIAGNOSTICS_SCHEMA_VERSION = "simulation_platform_diagnostics_v1"
@@ -1445,36 +1445,22 @@ class SimulationPlatformObservability:
                 submitted = aliases["submitted"][1]
                 failed = aliases["failed"][1]
                 pending = aliases["pending"][1]
-        execution_states = payload.get("local_sim_execution_states_v1")
-        if execution_states is not None:
-            if not isinstance(execution_states, list) or any(
-                not isinstance(item, Mapping) for item in execution_states
-            ):
-                raise _invalid(
-                    "LocalSIM execution states must be a list of mappings",
-                    field="run_payload_json.local_sim_execution_states_v1",
-                    value=execution_states,
-                )
-            parsed_states: list[LocalSimExecutionStateV1] = []
-            for index, item in enumerate(execution_states):
-                try:
-                    parsed_states.append(LocalSimExecutionStateV1.model_validate(item))
-                except Exception as exc:  # noqa: BLE001 - durable state validation must use one stable reason.
-                    raise RuntimeConfigInvalidError(
-                        "LocalSIM durable execution state is invalid",
-                        context={
-                            "reason_code": "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID",
-                            "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
-                            "run_id": run.run_id,
-                            "state_index": index,
-                            "error_type": type(exc).__name__,
-                            "error": str(exc)[:2048],
-                        },
-                    ) from exc
-            state_statuses = Counter(state.runtime_status.value for state in parsed_states)
-        else:
-            parsed_states = []
-            state_statuses = Counter()
+        try:
+            parsed_states = list(_local_sim_state_map(payload).values())
+        except InvalidStateTransitionError as exc:
+            durable_context = dict(exc.context)
+            raise RuntimeConfigInvalidError(
+                "LocalSIM durable execution state is invalid",
+                context={
+                    "reason_code": "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID",
+                    "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                    "run_id": run.run_id,
+                    "durable_reason_code": durable_context.get("reason_code"),
+                    "durable_context": durable_context,
+                },
+            ) from exc
+        parsed_states.sort(key=lambda item: (item.intent_id, item.algo_instance_id, item.state_id))
+        state_statuses = Counter(state.runtime_status.value for state in parsed_states)
         residual_count = state_statuses.get("EXPIRED_WITH_RESIDUAL", 0)
         active_algo_count = sum(state_statuses.get(status, 0) for status in LOCAL_SIM_ACTIVE_RUNTIME_STATUSES)
         partial_count = sum(state.filled_quantity > 0 and state.remaining_quantity > 0 for state in parsed_states)

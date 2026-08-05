@@ -120,9 +120,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?trade_date=2026-08-05&limit=100",
+    "fresh_process_evidence": [
+      "Fresh Python pytest process exercised the public SimulationRuntimeOpsService platform-diagnostics path against authoritative state_id-keyed LocalSIM durable carriers and strict malformed/list/identity-conflict negatives: 30 passed, 22 deselected; no backend process control",
+      "Fresh Python pytest process exercised public SimulationRuntimeOpsService.platform_diagnostics with authoritative state-id map and strict negative carriers: 30 passed, 22 deselected; no backend process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
