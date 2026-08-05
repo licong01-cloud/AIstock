@@ -169,6 +169,12 @@
     "python -m nox -s simulation_core_l2 -> 411 passed after rebase",
     "GitHub required CI -> CI verdict passed at d9069f7b436810ba25d5bf6f820c7a4a69522266"
   ],
+  "validation_receipts": [
+    "validation-receipt: id=b4e84f9b120eb5e7 commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`411 passed after rebase`",
+    "validation-receipt: id=091977cbba721175 commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0 after rebase`",
+    "validation-receipt: id=5997c5c581320a1e commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed ownership 14/14 after rebase`",
+    "validation-receipt: id=52c4339464bf0c9e commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2` result=`112/112 passed warnings=0 after rebase`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
