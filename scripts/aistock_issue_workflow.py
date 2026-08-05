@@ -10415,6 +10415,28 @@ def _merge_commit_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
     return str(merge_commit or "") or None
 
 
+def _merged_commit_changed_files(merge_commit: str) -> list[str]:
+    """Return the source-PR delta from the verified merge commit's first parent."""
+    normalized = str(merge_commit or "").strip().lower()
+    if not _FULL_GIT_COMMIT_RE.fullmatch(normalized):
+        raise WorkflowError("close-sync merge commit is not a full Git identity")
+    result = _run_command(
+        ["git", "diff", "--name-only", f"{normalized}^1", normalized, "--"],
+        cwd=REPO_ROOT,
+        timeout=30,
+    )
+    if not result.get("ok"):
+        raise WorkflowError(result.get("stderr") or result.get("stdout") or "close-sync cannot resolve merged PR changed files")
+    changed_files = flow._unique_strings(
+        line.strip().replace("\\", "/")
+        for line in str(result.get("stdout") or "").splitlines()
+        if line.strip()
+    )
+    if not changed_files:
+        raise WorkflowError("close-sync merged PR changed-file evidence is empty")
+    return changed_files
+
+
 def _closed_at_from_pr_check(pr_check: dict[str, Any] | None) -> str:
     """Use the authoritative source PR merge time, or the explicit skip-check time."""
 
@@ -12297,9 +12319,14 @@ def build_close_sync_plan(
         raise WorkflowError(f"{canonical_bug_id} has invalid status for close/sync: {status!r}")
     evidence = [item for item in validation_evidence or [] if item.strip()]
     gates = production_gates or _production_gates_payload()
+    runtime_changed_files = (
+        _merged_commit_changed_files(merge_commit)
+        if merge_commit
+        else flow._as_list(record.get("allowed_write_scope"))
+    )
     runtime_contract = build_runtime_contract(
         record=record,
-        changed_files=flow._as_list(record.get("allowed_write_scope")),
+        changed_files=runtime_changed_files,
         fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
         if isinstance(record.get("runtime_contract"), dict)
         else [],
@@ -12423,6 +12450,8 @@ def build_close_sync_plan(
         "missing_github_linkage": missing_linkage,
         "merged_pr": pr_url,
         "merge_commit": merge_commit,
+        "runtime_changed_files": runtime_changed_files,
+        "runtime_changed_files_source": "merge_commit" if merge_commit else "allowed_write_scope",
         "validation_evidence": evidence,
         "production_gates": gates,
         "backend_restart": {
@@ -12464,7 +12493,10 @@ def build_close_sync_plan(
             raise WorkflowError("close-sync --apply requires at least one --validation-evidence")
         started = time.monotonic()
         pr_check = _verify_pr_merged(pr_url, skip_github_check=skip_github_check)
-        merge_commit = merge_commit or _merge_commit_from_pr_check(pr_check)
+        verified_merge_commit = _merge_commit_from_pr_check(pr_check)
+        if merge_commit and verified_merge_commit and merge_commit != verified_merge_commit:
+            raise WorkflowError("close-sync merge commit differs from the verified source PR")
+        merge_commit = merge_commit or verified_merge_commit
         closed_at = _closed_at_from_pr_check(pr_check)
         if (
             runtime_contract.get("backend_restart_required")
