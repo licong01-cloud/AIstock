@@ -14,6 +14,9 @@ import pytest
 from psycopg2.extensions import parse_dsn
 from psycopg2.extras import RealDictCursor
 
+from backend.services.quantevolver.qe_active_execution_capacity import (
+    QEExecutionSourceClaimFactory,
+)
 from backend.services.quantevolver.qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     QEExecutionReservationError,
@@ -128,6 +131,39 @@ def _reservation_row(spec: QEExecutionReservationSpec, **overrides: Any) -> dict
     }
     row.update(overrides)
     return row
+
+
+def test_evolution_loop_source_claim_casts_jsonb_before_capacity_marker_match() -> None:
+    cursor = ScriptedCursor(
+        [
+            Step(
+                contains="agent_analysis::text LIKE",
+                one={
+                    "loop_id": "qe_task_1_Loop1",
+                    "task_id": "qe_task_1",
+                    "status": "running",
+                    "node_id": "wsl2-5080",
+                },
+            )
+        ]
+    )
+    claim_source, _record_waiting = QEExecutionSourceClaimFactory.evolution_loop(
+        loop_id="qe_task_1_Loop1",
+        node_id="wsl2-5080",
+    )
+
+    claimed = claim_source(cursor)
+
+    assert claimed == {
+        "loop_id": "qe_task_1_Loop1",
+        "task_id": "qe_task_1",
+        "status": "running",
+        "node_id": "wsl2-5080",
+    }
+    sql, params = cursor.executions[0]
+    assert "agent_analysis::text LIKE" in sql
+    assert "WHEN agent_analysis LIKE" not in sql
+    assert params == ("wsl2-5080", "qe_task_1_Loop1")
 
 
 def test_reservation_identity_is_stable_and_contract_is_explicit() -> None:
