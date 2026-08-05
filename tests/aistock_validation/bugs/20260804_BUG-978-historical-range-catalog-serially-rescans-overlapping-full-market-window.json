@@ -137,13 +137,15 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Python processes loaded the BUG-978 worktree source and passed 19 performance/transaction/dependency/cleanup/hash contracts plus the advisory_historical_range_backend matrix with 344 passed and 5 environment-gated skips"
+      "Fresh Python processes loaded the BUG-978 worktree source and passed 19 performance/transaction/dependency/cleanup/hash contracts plus the advisory_historical_range_backend matrix with 344 passed and 5 environment-gated skips",
+      "Fresh Python processes loaded committed BUG-978 source and passed 19 direct performance/transaction/dependency/cleanup/hash contracts plus 344 module tests"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
