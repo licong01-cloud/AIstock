@@ -5366,6 +5366,11 @@ def test_close_sync_apply_blocks_canonical_root_pollution(
         "_git_snapshot",
         lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
     )
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     with pytest.raises(workflow.WorkflowError, match="canonical root"):
         workflow.build_close_sync_plan(
@@ -5395,6 +5400,11 @@ def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
 
     monkeypatch.setattr(workflow, "_sync_github_issue_after_close", fake_sync)
     monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     payload = workflow.build_close_sync_plan(
         bug_id=None,
@@ -7023,6 +7033,7 @@ def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
 def test_close_sync_is_dry_run_and_requires_pr_url(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _write_json(
         isolated_workflow_root / "bug.json",
@@ -7052,6 +7063,12 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
     assert ready["workflow_gate"] == "ready_for_apply"
     assert ready["dry_run"] is True
     assert (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "close-sync-plan.json").exists()
+
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     assert workflow.main([
         "close-sync",
@@ -7098,6 +7115,11 @@ def test_close_sync_apply_can_create_registry_worktree(
 
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     payload = workflow.build_close_sync_plan(
         bug_id=None,
