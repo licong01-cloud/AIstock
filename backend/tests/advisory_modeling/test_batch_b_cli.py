@@ -19,12 +19,16 @@ from backend.services.advisory_historical_range.models import (
 )
 from backend.services.advisory_modeling.errors import AdvisoryModelingError
 from scripts.advisory_short_rebound_batch_b import (
+    DATABASE_TARGET_DEV,
+    DATABASE_TARGET_PRODUCTION,
+    DB_KEYS,
     REQUIRED_RUNTIME_KEYS,
     RestartSafeHistoricalRangeService,
     _database_config,
     _existing_directory,
     _load_environment,
     build_parser,
+    main as batch_b_main,
 )
 from backend.services.advisory_modeling.batch_b import (
     BATCH_B_CANDIDATE_PREFETCH_PER_PROGRAM,
@@ -44,6 +48,39 @@ def test_batch_b_cli_requires_every_explicit_root_and_env_source(tmp_path: Path)
     env_file.write_text("TDX_DB_HOST=localhost\n", encoding="utf-8")
     with pytest.raises(ValueError, match="missing required Batch B configuration"):
         _load_environment(env_file)
+
+
+def test_cli_preserves_production_default_and_parses_explicit_dev_target() -> None:
+    base_args = [
+        "--request",
+        "F:/configured/request.json",
+        "--env-file",
+        "F:/configured/.env",
+        "--repository-root",
+        "F:/Dev/AIstock",
+        "--artifact-root",
+        "F:/Dev/AIstock_artifacts/advisory_modeling-dev",
+        "--spool-root",
+        "F:/Dev/AIstock_artifacts/advisory_modeling-dev/spool",
+    ]
+
+    production = build_parser().parse_args(base_args)
+    dev = build_parser().parse_args(
+        [
+            *base_args,
+            "--database-target",
+            DATABASE_TARGET_DEV,
+            "--dev-historical-range-runtime-root",
+            "F:/Dev/AIstock_artifacts/historical-range-dev",
+        ]
+    )
+
+    assert production.database_target == DATABASE_TARGET_PRODUCTION
+    assert production.dev_historical_range_runtime_root is None
+    assert dev.database_target == DATABASE_TARGET_DEV
+    assert dev.dev_historical_range_runtime_root == Path(
+        "F:/Dev/AIstock_artifacts/historical-range-dev"
+    )
 
 
 def test_database_config_uses_only_loaded_env_values_without_logging_secrets() -> None:
@@ -95,6 +132,225 @@ def test_materialization_environment_loads_repository_root_from_explicit_file(
 
     assert loaded["AISTOCK_REPOSITORY_ROOT"] == values["AISTOCK_REPOSITORY_ROOT"]
     assert os.environ["AISTOCK_REPOSITORY_ROOT"] == values["AISTOCK_REPOSITORY_ROOT"]
+
+
+def test_dev_materialization_uses_only_dev_database_profile_and_derived_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = tmp_path / "repository"
+    runtime_root = tmp_path / "historical-range-dev"
+    package_asset_root = tmp_path / "package-assets"
+    repository_root.mkdir()
+    runtime_root.mkdir()
+    package_asset_root.mkdir()
+    values = {
+        "TDX_DB_HOST": "production.example",
+        "TDX_DB_PORT": "5432",
+        "TDX_DB_NAME": "production_db",
+        "TDX_DB_USER": "production_user",
+        "TDX_DB_PASSWORD": "production-secret",
+        "TDX_DB_DEV_HOST": "dev.example",
+        "TDX_DB_DEV_PORT": "15432",
+        "TDX_DB_DEV_NAME": "dev_db",
+        "TDX_DB_DEV_USER": "dev_user",
+        "TDX_DB_DEV_PASSWORD": "dev-secret",
+        **{key: f"F:/shared/{key.lower()}" for key in REQUIRED_RUNTIME_KEYS},
+    }
+    values["AISTOCK_PACKAGE_ASSET_STORE_ROOT"] = str(package_asset_root)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(f"{key}={value}" for key, value in values.items()) + "\n",
+        encoding="utf-8",
+    )
+    for key in (*DB_KEYS, *REQUIRED_RUNTIME_KEYS):
+        monkeypatch.delenv(key, raising=False)
+
+    loaded, _ = _load_environment(
+        env_file,
+        database_target=DATABASE_TARGET_DEV,
+        repository_root=repository_root.resolve(),
+        dev_historical_range_runtime_root=runtime_root,
+    )
+
+    assert _database_config(loaded) == {
+        "host": "dev.example",
+        "port": 15432,
+        "dbname": "dev_db",
+        "user": "dev_user",
+        "password": "dev-secret",
+    }
+    assert os.environ["TDX_DB_HOST"] == "dev.example"
+    assert loaded["AISTOCK_PACKAGE_ASSET_STORE_ROOT"] == str(package_asset_root.resolve())
+    assert loaded["AISTOCK_REPOSITORY_ROOT"] == str(repository_root.resolve())
+    for key in (
+        "AISTOCK_ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT",
+        "AISTOCK_ADVISORY_HISTORICAL_RANGE_TASK_RUNTIME_ROOT",
+        "AISTOCK_ADVISORY_HISTORICAL_RANGE_POLICY_COMPONENT_ROOT",
+        "AISTOCK_ADVISORY_CALCULATION_EVIDENCE_ROOT",
+        "AISTOCK_ADVISORY_DATASET_STORE_ROOT",
+    ):
+        Path(loaded[key]).relative_to(runtime_root.resolve())
+        assert "F:/shared" not in loaded[key]
+
+
+def test_dev_materialization_rejects_missing_profile_without_default_database_fallback(
+    tmp_path: Path,
+) -> None:
+    repository_root = tmp_path / "repository"
+    runtime_root = tmp_path / "historical-range-dev"
+    package_asset_root = tmp_path / "package-assets"
+    repository_root.mkdir()
+    runtime_root.mkdir()
+    package_asset_root.mkdir()
+    values = {
+        "TDX_DB_HOST": "production.example",
+        "TDX_DB_PORT": "5432",
+        "TDX_DB_NAME": "production_db",
+        "TDX_DB_USER": "production_user",
+        "TDX_DB_PASSWORD": "production-secret",
+        "AISTOCK_PACKAGE_ASSET_STORE_ROOT": str(package_asset_root),
+    }
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(f"{key}={value}" for key, value in values.items()) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="TDX_DB_DEV_HOST"):
+        _load_environment(
+            env_file,
+            database_target=DATABASE_TARGET_DEV,
+            repository_root=repository_root.resolve(),
+            dev_historical_range_runtime_root=runtime_root,
+        )
+
+
+def test_dev_materialization_requires_external_runtime_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = tmp_path / "repository"
+    runtime_root = tmp_path / "historical-range-dev"
+    package_asset_root = tmp_path / "package-assets"
+    repository_root.mkdir()
+    runtime_root.mkdir()
+    package_asset_root.mkdir()
+    values = {
+        "TDX_DB_DEV_HOST": "dev.example",
+        "TDX_DB_DEV_PORT": "15432",
+        "TDX_DB_DEV_NAME": "dev_db",
+        "TDX_DB_DEV_USER": "dev_user",
+        "TDX_DB_DEV_PASSWORD": "dev-secret",
+        "AISTOCK_PACKAGE_ASSET_STORE_ROOT": str(package_asset_root),
+    }
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(f"{key}={value}" for key, value in values.items()) + "\n",
+        encoding="utf-8",
+    )
+    for key in (*DB_KEYS, *REQUIRED_RUNTIME_KEYS):
+        monkeypatch.delenv(key, raising=False)
+
+    with pytest.raises(ValueError, match="dev_historical_range_runtime_root is required"):
+        _load_environment(
+            env_file,
+            database_target=DATABASE_TARGET_DEV,
+            repository_root=repository_root.resolve(),
+        )
+    loaded, _ = _load_environment(
+        env_file,
+        database_target=DATABASE_TARGET_DEV,
+        repository_root=repository_root.resolve(),
+        dev_historical_range_runtime_root=runtime_root,
+    )
+    assert loaded["TDX_DB_NAME"] == "dev_db"
+    with pytest.raises(ValueError, match="outside repository_root"):
+        _load_environment(
+            env_file,
+            database_target=DATABASE_TARGET_DEV,
+            repository_root=repository_root.resolve(),
+            dev_historical_range_runtime_root=repository_root,
+        )
+
+
+def test_production_target_rejects_dev_runtime_root_as_mixed_configuration(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "TDX_DB_HOST=production.example",
+                "TDX_DB_PORT=5432",
+                "TDX_DB_NAME=production_db",
+                "TDX_DB_USER=production_user",
+                "TDX_DB_PASSWORD=production-secret",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="only valid when database_target=dev"):
+        _load_environment(
+            env_file,
+            require_runtime=False,
+            database_target=DATABASE_TARGET_PRODUCTION,
+            dev_historical_range_runtime_root=tmp_path,
+        )
+
+
+def test_cli_reports_incomplete_dev_profile_without_default_database_fallback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository_root = tmp_path / "repository"
+    artifact_root = tmp_path / "artifacts"
+    runtime_root = tmp_path / "historical-range-dev"
+    package_asset_root = tmp_path / "package-assets"
+    repository_root.mkdir()
+    artifact_root.mkdir()
+    runtime_root.mkdir()
+    package_asset_root.mkdir()
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "TDX_DB_HOST=production.example",
+                "TDX_DB_PORT=5432",
+                "TDX_DB_NAME=production_db",
+                "TDX_DB_USER=production_user",
+                "TDX_DB_PASSWORD=production-secret",
+                f"AISTOCK_PACKAGE_ASSET_STORE_ROOT={package_asset_root}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = batch_b_main(
+        [
+            "--request",
+            str(tmp_path / "request.json"),
+            "--env-file",
+            str(env_file),
+            "--repository-root",
+            str(repository_root),
+            "--artifact-root",
+            str(artifact_root),
+            "--database-target",
+            DATABASE_TARGET_DEV,
+            "--dev-historical-range-runtime-root",
+            str(runtime_root),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().err)
+    assert exit_code == 3
+    assert payload["reason_code"] == "MODEL_BATCH_B_EXECUTION_FAILED"
+    assert "TDX_DB_DEV_HOST" in payload["message"]
+    assert "production-secret" not in payload["message"]
 
 
 def _create_request(*, program_version: int = 7) -> HistoricalRangeCreateRequest:

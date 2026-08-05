@@ -2,7 +2,9 @@
   "actual": "The Batch B materialization CLI reads only TDX_DB_* and the shared runtime roots from --env-file. The mandatory DEV-first materialization cannot select TDX_DB_DEV_* or an isolated DEV Historical Range root without manually generating a secret-bearing remapped env file. Add an explicit, typed DEV target/root selection path that derives only from the supplied .env, preserves production defaults, and fails visibly on incomplete or mixed targets. Do not add DDL, manual approvals, package re-admission, Selection/Paper/simulation changes, or silent fallback.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260805_BUG-983-batch-b-cli-cannot-select-explicit-dev-database-and-isolated-runtime-roo.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/advisory_short_rebound_batch_b.py",
+    "backend/tests/advisory_modeling/test_batch_b_cli.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-983",
@@ -54,7 +56,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "advisory_modeling_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -172,5 +175,5 @@
       "target_cost_percent_of_legacy": "45-60%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
