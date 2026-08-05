@@ -600,7 +600,12 @@ def build_explicit_historical_range_r5_runtime_factory(
             ),
             requirement_planner=HistoricalRangeSourceRequirementPlanner(),
             catalog_executor=PostgresHistoricalRangeCatalogExecutor(
-                conn_factory=read_only_factory
+                conn_factory=read_only_factory,
+                process_worker_dsn=getattr(
+                    conn_factory,
+                    "_aistock_process_worker_dsn",
+                    None,
+                ),
             ),
             repository=repository,
             artifact_store=artifact_store,
@@ -802,6 +807,11 @@ def explicit_historical_range_connection_factory() -> Callable[[], Any]:
     def connect() -> Any:
         return psycopg2.connect(**config)
 
+    setattr(
+        connect,
+        "_aistock_process_worker_dsn",
+        psycopg2.extensions.make_dsn(**config),
+    )
     return connect
 
 
