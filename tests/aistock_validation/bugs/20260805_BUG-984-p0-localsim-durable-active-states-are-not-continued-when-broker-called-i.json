@@ -135,9 +135,16 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?trade_date=2026-08-05&limit=100",
+    "fresh_process_evidence": [
+      "Fresh Python pytest process exercised SimulationLifecycleScheduler.run_once through a production-equivalent LocalSIM durable restart with broker_called=false, exact plan/state/outbox/economic/projection/Paper readback, no parent resubmit, stable order identities, generation advance, explicit malformed-outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control or broker call",
+      "Fresh pytest process exercised broker_called=false durable restart continuation, exact readback, malformed outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

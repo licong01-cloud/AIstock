@@ -10311,6 +10311,225 @@ def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_termi
     assert len(terminal_fill_ids) == len(set(terminal_fill_ids))
 
 
+def test_scheduler_localsim_durable_active_run_continues_when_broker_called_is_false() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    portfolio_id = "portfolio_localsim_broker_called_false"
+    first_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: first_context}),
+    )
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    run_id = first.results[0].run.run_id
+    first_states = tuple(repo.list_local_sim_execution_states(run_id))
+    first_order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run_id)}
+    assert first_states and all(not state.is_terminal for state in first_states)
+
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"broker_called": False},
+    )
+    first_broker = first_context.local_broker
+    assert first_broker is not None
+    restarted_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=float(first_broker.query_account().cash),
+        positions=first_broker.query_positions(),
+    )
+    restarted = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: restarted_context}
+        ),
+    )
+
+    continued = restarted.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 34),
+    )
+
+    continued_run = repo.get_simulation_daily_run(run_id)
+    continued_states = tuple(repo.list_local_sim_execution_states(run_id))
+    assert continued.results[0].status == "LOCALSIM_INTRADAY_RUNNING"
+    assert continued_run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert continued_run.run_payload_json["local_sim_economic_generation"] == 2
+    assert all(state.sequence == previous.sequence + 1 for state, previous in zip(continued_states, first_states))
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == first_order_ids
+
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"local_sim_projection_outbox_v1": None, "broker_called": False},
+    )
+    continued_broker = restarted_context.local_broker
+    assert continued_broker is not None
+    invalid_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=float(continued_broker.query_account().cash),
+        positions=continued_broker.query_positions(),
+    )
+    invalid_scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: invalid_context}),
+    )
+    invalid = invalid_scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 35),
+    )
+    assert invalid.results[0].error is not None
+    assert invalid.results[0].error["context"]["reason_code"] == "LOCALSIM_ACTIVE_CONTINUATION_OUTBOX_INVALID"
+    assert repo.get_simulation_daily_run(run_id).run_payload_json.get("broker_called") is False
+
+
+def test_scheduler_localsim_post_close_drives_active_durable_states_before_run_terminalization() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    portfolio_id = "portfolio_localsim_eod_durable_closure"
+    first_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: first_context}),
+    )
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    run_id = first.results[0].run.run_id
+    assert any(not state.is_terminal for state in repo.list_local_sim_execution_states(run_id))
+    repo.update_simulation_daily_run(run_id, payload_patch={"broker_called": False})
+
+    active_run = repo.get_simulation_daily_run(run_id)
+    corrupt_persistence = deepcopy(active_run.run_payload_json["local_sim_persistence"])
+    corrupt_persistence["terminal"] = True
+    corrupt_run = repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"local_sim_persistence": corrupt_persistence},
+    )
+    with pytest.raises(DataUnavailableError) as conflict:
+        scheduler._post_close_terminalize_localsim_run(
+            run=corrupt_run,
+            as_of_time=datetime(2026, 5, 21, 15, 5),
+        )
+    assert conflict.value.context["reason_code"] == "LOCALSIM_POST_CLOSE_ACTIVE_STATE_CONFLICT"
+    correct_persistence = deepcopy(corrupt_persistence)
+    correct_persistence["terminal"] = False
+    repo.update_simulation_daily_run(run_id, payload_patch={"local_sim_persistence": correct_persistence})
+
+    first_broker = first_context.local_broker
+    assert first_broker is not None
+    eod_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=float(first_broker.query_account().cash),
+        positions=first_broker.query_positions(),
+    )
+    restarted = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: eod_context}),
+    )
+
+    post_close = restarted.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 15, 5),
+    )
+
+    final_run = repo.get_simulation_daily_run(run_id)
+    final_states = tuple(repo.list_local_sim_execution_states(run_id))
+    assert final_states and all(state.is_terminal for state in final_states)
+    assert final_run.status in {
+        SimulationDailyRunStatus.SUCCEEDED,
+        SimulationDailyRunStatus.FAILED_TERMINAL,
+    }
+    assert final_run.run_payload_json["local_sim_persistence"]["terminal"] is True
+    assert post_close.results[0].status != "POST_CLOSE_TERMINALIZED"
+    assert not (
+        final_run.status == SimulationDailyRunStatus.FAILED_TERMINAL
+        and any(not state.is_terminal for state in final_states)
+    )
+
+    nonterminal_persistence = deepcopy(final_run.run_payload_json["local_sim_persistence"])
+    nonterminal_persistence["terminal"] = False
+    inconsistent_terminal_run = repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"local_sim_persistence": nonterminal_persistence},
+    )
+    with pytest.raises(DataUnavailableError) as persistence_conflict:
+        restarted._post_close_terminalize_localsim_run(
+            run=inconsistent_terminal_run,
+            as_of_time=datetime(2026, 5, 21, 15, 6),
+        )
+    assert persistence_conflict.value.context["reason_code"] == "LOCALSIM_POST_CLOSE_PERSISTENCE_STATE_CONFLICT"
+
+    malformed_persistence = deepcopy(nonterminal_persistence)
+    malformed_persistence["terminal"] = "false"
+    malformed_run = repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"local_sim_persistence": malformed_persistence},
+    )
+    with pytest.raises(DataUnavailableError) as schema_conflict:
+        restarted._post_close_terminalize_localsim_run(
+            run=malformed_run,
+            as_of_time=datetime(2026, 5, 21, 15, 7),
+        )
+    assert schema_conflict.value.context["reason_code"] == "LOCALSIM_POST_CLOSE_PERSISTENCE_SCHEMA_INVALID"
+
+
 def test_scheduler_localsim_waiting_for_capital_is_not_terminal_residual() -> None:
     release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
     assert local_binding is not None
