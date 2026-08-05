@@ -155,6 +155,38 @@
     "python -m nox -s simulation_core_l2 -> passed: 409 tests",
     "python -m pytest backend/tests/simulation_runtime/test_ops_api.py -k platform_diagnostics -q -> passed: 30 tests, 22 deselected"
   ],
+  "validation_receipts": [
+    {
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "46cbd573616212924952bf93fea0b5337dd76054",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "426eed1a95f82745",
+      "result": "passed: 8 tests; ownership 14/14 mapped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s simulation_core_l2",
+      "commit": "46cbd573616212924952bf93fea0b5337dd76054",
+      "evidence_kind": "nox",
+      "plan": "simulation_core_l2",
+      "receipt_id": "e2d9d6611051dcd2",
+      "result": "passed: 409 tests",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m pytest backend/tests/simulation_runtime/test_ops_api.py -k platform_diagnostics -q",
+      "commit": "46cbd573616212924952bf93fea0b5337dd76054",
+      "evidence_kind": "pytest",
+      "plan": "direct",
+      "receipt_id": "2d35254f88ff99c0",
+      "result": "passed: 30 tests, 22 deselected",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
