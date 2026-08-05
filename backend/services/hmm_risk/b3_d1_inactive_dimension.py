@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
 import struct
 from collections.abc import Mapping, Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +54,7 @@ REPORT_SCHEMA_VERSION_V2 = "hmm_risk_c008_b3_d1_controlled_refit_report_v2"
 REPORT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_refit_report_v3"
 REFIT02_ALGORITHM_VERSION = "hmm_risk_c008_b3_d1_refit_02_a_v1"
 REFIT02_AUTHORITY_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_current_a5_experiment_authority_v1"
+REFIT03_AUTHORITY_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_current_a5_experiment_authority_v2"
 REFIT02_ATTEMPT_SCHEMA_VERSION_ORIGINAL = "hmm_risk_c008_b3_d1_controlled_attempt_v3"
 REFIT02_ATTEMPT_SCHEMA_VERSION_LEGACY = "hmm_risk_c008_b3_d1_controlled_attempt_v4"
 REFIT02_ATTEMPT_SCHEMA_VERSION_MATCHED_FIT = "hmm_risk_c008_b3_d1_controlled_attempt_v5"
@@ -60,10 +63,12 @@ REFIT02_PROCESS_SCHEMA_VERSION_ORIGINAL = "hmm_risk_c008_b3_d1_controlled_proces
 REFIT02_PROCESS_SCHEMA_VERSION_LEGACY = "hmm_risk_c008_b3_d1_controlled_process_v5"
 REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT = "hmm_risk_c008_b3_d1_controlled_process_v6"
 REFIT02_PROCESS_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_process_v7"
+REFIT03_PROCESS_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_process_v8"
 REFIT02_REPORT_SCHEMA_VERSION_ORIGINAL = "hmm_risk_c008_b3_d1_controlled_refit_report_v4"
 REFIT02_REPORT_SCHEMA_VERSION_LEGACY = "hmm_risk_c008_b3_d1_controlled_refit_report_v5"
 REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT = "hmm_risk_c008_b3_d1_controlled_refit_report_v6"
 REFIT02_REPORT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_refit_report_v7"
+REFIT03_REPORT_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_controlled_refit_report_v8"
 REFIT02_DIAGNOSTIC_CONTRACT_LEGACY = "C-008-B3-REMEDIATION-D1-B-REFIT-02-A"
 REFIT02_DIAGNOSTIC_CONTRACT_MATCHED_FIT = "C-008-B3-REMEDIATION-D1-B-REFIT-02-B"
 REFIT02_DIAGNOSTIC_CONTRACT = "C-008-B3-D1-REFIT-03-COVARIANCE-DIAG-01"
@@ -71,6 +76,7 @@ REFIT02_FIT_BUDGET_CONTRACT_VERSION_LEGACY = "hmm_risk_c008_b3_d1_refit02_fit_bu
 REFIT02_FIT_BUDGET_CONTRACT_VERSION = "hmm_risk_c008_b3_d1_refit02_fit_budget_v2"
 REFIT03_COVARIANCE_EVIDENCE_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_covariance_evidence_v1"
 REFIT03_RAW_FRAME_HEADER_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_covariance_frame_header_v1"
+REFIT03_FROZEN_INPUT_BUNDLE_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_frozen_input_bundle_v1"
 TREATMENT_ROLE = "treatment"
 CONTROL_ROLE = "control"
 REFIT02_TREATMENT_ROLE = "treatment_19d"
@@ -99,6 +105,9 @@ REMEDIATION_REPORT_SHA256 = "48157a4255e9d19b814b26b90b18ec38769e28fd0a18e58403e
 C010_A5_REPORT_SHA256 = "e7f7edc9fbe7f1cdb5ec739e1390fffec69a9ede6c8d719c9dda1a21df71773d"
 C010_A5_PARTITION_SHA256 = "03d785347b35185fe9f9c771e0a4e69cd0deb8def31a0cb205d3ca7a86b8ead6"
 C010_A5_MAPPING_SHA256 = "6ed16f4e8473d851be7e359aac431c241bb98f0ba18dd3e7b537ca519f7fd696"
+C010_A5_CURRENT_REPORT_SHA256 = "cd70e597519b583c848928aca41d73e9acfecf0c83340a8d35ec6c0a90d3fee5"
+C010_A5_CURRENT_PARTITION_SHA256 = "9282e05ba235449c315e11e9ed324e52c8c73dc3a25547ae4157544aaab12d93"
+C010_A5_CURRENT_MAPPING_SHA256 = "acb38f303e5b9c7447fcae8e65ea23fe58615da67da762f51f03caa862682ab9"
 SOURCE_AUTHORITY_V1 = {
     "formal_report_sha256": FORMAL_REPORT_SHA256,
     "blocker_report_sha256": BLOCKER_REPORT_SHA256,
@@ -112,6 +121,12 @@ SOURCE_AUTHORITY_V2 = {
 SOURCE_AUTHORITY = {
     **SOURCE_AUTHORITY_V2,
     "c010_a5_mapping_sha256": C010_A5_MAPPING_SHA256,
+}
+CURRENT_SOURCE_AUTHORITY = {
+    **SOURCE_AUTHORITY_V1,
+    "c010_a5_report_sha256": C010_A5_CURRENT_REPORT_SHA256,
+    "c010_a5_partition_sha256": C010_A5_CURRENT_PARTITION_SHA256,
+    "c010_a5_mapping_sha256": C010_A5_CURRENT_MAPPING_SHA256,
 }
 
 _MIGRATABLE_INPUT_IDENTITY_FIELDS = frozenset(
@@ -154,8 +169,269 @@ class D1InactiveDimensionError(StateModelSetError):
         self.evidence = dict(evidence or {})
 
 
+def _frozen_series_payload(item: B3TrainOnlySeries) -> dict[str, Any]:
+    item.validate(len(ALL_CORE_FEATURES))
+    observations = np.asarray(item.train_observations, dtype="<f8", order="C")
+    raw = observations.tobytes(order="C")
+    return {
+        "sector_code": item.sector_code,
+        "sector_name": item.sector_name,
+        "train_observations": {
+            "dtype": "<f8",
+            "shape": list(observations.shape),
+            "order": "C",
+            "byte_count": len(raw),
+            "byte_sha256": sha256_bytes(raw),
+            "base64": base64.b64encode(raw).decode("ascii"),
+        },
+        "train_dates": [value.isoformat() for value in item.train_dates],
+        "pit_l2_constituents": list(item.pit_l2_constituents),
+        "pit_constituent_manifest_hash": item.pit_constituent_manifest_hash,
+        "observation_manifest_hash": item.observation_manifest_hash,
+        "train_input_manifest": dict(item.train_input_manifest),
+    }
+
+
+def _series_from_frozen_payload(value: Mapping[str, Any], *, role: str) -> B3TrainOnlySeries:
+    array_payload = value.get("train_observations")
+    dates = value.get("train_dates")
+    constituents = value.get("pit_l2_constituents")
+    manifest = value.get("train_input_manifest")
+    if (
+        not isinstance(array_payload, Mapping)
+        or array_payload.get("dtype") != "<f8"
+        or array_payload.get("order") != "C"
+        or not isinstance(dates, list)
+        or not isinstance(constituents, list)
+        or not isinstance(manifest, Mapping)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            f"REFIT-03 frozen {role} series envelope is invalid",
+        )
+    shape = array_payload.get("shape")
+    encoded = array_payload.get("base64")
+    if (
+        not isinstance(shape, list)
+        or len(shape) != 2
+        or any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in shape)
+        or shape[1] != len(ALL_CORE_FEATURES)
+        or not isinstance(encoded, str)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            f"REFIT-03 frozen {role} observation shape is invalid",
+        )
+    try:
+        raw = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            f"REFIT-03 frozen {role} observation bytes are invalid",
+        ) from exc
+    expected_bytes = int(shape[0]) * int(shape[1]) * np.dtype("<f8").itemsize
+    if (
+        len(raw) != expected_bytes
+        or array_payload.get("byte_count") != expected_bytes
+        or array_payload.get("byte_sha256") != sha256_bytes(raw)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            f"REFIT-03 frozen {role} observation identity is invalid",
+        )
+    try:
+        train_dates = tuple(date.fromisoformat(str(value)) for value in dates)
+    except ValueError as exc:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            f"REFIT-03 frozen {role} dates are invalid",
+        ) from exc
+    observations = np.frombuffer(raw, dtype="<f8").reshape(tuple(shape), order="C").copy()
+    item = B3TrainOnlySeries(
+        sector_code=str(value.get("sector_code") or ""),
+        sector_name=str(value.get("sector_name") or ""),
+        train_observations=observations,
+        train_dates=train_dates,
+        pit_l2_constituents=tuple(str(item) for item in constituents),
+        pit_constituent_manifest_hash=str(value.get("pit_constituent_manifest_hash") or ""),
+        observation_manifest_hash=str(value.get("observation_manifest_hash") or ""),
+        train_input_manifest=dict(manifest),
+    )
+    item.validate(len(ALL_CORE_FEATURES))
+    return item
+
+
+def build_refit03_frozen_input_bundle(
+    *,
+    treatment_item: B3TrainOnlySeries,
+    harness_item: B3TrainOnlySeries,
+    preprocess: Mapping[str, Any],
+    current_policy_sha256: str,
+    lineage_migration_receipt: Mapping[str, Any],
+    current_authority_sha256: str,
+    historical_reference_sha256: str,
+    writer_commit: str,
+) -> dict[str, Any]:
+    """Freeze exact D1 role matrices so fresh children never reload mutable PIT rows."""
+
+    _require_commit(writer_commit, "writer_commit")
+    lineage_migration = _validate_c010_a5_lineage_migration_envelope(
+        lineage_migration_receipt,
+        expected_producer_commit=writer_commit,
+    )
+    role_items = {
+        REFIT02_TREATMENT_ROLE: treatment_item,
+        REFIT02_HARNESS_ROLE: harness_item,
+    }
+    mapping_hashes = {str(item.train_input_manifest.get("mapping_manifest_hash") or "") for item in role_items.values()}
+    if mapping_hashes != {C010_A5_CURRENT_MAPPING_SHA256}:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "REFIT-03 frozen role inputs do not use the approved C-010-A5 mapping authority",
+        )
+    if canonical_sha256(dict(preprocess)) != PREPROCESS_IDENTITY_SHA256:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_preprocess_mismatch",
+            "REFIT-03 frozen preprocess identity is invalid",
+        )
+    for label, identity in (
+        ("current_policy_sha256", current_policy_sha256),
+        ("current_authority_sha256", current_authority_sha256),
+        ("historical_reference_sha256", historical_reference_sha256),
+    ):
+        if len(identity) != 64 or any(character not in "0123456789abcdef" for character in identity):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                f"REFIT-03 frozen {label} is invalid",
+            )
+    body = {
+        "schema_version": REFIT03_FROZEN_INPUT_BUNDLE_SCHEMA_VERSION,
+        "status": "frozen",
+        "writer_commit": writer_commit,
+        "source_authority": dict(CURRENT_SOURCE_AUTHORITY),
+        "approved_mapping_manifest_hash": C010_A5_CURRENT_MAPPING_SHA256,
+        "current_policy_sha256": current_policy_sha256,
+        "lineage_migration_receipt": lineage_migration,
+        "current_authority_sha256": current_authority_sha256,
+        "historical_reference_sha256": historical_reference_sha256,
+        "preprocess": dict(preprocess),
+        "roles": {role: _frozen_series_payload(item) for role, item in sorted(role_items.items())},
+        "selection_performed": False,
+        "d6_performed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "bundle_sha256": canonical_sha256(body)}
+
+
+def validate_refit03_frozen_input_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(value)
+    receipt = str(normalized.pop("bundle_sha256", ""))
+    roles = normalized.get("roles")
+    required_false = (
+        "selection_performed",
+        "d6_performed",
+        "model_write_performed",
+        "ready_artifact_write_performed",
+        "database_write_performed",
+        "runtime_action_performed",
+    )
+    if (
+        normalized.get("schema_version") != REFIT03_FROZEN_INPUT_BUNDLE_SCHEMA_VERSION
+        or normalized.get("status") != "frozen"
+        or normalized.get("source_authority") != CURRENT_SOURCE_AUTHORITY
+        or normalized.get("approved_mapping_manifest_hash") != C010_A5_CURRENT_MAPPING_SHA256
+        or not isinstance(roles, Mapping)
+        or set(roles) != {REFIT02_TREATMENT_ROLE, REFIT02_HARNESS_ROLE}
+        or any(normalized.get(field) is not False for field in required_false)
+        or receipt != canonical_sha256(normalized)
+    ):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "REFIT-03 frozen input bundle authority is invalid",
+        )
+    _require_commit(normalized.get("writer_commit"), "writer_commit")
+    for field in (
+        "current_policy_sha256",
+        "current_authority_sha256",
+        "historical_reference_sha256",
+    ):
+        _require_sha256(normalized.get(field), field)
+    lineage_migration = normalized.get("lineage_migration_receipt")
+    if not isinstance(lineage_migration, Mapping):
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "REFIT-03 frozen input lineage migration receipt is missing",
+        )
+    _validate_c010_a5_lineage_migration_envelope(
+        lineage_migration,
+        expected_producer_commit=str(normalized["writer_commit"]),
+    )
+    if canonical_sha256(dict(normalized.get("preprocess") or {})) != PREPROCESS_IDENTITY_SHA256:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_preprocess_mismatch",
+            "REFIT-03 frozen input bundle preprocess drifted",
+        )
+    parsed = {
+        role: _series_from_frozen_payload(roles[role], role=role)
+        for role in (REFIT02_TREATMENT_ROLE, REFIT02_HARNESS_ROLE)
+    }
+    for role, item in parsed.items():
+        if item.train_input_manifest.get("mapping_manifest_hash") != C010_A5_CURRENT_MAPPING_SHA256:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                f"REFIT-03 frozen {role} mapping authority drifted",
+            )
+    return {**normalized, "bundle_sha256": receipt, "parsed_roles": parsed}
+
+
+def write_refit03_frozen_input_bundle(path: Path, bundle: Mapping[str, Any]) -> str:
+    normalized = dict(bundle)
+    validated = validate_refit03_frozen_input_bundle(normalized)
+    validated.pop("parsed_roles", None)
+    payload = canonical_json_bytes(validated) + b"\n"
+    identity = str(validated["bundle_sha256"])
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        if target.read_bytes() != payload:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                f"REFIT-03 frozen input bundle collision: {target}",
+            )
+        return identity
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, target)
+        except FileExistsError:
+            if target.read_bytes() != payload:
+                raise D1InactiveDimensionError(
+                    "hmm_risk_model_inactive_dimension_authority_mismatch",
+                    f"REFIT-03 frozen input bundle collision: {target}",
+                ) from None
+        readback = json.loads(target.read_text(encoding="utf-8"))
+        if (
+            not isinstance(readback, dict)
+            or validate_refit03_frozen_input_bundle(readback)["bundle_sha256"] != identity
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                "REFIT-03 frozen input bundle readback mismatch",
+            )
+    finally:
+        temporary.unlink(missing_ok=True)
+    return identity
+
+
 def _refit_diagnostic_contract_for_report(schema_version: str) -> str:
-    if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+    if schema_version in {REFIT02_REPORT_SCHEMA_VERSION, REFIT03_REPORT_SCHEMA_VERSION}:
         return REFIT02_DIAGNOSTIC_CONTRACT
     if schema_version == REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT:
         return REFIT02_DIAGNOSTIC_CONTRACT_MATCHED_FIT
@@ -163,6 +439,8 @@ def _refit_diagnostic_contract_for_report(schema_version: str) -> str:
 
 
 def _refit_process_schema_for_report(schema_version: str) -> str:
+    if schema_version == REFIT03_REPORT_SCHEMA_VERSION:
+        return REFIT03_PROCESS_SCHEMA_VERSION
     if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
         return REFIT02_PROCESS_SCHEMA_VERSION
     if schema_version == REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT:
@@ -173,7 +451,31 @@ def _refit_process_schema_for_report(schema_version: str) -> str:
 
 
 def _refit_report_uses_v2_fit_budget(schema_version: str) -> bool:
-    return schema_version in {REFIT02_REPORT_SCHEMA_VERSION, REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT}
+    return schema_version in {
+        REFIT03_REPORT_SCHEMA_VERSION,
+        REFIT02_REPORT_SCHEMA_VERSION,
+        REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
+    }
+
+
+def _is_refit03_exact_process_schema(schema_version: str) -> bool:
+    return schema_version in {REFIT03_PROCESS_SCHEMA_VERSION, REFIT02_PROCESS_SCHEMA_VERSION}
+
+
+def _is_refit03_exact_report_schema(schema_version: str) -> bool:
+    return schema_version in {REFIT03_REPORT_SCHEMA_VERSION, REFIT02_REPORT_SCHEMA_VERSION}
+
+
+def _refit_source_authority_for_process(schema_version: str) -> Mapping[str, str]:
+    if schema_version == REFIT03_PROCESS_SCHEMA_VERSION:
+        return CURRENT_SOURCE_AUTHORITY
+    return SOURCE_AUTHORITY
+
+
+def _refit_source_authority_for_report(schema_version: str) -> Mapping[str, str]:
+    if schema_version == REFIT03_REPORT_SCHEMA_VERSION:
+        return CURRENT_SOURCE_AUTHORITY
+    return SOURCE_AUTHORITY
 
 
 def _require_sha256(value: Any, field: str) -> str:
@@ -357,10 +659,13 @@ def _refit02_role_input(
         "feature_domain_policy_sha256",
     ):
         _require_sha256(manifest.get(field), f"{item.sector_code}.{field}")
-    if manifest.get("mapping_manifest_hash") != C010_A5_MAPPING_SHA256:
+    if manifest.get("mapping_manifest_hash") not in {
+        C010_A5_MAPPING_SHA256,
+        C010_A5_CURRENT_MAPPING_SHA256,
+    }:
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_current_authority_mismatch",
-            f"{item.sector_code} mapping is not the approved C-010-A5 mapping",
+            f"{item.sector_code} mapping is not an approved C-010-A5 mapping revision",
         )
     role_input = {
         "sector_code": item.sector_code,
@@ -422,16 +727,34 @@ def build_refit02_current_a5_authority(
             "hmm_risk_model_inactive_dimension_current_authority_mismatch",
             "REFIT-02 roles do not share one current-A5 train authority",
         )
+    mapping_identity = _require_sha256(treatment_manifest.get("mapping_manifest_hash"), "mapping_manifest_hash")
+    if mapping_identity == C010_A5_MAPPING_SHA256:
+        authority_schema = REFIT02_AUTHORITY_SCHEMA_VERSION
+        source_authority = SOURCE_AUTHORITY
+        report_identity = C010_A5_REPORT_SHA256
+        partition_identity = C010_A5_PARTITION_SHA256
+        explicit_mapping_identity = None
+    elif mapping_identity == C010_A5_CURRENT_MAPPING_SHA256:
+        authority_schema = REFIT03_AUTHORITY_SCHEMA_VERSION
+        source_authority = CURRENT_SOURCE_AUTHORITY
+        report_identity = C010_A5_CURRENT_REPORT_SHA256
+        partition_identity = C010_A5_CURRENT_PARTITION_SHA256
+        explicit_mapping_identity = mapping_identity
+    else:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_current_authority_mismatch",
+            "REFIT-03 role mapping identity is not an approved A5 authority revision",
+        )
     role_inputs = {
         REFIT02_HARNESS_ROLE: harness_input,
         REFIT02_MATCHED_NEGATIVE_ROLE: treatment_input,
         REFIT02_TREATMENT_ROLE: treatment_input,
     }
     authority_body = {
-        "schema_version": REFIT02_AUTHORITY_SCHEMA_VERSION,
-        "c010_a5_report_sha256": C010_A5_REPORT_SHA256,
-        "c010_a5_partition_sha256": C010_A5_PARTITION_SHA256,
-        "c010_a5_mapping_sha256": C010_A5_MAPPING_SHA256,
+        "schema_version": authority_schema,
+        "c010_a5_report_sha256": report_identity,
+        "c010_a5_partition_sha256": partition_identity,
+        "c010_a5_mapping_sha256": mapping_identity,
         "dataset_manifest_sha256": _require_sha256(
             treatment_manifest.get("dataset_manifest_hash"),
             "dataset_manifest_sha256",
@@ -447,11 +770,13 @@ def build_refit02_current_a5_authority(
         "feature_domain_policy_sha256": normalized_policy,
         "role_inputs": role_inputs,
     }
+    if explicit_mapping_identity is not None:
+        authority_body["mapping_manifest_sha256"] = explicit_mapping_identity
     body = {
-        "schema_version": REFIT02_AUTHORITY_SCHEMA_VERSION,
+        "schema_version": authority_schema,
         "algorithm_version": REFIT02_ALGORITHM_VERSION,
         "producer_commit": _require_commit(producer_commit, "producer_commit"),
-        "source_authority": dict(SOURCE_AUTHORITY),
+        "source_authority": dict(source_authority),
         "experiment_authority": authority_body,
         "current_a5_experiment_authority_sha256": canonical_sha256(authority_body),
         "current_profile_exact_zero_evidence": exact_zero,
@@ -503,6 +828,19 @@ def _validate_refit02_current_authority_envelope(receipt: Mapping[str, Any]) -> 
         "runtime_action_performed",
     )
     exact_zero = normalized.get("current_profile_exact_zero_evidence")
+    schema_version = normalized.get("schema_version")
+    if schema_version == REFIT03_AUTHORITY_SCHEMA_VERSION:
+        expected_source_authority = CURRENT_SOURCE_AUTHORITY
+        expected_report = C010_A5_CURRENT_REPORT_SHA256
+        expected_partition = C010_A5_CURRENT_PARTITION_SHA256
+        expected_mapping = C010_A5_CURRENT_MAPPING_SHA256
+        expected_explicit_mapping = expected_mapping
+    else:
+        expected_source_authority = SOURCE_AUTHORITY
+        expected_report = C010_A5_REPORT_SHA256
+        expected_partition = C010_A5_PARTITION_SHA256
+        expected_mapping = C010_A5_MAPPING_SHA256
+        expected_explicit_mapping = None
     eligible = bool(
         isinstance(exact_zero, Mapping)
         and exact_zero.get("raw_variance_ddof0") == 0.0
@@ -513,15 +851,15 @@ def _validate_refit02_current_authority_envelope(receipt: Mapping[str, Any]) -> 
         and exact_zero.get("active_variance_all_finite_positive") is True
     )
     if (
-        normalized.get("schema_version") != REFIT02_AUTHORITY_SCHEMA_VERSION
+        schema_version not in {REFIT02_AUTHORITY_SCHEMA_VERSION, REFIT03_AUTHORITY_SCHEMA_VERSION}
         or normalized.get("algorithm_version") != REFIT02_ALGORITHM_VERSION
-        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or normalized.get("source_authority") != expected_source_authority
         or not isinstance(experiment, Mapping)
-        or experiment.get("schema_version") != REFIT02_AUTHORITY_SCHEMA_VERSION
-        or experiment.get("c010_a5_report_sha256") != C010_A5_REPORT_SHA256
-        or experiment.get("c010_a5_partition_sha256") != C010_A5_PARTITION_SHA256
-        or experiment.get("c010_a5_mapping_sha256") != C010_A5_MAPPING_SHA256
-        or experiment.get("mapping_manifest_sha256") is not None
+        or experiment.get("schema_version") != schema_version
+        or experiment.get("c010_a5_report_sha256") != expected_report
+        or experiment.get("c010_a5_partition_sha256") != expected_partition
+        or experiment.get("c010_a5_mapping_sha256") != expected_mapping
+        or experiment.get("mapping_manifest_sha256") != expected_explicit_mapping
         or not isinstance(role_inputs, Mapping)
         or set(role_inputs) != set(REFIT02_ROLES)
         or role_inputs.get(REFIT02_TREATMENT_ROLE) != role_inputs.get(REFIT02_MATCHED_NEGATIVE_ROLE)
@@ -724,8 +1062,12 @@ def build_input_migration_receipt(
             "hmm_risk_model_inactive_dimension_authority_mismatch",
             "D1 treatment cannot claim historical fitted-model lineage that was never produced",
         )
+    current_mapping_identity = current.get("mapping_manifest_hash")
+    source_authority = (
+        CURRENT_SOURCE_AUTHORITY if current_mapping_identity == C010_A5_CURRENT_MAPPING_SHA256 else SOURCE_AUTHORITY
+    )
     if (
-        current.get("mapping_manifest_hash") != C010_A5_MAPPING_SHA256
+        current_mapping_identity not in {C010_A5_MAPPING_SHA256, C010_A5_CURRENT_MAPPING_SHA256}
         or current.get("feature_domain_policy_sha256") != normalized_policy_sha256
         or (role == CONTROL_ROLE and item.observation_manifest_hash != historical_observation_sha256)
         or tuple(item.pit_l2_constituents) != (expected_sector,)
@@ -747,7 +1089,7 @@ def build_input_migration_receipt(
         "family": "autocycle_all_core",
         "level": "L2",
         "sector_code": expected_sector,
-        "source_authority": dict(SOURCE_AUTHORITY),
+        "source_authority": dict(source_authority),
         "historical_train_input_manifest": historical,
         "historical_train_input_manifest_sha256": expected_historical_sha256,
         "current_train_input_manifest": current,
@@ -819,6 +1161,10 @@ def _validate_input_migration_envelope(receipt: Mapping[str, Any], *, expected_r
         field: {"historical": historical.get(field), "current": current.get(field)}
         for field in sorted(_MIGRATABLE_INPUT_IDENTITY_FIELDS)
     }
+    current_mapping_identity = current.get("mapping_manifest_hash")
+    expected_source_authority = (
+        CURRENT_SOURCE_AUTHORITY if current_mapping_identity == C010_A5_CURRENT_MAPPING_SHA256 else SOURCE_AUTHORITY
+    )
     lineage_migration = normalized.get("c010_a5_lineage_migration_receipt")
     if (
         normalized.get("schema_version") != INPUT_MIGRATION_SCHEMA_VERSION
@@ -827,12 +1173,12 @@ def _validate_input_migration_envelope(receipt: Mapping[str, Any], *, expected_r
         or normalized.get("family") != "autocycle_all_core"
         or normalized.get("level") != "L2"
         or normalized.get("sector_code") != expected_sector
-        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or normalized.get("source_authority") != expected_source_authority
         or normalized.get("historical_train_input_manifest_sha256") != expected_historical_sha256
         or set(current) != set(historical)
         or not _MIGRATABLE_INPUT_IDENTITY_FIELDS.issubset(current)
         or historical_core != current_core
-        or current.get("mapping_manifest_hash") != C010_A5_MAPPING_SHA256
+        or current_mapping_identity not in {C010_A5_MAPPING_SHA256, C010_A5_CURRENT_MAPPING_SHA256}
         or normalized.get("migrated_identity_fields") != expected_migrated_fields
         or not isinstance(lineage_migration, Mapping)
         or normalized.get("c010_a5_lineage_migration_receipt_sha256") != (lineage_migration or {}).get("receipt_sha256")
@@ -895,11 +1241,16 @@ def _validate_c010_a5_lineage_migration_envelope(
     identity = str(normalized.get("receipt_sha256") or "")
     body = {key: value for key, value in normalized.items() if key != "receipt_sha256"}
     pairs = normalized.get("receipt_pairs")
+    report_identity = normalized.get("source_a5_report_sha256")
+    if report_identity == C010_A5_CURRENT_REPORT_SHA256:
+        expected_partition_identity = C010_A5_CURRENT_PARTITION_SHA256
+    else:
+        expected_partition_identity = C010_A5_PARTITION_SHA256
     if (
         normalized.get("schema_version") != C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION
         or normalized.get("producer_commit") != _require_commit(expected_producer_commit, "expected_producer_commit")
-        or normalized.get("source_a5_report_sha256") != C010_A5_REPORT_SHA256
-        or normalized.get("source_a5_partition_sha256") != C010_A5_PARTITION_SHA256
+        or report_identity not in {C010_A5_REPORT_SHA256, C010_A5_CURRENT_REPORT_SHA256}
+        or normalized.get("source_a5_partition_sha256") != expected_partition_identity
         or normalized.get("status") != "accepted"
         or normalized.get("excluded_non_business_fields") != list(C010_A5_LINEAGE_EXCLUDED_FIELDS)
         or not isinstance(pairs, Mapping)
@@ -2612,7 +2963,7 @@ def fit_refit02_attempt(
     authority = dict(current_authority)
     authority_body = {key: value for key, value in authority.items() if key != "receipt_sha256"}
     if (
-        authority.get("schema_version") != REFIT02_AUTHORITY_SCHEMA_VERSION
+        authority.get("schema_version") not in {REFIT02_AUTHORITY_SCHEMA_VERSION, REFIT03_AUTHORITY_SCHEMA_VERSION}
         or authority.get("algorithm_version") != REFIT02_ALGORITHM_VERSION
         or canonical_sha256(authority_body) != authority.get("receipt_sha256")
     ):
@@ -3386,7 +3737,11 @@ def build_refit02_process_receipt(
     ]
     attempt_schema_versions = {str(value.get("schema_version")) for value in ordered}
     if attempt_schema_versions == {REFIT02_ATTEMPT_SCHEMA_VERSION}:
-        process_schema_version = REFIT02_PROCESS_SCHEMA_VERSION
+        process_schema_version = (
+            REFIT03_PROCESS_SCHEMA_VERSION
+            if authority.get("schema_version") == REFIT03_AUTHORITY_SCHEMA_VERSION
+            else REFIT02_PROCESS_SCHEMA_VERSION
+        )
         fit_budget_contract_version: str | None = REFIT02_FIT_BUDGET_CONTRACT_VERSION
     elif attempt_schema_versions == {REFIT02_ATTEMPT_SCHEMA_VERSION_MATCHED_FIT}:
         process_schema_version = REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT
@@ -3431,7 +3786,7 @@ def build_refit02_process_receipt(
                 )
     pair_receipts = (
         [_build_refit03_pair_receipt(seed=seed, attempts_by_key=attempts_by_key) for seed in RESTART_SCHEDULE]
-        if process_schema_version == REFIT02_PROCESS_SCHEMA_VERSION
+        if _is_refit03_exact_process_schema(process_schema_version)
         else []
     )
     comparable = [
@@ -3443,7 +3798,11 @@ def build_refit02_process_receipt(
         for pair in pair_receipts
     ]
     actual_hmm_fit_invocation_count = sum(value.get("fit_performed") is True for value in ordered)
-    if process_schema_version in {REFIT02_PROCESS_SCHEMA_VERSION, REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT}:
+    if process_schema_version in {
+        REFIT03_PROCESS_SCHEMA_VERSION,
+        REFIT02_PROCESS_SCHEMA_VERSION,
+        REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT,
+    }:
         if actual_hmm_fit_invocation_count > 24:
             raise D1InactiveDimensionError(
                 "hmm_risk_model_inactive_dimension_fit_budget_exceeded",
@@ -3469,7 +3828,7 @@ def build_refit02_process_receipt(
         "algorithm_version": REFIT02_ALGORITHM_VERSION,
         "process_identity": process_identity,
         "producer_commit": _require_commit(producer_commit, "producer_commit"),
-        "source_authority": dict(SOURCE_AUTHORITY),
+        "source_authority": dict(_refit_source_authority_for_process(process_schema_version)),
         "current_authority": authority,
         "historical_reference": historical,
         "attempts": ordered,
@@ -3480,7 +3839,7 @@ def build_refit02_process_receipt(
         "numeric_environment_sha256": canonical_sha256(dict(ordered[0].get("numeric_environment") or {})),
         "comparable_payload_sha256": canonical_sha256(
             {"attempts": comparable, "pair_receipts": comparable_pairs}
-            if process_schema_version == REFIT02_PROCESS_SCHEMA_VERSION
+            if _is_refit03_exact_process_schema(process_schema_version)
             else comparable
         ),
         "selection_performed": False,
@@ -3489,7 +3848,7 @@ def build_refit02_process_receipt(
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
-    if process_schema_version == REFIT02_PROCESS_SCHEMA_VERSION:
+    if _is_refit03_exact_process_schema(process_schema_version):
         body.update(
             {
                 "diagnostic_contract": REFIT02_DIAGNOSTIC_CONTRACT,
@@ -3523,6 +3882,7 @@ def validate_refit02_process_receipt(
         schema_version
         not in {
             REFIT02_PROCESS_SCHEMA_VERSION,
+            REFIT03_PROCESS_SCHEMA_VERSION,
             REFIT02_PROCESS_SCHEMA_VERSION_MATCHED_FIT,
             REFIT02_PROCESS_SCHEMA_VERSION_LEGACY,
             REFIT02_PROCESS_SCHEMA_VERSION_ORIGINAL,
@@ -3530,7 +3890,7 @@ def validate_refit02_process_receipt(
         or normalized.get("algorithm_version") != REFIT02_ALGORITHM_VERSION
         or normalized.get("process_identity") != expected_process_identity
         or normalized.get("producer_commit") != _require_commit(expected_producer_commit, "expected_producer_commit")
-        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or normalized.get("source_authority") != _refit_source_authority_for_process(str(schema_version))
     ):
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_contract_invalid",
@@ -3614,7 +3974,12 @@ def build_refit02_report(
 ) -> dict[str, Any]:
     processes = [dict(first), dict(second)]
     process_schema_versions = {str(value.get("schema_version")) for value in processes}
-    if process_schema_versions == {REFIT02_PROCESS_SCHEMA_VERSION}:
+    if process_schema_versions == {REFIT03_PROCESS_SCHEMA_VERSION}:
+        report_schema_version = REFIT03_REPORT_SCHEMA_VERSION
+        fit_budget_contract_version = REFIT02_FIT_BUDGET_CONTRACT_VERSION
+        planned_hmm_fit_count = 48
+        current_matched_fit_contract = True
+    elif process_schema_versions == {REFIT02_PROCESS_SCHEMA_VERSION}:
         report_schema_version = REFIT02_REPORT_SCHEMA_VERSION
         fit_budget_contract_version: str | None = REFIT02_FIT_BUDGET_CONTRACT_VERSION
         planned_hmm_fit_count = 48
@@ -3696,7 +4061,7 @@ def build_refit02_report(
     }
     covariance_pattern_assessment: str | None = None
     pattern_reason_codes: set[str] = set()
-    if report_schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+    if _is_refit03_exact_report_schema(report_schema_version):
         pair_receipts = list(first.get("pair_receipts") or ())
         if len(pair_receipts) != 8:
             diagnostic_reasons.add("hmm_risk_model_covariance_evidence_incomplete")
@@ -3731,11 +4096,11 @@ def build_refit02_report(
     else:
         status_reasons = reasons
     mechanism_reason_codes: set[str] = set()
-    if report_schema_version != REFIT02_REPORT_SCHEMA_VERSION and any(
+    if not _is_refit03_exact_report_schema(report_schema_version) and any(
         value.get("fit_performed") is not True for value in treatment
     ):
         reasons.update(treatment_reasons or {"hmm_risk_model_initialization_failed"})
-    if report_schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+    if _is_refit03_exact_report_schema(report_schema_version):
         mechanism = "inconclusive"
     elif current_matched_fit_contract:
         if not matched_fit_ok and not matched_blocker_ok:
@@ -3770,14 +4135,14 @@ def build_refit02_report(
         "schema_version": report_schema_version,
         "diagnostic_contract": _refit_diagnostic_contract_for_report(report_schema_version),
         "producer_commit": _require_commit(producer_commit, "producer_commit"),
-        "source_authority": dict(SOURCE_AUTHORITY),
+        "source_authority": dict(_refit_source_authority_for_report(report_schema_version)),
         "status": "diagnostic_complete" if not status_reasons else "diagnostic_failed",
         "mechanism_assessment": mechanism,
         "mechanism_assessment_reason_codes": sorted(
             status_reasons | all_attempt_reasons | mechanism_reason_codes | pattern_reason_codes
         ),
         "d5_compatibility_evidence_ready": bool(
-            report_schema_version != REFIT02_REPORT_SCHEMA_VERSION
+            not _is_refit03_exact_report_schema(report_schema_version)
             and not reasons
             and repeat_equal
             and d4_ready
@@ -3799,7 +4164,7 @@ def build_refit02_report(
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
-    if report_schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+    if _is_refit03_exact_report_schema(report_schema_version):
         body.update(
             {
                 "covariance_pattern_assessment": covariance_pattern_assessment,
@@ -3833,6 +4198,7 @@ def build_refit02_not_applicable_report(
             "REFIT-02 not-applicable report requires an ineligible current profile",
         )
     if schema_version not in {
+        REFIT03_REPORT_SCHEMA_VERSION,
         REFIT02_REPORT_SCHEMA_VERSION,
         REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
         REFIT02_REPORT_SCHEMA_VERSION_LEGACY,
@@ -3846,7 +4212,7 @@ def build_refit02_not_applicable_report(
         "schema_version": schema_version,
         "diagnostic_contract": _refit_diagnostic_contract_for_report(schema_version),
         "producer_commit": _require_commit(producer_commit, "producer_commit"),
-        "source_authority": dict(SOURCE_AUTHORITY),
+        "source_authority": dict(_refit_source_authority_for_report(schema_version)),
         "status": "not_applicable",
         "mechanism_assessment": "constant_dimension_mechanism_not_applicable_current_profile_changed",
         "mechanism_assessment_reason_codes": ["hmm_risk_model_inactive_dimension_current_profile_not_applicable"],
@@ -3867,7 +4233,7 @@ def build_refit02_not_applicable_report(
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
-    if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+    if _is_refit03_exact_report_schema(schema_version):
         body.update(
             {
                 "covariance_pattern_assessment": None,
@@ -3913,7 +4279,7 @@ def build_refit02_execution_failure_report(
         failed,
         expected_process_identity=expected_failure_identity,
         expected_producer_commit=normalized_commit,
-        expected_source_authority=SOURCE_AUTHORITY,
+        expected_source_authority=_refit_source_authority_for_report(schema_version),
     )
     authority = _validate_refit02_current_authority_envelope(current_authority)
     historical = validate_refit02_historical_reference_receipt(
@@ -3922,6 +4288,7 @@ def build_refit02_execution_failure_report(
     )
     attempt_count = sum(int(value.get("attempt_count") or 0) for value in completed)
     if schema_version not in {
+        REFIT03_REPORT_SCHEMA_VERSION,
         REFIT02_REPORT_SCHEMA_VERSION,
         REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
         REFIT02_REPORT_SCHEMA_VERSION_LEGACY,
@@ -3941,7 +4308,7 @@ def build_refit02_execution_failure_report(
         "schema_version": schema_version,
         "diagnostic_contract": _refit_diagnostic_contract_for_report(schema_version),
         "producer_commit": normalized_commit,
-        "source_authority": dict(SOURCE_AUTHORITY),
+        "source_authority": dict(_refit_source_authority_for_report(schema_version)),
         "status": "diagnostic_failed",
         "mechanism_assessment": "inconclusive",
         "mechanism_assessment_reason_codes": [str(failed.get("reason_code") or "")],
@@ -3967,7 +4334,7 @@ def build_refit02_execution_failure_report(
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
-    if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+    if _is_refit03_exact_report_schema(schema_version):
         body.update(
             {
                 "covariance_pattern_assessment": "evidence_incomplete",
@@ -3994,6 +4361,7 @@ def build_refit02_preflight_failure_report(
     schema_version: str = REFIT02_REPORT_SCHEMA_VERSION,
 ) -> dict[str, Any]:
     if schema_version not in {
+        REFIT03_REPORT_SCHEMA_VERSION,
         REFIT02_REPORT_SCHEMA_VERSION,
         REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
         REFIT02_REPORT_SCHEMA_VERSION_LEGACY,
@@ -4007,7 +4375,7 @@ def build_refit02_preflight_failure_report(
         "schema_version": schema_version,
         "diagnostic_contract": _refit_diagnostic_contract_for_report(schema_version),
         "producer_commit": _require_commit(producer_commit, "producer_commit"),
-        "source_authority": dict(SOURCE_AUTHORITY),
+        "source_authority": dict(_refit_source_authority_for_report(schema_version)),
         "status": "diagnostic_failed",
         "mechanism_assessment": "inconclusive",
         "mechanism_assessment_reason_codes": [str(reason_code)],
@@ -4033,7 +4401,7 @@ def build_refit02_preflight_failure_report(
         "database_write_performed": False,
         "runtime_action_performed": False,
     }
-    if schema_version == REFIT02_REPORT_SCHEMA_VERSION:
+    if _is_refit03_exact_report_schema(schema_version):
         body.update(
             {
                 "covariance_pattern_assessment": "evidence_incomplete",
@@ -4057,6 +4425,7 @@ def validate_refit02_report(report: Mapping[str, Any]) -> dict[str, Any]:
     if (
         schema_version
         not in {
+            REFIT03_REPORT_SCHEMA_VERSION,
             REFIT02_REPORT_SCHEMA_VERSION,
             REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
             REFIT02_REPORT_SCHEMA_VERSION_LEGACY,
@@ -4064,7 +4433,7 @@ def validate_refit02_report(report: Mapping[str, Any]) -> dict[str, Any]:
         }
         or normalized.get("diagnostic_contract") != _refit_diagnostic_contract_for_report(str(schema_version))
         or normalized.get("status") not in {"not_applicable", "diagnostic_complete", "diagnostic_failed"}
-        or normalized.get("source_authority") != SOURCE_AUTHORITY
+        or normalized.get("source_authority") != _refit_source_authority_for_report(str(schema_version))
     ):
         raise D1InactiveDimensionError(
             "hmm_risk_model_inactive_dimension_contract_invalid",
@@ -4247,6 +4616,7 @@ def write_controlled_refit_report(path: Path, report: Mapping[str, Any]) -> str:
     target = Path(path)
     normalized = dict(report)
     if normalized.get("schema_version") in {
+        REFIT03_REPORT_SCHEMA_VERSION,
         REFIT02_REPORT_SCHEMA_VERSION,
         REFIT02_REPORT_SCHEMA_VERSION_MATCHED_FIT,
         REFIT02_REPORT_SCHEMA_VERSION_LEGACY,

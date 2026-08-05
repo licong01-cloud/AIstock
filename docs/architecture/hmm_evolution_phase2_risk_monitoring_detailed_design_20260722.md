@@ -3528,3 +3528,40 @@ REFIT-02-A已在双 fresh-process 完成48 attempts/32 fits并暴露旧matched p
 公共KMeans/EM/covariance或算法合同变化时才允许完整5184重跑。之后依次执行D5/D6、逐项修复其余persistent blocker、闭合两family READY，
 最终才实现generator/job/repository/API/UI/runtime。任何局部结果都不得冒充family/Phase 2完成。当前revision的DDL/DML、依赖、runtime、
 数据库、model/READY与客户端同步均为`noop`，文档提交与PR merge仍等待用户单独确认。
+
+### 24.1 BUG-982：REFIT-03 冻结输入可回放合同
+
+REFIT-03 首次真实执行暴露了一个独立的可复现性缺陷：C-010-A5 artifact 冻结了
+`mapping_manifest_sha256`，但没有保存可回放的映射行或 D1 角色训练矩阵；runner 的父进程与两个 fresh child 又分别读取
+可变 PostgreSQL PIT 表。`sw_index_member` / `sw_index_classify` 没有可用于恢复旧版本的 mutation timestamp，因而历史修订后只能
+检测 hash drift，不能重建已批准输入。该失败在 0 fits 处 fail closed；不得把当前数据库、DEV 数据库、旧模型参数或 role-local hash
+静默替代为已批准 C-010-A5 权威。
+
+BUG-982 的修复合同如下：
+
+- REFIT-03 在任何 child 启动前，由父进程生成一个 repo-external、append-only 的
+  `hmm_risk_c008_b3_d1_frozen_input_bundle_v1`；只有实时读取仍同时通过既有 C-010-A5 report、mapping、policy、role manifest 与
+  historical-reference 检查时才允许首次写入。
+- bundle 必须保存 treatment 与 harness 的 exact little-endian float64 C-order bytes、shape、byte hash、dates、PIT constituents、
+  observation/constituent/train-input manifests、preprocess、lineage migration receipt、current authority 与 historical reference hash；
+  canonical writer、readback 和 collision 必须 fail closed。
+- 两个 fresh child 只能读取同一个 bundle，不得重新访问数据库。已有 bundle 的 replay 必须显式提供 canonical SHA-256；缺失 hash、
+  payload/hash/manifest/authority 任一不一致、重复 JSON key、路径越出 explicit artifact root 均在首个 fit 前失败。
+- bundle 是已批准输入的持久化载体，不是新的数据权威、threshold、selection 或 model artifact。它不得改变 hard semantic authority，
+  不得执行 D5/D6，不得生成 model/READY，也不得执行数据库或 runtime 动作。
+- 本次历史 C-010-A5 mapping 已发生不可逆 source drift，且旧行未被任何现存 artifact 保存。因此 BUG-982 源码修复只能防止未来重复
+  丢失并允许已存在 bundle 的确定性 replay；它不能伪造旧 bundle。继续 48-fit REFIT-03 的唯一合法前置是：提供真实旧冻结输入，或由
+  用户另行批准一个基于当前只读 preflight 的新 authority revision。该决定不由实现自动作出。
+- 用户已选择后一条路径。当前 `main@c6b6300b79deba04a3fd76cd9caab34689c8559d` 已按同一601日、同一
+  security/provider-absence/train-coverage 合同完成新的只读 C-010-A5 preflight：canonical report
+  `cd70e597519b583c848928aca41d73e9acfecf0c83340a8d35ec6c0a90d3fee5`、partition
+  `9282e05ba235449c315e11e9ed324e52c8c73dc3a25547ae4157544aaab12d93`、mapping
+  `acb38f303e5b9c7447fcae8e65ea23fe58615da67da762f51f03caa862682ab9`，结果仍为 `P_all/P_in/P_out=502/501/1`；
+  fit、selection、D6、model/READY、数据库和runtime flags均为false。该revision表示“从当前PIT事实启动新的可复现实验权威”，不是
+  对历史缺口的修复、回填或覆盖。
+- 新 authority 使用 versioned v2 envelope 及 v8 process/report readback；旧 `e7f7edc9…773d` / `03d78534…ead6` /
+  `6ed16f4e…d696` 与既有 v1/v7 artifact 继续按原authority只读解析。writer不得把新mapping写入旧schema，也不得把旧artifact迁移或重签。
+
+当前状态：`BUG_982_CURRENT_PIT_AUTHORITY_REVISION_PREFLIGHT_VERIFIED_SOURCE_FIX_IN_PROGRESS_REFIT_03_NOT_EXECUTED`。原 REFIT-03 三份
+0-fit failure receipt 保持 immutable；本次不执行历史数据修复。只有 BUG-982 源码完成审核并独立合入后，才允许使用新authority创建首个
+append-only bundle并执行真实48-fit诊断；在真实诊断成功前不执行原source worktree清理。
