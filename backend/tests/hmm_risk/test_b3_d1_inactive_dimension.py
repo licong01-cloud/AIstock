@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date, timedelta
+import json
 import struct
 
 import numpy as np
@@ -51,7 +52,12 @@ def _install_authority(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict[str, 
     return treatment, control
 
 
-def _series(sector_code: str, *, inactive_value: float = 0.0) -> B3TrainOnlySeries:
+def _series(
+    sector_code: str,
+    *,
+    inactive_value: float = 0.0,
+    mapping_manifest_hash: str | None = None,
+) -> B3TrainOnlySeries:
     rows = 120
     observations = np.arange(rows * len(ALL_CORE_FEATURES), dtype=np.float64).reshape(rows, len(ALL_CORE_FEATURES))
     observations = observations / 1000.0
@@ -66,7 +72,7 @@ def _series(sector_code: str, *, inactive_value: float = 0.0) -> B3TrainOnlySeri
         "train_dates_sha256": canonical_sha256(date_values),
         "train_observation_sha256": canonical_sha256(observations.tolist()),
         "dataset_manifest_hash": "a" * 64,
-        "mapping_manifest_hash": subject.C010_A5_MAPPING_SHA256,
+        "mapping_manifest_hash": mapping_manifest_hash or subject.C010_A5_MAPPING_SHA256,
         "calendar_manifest_hash": "c" * 64,
         "l2_stock_fact_manifest_hash": "6" * 64,
         "feature_domain_policy_sha256": "d" * 64,
@@ -87,7 +93,11 @@ def _preprocess() -> dict[str, object]:
     return {"family": "identity", "winsor_low": None, "winsor_high": None, "center": None, "scale": None}
 
 
-def _lineage_migration_receipt(*, producer_commit: str = "1" * 40) -> dict[str, object]:
+def _lineage_migration_receipt(
+    *,
+    producer_commit: str = "1" * 40,
+    current: bool = False,
+) -> dict[str, object]:
     pairs = {
         label: {
             "approved_receipt_sha256": canonical_sha256({"label": label, "side": "approved"}),
@@ -100,8 +110,12 @@ def _lineage_migration_receipt(*, producer_commit: str = "1" * 40) -> dict[str, 
     body = {
         "schema_version": subject.C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION,
         "producer_commit": producer_commit,
-        "source_a5_report_sha256": subject.C010_A5_REPORT_SHA256,
-        "source_a5_partition_sha256": subject.C010_A5_PARTITION_SHA256,
+        "source_a5_report_sha256": (
+            subject.C010_A5_CURRENT_REPORT_SHA256 if current else subject.C010_A5_REPORT_SHA256
+        ),
+        "source_a5_partition_sha256": (
+            subject.C010_A5_CURRENT_PARTITION_SHA256 if current else subject.C010_A5_PARTITION_SHA256
+        ),
         "status": "accepted",
         "excluded_non_business_fields": list(subject.C010_A5_LINEAGE_EXCLUDED_FIELDS),
         "receipt_pairs": pairs,
@@ -112,6 +126,104 @@ def _lineage_migration_receipt(*, producer_commit: str = "1" * 40) -> dict[str, 
         "runtime_action_performed": False,
     }
     return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def test_refit03_frozen_input_bundle_roundtrips_exact_float64_and_is_append_only(monkeypatch, tmp_path) -> None:
+    producer_commit = "1" * 40
+    preprocess = _preprocess()
+    monkeypatch.setattr(subject, "PREPROCESS_IDENTITY_SHA256", canonical_sha256(preprocess))
+    treatment = _series(
+        subject.TREATMENT_SECTOR,
+        mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+    )
+    harness = _series(
+        subject.CONTROL_SECTOR,
+        inactive_value=7.0,
+        mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+    )
+    bundle = subject.build_refit03_frozen_input_bundle(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=preprocess,
+        current_policy_sha256="d" * 64,
+        lineage_migration_receipt=_lineage_migration_receipt(
+            producer_commit=producer_commit,
+            current=True,
+        ),
+        current_authority_sha256="a" * 64,
+        historical_reference_sha256="b" * 64,
+        writer_commit=producer_commit,
+    )
+    path = tmp_path / "refit03.frozen-input.json"
+
+    identity = subject.write_refit03_frozen_input_bundle(path, bundle)
+    readback = subject.validate_refit03_frozen_input_bundle(json.loads(path.read_text(encoding="utf-8")))
+
+    assert identity == bundle["bundle_sha256"]
+    assert path.read_bytes() == canonical_json_bytes(bundle) + b"\n"
+    assert np.array_equal(
+        readback["parsed_roles"][subject.REFIT02_TREATMENT_ROLE].train_observations,
+        treatment.train_observations,
+    )
+    assert np.array_equal(
+        readback["parsed_roles"][subject.REFIT02_HARNESS_ROLE].train_observations,
+        harness.train_observations,
+    )
+    assert subject.write_refit03_frozen_input_bundle(path, bundle) == identity
+
+    alternate = subject.build_refit03_frozen_input_bundle(
+        treatment_item=treatment,
+        harness_item=_series(
+            subject.CONTROL_SECTOR,
+            inactive_value=8.0,
+            mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+        ),
+        preprocess=preprocess,
+        current_policy_sha256="d" * 64,
+        lineage_migration_receipt=_lineage_migration_receipt(
+            producer_commit=producer_commit,
+            current=True,
+        ),
+        current_authority_sha256="c" * 64,
+        historical_reference_sha256="b" * 64,
+        writer_commit=producer_commit,
+    )
+    with pytest.raises(subject.D1InactiveDimensionError, match="collision"):
+        subject.write_refit03_frozen_input_bundle(path, alternate)
+
+
+def test_refit03_frozen_input_bundle_rejects_rehashed_observation_tampering(monkeypatch) -> None:
+    producer_commit = "1" * 40
+    preprocess = _preprocess()
+    monkeypatch.setattr(subject, "PREPROCESS_IDENTITY_SHA256", canonical_sha256(preprocess))
+    bundle = subject.build_refit03_frozen_input_bundle(
+        treatment_item=_series(
+            subject.TREATMENT_SECTOR,
+            mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+        ),
+        harness_item=_series(
+            subject.CONTROL_SECTOR,
+            inactive_value=7.0,
+            mapping_manifest_hash=subject.C010_A5_CURRENT_MAPPING_SHA256,
+        ),
+        preprocess=preprocess,
+        current_policy_sha256="d" * 64,
+        lineage_migration_receipt=_lineage_migration_receipt(
+            producer_commit=producer_commit,
+            current=True,
+        ),
+        current_authority_sha256="a" * 64,
+        historical_reference_sha256="b" * 64,
+        writer_commit=producer_commit,
+    )
+    tampered = deepcopy(bundle)
+    role = tampered["roles"][subject.REFIT02_TREATMENT_ROLE]
+    role["train_observations"]["base64"] = "AAAA"
+    body = {key: value for key, value in tampered.items() if key != "bundle_sha256"}
+    tampered["bundle_sha256"] = canonical_sha256(body)
+
+    with pytest.raises(subject.D1InactiveDimensionError, match="observation identity is invalid"):
+        subject.validate_refit03_frozen_input_bundle(tampered)
 
 
 def _migration_receipts(*, producer_commit: str = "1" * 40) -> dict[str, dict[str, object]]:
@@ -1052,9 +1164,19 @@ def _refit02_authorities(
     monkeypatch: pytest.MonkeyPatch,
     *,
     treatment_inactive_value: float = 0.0,
+    current_revision: bool = False,
 ) -> tuple[B3TrainOnlySeries, B3TrainOnlySeries, dict, dict]:
-    treatment = _series(subject.TREATMENT_SECTOR, inactive_value=treatment_inactive_value)
-    harness = _series(subject.CONTROL_SECTOR, inactive_value=7.0)
+    mapping_identity = subject.C010_A5_CURRENT_MAPPING_SHA256 if current_revision else subject.C010_A5_MAPPING_SHA256
+    treatment = _series(
+        subject.TREATMENT_SECTOR,
+        inactive_value=treatment_inactive_value,
+        mapping_manifest_hash=mapping_identity,
+    )
+    harness = _series(
+        subject.CONTROL_SECTOR,
+        inactive_value=7.0,
+        mapping_manifest_hash=mapping_identity,
+    )
     historical_treatment = {**dict(treatment.train_input_manifest), "dataset_manifest_hash": "8" * 64}
     historical_harness = {**dict(harness.train_input_manifest), "dataset_manifest_hash": "8" * 64}
     monkeypatch.setattr(
@@ -1172,6 +1294,24 @@ def _refit02_process(monkeypatch: pytest.MonkeyPatch, process_identity: str) -> 
     )
 
 
+def _refit03_process(monkeypatch: pytest.MonkeyPatch, process_identity: str) -> dict:
+    treatment, harness, authority, historical = _refit02_authorities(
+        monkeypatch,
+        current_revision=True,
+    )
+    monkeypatch.setattr(subject, "fit_b3_preprocessed_train_only", _refit02_fit)
+    return subject.run_refit02_process(
+        treatment_item=treatment,
+        harness_item=harness,
+        preprocess=_preprocess(),
+        process_identity=process_identity,
+        producer_commit="1" * 40,
+        numeric_environment={"environment": "fixed-single-thread"},
+        current_authority=authority,
+        historical_reference=historical,
+    )
+
+
 def _remove_refit03_attempt_fields(attempt: dict) -> None:
     for field in (
         "training_stage_evidence",
@@ -1269,6 +1409,54 @@ def test_refit02_current_authority_binds_matched_input_and_historical_drift(monk
         )
         == authority
     )
+
+
+def test_refit03_current_authority_process_and_report_are_versioned_without_rewriting_v7(monkeypatch):
+    treatment, harness, authority, historical = _refit02_authorities(
+        monkeypatch,
+        current_revision=True,
+    )
+
+    assert authority["schema_version"] == subject.REFIT03_AUTHORITY_SCHEMA_VERSION
+    assert authority["source_authority"] == subject.CURRENT_SOURCE_AUTHORITY
+    assert authority["experiment_authority"]["mapping_manifest_sha256"] == subject.C010_A5_CURRENT_MAPPING_SHA256
+    assert (
+        subject.validate_refit02_current_a5_authority(
+            authority,
+            treatment_item=treatment,
+            harness_item=harness,
+            preprocess=_preprocess(),
+        )
+        == authority
+    )
+    assert (
+        subject.validate_refit02_historical_reference_receipt(
+            historical,
+            current_authority=authority,
+        )
+        == historical
+    )
+
+    first = _refit03_process(monkeypatch, "fresh_process_1")
+    second = _refit03_process(monkeypatch, "fresh_process_2")
+    report = subject.build_refit02_report(first, second, producer_commit="1" * 40)
+
+    assert first["schema_version"] == subject.REFIT03_PROCESS_SCHEMA_VERSION
+    assert second["schema_version"] == subject.REFIT03_PROCESS_SCHEMA_VERSION
+    assert report["schema_version"] == subject.REFIT03_REPORT_SCHEMA_VERSION
+    assert report["source_authority"] == subject.CURRENT_SOURCE_AUTHORITY
+    assert subject.validate_refit02_report(report) == report
+
+    failed = subject.build_refit02_preflight_failure_report(
+        producer_commit="1" * 40,
+        reason_code="hmm_risk_model_inactive_dimension_authority_mismatch",
+        error_type="D1InactiveDimensionError",
+        error="current authority rejected before fit",
+        schema_version=subject.REFIT03_REPORT_SCHEMA_VERSION,
+    )
+    assert failed["source_authority"] == subject.CURRENT_SOURCE_AUTHORITY
+    assert failed["actual_hmm_fit_invocation_count"] == 0
+    assert subject.validate_refit02_report(failed) == failed
     assert (
         subject.validate_refit02_historical_reference_receipt(
             historical,
