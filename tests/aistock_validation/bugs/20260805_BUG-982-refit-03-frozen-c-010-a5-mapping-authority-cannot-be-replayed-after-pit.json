@@ -1,0 +1,277 @@
+{
+  "actual": "The runner reads current production mapping and fails with D1-B C-010-A5 mapping_manifest_hash drifted. The old mapping cannot be reconstructed because sw_index_member/sw_index_classify have no version timestamp and the artifact stores no mapping rows.",
+  "allowed_write_scope": [
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+    "backend/services/hmm_risk/stock_fact_repository.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+    "tests/aistock_validation/bugs/20260805_BUG-982-refit-03-frozen-c-010-a5-mapping-authority-cannot-be-replayed-after-pit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-982",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-05T06:06:39.641417Z",
+  "description": "The runner reads current production mapping and fails with D1-B C-010-A5 mapping_manifest_hash drifted. The old mapping cannot be reconstructed because sw_index_member/sw_index_classify have no version timestamp and the artifact stores no mapping rows.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260805-2d3cf664724b",
+      "timestamp": "2026-08-05T06:06:39.641412Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/hmm_risk/d1_refit03_20260805_63c49e38_v7_retry2/d1_controlled_refit.json",
+    "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md#C-008-B3-D1-REFIT-03-COVARIANCE-DIAG-01"
+  ],
+  "expected": "A source-merged controlled diagnostic can replay the exact approved current-A5 dataset/mapping authority from immutable repo-external evidence, validate writer/readback identity, and run 48 fits without depending on later mutable DB state. Any new authority revision remains an explicit design/user decision.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+        "backend/services/hmm_risk/stock_fact_repository.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+      ],
+      "impacted_modules": [
+        "hmm.risk",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/hmm_risk/prepare_state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/stock_fact_repository.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+        "backend/services/hmm_risk/stock_fact_repository.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+        "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py",
+      "docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md"
+    ]
+  },
+  "first_seen_at": "2026-08-05T06:06:39.641417Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3153,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3153",
+  "last_seen_at": "2026-08-05T06:06:39.641417Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run the approved REFIT-03 prepare_state_model_set.py command against C-010-A5 report e7f7edc9...; preflight writes diagnostic_failed with 0 attempts/0 fits and mapping_manifest_hash drifted.",
+  "required_verification": [
+    "l0",
+    "hmm_risk_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "REFIT-03 frozen C-010-A5 mapping authority cannot be replayed after PIT source drift",
+  "trigger_condition": {
+    "fingerprint": "2d3cf664724bd7cf439d8783",
+    "source_event_id": "FE-20260805-2d3cf664724b"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
