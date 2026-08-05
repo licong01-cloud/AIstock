@@ -4489,6 +4489,7 @@ class SimulationLifecycleScheduler:
         run: SimulationDailyRun,
         as_of_time: datetime | None,
     ) -> dict[str, Any] | None:
+        self._validate_local_sim_post_close_state_closure(run)
         terminal_status, reason, reason_code, audit_state = self._localsim_post_close_terminal_status(run)
         if terminal_status is None:
             return None
@@ -4540,6 +4541,63 @@ class SimulationLifecycleScheduler:
             "post_close_terminalization": True,
         }
 
+    def _validate_local_sim_post_close_state_closure(self, run: SimulationDailyRun) -> None:
+        states = tuple(self.repository.list_local_sim_execution_states(run.run_id))
+        if not states:
+            return
+        plan = self.repository.get_execution_plan(run.execution_plan_id or "")
+        expected_intents = {intent.intent_id for intent in plan.intents}
+        by_intent = {state.intent_id: state for state in states}
+        if (
+            len(by_intent) != len(states)
+            or set(by_intent) != expected_intents
+            or any(
+                state.run_id != run.run_id
+                or state.binding_id != run.binding_id
+                or state.trade_date != run.trade_date
+                or state.plan_id != plan.plan_id
+                for state in states
+            )
+        ):
+            raise DataUnavailableError(
+                "LocalSim post-close durable states do not close over the frozen plan",
+                context={
+                    "reason_code": "LOCALSIM_POST_CLOSE_STATE_PLAN_MISMATCH",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                    "expected_intent_ids": sorted(expected_intents),
+                    "actual_intent_ids": sorted(by_intent),
+                    "state_count": len(states),
+                },
+            )
+        persistence = run.run_payload_json.get("local_sim_persistence")
+        terminal_flag = persistence.get("terminal") if isinstance(persistence, dict) else None
+        active_states = tuple(state for state in states if not state.is_terminal)
+        if active_states and terminal_flag is not False:
+            raise DataUnavailableError(
+                "LocalSim post-close run cannot terminalize while durable execution states remain active",
+                context={
+                    "reason_code": "LOCALSIM_POST_CLOSE_ACTIVE_STATE_CONFLICT",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                    "persistence_terminal": terminal_flag,
+                    "active_state_ids": sorted(state.state_id for state in active_states),
+                },
+            )
+        if not active_states and terminal_flag is False:
+            raise DataUnavailableError(
+                "LocalSim post-close persistence remains non-terminal after all durable states terminated",
+                context={
+                    "reason_code": "LOCALSIM_POST_CLOSE_PERSISTENCE_STATE_CONFLICT",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                    "state_ids": sorted(state.state_id for state in states),
+                },
+            )
+
     @staticmethod
     def _localsim_post_close_terminal_status(
         run: SimulationDailyRun,
@@ -4549,6 +4607,21 @@ class SimulationLifecycleScheduler:
             payload.get("local_sim_persistence") if isinstance(payload.get("local_sim_persistence"), dict) else {}
         )
         persistence_status = str(persistence.get("status") or "").upper()
+        if persistence and not isinstance(persistence.get("terminal"), bool):
+            raise DataUnavailableError(
+                "LocalSim post-close persistence terminal flag must be a boolean",
+                context={
+                    "reason_code": "LOCALSIM_POST_CLOSE_PERSISTENCE_SCHEMA_INVALID",
+                    "run_id": run.run_id,
+                    "terminal_type": type(persistence.get("terminal")).__name__,
+                },
+            )
+        if persistence and persistence["terminal"] is False:
+            # A non-terminal durable generation is the execution authority.
+            # The binding loop must restore and drive it with the post-close
+            # exchange time before this summary-level terminalizer can decide
+            # the run status.
+            return None, None, None, None
         if persistence_status == "PERSISTED":
             return (
                 SimulationDailyRunStatus.SUCCEEDED,
@@ -7365,6 +7438,7 @@ class SimulationLifecycleScheduler:
         as_of_time: datetime | None,
         outbox: LocalSimProjectionOutboxV1,
         states: tuple[LocalSimExecutionStateV1, ...],
+        context: SimulationRunContext | None = None,
     ) -> None:
         """Prove both durable planes before reviving a failed minute loop."""
         raw_economic_receipts = run.run_payload_json.get("local_sim_economic_receipts_v1")
@@ -7453,12 +7527,13 @@ class SimulationLifecycleScheduler:
             run_id=run.run_id,
             receipt=projection_receipt,
         )
-        context = self._load_run_context(
-            runtime_release=runtime_release,
-            binding=binding,
-            trade_date=trade_date,
-            as_of_time=as_of_time,
-        )
+        if context is None:
+            context = self._load_run_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
+                as_of_time=as_of_time,
+            )
         paper_repository = self._paper_repository_for_local_sim(binding=binding, run=run, context=context)
         economic_fact_hashes: dict[str, dict[str, Any]] = {}
         for field_name in (
@@ -12207,7 +12282,6 @@ class SimulationLifecycleScheduler:
             submit
             and binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM
             and bool(plan.intents)
-            and bool(run.run_payload_json.get("broker_called"))
             and run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
         )
 
@@ -12224,6 +12298,15 @@ class SimulationLifecycleScheduler:
     ) -> SimulationSchedulerBindingResult:
         context = self._load_run_context(
             runtime_release=runtime_release, binding=binding, trade_date=trade_date, as_of_time=as_of_time
+        )
+        self._readback_active_local_sim_durable_continuation(
+            binding=binding,
+            run=run,
+            plan=plan,
+            runtime_release=runtime_release,
+            trade_date=trade_date,
+            as_of_time=as_of_time,
+            context=context,
         )
         self._configure_local_sim_runtime_scope(
             binding=binding, run=run, plan=plan, context=context, restore=True, as_of_time=as_of_time
@@ -12316,6 +12399,121 @@ class SimulationLifecycleScheduler:
                 binding=binding, trade_date=trade_date, default_data_source=data_source
             ),
         )
+
+    def _readback_active_local_sim_durable_continuation(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        as_of_time: datetime | None,
+        context: SimulationRunContext,
+    ) -> tuple[LocalSimExecutionStateV1, ...]:
+        """Validate the exact committed generation before a LocalSIM continuation.
+
+        ``broker_called`` is an observation of an earlier call, not the owner of
+        the durable minute-loop lifecycle.  Continuation authority comes from
+        the frozen plan, execution states, persistence marker, outbox and both
+        readback receipts.
+        """
+
+        raw_outbox = run.run_payload_json.get("local_sim_projection_outbox_v1")
+        try:
+            outbox = LocalSimProjectionOutboxV1.model_validate(raw_outbox)
+        except Exception as exc:
+            raise DataUnavailableError(
+                "LocalSim active durable continuation outbox is invalid",
+                context={
+                    "reason_code": "LOCALSIM_ACTIVE_CONTINUATION_OUTBOX_INVALID",
+                    "run_id": run.run_id,
+                    "binding_id": binding.binding_id,
+                    "plan_id": plan.plan_id,
+                },
+            ) from exc
+        if (
+            outbox.status != LocalSimProjectionOutboxStatus.PROJECTED
+            or outbox.run_id != run.run_id
+            or outbox.plan_id != plan.plan_id
+        ):
+            raise DataUnavailableError(
+                "LocalSim active durable continuation outbox does not identify the projected plan generation",
+                context={
+                    "reason_code": "LOCALSIM_ACTIVE_CONTINUATION_OUTBOX_CONFLICT",
+                    "run_id": run.run_id,
+                    "binding_id": binding.binding_id,
+                    "plan_id": plan.plan_id,
+                    "outbox_id": outbox.outbox_id,
+                    "outbox_status": outbox.status.value,
+                    "outbox_run_id": outbox.run_id,
+                    "outbox_plan_id": outbox.plan_id,
+                },
+            )
+        states = tuple(self.repository.list_local_sim_execution_states(run.run_id))
+        by_intent = {state.intent_id: state for state in states}
+        expected_intents = {intent.intent_id for intent in plan.intents}
+        if (
+            not states
+            or len(by_intent) != len(states)
+            or set(by_intent) != expected_intents
+            or any(
+                state.run_id != run.run_id
+                or state.binding_id != binding.binding_id
+                or state.trade_date != trade_date
+                or state.plan_id != plan.plan_id
+                for state in states
+            )
+        ):
+            raise DataUnavailableError(
+                "LocalSim active durable continuation states do not close over the frozen plan",
+                context={
+                    "reason_code": "LOCALSIM_ACTIVE_CONTINUATION_STATE_PLAN_MISMATCH",
+                    "run_id": run.run_id,
+                    "binding_id": binding.binding_id,
+                    "plan_id": plan.plan_id,
+                    "expected_intent_ids": sorted(expected_intents),
+                    "actual_intent_ids": sorted(by_intent),
+                    "state_count": len(states),
+                },
+            )
+        persistence = run.run_payload_json.get("local_sim_persistence")
+        if not isinstance(persistence, dict) or persistence.get("terminal") is not False:
+            raise DataUnavailableError(
+                "LocalSim active durable continuation persistence is not explicitly non-terminal",
+                context={
+                    "reason_code": "LOCALSIM_ACTIVE_CONTINUATION_PERSISTENCE_CONFLICT",
+                    "run_id": run.run_id,
+                    "binding_id": binding.binding_id,
+                    "plan_id": plan.plan_id,
+                    "persistence_type": type(persistence).__name__,
+                    "persistence_terminal": persistence.get("terminal") if isinstance(persistence, dict) else None,
+                },
+            )
+        active_states = tuple(state for state in states if not state.is_terminal)
+        if not active_states:
+            raise DataUnavailableError(
+                "LocalSim intraday run has no active durable execution state",
+                context={
+                    "reason_code": "LOCALSIM_ACTIVE_CONTINUATION_STATE_MISSING",
+                    "run_id": run.run_id,
+                    "binding_id": binding.binding_id,
+                    "plan_id": plan.plan_id,
+                    "state_ids": sorted(state.state_id for state in states),
+                },
+            )
+        self._readback_local_sim_recovery_generation(
+            binding=binding,
+            run=run,
+            plan=plan,
+            runtime_release=runtime_release,
+            trade_date=trade_date,
+            as_of_time=as_of_time,
+            outbox=outbox,
+            states=states,
+            context=context,
+        )
+        return active_states
 
     @staticmethod
     def _should_submit_existing_plan(
