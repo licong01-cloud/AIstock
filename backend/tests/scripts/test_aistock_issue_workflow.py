@@ -1768,6 +1768,84 @@ def test_close_sync_rejects_non_backend_runtime_contract_conflicts(
         )
 
 
+def test_close_sync_uses_merged_commit_files_instead_of_unmodified_allowed_scope(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_commit = "a" * 40
+    issue = _write_json(
+        isolated_workflow_root / "offline-bug.json",
+        _bug(
+            allowed_write_scope=[
+                "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+                "backend/services/hmm_risk/stock_fact_repository.py",
+            ],
+            runtime_contract={
+                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                "runtime_impact": "none",
+                "persistence_basis": "not_required",
+                "post_restart_effective_gate": "not_required",
+                "target_id": None,
+                "target_ids": [],
+            },
+        ),
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        assert args == ["git", "diff", "--name-only", f"{merge_commit}^1", merge_commit, "--"]
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "backend/services/hmm_risk/b3_d1_inactive_dimension.py\nscripts/hmm_risk/prepare_state_model_set.py\n",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/199",
+        apply=False,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s hmm_risk_backend -> passed"],
+        merge_commit=merge_commit,
+    )
+    assert payload["workflow_gate"] == "ready_for_apply"
+    assert payload["backend_restart"]["required"] is False
+    assert payload["runtime_changed_files_source"] == "merge_commit"
+    assert "backend/services/hmm_risk/stock_fact_repository.py" not in payload["runtime_changed_files"]
+
+
+def test_close_sync_rejects_declared_merge_commit_that_differs_from_verified_pr(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    declared = "a" * 40
+    verified = "b" * 40
+    issue = _write_json(isolated_workflow_root / "offline-bug.json", _bug())
+    monkeypatch.setattr(workflow, "_merged_commit_changed_files", lambda merge_commit: ["scripts/aistock_issue_workflow.py"])
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url, skip_github_check=False: {
+            "checked": True,
+            "merged": True,
+            "pr": {"mergeCommit": {"oid": verified}, "mergedAt": "2026-08-05T00:00:00Z"},
+        },
+    )
+    with pytest.raises(workflow.WorkflowError, match="differs from the verified source PR"):
+        workflow.build_close_sync_plan(
+            bug_id=None,
+            issue_json=str(issue),
+            pr_url="https://github.example/pull/199",
+            apply=True,
+            allow_missing_linkage=False,
+            validation_evidence=["python -m nox -s validation_module_registry_l0 -> passed"],
+            merge_commit=declared,
+            allow_current_worktree=True,
+        )
+
+
 def test_runtime_close_sync_preserves_source_fixed_time_and_uses_verification_close_time(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5288,6 +5366,11 @@ def test_close_sync_apply_blocks_canonical_root_pollution(
         "_git_snapshot",
         lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
     )
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     with pytest.raises(workflow.WorkflowError, match="canonical root"):
         workflow.build_close_sync_plan(
@@ -5317,6 +5400,11 @@ def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
 
     monkeypatch.setattr(workflow, "_sync_github_issue_after_close", fake_sync)
     monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     payload = workflow.build_close_sync_plan(
         bug_id=None,
@@ -6945,6 +7033,7 @@ def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
 def test_close_sync_is_dry_run_and_requires_pr_url(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _write_json(
         isolated_workflow_root / "bug.json",
@@ -6974,6 +7063,12 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
     assert ready["workflow_gate"] == "ready_for_apply"
     assert ready["dry_run"] is True
     assert (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "close-sync-plan.json").exists()
+
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     assert workflow.main([
         "close-sync",
@@ -7020,6 +7115,11 @@ def test_close_sync_apply_can_create_registry_worktree(
 
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(workflow, "_validate_close_sync_apply_target", lambda root: {"blocking": [], "warnings": []})
+    monkeypatch.setattr(
+        workflow,
+        "_merged_commit_changed_files",
+        lambda _commit: ["scripts/aistock_issue_workflow.py"],
+    )
 
     payload = workflow.build_close_sync_plan(
         bug_id=None,
