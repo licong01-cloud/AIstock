@@ -258,11 +258,14 @@ def test_repository_public_transaction_surface_is_complete() -> None:
         "ingest_routed_event_atomic",
         "apply_claimed_delivery_atomic",
         "initialize_algo_atomic",
+        "initialize_product_algo_atomic_v3",
         "read_event_transaction",
         "read_delivery_tail",
         "write_transition_bundle",
         "read_transition_bundle",
         "read_command_identity_chain",
+        "read_callback_identity_chain",
+        "list_dispatchable_outbox_commands",
         "compare_and_swap_mapping_outbox",
         "close_mapping_from_callback",
         "claim_delivery",
@@ -1628,6 +1631,15 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             expected_lease_epoch=dispatching_outbox.lease_epoch,
             expected_lease_fence_token=dispatching_outbox.lease_fence_token,
         ) == {"mapping": dispatching_mapping, "outbox": accepted_outbox}
+        assert repository.read_callback_identity_chain(
+            runtime_id="runtime_k2",
+            broker_order_id="broker_repo_k2",
+        ) == {
+            "mapping": dispatching_mapping,
+            "submit_outbox": accepted_outbox,
+            "reference_outbox": accepted_outbox,
+            "algo": repository.read_algo_instance(_algo_id()),
+        }
         completion_attempt = BrokerDispatchAttemptV1.create(
             command_id=dispatch_attempt.command_id,
             attempt_count=dispatch_attempt.attempt_count,

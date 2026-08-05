@@ -2,7 +2,7 @@
 
 > Feature tier：`F2`。本文是 [`miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md`](miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md) 的 K6-D 唯一下位实施合同；上位架构为 [`miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`](miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md)，模拟盘唯一蓝图为 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。冲突时以上位 K6 设计与统一蓝图为准，本文不得扩展其业务范围。
 
-> 当前事实（2026-08-04）：K1–K5 与 K6-A/C0/C1/B 均为 `implemented_verified + merged`。K6-B PR #3120 已通过 merge `48bcf1153dea3dca5c598793d6556d2757ed87de` 合入；K6-B successor production DDL 已按 DEV-first 流程应用并独立回读，DEV migration=`1 passed`，production repository preflight=`9/9 true`，K6/K6C/K6B catalog=`6eeff2d2.../ef09f8ab.../10ae5be0...`，coordination rows=`0`。K6-D code=`not_started`，product runtime=`not_switched`。
+> 当前事实（2026-08-05）：K1–K5 与 K6-A/C0/C1/B/D 均为 `implemented_verified + merged`。K6-B PR #3120 已通过 merge `48bcf1153dea3dca5c598793d6556d2757ed87de` 合入；K6-B successor production DDL 已按 DEV-first 流程应用并独立回读，DEV migration=`1 passed`，production repository preflight=`9/9 true`，K6/K6C/K6B catalog=`6eeff2d2.../ef09f8ab.../10ae5be0...`，coordination rows=`0`。K6-D source 已通过 PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` 完成 `implemented_verified + merged`，`source_merge=merged_pr_3146`；product runtime=`not_switched`，用户restart、runtime activation与正常交易日验收仍分别未完成。
 
 ## 0. Executive Decision / 核心结论
 
@@ -100,6 +100,44 @@ source inventory 与 process drain inventory 必须分开，禁止用一个含�
 
 `migration_readback_sha256` 使用 `hash_hex_v1("miniqmt_k6b_production_readback_v1", {ordered_checks,k6_catalog_sha256,k6c_catalog_sha256,k6b_catalog_sha256,authority_columns,successor_trigger_identity})`；不包含主机路径、密码、临时时间或连接对象。writer/readback共用唯一pure builder，不能由caller传入PASSED。
 
+#### 3.2.1 Exact route-authority builders and lock closure
+
+`product_authority_schema_sha256` is not a caller value.  The only builder is
+`hash_hex_v1("miniqmt_product_authority_schema_v3", payload)`, where `payload`
+has exactly these keys in canonical JSON order: `authority_set_schema`,
+`authority_item_schema`, `authority_envelope_schema`,
+`materialization_receipt_schema`, and `lifecycle_projection_schema`.  Their
+values are respectively the canonical `model_json_schema()` JSON payloads of
+`ProductCommandAuthoritySetV3`, `ProductCommandAuthorityItemV3`,
+`ProductCommandAuthorityEnvelopeV3`, `ProductMaterializationReceiptV3`, and
+`ProductCommandLifecycleProjectionV3`.  No module path, class object, source
+timestamp, environment value, or caller-supplied hash participates.  The same
+pure builder is used before candidate creation and in post-commit readback.
+
+The repository takes the route lock in this exact order, with no preliminary
+read on a separate connection: (1) `paper_v2.simulation_release_binding` and
+its `strategy_pkg.strategy_runtime_release` row `FOR SHARE`; (2)
+`qmt_strategy.execution_runtime FOR UPDATE`; (3)
+`execution_product_route_owner FOR UPDATE` and its immutable cutover receipt
+`FOR SHARE`; (4) nonterminal `execution_algo_instance` rows ordered by
+`algo_instance_id FOR SHARE`; (5) the unique current
+`execution_kernel_worker_incarnation` joined to its current
+`execution_kernel_worker_epoch` for `PRODUCT_COORDINATOR`; and (6) strict
+catalog, gateway, exchange-session and K6-B schema readbacks.  The binding
+readback must be `MINIQMT_SIM`, have a nonempty broker account and account
+group, have a valid effective date window, and exactly close to every frozen
+parent-benchmark row for the requested runtime/binding/date.  An empty parent
+set is valid only for a zero-intent plan; a nonempty set must have one binding,
+release, release hash, account and trade date and cannot be silently reduced.
+
+The repository-owned migration builder receives only the verified K6/K6-C0/K6-B
+preflight result, the three independently recomputed catalog hashes, the exact
+ordered V3 authority column identities, and the exact successor-trigger
+identity.  It serializes `ordered_checks` as sorted `(name,true)` pairs and
+uses the §3.2 `miniqmt_k6b_production_readback_v1` domain.  Any false, missing,
+extra, duplicate or non-boolean check is a typed zero-write failure; it is never
+converted to a default, cached, or previous readback.
+
 ### 3.3 Cutover receipt and current owner
 
 复用上位合同：
@@ -169,6 +207,88 @@ route writer、ALGO_START、scheduler roll-forward和restart recovery并发时�
 
 `K6DProductPlanStartReceiptV1`是从durable route owner与ALGO_START ingress receipts重建的immutable readback carrier，不新增表：`schema_version,runtime_id,binding_id,execution_plan_id,execution_plan_sha256,product_route_receipt_sha256,ordered_parent_results,total,started,failed,success,receipt_sha256`。每个parent result包含`plan_intent_ordinal,parent_intent_id,algo_instance_id,event_id,ingress_receipt_sha256,start_status in STARTED|FAILED_TERMINAL,terminal_reason_or_null,coordinator_broker_called=false`；集合必须与冻结plan exact set-equal且顺序相同，hash domain=`miniqmt_k6d_product_plan_start_receipt_v1`。只有全部parent均有真实durable result、failed=0且started=total才可`success=true`；空结果、partial set或读取失败不能返回成功。child/outbox仍可能处于合法PENDING并由独立lifecycle projection呈现，不能把它混入plan-start状态；异步dispatcher后续可能真实调用broker，因此这里只证明product coordinator自身没有broker side effect。
 
+#### 5.1.1 Production evidence authority and deterministic replay
+
+`ProductCommandEvaluationEvidenceV3` is produced only by
+`KernelProductEvidenceProviderV3.build_with_cursor_v1(...)`.  This is a
+repository-transaction service, not a caller DTO factory.  Its public input is
+the locked `RuntimeEventEnvelopeV2`, claimed delivery, durable algo/previous
+state, proposal `AlgoTransitionV1`, the exact plugin creation authority and the
+same-cursor read-only service projections.  A caller cannot supply an OMS or
+risk decision, kill-switch value, route status, command disposition, PASS
+value, target algo set or account balance.
+
+For every `SUBMIT_LIMIT` command the provider derives the deterministic child,
+mapping, client-reference and managed-order request from the command and the
+locked ALGO_START/binding/release rows.  It invokes the existing
+`QmtManagedOrderService.preview_order()` business evaluator through a
+same-cursor read repository.  That read repository locks and projects exactly
+the matching `qmt_strategy.virtual_account`, existing order remark,
+`position_lot`, open SELL intents and trading-calendar rows.  The provider
+hashes the complete account/cash/lot/open-order fact set, maps the complete
+ordered preflight errors to one `OMSPreflightProjectionReceiptV1`, and maps the
+existing durable `miniqmt_pre_trade_risk` account/request configuration to one
+`MiniQMTRiskDecisionReceiptV1`.  `PRE_TRADE_KILL_SWITCH_ACTIVE` is the only
+source of `KILL_SWITCH`; all other preflight failures remain exact OMS REJECT
+reasons.  `CANCEL_ORDER` reuses the locked accepted mapping/outbox authority and
+does not invent a new order preflight.
+
+Market data is accepted only from the committed current or latest-prior
+`B0_QUOTE_V2` K2 TICK event selected by the existing facade/K2 cutoff rules.
+Contract, account and kill-switch payloads are rebuilt from the same locked
+binding/plan/ledger rows.  Their projection refs, OMS/risk/route refs and raw
+payload hashes are inserted into one canonical `ExecutionProjectionSetV1`.
+Missing, stale, duplicate, extra, noncanonical or cross-owner facts are typed
+zero-write failures.  There is no `NoopMiniQMTRiskEngine`, process-local kill
+switch, installed/latest/previous receipt, default balance, default price or
+shadow historical PASS fallback in the product provider.
+
+ALGO_START is a zero-command lifecycle event for all five approved plugins;
+its initialization may create state, timers and diagnostics but cannot submit
+or cancel.  A nonzero ALGO_START command trace is
+`MINIQMT_K6_PRODUCT_ALGO_START_COMMAND_FORBIDDEN` and writes the parent's typed
+terminal no-broker initialization failure.  Its zero-command V3 envelope is
+still persisted atomically, so initialization never bypasses V3.
+
+For every subsequent delivery the plugin is pure-evaluated twice and persisted once.  Pass one uses the
+locked base service set and produces a proposal command trace.  The provider
+builds the exact per-command evidence and expanded projection set from that
+trace.  Pass two uses the same event/state/deterministic context plus the
+expanded projection set.  Its next state, ordered commands, timers,
+diagnostics and terminal outcome must equal pass one byte-for-byte; only the
+input projection-set identity may differ.  Drift is
+`MINIQMT_K6_PRODUCT_REPLAY_DRIFT` and writes nothing.  The pass-two transition
+is the only transition admitted to the V3 aggregate/materializer.  Zero-command
+transitions still persist a V3 zero-command envelope and need no synthetic
+per-command evidence.
+
+#### 5.1.2 Initial and subsequent V3 transaction seams
+
+The repository exposes two product-only transaction seams:
+
+1. `initialize_product_algo_atomic_v3(...)` locks binding/release, runtime,
+   route owner/receipt, worker incarnation and plan parent authority in the
+   §3 order; allocates the ALGO_START event sequence; builds the proposal,
+   evidence replay and V3 envelope; then writes event, ingress receipt,
+   delivery, algo, transition, authority/items, mapping/outbox or dependent-BUY
+   coordination, timers and diagnostics in one transaction.  Post-COMMIT it
+   independently reads the event, ingress, route lineage and complete V3
+   materialization receipt.  A commit-unknown path performs readback only and
+   never invokes the builder or writer again.
+2. `apply_claimed_product_delivery_atomic_v3(...)` locks the minimum
+   nonterminal claimed delivery, predecessor, algo/state, event, active
+   mapping/outbox/timer set and product evidence rows; performs the same
+   proposal/evidence/replay/V3 build; and commits transition, authority and
+   economic lineage with the delivery/algo CAS in one transaction.  Shadow
+   `apply_claimed_delivery_atomic` remains a non-product compatibility seam and
+   is unreachable from the product composition root.
+
+Both seams share one cursor-level V3 validator/writer and one independent
+readback.  Failure/skip transitions preserve the existing K2 terminal
+semantics and never fabricate a V3 APPLIED envelope.  An APPLIED product
+transition without a persisted V3 envelope, or a V3 envelope written after a
+separate K2 commit, is forbidden.
+
 ### 5.2 Submission and event flow
 
 最终链路固定为：
@@ -177,10 +297,41 @@ route writer、ALGO_START、scheduler roll-forward和restart recovery并发时�
 
 - scheduler只按binding/run/session发布业务事件，不读取`algo_code`、不循环调用algo timer、不直接调用broker。
 - bridge只构造strict runtime/release/binding/plan context并调用一个KERNEL_V2 coordinator；不实例化`MiniQMTExecutionRuntimeClient`产品submit/tick driver。
-- coordinator按现有five-plugin catalog创建K2 ALGO_START；0/1/N command全部经V3 aggregate/materializer。
+- coordinator按现有five-plugin catalog创建K2 ALGO_START；ALGO_START固定zero-command并持久化V3 zero envelope，后续event的0/1/N command全部经V3 aggregate/materializer。
 - TICK只来自native B0_QUOTE_V2 committed event；TIMER/SESSION/EOD只来自ExchangeSessionClock；午休不累计TIMER，PM不catch-up burst。
 - ORDER/TRADE/RECONCILE callback、ACCOUNT authority与outbox COMMAND_OUTCOME先持久化K2 event，再投递plugin/K6-B；callback/outbox worker不得直接调用algo或dependent-BUY submit。
 - broker side effect只由K2 outbox dispatcher执行；所有同步拒绝仍写完整no-broker lineage。
+
+产品实现将真实QMT callback authority固定为现有gateway的`sync_orders()/sync_trades()` snapshot，不假设宿主提供不存在的callback registrar。`MiniQMTQuoteIngressActivation.watchdog_tick()`对每个已注册KERNEL_V2 runtime调用`SimulationMiniQMTProductRuntimeV1.scheduler_tick_v1()`：先按durable mapping/outbox broker identity筛选账户级snapshot并以TRADE-before-terminal-ORDER顺序写K2 callback transaction，再用同一scheduler observation推进ExchangeSessionClock。由此即使某个窗口没有新quote，SESSION/TIMER/EOD仍由scheduler lifecycle推进；不得用quote arrival充当wall-clock替代品。
+
+snapshot中的binary float只在QMT source boundary转为exact decimal text，canonical JSON/hash authority仍拒绝non-finite或未知carrier。首次同步ACK可从submit outbox receipt解析broker identity并在callback transaction内闭合mapping；后续重复snapshot按event identity幂等，不重复broker/child side effect。terminal ORDER之后出现的distinct late TRADE只能执行`TERMINAL -> TERMINAL` lineage extension，不得重开child。单runtime tick失败携带runtime/binding identity并只使所属binding `FAILED_RETRYABLE`，其他MiniQMT/LocalSIM binding继续；activation先尝试全部runtime再聚合，不得形成global starvation或静默忽略。成功完成下一交易日首个final tick的旧runtime释放其B0 logical lease和sink，防止跨日registry/consumer累积。
+
+The production clock persists the complete native A-share calendar carried by
+the B0 context: opening auction, AM continuous, PM continuous and closing
+auction remain four distinct source segments.  `ExchangeSessionClockV1` uses
+the versioned A-share phase authority to select exactly the two continuous
+segments for active-second/TIMER calculations; auction segments remain
+`OPEN_AUCTION`/`CLOSE_AUCTION` and never become tradable continuous data.  A
+calendar with zero, one, duplicate, overlapping or more than two continuous
+segments fails loud.  It is forbidden to truncate the durable calendar to a
+two-segment test fixture or to merge the closing auction into PM continuous.
+
+The product plan reader accepts only the compiler-owned frozen envelope
+`execution_policy={version_id,sha256,payload}` and payload
+`{policy_version_id,policy_sha256,policy_json}`.  All three identity/hash views
+must equal the `ExecutionPlan` fields and `policy_sha256` must be recomputed
+from the exact policy JSON.  There is no `validated_execution_policy_id`,
+container, plan-field, string-coercion or inferred-algo fallback.  Parent and
+trading-rule-decision sets must be non-empty, unique and exact set-equal before
+the first ALGO_START write.
+
+Native source ingestion retries only the two explicit event-sequence CAS
+conflicts.  `KernelRepositoryCommitUnknown` performs independent readback and
+is re-raised unchanged when no committed event is visible; every other
+repository conflict preserves its original type, message and context.  An
+existing in-process product runtime is reusable only when its exact runtime,
+binding, trade date, ordered symbol set and current source-capability hash all
+match; stale-source reuse is a typed idempotency conflict.
 
 ### 5.3 Dependent-BUY
 
@@ -200,6 +351,8 @@ fresh process只从route owner/receipt、K2 event/delivery/algo/transition、V3 
 - capacity residual与dependent-BUY共用helper必须先拆开，保留capacity residual原业务合同并直接回归，不能连带删除。
 - 删除后的inventory aggregate必须所有产品项=`REMOVED`，允许的`NON_PRODUCT_TEST_ADAPTER`必须有zero-product-caller证明；`UNKNOWN`阻断合入。
 
+实现后的精确disposition为：`MiniQMTExecutionBridge.submit_event_loop_plan/drive_event_loop_ticks`与scheduler旧tick driver symbol物理删除；`MiniQMTExecutionRuntimeClient`中的historical submit/drive、order-service dependent retry和`vnpy_style.legacy_adapter`仅保留`NON_PRODUCT_TEST_ADAPTER`/characterization用途，产品root不可达，且`backend.execution_algos`不再eager import legacy adapter。source capability以AST同时证明lifecycle submit、scheduler product builder、scheduler lifecycle watchdog、product runtime builder与quote activation watchdog五个root均无retired call；不能用自报`REMOVED`替代symbol-absence readback。
+
 ### 6.2 Unique-route proof
 
 `test_kernel_legacy_route_retirement.py`必须以AST/import graph和精确symbol inventory证明：
@@ -216,7 +369,7 @@ build/fresh-process同时生成并重算`K6DRouteSourceCapabilityV1`：`schema_v
 
 ### 7.1 Read-only diagnostics
 
-复用 `/api/v1/simulation-runtime/platform-diagnostics` 与既有kernel diagnostics，以additive只读字段增加`miniqmt_k6d`投影；不新建平行endpoint。投影schema固定为`miniqmt_k6d_platform_diagnostics_v1`：`runtime_id,binding_id,trade_date,source_capability_sha256,route_owner/epoch/cutoff/current_receipt_sha256,binding/release hashes,legacy/kernel active counts,migration_readback_sha256,coordination summary/age/last trigger/ledger observation,authority/mapping/outbox/attempt/callback/reconcile closure,active_failure,last_failure,observed_at_utc,projection_sha256`。各ordered collection按稳定identity排序，最多256项并带`total/retained/omitted_count,omitted_set_sha256`；projection hash覆盖完整bounded payload。不得增加acknowledge、force-route、force-release、replay或其他写API。
+复用 `/api/v1/simulation-runtime/platform-diagnostics` 与既有kernel diagnostics，以additive只读layer增加`miniqmt_k6d`投影；不新建平行endpoint。`read_kernel_diagnostics()`用独立只读连接strict读取current route owner/receipt、当前active legacy/kernel instance count、cutover snapshot count和coordination status aggregate；live source capability只从scheduler quote-activation health取得。pure projector要求runtime/binding/date与durable/live两侧exact一致，输出`miniqmt_k6d_platform_diagnostics_v1`及覆盖完整facts的`projection_sha256`。route未激活返回`NOT_DEPLOYED`，owner/source/legacy drift返回`BLOCKED`并自动clear；不得把readback failure、missing live source或旧receipt count伪装为healthy。高基数identity只进入diagnostics/alert body，projection不增加acknowledge、force-route、force-release、replay或其他写API。
 
 ### 7.2 Metrics and alerts
 
@@ -245,7 +398,7 @@ route receipt/owner history、K2/K6 economic lineage按现有订单审计保留�
 - `test_kernel_product_cutover.py`：existing binding/release/account closure、SIM-only、LIVE/LIVE_PENDING拒绝、first/retry/allowed-successor/forbidden-drift receipt、CAS、cutoff、dual-route、same-event concurrency、commit unknown、restart、rollback边界。
 - `test_kernel_legacy_route_retirement.py`：完整inventory、AST/import/call graph、dynamic import、zero product legacy caller、capacity residual保留、LocalSIM no-diff。
 - `test_kernel_product_runtime_integration.py`：`KernelAlgoCreationRequestV2`与`miniqmt_algo_start_v2`的plugin/product route双lineage、五plugin统一ALGO_START/TICK/TIMER/SESSION/ORDER/TRADE/COMMAND_OUTCOME/RECONCILE/EOD、ACCOUNT dependent-BUY、既有typed OPERATOR owner routing、0/1/N V3 authority、outbox与restart；raw/unknown/新增审批型OPERATOR zero-write拒绝。
-- `test_kernel_product_diagnostics.py`：只读、bounded evidence、reason preservation、cardinality、alert auto-clear。
+- `test_kernel_diagnostics.py`与`test_ops_api.py`：durable route/live source exact closure、只读、projection hash、current-vs-cutover active count、低cardinality metrics、reason preservation、binding-scoped alert auto-clear与无side effect。
 - `test_lifecycle_scheduler.py`定向nodeids：single/multi binding、午休恢复、EOD、per-binding failure isolation；不得运行无关simulation全套。
 
 所有RED必须走public production seam；不得使用helper-only、固定PASSED、mock-only完成证据、skip或xfail代替实现。broker使用recording adapter，不调用真实broker。
@@ -310,12 +463,12 @@ route receipt/owner history、K2/K6 economic lineage按现有订单审计保留�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| `F-107` | §3–§5；target `kernel_product_cutover.py`、`kernel_delivery.py`、`kernel_creation.py`、`kernel_repository_k2b.py`、`simulation_runtime/bridges.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py` + DEV SIM/account/route/ALGO_START transaction matrix | design_ready | none |
-| `F-108` | §2.2、§6；target `simulation_runtime/scheduler.py`、`miniqmt_execution_runtime/client.py`、`runtime.py`、`qmt_strategy_ledger/order_service.py`、`execution_algos/vnpy_style/legacy_adapter.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_legacy_route_retirement.py` exact before/after inventory、source capability、AST/import/call graph与capacity residual no-diff | design_ready | none |
-| `F-109` | §7；target existing platform diagnostics/metrics + operator runbook | `backend/tests/miniqmt_execution_runtime/test_kernel_product_diagnostics.py`；artifact: `docs/operations/simulation_platform_operator_runbook_20260717.md` | design_ready | none |
-| `F-110` | §5、§8 | `backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py`、`backend/tests/simulation_runtime/test_lifecycle_scheduler.py`、DEV/full-five/coverage与existing-binding normal trading day acceptance receipt | design_ready | none |
-| `F-111` | §9–§10 | artifact: `docs/architecture/miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`；source/production/runtime独立receipts | design_ready | none |
-| `F-112` | §0–§10、§13–§14 | artifact: `docs/architecture/miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`；formal DESIGN-COMPLIANCE-001 review，K6 overall保持in_progress直到runtime acceptance | design_ready | none |
+| `F-107` | §3–§5；`kernel_product_cutover.py`、`kernel_delivery.py`、`kernel_creation.py`、`kernel_repository_k2b.py`、`simulation_runtime/miniqmt_kernel_product.py` | `backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py`及DEV SIM/account/route/ALGO_START transaction matrix；PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` | implemented_verified + merged | none |
+| `F-108` | §2.2、§6；`kernel_product_source_capability.py`、scheduler/lifecycle/bridge retirement | `backend/tests/miniqmt_execution_runtime/test_kernel_legacy_route_retirement.py` exact symbol absence、five product-root AST proof、fresh-process capability及capacity residual/LocalSIM no-diff；PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` | implemented_verified + merged | none |
+| `F-109` | §7；existing platform diagnostics/metrics + operator runbook | `backend/tests/miniqmt_execution_runtime/test_kernel_diagnostics.py`、`backend/tests/simulation_runtime/test_ops_api.py`、`backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py`；artifact: `docs/operations/simulation_platform_operator_runbook_20260717.md`；PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` | implemented_verified + merged | none |
+| `F-110` | §5、§8 | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py backend/tests/miniqmt_execution_runtime/test_kernel_clock.py -q`；`backend/tests/simulation_runtime/test_miniqmt_quote_activation.py`、`backend/tests/simulation_runtime/test_lifecycle_scheduler.py`；real snapshot callback、no-quote clock/EOD、per-binding isolation、DEV/full-five/coverage；PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` | implemented_verified + merged | none |
+| `F-111` | §9–§10 | artifact: `docs/architecture/miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`；changed-files classifier与source/production/runtime独立receipts；PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` | implemented_verified + merged | none |
+| `F-112` | §0–§10、§13–§14 | artifact: `docs/architecture/miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`；formal DESIGN-COMPLIANCE-001 review；K6 overall保持in_progress直到runtime acceptance；PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` | implemented_verified + merged | none |
 
 ## 13. Formal Design Review and DESIGN-COMPLIANCE-001 / 正式设计审核
 
@@ -338,6 +491,15 @@ route receipt/owner history、K2/K6 economic lineage按现有订单审计保留�
 15. **SIM与账户边界可能只靠backend字符串而被绕过**：§1.1/§3.1要求runtime mode、binding/release/package/account/date同事务exact closure并拒绝LIVE/LIVE_PENDING。
 16. **可清除状态使用`*_total`会破坏metrics语义，五plugin正常日又可能暗含binding DML**：§7.2拆分counter/gauge与existing SLA evaluator；§8/§9把full-five source/DEV支持和existing-binding生产观察分开。
 17. **“最后兼容K6版本”未定义会实际回滚到legacy**：§6.2/§10固定`miniqmt_k6d_route_contract_v1` fresh-process capability；route receipt写入后禁止任何pre-K6-D source。
+18. **callback ingress存在但scheduler从未调用watchdog会形成假接线**：§5.2要求scheduler lifecycle每tick真实调用activation watchdog，source capability把该call edge纳入fresh-process proof。
+19. **把callback/clock failure放在global pre-binding阶段会饿死无关binding**：runtime tick先全部尝试并聚合，scheduler按exact binding归属失败；LocalSIM和其他MiniQMT binding继续。
+20. **仅由quote驱动clock会在无quote窗口漏掉SESSION/TIMER/EOD**：同一scheduler tick先处理callback snapshot，再推进ExchangeSessionClock；跨日成功final tick后释放旧runtime logical lease。
+21. **TRADE payload没有terminal字段且terminal mapping禁止lineage extension会丢迟到成交**：repository对TRADE不伪造terminal字段；distinct late TRADE只允许`TERMINAL -> TERMINAL`更新last-trade lineage，禁止状态重开。
+
+22. **The real B0 calendar contains four native segments while the K2 clock accepted only a two-segment fixture**: the clock now retains the full calendar, derives exactly two continuous segments through the versioned phase authority, exposes native auction phases and excludes auctions from TIMER/active seconds.
+23. **Frozen execution policy fallback and string coercion could self-authorize drift**: the product reader now accepts one exact compiler envelope/payload, recomputes the policy hash, and rejects missing/extra/duplicate parent or trading-rule authorities before any ALGO_START write.
+24. **Generic conflict retry could hide authority corruption or commit-unknown**: bounded retry is limited to exact event-sequence CAS conflicts; commit-unknown and every non-sequence conflict retain their original typed failure and context.
+25. **Quote-runtime registry normalization and rollback could hide invalid owners or the primary failure**: registration now requires the exact non-empty unique frozen symbol tuple and the same runtime object for an existing identity; acquire/unregister compensation failure retains both bounded primary and rollback evidence in `MINIQMT_K6_PRODUCT_REGISTRY_ROLLBACK_FAILED`.
 
 ### 13.2 Mandatory review result
 
@@ -359,5 +521,5 @@ K6-D implementation完成：source merged；用户restart、runtime identity和�
 - K6-A/C0/C1/B：`implemented_verified + merged`。
 - K6-B production DDL：`applied_and_verified`；K6-D new DDL=`noop`。
 - K6-D detailed design：`design_ready + merged`，PR #3129，merge `5b1e1477c98fedbc1361b5551133fcb3075bb2b3`，`source_merge=merged_pr_3129`。
-- K6-D code：`not_started`；K6 overall=`implementation_in_progress`。
+- K6-D code：`implemented_verified + merged`，PR #3146，merge `33c09049e82c11cdbae7cd9b596b3666cb481349`，`source_merge=merged_pr_3146`；三项原始P0及正式复审发现的watchdog caller、no-quote clock/EOD、binding isolation、callback identity/late-TRADE与只读diagnostics缺口已闭合；K6 overall仍=`implementation_in_progress`，等待用户restart、runtime activation与正常交易日验收独立闭合。
 - product runtime=`not_switched`；K6-D DML/config/binding=`noop`，broker/restart/runtime/normal-day=`not_run`。

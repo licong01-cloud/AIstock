@@ -498,6 +498,101 @@ class KernelProductMaterializationRepositoryMixin:
         if receipt.transaction_commit_identity != expected_transaction_identity:
             raise KernelRepositoryConflict("product transition transaction identity differs from durable authority")
 
+        prepared = self._prepare_product_materialization_v3(
+            envelope=envelope,
+            transition_bundle=transition_bundle,
+            strategy_slot_id=strategy_slot_id,
+        )
+
+        try:
+            existing_envelope, _, existing_receipt = self._read_product_materialization_envelope_v3(
+                authority.authority_set_sha256
+            )
+        except KeyError:
+            existing_envelope = existing_receipt = None
+        if existing_envelope is not None:
+            if existing_envelope != envelope:
+                raise KernelRepositoryConflict("product authority identity exists with different durable closure")
+            assert existing_receipt is not None
+            return existing_receipt
+
+        with self._connection(transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (authority.authority_set_sha256,),
+                )
+                cur.execute(
+                    "SELECT carrier_json FROM qmt_strategy.execution_product_command_authority "
+                    "WHERE authority_set_sha256=%s",
+                    (authority.authority_set_sha256,),
+                )
+                concurrent_row = cur.fetchone()
+                if concurrent_row is not None:
+                    concurrent_envelope = validate_kernel_product_payload_v1(
+                        ProductCommandAuthorityEnvelopeV3,
+                        _row_json(concurrent_row, "carrier_json"),
+                        stage="CONCURRENT_PRODUCT_AUTHORITY_READBACK",
+                    )
+                    if concurrent_envelope != envelope:
+                        raise KernelRepositoryConflict(
+                            "concurrent product authority identity has different durable closure"
+                        )
+                    return self._read_product_materialization_envelope_v3(authority.authority_set_sha256)[2]
+                cur.execute(
+                    "SELECT carrier_json FROM qmt_strategy.execution_algo_event_delivery WHERE delivery_id=%s FOR UPDATE",
+                    (previous_delivery.delivery_id,),
+                )
+                delivery_row = cur.fetchone()
+                if delivery_row is None:
+                    raise KeyError(previous_delivery.delivery_id)
+                durable_delivery = _model_from_json(AlgoDeliveryPersistenceV1, _row_json(delivery_row, "carrier_json"))
+                if (
+                    durable_delivery != previous_delivery
+                    or durable_delivery.row_version != expected_delivery_row_version
+                ):
+                    raise KernelRepositoryConflict("product materializer delivery predecessor/CAS differs")
+                cur.execute(
+                    "SELECT kernel_carrier_json FROM qmt_strategy.execution_algo_instance "
+                    "WHERE runtime_id=%s AND algo_instance_id=%s FOR UPDATE",
+                    (authority.runtime_id, authority.algo_instance_id),
+                )
+                algo_row = cur.fetchone()
+                if algo_row is None:
+                    raise KeyError(authority.algo_instance_id)
+                durable_algo = _model_from_json(
+                    ExecutionAlgoInstancePersistenceV2, _row_json(algo_row, "kernel_carrier_json")
+                )
+                if durable_algo.row_version != expected_algo_row_version:
+                    raise KernelRepositoryConflict("product materializer algo CAS differs")
+                prepared["algo_instance"].validate_successor_v1(durable_algo)
+                transition_bundle.delivery.validate_successor_v1(durable_delivery)
+                self._write_prepared_product_materialization_with_cursor(
+                    cur,
+                    envelope=envelope,
+                    transition_bundle=transition_bundle,
+                    prepared=prepared,
+                    previous_delivery=durable_delivery,
+                    expected_row_version=expected_algo_row_version,
+                    expected_delivery_row_version=expected_delivery_row_version,
+                )
+        durable_envelope, _, materialization_receipt = self._read_product_materialization_envelope_v3(
+            authority.authority_set_sha256
+        )
+        if durable_envelope != envelope:
+            raise KernelRepositoryConflict("product materialization post-commit authority readback differs")
+        return materialization_receipt
+
+    def _prepare_product_materialization_v3(
+        self,
+        *,
+        envelope: ProductCommandAuthorityEnvelopeV3,
+        transition_bundle: KernelTransitionWriteBundleV1,
+        strategy_slot_id: str,
+    ) -> dict[str, Any]:
+        """Build the only pre-write product mapping/outbox transformation."""
+
+        authority = envelope.authority_set
         base_mapping_by_command = {item.command_id: item for item in transition_bundle.new_child_mappings}
         base_outbox_by_command = {item.command_id: item for item in transition_bundle.command_outboxes}
         if len(base_mapping_by_command) != len(transition_bundle.new_child_mappings) or len(
@@ -506,6 +601,8 @@ class KernelProductMaterializationRepositoryMixin:
             raise ValueError("K2 transition bundle contains duplicate command lineage")
         if set(base_outbox_by_command) != {item.command_id for item in authority.ordered_items}:
             raise ValueError("K2 transition bundle must carry the exact pre-product command set")
+        if transition_bundle.after_state is None:
+            raise ValueError("product materialization requires an applied after state")
 
         regular_mappings: list[tuple[ExecutionCommandChildMappingV1, ProductCommandAuthorityItemV3]] = []
         product_mappings: list[tuple[ProductCommandChildMappingV1, ProductCommandAuthorityItemV3]] = []
@@ -582,121 +679,72 @@ class KernelProductMaterializationRepositoryMixin:
         if durable_previous_active_count < 0:
             raise ValueError("K2 transition bundle active-child count is internally inconsistent")
         algo_payload["active_child_count"] = durable_previous_active_count + active_new_count
-        algo_instance = ExecutionAlgoInstancePersistenceV2.model_validate(algo_payload)
+        return {
+            "regular_mappings": tuple(regular_mappings),
+            "product_mappings": tuple(product_mappings),
+            "outboxes": tuple(outboxes),
+            "coordinations": tuple(coordinations),
+            "algo_instance": ExecutionAlgoInstancePersistenceV2.model_validate(algo_payload),
+        }
 
-        try:
-            existing_envelope, _, existing_receipt = self._read_product_materialization_envelope_v3(
-                authority.authority_set_sha256
-            )
-        except KeyError:
-            existing_envelope = existing_receipt = None
-        if existing_envelope is not None:
-            if existing_envelope != envelope:
-                raise KernelRepositoryConflict("product authority identity exists with different durable closure")
-            assert existing_receipt is not None
-            return existing_receipt
+    def _write_prepared_product_materialization_with_cursor(
+        self,
+        cur: Any,
+        *,
+        envelope: ProductCommandAuthorityEnvelopeV3,
+        transition_bundle: KernelTransitionWriteBundleV1,
+        prepared: dict[str, Any],
+        previous_delivery: AlgoDeliveryPersistenceV1,
+        expected_row_version: int,
+        expected_delivery_row_version: int,
+    ) -> None:
+        """Write one already-validated V3 closure on the caller-owned cursor."""
 
-        with self._connection(transaction=True) as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
-                    (authority.authority_set_sha256,),
-                )
-                cur.execute(
-                    "SELECT carrier_json FROM qmt_strategy.execution_product_command_authority "
-                    "WHERE authority_set_sha256=%s",
-                    (authority.authority_set_sha256,),
-                )
-                concurrent_row = cur.fetchone()
-                if concurrent_row is not None:
-                    concurrent_envelope = validate_kernel_product_payload_v1(
-                        ProductCommandAuthorityEnvelopeV3,
-                        _row_json(concurrent_row, "carrier_json"),
-                        stage="CONCURRENT_PRODUCT_AUTHORITY_READBACK",
-                    )
-                    if concurrent_envelope != envelope:
-                        raise KernelRepositoryConflict(
-                            "concurrent product authority identity has different durable closure"
-                        )
-                    return self._read_product_materialization_envelope_v3(authority.authority_set_sha256)[2]
-                cur.execute(
-                    "SELECT carrier_json FROM qmt_strategy.execution_algo_event_delivery WHERE delivery_id=%s FOR UPDATE",
-                    (previous_delivery.delivery_id,),
-                )
-                delivery_row = cur.fetchone()
-                if delivery_row is None:
-                    raise KeyError(previous_delivery.delivery_id)
-                durable_delivery = _model_from_json(AlgoDeliveryPersistenceV1, _row_json(delivery_row, "carrier_json"))
-                if (
-                    durable_delivery != previous_delivery
-                    or durable_delivery.row_version != expected_delivery_row_version
-                ):
-                    raise KernelRepositoryConflict("product materializer delivery predecessor/CAS differs")
-                cur.execute(
-                    "SELECT kernel_carrier_json FROM qmt_strategy.execution_algo_instance "
-                    "WHERE runtime_id=%s AND algo_instance_id=%s FOR UPDATE",
-                    (authority.runtime_id, authority.algo_instance_id),
-                )
-                algo_row = cur.fetchone()
-                if algo_row is None:
-                    raise KeyError(authority.algo_instance_id)
-                durable_algo = _model_from_json(
-                    ExecutionAlgoInstancePersistenceV2, _row_json(algo_row, "kernel_carrier_json")
-                )
-                if durable_algo.row_version != expected_algo_row_version:
-                    raise KernelRepositoryConflict("product materializer algo CAS differs")
-                algo_instance.validate_successor_v1(durable_algo)
-                transition_bundle.delivery.validate_successor_v1(durable_delivery)
-                self._insert_product_transition_header_with_cursor(cur, transition_bundle)
-                for mapping, item in regular_mappings:
-                    self._insert_product_child_with_cursor(cur, mapping, authority_item=item)
-                for mapping, item in product_mappings:
-                    self._insert_product_child_with_cursor(cur, mapping, authority_item=item)
-                self._write_transition_commands_with_cursor(
-                    cur,
-                    transition_id=authority.transition_id,
-                    mappings=(),
-                    outboxes=tuple(outboxes),
-                    child_price_type=2,
-                )
-                for coordination in coordinations:
-                    self._insert_dependent_buy_coordination_v2_with_cursor(cur, coordination)
-                self._insert_product_authority_v3_with_cursor(cur, envelope)
-                for schedule in transition_bundle.timer_schedules:
-                    self._write_timer_schedule_with_cursor(cur, schedule)
-                for observation in transition_bundle.diagnostic_observations:
-                    cur.execute(
-                        "INSERT INTO qmt_strategy.execution_algo_diagnostic_observation("
-                        "observation_id,runtime_id,algo_instance_id,event_id,transition_id,observation_json,"
-                        "context_sha256,observed_at_utc) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (
-                            observation.observation_id,
-                            observation.runtime_id,
-                            observation.algo_instance_id,
-                            observation.event_id,
-                            observation.transition_id,
-                            _json(observation.model_dump(mode="json")),
-                            observation.context_sha256,
-                            observation.observed_at_logical_utc,
-                        ),
-                    )
-                self._cas_algo_with_cursor(
-                    cur,
-                    algo_instance=algo_instance,
-                    expected_row_version=expected_algo_row_version,
-                )
-                self._cas_product_delivery_with_cursor(
-                    cur,
-                    delivery=transition_bundle.delivery,
-                    previous=durable_delivery,
-                    expected_row_version=expected_delivery_row_version,
-                )
-        durable_envelope, _, materialization_receipt = self._read_product_materialization_envelope_v3(
-            authority.authority_set_sha256
+        authority = envelope.authority_set
+        self._insert_product_transition_header_with_cursor(cur, transition_bundle)
+        for mapping, item in prepared["regular_mappings"]:
+            self._insert_product_child_with_cursor(cur, mapping, authority_item=item)
+        for mapping, item in prepared["product_mappings"]:
+            self._insert_product_child_with_cursor(cur, mapping, authority_item=item)
+        self._write_transition_commands_with_cursor(
+            cur,
+            transition_id=authority.transition_id,
+            mappings=(),
+            outboxes=prepared["outboxes"],
+            child_price_type=2,
         )
-        if durable_envelope != envelope:
-            raise KernelRepositoryConflict("product materialization post-commit authority readback differs")
-        return materialization_receipt
+        for coordination in prepared["coordinations"]:
+            self._insert_dependent_buy_coordination_v2_with_cursor(cur, coordination)
+        self._insert_product_authority_v3_with_cursor(cur, envelope)
+        for schedule in transition_bundle.timer_schedules:
+            self._write_timer_schedule_with_cursor(cur, schedule)
+        for observation in transition_bundle.diagnostic_observations:
+            cur.execute(
+                "INSERT INTO qmt_strategy.execution_algo_diagnostic_observation("
+                "observation_id,runtime_id,algo_instance_id,event_id,transition_id,observation_json,"
+                "context_sha256,observed_at_utc) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (
+                    observation.observation_id,
+                    observation.runtime_id,
+                    observation.algo_instance_id,
+                    observation.event_id,
+                    observation.transition_id,
+                    _json(observation.model_dump(mode="json")),
+                    observation.context_sha256,
+                    observation.observed_at_logical_utc,
+                ),
+            )
+        self._cas_algo_with_cursor(
+            cur,
+            algo_instance=prepared["algo_instance"],
+            expected_row_version=expected_row_version,
+        )
+        self._cas_product_delivery_with_cursor(
+            cur,
+            delivery=transition_bundle.delivery,
+            previous=previous_delivery,
+            expected_row_version=expected_delivery_row_version,
+        )
 
     def read_product_materialization_v3(
         self, authority_set_sha256: str

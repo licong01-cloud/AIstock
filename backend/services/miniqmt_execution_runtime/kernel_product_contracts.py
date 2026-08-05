@@ -2128,8 +2128,9 @@ class ProductCommandAuthoritySetV3(FrozenStrictModel):
             self.ordered_items
         ):
             raise ValueError("ordered product command items must be sorted and unique")
-        if tuple(item.effect_ordinal for item in self.ordered_items) != tuple(range(len(self.ordered_items))):
-            raise ValueError("ordered product command ordinals must be contiguous from zero")
+        ordinals = tuple(item.effect_ordinal for item in self.ordered_items)
+        if ordinals != tuple(sorted(ordinals)) or len(ordinals) != len(set(ordinals)):
+            raise ValueError("ordered product command effect ordinals must be strictly increasing and unique")
         owner = (self.runtime_id, self.algo_instance_id, self.event_id, self.delivery_id, self.transition_id)
         for item in self.ordered_items:
             if (item.runtime_id, item.algo_instance_id, item.event_id, item.delivery_id, item.transition_id) != owner:
@@ -2381,8 +2382,9 @@ class ProductCommandLifecycleProjectionV3(FrozenStrictModel):
         items = self.ordered_item_projections
         if len(items) > MAX_PRODUCT_COMMANDS:
             raise ValueError("product lifecycle projection exceeds maximum cardinality")
-        if tuple(item.effect_ordinal for item in items) != tuple(range(len(items))):
-            raise ValueError("product lifecycle projection order must follow contiguous authority ordinals")
+        ordinals = tuple(item.effect_ordinal for item in items)
+        if ordinals != tuple(sorted(ordinals)) or len(ordinals) != len(set(ordinals)):
+            raise ValueError("product lifecycle projection must preserve strictly increasing authority ordinals")
         if len({item.command_id for item in items}) != len(items):
             raise ValueError("product lifecycle projection contains duplicate command")
         expected = hash_hex_v1(
