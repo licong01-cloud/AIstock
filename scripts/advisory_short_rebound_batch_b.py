@@ -105,6 +105,25 @@ DB_KEYS = (
     "TDX_DB_USER",
     "TDX_DB_PASSWORD",
 )
+DATABASE_TARGET_PRODUCTION = "production"
+DATABASE_TARGET_DEV = "dev"
+DATABASE_TARGETS = (DATABASE_TARGET_PRODUCTION, DATABASE_TARGET_DEV)
+DATABASE_TARGET_KEY_MAP = {
+    DATABASE_TARGET_PRODUCTION: {
+        "TDX_DB_HOST": "TDX_DB_HOST",
+        "TDX_DB_PORT": "TDX_DB_PORT",
+        "TDX_DB_NAME": "TDX_DB_NAME",
+        "TDX_DB_USER": "TDX_DB_USER",
+        "TDX_DB_PASSWORD": "TDX_DB_PASSWORD",
+    },
+    DATABASE_TARGET_DEV: {
+        "TDX_DB_HOST": "TDX_DB_DEV_HOST",
+        "TDX_DB_PORT": "TDX_DB_DEV_PORT",
+        "TDX_DB_NAME": "TDX_DB_DEV_NAME",
+        "TDX_DB_USER": "TDX_DB_DEV_USER",
+        "TDX_DB_PASSWORD": "TDX_DB_DEV_PASSWORD",
+    },
+}
 REQUIRED_RUNTIME_KEYS = (
     "AISTOCK_ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT",
     "AISTOCK_ADVISORY_HISTORICAL_RANGE_TASK_RUNTIME_ROOT",
@@ -114,6 +133,14 @@ REQUIRED_RUNTIME_KEYS = (
     "AISTOCK_ADVISORY_CALCULATION_EVIDENCE_ROOT",
     "AISTOCK_ADVISORY_DATASET_STORE_ROOT",
 )
+_DEV_SHARED_RUNTIME_KEYS = ("AISTOCK_PACKAGE_ASSET_STORE_ROOT",)
+_DEV_ARTIFACT_ROOT_LAYOUT = {
+    "AISTOCK_ADVISORY_HISTORICAL_RANGE_ARTIFACT_ROOT": "historical-range-artifacts",
+    "AISTOCK_ADVISORY_HISTORICAL_RANGE_TASK_RUNTIME_ROOT": "historical-range-task-runtime",
+    "AISTOCK_ADVISORY_HISTORICAL_RANGE_POLICY_COMPONENT_ROOT": "historical-range-policy-components",
+    "AISTOCK_ADVISORY_CALCULATION_EVIDENCE_ROOT": "calculation-evidence",
+    "AISTOCK_ADVISORY_DATASET_STORE_ROOT": "dataset-store",
+}
 
 
 class AdvisoryProgramIdentityReader(Protocol):
@@ -500,10 +527,66 @@ def _existing_directory(path: Path, *, field_name: str) -> Path:
     return resolved
 
 
+def _database_target_key_map(database_target: str) -> dict[str, str]:
+    try:
+        return DATABASE_TARGET_KEY_MAP[database_target]
+    except KeyError as exc:
+        raise ValueError(
+            f"database_target must be one of {DATABASE_TARGETS}, got {database_target!r}"
+        ) from exc
+
+
+def _external_runtime_root(
+    path: Path,
+    *,
+    repository_root: Path,
+    field_name: str,
+) -> Path:
+    root = _existing_directory(path, field_name=field_name)
+    try:
+        root.relative_to(repository_root)
+    except ValueError:
+        return root
+    raise ValueError(f"{field_name} must be outside repository_root")
+
+
+def _dev_runtime_values(
+    values: dict[str, str],
+    *,
+    repository_root: Path | None,
+    artifact_root: Path | None,
+) -> dict[str, str]:
+    if repository_root is None:
+        raise ValueError("repository_root is required for DEV Batch B materialization")
+    if artifact_root is None:
+        raise ValueError(
+            "artifact_root is required when database_target=dev for Batch B materialization"
+        )
+    runtime_root = _external_runtime_root(
+        artifact_root,
+        repository_root=repository_root,
+        field_name="artifact_root",
+    )
+    package_asset_root = _existing_directory(
+        Path(values["AISTOCK_PACKAGE_ASSET_STORE_ROOT"]),
+        field_name="package_asset_store_root",
+    )
+    derived = {
+        key: str((runtime_root / relative).resolve())
+        for key, relative in _DEV_ARTIFACT_ROOT_LAYOUT.items()
+    }
+    derived["AISTOCK_PACKAGE_ASSET_STORE_ROOT"] = str(package_asset_root)
+    derived["AISTOCK_REPOSITORY_ROOT"] = str(repository_root)
+    return derived
+
+
 def _load_environment(
     path: Path,
     *,
     require_runtime: bool = True,
+    database_target: str = DATABASE_TARGET_PRODUCTION,
+    repository_root: Path | None = None,
+    artifact_root: Path | None = None,
 ) -> tuple[dict[str, str], Path]:
     env_path = path.expanduser().resolve(strict=True)
     if not env_path.is_file():
@@ -513,13 +596,31 @@ def _load_environment(
         for key, value in dotenv_values(env_path, interpolate=False).items()
         if key and value is not None
     }
-    required_keys = (*DB_KEYS, *REQUIRED_RUNTIME_KEYS) if require_runtime else DB_KEYS
+    database_key_map = _database_target_key_map(database_target)
+    required_keys = tuple(database_key_map.values())
+    if require_runtime:
+        required_keys += (
+            _DEV_SHARED_RUNTIME_KEYS
+            if database_target == DATABASE_TARGET_DEV
+            else REQUIRED_RUNTIME_KEYS
+        )
     missing = tuple(key for key in required_keys if not values.get(key))
     if missing:
         raise ValueError(f"env_file is missing required Batch B configuration keys: {missing}")
-    for key in required_keys:
-        os.environ[key] = values[key]
-    return values, env_path
+    resolved_values = dict(values)
+    for canonical_key, source_key in database_key_map.items():
+        resolved_values[canonical_key] = values[source_key]
+    if require_runtime and database_target == DATABASE_TARGET_DEV:
+        resolved_values.update(
+            _dev_runtime_values(
+                values,
+                repository_root=repository_root,
+                artifact_root=artifact_root,
+            )
+        )
+    for key in (*DB_KEYS, *(REQUIRED_RUNTIME_KEYS if require_runtime else ())):
+        os.environ[key] = resolved_values[key]
+    return resolved_values, env_path
 
 
 def _database_config(values: dict[str, str]) -> dict[str, Any]:
@@ -580,6 +681,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
+    parser.add_argument(
+        "--database-target",
+        choices=DATABASE_TARGETS,
+        default=DATABASE_TARGET_PRODUCTION,
+        help="database profile in --env-file; dev uses TDX_DB_DEV_* only",
+    )
     parser.add_argument("--spool-root", type=Path)
     parser.add_argument("--decision-date-start", type=_date)
     parser.add_argument("--decision-date-end", type=_date)
@@ -591,12 +698,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        repository_root = _existing_directory(args.repository_root, field_name="repository_root")
+        artifact_root = _existing_directory(args.artifact_root, field_name="artifact_root")
         values, env_file = _load_environment(
             args.env_file,
             require_runtime=args.prepare_program_id is None,
+            database_target=args.database_target,
+            repository_root=repository_root,
+            artifact_root=artifact_root,
         )
-        repository_root = _existing_directory(args.repository_root, field_name="repository_root")
-        artifact_root = _existing_directory(args.artifact_root, field_name="artifact_root")
         config = _database_config(values)
 
         def conn_factory() -> Any:
