@@ -612,7 +612,7 @@ class QEExecutionSourceClaimFactory:
                 SET status = 'running',
                     node_id = %s,
                     agent_analysis = CASE
-                        WHEN agent_analysis LIKE '{"_qe_execution_capacity"%%'
+                        WHEN agent_analysis::text LIKE '{"_qe_execution_capacity"%%'
                         THEN NULL
                         ELSE agent_analysis
                     END,

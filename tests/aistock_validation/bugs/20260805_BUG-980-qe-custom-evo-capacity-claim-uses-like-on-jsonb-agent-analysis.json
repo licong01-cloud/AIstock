@@ -2,7 +2,9 @@
   "actual": "MA-E11 experiment submission reproduced on 2026-08-05: all six custom_evo loops failed before node dispatch. QEExecutionSourceClaimFactory.evolution_loop executes agent_analysis LIKE against qe_evolution_loops.agent_analysis jsonb, raising psycopg2.errors.UndefinedFunction. Reproduction tasks: qe_20260805_120517_beb9 and qe_20260805_120517_3a24. Expected: capacity/source claim accepts the persisted jsonb column, clears only prior _qe_execution_capacity evidence, and dispatches the loop.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260805_BUG-980-qe-custom-evo-capacity-claim-uses-like-on-jsonb-agent-analysis.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/tests/multi_alpha/test_durable_capacity.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-980",
@@ -22,11 +24,17 @@
       "timestamp": "2026-08-05T04:14:12.757178Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260805_120517_beb9/loops/1/analysis",
+    "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260805_120517_3a24/loops/1/analysis"
+  ],
+  "expected": "A custom_evo Loop can atomically claim its source row when agent_analysis is jsonb, clearing only a prior _qe_execution_capacity marker and dispatching to its configured node.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_durable_capacity.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +44,10 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_durable_capacity.py"
+    ]
   },
   "first_seen_at": "2026-08-05T04:14:12.757184Z",
   "fix_branch": null,
@@ -52,20 +63,31 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "POST /api/v1/quantevolver/evolution/tasks/{task_id}/custom-evo/run for qe_20260805_120517_beb9 or qe_20260805_120517_3a24, then GET /api/v1/quantevolver/evolution/tasks/{task_id}/loops/1/analysis",
   "required_verification": [
-    "l0"
+    "l0",
+    "qe_read_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260805_120517_beb9/loops/4/analysis",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh pytest interpreter imported QEExecutionSourceClaimFactory and exercised the jsonb-safe source-claim SQL -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
