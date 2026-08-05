@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-982",
-  "closed_at": null,
+  "closed_at": "2026-08-05T16:07:20Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -135,8 +135,8 @@
   },
   "first_seen_at": "2026-08-05T06:06:39.641417Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "88f567fe0811d7129ff8e492e0ad39fd74878885",
+  "fixed_at": "2026-08-05T16:07:20Z",
   "github_issue_number": 3153,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3153",
   "last_seen_at": "2026-08-05T06:06:39.641417Z",
@@ -144,6 +144,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3159",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -167,7 +168,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -176,6 +177,11 @@
     "fingerprint": "2d3cf664724bd7cf439d8783",
     "source_event_id": "FE-20260805-2d3cf664724b"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -> passed (140 tests)",
+    "python -m nox -s hmm_risk_backend -> passed (306 tests; coverage 75.49%)",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 tests; 14/14 mapped)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
