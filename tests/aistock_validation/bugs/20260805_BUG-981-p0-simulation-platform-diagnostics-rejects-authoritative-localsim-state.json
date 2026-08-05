@@ -100,8 +100,8 @@
   },
   "first_seen_at": "2026-08-05T05:05:23.034392Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f71c8c727fff4866880f6a3c8dc475ade117981a",
+  "fixed_at": "2026-08-05T05:54:32Z",
   "github_issue_number": 3149,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3149",
   "last_seen_at": "2026-08-05T05:05:23.034392Z",
@@ -109,6 +109,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3151",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -140,7 +141,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -149,6 +150,43 @@
     "fingerprint": "af96f0646f357c667397ed64",
     "source_event_id": "FE-20260805-af96f0646f35"
   },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests; ownership 14/14 mapped",
+    "python -m nox -s simulation_core_l2 -> passed: 409 tests",
+    "python -m pytest backend/tests/simulation_runtime/test_ops_api.py -k platform_diagnostics -q -> passed: 30 tests, 22 deselected"
+  ],
+  "validation_receipts": [
+    {
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "46cbd573616212924952bf93fea0b5337dd76054",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "426eed1a95f82745",
+      "result": "passed: 8 tests; ownership 14/14 mapped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s simulation_core_l2",
+      "commit": "46cbd573616212924952bf93fea0b5337dd76054",
+      "evidence_kind": "nox",
+      "plan": "simulation_core_l2",
+      "receipt_id": "e2d9d6611051dcd2",
+      "result": "passed: 409 tests",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m pytest backend/tests/simulation_runtime/test_ops_api.py -k platform_diagnostics -q",
+      "commit": "46cbd573616212924952bf93fea0b5337dd76054",
+      "evidence_kind": "pytest",
+      "plan": "direct",
+      "receipt_id": "2d35254f88ff99c0",
+      "result": "passed: 30 tests, 22 deselected",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
