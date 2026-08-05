@@ -26,6 +26,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260805-2d3cf664724b",
       "timestamp": "2026-08-05T06:06:39.641412Z"
+    },
+    {
+      "action": "runtime_contract_alignment",
+      "actor": "codex",
+      "note": "Latest workflow classifies b3_d1_inactive_dimension.py and prepare_state_model_set.py as offline non-runtime files; changed-file routing selects hmm_risk_backend plus validation_module_registry_l0 and does not require backend restart.",
+      "timestamp": "2026-08-05T09:50:51.4262054Z"
     }
   ],
   "evidence_uris": [
@@ -143,21 +149,21 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Run the approved REFIT-03 prepare_state_model_set.py command against C-010-A5 report e7f7edc9...; preflight writes diagnostic_failed with 0 attempts/0 fits and mapping_manifest_hash drifted.",
   "required_verification": [
-    "l0",
-    "hmm_risk_backend"
+    "hmm_risk_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_impact": "backend",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ]
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
