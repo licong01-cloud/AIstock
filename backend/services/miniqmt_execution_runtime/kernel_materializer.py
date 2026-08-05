@@ -1056,6 +1056,7 @@ def materialize_applied_transition_v1(
         receipt=receipt,
         projection_set=projection_set,
         after_state=next_state,
+        applied_transition=transition,
         new_child_mappings=mappings,
         command_outboxes=outboxes,
         timer_mutations=transition.timer_mutations,

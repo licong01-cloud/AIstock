@@ -88,7 +88,9 @@ class LocalSimExecutionBridge:
         )
 
     @staticmethod
-    def _export_execution_snapshot(*, broker: BrokerBackend, handles: tuple[OrderHandle, ...]) -> LocalSimExecutionSnapshot | None:
+    def _export_execution_snapshot(
+        *, broker: BrokerBackend, handles: tuple[OrderHandle, ...]
+    ) -> LocalSimExecutionSnapshot | None:
         exporter = getattr(broker, "export_execution_snapshot", None)
         if callable(exporter):
             raw = exporter(handles=handles)
@@ -198,7 +200,9 @@ class MiniQMTExecutionBridge:
                 price_type=price_type,
                 mode=mode,
             ),
-            quote_provider=_quote_provider(quote_by_symbol=quote_by_symbol or {}, price_by_symbol=price_by_symbol or {}),
+            quote_provider=_quote_provider(
+                quote_by_symbol=quote_by_symbol or {}, price_by_symbol=price_by_symbol or {}
+            ),
             source="simulation_runtime_vnpy_request_build",
         )
         return list(build.requests)
@@ -258,7 +262,9 @@ class MiniQMTExecutionBridge:
                 price_type=price_type,
                 mode=mode,
             ),
-            "quote_provider": _quote_provider(quote_by_symbol=quote_by_symbol or {}, price_by_symbol=price_by_symbol or {}),
+            "quote_provider": _quote_provider(
+                quote_by_symbol=quote_by_symbol or {}, price_by_symbol=price_by_symbol or {}
+            ),
         }
 
     def preview_plan(self, **kwargs: Any) -> MiniQMTPlanPreviewResult:
@@ -292,185 +298,6 @@ class MiniQMTExecutionBridge:
                 "broker_called": False,
                 "submitted_intents": 0,
                 "failed_intents": len(getattr(plan, "intents", ()) or ()),
-            },
-        )
-
-    def submit_event_loop_plan(self, **kwargs: Any) -> MiniQMTRuntimeManagedBatchSubmitResult:
-        mode = str(kwargs.get("mode") or "SIM").strip().upper()
-        if mode != "SIM":
-            raise LiveApprovalRequiredError(
-                "MiniQMT event_loop route is SIM-only; LIVE requires separate live admission",
-                context={"mode": mode, "reason_code": "MINIQMT_EVENT_LOOP_LIVE_FORBIDDEN"},
-            )
-        vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(**kwargs)
-        if bool(getattr(self._managed_order_service, "preview_only", False)):
-            raise LiveApprovalRequiredError(
-                "MiniQMT event_loop route requires submit-enabled SIM broker authority, not preview-only dry-run",
-                context={
-                    "reason_code": "MINIQMT_EVENT_LOOP_PREVIEW_ONLY_FORBIDDEN",
-                    "plan_id": kwargs["plan"].plan_id,
-                    "binding_id": kwargs["binding"].binding_id,
-                    "runtime_id": vnpy_kwargs["runtime_id"],
-                },
-            )
-        broker = getattr(self._managed_order_service, "_broker", None)
-        if broker is None:
-            raise BrokerUnavailableError(
-                "MiniQMT event_loop route requires the broker behind QmtManagedOrderService",
-                context={
-                    "reason_code": "MINIQMT_EVENT_LOOP_BROKER_MISSING",
-                    "plan_id": kwargs["plan"].plan_id,
-                    "binding_id": kwargs["binding"].binding_id,
-                    "runtime_id": vnpy_kwargs["runtime_id"],
-                },
-            )
-        self._assert_event_loop_broker_gateway_ready(
-            broker=broker,
-            plan=kwargs["plan"],
-            binding=kwargs["binding"],
-            runtime_id=str(vnpy_kwargs["runtime_id"]),
-            parent_intent_count=len(vnpy_kwargs["parent_intents"]),
-        )
-        strategy_ledger_repository = getattr(self._managed_order_service, "_repository", None)
-        if strategy_ledger_repository is None:
-            raise BrokerUnavailableError(
-                "MiniQMT event_loop route requires qmt_strategy ledger repository authority",
-                context={
-                    "reason_code": "MINIQMT_EVENT_LOOP_LEDGER_REPOSITORY_MISSING",
-                    "plan_id": kwargs["plan"].plan_id,
-                    "binding_id": kwargs["binding"].binding_id,
-                    "runtime_id": vnpy_kwargs["runtime_id"],
-                },
-            )
-        plan = kwargs["plan"]
-        binding = kwargs["binding"]
-        event_loop_client = MiniQMTExecutionRuntimeClient(
-            repository=self._runtime_client.repository,
-            strategy_ledger_repository=strategy_ledger_repository,
-            runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
-            b0_quote_v2_controller_factory=self._b0_quote_v2_controller_factory,
-        )
-        return event_loop_client.submit_event_loop_vnpy_parent_intents(
-            parent_intents=vnpy_kwargs["parent_intents"],
-            policy_context=vnpy_kwargs["policy_context"],
-            account_group_id=str(vnpy_kwargs["account_group_id"]),
-            trade_date=plan.target_trade_date,
-            runtime_config_hash=str(vnpy_kwargs["runtime_config_hash"]),
-            runtime_id=str(vnpy_kwargs["runtime_id"]),
-            strategy_slot_id=str(vnpy_kwargs["strategy_slot_id"]),
-            qmt_client=broker,
-            strategy_name=str(kwargs.get("strategy_name") or binding.strategy_name or binding.strategy_id),
-            order_remark_prefix=str(kwargs.get("order_remark_prefix") or binding.order_remark_prefix or "aistock"),
-            account_id=str(binding.broker_account_id or ""),
-            quote_provider=None,
-            child_context_factory=self._event_loop_child_metadata_factory(
-                plan=plan,
-                binding=binding,
-                strategy_name=str(kwargs.get("strategy_name") or binding.strategy_name or binding.strategy_id),
-                order_remark_prefix=str(kwargs.get("order_remark_prefix") or binding.order_remark_prefix or "aistock"),
-                price_type=int(kwargs.get("price_type") or 5),
-                mode=mode,
-            ),
-            managed_request_factory=vnpy_kwargs["managed_request_factory"],
-            managed_order_service=self._managed_order_service,
-            source="simulation_runtime_event_loop_submit",
-        )
-
-    def drive_event_loop_ticks(self, **kwargs: Any) -> Any:
-        mode = str(kwargs.get("mode") or "SIM").strip().upper()
-        if mode != "SIM":
-            raise LiveApprovalRequiredError(
-                "MiniQMT event_loop tick driver is SIM-only; LIVE requires separate live admission",
-                context={"mode": mode, "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_LIVE_FORBIDDEN"},
-            )
-        runtime_kwargs = dict(kwargs)
-        as_of_time = runtime_kwargs.pop("as_of_time", None)
-        vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(**runtime_kwargs)
-        broker = getattr(self._managed_order_service, "_broker", None)
-        if broker is None:
-            raise BrokerUnavailableError(
-                "MiniQMT event_loop tick driver requires the broker behind QmtManagedOrderService",
-                context={
-                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BROKER_MISSING",
-                    "plan_id": kwargs["plan"].plan_id,
-                    "binding_id": kwargs["binding"].binding_id,
-                    "runtime_id": vnpy_kwargs["runtime_id"],
-                },
-            )
-        self._assert_event_loop_broker_gateway_ready(
-            broker=broker,
-            plan=kwargs["plan"],
-            binding=kwargs["binding"],
-            runtime_id=str(vnpy_kwargs["runtime_id"]),
-            parent_intent_count=len(vnpy_kwargs["parent_intents"]),
-        )
-        strategy_ledger_repository = getattr(self._managed_order_service, "_repository", None)
-        if strategy_ledger_repository is None:
-            raise BrokerUnavailableError(
-                "MiniQMT event_loop tick driver requires qmt_strategy ledger repository authority",
-                context={
-                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_LEDGER_REPOSITORY_MISSING",
-                    "plan_id": kwargs["plan"].plan_id,
-                    "binding_id": kwargs["binding"].binding_id,
-                    "runtime_id": vnpy_kwargs["runtime_id"],
-                },
-            )
-        plan = kwargs["plan"]
-        binding = kwargs["binding"]
-        event_loop_client = MiniQMTExecutionRuntimeClient(
-            repository=self._runtime_client.repository,
-            strategy_ledger_repository=strategy_ledger_repository,
-            runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
-            b0_quote_v2_controller_factory=self._b0_quote_v2_controller_factory,
-        )
-        return event_loop_client.drive_event_loop_ticks(
-            account_group_id=str(vnpy_kwargs["account_group_id"]),
-            trade_date=plan.target_trade_date,
-            runtime_config_hash=str(vnpy_kwargs["runtime_config_hash"]),
-            runtime_id=str(vnpy_kwargs["runtime_id"]),
-            qmt_client=broker,
-            strategy_name=str(kwargs.get("strategy_name") or binding.strategy_name or binding.strategy_id),
-            order_remark_prefix=str(kwargs.get("order_remark_prefix") or binding.order_remark_prefix or "aistock"),
-            account_id=str(binding.broker_account_id or ""),
-            quote_provider=None,
-            policy_context=vnpy_kwargs["policy_context"],
-            managed_request_factory=vnpy_kwargs["managed_request_factory"],
-            managed_order_service=self._managed_order_service,
-            as_of_time=as_of_time,
-            source="simulation_runtime_event_loop_tick_driver",
-        )
-
-    @staticmethod
-    def _assert_event_loop_broker_gateway_ready(
-        *,
-        broker: Any,
-        plan: ExecutionPlan,
-        binding: SimulationReleaseBinding,
-        runtime_id: str,
-        parent_intent_count: int,
-    ) -> None:
-        missing_methods = [
-            method_name
-            for method_name in MINIQMT_EVENT_LOOP_REQUIRED_BROKER_METHODS
-            if not callable(getattr(broker, method_name, None))
-        ]
-        if not missing_methods:
-            return
-        raise BrokerUnavailableError(
-            "MiniQMT event_loop route requires real qmt_client callback gateway methods",
-            context={
-                "reason_code": "MINIQMT_EVENT_LOOP_REAL_CALLBACKS_MISSING",
-                "stage": "MINIQMT_EVENT_LOOP_CALLBACK_GATEWAY_UNAVAILABLE",
-                "plan_id": plan.plan_id,
-                "binding_id": binding.binding_id,
-                "strategy_id": binding.strategy_id,
-                "runtime_id": runtime_id,
-                "broker_type": type(broker).__name__,
-                "missing_methods": missing_methods,
-                "required_methods": list(MINIQMT_EVENT_LOOP_REQUIRED_BROKER_METHODS),
-                "broker_called": False,
-                "submitted_intents": 0,
-                "failed_intents": int(parent_intent_count),
             },
         )
 
@@ -549,71 +376,11 @@ class MiniQMTExecutionBridge:
 
         return build
 
-    def _event_loop_child_metadata_factory(
-        self,
-        *,
-        plan: ExecutionPlan,
-        binding: SimulationReleaseBinding,
-        strategy_name: str,
-        order_remark_prefix: str,
-        price_type: int,
-        mode: str,
-    ) -> Callable[[Any, int], dict[str, Any]]:
-        plan_intent_by_id = {intent.intent_id: intent for intent in plan.intents}
-
-        def build(parent: Any, index: int) -> dict[str, Any]:
-            plan_intent = plan_intent_by_id.get(str(parent.intent_id))
-            parent_metadata = dict(getattr(parent, "metadata", {}) or {})
-            target_weight_raw = parent_metadata.get("target_weight")
-            child_context = {
-                **parent_metadata,
-                "source": "simulation_runtime_event_loop_submit",
-                "runtime_owner": "MiniQMTExecutionRuntime",
-                "runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
-                "gateway_class": "QmtClientMiniQMTEventLoopGateway",
-                "oms_authority": "qmt_strategy_ledger",
-                "broker_quote_source": "MINIQMT_REALTIME.broker_quote",
-                "execution_plan_id": plan.plan_id,
-                "execution_plan_hash": plan.plan_hash,
-                "execution_plan_intent_id": str(parent.intent_id),
-                "release_id": plan.release_id,
-                "release_hash": plan.release_hash,
-                "binding_id": plan.binding_id,
-                "binding_hash": plan.binding_hash,
-                "selection_evidence_id": plan.selection_evidence_id,
-                "selection_evidence_hash": plan.selection_evidence_hash,
-                "strategy_id": binding.strategy_id,
-                "strategy_name": strategy_name,
-                "account_id": binding.broker_account_id,
-                "broker_account_id": binding.broker_account_id,
-                "package_id": parent_metadata.get("package_id") or plan.package_id,
-                "portfolio_id": plan.portfolio_id,
-                "order_type": "LIMIT",
-                "price_type": int(price_type),
-                "event_loop_request_index": index,
-                "target_trade_date": plan.target_trade_date.isoformat(),
-                "target_weight": target_weight_raw,
-                "order_remark": self._vnpy_order_remark(order_remark_prefix, plan=plan, child=parent, index=index),
-                "mode": mode,
-            }
-            if plan_intent is not None:
-                child_context.update(
-                    {
-                        "trading_rule_decision_id": plan_intent.trading_rule_decision_id,
-                        "rebalance_reason": plan_intent.rebalance_reason,
-                        "target_quantity": plan_intent.target_quantity,
-                        "delta_quantity": plan_intent.delta_quantity,
-                        "current_quantity": plan_intent.current_quantity,
-                        "current_available_quantity": plan_intent.current_available_quantity,
-                    }
-                )
-            return child_context
-
-        return build
-
     @staticmethod
     def _account_group_id(*, plan: ExecutionPlan, binding: SimulationReleaseBinding) -> str:
-        return str(plan.account_group_id or binding.account_group_id or binding.broker_account_id or binding.strategy_id)
+        return str(
+            plan.account_group_id or binding.account_group_id or binding.broker_account_id or binding.strategy_id
+        )
 
     @staticmethod
     def _runtime_config_hash(plan: ExecutionPlan) -> str:
@@ -730,7 +497,9 @@ def _vnpy_policy_context_from_plan(plan: ExecutionPlan) -> dict[str, Any] | None
         return None
     policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
     algo_code = str(policy_json.get("algo_code") or payload.get("algo_code") or "").strip().upper()
-    inferred_algo_code = _infer_vnpy_algo_code_from_policy_ids(plan=plan, policy_container=policy_container, payload=payload)
+    inferred_algo_code = _infer_vnpy_algo_code_from_policy_ids(
+        plan=plan, policy_container=policy_container, payload=payload
+    )
     if not algo_code and inferred_algo_code:
         raise RuntimeConfigInvalidError(
             "MiniQMT vn.py-style execution plan requires a full policy_json snapshot",
@@ -754,9 +523,7 @@ def _vnpy_policy_context_from_plan(plan: ExecutionPlan) -> dict[str, Any] | None
             or plan.execution_policy_version_id
         ),
         "policy_sha256": str(
-            payload.get("policy_sha256")
-            or policy_container.get("sha256")
-            or plan.execution_policy_sha256
+            payload.get("policy_sha256") or policy_container.get("sha256") or plan.execution_policy_sha256
         ),
         "algo_code": algo_code,
         "policy_json": policy_json,
@@ -813,7 +580,9 @@ def _reject_vnpy_style_for_localsim(plan: ExecutionPlan) -> None:
         return
     policy_json = payload.get("policy_json") if isinstance(payload.get("policy_json"), dict) else payload
     algo_code = str(policy_json.get("algo_code") or payload.get("algo_code") or "").strip().upper()
-    inferred_algo_code = _infer_vnpy_algo_code_from_policy_ids(plan=plan, policy_container=policy_container, payload=payload)
+    inferred_algo_code = _infer_vnpy_algo_code_from_policy_ids(
+        plan=plan, policy_container=policy_container, payload=payload
+    )
     effective_algo_code = algo_code or inferred_algo_code
     if not is_vnpy_style_algo(effective_algo_code):
         return
@@ -930,7 +699,9 @@ def _policy_error_context(
         "execution_policy_sha256": plan.execution_policy_sha256,
         "policy_container_version_id": policy_container.get("version_id"),
         "policy_container_sha256": policy_container.get("sha256"),
-        "payload_policy_id": payload.get("validated_execution_policy_id") or payload.get("policy_id") or payload.get("policy_version_id"),
+        "payload_policy_id": payload.get("validated_execution_policy_id")
+        or payload.get("policy_id")
+        or payload.get("policy_version_id"),
         "payload_policy_sha256": payload.get("policy_sha256"),
         "payload_has_policy_json": isinstance(payload.get("policy_json"), dict),
         "inferred_algo_code": inferred_algo_code,
@@ -961,4 +732,3 @@ def _quote_provider(
         return None
 
     return load
-

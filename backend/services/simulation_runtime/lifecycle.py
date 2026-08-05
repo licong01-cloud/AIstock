@@ -21,13 +21,11 @@ from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.errors import (
     BrokerUnavailableError,
     InvalidStateTransitionError,
-    LiveApprovalRequiredError,
     RuntimeConfigInvalidError,
 )
 from backend.services.trading_core.models import PositionLot
-from backend.services.miniqmt_execution_runtime import MiniQMTExecutionRuntimeKind
 
-from .bridges import LocalSimExecutionBridge, MiniQMTExecutionBridge
+from .bridges import LocalSimExecutionBridge
 from .decision import (
     TRADABILITY_BLOCK_REASON_CODES,
     ExecutionPlanCompiler,
@@ -44,6 +42,7 @@ from .models import (
     SimulationReleaseBinding,
     StrategyRuntimeRelease,
     canonical_json_sha256,
+    miniqmt_kernel_runtime_id,
 )
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .tca_capture import (
@@ -60,7 +59,13 @@ SCHEDULER_TZ = ZoneInfo("Asia/Shanghai")
 SCHEDULER_TZ_NAME = "Asia/Shanghai"
 DEFAULT_SCHEDULER_WINDOWS = (
     {"window_id": "pre_open", "label": "\u76d8\u524d", "start": "08:50", "end": "09:10", "action": "readiness"},
-    {"window_id": "selection", "label": "\u9009\u80a1", "start": "09:10", "end": "09:20", "action": "selection_evidence"},
+    {
+        "window_id": "selection",
+        "label": "\u9009\u80a1",
+        "start": "09:10",
+        "end": "09:20",
+        "action": "selection_evidence",
+    },
     {"window_id": "planning", "label": "\u8c03\u4ed3", "start": "09:20", "end": "09:25", "action": "execution_plan"},
     {
         "window_id": "opening_auction_observe",
@@ -151,7 +156,9 @@ def compute_schedule_windows(*, trade_date: date, as_of_time: datetime | None) -
     return tuple(windows)
 
 
-def active_submit_window(*, trade_date: date, as_of_time: datetime) -> tuple[dict[str, Any] | None, tuple[dict[str, Any], ...]]:
+def active_submit_window(
+    *, trade_date: date, as_of_time: datetime
+) -> tuple[dict[str, Any] | None, tuple[dict[str, Any], ...]]:
     windows = compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time)
     active = next((item for item in windows if item["state"] == "ACTIVE"), None)
     if active is not None and str(active.get("action") or "") == "submit":
@@ -181,29 +188,14 @@ class SimulationExecutionResult:
     broker_result: Any | None = None
 
 
-def _normalize_miniqmt_runtime_kind(
-    raw: MiniQMTExecutionRuntimeKind | str | None,
-) -> MiniQMTExecutionRuntimeKind:
-    if raw is None:
-        return MiniQMTExecutionRuntimeKind.EVENT_LOOP
-    try:
-        kind = raw if isinstance(raw, MiniQMTExecutionRuntimeKind) else MiniQMTExecutionRuntimeKind(str(raw))
-    except ValueError as exc:
-        raise LiveApprovalRequiredError(
-            "unsupported MiniQMT simulation runtime kind",
-            context={"reason_code": "MINIQMT_RUNTIME_KIND_UNSUPPORTED", "runtime_kind": str(raw)},
-        ) from exc
-    if kind == MiniQMTExecutionRuntimeKind.COMPILER:
-        raise RuntimeConfigInvalidError(
-            "MiniQMT SIM compiler runtime route is retired; SIM submissions must use event_loop",
-            context={
-                "reason_code": "MINIQMT_SIM_COMPILER_ROUTE_RETIRED",
-                "stage": "MINIQMT_RUNTIME_KIND_REJECTED",
-                "runtime_kind": kind.value,
-                "allowed_runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
-            },
-        )
-    return kind
+def _miniqmt_kernel_runtime_id(*, plan: ExecutionPlan, binding: SimulationReleaseBinding) -> str:
+    """Stable runtime identity shared by the final KERNEL_V2 product root."""
+
+    return miniqmt_kernel_runtime_id(
+        plan_id=plan.plan_id,
+        binding_id=binding.binding_id,
+        trade_date=plan.target_trade_date,
+    )
 
 
 def _pre_trade_blocked_symbol_count(pre_trade_tradability: dict[str, dict[str, Any]] | None) -> int:
@@ -219,7 +211,10 @@ def _pre_trade_blocked_symbol_count(pre_trade_tradability: dict[str, dict[str, A
 def _pre_trade_blocked_order_generation_payload(plan: ExecutionPlan) -> dict[str, Any] | None:
     blocked = []
     for decision in plan.trading_rule_decisions:
-        if decision.reason_code not in TRADABILITY_BLOCK_REASON_CODES and decision.reason_code != "SUSPENDED_OR_NO_QUOTE_BLOCKED":
+        if (
+            decision.reason_code not in TRADABILITY_BLOCK_REASON_CODES
+            and decision.reason_code != "SUSPENDED_OR_NO_QUOTE_BLOCKED"
+        ):
             continue
         tradability = decision.price_limit_rule.get("pre_trade_tradability")
         blocked.append(
@@ -276,6 +271,7 @@ class SimulationLifecycleOrchestrator:
         plan_compiler: ExecutionPlanCompiler | None = None,
         local_bridge: LocalSimExecutionBridge | None = None,
         b0_quote_v2_controller_factory: Any | None = None,
+        miniqmt_product_runtime_factory: Any | None = None,
     ) -> None:
         self.repository = repository or SimulationRuntimeRepository()
         self.target_service = target_service or TargetPositionService()
@@ -283,6 +279,9 @@ class SimulationLifecycleOrchestrator:
         self.plan_compiler = plan_compiler or ExecutionPlanCompiler()
         self.local_bridge = local_bridge or LocalSimExecutionBridge()
         self.b0_quote_v2_controller_factory = b0_quote_v2_controller_factory
+        if miniqmt_product_runtime_factory is not None and not callable(miniqmt_product_runtime_factory):
+            raise TypeError("miniqmt_product_runtime_factory must be callable or None")
+        self.miniqmt_product_runtime_factory = miniqmt_product_runtime_factory
 
     def build_execution_plan(
         self,
@@ -589,7 +588,6 @@ class SimulationLifecycleOrchestrator:
         managed_order_service: QmtManagedOrderService | None = None,
         mode: str = "SIM",
         price_by_symbol: dict[str, Any] | None = None,
-        miniqmt_runtime_kind: MiniQMTExecutionRuntimeKind | str | None = None,
         as_of_time: datetime | None = None,
     ) -> SimulationExecutionResult:
         return self.submit_persisted_execution_plan(
@@ -600,7 +598,6 @@ class SimulationLifecycleOrchestrator:
             managed_order_service=managed_order_service,
             mode=mode,
             price_by_symbol=price_by_symbol,
-            miniqmt_runtime_kind=miniqmt_runtime_kind,
             as_of_time=as_of_time,
         )
 
@@ -614,7 +611,6 @@ class SimulationLifecycleOrchestrator:
         managed_order_service: QmtManagedOrderService | None = None,
         mode: str = "SIM",
         price_by_symbol: dict[str, Any] | None = None,
-        miniqmt_runtime_kind: MiniQMTExecutionRuntimeKind | str | None = None,
         as_of_time: datetime | None = None,
     ) -> SimulationExecutionResult:
         """Submit an already-persisted plan exactly once after restart recovery."""
@@ -707,9 +703,7 @@ class SimulationLifecycleOrchestrator:
                 payload_patch={
                     "broker_called": True,
                     "submitted_intents": len(local_result.order_intents),
-                    "broker_order_handles": [
-                        handle.model_dump(mode="json") for handle in local_result.handles
-                    ],
+                    "broker_order_handles": [handle.model_dump(mode="json") for handle in local_result.handles],
                     "local_sim_synchronous_terminal": True,
                     "last_stage": "LOCAL_SIM_DURABLE_PERSISTENCE_PENDING",
                     "submit_failure": None,
@@ -726,31 +720,51 @@ class SimulationLifecycleOrchestrator:
             )
 
         if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
-            if managed_order_service is None:
+            if not callable(self.miniqmt_product_runtime_factory):
+                product_runtime = None
+            else:
+                product_runtime = self.miniqmt_product_runtime_factory(
+                    plan=plan,
+                    binding=binding,
+                    managed_order_service=managed_order_service,
+                    as_of_time=as_of_time,
+                )
+            miniqmt_product_coordinator = getattr(product_runtime, "coordinator", None)
+            miniqmt_worker_incarnation_id = getattr(product_runtime, "worker_incarnation_id", None)
+            if miniqmt_product_coordinator is None or not callable(
+                getattr(miniqmt_product_coordinator, "start_execution_plan_v1", None)
+            ):
                 self.mark_submit_failure(
                     run=run,
-                    stage="MINIQMT_SERVICE_UNAVAILABLE",
+                    stage="MINIQMT_KERNEL_V2_PRODUCT_ROOT_UNAVAILABLE",
                     exc=BrokerUnavailableError(
-                        "MiniQMT execution requires QmtManagedOrderService",
+                        "MiniQMT execution requires the KERNEL_V2 product coordinator",
                         context={"run_id": run.run_id, "plan_id": plan.plan_id},
                     ),
                 )
                 raise BrokerUnavailableError(
-                    "MiniQMT execution requires QmtManagedOrderService",
+                    "MiniQMT execution requires the KERNEL_V2 product coordinator",
                     context={"run_id": run.run_id, "plan_id": plan.plan_id},
                 )
-            bridge = MiniQMTExecutionBridge(
-                managed_order_service=managed_order_service,
-                b0_quote_v2_controller_factory=self.b0_quote_v2_controller_factory,
-            )
-            runtime_kind = _normalize_miniqmt_runtime_kind(miniqmt_runtime_kind)
-            submit_stage = "MINIQMT_EVENT_LOOP_SUBMIT_FAILED"
+            worker_incarnation_id = str(miniqmt_worker_incarnation_id or "").strip()
+            if not worker_incarnation_id:
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT KERNEL_V2 product coordinator requires its durable worker incarnation",
+                    context={
+                        "reason_code": "MINIQMT_KERNEL_V2_WORKER_INCARNATION_MISSING",
+                        "run_id": run.run_id,
+                        "plan_id": plan.plan_id,
+                        "broker_called": False,
+                    },
+                )
+            runtime_id = _miniqmt_kernel_runtime_id(plan=plan, binding=binding)
+            submit_stage = "MINIQMT_KERNEL_V2_PLAN_START_FAILED"
             try:
-                qmt_result = bridge.submit_event_loop_plan(
-                    plan=plan,
-                    binding=binding,
-                    mode=mode,
-                    price_by_symbol=price_by_symbol,
+                qmt_result = miniqmt_product_coordinator.start_execution_plan_v1(
+                    runtime_id=runtime_id,
+                    binding_id=binding.binding_id,
+                    execution_plan_id=plan.plan_id,
+                    worker_incarnation_id=worker_incarnation_id,
                 )
             except Exception as exc:
                 self._annotate_event_loop_submit_failure(
@@ -767,65 +781,49 @@ class SimulationLifecycleOrchestrator:
                 )
                 self.mark_submit_failure(run=run, stage=submit_stage, exc=exc)
                 raise
-            broker_called = any(result.broker_called for result in qmt_result.results)
-            self._capture_tca_first_batch_mapping(
-                run=run,
-                execution_plan=plan,
-                batch_id=qmt_result.batch_id,
-            )
-            qmt_batch_payload = qmt_result.to_dict()
-            pending_intents = int(qmt_batch_payload.get("pending") or 0)
-            failed_intents = int(qmt_batch_payload.get("failed") or qmt_result.failed or 0)
-            batch_status = qmt_batch_payload.get("batch_status") or qmt_result.batch_status or ""
-            batch_status_value = str(getattr(batch_status, "value", batch_status)).upper().rsplit(".", 1)[-1]
-            event_loop_pending = (
-                batch_status_value == "SUBMITTING"
-                and pending_intents > 0
-                and failed_intents == 0
-            )
-            # BUG-604 semantics: a preflight-approved event-loop parent with no
-            # child yet is pending work, not a retryable submit failure.
+            qmt_batch_payload = qmt_result.model_dump(mode="json")
+            broker_called = False
+            failed_intents = int(qmt_result.failed)
+            pending_intents = int(qmt_result.started)
             next_status = (
                 SimulationDailyRunStatus.INTRADAY_RUNNING
-                if qmt_result.success or event_loop_pending
-                else SimulationDailyRunStatus.FAILED_RETRYABLE
+                if qmt_result.success
+                else SimulationDailyRunStatus.FAILED_TERMINAL
             )
             payload_patch = {
                 "broker_called": broker_called,
-                "submitted_intents": qmt_result.succeeded,
+                "submitted_intents": 0,
                 "failed_intents": failed_intents,
-                "event_loop_pending": event_loop_pending,
+                "event_loop_pending": False,
                 "pending_intents": pending_intents,
-                "qmt_batch_id": qmt_result.batch_id,
-                "qmt_batch_status": qmt_result.batch_status,
-                "qmt_retry_of_batch_id": qmt_result.retry_of_batch_id,
+                "qmt_batch_id": None,
+                "qmt_batch_status": "KERNEL_V2_PLAN_STARTED" if qmt_result.success else "FAILED_TERMINAL",
+                "qmt_retry_of_batch_id": None,
                 "qmt_batch_result": qmt_batch_payload,
                 "last_stage": next_status.value,
+                "miniqmt_runtime_kind": "KERNEL_V2",
+                "miniqmt_runtime_route": {
+                    "route": "KERNEL_V2",
+                    "runtime_kind": "KERNEL_V2",
+                    "gateway_class": "MiniQMTKernelGatewayAdapterV1",
+                    "oms_authority": "qmt_strategy_ledger",
+                    "quote_source": "B0_QUOTE_V2",
+                    "runtime_id": runtime_id,
+                    "route_receipt_sha256": qmt_result.product_route_receipt_sha256,
+                    "reason_code": "MINIQMT_KERNEL_V2_ROUTE_SELECTED",
+                },
             }
-            payload_patch.update(
-                {
-                    "miniqmt_runtime_kind": runtime_kind.value,
-                    "miniqmt_runtime_route": {
-                        "route": "A_EVENT_LOOP",
-                        "runtime_kind": runtime_kind.value,
-                        "gateway_class": "QmtClientMiniQMTEventLoopGateway",
-                        "oms_authority": "qmt_strategy_ledger",
-                        "quote_source": "MINIQMT_REALTIME.broker_quote",
-                        "reason_code": "MINIQMT_EVENT_LOOP_ROUTE_SELECTED",
-                    },
-                }
-            )
             updated = self.repository.update_simulation_daily_run(
                 run.run_id,
                 status=next_status,
                 payload_patch=payload_patch,
-                payload_unset=("submit_failure",) if qmt_result.success or event_loop_pending else None,
+                payload_unset=("submit_failure",) if qmt_result.success else None,
             )
             return SimulationExecutionResult(
                 run=updated,
                 execution_plan=plan,
                 broker_backend=binding.broker_backend,
-                status="SUBMITTED" if qmt_result.success else "BROKER_PRECHECK_FAILED",
+                status="KERNEL_V2_STARTED" if qmt_result.success else "FAILED_TERMINAL",
                 intent_count=len(plan.intents),
                 broker_result=qmt_result,
             )
@@ -869,8 +867,12 @@ class SimulationLifecycleOrchestrator:
             "active_window": active_non_submit,
             "schedule_windows": list(windows),
             "blocked_intent_count": intent_count,
-            "blocked_buy_intent_count": sum(1 for intent in execution_plan.intents if str(intent.side.value).upper() == "BUY"),
-            "blocked_sell_intent_count": sum(1 for intent in execution_plan.intents if str(intent.side.value).upper() == "SELL"),
+            "blocked_buy_intent_count": sum(
+                1 for intent in execution_plan.intents if str(intent.side.value).upper() == "BUY"
+            ),
+            "blocked_sell_intent_count": sum(
+                1 for intent in execution_plan.intents if str(intent.side.value).upper() == "SELL"
+            ),
             "durable_residual": True,
             "broker_called_by_gate": False,
             "broker_called_before_rejection": previous_broker_called,
@@ -931,11 +933,7 @@ class SimulationLifecycleOrchestrator:
         payload_patch: dict[str, Any] = {
             "last_stage": "FAILED_RETRYABLE",
             "submit_failure": {
-                "stage": (
-                    str(context.get("stage"))
-                    if isinstance(context, dict) and context.get("stage")
-                    else stage
-                ),
+                "stage": (str(context.get("stage")) if isinstance(context, dict) and context.get("stage") else stage),
                 "outer_stage": stage,
                 "type": type(exc).__name__,
                 "message": str(exc),
@@ -998,7 +996,9 @@ class SimulationLifecycleOrchestrator:
         )
 
     @staticmethod
-    def _validate_release_binding(*, runtime_release: StrategyRuntimeRelease, binding: SimulationReleaseBinding) -> None:
+    def _validate_release_binding(
+        *, runtime_release: StrategyRuntimeRelease, binding: SimulationReleaseBinding
+    ) -> None:
         if binding.release_id != runtime_release.release_id or binding.release_hash != runtime_release.release_hash:
             raise InvalidStateTransitionError(
                 "SimulationReleaseBinding does not match StrategyRuntimeRelease",

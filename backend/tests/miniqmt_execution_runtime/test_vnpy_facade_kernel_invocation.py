@@ -50,6 +50,7 @@ from backend.services.miniqmt_execution_runtime.kernel_delivery import (
     KernelPluginInvocationError,
     invoke_plugin_initialize_v1,
     invoke_plugin_transition_v1,
+    validate_vnpy_facade_k6_product_command_trace_v1,
     validate_vnpy_facade_k2_shadow_command_authority_v1,
 )
 from backend.services.miniqmt_execution_runtime.kernel_creation import (
@@ -432,6 +433,10 @@ def test_k2_shadow_materialization_rejects_multi_command_without_truncating_trac
         first.command_id,
         second.command_id,
     ]
+    # K6 does not reinterpret K5's shadow receipt as a product grant.  It
+    # accepts the full source trace solely for the later V3 authority/
+    # materializer transaction.
+    validate_vnpy_facade_k6_product_command_trace_v1(full_trace)
 
 
 def test_k2_creation_optional_seam_invokes_exact_facade_adapter_without_switching_catalog_binding(

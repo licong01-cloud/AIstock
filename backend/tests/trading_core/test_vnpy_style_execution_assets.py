@@ -166,10 +166,10 @@ def test_template_update_order_trade_and_finish_match_vnpy_lifecycle() -> None:
     assert algo.status.value == "finished"
 
 
-def test_vnpy_style_assets_are_registered_and_declared_live_supported() -> None:
+def test_vnpy_style_assets_are_kernel_owned_and_declared_live_supported() -> None:
     for code in ("SNIPER_MINIQMT", "BEST_LIMIT_MINIQMT", "TWAP_LITE_MINIQMT"):
         assert code in VNPY_STYLE_ASSETS
-        assert code in ALGO_REGISTRY
+        assert code not in ALGO_REGISTRY
         cap = get_execution_algo_capability(code)
         assert cap.live_supported is True
         assert cap.live_step_mode.startswith("miniqmt_event_driven")

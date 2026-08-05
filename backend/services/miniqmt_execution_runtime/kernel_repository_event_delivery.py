@@ -462,8 +462,9 @@ class KernelRepositoryEventDeliveryMixin:
             "mapping_id": mapping.mapping_id,
             "local_vt_orderid": mapping.local_vt_orderid,
             "broker_order_id": mapping.broker_order_id,
-            "terminal": mapping.mapping_status is CommandChildMappingStatusV1.TERMINAL,
         }
+        if event.event_type is not EventTypeV2.TRADE:
+            expected_payload["terminal"] = mapping.mapping_status is CommandChildMappingStatusV1.TERMINAL
         if any(payload.get(key) != value for key, value in expected_payload.items()):
             raise ValueError("callback event payload conflicts with mapping update authority")
         if mapping.updated_by_event_id != event.event_id:

@@ -10,6 +10,7 @@ from datetime import date, datetime
 import hashlib
 from typing import Any
 
+import psycopg2
 import psycopg2.extras
 
 from .kernel_product_contracts import (
@@ -21,12 +22,25 @@ from .kernel_product_contracts import (
     DependentBuyTriggerEventRefV1,
     ProductCommandAuthorityItemV2,
     ProductCommandAuthoritySetV2,
+    ProductCommandAuthorityEnvelopeV3,
+    ProductCommandAuthorityItemV3,
+    ProductCommandAuthoritySetV3,
+    ProductCommandLifecycleProjectionV3,
+    ProductMaterializationReceiptV3,
     ProductRouteCutoverReceiptV1,
     ProductRouteOwnerKindV1,
     ProductRouteOwnerV1,
     validate_kernel_product_payload_v1,
 )
+from .full_five_catalog_authority import (
+    FULL_FIVE_ALGO_CODES_V1,
+    build_full_five_catalog_authority_v1,
+)
+from .plugin_canonical import hash_hex_v1
+from .plugin_contracts import GatewayCapabilityCatalogV1
+from .plugin_registry import PluginCatalogSnapshotV1
 from .kernel_repository_common import (
+    KernelRepositoryCommitUnknown,
     KernelRepositoryConflict,
     KernelRepositorySchemaError,
     _json,
@@ -55,6 +69,122 @@ K6C0_CATALOG_SHA256S = frozenset({K6C0_CATALOG_SHA256, K6C0_CATALOG_SHA256_K6B})
 K6C0_CATALOG_FUNCTION_BODY_SHA256 = "0b9889bc7c4bdfa980e3deddfc87edfd7379047778f837a2c4d6b1eecee272f4"
 K6B_CATALOG_SHA256 = "10ae5be030612f923f2fe23f17f1f8b4891358cc8bd9565d54ad27ee3d18393c"
 K6B_CATALOG_FUNCTION_BODY_SHA256 = "7a57ccdf81f8ff2c549f5f2e2a77a168663274de37d6f08919eebbd4e5d74067"
+_K6D_V3_AUTHORITY_COLUMNS = (
+    "execution_product_command_authority_item.command_json",
+    "execution_product_command_authority_item.evaluation_evidence_json",
+    "execution_product_command_authority_item.evaluation_evidence_sha256",
+    "execution_product_command_authority_item.coordination_id",
+)
+_K6D_K6B_SUCCESSOR_TRIGGER_IDENTITY = (
+    "execution_dependent_buy_dependency.trg_miniqmt_k6_dependency_successor:miniqmt_k6b_validate_dependency_successor"
+)
+
+
+def product_authority_schema_sha256_v3() -> str:
+    """Return the sole code-owned schema identity for K6-D route activation.
+
+    This intentionally hashes only canonical Pydantic schemas for the existing
+    K6 V3 aggregate carriers.  It does not depend on a checkout path, source
+    timestamp, database connection or caller-provided value.
+    """
+
+    return hash_hex_v1(
+        "miniqmt_product_authority_schema_v3",
+        {
+            "authority_set_schema": ProductCommandAuthoritySetV3.model_json_schema(),
+            "authority_item_schema": ProductCommandAuthorityItemV3.model_json_schema(),
+            "authority_envelope_schema": ProductCommandAuthorityEnvelopeV3.model_json_schema(),
+            "materialization_receipt_schema": ProductMaterializationReceiptV3.model_json_schema(),
+            "lifecycle_projection_schema": ProductCommandLifecycleProjectionV3.model_json_schema(),
+        },
+    )
+
+
+def migration_readback_sha256_v1(
+    checks: dict[str, bool],
+    *,
+    k6_catalog_sha256: str,
+    k6c_catalog_sha256: str,
+    k6b_catalog_sha256: str,
+) -> str:
+    """Hash one independently-read K6/K6-C0/K6-B migration closure.
+
+    The catalog fingerprints are separate from the boolean preflight result on
+    purpose.  A code constant is only an expected authority; it cannot stand
+    in for the catalog bytes read from the locked database transaction.
+    """
+
+    expected_names = set(K6_TABLES) | {"k6c0_schema_catalog_fingerprint", "k6b_schema_catalog_fingerprint"}
+    if set(checks) != expected_names or any(type(value) is not bool or not value for value in checks.values()):
+        raise KernelRepositorySchemaError(
+            "K6-D migration readback requires the complete exact all-true K6/K6-C0/K6-B check set"
+        )
+    expected_catalogs = (
+        ("k6_catalog_sha256", k6_catalog_sha256, K6_CATALOG_SHA256_K6B),
+        ("k6c_catalog_sha256", k6c_catalog_sha256, K6C0_CATALOG_SHA256_K6B),
+        ("k6b_catalog_sha256", k6b_catalog_sha256, K6B_CATALOG_SHA256),
+    )
+    for field_name, value, expected in expected_catalogs:
+        if type(value) is not str or value != expected:
+            raise KernelRepositorySchemaError(
+                f"K6-D migration readback {field_name} differs from independently verified catalog authority"
+            )
+    return hash_hex_v1(
+        "miniqmt_k6b_production_readback_v1",
+        {
+            "ordered_checks": [[name, checks[name]] for name in sorted(checks)],
+            "k6_catalog_sha256": k6_catalog_sha256,
+            "k6c_catalog_sha256": k6c_catalog_sha256,
+            "k6b_catalog_sha256": k6b_catalog_sha256,
+            "authority_columns": list(_K6D_V3_AUTHORITY_COLUMNS),
+            "successor_trigger_identity": _K6D_K6B_SUCCESSOR_TRIGGER_IDENTITY,
+        },
+    )
+
+
+def _assert_route_successor_authority_v1(
+    *,
+    predecessor: ProductRouteCutoverReceiptV1,
+    catalog_sha256: str,
+    gateway_capability_catalog_sha256: str,
+    exchange_session_authority_sha256: str,
+    migration_readback_sha256: str,
+    product_authority_schema_sha256: str,
+) -> bool:
+    """Return ``True`` only for an exact retry or an authorized catalog successor.
+
+    The K6-D route may be renewed when the immutable full-five catalog or
+    gateway capability authority changes.  A session, migration or durable
+    authority-schema change is not an executable route successor: accepting
+    it would let a caller continue on a different exchange calendar or schema
+    authority while pretending the prior route still closed.
+    """
+
+    predecessor_tuple = (
+        predecessor.catalog_sha256,
+        predecessor.gateway_capability_catalog_sha256,
+        predecessor.exchange_session_authority_sha256,
+        predecessor.migration_readback_sha256,
+        predecessor.product_authority_schema_sha256,
+    )
+    successor_tuple = (
+        catalog_sha256,
+        gateway_capability_catalog_sha256,
+        exchange_session_authority_sha256,
+        migration_readback_sha256,
+        product_authority_schema_sha256,
+    )
+    if predecessor_tuple == successor_tuple:
+        return True
+    if (
+        predecessor.exchange_session_authority_sha256 != exchange_session_authority_sha256
+        or predecessor.migration_readback_sha256 != migration_readback_sha256
+        or predecessor.product_authority_schema_sha256 != product_authority_schema_sha256
+    ):
+        raise KernelRepositoryConflict(
+            "MINIQMT_K6_ROUTE_AUTHORITY_DRIFT: exchange-session, migration, or product-schema authority differs"
+        )
+    return False
 
 
 def _strict_identity(value: Any, *, field_name: str) -> str:
@@ -411,6 +541,231 @@ def _owner_projection(value: ProductRouteOwnerV1) -> dict[str, Any]:
 class KernelProductRepositoryMixin:
     """Strict K6-A writer/readback authority over the shared connection owner."""
 
+    def __init__(
+        self,
+        conn_factory: Any = None,
+        *,
+        product_catalog_snapshot: PluginCatalogSnapshotV1 | None = None,
+        product_gateway_catalog: GatewayCapabilityCatalogV1 | None = None,
+    ) -> None:
+        """Bind process-local product authorities without a caller fallback.
+
+        Existing K2/K6 repository operations do not require these objects.  A
+        K6-D route activation does, and fails loudly if the product composition
+        root did not supply both strict code-owned authorities at construction.
+        """
+
+        if conn_factory is None:
+            super().__init__()
+        else:
+            super().__init__(conn_factory=conn_factory)
+        if product_catalog_snapshot is not None and not isinstance(product_catalog_snapshot, PluginCatalogSnapshotV1):
+            raise TypeError("product_catalog_snapshot must be PluginCatalogSnapshotV1 or None")
+        if product_gateway_catalog is not None and not isinstance(product_gateway_catalog, GatewayCapabilityCatalogV1):
+            raise TypeError("product_gateway_catalog must be GatewayCapabilityCatalogV1 or None")
+        self._product_catalog_snapshot = (
+            None
+            if product_catalog_snapshot is None
+            else PluginCatalogSnapshotV1.model_validate(product_catalog_snapshot.model_dump(mode="python"), strict=True)
+        )
+        self._product_gateway_catalog = (
+            None
+            if product_gateway_catalog is None
+            else GatewayCapabilityCatalogV1.model_validate(
+                product_gateway_catalog.model_dump(mode="python"), strict=True
+            )
+        )
+
+    def _read_k6d_product_catalog_authority_v1(
+        self,
+    ) -> tuple[PluginCatalogSnapshotV1, GatewayCapabilityCatalogV1]:
+        """Return the exact full-five/B0 authority or reject before any write."""
+
+        gateway = self._product_gateway_catalog
+        if gateway is None:
+            raise KernelRepositoryConflict(
+                "K6-D route activation requires an explicit strict product gateway authority"
+            )
+        strict_gateway = GatewayCapabilityCatalogV1.model_validate(gateway.model_dump(mode="python"), strict=True)
+        full_authority = build_full_five_catalog_authority_v1(gateway_catalog=strict_gateway)
+        strict_snapshot = PluginCatalogSnapshotV1.model_validate(
+            full_authority.catalog_runtime.snapshot.model_dump(mode="python"), strict=True
+        )
+        actual_algos = tuple(item.manifest.algo_code for item in strict_snapshot.registration_descriptors)
+        if actual_algos != FULL_FIVE_ALGO_CODES_V1:
+            raise KernelRepositoryConflict(
+                "K6-D route activation requires the exact full-five product catalog; "
+                f"expected={list(FULL_FIVE_ALGO_CODES_V1)} actual={list(actual_algos)}"
+            )
+        supplied_snapshot = self._product_catalog_snapshot
+        if supplied_snapshot is not None:
+            supplied_snapshot = PluginCatalogSnapshotV1.model_validate(
+                supplied_snapshot.model_dump(mode="python"), strict=True
+            )
+            if supplied_snapshot != strict_snapshot:
+                raise KernelRepositoryConflict(
+                    "K6-D supplied product catalog differs from the independently rebuilt full-five authority"
+                )
+        if strict_gateway.quote_source != "B0_QUOTE_V2":
+            raise KernelRepositoryConflict("K6-D route activation requires B0_QUOTE_V2 gateway authority")
+        return strict_snapshot, strict_gateway
+
+    def ensure_product_runtime_v1(
+        self,
+        *,
+        runtime_id: str,
+        binding_id: str,
+        execution_plan_id: str,
+    ) -> dict[str, Any]:
+        """Create or read the exact SIM runtime without invoking the legacy runtime client."""
+
+        runtime_id = _strict_identity(runtime_id, field_name="runtime_id")
+        binding_id = _strict_identity(binding_id, field_name="binding_id")
+        execution_plan_id = _strict_identity(execution_plan_id, field_name="execution_plan_id")
+        expected_runtime: dict[str, Any] | None = None
+        try:
+            with self._connection(transaction=True) as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT plan_id,plan_hash,binding_id,binding_hash,release_id,release_hash,package_id,"
+                        "target_trade_date,execution_policy_sha256,tail_policy_sha256 "
+                        "FROM paper_v2.execution_plan WHERE plan_id=%s FOR SHARE",
+                        (execution_plan_id,),
+                    )
+                    plan = cur.fetchone()
+                    if plan is None or plan["binding_id"] != binding_id:
+                        raise KernelRepositoryConflict(
+                            "K6-D execution plan/binding authority is missing or conflicting"
+                        )
+                    binding = self._lock_product_route_binding_with_cursor(
+                        cur,
+                        runtime_id=runtime_id,
+                        binding_id=binding_id,
+                        trade_date=plan["target_trade_date"],
+                    )
+                    if (
+                        plan["binding_hash"] != binding["binding_hash"]
+                        or plan["release_id"] != binding["release_id"]
+                        or plan["release_hash"] != binding["release_hash"]
+                        or plan["package_id"] != binding["package_id"]
+                    ):
+                        raise KernelRepositoryConflict("K6-D execution plan differs from binding/release authority")
+                    runtime_config_hash = hash_hex_v1(
+                        "miniqmt_k6d_product_runtime_config_v1",
+                        {
+                            "runtime_id": runtime_id,
+                            "execution_plan_id": plan["plan_id"],
+                            "execution_plan_sha256": plan["plan_hash"],
+                            "binding_id": binding_id,
+                            "binding_sha256": binding["binding_hash"],
+                            "release_id": binding["release_id"],
+                            "release_sha256": binding["release_hash"],
+                            "account_group_id": binding["account_group_id"],
+                            "broker_account_id": binding["broker_account_id"],
+                            "trade_date": plan["target_trade_date"].isoformat(),
+                            "execution_policy_sha256": plan["execution_policy_sha256"],
+                            "tail_policy_sha256": plan["tail_policy_sha256"],
+                            "route": "KERNEL_V2",
+                        },
+                    )
+                    metadata = {
+                        "schema_version": "miniqmt_k6d_product_runtime_metadata_v1",
+                        "route": "KERNEL_V2",
+                        "binding_id": binding_id,
+                        "execution_plan_id": execution_plan_id,
+                        "execution_plan_sha256": plan["plan_hash"],
+                        "broker_account_id": binding["broker_account_id"],
+                    }
+                    expected_runtime = {
+                        "runtime_id": runtime_id,
+                        "account_group_id": binding["account_group_id"],
+                        "trade_date": plan["target_trade_date"],
+                        "mode": "SIM",
+                        "runtime_config_hash": runtime_config_hash,
+                        "metadata": metadata,
+                    }
+                    cur.execute(
+                        "SELECT runtime_id,account_group_id,trade_date,mode,event_loop_state,gateway_state,oms_state,"
+                        "runtime_config_hash,last_event_sequence,archived_at,metadata "
+                        "FROM qmt_strategy.execution_runtime WHERE runtime_id=%s FOR UPDATE",
+                        (runtime_id,),
+                    )
+                    existing = cur.fetchone()
+                    if existing is None:
+                        cur.execute(
+                            "INSERT INTO qmt_strategy.execution_runtime("
+                            "runtime_id,account_group_id,trade_date,mode,event_loop_state,gateway_state,oms_state,"
+                            "runtime_config_hash,last_event_sequence,metadata) "
+                            "VALUES (%s,%s,%s,'SIM','CREATED','DISCONNECTED','EMPTY',%s,0,%s)",
+                            (
+                                runtime_id,
+                                binding["account_group_id"],
+                                plan["target_trade_date"],
+                                runtime_config_hash,
+                                _json(metadata),
+                            ),
+                        )
+                    else:
+                        expected = (
+                            runtime_id,
+                            binding["account_group_id"],
+                            plan["target_trade_date"],
+                            "SIM",
+                            runtime_config_hash,
+                            None,
+                        )
+                        actual = (
+                            existing["runtime_id"],
+                            existing["account_group_id"],
+                            existing["trade_date"],
+                            existing["mode"],
+                            existing["runtime_config_hash"],
+                            existing["archived_at"],
+                        )
+                        if actual != expected:
+                            raise KernelRepositoryConflict("K6-D runtime readback differs from the frozen plan owner")
+                        existing_metadata = existing["metadata"]
+                        if not isinstance(existing_metadata, dict) or any(
+                            existing_metadata.get(key) != value for key, value in metadata.items()
+                        ):
+                            raise KernelRepositoryConflict("K6-D runtime metadata differs from the frozen plan owner")
+        except KernelRepositoryCommitUnknown:
+            # The independent readback below is the only allowed resolution.
+            pass
+        if expected_runtime is None:
+            raise KernelRepositoryCommitUnknown("K6-D runtime authority was unavailable after transaction uncertainty")
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT runtime_id,account_group_id,trade_date,mode,event_loop_state,gateway_state,oms_state,"
+                    "runtime_config_hash,last_event_sequence,archived_at,metadata "
+                    "FROM qmt_strategy.execution_runtime WHERE runtime_id=%s",
+                    (runtime_id,),
+                )
+                readback = cur.fetchone()
+        if readback is None:
+            raise KernelRepositoryCommitUnknown("K6-D runtime commit did not produce an exact independent readback")
+        readback_metadata = readback["metadata"]
+        if (
+            any(
+                readback[key] != expected_runtime[key]
+                for key in (
+                    "runtime_id",
+                    "account_group_id",
+                    "trade_date",
+                    "mode",
+                    "runtime_config_hash",
+                )
+            )
+            or readback["archived_at"] is not None
+            or type(readback["last_event_sequence"]) is not int
+            or readback["last_event_sequence"] < 0
+            or not isinstance(readback_metadata, dict)
+            or any(readback_metadata.get(key) != value for key, value in expected_runtime["metadata"].items())
+        ):
+            raise KernelRepositoryCommitUnknown("K6-D runtime independent readback differs from the frozen owner")
+        return dict(readback)
+
     def preflight_k6_schema(self) -> dict[str, bool]:
         with self._connection(transaction=False) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -582,6 +937,157 @@ class KernelProductRepositoryMixin:
             )
         result["k6b_schema_catalog_fingerprint"] = True
         return result
+
+    @staticmethod
+    def _read_catalog_function_with_cursor(cur: Any, *, function_name: str) -> tuple[dict[str, Any], str]:
+        cur.execute(
+            "SELECT n.nspname,l.lanname,p.provolatile,p.prokind,"
+            "pg_get_function_identity_arguments(p.oid) AS identity_arguments,p.prosrc "
+            "FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+            "JOIN pg_language l ON l.oid=p.prolang "
+            "WHERE n.nspname='qmt_strategy' AND p.proname=%s",
+            (function_name,),
+        )
+        definition = cur.fetchone()
+        if definition is None:
+            raise KernelRepositorySchemaError(f"{function_name} definition is missing")
+        cur.execute(f"SELECT qmt_strategy.{function_name}() AS catalog_sha256")
+        value = cur.fetchone()
+        if value is None or type(value["catalog_sha256"]) is not str:
+            raise KernelRepositorySchemaError(f"{function_name} result is unavailable")
+        return definition, value["catalog_sha256"]
+
+    @staticmethod
+    def _assert_catalog_function_definition(
+        definition: dict[str, Any], *, function_name: str, expected_body_sha256: str
+    ) -> None:
+        normalized_body = (
+            str(definition["prosrc"])
+            .replace(str(definition["nspname"]), "<schema>")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        )
+        actual_body_sha256 = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest()
+        metadata = (
+            definition["lanname"],
+            definition["provolatile"],
+            definition["prokind"],
+            definition["identity_arguments"],
+        )
+        if metadata != ("sql", "s", "f", "") or actual_body_sha256 != expected_body_sha256:
+            raise KernelRepositorySchemaError(
+                f"{function_name} definition drift: metadata={metadata} "
+                f"expected_body={expected_body_sha256} actual_body={actual_body_sha256}"
+            )
+
+    def _preflight_k6_schema_with_cursor(self, cur: Any) -> dict[str, bool]:
+        """Run K6 schema authority readback on the caller's locked transaction cursor."""
+
+        cur.execute(
+            "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname='qmt_strategy' AND c.relkind='r' AND c.relname=ANY(%s)",
+            (list(K6_TABLES),),
+        )
+        found = {str(row["relname"]) for row in cur.fetchall()}
+        if found != set(K6_TABLES):
+            raise KernelRepositorySchemaError(
+                f"K6 schema incomplete: missing={sorted(set(K6_TABLES) - found)} extra={sorted(found - set(K6_TABLES))}"
+            )
+        cur.execute(_K6_CATALOG_PAYLOAD_SQL)
+        row = cur.fetchone()
+        if row is None or type(row["payload"]) is not str:
+            raise KernelRepositorySchemaError("K6 independent catalog payload is unavailable")
+        independent = hashlib.sha256(row["payload"].encode("utf-8")).hexdigest()
+        definition, function_value = self._read_catalog_function_with_cursor(
+            cur, function_name="miniqmt_k6_catalog_fingerprint"
+        )
+        self._assert_catalog_function_definition(
+            definition,
+            function_name="miniqmt_k6_catalog_fingerprint",
+            expected_body_sha256=K6_CATALOG_FUNCTION_BODY_SHA256,
+        )
+        if independent not in K6_CATALOG_SHA256S or function_value != independent:
+            raise KernelRepositorySchemaError(
+                "K6 catalog fingerprint mismatch: "
+                f"expected_one_of={sorted(K6_CATALOG_SHA256S)} independent={independent} function={function_value}"
+            )
+        return {table: True for table in K6_TABLES}
+
+    def _preflight_k6c_schema_with_cursor(self, cur: Any) -> dict[str, bool]:
+        result = self._preflight_k6_schema_with_cursor(cur)
+        cur.execute(_K6_CATALOG_PAYLOAD_SQL)
+        k6_row = cur.fetchone()
+        cur.execute(_K6C0_CATALOG_PAYLOAD_SQL)
+        k6c0_row = cur.fetchone()
+        if k6_row is None or type(k6_row["payload"]) is not str:
+            raise KernelRepositorySchemaError("K6-C0 base catalog payload is unavailable")
+        if k6c0_row is None or type(k6c0_row["payload"]) is not str:
+            raise KernelRepositorySchemaError("K6-C0 independent catalog payload is unavailable")
+        k6_catalog_sha256 = hashlib.sha256(k6_row["payload"].encode("utf-8")).hexdigest()
+        independent = hashlib.sha256(k6c0_row["payload"].encode("utf-8")).hexdigest()
+        definition, function_value = self._read_catalog_function_with_cursor(
+            cur, function_name="miniqmt_k6c_catalog_fingerprint"
+        )
+        self._assert_catalog_function_definition(
+            definition,
+            function_name="miniqmt_k6c_catalog_fingerprint",
+            expected_body_sha256=K6C0_CATALOG_FUNCTION_BODY_SHA256,
+        )
+        if k6_catalog_sha256 not in {K6_CATALOG_SHA256_K6C0, K6_CATALOG_SHA256_K6B}:
+            raise KernelRepositorySchemaError(
+                "K6-C0 requires the exact successor K6 catalog: "
+                f"expected_one_of={sorted({K6_CATALOG_SHA256_K6C0, K6_CATALOG_SHA256_K6B})} "
+                f"actual={k6_catalog_sha256}"
+            )
+        if independent not in K6C0_CATALOG_SHA256S or function_value != independent:
+            raise KernelRepositorySchemaError(
+                "K6-C0 catalog fingerprint mismatch: "
+                f"expected_one_of={sorted(K6C0_CATALOG_SHA256S)} independent={independent} function={function_value}"
+            )
+        result["k6c0_schema_catalog_fingerprint"] = True
+        return result
+
+    def _preflight_k6b_schema_with_cursor(self, cur: Any) -> dict[str, bool]:
+        """Run the complete K6/K6-C0/K6-B readback in one route transaction."""
+
+        result = self._preflight_k6c_schema_with_cursor(cur)
+        cur.execute(_K6B_CATALOG_PAYLOAD_SQL)
+        row = cur.fetchone()
+        if row is None or type(row["payload"]) is not str:
+            raise KernelRepositorySchemaError("K6-B independent catalog payload is unavailable")
+        independent = hashlib.sha256(row["payload"].encode("utf-8")).hexdigest()
+        definition, function_value = self._read_catalog_function_with_cursor(
+            cur, function_name="miniqmt_k6b_catalog_fingerprint"
+        )
+        self._assert_catalog_function_definition(
+            definition,
+            function_name="miniqmt_k6b_catalog_fingerprint",
+            expected_body_sha256=K6B_CATALOG_FUNCTION_BODY_SHA256,
+        )
+        if independent != K6B_CATALOG_SHA256 or function_value != independent:
+            raise KernelRepositorySchemaError(
+                "K6-B catalog fingerprint mismatch: "
+                f"expected={K6B_CATALOG_SHA256} independent={independent} function={function_value}"
+            )
+        result["k6b_schema_catalog_fingerprint"] = True
+        return result
+
+    @staticmethod
+    def _independent_k6_catalog_hashes_with_cursor(cur: Any) -> tuple[str, str, str]:
+        """Recompute all catalog byte hashes inside the route-lock transaction."""
+
+        values: list[str] = []
+        for label, payload_sql in (
+            ("K6", _K6_CATALOG_PAYLOAD_SQL),
+            ("K6-C0", _K6C0_CATALOG_PAYLOAD_SQL),
+            ("K6-B", _K6B_CATALOG_PAYLOAD_SQL),
+        ):
+            cur.execute(payload_sql)
+            row = cur.fetchone()
+            if row is None or type(row["payload"]) is not str:
+                raise KernelRepositorySchemaError(f"{label} independent catalog payload is unavailable")
+            values.append(hashlib.sha256(row["payload"].encode("utf-8")).hexdigest())
+        return values[0], values[1], values[2]
 
     def read_dependent_buy_coordination_v1(self, coordination_id: str) -> DependentBuyCoordinationV1:
         coordination_id = _strict_sha256(coordination_id, field_name="coordination_id")
@@ -1202,15 +1708,17 @@ class KernelProductRepositoryMixin:
                 (authority.authority_set_sha256, *projection_item.values(), _json(item.model_dump(mode="json"))),
             )
 
-    def _read_product_route_receipt_v1(self, receipt_sha256: str) -> ProductRouteCutoverReceiptV1:
+    @staticmethod
+    def _read_product_route_receipt_with_cursor(
+        cur: Any, *, receipt_sha256: str, lock: bool
+    ) -> ProductRouteCutoverReceiptV1:
         receipt_sha256 = _strict_sha256(receipt_sha256, field_name="receipt_sha256")
-        with self._connection(transaction=False) as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT * FROM qmt_strategy.execution_product_route_cutover WHERE receipt_sha256=%s",
-                    (receipt_sha256,),
-                )
-                row = cur.fetchone()
+        cur.execute(
+            "SELECT * FROM qmt_strategy.execution_product_route_cutover WHERE receipt_sha256=%s"
+            + (" FOR SHARE" if lock else ""),
+            (receipt_sha256,),
+        )
+        row = cur.fetchone()
         if row is None:
             raise KeyError(receipt_sha256)
         receipt = _read_k6_model(
@@ -1221,19 +1729,29 @@ class KernelProductRepositoryMixin:
         _assert_scalar_columns(row, _route_projection(receipt), carrier_name="product_route_receipt")
         return receipt
 
-    def read_product_route_owner_v1(
-        self, *, runtime_id: str, binding_id: str, trade_date: date | str
-    ) -> ProductRouteOwnerV1:
+    def _read_product_route_receipt_v1(self, receipt_sha256: str) -> ProductRouteCutoverReceiptV1:
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                return self._read_product_route_receipt_with_cursor(cur, receipt_sha256=receipt_sha256, lock=False)
+
+    def _read_product_route_owner_with_cursor(
+        self,
+        cur: Any,
+        *,
+        runtime_id: str,
+        binding_id: str,
+        trade_date: date | str,
+        lock: bool,
+    ) -> tuple[ProductRouteOwnerV1, ProductRouteCutoverReceiptV1]:
         runtime_id = _strict_identity(runtime_id, field_name="runtime_id")
         binding_id = _strict_identity(binding_id, field_name="binding_id")
         trade_date = _strict_trade_date(trade_date)
-        with self._connection(transaction=False) as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT * FROM qmt_strategy.execution_product_route_owner WHERE runtime_id=%s AND binding_id=%s AND trade_date=%s",
-                    (runtime_id, binding_id, trade_date),
-                )
-                row = cur.fetchone()
+        cur.execute(
+            "SELECT * FROM qmt_strategy.execution_product_route_owner "
+            "WHERE runtime_id=%s AND binding_id=%s AND trade_date=%s" + (" FOR UPDATE" if lock else ""),
+            (runtime_id, binding_id, trade_date),
+        )
+        row = cur.fetchone()
         if row is None:
             raise KeyError((runtime_id, binding_id, trade_date))
         owner = _read_k6_model(
@@ -1242,110 +1760,443 @@ class KernelProductRepositoryMixin:
             stage="PRODUCT_ROUTE_OWNER_READBACK",
         )
         _assert_scalar_columns(row, _owner_projection(owner), carrier_name="product route owner")
+        receipt = self._read_product_route_receipt_with_cursor(
+            cur, receipt_sha256=owner.current_receipt_sha256, lock=lock
+        )
+        owner.validate_receipt_v1(receipt)
+        return owner, receipt
+
+    def read_product_route_owner_v1(
+        self, *, runtime_id: str, binding_id: str, trade_date: date | str
+    ) -> ProductRouteOwnerV1:
+        runtime_id = _strict_identity(runtime_id, field_name="runtime_id")
+        binding_id = _strict_identity(binding_id, field_name="binding_id")
+        trade_date = _strict_trade_date(trade_date)
+        with self._connection(transaction=False) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                owner, _receipt = self._read_product_route_owner_with_cursor(
+                    cur,
+                    runtime_id=runtime_id,
+                    binding_id=binding_id,
+                    trade_date=trade_date,
+                    lock=False,
+                )
+                return owner
+
+    @staticmethod
+    def _lock_product_route_binding_with_cursor(
+        cur: Any,
+        *,
+        runtime_id: str,
+        binding_id: str,
+        trade_date: date,
+    ) -> dict[str, Any]:
+        cur.execute(
+            "SELECT binding_id,release_id,release_hash,package_id,manifest_sha256,broker_backend,"
+            "broker_account_id,account_group_id,effective_from,effective_to,binding_hash "
+            "FROM paper_v2.simulation_release_binding WHERE binding_id=%s FOR SHARE",
+            (binding_id,),
+        )
+        binding = cur.fetchone()
+        if binding is None:
+            raise KernelRepositoryConflict("K6-D MiniQMT binding authority is missing")
+        if binding["broker_backend"] != "minqmt_sim":
+            raise KernelRepositoryConflict("K6-D route activation requires a MINIQMT_SIM binding")
+        for field_name in (
+            "release_id",
+            "release_hash",
+            "package_id",
+            "manifest_sha256",
+            "broker_account_id",
+            "account_group_id",
+            "binding_hash",
+        ):
+            value = binding[field_name]
+            if type(value) is not str or not value or value != value.strip():
+                raise KernelRepositoryConflict(f"K6-D binding has invalid {field_name} authority")
+        effective_from = binding["effective_from"]
+        effective_to = binding["effective_to"]
+        if effective_from is not None and (type(effective_from) is not date or trade_date < effective_from):
+            raise KernelRepositoryConflict("K6-D binding is not effective on the requested trade date")
+        if effective_to is not None and (type(effective_to) is not date or trade_date > effective_to):
+            raise KernelRepositoryConflict("K6-D binding is not effective on the requested trade date")
+        cur.execute(
+            "SELECT release_id,release_hash,package_id,manifest_sha256 FROM strategy_pkg.strategy_runtime_release "
+            "WHERE release_id=%s FOR SHARE",
+            (binding["release_id"],),
+        )
+        release = cur.fetchone()
+        if release is None or any(
+            release[name] != binding[name] for name in ("release_id", "release_hash", "package_id", "manifest_sha256")
+        ):
+            raise KernelRepositoryConflict("K6-D binding/release/package strict readback differs")
+        # PostgreSQL forbids a row lock on a DISTINCT result.  Lock concrete
+        # benchmark rows, then derive the uniqueness assertion locally.
+        cur.execute(
+            "SELECT parent_intent_id,binding_id,release_id,release_hash,trade_date "
+            "FROM qmt_strategy.execution_parent_benchmark WHERE runtime_id=%s "
+            "ORDER BY parent_intent_id FOR SHARE",
+            (runtime_id,),
+        )
+        parents = cur.fetchall()
+        for parent in parents:
+            if (
+                parent["binding_id"],
+                parent["release_id"],
+                parent["release_hash"],
+                parent["trade_date"],
+            ) != (binding_id, binding["release_id"], binding["release_hash"], trade_date):
+                raise KernelRepositoryConflict("K6-D frozen parent benchmark does not close to binding/release/date")
+        return binding
+
+    @staticmethod
+    def _active_route_instance_counts_with_cursor(cur: Any, *, runtime_id: str) -> tuple[int, int]:
+        cur.execute(
+            "SELECT algo_instance_id,kernel_contract_version "
+            "FROM qmt_strategy.execution_algo_instance "
+            "WHERE runtime_id=%s AND status NOT IN ('COMPLETED','CANCELLED','FAILED','EXPIRED_WITH_RESIDUAL') "
+            "AND kernel_contract_version IN ('LEGACY_V1','KERNEL_V2') "
+            "ORDER BY algo_instance_id FOR SHARE",
+            (runtime_id,),
+        )
+        rows = cur.fetchall()
+        if any(row["kernel_contract_version"] not in {"LEGACY_V1", "KERNEL_V2"} for row in rows):
+            raise KernelRepositoryConflict("K6-D active route count contains an unknown kernel contract version")
+        return (
+            sum(row["kernel_contract_version"] == "LEGACY_V1" for row in rows),
+            sum(row["kernel_contract_version"] == "KERNEL_V2" for row in rows),
+        )
+
+    def activate_kernel_v2_route_v1(
+        self,
+        *,
+        runtime_id: str,
+        binding_id: str,
+        trade_date: date,
+        worker_incarnation_id: str,
+    ) -> ProductRouteOwnerV1:
+        """Activate the final route and resolve commit-unknown by readback only."""
+
+        try:
+            return self._activate_kernel_v2_route_transaction_v1(
+                runtime_id=runtime_id,
+                binding_id=binding_id,
+                trade_date=trade_date,
+                worker_incarnation_id=worker_incarnation_id,
+            )
+        except KernelRepositoryCommitUnknown as commit_unknown:
+            try:
+                return self._read_route_after_commit_unknown_v1(
+                    runtime_id=runtime_id,
+                    binding_id=binding_id,
+                    trade_date=trade_date,
+                )
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                KernelRepositoryConflict,
+                KernelRepositorySchemaError,
+                psycopg2.Error,
+            ) as exc:
+                raise KernelRepositoryCommitUnknown(
+                    "K6-D route commit return was not observed and independent authority readback did not close; "
+                    f"readback_error_type={type(exc).__name__} readback_error={exc}"
+                ) from commit_unknown
+
+    def _read_route_after_commit_unknown_v1(
+        self,
+        *,
+        runtime_id: str,
+        binding_id: str,
+        trade_date: date,
+    ) -> ProductRouteOwnerV1:
+        """Accept only an independently reconstructed exact committed owner.
+
+        This path never re-enters the writer and therefore cannot allocate a
+        second epoch or receipt after an uncertain commit.
+        """
+
+        owner = self.read_product_route_owner_v1(
+            runtime_id=runtime_id,
+            binding_id=binding_id,
+            trade_date=trade_date,
+        )
+        if owner.route_owner is not ProductRouteOwnerKindV1.KERNEL_V2:
+            raise KernelRepositoryConflict("K6-D commit-unknown readback did not observe a KERNEL_V2 owner")
         receipt = self._read_product_route_receipt_v1(owner.current_receipt_sha256)
         owner.validate_receipt_v1(receipt)
+        catalog, gateway = self._read_k6d_product_catalog_authority_v1()
+        session = self.read_exchange_session_authority(
+            runtime_id=runtime_id,
+            exchange_trade_date=trade_date,
+        )
+        migration_checks = self.preflight_k6b_schema()
+        migration_sha256 = migration_readback_sha256_v1(
+            migration_checks,
+            k6_catalog_sha256=K6_CATALOG_SHA256_K6B,
+            k6c_catalog_sha256=K6C0_CATALOG_SHA256_K6B,
+            k6b_catalog_sha256=K6B_CATALOG_SHA256,
+        )
+        expected = (
+            runtime_id,
+            binding_id,
+            trade_date,
+            catalog.catalog_sha256,
+            gateway.catalog_sha256,
+            session.authority_sha256,
+            migration_sha256,
+            product_authority_schema_sha256_v3(),
+        )
+        actual = (
+            receipt.runtime_id,
+            receipt.binding_id,
+            receipt.trade_date,
+            receipt.catalog_sha256,
+            receipt.gateway_capability_catalog_sha256,
+            receipt.exchange_session_authority_sha256,
+            receipt.migration_readback_sha256,
+            receipt.product_authority_schema_sha256,
+        )
+        if actual != expected:
+            raise KernelRepositoryConflict("K6-D commit-unknown owner differs from current strict route authority")
         return owner
+
+    def _activate_kernel_v2_route_transaction_v1(
+        self,
+        *,
+        runtime_id: str,
+        binding_id: str,
+        trade_date: date,
+        worker_incarnation_id: str,
+    ) -> ProductRouteOwnerV1:
+        """Atomically establish or read the only KERNEL_V2 product route.
+
+        No route, receipt, cutoff, catalog or migration value is accepted from
+        a caller.  The route transaction owns all authority reads and uses a
+        separate connection for the final strict durable readback.
+        """
+
+        runtime_id = _strict_identity(runtime_id, field_name="runtime_id")
+        binding_id = _strict_identity(binding_id, field_name="binding_id")
+        worker_incarnation_id = _strict_identity(worker_incarnation_id, field_name="worker_incarnation_id")
+        if type(trade_date) is not date:
+            raise TypeError("trade_date must be an exact date")
+        # Process-local full-five/B0 authority is a construction dependency,
+        # not a route candidate supplied by this call.  Reject its absence
+        # before opening a transaction so no partial durable attempt exists.
+        self._read_k6d_product_catalog_authority_v1()
+        expected_owner: ProductRouteOwnerV1 | None = None
+        with self._connection(transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                binding = self._lock_product_route_binding_with_cursor(
+                    cur, runtime_id=runtime_id, binding_id=binding_id, trade_date=trade_date
+                )
+                cur.execute(
+                    "SELECT runtime_id,account_group_id,trade_date,mode,archived_at,last_event_sequence "
+                    "FROM qmt_strategy.execution_runtime WHERE runtime_id=%s FOR UPDATE",
+                    (runtime_id,),
+                )
+                runtime = cur.fetchone()
+                if runtime is None:
+                    raise KeyError(runtime_id)
+                if runtime["archived_at"] is not None or runtime["mode"] != "SIM":
+                    raise KernelRepositoryConflict("K6-D route activation requires one active SIM execution runtime")
+                if runtime["trade_date"] != trade_date or runtime["account_group_id"] != binding["account_group_id"]:
+                    raise KernelRepositoryConflict("K6-D runtime/binding trade-date or account-group authority differs")
+                # Keep the exact product-route lock order: route owner before
+                # active instances, then worker fence, then derived authority
+                # readers.  These readers may not move ahead of owner locking.
+                cur.execute(
+                    "SELECT * FROM qmt_strategy.execution_product_route_owner "
+                    "WHERE runtime_id=%s AND binding_id=%s AND trade_date=%s FOR UPDATE",
+                    (runtime_id, binding_id, trade_date),
+                )
+                owner_row = cur.fetchone()
+                previous_owner: ProductRouteOwnerV1 | None = None
+                previous_receipt: ProductRouteCutoverReceiptV1 | None = None
+                if owner_row is not None:
+                    previous_owner = _read_k6_model(
+                        ProductRouteOwnerV1,
+                        _row_json(owner_row, "carrier_json"),
+                        stage="K6D_ROUTE_OWNER_PREDECESSOR_READBACK",
+                    )
+                    _assert_scalar_columns(
+                        owner_row, _owner_projection(previous_owner), carrier_name="product route owner"
+                    )
+                    previous_receipt = self._read_product_route_receipt_with_cursor(
+                        cur, receipt_sha256=previous_owner.current_receipt_sha256, lock=True
+                    )
+                    previous_owner.validate_receipt_v1(previous_receipt)
+                    if previous_owner.route_owner is ProductRouteOwnerKindV1.LEGACY_DRAIN_ONLY:
+                        raise KernelRepositoryConflict("MINIQMT_K6_ROUTE_LEGACY_OWNER_PRESENT")
+                    if previous_owner.route_owner is not ProductRouteOwnerKindV1.KERNEL_V2:
+                        raise KernelRepositoryConflict("K6-D current route owner is not KERNEL_V2")
+                legacy_count, kernel_count = self._active_route_instance_counts_with_cursor(cur, runtime_id=runtime_id)
+                self._verify_k6_product_process_cursor(cur, worker_incarnation_id)
+                catalog, gateway = self._read_k6d_product_catalog_authority_v1()
+                session = self._read_exchange_session_authority_with_cursor(
+                    cur, runtime_id=runtime_id, exchange_trade_date=trade_date, lock=True
+                )
+                migration_checks = self._preflight_k6b_schema_with_cursor(cur)
+                k6_catalog_sha256, k6c_catalog_sha256, k6b_catalog_sha256 = (
+                    self._independent_k6_catalog_hashes_with_cursor(cur)
+                )
+                migration_sha256 = migration_readback_sha256_v1(
+                    migration_checks,
+                    k6_catalog_sha256=k6_catalog_sha256,
+                    k6c_catalog_sha256=k6c_catalog_sha256,
+                    k6b_catalog_sha256=k6b_catalog_sha256,
+                )
+                if previous_owner is not None:
+                    if _assert_route_successor_authority_v1(
+                        predecessor=previous_receipt,
+                        catalog_sha256=catalog.catalog_sha256,
+                        gateway_capability_catalog_sha256=gateway.catalog_sha256,
+                        exchange_session_authority_sha256=session.authority_sha256,
+                        migration_readback_sha256=migration_sha256,
+                        product_authority_schema_sha256=product_authority_schema_sha256_v3(),
+                    ):
+                        expected_owner = previous_owner
+                if expected_owner is None:
+                    cur.execute("SELECT transaction_timestamp() AS created_at_utc")
+                    timestamp_row = cur.fetchone()
+                    if timestamp_row is None or not isinstance(timestamp_row["created_at_utc"], datetime):
+                        raise KernelRepositoryConflict("K6-D route transaction timestamp is unavailable")
+                    receipt = ProductRouteCutoverReceiptV1.create(
+                        runtime_id=runtime_id,
+                        binding_id=binding_id,
+                        trade_date=trade_date,
+                        route_epoch=1 if previous_owner is None else previous_owner.current_route_epoch + 1,
+                        route_owner=ProductRouteOwnerKindV1.KERNEL_V2,
+                        effective_new_instance_sequence=int(runtime["last_event_sequence"]) + 1,
+                        legacy_active_instance_count=legacy_count,
+                        kernel_active_instance_count=kernel_count,
+                        catalog_sha256=catalog.catalog_sha256,
+                        gateway_capability_catalog_sha256=gateway.catalog_sha256,
+                        exchange_session_authority_sha256=session.authority_sha256,
+                        migration_readback_sha256=migration_sha256,
+                        product_authority_schema_sha256=product_authority_schema_sha256_v3(),
+                        previous_receipt_sha256=None if previous_receipt is None else previous_receipt.receipt_sha256,
+                        created_at_utc=timestamp_row["created_at_utc"],
+                    )
+                    expected_owner = ProductRouteOwnerV1.create(
+                        receipt=receipt,
+                        row_version=1 if previous_owner is None else previous_owner.row_version + 1,
+                    )
+                    self._write_product_route_cutover_with_cursor(cur, receipt=receipt, owner=expected_owner)
+        if expected_owner is None:
+            raise KernelRepositoryConflict("K6-D route activation exited without a strict owner")
+        readback = self.read_product_route_owner_v1(runtime_id=runtime_id, binding_id=binding_id, trade_date=trade_date)
+        if readback != expected_owner:
+            raise KernelRepositoryConflict("K6-D route owner post-commit readback differs")
+        return readback
+
+    def _write_product_route_cutover_with_cursor(
+        self, cur: Any, *, receipt: ProductRouteCutoverReceiptV1, owner: ProductRouteOwnerV1
+    ) -> None:
+        """Persist one route candidate under the caller's already-held route lock."""
+
+        if not isinstance(receipt, ProductRouteCutoverReceiptV1) or not isinstance(owner, ProductRouteOwnerV1):
+            raise TypeError("receipt and owner must use strict K6 route carriers")
+        owner.validate_receipt_v1(receipt)
+        cur.execute(
+            "SELECT carrier_json FROM qmt_strategy.execution_product_route_owner "
+            "WHERE runtime_id=%s AND binding_id=%s AND trade_date=%s FOR UPDATE",
+            (owner.runtime_id, owner.binding_id, owner.trade_date),
+        )
+        previous_row = cur.fetchone()
+        previous_owner = (
+            None
+            if previous_row is None
+            else _read_k6_model(
+                ProductRouteOwnerV1,
+                _row_json(previous_row, "carrier_json"),
+                stage="PRODUCT_ROUTE_OWNER_PREDECESSOR_READBACK",
+            )
+        )
+        is_retry = previous_owner == owner
+        if previous_owner is None:
+            if receipt.route_epoch != 1 or owner.row_version != 1 or receipt.previous_receipt_sha256 is not None:
+                raise KernelRepositoryConflict("first product route write requires epoch/version one")
+        elif not is_retry:
+            if (
+                owner.row_version != previous_owner.row_version + 1
+                or receipt.route_epoch != previous_owner.current_route_epoch + 1
+            ):
+                raise KernelRepositoryConflict("product route successor is not the exact CAS successor")
+            if receipt.previous_receipt_sha256 != previous_owner.current_receipt_sha256:
+                raise KernelRepositoryConflict("product route predecessor receipt differs")
+            if (
+                previous_owner.route_owner is ProductRouteOwnerKindV1.KERNEL_V2
+                and owner.route_owner is not ProductRouteOwnerKindV1.KERNEL_V2
+            ):
+                raise KernelRepositoryConflict("product route cannot revert from KERNEL_V2")
+        cur.execute(
+            "SELECT * FROM qmt_strategy.execution_product_route_cutover WHERE receipt_sha256=%s FOR SHARE",
+            (receipt.receipt_sha256,),
+        )
+        existing_receipt_row = cur.fetchone()
+        if existing_receipt_row is not None:
+            existing_receipt = _read_k6_model(
+                ProductRouteCutoverReceiptV1,
+                _row_json(existing_receipt_row, "carrier_json"),
+                stage="PRODUCT_ROUTE_RECEIPT_IDEMPOTENT_READBACK",
+            )
+            _assert_scalar_columns(
+                existing_receipt_row,
+                _route_projection(existing_receipt),
+                carrier_name="product route receipt",
+            )
+            if existing_receipt != receipt:
+                raise KernelRepositoryConflict("product route receipt identity conflicts")
+        elif is_retry:
+            raise KernelRepositoryConflict("route owner exists without its immutable receipt")
+        route_projection = _route_projection(receipt)
+        columns = tuple(route_projection)
+        if existing_receipt_row is None:
+            cur.execute(
+                f"INSERT INTO qmt_strategy.execution_product_route_cutover({','.join(columns)},carrier_json) "
+                f"VALUES ({','.join(['%s'] * (len(columns) + 1))})",
+                (*route_projection.values(), _json(receipt.model_dump(mode="json"))),
+            )
+        owner_projection = _owner_projection(owner)
+        columns = tuple(owner_projection)
+        if not is_retry:
+            if previous_owner is None:
+                cur.execute(
+                    f"INSERT INTO qmt_strategy.execution_product_route_owner({','.join(columns)},carrier_json) "
+                    f"VALUES ({','.join(['%s'] * (len(columns) + 1))})",
+                    (*owner_projection.values(), _json(owner.model_dump(mode="json"))),
+                )
+            else:
+                mutable_columns = tuple(key for key in columns if key not in {"runtime_id", "binding_id", "trade_date"})
+                cur.execute(
+                    "UPDATE qmt_strategy.execution_product_route_owner SET "
+                    + ",".join(f"{key}=%s" for key in mutable_columns)
+                    + ",carrier_json=%s WHERE runtime_id=%s AND binding_id=%s AND trade_date=%s AND row_version=%s",
+                    (
+                        *(owner_projection[key] for key in mutable_columns),
+                        _json(owner.model_dump(mode="json")),
+                        owner.runtime_id,
+                        owner.binding_id,
+                        owner.trade_date,
+                        previous_owner.row_version,
+                    ),
+                )
+            if cur.rowcount != 1:
+                raise KernelRepositoryConflict("product route owner CAS failed")
 
     def write_product_route_cutover_v1(
         self, *, receipt: ProductRouteCutoverReceiptV1, owner: ProductRouteOwnerV1
     ) -> ProductRouteOwnerV1:
+        """Compatibility/test seam; K6-D product callers use ``activate_kernel_v2_route_v1`` only."""
+
         if not isinstance(receipt, ProductRouteCutoverReceiptV1) or not isinstance(owner, ProductRouteOwnerV1):
             raise TypeError("receipt and owner must use strict K6 route carriers")
-        owner.validate_receipt_v1(receipt)
         with self._connection(transaction=True) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT carrier_json FROM qmt_strategy.execution_product_route_owner "
-                    "WHERE runtime_id=%s AND binding_id=%s AND trade_date=%s FOR UPDATE",
-                    (owner.runtime_id, owner.binding_id, owner.trade_date),
-                )
-                previous_row = cur.fetchone()
-                previous_owner = (
-                    None
-                    if previous_row is None
-                    else _read_k6_model(
-                        ProductRouteOwnerV1,
-                        _row_json(previous_row, "carrier_json"),
-                        stage="PRODUCT_ROUTE_OWNER_PREDECESSOR_READBACK",
-                    )
-                )
-                is_retry = previous_owner == owner
-                if previous_owner is None:
-                    if (
-                        receipt.route_epoch != 1
-                        or owner.row_version != 1
-                        or receipt.previous_receipt_sha256 is not None
-                    ):
-                        raise KernelRepositoryConflict("first product route write requires epoch/version one")
-                elif not is_retry:
-                    if (
-                        owner.row_version != previous_owner.row_version + 1
-                        or receipt.route_epoch != previous_owner.current_route_epoch + 1
-                    ):
-                        raise KernelRepositoryConflict("product route successor is not the exact CAS successor")
-                    if receipt.previous_receipt_sha256 != previous_owner.current_receipt_sha256:
-                        raise KernelRepositoryConflict("product route predecessor receipt differs")
-                    if (
-                        previous_owner.route_owner is ProductRouteOwnerKindV1.KERNEL_V2
-                        and owner.route_owner is not ProductRouteOwnerKindV1.KERNEL_V2
-                    ):
-                        raise KernelRepositoryConflict("product route cannot revert from KERNEL_V2")
-                cur.execute(
-                    "SELECT * FROM qmt_strategy.execution_product_route_cutover WHERE receipt_sha256=%s FOR SHARE",
-                    (receipt.receipt_sha256,),
-                )
-                existing_receipt_row = cur.fetchone()
-                if existing_receipt_row is not None:
-                    existing_receipt = _read_k6_model(
-                        ProductRouteCutoverReceiptV1,
-                        _row_json(existing_receipt_row, "carrier_json"),
-                        stage="PRODUCT_ROUTE_RECEIPT_IDEMPOTENT_READBACK",
-                    )
-                    _assert_scalar_columns(
-                        existing_receipt_row,
-                        _route_projection(existing_receipt),
-                        carrier_name="product route receipt",
-                    )
-                    if existing_receipt != receipt:
-                        raise KernelRepositoryConflict("product route receipt identity conflicts")
-                elif is_retry:
-                    raise KernelRepositoryConflict("route owner exists without its immutable receipt")
-                route_projection = _route_projection(receipt)
-                columns = tuple(route_projection)
-                if existing_receipt_row is None:
-                    cur.execute(
-                        f"INSERT INTO qmt_strategy.execution_product_route_cutover({','.join(columns)},carrier_json) "
-                        f"VALUES ({','.join(['%s'] * (len(columns) + 1))})",
-                        (*route_projection.values(), _json(receipt.model_dump(mode="json"))),
-                    )
-                owner_projection = _owner_projection(owner)
-                columns = tuple(owner_projection)
-                if not is_retry:
-                    if previous_owner is None:
-                        cur.execute(
-                            f"INSERT INTO qmt_strategy.execution_product_route_owner({','.join(columns)},carrier_json) "
-                            f"VALUES ({','.join(['%s'] * (len(columns) + 1))})",
-                            (*owner_projection.values(), _json(owner.model_dump(mode="json"))),
-                        )
-                    else:
-                        mutable_columns = tuple(
-                            key for key in columns if key not in {"runtime_id", "binding_id", "trade_date"}
-                        )
-                        cur.execute(
-                            "UPDATE qmt_strategy.execution_product_route_owner SET "
-                            + ",".join(f"{key}=%s" for key in mutable_columns)
-                            + ",carrier_json=%s WHERE runtime_id=%s AND binding_id=%s AND trade_date=%s AND row_version=%s",
-                            (
-                                *(owner_projection[key] for key in mutable_columns),
-                                _json(owner.model_dump(mode="json")),
-                                owner.runtime_id,
-                                owner.binding_id,
-                                owner.trade_date,
-                                previous_owner.row_version,
-                            ),
-                        )
-                    if cur.rowcount != 1:
-                        raise KernelRepositoryConflict("product route owner CAS failed")
+                self._write_product_route_cutover_with_cursor(cur, receipt=receipt, owner=owner)
         readback = self.read_product_route_owner_v1(
             runtime_id=owner.runtime_id, binding_id=owner.binding_id, trade_date=owner.trade_date
         )

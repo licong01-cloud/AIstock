@@ -38,11 +38,11 @@ _BINDING_PAYLOADS = MappingProxyType(
                 "constructor_body_sha256": "5438bb6d1ca6e6e3e130ef4e9e492e6372487e4e28fa81891e305e0aba21f442",
                 "state_mapping_set_sha256": "da74319679cdb76af93a345fc98bfb18738544651fa05e903ba426012df7f6a1",
                 "terminal_mapping_set_sha256": "337887210fbba37e4e4c4d53ec6be367bff658bb41776da0d3193a8db543cd76",
-                "characterization_receipt_sha256": "a40f269bdc0f5c78b49aad744b8fb9feb2c9e72c76f2eccd8f9f62abdf3822a2",
+                "characterization_receipt_sha256": "58e435b8050f912c8163411f45b44819a3adabb56b0f2316ed667c87a70cb5a8",
                 "adapter_contract_sha256": "0158a2808d4673166edd721bf321d0457e4ee7ef2e9b4537187b5c7809914cad",
-                "source_executor_binding_sha256": "a87fe90df12f498fc52a23932669e549608ffad67a8b513b201da95d8cf14063",
-                "source_execution_set_sha256": "9ceceb46816ff0958dca2141fc160bb58df0e871782f927c484fa82f28ffb161",
-                "binding_sha256": "7150471bdc81a6d1901db1625089aac9079c1e216e83b1e23e5855b5d466af44",
+                "source_executor_binding_sha256": "f92c35a7a9cabede07c8e77da09f6779e6f6393a5cc36b00de1daefc743d8281",
+                "source_execution_set_sha256": "15c193afbc9f8774604e7999646e0e01c517b82244a4b457a3ac2fbc11a031ea",
+                "binding_sha256": "99e6382468139063844813bb89f910182cc99ca64e48399ea8575ea21b3cd499",
             }
         ),
         "STOP": freeze_json_v1(
@@ -55,11 +55,11 @@ _BINDING_PAYLOADS = MappingProxyType(
                 "constructor_body_sha256": "fde0565d377dae82c85f103fe27292ee85430f86ed0d74b99c9235091e964844",
                 "state_mapping_set_sha256": "3c71151dd52c68179e35bd07cc809fc76bba434866eebab6346e957f84949924",
                 "terminal_mapping_set_sha256": "35d15534a9cbff10b0e1839fcd1ee4321fe049b0505ea9ff1f19a89ff769a1fa",
-                "characterization_receipt_sha256": "dffc2fbc515f1ad99606e4b76e44317eaa5dbce413fb3d586edab9b3b88b9db3",
+                "characterization_receipt_sha256": "8b5113e863a2fe270bd0a798562bcfa52c802ead8fff5b097a2db8b7da24586a",
                 "adapter_contract_sha256": "0158a2808d4673166edd721bf321d0457e4ee7ef2e9b4537187b5c7809914cad",
-                "source_executor_binding_sha256": "a87fe90df12f498fc52a23932669e549608ffad67a8b513b201da95d8cf14063",
-                "source_execution_set_sha256": "bff896e4dd29422f10ae341c0a18c2d17658b22fa518316892ce51abc1f282af",
-                "binding_sha256": "b24a85a64cd3b846d1c47881961bbc2b9c60d16aa59cb3851b2747ccd26457bc",
+                "source_executor_binding_sha256": "f92c35a7a9cabede07c8e77da09f6779e6f6393a5cc36b00de1daefc743d8281",
+                "source_execution_set_sha256": "5465e4f0647aa5db268938cf7a18275a3557e0e30381d40df98c738c80ae7d55",
+                "binding_sha256": "463b9e67d3a11ba109840b7572fd4e145b0fdf620579cf5cf01acd50214516e4",
             }
         ),
     }

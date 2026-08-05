@@ -3356,7 +3356,7 @@ class VnpyFacadeRepositoryEventReadV1(FrozenStrictModel):
                 self.delivery.algo_delivery_sequence != 1
                 or self.event.event_type is not EventTypeV2.ALGO_START
                 or self.event.source is not EventSourceV2.MINIQMT_EXECUTION_KERNEL
-                or self.event.payload_schema_version != "miniqmt_algo_start_v1"
+                or self.event.payload_schema_version not in {"miniqmt_algo_start_v1", "miniqmt_algo_start_v2"}
             ):
                 raise ValueError("facade ALGO_START repository read is not the exact first applied fact")
         else:

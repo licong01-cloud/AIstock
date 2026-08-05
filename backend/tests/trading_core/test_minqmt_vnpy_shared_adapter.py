@@ -1,19 +1,14 @@
 from __future__ import annotations
 
 from datetime import date, timezone
-from decimal import Decimal
 from typing import Any
 
 import pytest
 
-from backend.execution_algos.vnpy_style import VnpyAction, VnpyStyleConfigError
-from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
-from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
+from backend.execution_algos.vnpy_style import VnpyAction
 from backend.services.simulation_runtime import (
-    ExecutionPathNotCanonicalError,
     ExecutionPlanCompiler,
     LocalSimExecutionBridge,
-    MiniQMTExecutionBridge,
     RebalanceIntentService,
     SimulationBrokerBackend,
     TargetPositionService,
@@ -153,124 +148,6 @@ def test_unified_adapter_preserves_rejected_child_raw_status_msg() -> None:
     assert status["status_msg"].startswith("[COUNTER][260200]")
 
 
-def _vnpy_plan(algo_code: str, algo_config: dict[str, Any] | None = None):
-    release, binding, runtime_repo = _release_binding_repo(backend=SimulationBrokerBackend.MINIQMT_SIM)
-    evidence = _evidence(release)
-    runtime_repo.save_daily_selection_evidence(evidence)
-    targets = TargetPositionService().build_target_positions(
-        selection_evidence=evidence,
-        signal_snapshot=_snapshot(),
-        runtime_release=release,
-        binding=binding,
-        current_positions=_current_positions("portfolio_shared"),
-    )
-    rebalance = RebalanceIntentService().build_order_intents(
-        package_id=release.package_id,
-        portfolio_id="portfolio_shared",
-        strategy_id=binding.strategy_id,
-        trade_date=TRADE_DATE,
-        current_positions=_current_positions("portfolio_shared"),
-        target_positions=targets,
-    )
-    plan = ExecutionPlanCompiler().compile_plan(
-        runtime_release=release,
-        binding=binding,
-        selection_evidence=evidence,
-        order_intents=rebalance.order_intents,
-        trading_rule_decisions=rebalance.trading_rule_decisions,
-        portfolio_id="portfolio_shared",
-        execution_policy_payload={
-            "algo_code": algo_code,
-            "algo_config": dict(algo_config or {}),
-            "schedule_window": {"mode": "open_to_close"},
-        },
-        tail_policy_payload={"policy": "cancel_unfilled_at_close"},
-    )
-    return binding, runtime_repo.save_execution_plan(plan)
-
-
-def test_miniqmt_bridge_uses_runtime_owned_vnpy_algo_for_child_requests() -> None:
-    binding, plan = _vnpy_plan("SNIPER_MINIQMT")
-    bridge = MiniQMTExecutionBridge(
-        managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
-    )
-
-    requests = bridge.build_managed_order_requests(
-        plan=plan,
-        binding=binding,
-        price_by_symbol={"000001.SZ": Decimal("10.00"), "000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")},
-    )
-
-    assert requests
-    assert all(request.metadata["source"] == "runtime_owned_vnpy_algo" for request in requests)
-    assert all(request.metadata["runtime_owner"] == "MiniQMTExecutionRuntime" for request in requests)
-    assert all(request.metadata["runtime_child_order_id"] for request in requests)
-    assert all(request.metadata["runtime_algo_instance_id"] for request in requests)
-    assert all("vnpy_action" in request.metadata for request in requests)
-    assert all("-vn" in request.order_remark for request in requests)
-    assert requests[0].metadata["execution_policy_id"] == plan.execution_policy_version_id
-    assert requests[0].metadata["execution_policy_sha256"] == plan.execution_policy_sha256
-    assert requests[0].metadata["execution_algo_code"] == "SNIPER_MINIQMT"
-    assert requests[0].metadata["source_attribution"]["upstream_source_file"].endswith("sniper_algo.py")
-    assert "vnpy_execution_diagnostic" not in requests[0].metadata
-
-
-def test_miniqmt_bridge_rejects_vnpy_id_only_plan_without_policy_snapshot() -> None:
-    release, binding, runtime_repo = _release_binding_repo(backend=SimulationBrokerBackend.MINIQMT_SIM)
-    policy_id = "vnpy_asset:SNIPER_MINIQMT:final_multistrategy_dry_run_20260603"
-    release = release.model_copy(
-        update={
-            "execution_policy_version_id": policy_id,
-            "execution_policy_sha256": "sha_vnpy_id_only",
-            "release_config_json": {
-                **release.release_config_json,
-                "execution_policy": {
-                    "policy_version_id": policy_id,
-                    "policy_sha256": "sha_vnpy_id_only",
-                },
-            },
-        }
-    )
-    evidence = _evidence(release)
-    runtime_repo.save_daily_selection_evidence(evidence)
-    targets = TargetPositionService().build_target_positions(
-        selection_evidence=evidence,
-        signal_snapshot=_snapshot(),
-        runtime_release=release,
-        binding=binding,
-        current_positions=_current_positions("portfolio_shared"),
-    )
-    rebalance = RebalanceIntentService().build_order_intents(
-        package_id=release.package_id,
-        portfolio_id="portfolio_shared",
-        strategy_id=binding.strategy_id,
-        trade_date=TRADE_DATE,
-        current_positions=_current_positions("portfolio_shared"),
-        target_positions=targets,
-    )
-    plan = ExecutionPlanCompiler().compile_plan(
-        runtime_release=release,
-        binding=binding,
-        selection_evidence=evidence,
-        order_intents=rebalance.order_intents,
-        trading_rule_decisions=rebalance.trading_rule_decisions,
-        portfolio_id="portfolio_shared",
-    )
-    bridge = MiniQMTExecutionBridge(
-        managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
-    )
-
-    with pytest.raises(RuntimeConfigInvalidError, match="full policy_json snapshot") as exc_info:
-        bridge.build_managed_order_requests(
-            plan=plan,
-            binding=binding,
-            price_by_symbol={"000001.SZ": Decimal("10.00"), "000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")},
-        )
-
-    assert exc_info.value.context["payload_has_policy_json"] is False
-    assert exc_info.value.context["inferred_algo_code"] == "SNIPER_MINIQMT"
-
-
 def test_localsim_bridge_rejects_vnpy_plan_before_broker_submit() -> None:
     release, binding, runtime_repo = _release_binding_repo(backend=SimulationBrokerBackend.LOCAL_SIM)
     release = release.model_copy(
@@ -320,48 +197,3 @@ def test_localsim_bridge_rejects_vnpy_plan_before_broker_submit() -> None:
     assert broker.submitted == []
     assert exc_info.value.context["broker_backend"] == "local_sim"
     assert exc_info.value.context["inferred_algo_code"] == "SNIPER_MINIQMT"
-
-
-def test_miniqmt_bridge_rejects_non_vnpy_plan_without_managed_order_fallback() -> None:
-    binding, plan = _vnpy_plan("SNIPER_MINIQMT")
-    plan = plan.model_copy(
-        update={
-            "execution_policy_version_id": "exec_policy_close_price",
-            "plan_payload_json": {
-                **plan.plan_payload_json,
-                "execution_policy": {
-                    **plan.plan_payload_json["execution_policy"],
-                    "version_id": "exec_policy_close_price",
-                    "payload": {"algo_code": "CLOSE_PRICE", "policy_json": {"algo_code": "CLOSE_PRICE", "algo_config": {}}},
-                },
-            },
-        }
-    )
-    bridge = MiniQMTExecutionBridge(
-        managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
-    )
-
-    with pytest.raises(ExecutionPathNotCanonicalError) as exc_info:
-        bridge.build_managed_order_requests(
-            plan=plan,
-            binding=binding,
-            price_by_symbol={"000001.SZ": Decimal("10.00"), "000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")},
-        )
-
-    assert exc_info.value.context["inferred_algo_code"] == "CLOSE_PRICE"
-    assert exc_info.value.context["required_action"].startswith("activate SNIPER_MINIQMT")
-
-
-def test_miniqmt_bridge_vnpy_invalid_config_fails_fast_without_direct_order_fallback() -> None:
-    binding, plan = _vnpy_plan("BEST_LIMIT_MINIQMT", {"min_volume": 300, "max_volume": 100})
-    bridge = MiniQMTExecutionBridge(
-        managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
-    )
-
-    with pytest.raises(VnpyStyleConfigError, match="max_volume >= min_volume"):
-        bridge.build_managed_order_requests(
-            plan=plan,
-            binding=binding,
-            price_by_symbol={"000001.SZ": Decimal("10.00"), "000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")},
-        )
-

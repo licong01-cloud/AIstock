@@ -829,7 +829,11 @@ import json
 import sys
 sys.path.insert(0, sys.argv[1])
 from backend.execution_algos import ALGO_REGISTRY, get_algo
-print(json.dumps({"count": len(ALGO_REGISTRY), "twap": get_algo("TWAP") is not None}, sort_keys=True))
+print(json.dumps({
+    "count": len(ALGO_REGISTRY),
+    "twap": get_algo("TWAP") is not None,
+    "miniqmt_codes": sorted(code for code in ALGO_REGISTRY if code.endswith("_MINIQMT")),
+}, sort_keys=True))
 """
     completed = subprocess.run(
         [sys.executable, "-I", "-c", script, str(REPO_ROOT)],
@@ -840,5 +844,6 @@ print(json.dumps({"count": len(ALGO_REGISTRY), "twap": get_algo("TWAP") is not N
         encoding="utf-8",
     )
     result = json.loads(completed.stdout)
-    assert result["count"] >= 14
+    assert result["count"] >= 11
     assert result["twap"] is True
+    assert result["miniqmt_codes"] == []

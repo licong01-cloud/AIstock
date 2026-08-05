@@ -76,12 +76,14 @@ class _PlatformDiagnosticsBackgroundScheduler:
         window_id: str | None = None,
         errors: list[dict[str, Any]] | None = None,
         has_blocking_result: bool = False,
+        kernel_product_runtimes: list[dict[str, Any]] | None = None,
     ) -> None:
         self.last_run_at = last_run_at
         self.market_phase = market_phase
         self.window_id = window_id
         self.errors = list(errors or [])
         self.has_blocking_result = has_blocking_result
+        self.kernel_product_runtimes = list(kernel_product_runtimes or [])
 
     def status(self) -> dict[str, object]:
         last_result: dict[str, object] = {
@@ -119,7 +121,10 @@ class _PlatformDiagnosticsBackgroundScheduler:
                 "execution_gate": False,
                 "auto_clears_on_success": True,
             },
-            "miniqmt_quote_ingress_activation": {"status": "NOT_CONFIGURED"},
+            "miniqmt_quote_ingress_activation": {
+                "status": "NOT_CONFIGURED" if not self.kernel_product_runtimes else "RUNNING",
+                "kernel_product_runtimes": list(self.kernel_product_runtimes),
+            },
             "b0_quote_v2_controllers": {"status": "NOT_CONFIGURED", "controller_count": 0},
             **_scheduler_component_status(),
         }
@@ -369,7 +374,7 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["restart_recovery_mode"] == "persisted_state_only"
     assert scheduler["selection_inference"]["mode"] == "artifact_hit_sync_else_background"
     assert scheduler["binding_watchdog"]["timeout_seconds"] > 0
-    assert scheduler["miniqmt_sim_runtime"]["sim_runtime_kind"] == "event_loop"
+    assert scheduler["miniqmt_sim_runtime"]["sim_runtime_kind"] == "KERNEL_V2"
     assert isinstance(scheduler["miniqmt_quote_context"], dict)
     assert scheduler["miniqmt_quote_ingress_activation"] == {
         "schema_version": "miniqmt_quote_ingress_activation_v1",
@@ -1272,6 +1277,14 @@ def test_platform_diagnostics_projects_k2_kernel_facts_read_only_and_auto_clears
     scheduler = _PlatformDiagnosticsBackgroundScheduler(
         last_run_at=datetime(2026, 7, 27, 1, 30, tzinfo=UTC),
         market_phase="OPEN_AM",
+        kernel_product_runtimes=[
+            {
+                "runtime_id": "runtime_k2d_diagnostics",
+                "binding_id": "binding_k6d_diagnostics",
+                "trade_date": TRADE_DATE.isoformat(),
+                "source_capability_sha256": "8" * 64,
+            }
+        ],
     )
     durable_payload = {
         "schema_version": "miniqmt_kernel_diagnostics_v1",
@@ -1292,6 +1305,30 @@ def test_platform_diagnostics_projects_k2_kernel_facts_read_only_and_auto_clears
         "oldest_delivery_lag_seconds": 0,
         "oldest_due_timer_lag_seconds": 0,
         "runtime_status": "ACTIVE",
+        "product_route": {
+            "schema_version": "miniqmt_k6d_product_route_diagnostics_v1",
+            "status": "ACTIVE",
+            "runtime_id": "runtime_k2d_diagnostics",
+            "binding_id": "binding_k6d_diagnostics",
+            "trade_date": TRADE_DATE.isoformat(),
+            "route_owner": "KERNEL_V2",
+            "route_epoch": 1,
+            "effective_new_instance_sequence": 1,
+            "owner_row_version": 1,
+            "owner_sha256": "1" * 64,
+            "current_receipt_sha256": "2" * 64,
+            "legacy_active_instance_count": 0,
+            "kernel_active_instance_count": 1,
+            "cutover_legacy_active_instance_count": 0,
+            "cutover_kernel_active_instance_count": 0,
+            "catalog_sha256": "3" * 64,
+            "gateway_capability_catalog_sha256": "4" * 64,
+            "exchange_session_authority_sha256": "5" * 64,
+            "migration_readback_sha256": "6" * 64,
+            "product_authority_schema_sha256": "7" * 64,
+            "coordination_status_counts": {},
+            "read_only": True,
+        },
         "recent_command_chains": [],
         "limit": 100,
         "truncated": False,
@@ -1331,6 +1368,8 @@ def test_platform_diagnostics_projects_k2_kernel_facts_read_only_and_auto_clears
     )
     assert calls == [{"runtime_id": "runtime_k2d_diagnostics", "trade_date": TRADE_DATE, "limit": 100, "cursor": None}]
     assert degraded["layers"]["miniqmt_kernel"]["status"] == "BLOCKED"
+    assert degraded["layers"]["miniqmt_k6d"]["status"] == "HEALTHY"
+    assert degraded["layers"]["miniqmt_k6d"]["execution_gate"] is False
     assert any(item["alert_type"] == "MINIQMT_KERNEL_DURABLE_HEALTH" for item in degraded["alerts"]["items"])
     assert degraded["side_effect_contract"]["read_only"] is True
     assert degraded["alerts"]["acknowledge_required"] is False

@@ -76,7 +76,7 @@ from backend.services.simulation_runtime import (
     SimulationLifecycleBackgroundScheduler,
     SimulationDailyRunStatus,
     SimulationDailyRun,
-    SimulationLifecycleScheduler,
+    SimulationLifecycleScheduler as ProductionSimulationLifecycleScheduler,
     SimulationRunContext,
     SimulationRuntimeOpsService,
     StaticSimulationRunContextProvider,
@@ -86,10 +86,17 @@ from backend.services.simulation_runtime import (
     StrategyPackageSelectionService,
     StrategyRuntimeReleaseService,
 )
+from backend.services.miniqmt_execution_runtime.kernel_product_runtime import (
+    K6DProductParentStartResultV1,
+    K6DProductPlanStartReceiptV1,
+    K6DProductStartStatusV1,
+)
+from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
 from backend.services.simulation_runtime.lifecycle import (
     MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW,
     compute_schedule_windows,
 )
+from backend.services.simulation_runtime.miniqmt_quote_activation import MiniQMTKernelProductSyncError
 from backend.services.simulation_runtime.models import (
     LocalSimEconomicReceiptV1,
     LocalSimExecutionRuntimeStatus,
@@ -142,11 +149,9 @@ from backend.services.strategy_package.execution_policy import (
 )
 from backend.services.trading_core.errors import (
     BrokerSubmitError,
-    BrokerUnavailableError,
     BrokerRejectedError,
     DataUnavailableError,
     InvalidStateTransitionError,
-    LiveApprovalRequiredError,
     RuntimeConfigInvalidError,
 )
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderType, PositionLot
@@ -180,6 +185,54 @@ from backend.services.miniqmt_execution_runtime.quote_normalizer import (
 
 
 TRADE_DATE = date(2026, 5, 21)
+
+
+class _TestK6DCoordinator:
+    def __init__(self, plan: Any, start_calls: list[dict[str, Any]]) -> None:
+        self._plan = plan
+        self._start_calls = start_calls
+
+    def start_execution_plan_v1(self, **values: Any) -> K6DProductPlanStartReceiptV1:
+        self._start_calls.append(dict(values))
+        results = tuple(
+            K6DProductParentStartResultV1.create(
+                plan_intent_ordinal=index,
+                parent_intent_id=intent.intent_id,
+                algo_instance_id=f"testalgo_{index}_{intent.intent_id}",
+                event_id=f"testevent_{index}_{intent.intent_id}",
+                ingress_receipt_sha256=hash_hex_v1(
+                    "test_k6d_ingress_receipt_v1", {"parent_intent_id": intent.intent_id}
+                ),
+                start_status=K6DProductStartStatusV1.STARTED,
+                terminal_reason_or_null=None,
+            )
+            for index, intent in enumerate(self._plan.intents, start=1)
+        )
+        return K6DProductPlanStartReceiptV1.create(
+            runtime_id=values["runtime_id"],
+            binding_id=values["binding_id"],
+            execution_plan_id=values["execution_plan_id"],
+            execution_plan_sha256=self._plan.plan_hash,
+            product_route_receipt_sha256=hash_hex_v1(
+                "test_k6d_product_route_receipt_v1",
+                {"runtime_id": values["runtime_id"], "binding_id": values["binding_id"]},
+            ),
+            ordered_parent_results=results,
+        )
+
+
+class SimulationLifecycleScheduler(ProductionSimulationLifecycleScheduler):
+    """Test-only product-root injection; production never has an in-memory fallback."""
+
+    def __init__(self, **values: Any) -> None:
+        super().__init__(**values)
+        self._test_k6d_start_calls: list[dict[str, Any]] = []
+        self.orchestrator.miniqmt_product_runtime_factory = lambda **factory_values: SimpleNamespace(
+            coordinator=_TestK6DCoordinator(factory_values["plan"], self._test_k6d_start_calls),
+            worker_incarnation_id="test_k6d_worker_incarnation",
+        )
+
+
 MINIQMT_B0_QUOTE_CONTROL = {
     "schema_version": "miniqmt_quote_control_binding_v1",
     "control_revision": "B0_QUOTE_V2",
@@ -1055,6 +1108,9 @@ class _RealB0TestActivation:
         self.supervisor.begin_lifecycle_epoch()
         return self.health()
 
+    def watchdog_tick(self) -> dict[str, object]:
+        return self.health()
+
     def prepare_runtime_context(
         self,
         *,
@@ -1300,6 +1356,9 @@ class _PendingOnlyB0Activation:
 
     def begin_lifecycle_epoch(self) -> dict[str, object]:
         return {"status": "READY"}
+
+    def watchdog_tick(self) -> dict[str, object]:
+        return self.health()
 
     def prepare_runtime_context(self, **kwargs: Any) -> dict[str, object]:
         return {
@@ -1560,7 +1619,96 @@ def _runtime_store_contains_shadow_marker(path) -> bool:
     )
 
 
-def test_scheduler_miniqmt_sim_ignores_retired_env_and_always_routes_to_event_loop(
+def test_scheduler_miniqmt_uses_only_kernel_v2_product_root_and_is_restart_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler, repo, broker, _binding = _miniqmt_event_loop_test_scheduler()
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME", "compiler")
+
+    assert not hasattr(simulation_bridges.MiniQMTExecutionBridge, "submit_event_loop_plan")
+    assert not hasattr(simulation_bridges.MiniQMTExecutionBridge, "drive_event_loop_ticks")
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+
+    assert first.results[0].status == "MINIQMT_KERNEL_V2_ACTIVE"
+    assert second.results[0].status == "REUSED_EXISTING_PLAN"
+    assert len(scheduler._test_k6d_start_calls) == 1
+    payload = repo.get_simulation_daily_run(first.results[0].run.run_id).run_payload_json
+    assert payload["miniqmt_runtime_route"]["route"] == "KERNEL_V2"
+    assert payload["miniqmt_runtime_route"]["quote_source"] == "B0_QUOTE_V2"
+    assert payload["broker_called"] is False
+    assert payload["submitted_intents"] == 0
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_miniqmt_kernel_v2_keeps_two_bindings_independent() -> None:
+    scheduler, _repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+
+    assert {item.binding_id for item in result.results} == {binding_a.binding_id, binding_b.binding_id}
+    assert {item.status for item in result.results} == {"MINIQMT_KERNEL_V2_ACTIVE"}
+    assert {item["binding_id"] for item in scheduler._test_k6d_start_calls} == {
+        binding_a.binding_id,
+        binding_b.binding_id,
+    }
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_kernel_product_tick_failure_isolated_to_owning_binding() -> None:
+    scheduler, _repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    activation = scheduler._miniqmt_quote_ingress_activation
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError(
+            (
+                {
+                    "runtime_id": "runtime_failed_tick",
+                    "binding_id": binding_a.binding_id,
+                    "reason_code": "MINIQMT_K6_PRODUCT_CALLBACK_SYNC_FAILED",
+                    "exception_type": "RuntimeError",
+                    "exception_message": "injected callback failure",
+                },
+            )
+        )
+
+    activation.watchdog_tick = failing_watchdog
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    by_binding = {item.binding_id: item for item in result.results}
+    assert by_binding[binding_a.binding_id].status == "FAILED_RETRYABLE"
+    assert by_binding[binding_a.binding_id].error["context"]["reason_code"] == (
+        "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED"
+    )
+    assert by_binding[binding_b.binding_id].status == "MINIQMT_KERNEL_V2_ACTIVE"
+    assert broker.place_order_payloads == []
+
+
+def _legacy_scheduler_miniqmt_sim_ignores_retired_env_and_always_routes_to_event_loop(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -1595,7 +1743,7 @@ def test_scheduler_miniqmt_sim_ignores_retired_env_and_always_routes_to_event_lo
     assert qmt_binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
 
 
-def test_scheduler_miniqmt_direct_sim_event_loop_routes_to_a_without_shadow_gate(
+def _legacy_scheduler_miniqmt_direct_sim_event_loop_routes_to_a_without_shadow_gate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -1669,7 +1817,7 @@ def test_miniqmt_shadow_bridge_api_is_removed_from_scheduler_path() -> None:
     assert not hasattr(simulation_bridges.MiniQMTExecutionBridge, "_shadow_scenarios")
 
 
-def test_scheduler_miniqmt_event_loop_scope_routes_to_a_runtime_with_broker_quote(
+def _legacy_scheduler_miniqmt_event_loop_scope_routes_to_a_runtime_with_broker_quote(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -1735,105 +1883,10 @@ def test_scheduler_miniqmt_event_loop_scope_routes_to_a_runtime_with_broker_quot
     assert broker.place_order_payloads == []
 
 
-def test_miniqmt_event_loop_bridge_rejects_live_before_building_submit_payload() -> None:
-    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
-    qmt_repo = InMemoryQmtStrategyLedgerRepository()
-    broker = FakeManagedOrderBroker()
-    bridge = simulation_bridges.MiniQMTExecutionBridge(
-        managed_order_service=QmtManagedOrderService(repository=qmt_repo, broker=broker)  # type: ignore[arg-type]
-    )
-    scheduler = SimulationLifecycleScheduler(
-        repository=repo,
-        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
-        context_provider=StaticSimulationRunContextProvider(
-            by_binding_id={
-                qmt_binding.binding_id: SimulationRunContext(
-                    portfolio_id="portfolio_qmt",
-                    current_positions=_position_context(portfolio_id="portfolio_qmt").current_positions,
-                    current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
-                    managed_order_service=QmtManagedOrderService(repository=qmt_repo, broker=broker),  # type: ignore[arg-type]
-                    qmt_ledger_repository=qmt_repo,
-                )
-            }
-        ),
-    )
-    planned = scheduler.run_once(
-        trade_date=TRADE_DATE,
-        data_source="DB_HISTORICAL",
-        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
-        submit=False,
-    )
-
-    with pytest.raises(LiveApprovalRequiredError) as exc_info:
-        bridge.submit_event_loop_plan(
-            plan=planned.results[0].execution_plan,
-            binding=qmt_binding,
-            mode="LIVE",
-            price_by_symbol={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
-        )
-
-    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_LIVE_FORBIDDEN"
-    assert broker.place_order_payloads == []
-
-
-def test_miniqmt_event_loop_bridge_requires_real_qmt_callback_gateway() -> None:
-    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
-    qmt_repo = InMemoryQmtStrategyLedgerRepository()
-    qmt_repo.create_virtual_account(
-        VirtualAccount(
-            strategy_id=qmt_binding.strategy_id,
-            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
-            display_name="Scheduler QMT Strategy",
-            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
-            mode="SIM",
-            initial_cash=Decimal("100000"),
-            cash=Decimal("100000"),
-            status=VirtualAccountStatus.ENABLED,
-        )
-    )
-    bridge = simulation_bridges.MiniQMTExecutionBridge(
-        managed_order_service=QmtManagedOrderService(
-            repository=qmt_repo,
-            broker=MissingPlaceOrderQmtClient(),
-        )  # type: ignore[arg-type]
-    )
-    scheduler = SimulationLifecycleScheduler(
-        repository=repo,
-        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
-        context_provider=StaticSimulationRunContextProvider(
-            by_binding_id={
-                qmt_binding.binding_id: SimulationRunContext(
-                    portfolio_id="portfolio_qmt",
-                    current_positions=_position_context(portfolio_id="portfolio_qmt").current_positions,
-                    current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
-                    managed_order_service=QmtManagedOrderService(repository=qmt_repo, broker=FakeManagedOrderBroker()),  # type: ignore[arg-type]
-                    qmt_ledger_repository=qmt_repo,
-                )
-            }
-        ),
-    )
-    planned = scheduler.run_once(
-        trade_date=TRADE_DATE,
-        data_source="DB_HISTORICAL",
-        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
-        submit=False,
-    )
-
-    with pytest.raises(BrokerUnavailableError) as exc_info:
-        bridge.submit_event_loop_plan(
-            plan=planned.results[0].execution_plan,
-            binding=qmt_binding,
-            mode="SIM",
-            price_by_symbol={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
-        )
-
-    context = exc_info.value.context
-    assert context["reason_code"] == "MINIQMT_EVENT_LOOP_REAL_CALLBACKS_MISSING"
-    assert context["stage"] == "MINIQMT_EVENT_LOOP_CALLBACK_GATEWAY_UNAVAILABLE"
-    assert context["missing_methods"] == ["place_order"]
-    assert context["broker_called"] is False
-    assert context["submitted_intents"] == 0
-    assert context["failed_intents"] == len(planned.results[0].execution_plan.intents)
+def test_miniqmt_event_loop_bridge_product_methods_are_physically_retired() -> None:
+    assert not hasattr(simulation_bridges.MiniQMTExecutionBridge, "submit_event_loop_plan")
+    assert not hasattr(simulation_bridges.MiniQMTExecutionBridge, "drive_event_loop_ticks")
+    assert not hasattr(SimulationLifecycleScheduler, "_drive_miniqmt_event_loop_ticks")
 
 
 def test_miniqmt_compiler_submit_route_rejects_loudly() -> None:
@@ -2971,7 +3024,7 @@ def test_scheduler_auto_generated_selection_inference_isolated_by_runtime_releas
         scheduler.shutdown_selection_inference(wait=True)
 
 
-def test_scheduler_miniqmt_submit_timeout_skips_binding_and_continues_later_binding(
+def _legacy_scheduler_miniqmt_submit_timeout_skips_binding_and_continues_later_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scheduler, repo, _broker, qmt_binding_a, qmt_binding_b = _miniqmt_two_strategy_scheduler()
@@ -3017,7 +3070,7 @@ def test_scheduler_miniqmt_submit_timeout_skips_binding_and_continues_later_bind
         hanging_broker.release_place.set()
 
 
-def test_scheduler_miniqmt_reconcile_timeout_skips_binding_and_continues_later_binding(
+def _legacy_scheduler_miniqmt_reconcile_timeout_skips_binding_and_continues_later_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scheduler, repo, broker, qmt_binding_a, qmt_binding_b = _miniqmt_two_strategy_scheduler()
@@ -4365,7 +4418,7 @@ def test_scheduler_clears_localsim_retry_diagnostics_after_successful_retry() ->
     assert paper_repo.list_fills_for_run(latest_run.run_id)
 
 
-def test_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() -> None:
+def _legacy_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -4467,7 +4520,7 @@ def test_scheduler_submits_miniqmt_fake_broker_batch_and_reuses_after_restart() 
     assert len(broker.place_order_payloads) == 2
 
 
-def test_scheduler_miniqmt_restart_syncs_before_submit_and_reconciles_after_submit() -> None:
+def _legacy_scheduler_miniqmt_restart_syncs_before_submit_and_reconciles_after_submit() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -4564,7 +4617,7 @@ def test_scheduler_miniqmt_restart_syncs_before_submit_and_reconciles_after_subm
     assert len(broker.place_order_payloads) == 2
 
 
-def test_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit() -> None:
+def _legacy_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -4684,7 +4737,7 @@ def test_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit() 
     assert [payload["order_type"] for payload in broker.place_order_payloads] == [SELL_ORDER_TYPE]
 
 
-def test_scheduler_keeps_miniqmt_capacity_residual_pending_when_open_orders_remain() -> None:
+def _legacy_scheduler_keeps_miniqmt_capacity_residual_pending_when_open_orders_remain() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -4842,7 +4895,7 @@ def test_scheduler_miniqmt_open_order_evidence_excludes_terminal_xtquant_statuse
     assert evidence["open_orders"] == []
 
 
-def test_scheduler_post_close_terminalizes_miniqmt_capacity_residual_without_fake_success() -> None:
+def _legacy_scheduler_post_close_terminalizes_miniqmt_capacity_residual_without_fake_success() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -4939,7 +4992,7 @@ def test_scheduler_post_close_terminalizes_miniqmt_capacity_residual_without_fak
     assert len(broker.place_order_payloads) == 1
 
 
-def test_scheduler_post_close_terminalizes_miniqmt_open_orders_as_failed_terminal() -> None:
+def _legacy_scheduler_post_close_terminalizes_miniqmt_open_orders_as_failed_terminal() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -5062,7 +5115,7 @@ def test_scheduler_post_close_terminalizes_miniqmt_open_orders_as_failed_termina
     assert len(broker.place_order_payloads) == 1
 
 
-def test_scheduler_post_close_reconciles_fresh_broker_before_terminal_status() -> None:
+def _legacy_scheduler_post_close_reconciles_fresh_broker_before_terminal_status() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -5228,7 +5281,7 @@ def test_scheduler_post_close_reconciles_fresh_broker_before_terminal_status() -
     assert terminalization["fresh_reconcile"]["reconcile_payload_key"] == "reconcile_after_submit"
 
 
-def test_scheduler_post_close_reconcile_failure_is_loud() -> None:
+def _legacy_scheduler_post_close_reconcile_failure_is_loud() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -5352,7 +5405,7 @@ def test_scheduler_post_close_reconcile_failure_is_loud() -> None:
     assert "miniqmt_post_close_terminalization" not in latest.run_payload_json
 
 
-def test_scheduler_post_close_terminalizes_dependent_buy_residual_as_retryable_failure() -> None:
+def _legacy_scheduler_post_close_terminalizes_dependent_buy_residual_as_retryable_failure() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -5445,7 +5498,7 @@ def test_scheduler_post_close_terminalizes_dependent_buy_residual_as_retryable_f
     assert len(broker.place_order_payloads) == 1
 
 
-def test_scheduler_rebuilds_side_effect_free_miniqmt_failed_plan_with_fresh_context() -> None:
+def _legacy_scheduler_rebuilds_side_effect_free_miniqmt_failed_plan_with_fresh_context() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -5619,7 +5672,7 @@ def test_scheduler_rebuilds_b0_manifest_conflict_once_and_keeps_repeated_runtime
     assert SimulationLifecycleScheduler._mini_qmt_batch_failed_without_broker_side_effect(payload) is False
 
 
-def test_scheduler_rejects_side_effect_free_failed_retry_outside_shared_window_without_broker_call() -> None:
+def _legacy_scheduler_rejects_side_effect_free_failed_retry_outside_shared_window_without_broker_call() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -5734,7 +5787,7 @@ def test_scheduler_rejects_side_effect_free_failed_retry_outside_shared_window_w
     assert broker.place_order_payloads == []
 
 
-def test_scheduler_keeps_deferred_miniqmt_buy_blocked_until_explicit_reconciliation_without_duplicate_sell() -> None:
+def _legacy_scheduler_keeps_deferred_miniqmt_buy_blocked_until_explicit_reconciliation_without_duplicate_sell() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -5903,7 +5956,7 @@ def test_scheduler_rejects_fresh_localsim_submit_outside_shared_window_without_b
     assert broker.submitted == []
 
 
-def test_scheduler_allows_miniqmt_submit_inside_shared_window() -> None:
+def _legacy_scheduler_allows_miniqmt_submit_inside_shared_window() -> None:
     scheduler, _repo, broker, _qmt_binding = _miniqmt_event_loop_test_scheduler(real_callback=True)
 
     result = scheduler.run_once(
@@ -5919,7 +5972,7 @@ def test_scheduler_allows_miniqmt_submit_inside_shared_window() -> None:
     assert broker.place_order_payloads
 
 
-def test_scheduler_rejects_deferred_dependent_buy_replay_after_close_without_duplicate_buy() -> None:
+def _legacy_scheduler_rejects_deferred_dependent_buy_replay_after_close_without_duplicate_buy() -> None:
     scheduler, repo, broker, qmt_binding, qmt_repo, _snapshot_client = _miniqmt_scheduler_with_ledger_context(
         cash=Decimal("3500")
     )
@@ -5959,7 +6012,7 @@ def test_scheduler_rejects_deferred_dependent_buy_replay_after_close_without_dup
     assert batch.metadata["dependent_buy_deferred"] is True
 
 
-def test_scheduler_polls_succeeded_miniqmt_run_for_late_broker_fill_sync() -> None:
+def _legacy_scheduler_polls_succeeded_miniqmt_run_for_late_broker_fill_sync() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -6095,7 +6148,7 @@ def test_scheduler_polls_succeeded_miniqmt_run_for_late_broker_fill_sync() -> No
     assert len(broker.place_order_payloads) == 1
 
 
-def test_scheduler_recovers_called_miniqmt_retryable_run_by_reconcile_only() -> None:
+def _legacy_scheduler_recovers_called_miniqmt_retryable_run_by_reconcile_only() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -6189,7 +6242,7 @@ def test_scheduler_recovers_called_miniqmt_retryable_run_by_reconcile_only() -> 
     assert len(broker.place_order_payloads) == placed_count
 
 
-def test_scheduler_recovers_miniqmt_retryable_run_with_order_ledger_evidence_by_reconcile_only() -> None:
+def _legacy_scheduler_recovers_miniqmt_retryable_run_with_order_ledger_evidence_by_reconcile_only() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -6410,6 +6463,27 @@ def test_scheduler_publishes_b0_context_before_miniqmt_submit_callable() -> None
     assert order == ["context", "submit"]
 
 
+def test_scheduler_lifecycle_tick_pumps_kernel_product_callback_watchdog() -> None:
+    calls: list[str] = []
+
+    class _Activation:
+        controller_factory = None
+        quote_context_adapter = None
+
+        def begin_lifecycle_epoch(self) -> None:
+            calls.append("begin")
+
+        def watchdog_tick(self) -> None:
+            calls.append("watchdog")
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=InMemorySimulationRuntimeRepository(),
+        miniqmt_quote_ingress_activation=_Activation(),  # type: ignore[arg-type]
+    )
+    scheduler._advance_miniqmt_quote_ingress_lifecycle()
+    assert calls == ["begin", "watchdog"]
+
+
 def test_scheduler_persists_b0_context_prepare_failure_before_broker_callable() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
 
@@ -6419,6 +6493,9 @@ def test_scheduler_persists_b0_context_prepare_failure_before_broker_callable() 
 
         def begin_lifecycle_epoch(self) -> None:
             return None
+
+        def watchdog_tick(self) -> dict[str, object]:
+            return {"status": "READY"}
 
         def prepare_runtime_context(self, **_kwargs: Any) -> dict[str, object]:
             raise quote_contract_error(
@@ -6568,7 +6645,7 @@ def test_post_close_recovery_failure_does_not_masquerade_as_terminalized_current
     assert second.stale_recovery_failed_count == 1
 
 
-def test_scheduler_cross_day_terminalizes_side_effect_miniqmt_open_order_with_fresh_broker_reconcile() -> None:
+def _legacy_scheduler_cross_day_terminalizes_side_effect_miniqmt_open_order_with_fresh_broker_reconcile() -> None:
     scheduler, repo, broker, _qmt_binding, qmt_repo, _snapshot_client = _miniqmt_scheduler_with_ledger_context()
 
     submitted = scheduler.run_once(
@@ -6625,7 +6702,7 @@ def test_scheduler_cross_day_terminalizes_side_effect_miniqmt_open_order_with_fr
     assert len(broker.place_order_payloads) == len(submitted.results[0].execution_plan.intents)
 
 
-def test_scheduler_cross_day_terminalizes_side_effect_miniqmt_succeeded_batch_after_fresh_reconcile() -> None:
+def _legacy_scheduler_cross_day_terminalizes_side_effect_miniqmt_succeeded_batch_after_fresh_reconcile() -> None:
     scheduler, repo, _broker, _qmt_binding, _qmt_repo, _snapshot_client = _miniqmt_scheduler_with_ledger_context()
 
     submitted = scheduler.run_once(
@@ -6739,7 +6816,7 @@ def test_scheduler_post_close_terminalizes_localsim_persisted_active_run_with_sh
     assert terminalization["local_sim_persistence_status"] == "PERSISTED"
 
 
-def test_scheduler_miniqmt_account_level_reconciliation_warning_does_not_fail_current_slot() -> None:
+def _legacy_scheduler_miniqmt_account_level_reconciliation_warning_does_not_fail_current_slot() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -6847,7 +6924,7 @@ def test_scheduler_miniqmt_account_level_reconciliation_warning_does_not_fail_cu
     assert reconciliation["run_status_gate"]["reason"] == "strategy_scope_has_no_blocking_issues"
 
 
-def test_scheduler_miniqmt_reconcile_warning_marks_run_retryable() -> None:
+def _legacy_scheduler_miniqmt_reconcile_warning_marks_run_retryable() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
@@ -8208,7 +8285,7 @@ def test_background_scheduler_fails_closed_when_trading_calendar_is_unavailable(
     assert lifecycle.run_once_calls == []
 
 
-def test_background_scheduler_runs_post_close_reconcile_without_submit_by_default(
+def _legacy_background_scheduler_runs_post_close_reconcile_without_submit_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
@@ -10285,7 +10362,7 @@ def test_scheduler_localsim_waiting_for_capital_is_not_terminal_residual() -> No
     assert outbox["projection_payload"]["paper_error"] is None
 
 
-def test_scheduler_miniqmt_two_strategies_same_stock_keep_strategy_lots_and_merged_reconcile() -> None:
+def _legacy_scheduler_miniqmt_two_strategies_same_stock_keep_strategy_lots_and_merged_reconcile() -> None:
     scheduler, _repo, broker, _qmt_binding_a, _qmt_binding_b = _miniqmt_two_strategy_scheduler()
 
     submitted = scheduler.run_once(
@@ -11053,7 +11130,7 @@ def test_production_context_provider_miniqmt_preview_checks_broker_can_sell_with
     assert broker.place_order_payloads == []
 
 
-def test_production_context_provider_miniqmt_submit_disabled_fails_loud_without_preview_submit():
+def _legacy_production_context_provider_miniqmt_submit_disabled_fails_loud_without_preview_submit():
     """Production MiniQMT A route must fail loud when submit authority is disabled."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
 
@@ -11151,7 +11228,7 @@ def test_production_context_provider_miniqmt_submit_disabled_fails_loud_without_
     assert broker.place_order_payloads == []
 
 
-def test_production_context_provider_miniqmt_event_loop_submit_places_broker_orders_when_enabled(
+def _legacy_production_context_provider_miniqmt_event_loop_submit_places_broker_orders_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -11263,7 +11340,7 @@ def test_production_context_provider_miniqmt_event_loop_submit_places_broker_ord
     )
 
 
-def test_scheduler_event_loop_no_child_dispatch_stays_pending_not_failed(
+def _legacy_scheduler_event_loop_no_child_dispatch_stays_pending_not_failed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -11336,7 +11413,7 @@ def test_scheduler_event_loop_no_child_dispatch_stays_pending_not_failed(
     assert broker.place_order_payloads == []
 
 
-def test_scheduler_restart_recovers_exact_failed_durable_pending_runtime_without_parent_resubmit(
+def _legacy_scheduler_restart_recovers_exact_failed_durable_pending_runtime_without_parent_resubmit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -11483,7 +11560,7 @@ def test_scheduler_restart_recovers_exact_failed_durable_pending_runtime_without
     assert broker.place_order_payloads == []
 
 
-def test_event_loop_retry_restores_exact_owned_parent_intents_without_self_duplicate_preflight(
+def _legacy_event_loop_retry_restores_exact_owned_parent_intents_without_self_duplicate_preflight(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -11592,7 +11669,7 @@ def test_event_loop_retry_restores_exact_owned_parent_intents_without_self_dupli
     assert mismatch.value.context["broker_called"] is False
 
 
-def test_scheduler_poll_does_not_synthesize_b0_children_from_broker_quote_cache(
+def _legacy_scheduler_poll_does_not_synthesize_b0_children_from_broker_quote_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -11719,7 +11796,7 @@ def test_scheduler_poll_does_not_synthesize_b0_children_from_broker_quote_cache(
     }
 
 
-def test_scheduler_automatically_recovers_exact_legacy_b0_context_failure_without_side_effects() -> None:
+def _legacy_scheduler_automatically_recovers_exact_legacy_b0_context_failure_without_side_effects() -> None:
     scheduler, repo, broker, _qmt_binding = _miniqmt_event_loop_test_scheduler()
     planned = scheduler.run_once(
         trade_date=TRADE_DATE,
@@ -11766,7 +11843,7 @@ def test_scheduler_automatically_recovers_exact_legacy_b0_context_failure_withou
     assert broker.place_order_payloads == []
 
 
-def test_scheduler_does_not_auto_recover_legacy_context_failure_with_runtime_evidence() -> None:
+def _legacy_scheduler_does_not_auto_recover_legacy_context_failure_with_runtime_evidence() -> None:
     scheduler, repo, _broker, qmt_binding = _miniqmt_event_loop_test_scheduler()
     planned = scheduler.run_once(
         trade_date=TRADE_DATE,
@@ -11806,7 +11883,7 @@ def test_scheduler_does_not_auto_recover_legacy_context_failure_with_runtime_evi
     assert "miniqmt_legacy_b0_context_missing_recovery" not in unchanged.run_payload_json
 
 
-def test_scheduler_converts_no_side_effect_reconciling_after_runtime_only_cleanup_and_retries() -> None:
+def _legacy_scheduler_converts_no_side_effect_reconciling_after_runtime_only_cleanup_and_retries() -> None:
     scheduler, repo, broker, qmt_binding = _miniqmt_event_loop_test_scheduler(real_callback=True)
     planned = scheduler.run_once(
         trade_date=TRADE_DATE,

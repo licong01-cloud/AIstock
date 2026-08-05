@@ -14,7 +14,10 @@ from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from backend.services.qmt_strategy_ledger.models import OrderBatchStatus
-from backend.services.miniqmt_execution_runtime.kernel_diagnostics import project_kernel_diagnostics_v1
+from backend.services.miniqmt_execution_runtime.kernel_diagnostics import (
+    project_k6d_product_diagnostics_v1,
+    project_kernel_diagnostics_v1,
+)
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
 from .models import (
@@ -42,6 +45,7 @@ METRIC_LABEL_ALLOWLIST = frozenset(
         "event_type",
         "command_type",
         "reason_family",
+        "route",
     }
 )
 METRIC_HIGH_CARDINALITY_LABELS = frozenset(
@@ -463,6 +467,19 @@ class SimulationPlatformObservability:
         kernel_projection = (
             project_kernel_diagnostics_v1(kernel_diagnostics) if kernel_diagnostics is not None else None
         )
+        k6d_projection = None
+        if kernel_diagnostics is not None and isinstance(kernel_diagnostics.get("product_route"), Mapping):
+            quote_activation = exact_scheduler.get("miniqmt_quote_ingress_activation")
+            if not isinstance(quote_activation, Mapping):
+                raise _invalid(
+                    "K6-D product diagnostics require quote activation readback",
+                    field="scheduler_status.miniqmt_quote_ingress_activation",
+                    value=quote_activation,
+                )
+            k6d_projection = project_k6d_product_diagnostics_v1(
+                kernel_diagnostics,
+                quote_activation=quote_activation,
+            )
         lifecycle_layer = self._lifecycle_layer(
             scheduler_status=exact_scheduler,
             runs=exact_runs,
@@ -490,6 +507,18 @@ class SimulationPlatformObservability:
                     context=item["context"],
                 )
                 for item in kernel_projection.alerts
+            )
+        if k6d_projection is not None:
+            alerts.extend(
+                _alert(
+                    alert_type=item["alert_type"],
+                    status=item["status"],
+                    reason_code=item["reason_code"],
+                    source=item["source"],
+                    identity=item["identity"],
+                    context=item["context"],
+                )
+                for item in k6d_projection.alerts
             )
         metrics = self._metrics(
             scheduler_status=exact_scheduler,
@@ -523,6 +552,26 @@ class SimulationPlatformObservability:
                         "bounded_limit": METRIC_SERIES_LIMIT,
                     },
                 )
+        if k6d_projection is not None:
+            metrics.extend(
+                _metric(
+                    name=item["name"],
+                    kind=item["kind"],
+                    value=item["value"],
+                    labels=item["labels"],
+                )
+                for item in k6d_projection.metrics
+            )
+            if len(metrics) > METRIC_SERIES_LIMIT:
+                raise RuntimeConfigInvalidError(
+                    "simulation platform metric series exceed the bounded contract",
+                    context={
+                        "reason_code": "SIMULATION_PLATFORM_METRIC_CARDINALITY_EXCEEDED",
+                        "stage": "SIMULATION_PLATFORM_DIAGNOSTICS_PROJECTION",
+                        "series_count": len(metrics),
+                        "bounded_limit": METRIC_SERIES_LIMIT,
+                    },
+                )
         overall = self._overall_health(
             process_layer=process_layer,
             lifecycle_layer=lifecycle_layer,
@@ -530,7 +579,15 @@ class SimulationPlatformObservability:
             durability_layers=durability_layers,
             business_layers=business_layers,
             backend_layers=backend_layers,
-            kernel_layer=None if kernel_projection is None else kernel_projection.layer,
+            kernel_layer=(
+                None
+                if kernel_projection is None
+                else (
+                    k6d_projection.layer
+                    if k6d_projection is not None and k6d_projection.layer["status"] == "BLOCKED"
+                    else kernel_projection.layer
+                )
+            ),
             market_phase=market_phase,
         )
         bounded_alerts = sorted(alerts, key=lambda item: (item["alert_type"], item["alert_id"]))[:ALERT_LIMIT]
@@ -550,6 +607,7 @@ class SimulationPlatformObservability:
                 "durability": durability_layers,
                 "business": business_layers,
                 **({} if kernel_projection is None else {"miniqmt_kernel": kernel_projection.layer}),
+                **({} if k6d_projection is None else {"miniqmt_k6d": k6d_projection.layer}),
             },
             "metrics": {
                 "schema_version": PLATFORM_METRICS_SCHEMA_VERSION,
