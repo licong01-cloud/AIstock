@@ -1861,16 +1861,16 @@ def test_platform_diagnostics_emits_scheduler_tick_lag_metric_and_auto_clear_ale
     assert not any(alert["alert_type"] == "SIMULATION_SCHEDULER_TICK_LAG" for alert in recovered["alerts"]["items"])
 
 
-def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
-    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
-) -> None:
-    repo, run_id, plan_id = repo_with_plan
-    run = repo.get_simulation_daily_run(run_id)
+def _platform_observability_local_sim_state(
+    *,
+    run: SimulationDailyRun,
+    plan_id: str,
+) -> LocalSimExecutionStateV1:
     # Production TDX bars are naive Asia/Shanghai timestamps.  The causal
     # cursor precedes the first processed bar; cursor-minus-bar therefore used
     # to collapse to zero and hide a genuinely stalled LocalSIM event loop.
     last_bar = datetime(2026, 5, 21, 9, 30)
-    state = LocalSimExecutionStateV1(
+    return LocalSimExecutionStateV1(
         run_id=run.run_id,
         binding_id=run.binding_id,
         trade_date=run.trade_date,
@@ -1893,12 +1893,22 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
         waiting_reason_code="LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE",
         idempotency_key="localsim-platform-observability",
     )
+
+
+def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, plan_id = repo_with_plan
+    run = repo.get_simulation_daily_run(run_id)
+    state = _platform_observability_local_sim_state(run=run, plan_id=plan_id)
     repo.update_simulation_daily_run(
         run_id,
         status=SimulationDailyRunStatus.INTRADAY_RUNNING,
         payload_patch={
             "last_stage": "INTRADAY_RUNNING",
-            "local_sim_execution_states_v1": [state.model_dump(mode="json")],
+            "local_sim_execution_states_v1": {
+                state.state_id: state.model_dump(mode="json"),
+            },
             "local_sim_persistence": {
                 "schema_version": "local_sim_persistence_v2",
                 "status": "INTRADAY_PERSISTED",
@@ -1955,7 +1965,9 @@ def test_platform_diagnostics_projects_exact_localsim_state_partial_and_bar_lag(
     repo.update_simulation_daily_run(
         run_id,
         payload_patch={
-            "local_sim_execution_states_v1": [future_state.model_dump(mode="json")],
+            "local_sim_execution_states_v1": {
+                future_state.state_id: future_state.model_dump(mode="json"),
+            },
         },
     )
     with pytest.raises(RuntimeConfigInvalidError) as future_exc:
@@ -2273,7 +2285,11 @@ def test_platform_diagnostics_rejects_malformed_localsim_durable_state(
     repo.update_simulation_daily_run(
         run_id,
         status=SimulationDailyRunStatus.INTRADAY_RUNNING,
-        payload_patch={"local_sim_execution_states_v1": [{"schema_version": "local_sim_execution_state_v1"}]},
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                "state_malformed": {"schema_version": "local_sim_execution_state_v1"},
+            }
+        },
     )
     service = SimulationRuntimeOpsService(
         repository=repo,
@@ -2284,6 +2300,58 @@ def test_platform_diagnostics_rejects_malformed_localsim_durable_state(
         service.platform_diagnostics(run_id=run_id)
 
     assert exc_info.value.context["reason_code"] == "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID"
+
+
+def test_platform_diagnostics_rejects_legacy_localsim_state_list_carrier(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, plan_id = repo_with_plan
+    run = repo.get_simulation_daily_run(run_id)
+    state = _platform_observability_local_sim_state(run=run, plan_id=plan_id)
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={
+            "local_sim_execution_states_v1": [state.model_dump(mode="json")],
+        },
+    )
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        service.platform_diagnostics(run_id=run_id)
+
+    assert exc_info.value.context["reason_code"] == "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID"
+    assert exc_info.value.context["durable_reason_code"] == "LOCALSIM_DURABLE_STATE_PAYLOAD_INVALID"
+
+
+def test_platform_diagnostics_rejects_localsim_state_map_identity_conflict(
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo, run_id, plan_id = repo_with_plan
+    run = repo.get_simulation_daily_run(run_id)
+    state = _platform_observability_local_sim_state(run=run, plan_id=plan_id)
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                "state_wrong_identity": state.model_dump(mode="json"),
+            }
+        },
+    )
+    service = SimulationRuntimeOpsService(
+        repository=repo,
+        scheduler=getattr(repo, "_ops_test_scheduler"),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        service.platform_diagnostics(run_id=run_id)
+
+    assert exc_info.value.context["reason_code"] == "SIMULATION_PLATFORM_LOCAL_SIM_STATE_INVALID"
+    assert exc_info.value.context["durable_reason_code"] == "LOCALSIM_DURABLE_STATE_IDENTITY_CONFLICT"
 
 
 def test_platform_diagnostics_keeps_binding_failure_isolated_and_alert_auto_clears(
