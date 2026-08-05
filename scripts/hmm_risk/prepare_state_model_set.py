@@ -72,6 +72,9 @@ from backend.services.hmm_risk.b3_training import (  # noqa: E402
 from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
     C010_A5_LINEAGE_EXCLUDED_FIELDS as B3_D1_C010_A5_LINEAGE_EXCLUDED_FIELDS,
     C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION as B3_D1_C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION,
+    C010_A5_CURRENT_MAPPING_SHA256 as B3_D1_C010_A5_CURRENT_MAPPING_SHA256,
+    C010_A5_CURRENT_PARTITION_SHA256 as B3_D1_C010_A5_CURRENT_PARTITION_SHA256,
+    C010_A5_CURRENT_REPORT_SHA256 as B3_D1_C010_A5_CURRENT_REPORT_SHA256,
     C010_A5_MAPPING_SHA256 as B3_D1_C010_A5_MAPPING_SHA256,
     C010_A5_PARTITION_SHA256 as B3_D1_C010_A5_PARTITION_SHA256,
     C010_A5_REPORT_SHA256 as B3_D1_C010_A5_REPORT_SHA256,
@@ -82,9 +85,13 @@ from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
     D1InactiveDimensionError,
     FEATURE_DEFINITION_SHA256 as B3_D1_FEATURE_DEFINITION_SHA256,
     PREPROCESS_IDENTITY_SHA256 as B3_D1_PREPROCESS_IDENTITY_SHA256,
+    REFIT02_HARNESS_ROLE as B3_D1_REFIT02_HARNESS_ROLE,
     REFIT02_REPORT_SCHEMA_VERSION as B3_D1_REFIT02_REPORT_SCHEMA_VERSION,
+    REFIT03_REPORT_SCHEMA_VERSION as B3_D1_REFIT03_REPORT_SCHEMA_VERSION,
+    REFIT02_TREATMENT_ROLE as B3_D1_REFIT02_TREATMENT_ROLE,
     REMEDIATION_REPORT_SHA256 as B3_D1_REMEDIATION_REPORT_SHA256,
     SOURCE_AUTHORITY as B3_D1_SOURCE_AUTHORITY,
+    CURRENT_SOURCE_AUTHORITY as B3_D1_CURRENT_SOURCE_AUTHORITY,
     TREATMENT_PROFILE_RECEIPT_SHA256 as B3_D1_TREATMENT_PROFILE_RECEIPT_SHA256,
     TREATMENT_SECTOR as B3_D1_TREATMENT_SECTOR,
     TREATMENT_SOURCE_SET_SHA256 as B3_D1_TREATMENT_SOURCE_SET_SHA256,
@@ -95,10 +102,13 @@ from backend.services.hmm_risk.b3_d1_inactive_dimension import (  # noqa: E402
     build_refit02_not_applicable_report as build_b3_d1_refit02_not_applicable_report,
     build_refit02_preflight_failure_report as build_b3_d1_refit02_preflight_failure_report,
     build_refit02_report as build_b3_d1_refit02_report,
+    build_refit03_frozen_input_bundle as build_b3_d1_refit03_frozen_input_bundle,
     run_refit02_process as run_b3_d1_refit02_process,
+    validate_refit03_frozen_input_bundle as validate_b3_d1_refit03_frozen_input_bundle,
     validate_refit02_process_receipt as validate_b3_d1_refit02_process_receipt,
     validate_source_identity_set as validate_b3_d1_source_identity_set,
     write_controlled_refit_report as write_b3_d1_controlled_refit_report,
+    write_refit03_frozen_input_bundle as write_b3_d1_refit03_frozen_input_bundle,
 )
 from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
     C010_APPROVED_TRAIN_TRADING_DATE_COUNT,
@@ -2918,17 +2928,35 @@ def _validate_b3_d1_c010_a5_authority(report: dict[str, Any]) -> dict[str, Any]:
         "database_write_performed",
         "runtime_action_performed",
     )
+    report_identity = canonical_sha256(report)
+    authority_variants = {
+        B3_D1_C010_A5_REPORT_SHA256: (
+            B3_D1_C010_A5_PARTITION_SHA256,
+            B3_D1_C010_A5_MAPPING_SHA256,
+        ),
+        B3_D1_C010_A5_CURRENT_REPORT_SHA256: (
+            B3_D1_C010_A5_CURRENT_PARTITION_SHA256,
+            B3_D1_C010_A5_CURRENT_MAPPING_SHA256,
+        ),
+    }
+    expected_authority = authority_variants.get(report_identity)
+    if expected_authority is None:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B C-010-A5 authority is not an approved immutable revision",
+        )
+    expected_partition_sha256, expected_mapping_sha256 = expected_authority
     if (
-        canonical_sha256(report) != B3_D1_C010_A5_REPORT_SHA256
+        report_identity not in authority_variants
         or report.get("schema_version") != C010_A5_DOMAIN_PARTITION_PREFLIGHT_SCHEMA
         or report.get("status") != "preflight_complete"
         or report.get("partition_complete") is not True
         or report.get("known_sw_domain_out_verified") is not True
         or report.get("train_trading_date_count") != C010_APPROVED_TRAIN_TRADING_DATE_COUNT
         or report.get("train_trading_date_sha256") != C010_APPROVED_TRAIN_TRADING_DATE_SHA256
-        or report.get("mapping_manifest_sha256") != B3_D1_C010_A5_MAPPING_SHA256
-        or report.get("provider_absence_partition_receipt_sha256") != B3_D1_C010_A5_PARTITION_SHA256
-        or partition.get("receipt_sha256") != B3_D1_C010_A5_PARTITION_SHA256
+        or report.get("mapping_manifest_sha256") != expected_mapping_sha256
+        or report.get("provider_absence_partition_receipt_sha256") != expected_partition_sha256
+        or partition.get("receipt_sha256") != expected_partition_sha256
         or partition.get("p_all_entry_count") != 502
         or partition.get("p_in_entry_count") != 501
         or partition.get("p_out_entry_count") != 1
@@ -3029,8 +3057,8 @@ def _build_b3_d1_c010_a5_lineage_migration_receipt(
     body = {
         "schema_version": B3_D1_C010_A5_LINEAGE_MIGRATION_SCHEMA_VERSION,
         "producer_commit": producer_commit,
-        "source_a5_report_sha256": B3_D1_C010_A5_REPORT_SHA256,
-        "source_a5_partition_sha256": B3_D1_C010_A5_PARTITION_SHA256,
+        "source_a5_report_sha256": canonical_sha256(c010_a5_report),
+        "source_a5_partition_sha256": str(c010_a5_report["provider_absence_partition_receipt_sha256"]),
         "status": "accepted",
         "excluded_non_business_fields": list(B3_D1_C010_A5_LINEAGE_EXCLUDED_FIELDS),
         "receipt_pairs": pairs,
@@ -3101,6 +3129,8 @@ def _prepare_b3_d1_refit02_authority(
     *,
     db_prefix: str,
     producer_commit: str,
+    frozen_input_bundle_path: Path | None = None,
+    expected_frozen_input_bundle_sha256: str = "",
 ) -> dict[str, Any]:
     """Build the current-A5 REFIT-02 authority before any child fit starts."""
 
@@ -3117,6 +3147,53 @@ def _prepare_b3_d1_refit02_authority(
         authority["numeric_environment"],
     )
     target_manifest = derive_b3_blocker_target_manifest(formal_report)
+    if frozen_input_bundle_path is not None and frozen_input_bundle_path.exists():
+        if not expected_frozen_input_bundle_sha256:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                "REFIT-03 frozen input bundle replay requires its explicit canonical SHA-256",
+            )
+        bundle = validate_b3_d1_refit03_frozen_input_bundle(
+            _load_json_mapping(frozen_input_bundle_path, label="REFIT-03 frozen input bundle")
+        )
+        if bundle["bundle_sha256"] != expected_frozen_input_bundle_sha256:
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                "REFIT-03 frozen input bundle differs from its explicit canonical SHA-256",
+            )
+        _validate_b3_d1_historical_request_authority(request, target_manifest=target_manifest)
+        treatment_item = bundle["parsed_roles"][B3_D1_REFIT02_TREATMENT_ROLE]
+        harness_item = bundle["parsed_roles"][B3_D1_REFIT02_HARNESS_ROLE]
+        current_authority = build_b3_d1_refit02_current_a5_authority(
+            treatment_item=treatment_item,
+            harness_item=harness_item,
+            preprocess=bundle["preprocess"],
+            current_policy_sha256=str(bundle["current_policy_sha256"]),
+            producer_commit=current_commit,
+        )
+        historical_reference = build_b3_d1_refit02_historical_reference_receipt(
+            treatment_item=treatment_item,
+            harness_item=harness_item,
+            historical_treatment_manifest=authority["profiles"][B3_D1_TREATMENT_SECTOR]["train_input_manifest"],
+            historical_harness_manifest=authority["profiles"][B3_D1_CONTROL_SECTOR]["train_input_manifest"],
+        )
+        if (
+            current_authority["receipt_sha256"] != bundle["current_authority_sha256"]
+            or historical_reference["receipt_sha256"] != bundle["historical_reference_sha256"]
+        ):
+            raise D1InactiveDimensionError(
+                "hmm_risk_model_inactive_dimension_authority_mismatch",
+                "REFIT-03 frozen input bundle does not reconstruct its authority receipts",
+            )
+        return {
+            "treatment_item": treatment_item,
+            "harness_item": harness_item,
+            "preprocess": bundle["preprocess"],
+            "numeric_environment": current_environment,
+            "current_authority": current_authority,
+            "historical_reference": historical_reference,
+            "frozen_input_bundle_sha256": bundle["bundle_sha256"],
+        }
     inputs, input_identities = _load_b3_d1_train_inputs(
         request,
         db_prefix=db_prefix,
@@ -3149,6 +3226,19 @@ def _prepare_b3_d1_refit02_authority(
         historical_treatment_manifest=authority["profiles"][B3_D1_TREATMENT_SECTOR]["train_input_manifest"],
         historical_harness_manifest=authority["profiles"][B3_D1_CONTROL_SECTOR]["train_input_manifest"],
     )
+    frozen_input_bundle_sha256 = None
+    if frozen_input_bundle_path is not None:
+        bundle = build_b3_d1_refit03_frozen_input_bundle(
+            treatment_item=series[B3_D1_TREATMENT_SECTOR],
+            harness_item=series[B3_D1_CONTROL_SECTOR],
+            preprocess=authority["preprocess"],
+            current_policy_sha256=input_identities["c010_feature_domain_policy_sha256"],
+            lineage_migration_receipt=input_identities["c010_a5_lineage_migration_receipt"],
+            current_authority_sha256=current_authority["receipt_sha256"],
+            historical_reference_sha256=historical_reference["receipt_sha256"],
+            writer_commit=current_commit,
+        )
+        frozen_input_bundle_sha256 = write_b3_d1_refit03_frozen_input_bundle(frozen_input_bundle_path, bundle)
     return {
         "treatment_item": series[B3_D1_TREATMENT_SECTOR],
         "harness_item": series[B3_D1_CONTROL_SECTOR],
@@ -3156,6 +3246,7 @@ def _prepare_b3_d1_refit02_authority(
         "numeric_environment": current_environment,
         "current_authority": current_authority,
         "historical_reference": historical_reference,
+        "frozen_input_bundle_sha256": frozen_input_bundle_sha256,
     }
 
 
@@ -3171,6 +3262,8 @@ def prepare_b3_d1_controlled_pass(
     producer_commit: str,
     expected_current_authority_sha256: str,
     expected_historical_reference_sha256: str,
+    frozen_input_bundle_path: Path,
+    expected_frozen_input_bundle_sha256: str,
 ) -> dict[str, Any]:
     """Run one 24-attempt REFIT-02 process after current-A5 preflight closes."""
 
@@ -3187,6 +3280,8 @@ def prepare_b3_d1_controlled_pass(
         c010_a5_report,
         db_prefix=db_prefix,
         producer_commit=producer_commit,
+        frozen_input_bundle_path=frozen_input_bundle_path,
+        expected_frozen_input_bundle_sha256=expected_frozen_input_bundle_sha256,
     )
     current_authority = prepared["current_authority"]
     historical_reference = prepared["historical_reference"]
@@ -3244,6 +3339,10 @@ def _b3_d1_child_command(args: argparse.Namespace, process_identity: str) -> lis
         str(args.b3_d1_current_authority_sha256),
         "--b3-d1-historical-reference-sha256",
         str(args.b3_d1_historical_reference_sha256),
+        "--b3-d1-frozen-input-bundle",
+        str(args.b3_d1_frozen_input_bundle),
+        "--b3-d1-frozen-input-bundle-sha256",
+        str(args.b3_d1_frozen_input_bundle_sha256),
         "--_b3-d1-controlled-child",
     ]
 
@@ -3325,6 +3424,38 @@ def _resolve_b3_d1_report_path(args: argparse.Namespace) -> Path:
     return report_path
 
 
+def _resolve_b3_d1_frozen_input_bundle_path(args: argparse.Namespace) -> Path:
+    artifact_root = Path(args.output_root).resolve()
+    try:
+        artifact_root.relative_to(ROOT)
+    except ValueError:
+        pass
+    else:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "REFIT-03 frozen input artifact root must be outside the repository",
+        )
+    configured = str(getattr(args, "b3_d1_frozen_input_bundle", "") or "")
+    if configured:
+        bundle_path = Path(configured).resolve()
+    else:
+        report_path = _resolve_b3_d1_report_path(args)
+        bundle_path = report_path.with_name(f"{report_path.stem}.frozen-input.json")
+    try:
+        bundle_path.relative_to(artifact_root)
+    except ValueError as exc:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "REFIT-03 frozen input bundle must be contained by the explicit artifact root",
+        ) from exc
+    if bundle_path == artifact_root:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_contract_invalid",
+            "REFIT-03 frozen input bundle must identify a file below the artifact root",
+        )
+    return bundle_path
+
+
 def _b3_d1_child_failure_receipt(
     *,
     process_identity: str,
@@ -3333,6 +3464,7 @@ def _b3_d1_child_failure_receipt(
     stdout: bytes,
     stderr: bytes,
     fit_budget_completion_unknown: bool,
+    source_authority: dict[str, str] | None = None,
     error: BaseException | None = None,
 ) -> dict[str, Any]:
     decoded = stderr.decode("utf-8", errors="replace").strip()
@@ -3355,7 +3487,7 @@ def _b3_d1_child_failure_receipt(
         "status": "failed",
         "process_identity": process_identity,
         "producer_commit": producer_commit,
-        "source_authority": dict(B3_D1_SOURCE_AUTHORITY),
+        "source_authority": dict(B3_D1_SOURCE_AUTHORITY if source_authority is None else source_authority),
         "returncode": returncode,
         "reason_code": reason_code,
         "error_type": str(parsed.get("error_type") or (type(error).__name__ if error else "child_process_error"))[:256],
@@ -3388,7 +3520,34 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
         Path(args.c010_a5_domain_partition_report).resolve(),
         label="C-010-A5 domain-partition report",
     )
+    frozen_input_bundle_path = _resolve_b3_d1_frozen_input_bundle_path(args)
+    replaying_bundle = frozen_input_bundle_path.exists()
+    expected_bundle_sha256 = str(getattr(args, "b3_d1_frozen_input_bundle_sha256", "") or "")
+    if replaying_bundle and not expected_bundle_sha256:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "REFIT-03 frozen input bundle replay requires --b3-d1-frozen-input-bundle-sha256",
+        )
+    if not replaying_bundle and expected_bundle_sha256:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "REFIT-03 frozen input bundle SHA-256 was supplied but the bundle does not exist",
+        )
     _b3_d1_frozen_authority(formal_report, blocker_report, remediation_report, c010_a5_report)
+    c010_a5_report_sha256 = canonical_sha256(c010_a5_report)
+    if c010_a5_report_sha256 == B3_D1_C010_A5_CURRENT_REPORT_SHA256:
+        source_authority = B3_D1_CURRENT_SOURCE_AUTHORITY
+        report_schema_version = B3_D1_REFIT03_REPORT_SCHEMA_VERSION
+    elif c010_a5_report_sha256 == B3_D1_C010_A5_REPORT_SHA256:
+        source_authority = B3_D1_SOURCE_AUTHORITY
+        report_schema_version = B3_D1_REFIT02_REPORT_SCHEMA_VERSION
+    else:
+        raise D1InactiveDimensionError(
+            "hmm_risk_model_inactive_dimension_authority_mismatch",
+            "D1-B C-010-A5 authority is not an approved immutable revision",
+        )
+    args.b3_d1_source_authority = dict(source_authority)
+    args.b3_d1_report_schema_version = report_schema_version
     preflight = _prepare_b3_d1_refit02_authority(
         request,
         formal_report,
@@ -3397,16 +3556,23 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
         c010_a5_report,
         db_prefix=args.db_env_prefix,
         producer_commit=producer_commit,
+        frozen_input_bundle_path=frozen_input_bundle_path,
+        expected_frozen_input_bundle_sha256=expected_bundle_sha256,
     )
     current_authority = preflight["current_authority"]
     historical_reference = preflight["historical_reference"]
     args.b3_d1_current_authority_sha256 = current_authority["receipt_sha256"]
     args.b3_d1_historical_reference_sha256 = historical_reference["receipt_sha256"]
+    args.b3_d1_frozen_input_bundle = str(frozen_input_bundle_path)
+    args.b3_d1_frozen_input_bundle_sha256 = str(preflight["frozen_input_bundle_sha256"])
     if current_authority.get("current_profile_eligible") is not True:
+        report_kwargs: dict[str, Any] = {"producer_commit": producer_commit}
+        if report_schema_version == B3_D1_REFIT03_REPORT_SCHEMA_VERSION:
+            report_kwargs["schema_version"] = report_schema_version
         return build_b3_d1_refit02_not_applicable_report(
             current_authority,
             historical_reference,
-            producer_commit=producer_commit,
+            **report_kwargs,
         )
     environment = os.environ.copy()
     for key in (
@@ -3435,6 +3601,7 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
                 stdout=b"",
                 stderr=b"",
                 fit_budget_completion_unknown=False,
+                source_authority=source_authority,
                 error=exc,
             )
             raise B3D1ControlledProcessError(
@@ -3453,6 +3620,7 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
                 stdout=completed.stdout,
                 stderr=completed.stderr,
                 fit_budget_completion_unknown=True,
+                source_authority=source_authority,
             )
             raise B3D1ControlledProcessError(
                 failure["reason_code"],
@@ -3474,6 +3642,7 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
                 stdout=completed.stdout,
                 stderr=completed.stderr,
                 fit_budget_completion_unknown=True,
+                source_authority=source_authority,
                 error=exc,
             )
             raise B3D1ControlledProcessError(
@@ -3500,6 +3669,7 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
             stdout=b"",
             stderr=b"",
             fit_budget_completion_unknown=False,
+            source_authority=source_authority,
             error=exc,
         )
         raise B3D1ControlledProcessError(
@@ -3830,7 +4000,7 @@ def parse_args() -> argparse.Namespace:
     )
     diagnostic_group.add_argument(
         "--b3-d1-controlled-refit-output",
-        help="Run the approved D1-B 32-fit controlled diagnostic without D5/D6 or model/READY writes.",
+        help="Run the approved D1-B 48-fit controlled diagnostic without D5/D6 or model/READY writes.",
     )
     parser.add_argument(
         "--b3-request-candidate-output",
@@ -3845,6 +4015,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--b3-d1-producer-commit", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-d1-current-authority-sha256", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-d1-historical-reference-sha256", default="", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--b3-d1-frozen-input-bundle",
+        default="",
+        help="Repo-external immutable REFIT-03 role-input bundle; created on the first authority-matching run.",
+    )
+    parser.add_argument(
+        "--b3-d1-frozen-input-bundle-sha256",
+        default="",
+        help="Required canonical SHA-256 when replaying an existing REFIT-03 frozen input bundle.",
+    )
     parser.add_argument("--b3-formal-report", help="Approved immutable formal B3 preparation report.")
     parser.add_argument("--b3-blocker-report", help="Approved immutable C-008-B3-FORMAL-BLOCKER-DIAG-01 report.")
     parser.add_argument("--b3-remediation-report", help="Approved immutable C-008-B3-REMEDIATION-DIAG-02 report.")
@@ -3880,6 +4060,8 @@ def main() -> int:
         remediation_blocker_report = getattr(args, "b3_blocker_report", None)
         d1_remediation_report = getattr(args, "b3_remediation_report", None)
         d1_c010_a5_report = getattr(args, "c010_a5_domain_partition_report", None)
+        d1_frozen_input_bundle = str(getattr(args, "b3_d1_frozen_input_bundle", "") or "")
+        d1_frozen_input_bundle_sha256 = str(getattr(args, "b3_d1_frozen_input_bundle_sha256", "") or "")
         blocker_target_sha256 = getattr(args, "b3_target_manifest_sha256", "")
         blocker_parent = bool(blocker_output)
         blocker_child = bool(getattr(args, "_b3_blocker_diag01_child", False))
@@ -3905,6 +4087,8 @@ def main() -> int:
                 or any(character not in "0123456789abcdef" for character in args.b3_d1_producer_commit)
             ):
                 raise StateModelSetError("D1-B controlled child producer commit is invalid")
+            if d1_child and (not d1_frozen_input_bundle or not d1_frozen_input_bundle_sha256):
+                raise StateModelSetError("D1-B controlled child frozen input bundle identity is required")
             if d1_parent and args.b3_process_identity:
                 raise StateModelSetError("D1-B controlled parent must not declare a child process identity")
             if d1_parent and args.b3_d1_producer_commit:
@@ -3939,6 +4123,8 @@ def main() -> int:
             or remediation_blocker_report
             or d1_remediation_report
             or d1_c010_a5_report
+            or d1_frozen_input_bundle
+            or d1_frozen_input_bundle_sha256
         ):
             raise StateModelSetError("B3 diagnostic authority arguments require their matching diagnostic mode")
         if blocker_parent and blocker_target_sha256:
@@ -4110,6 +4296,8 @@ def main() -> int:
                 producer_commit=str(args.b3_d1_producer_commit),
                 expected_current_authority_sha256=str(args.b3_d1_current_authority_sha256),
                 expected_historical_reference_sha256=str(args.b3_d1_historical_reference_sha256),
+                frozen_input_bundle_path=_resolve_b3_d1_frozen_input_bundle_path(args),
+                expected_frozen_input_bundle_sha256=str(args.b3_d1_frozen_input_bundle_sha256),
             )
             sys.stdout.buffer.write(canonical_json_bytes(report))
             return 0
@@ -4166,6 +4354,9 @@ def main() -> int:
                 failed_process_receipt = getattr(exc, "failed_process_receipt", None)
                 accepted_producer_commit = str(getattr(args, "b3_d1_producer_commit", "") or "")
                 producer_commit = accepted_producer_commit if len(accepted_producer_commit) == 40 else _git_commit()
+                report_schema_version = str(
+                    getattr(args, "b3_d1_report_schema_version", "") or B3_D1_REFIT02_REPORT_SCHEMA_VERSION
+                )
                 current_authority = getattr(exc, "current_authority", None)
                 historical_reference = getattr(exc, "historical_reference", None)
                 if (
@@ -4181,6 +4372,7 @@ def main() -> int:
                         historical_reference=historical_reference,
                         completed_processes=completed_processes,
                         failed_process_receipt=failed_process_receipt,
+                        schema_version=report_schema_version,
                     )
                 else:
                     failure = build_b3_d1_refit02_preflight_failure_report(
@@ -4194,10 +4386,14 @@ def main() -> int:
                         ),
                         error_type=type(exc).__name__,
                         error=str(exc),
+                        schema_version=report_schema_version,
                     )
                 write_b3_d1_controlled_refit_report(report_path, failure)
                 raise
-            if report.get("schema_version") != B3_D1_REFIT02_REPORT_SCHEMA_VERSION:
+            if report.get("schema_version") not in {
+                B3_D1_REFIT02_REPORT_SCHEMA_VERSION,
+                B3_D1_REFIT03_REPORT_SCHEMA_VERSION,
+            }:
                 raise D1InactiveDimensionError(
                     "hmm_risk_model_inactive_dimension_contract_invalid",
                     "REFIT-02 parent produced an unsupported report schema",
@@ -4212,6 +4408,8 @@ def main() -> int:
                 "mechanism_assessment": report["mechanism_assessment"],
                 "d5_compatibility_evidence_ready": report["d5_compatibility_evidence_ready"],
                 "attempt_count": report["attempt_count"],
+                "frozen_input_bundle_path": str(_resolve_b3_d1_frozen_input_bundle_path(args)),
+                "frozen_input_bundle_sha256": str(args.b3_d1_frozen_input_bundle_sha256),
                 "selection_performed": False,
                 "model_write_performed": False,
                 "ready_artifact_write_performed": False,
