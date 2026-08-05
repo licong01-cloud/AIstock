@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
+import pickle
 import threading
 import time
 import tracemalloc
-import json
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
+import psycopg2
 import pytest
 
 from backend.services.advisory_historical_range.catalog_planner import (
@@ -15,8 +17,12 @@ from backend.services.advisory_historical_range.catalog_planner import (
 from backend.services.advisory_historical_range.catalog_postgres import (
     PostgresHistoricalRangeCatalogExecutor,
     _PostgresRequirementResolver,
+    _RequirementResolutionFailure,
     _canonical_bytes,
+    _canonicalize_payload_batch,
+    _requirement_uses_process_worker,
     _requirement_work_weight,
+    _resolve_requirement_batch_process,
 )
 from backend.services.advisory_historical_range.models import (
     HistoricalRangeCatalogPhase,
@@ -27,6 +33,9 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeSourceRevisionMemberV1,
 )
 from backend.tests.advisory_historical_range.conftest import digest, resolved_request
+from backend.services.advisory_historical_range.composition import (
+    explicit_historical_range_connection_factory,
+)
 
 
 OBSERVED_AT = datetime(2026, 8, 5, 1, tzinfo=UTC)
@@ -227,6 +236,122 @@ def test_worker_connection_failure_is_replayed_at_earliest_affected_ordinal(monk
         )
 
 
+def test_weight_balancing_preserves_original_ordinal_inside_worker_batch(monkeypatch) -> None:  # noqa: ANN001
+    tracker = _ConnectionTracker()
+    executor = PostgresHistoricalRangeCatalogExecutor(
+        conn_factory=tracker.connect,
+        max_workers=1,
+    )
+    first, second = _plan(2).requirements
+    first = first.model_copy(
+        update={
+            "query_template_id": "historical_market_history_window",
+            "parameter_template": {"start_date": "2026-01-01", "trade_date": "2026-01-31"},
+        }
+    )
+    second = second.model_copy(
+        update={
+            "query_template_id": "historical_market_history_window",
+            "parameter_template": {"start_date": "2025-01-01", "trade_date": "2026-01-31"},
+        }
+    )
+    base = _plan(2)
+    plan = base.model_copy(update={"requirements": (first, second)})
+    observed: list[list[str]] = []
+
+    def resolve_batch(*, requirements, **_kwargs):  # noqa: ANN001, ANN202
+        observed.append([item.requirement_id for item in requirements])
+        return {item.requirement_id: _member(item) for item in requirements}
+
+    monkeypatch.setattr(executor, "_resolve_requirement_batch", resolve_batch)
+    executor.resolve_chunk(
+        plan=plan,
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+        start_ordinal=1,
+        resolved_members={},
+        chunk_size=2,
+    )
+
+    assert observed == [["requirement-001", "requirement-002"]]
+
+
+def test_generic_requirement_failure_stops_same_transaction_batch(monkeypatch) -> None:  # noqa: ANN001
+    tracker = _ConnectionTracker()
+    executor = PostgresHistoricalRangeCatalogExecutor(
+        conn_factory=tracker.connect,
+        max_workers=1,
+    )
+    requirements = _plan(3).requirements
+    calls: list[str] = []
+    failure = RuntimeError("database transaction aborted")
+
+    def resolve(self, *, requirement, **_kwargs):  # noqa: ANN001, ANN202
+        calls.append(requirement.requirement_id)
+        if requirement.requirement_id == "requirement-002":
+            raise failure
+        return _member(requirement)
+
+    monkeypatch.setattr(_PostgresRequirementResolver, "resolve", resolve)
+    result = executor._resolve_requirement_batch(
+        requirements=requirements,
+        dependency_source={},
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+        expected_members={},
+        observed_at=OBSERVED_AT,
+        snapshot_id="snapshot-shared",
+    )
+
+    assert calls == ["requirement-001", "requirement-002"]
+    assert result["requirement-001"].requirement_id == "requirement-001"
+    assert result["requirement-002"].message == str(failure)
+    assert result["requirement-003"] == result["requirement-002"]
+
+
+def test_parallel_prefetch_resolves_dependency_waves_before_dependents(monkeypatch) -> None:  # noqa: ANN001
+    tracker = _ConnectionTracker()
+    executor = PostgresHistoricalRangeCatalogExecutor(
+        conn_factory=tracker.connect,
+        max_workers=2,
+    )
+    base = _plan(3)
+    dependent = base.requirements[1].model_copy(
+        update={"depends_on_requirement_ids": (base.requirements[0].requirement_id,)}
+    )
+    plan = base.model_copy(
+        update={
+            "requirements": (
+                base.requirements[0],
+                dependent,
+                base.requirements[2],
+            )
+        }
+    )
+    observed: dict[str, tuple[str, ...]] = {}
+
+    def resolve_batch(*, requirements, dependency_source, **_kwargs):  # noqa: ANN001, ANN202
+        for requirement in requirements:
+            observed[requirement.requirement_id] = tuple(sorted(dependency_source))
+        return {item.requirement_id: _member(item) for item in requirements}
+
+    monkeypatch.setattr(executor, "_resolve_requirement_batch", resolve_batch)
+    result = executor.resolve_chunk(
+        plan=plan,
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+        start_ordinal=1,
+        resolved_members={},
+        chunk_size=3,
+    )
+
+    assert observed == {
+        "requirement-001": (),
+        "requirement-002": ("requirement-001",),
+        "requirement-003": (),
+    }
+    assert [delta.ordinal for delta in result.checkpoint.member_delta] == [1, 2, 3]
+
+
 class _StreamingCursor:
     def __init__(self, row_count: int) -> None:
         self.remaining = row_count
@@ -241,6 +366,9 @@ class _StreamingCursor:
     def __exit__(self, *_args) -> bool:
         self.closed = True
         return False
+
+    def close(self) -> None:
+        self.closed = True
 
     def execute(self, _sql, _params) -> None:  # noqa: ANN001
         return None
@@ -267,6 +395,17 @@ class _StreamingConnection:
         return self.cursor_instance
 
 
+class _FailingStreamingCursor(_StreamingCursor):
+    def execute(self, _sql, _params) -> None:  # noqa: ANN001
+        raise RuntimeError("stream execute failed")
+
+
+class _FailingStreamingConnection(_StreamingConnection):
+    def __init__(self) -> None:
+        self.cursor_instance = _FailingStreamingCursor(0)
+        self.cursor_names = []
+
+
 def test_stream_query_uses_named_cursor_and_fixed_memory_batches() -> None:
     conn = _StreamingConnection(row_count=20_000)
     resolver = _PostgresRequirementResolver(
@@ -291,10 +430,24 @@ def test_stream_query_uses_named_cursor_and_fixed_memory_batches() -> None:
     assert peak < 32 * 1024 * 1024
 
 
+def test_stream_cursor_is_closed_when_execute_fails() -> None:
+    conn = _FailingStreamingConnection()
+    resolver = _PostgresRequirementResolver(
+        cur=object(),
+        conn=conn,
+        observed_at=OBSERVED_AT,
+    )
+
+    with pytest.raises(RuntimeError, match="stream execute failed"):
+        resolver._stream_query("SELECT payload", ())
+
+    assert conn.cursor_instance.closed is True
+
+
 @pytest.mark.parametrize(
     "payload",
     [
-        {"plain": 12.34, "count": 7, "nullable": None, "unicode": "科技股"},
+        {"plain": 12.34, "count": 7, "nullable": None, "label": "technology"},
         {"small_exponent": 1e-7, "large_exponent": 1e20, "negative_zero": -0.0},
         {"nested": [1e-6, {"observed_at": OBSERVED_AT}]},
     ],
@@ -309,6 +462,65 @@ def test_fast_canonical_bytes_preserve_existing_hash_bytes(payload) -> None:  # 
     ).encode("utf-8")
 
     assert _canonical_bytes(payload) == expected
+
+
+def test_process_payloads_and_results_are_picklable_with_exact_framed_bytes() -> None:
+    payloads = tuple(
+        json.dumps(
+            {"trade_date": "2026-06-02", "ts_code": f"{index:06d}.SZ", "close_li": 12.34},
+            separators=(",", ":"),
+        )
+        for index in range(512)
+    )
+    expected, expected_count, expected_missing = _canonicalize_payload_batch(payloads, ())
+    actual, actual_count, actual_missing = _canonicalize_payload_batch(
+        pickle.loads(pickle.dumps(payloads)),
+        (),
+    )
+    failure = _RequirementResolutionFailure(
+        category="worker_error",
+        message="test",
+        exception_type="builtins.RuntimeError",
+        traceback_text="trace",
+    )
+
+    assert actual == expected
+    assert actual_count == expected_count == 512
+    assert actual_missing is expected_missing is False
+    assert pickle.loads(pickle.dumps(failure)) == failure
+
+
+def test_process_worker_closes_connection_even_when_rollback_fails(monkeypatch) -> None:  # noqa: ANN001
+    class FailingConnection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def set_session(self, **_kwargs) -> None:  # noqa: ANN003
+            raise RuntimeError("worker transaction failed")
+
+        def rollback(self) -> None:
+            raise RuntimeError("worker rollback failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    conn = FailingConnection()
+    monkeypatch.setattr(psycopg2, "connect", lambda _dsn: conn)
+
+    with pytest.raises(RuntimeError, match="worker transaction failed") as error:
+        _resolve_requirement_batch_process(
+            "dbname=test",
+            _plan(1).requirements,
+            {},
+            HistoricalRangeCatalogPhase.DISCOVER,
+            {},
+            OBSERVED_AT,
+            "snapshot-shared",
+            1000,
+        )
+
+    assert conn.closed is True
+    assert any("worker rollback failed" in note for note in error.value.__notes__)
 
 
 def test_parallel_scheduler_accounts_for_window_span() -> None:
@@ -329,13 +541,46 @@ def test_parallel_scheduler_accounts_for_window_span() -> None:
     assert _requirement_work_weight(long) > _requirement_work_weight(short) * 10
 
 
-@pytest.mark.parametrize("max_workers", [0, 7])
+def test_process_worker_selection_only_requires_database_backed_sources() -> None:
+    frozen, hmm, market = _plan(3).requirements
+    hmm = hmm.model_copy(update={"query_template_id": "historical_hmm_frozen_evidence_bundle"})
+    market = market.model_copy(update={"query_template_id": "historical_market_history_window"})
+
+    assert _requirement_uses_process_worker(frozen) is False
+    assert _requirement_uses_process_worker(hmm) is False
+    assert _requirement_uses_process_worker(market) is True
+
+
+@pytest.mark.parametrize("max_workers", [0, 25])
 def test_catalog_executor_rejects_unbounded_worker_counts(max_workers: int) -> None:
     with pytest.raises(ValueError, match="max_workers"):
         PostgresHistoricalRangeCatalogExecutor(
             conn_factory=lambda: None,
             max_workers=max_workers,
         )
+
+
+def test_explicit_connection_factory_carries_same_env_worker_dsn(monkeypatch) -> None:  # noqa: ANN001
+    values = {
+        "TDX_DB_HOST": "127.0.0.1",
+        "TDX_DB_PORT": "5432",
+        "TDX_DB_NAME": "aistock-test",
+        "TDX_DB_USER": "worker-test",
+        "TDX_DB_PASSWORD": "secret-test",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+    factory = explicit_historical_range_connection_factory()
+    parsed = psycopg2.extensions.parse_dsn(
+        getattr(factory, "_aistock_process_worker_dsn")
+    )
+
+    assert parsed["host"] == values["TDX_DB_HOST"]
+    assert parsed["port"] == values["TDX_DB_PORT"]
+    assert parsed["dbname"] == values["TDX_DB_NAME"]
+    assert parsed["user"] == values["TDX_DB_USER"]
+    assert parsed["password"] == values["TDX_DB_PASSWORD"]
 
 
 def test_invalid_catalog_request_fails_before_opening_database_connection() -> None:

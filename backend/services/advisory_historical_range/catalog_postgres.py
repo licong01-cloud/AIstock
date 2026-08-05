@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import re
+import traceback
 import uuid
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -41,9 +44,9 @@ from backend.services.advisory_historical_range.models import (
 
 ConnFactory = Callable[[], Any]
 
-_DEFAULT_CATALOG_WORKERS = 6
-_MAX_CATALOG_WORKERS = 6
-_DEFAULT_STREAM_FETCH_SIZE = 256
+_DEFAULT_CATALOG_WORKERS = 24
+_MAX_CATALOG_WORKERS = 24
+_DEFAULT_STREAM_FETCH_SIZE = 1000
 _MAX_STREAM_FETCH_SIZE = 1000
 _ORJSON_EXPONENT_NUMBER = re.compile(rb"e-?\d")
 
@@ -254,6 +257,7 @@ class PostgresHistoricalRangeCatalogExecutor:
         planner: HistoricalRangeCatalogPlanner | None = None,
         max_workers: int = _DEFAULT_CATALOG_WORKERS,
         stream_fetch_size: int = _DEFAULT_STREAM_FETCH_SIZE,
+        process_worker_dsn: str | None = None,
     ) -> None:
         if conn_factory is None:
             raise ValueError("conn_factory is required")
@@ -265,6 +269,7 @@ class PostgresHistoricalRangeCatalogExecutor:
         self._planner = planner or HistoricalRangeCatalogPlanner()
         self._max_workers = max_workers
         self._stream_fetch_size = stream_fetch_size
+        self._process_worker_dsn = str(process_worker_dsn or "").strip() or None
 
     def resolve_chunk(
         self,
@@ -314,6 +319,7 @@ class PostgresHistoricalRangeCatalogExecutor:
                     snapshot_id=str(snapshot["snapshot_id"]),
                     resolved_members=resolved_members,
                     expected_members=expected_members,
+                    worker_dsn=self._process_worker_dsn,
                 )
                 result = self._planner.resolve_chunk(
                     plan=plan,
@@ -341,15 +347,31 @@ class PostgresHistoricalRangeCatalogExecutor:
         snapshot_id: str,
         resolved_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
         expected_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1] | None,
-    ) -> dict[str, HistoricalRangeSourceRevisionMemberV1 | Exception]:
+        worker_dsn: str | None,
+    ) -> dict[str, HistoricalRangeSourceRevisionMemberV1 | _RequirementResolutionFailure]:
         ordinal_end = min(len(plan.requirements), start_ordinal + chunk_size - 1)
         pending = list(plan.requirements[start_ordinal - 1 : ordinal_end])
         dependency_source = dict(expected_members or resolved_members)
-        cached: dict[str, HistoricalRangeSourceRevisionMemberV1 | Exception] = {}
-        with ThreadPoolExecutor(
-            max_workers=min(self._max_workers, len(pending)),
-            thread_name_prefix="advisory-catalog",
-        ) as executor:
+        ordinal_by_requirement_id = {
+            requirement.requirement_id: ordinal
+            for ordinal, requirement in enumerate(plan.requirements, start=1)
+        }
+        cached: dict[str, HistoricalRangeSourceRevisionMemberV1 | _RequirementResolutionFailure] = {}
+        use_process_workers = worker_dsn is not None and any(
+            _requirement_uses_process_worker(requirement) for requirement in pending
+        )
+        executor: ProcessPoolExecutor | ThreadPoolExecutor
+        if use_process_workers:
+            executor = ProcessPoolExecutor(
+                max_workers=min(self._max_workers, len(pending)),
+                mp_context=multiprocessing.get_context("spawn"),
+            )
+        else:
+            executor = ThreadPoolExecutor(
+                max_workers=min(self._max_workers, len(pending)),
+                thread_name_prefix="advisory-catalog",
+            )
+        with executor:
             while pending:
                 ready = [
                     requirement
@@ -370,28 +392,56 @@ class PostgresHistoricalRangeCatalogExecutor:
                     target = min(range(worker_count), key=batch_weights.__getitem__)
                     batches[target].append(requirement)
                     batch_weights[target] += _requirement_work_weight(requirement)
-                futures = [
-                    (
-                        tuple(batch),
-                        executor.submit(
+                for batch in batches:
+                    batch.sort(
+                        key=lambda requirement: ordinal_by_requirement_id[requirement.requirement_id]
+                    )
+                futures = []
+                for batch in batches:
+                    if not batch:
+                        continue
+                    batch_tuple = tuple(batch)
+                    batch_dependencies = {
+                        dependency: dependency_source[dependency]
+                        for requirement in batch_tuple
+                        for dependency in requirement.depends_on_requirement_ids
+                    }
+                    batch_expected = {
+                        requirement.requirement_id: expected_members[requirement.requirement_id]
+                        for requirement in batch_tuple
+                        if expected_members is not None
+                        and requirement.requirement_id in expected_members
+                    }
+                    if use_process_workers:
+                        future = executor.submit(
+                            _resolve_requirement_batch_process,
+                            worker_dsn,
+                            batch_tuple,
+                            batch_dependencies,
+                            phase,
+                            batch_expected,
+                            observed_at,
+                            snapshot_id,
+                            self._stream_fetch_size,
+                        )
+                    else:
+                        future = executor.submit(
                             self._resolve_requirement_batch,
-                            requirements=tuple(batch),
-                            dependency_source=dependency_source,
+                            requirements=batch_tuple,
+                            dependency_source=batch_dependencies,
                             phase=phase,
-                            expected_members=expected_members or {},
+                            expected_members=batch_expected,
                             observed_at=observed_at,
                             snapshot_id=snapshot_id,
-                        ),
-                    )
-                    for batch in batches
-                    if batch
-                ]
+                        )
+                    futures.append((batch_tuple, future))
                 for batch, future in futures:
                     try:
                         batch_result = future.result()
                     except Exception as exc:
+                        failure = _requirement_failure_from_exception(exc)
                         batch_result = {
-                            requirement.requirement_id: exc for requirement in batch
+                            requirement.requirement_id: failure for requirement in batch
                         }
                     cached.update(batch_result)
                     dependency_source.update(
@@ -418,38 +468,19 @@ class PostgresHistoricalRangeCatalogExecutor:
         expected_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
         observed_at: datetime,
         snapshot_id: str,
-    ) -> dict[str, HistoricalRangeSourceRevisionMemberV1 | Exception]:
+    ) -> dict[str, HistoricalRangeSourceRevisionMemberV1 | _RequirementResolutionFailure]:
         with self._conn_factory() as conn:
-            conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
             try:
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute("SET TRANSACTION SNAPSHOT %s", (snapshot_id,))
-                    resolver = _PostgresRequirementResolver(
-                        cur=cur,
-                        conn=conn,
-                        observed_at=observed_at,
-                        stream_fetch_size=self._stream_fetch_size,
-                    )
-                    results: dict[str, HistoricalRangeSourceRevisionMemberV1 | Exception] = {}
-                    for requirement in requirements:
-                        try:
-                            results[requirement.requirement_id] = resolver.resolve(
-                                requirement=requirement,
-                                dependency_members={
-                                    dependency: dependency_source[dependency]
-                                    for dependency in requirement.depends_on_requirement_ids
-                                },
-                                phase=phase,
-                                expected_member=expected_members.get(requirement.requirement_id),
-                            )
-                        except HistoricalRangeSourceInputUnavailable as exc:
-                            exc.__traceback__ = None
-                            exc.__context__ = None
-                            exc.__cause__ = None
-                            results[requirement.requirement_id] = exc
-                        except Exception as exc:  # retain the original stack for diagnosis
-                            results[requirement.requirement_id] = exc
-                    return results
+                return _resolve_requirement_batch_on_connection(
+                    conn=conn,
+                    requirements=requirements,
+                    dependency_source=dependency_source,
+                    phase=phase,
+                    expected_members=expected_members,
+                    observed_at=observed_at,
+                    snapshot_id=snapshot_id,
+                    stream_fetch_size=self._stream_fetch_size,
+                )
             finally:
                 conn.rollback()
 
@@ -457,7 +488,7 @@ class PostgresHistoricalRangeCatalogExecutor:
 class _CachedRequirementResolver(HistoricalRangeSourceRequirementResolver):
     def __init__(
         self,
-        cached: Mapping[str, HistoricalRangeSourceRevisionMemberV1 | Exception],
+        cached: Mapping[str, HistoricalRangeSourceRevisionMemberV1 | _RequirementResolutionFailure],
     ) -> None:
         self._cached = dict(cached)
 
@@ -475,9 +506,143 @@ class _CachedRequirementResolver(HistoricalRangeSourceRequirementResolver):
                 f"catalog requirement was not prefetched: {requirement.requirement_id}"
             )
         value = self._cached[requirement.requirement_id]
-        if isinstance(value, Exception):
-            raise value
+        if isinstance(value, _RequirementResolutionFailure):
+            value.raise_error(requirement_id=requirement.requirement_id)
         return value
+
+
+@dataclass(frozen=True)
+class _RequirementResolutionFailure:
+    category: str
+    message: str
+    reason_code: str | None = None
+    context: dict[str, Any] | None = None
+    exception_type: str | None = None
+    traceback_text: str | None = None
+
+    def raise_error(self, *, requirement_id: str) -> None:
+        if self.category == "source_input_unavailable":
+            raise HistoricalRangeSourceInputUnavailable(
+                str(self.reason_code),
+                self.message,
+                context=dict(self.context or {}),
+            )
+        detail = f"{self.exception_type or 'Exception'}: {self.message}"
+        if self.traceback_text:
+            detail = f"{detail}\nRemote worker traceback:\n{self.traceback_text}"
+        raise RuntimeError(
+            f"historical catalog worker failed for {requirement_id}: {detail}"
+        )
+
+
+def _requirement_failure_from_exception(exc: Exception) -> _RequirementResolutionFailure:
+    if isinstance(exc, HistoricalRangeSourceInputUnavailable):
+        return _RequirementResolutionFailure(
+            category="source_input_unavailable",
+            message=str(exc),
+            reason_code=exc.reason_code,
+            context=dict(exc.context),
+        )
+    return _RequirementResolutionFailure(
+        category="worker_error",
+        message=str(exc),
+        exception_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
+        traceback_text="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    )
+
+
+def _resolve_requirement_batch_process(
+    worker_dsn: str,
+    requirements: tuple[HistoricalRangeSourceRequirementV1, ...],
+    dependency_source: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+    phase: HistoricalRangeCatalogPhase,
+    expected_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+    observed_at: datetime,
+    snapshot_id: str,
+    stream_fetch_size: int,
+) -> dict[str, HistoricalRangeSourceRevisionMemberV1 | _RequirementResolutionFailure]:
+    conn = psycopg2.connect(worker_dsn)
+    primary_error: BaseException | None = None
+    try:
+        return _resolve_requirement_batch_on_connection(
+            conn=conn,
+            requirements=requirements,
+            dependency_source=dependency_source,
+            phase=phase,
+            expected_members=expected_members,
+            observed_at=observed_at,
+            snapshot_id=snapshot_id,
+            stream_fetch_size=stream_fetch_size,
+        )
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        cleanup_errors: list[BaseException] = []
+        try:
+            conn.rollback()
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+        try:
+            conn.close()
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+        if primary_error is not None:
+            for cleanup_error in cleanup_errors:
+                primary_error.add_note(
+                    f"worker connection cleanup failed: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
+        elif cleanup_errors:
+            cleanup_error = cleanup_errors[0]
+            for additional_error in cleanup_errors[1:]:
+                cleanup_error.add_note(
+                    f"additional worker cleanup failure: "
+                    f"{type(additional_error).__name__}: {additional_error}"
+                )
+            raise cleanup_error
+
+
+def _resolve_requirement_batch_on_connection(
+    *,
+    conn: Any,
+    requirements: tuple[HistoricalRangeSourceRequirementV1, ...],
+    dependency_source: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+    phase: HistoricalRangeCatalogPhase,
+    expected_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+    observed_at: datetime,
+    snapshot_id: str,
+    stream_fetch_size: int,
+) -> dict[str, HistoricalRangeSourceRevisionMemberV1 | _RequirementResolutionFailure]:
+    conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SET TRANSACTION SNAPSHOT %s", (snapshot_id,))
+        resolver = _PostgresRequirementResolver(
+            cur=cur,
+            conn=conn,
+            observed_at=observed_at,
+            stream_fetch_size=stream_fetch_size,
+        )
+        results: dict[str, HistoricalRangeSourceRevisionMemberV1 | _RequirementResolutionFailure] = {}
+        for index, requirement in enumerate(requirements):
+            try:
+                results[requirement.requirement_id] = resolver.resolve(
+                    requirement=requirement,
+                    dependency_members={
+                        dependency: dependency_source[dependency]
+                        for dependency in requirement.depends_on_requirement_ids
+                    },
+                    phase=phase,
+                    expected_member=expected_members.get(requirement.requirement_id),
+                )
+            except HistoricalRangeSourceInputUnavailable as exc:
+                results[requirement.requirement_id] = _requirement_failure_from_exception(exc)
+            except Exception as exc:
+                failure = _requirement_failure_from_exception(exc)
+                results[requirement.requirement_id] = failure
+                for blocked in requirements[index + 1 :]:
+                    results[blocked.requirement_id] = failure
+                break
+        return results
 
 
 def _requirement_work_weight(requirement: HistoricalRangeSourceRequirementV1) -> int:
@@ -495,6 +660,13 @@ def _requirement_work_weight(requirement: HistoricalRangeSourceRequirementV1) ->
     except (TypeError, ValueError):
         return query_weight
     return query_weight * max(span_days, 1)
+
+
+def _requirement_uses_process_worker(requirement: HistoricalRangeSourceRequirementV1) -> bool:
+    return requirement.query_template_id not in {
+        "frozen_artifact_identity",
+        "historical_hmm_frozen_evidence_bundle",
+    }
 
 
 class PostgresHistoricalRangeSourceRevisionVerifier:
@@ -951,7 +1123,10 @@ class _PostgresRequirementResolver(HistoricalRangeSourceRequirementResolver):
         total = 0
         schemas: list[dict[str, Any]] = []
         for dataset_name, sql in queries:
-            count, content_hash, schema_hash = self._stream_query(sql, params)
+            count, content_hash, schema_hash = self._stream_query(
+                sql,
+                params,
+            )
             total += count
             marker = _canonical_bytes({"dataset_name": dataset_name, "content_hash": content_hash, "row_count": count})
             digest.update(len(marker).to_bytes(8, "big"))
@@ -972,30 +1147,39 @@ class _PostgresRequirementResolver(HistoricalRangeSourceRequirementResolver):
             digest = hashlib.sha256()
             row_count = 0
             while rows:
-                for row in rows:
-                    payload = row["payload"]
-                    if any(payload.get(field) is None for field in required_non_null):
-                        raise HistoricalRangeSourceInputUnavailable(
-                            "ADVISORY_HR_PIT_INPUT_UNAVAILABLE",
-                            "historical source row lacks a required database value",
-                            context={"missing_fields": list(required_non_null)},
-                        )
-                    encoded = _canonical_bytes(payload)
-                    digest.update(len(encoded).to_bytes(8, "big"))
-                    digest.update(encoded)
-                    row_count += 1
+                payloads = tuple(row["payload"] for row in rows)
+                framed, count, missing_required = _canonicalize_payload_batch(
+                    payloads,
+                    required_non_null,
+                )
+                if missing_required:
+                    raise HistoricalRangeSourceInputUnavailable(
+                        "ADVISORY_HR_PIT_INPUT_UNAVAILABLE",
+                        "historical source row lacks a required database value",
+                        context={"missing_fields": list(required_non_null)},
+                    )
+                digest.update(framed)
+                row_count += count
                 rows = stream_cur.fetchmany(self._stream_fetch_size)
         return row_count, digest.hexdigest(), schema_fingerprint
 
-    def _open_stream_cursor(self, sql: str, params: tuple[Any, ...]) -> Any:
+    def _open_stream_cursor(
+        self,
+        sql: str,
+        params: tuple[Any, ...],
+    ) -> Any:
         if self._conn is None:
             raise RuntimeError("streaming historical catalog queries require an explicit PostgreSQL connection")
         stream_cur = self._conn.cursor(
             name=f"ahr_catalog_{uuid.uuid4().hex}",
             cursor_factory=psycopg2.extras.RealDictCursor,
         )
-        stream_cur.itersize = self._stream_fetch_size
-        stream_cur.execute(sql, params)
+        try:
+            stream_cur.itersize = self._stream_fetch_size
+            stream_cur.execute(sql, params)
+        except Exception:
+            stream_cur.close()
+            raise
         return stream_cur
 
     @staticmethod
@@ -1020,6 +1204,21 @@ def _canonical_bytes(value: Any) -> bytes:
     if _ORJSON_EXPONENT_NUMBER.search(encoded) is None:
         return encoded
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False).encode("utf-8")
+
+
+def _canonicalize_payload_batch(
+    payloads: tuple[Any, ...],
+    required_non_null: tuple[str, ...],
+) -> tuple[bytes, int, bool]:
+    framed = bytearray()
+    for raw_payload in payloads:
+        payload = orjson.loads(raw_payload) if isinstance(raw_payload, (str, bytes, bytearray)) else raw_payload
+        if any(payload.get(field) is None for field in required_non_null):
+            return b"", 0, True
+        encoded = _canonical_bytes(payload)
+        framed.extend(len(encoded).to_bytes(8, "big"))
+        framed.extend(encoded)
+    return bytes(framed), len(payloads), False
 
 
 def _member_matches_research_program(
