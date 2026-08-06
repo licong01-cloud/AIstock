@@ -11,6 +11,10 @@ targets:
     source_globs:
       - backend/**/*.py
       - scripts/qe_sector_risk_overlay_strategy.py
+      - scripts/qe_build_frozen_risk_policy.py
+      - scripts/qrun_limit.py
+      - scripts/qrun_limit_minute.py
+      - aistock_models/**/*.py
       - requirements*.txt
       - pyproject.toml
     production_port: 8001

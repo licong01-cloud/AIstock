@@ -14,7 +14,8 @@
     "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260806_BUG-989-qe-alpha-postgresql.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/standards/aistock_runtime_targets_v1.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-989",
@@ -42,14 +43,16 @@
       "backend/services/quantevolver/config_composer.py",
       "docs/architecture/qe_efficient_gats_l2_industry_embedding_f1_design_20260710.md",
       "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
-      "tests/aistock_validation/catalog/file_ownership.yaml"
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/config_composer.py",
         "docs/architecture/qe_efficient_gats_l2_industry_embedding_f1_design_20260710.md",
         "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
-        "tests/aistock_validation/catalog/file_ownership.yaml"
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "docs/standards/aistock_runtime_targets_v1.yaml"
       ],
       "impacted_modules": [
         "qe.sector_risk_overlay",
@@ -148,9 +151,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python pytest process ran backend/tests/unified_engine/test_qe_config_truth.py + backend/tests/unified_engine/test_qe_data_plane_zero_db.py + backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 145 passed, 38 skipped (torch/qlib importorskip, pre-existing)"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
