@@ -222,14 +222,7 @@ class CatalogSourceFileCache:
         sqlite = self._connect(path)
         try:
             self._create_schema(sqlite)
-            extractors = (
-                ("pit", self._extract_pit),
-                ("calendar", self._extract_calendar),
-                ("market", self._extract_market),
-                ("stock-state", self._extract_stock_state),
-                ("industry", self._extract_industry),
-                ("fundamentals", self._extract_fundamentals),
-            )
+            extractors = self._required_extractors()
             for label, extractor in extractors:
                 started_at = time.monotonic()
                 logger.info(
@@ -268,6 +261,41 @@ class CatalogSourceFileCache:
             raise
         finally:
             sqlite.close()
+
+    def _required_extractors(self) -> tuple[tuple[str, Any], ...]:
+        query_ids = {
+            requirement.query_template_id
+            for requirement in self._plan.requirements
+            if requirement.query_template_id in CACHEABLE_QUERY_IDS
+        }
+        extractors: list[tuple[str, Any]] = []
+        if query_ids & {
+            "historical_pit_universe_existing_readonly",
+            "historical_st_risk_existing_readonly",
+            "historical_market_history_window",
+            "historical_decision_mark_market_state",
+            "historical_fundamental_moneyflow_window",
+        }:
+            extractors.append(("pit", self._extract_pit))
+        if "historical_trading_calendar_window" in query_ids:
+            extractors.append(("calendar", self._extract_calendar))
+        if query_ids & {
+            "historical_market_history_window",
+            "historical_decision_mark_daily_market",
+        }:
+            extractors.append(("market", self._extract_market))
+        if "historical_decision_mark_market_state" in query_ids:
+            extractors.append(("stock-basic", self._extract_stock_basic))
+        if query_ids & {
+            "historical_decision_mark_market_state",
+            "historical_suspend_lookup",
+        }:
+            extractors.append(("suspend", self._extract_suspend))
+        if "historical_industry_membership" in query_ids:
+            extractors.append(("industry", self._extract_industry))
+        if "historical_fundamental_moneyflow_window" in query_ids:
+            extractors.append(("fundamentals", self._extract_fundamentals))
+        return tuple(extractors)
 
     def _bounds(self) -> dict[str, Any]:
         cacheable = [
@@ -403,9 +431,11 @@ class CatalogSourceFileCache:
                 )
         self._insert_many(target, "INSERT INTO market VALUES(?,?,?,?,?,?)", values())
 
-    def _extract_stock_state(self, source: Any, target: sqlite3.Connection, bounds: Mapping[str, Any]) -> None:
+    def _extract_stock_basic(self, source: Any, target: sqlite3.Connection, _bounds: Mapping[str, Any]) -> None:
         rows = self._stream(source, "SELECT ts_code,list_date,delist_date,list_status FROM market.stock_basic ORDER BY ts_code", ())
         self._insert_many(target, "INSERT INTO stock_basic VALUES(?,?,?,?)", ((r["ts_code"], self._optional_date(r["list_date"]), self._optional_date(r["delist_date"]), r["list_status"]) for r in rows))
+
+    def _extract_suspend(self, source: Any, target: sqlite3.Connection, bounds: Mapping[str, Any]) -> None:
         rows = self._stream(
             source,
             """SELECT trade_date,ts_code,suspend_type,suspend_timing,

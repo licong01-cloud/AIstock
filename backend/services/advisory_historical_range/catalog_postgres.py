@@ -860,6 +860,7 @@ def _requirement_uses_process_worker(requirement: HistoricalRangeSourceRequireme
 
 
 def _plan_uses_source_cache(plan: HistoricalRangeSourceRequirementPlanV1) -> bool:
+    has_cacheable_requirement = False
     for requirement in plan.requirements:
         if requirement.query_template_id == "frozen_artifact_identity":
             continue
@@ -867,7 +868,8 @@ def _plan_uses_source_cache(plan: HistoricalRangeSourceRequirementPlanV1) -> boo
             return False
         if isinstance(requirement.parameter_template.get("formal_partition_key"), Mapping):
             return False
-    return True
+        has_cacheable_requirement = True
+    return has_cacheable_requirement
 
 
 class PostgresHistoricalRangeSourceRevisionVerifier:

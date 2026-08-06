@@ -103,6 +103,47 @@ def _cacheable_plan(count: int) -> HistoricalRangeSourceRequirementPlanV1:
     )
 
 
+def _batch_b_source_plan() -> HistoricalRangeSourceRequirementPlanV1:
+    base = _plan(6)
+    templates = (
+        (
+            "historical_pit_universe_existing_readonly",
+            {"trade_date": "2026-06-02", "universe_key": "shsz_st_pit_active_v1"},
+        ),
+        (
+            "historical_trading_calendar_window",
+            {"range_start": "2026-05-01", "trade_date": "2026-06-02"},
+        ),
+        (
+            "historical_market_history_window",
+            {"start_date": "2026-05-01", "trade_date": "2026-06-02", "universe_key": "shsz_st_pit_active_v1"},
+        ),
+        ("historical_decision_mark_daily_market", {"trade_date": "2026-06-02"}),
+        ("historical_decision_mark_market_state", {"trade_date": "2026-06-02"}),
+        (
+            "historical_fundamental_moneyflow_window",
+            {"start_date": "2026-05-01", "trade_date": "2026-06-02", "universe_key": "shsz_st_pit_active_v1"},
+        ),
+    )
+    return base.model_copy(
+        update={
+            "requirements": tuple(
+                requirement.model_copy(
+                    update={
+                        "source_role": f"source-{index}",
+                        "query_template_id": query_id,
+                        "parameter_template": parameters,
+                    }
+                )
+                for index, (requirement, (query_id, parameters)) in enumerate(
+                    zip(base.requirements, templates, strict=True),
+                    start=1,
+                )
+            )
+        }
+    )
+
+
 class _ConnectionTracker:
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -719,6 +760,7 @@ def test_source_cache_mode_rejects_formal_and_hmm_special_contracts() -> None:
     )
 
     assert _plan_uses_source_cache(plan) is True
+    assert _plan_uses_source_cache(_plan(1)) is False
     assert _plan_uses_source_cache(plan.model_copy(update={"requirements": (formal,)})) is False
     assert _plan_uses_source_cache(plan.model_copy(update={"requirements": (hmm,)})) is False
 
@@ -766,7 +808,18 @@ def test_bulk_extract_statement_count_is_independent_of_requirement_count(
         ).ensure(conn=source, observed_at=OBSERVED_AT)
         statement_counts.append(len(source.statements))
 
-    assert statement_counts == [11, 11]
+    assert statement_counts == [1, 1]
+
+    target_root = tmp_path / "batch-b"
+    target_root.mkdir()
+    target_source = _EmptyBulkConnection()
+    CatalogSourceFileCache(
+        root=target_root,
+        plan=_batch_b_source_plan(),
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+    ).ensure(conn=target_source, observed_at=OBSERVED_AT)
+    assert len(target_source.statements) == 10
 
 
 def test_corrupt_source_cache_fails_loudly_without_database_fallback(tmp_path) -> None:  # noqa: ANN001
