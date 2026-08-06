@@ -1,6 +1,10 @@
 {
   "actual": "Production Batch B request 9a10e69c over 1632 dates produced 13058 source requirements. BUILD_SOURCE_CATALOG creates a new 24-process spawn pool for every 32-item chunk, repeatedly imports the full application, rereads highly overlapping market and fundamental windows from PostgreSQL, and repeats all reads in VERIFY. Observed 25 processes, 6.39 GB working set, 23.66 GB private commit, and about 30 requirements per minute; model training had not started. User requires range-batched database extraction, repo-external file cache plus bounded in-memory indexes, persistent bounded workers, no per-requirement database fetch, under-8GB memory, unchanged PIT and evidence semantics, visible errors, and no new approval gates.",
   "allowed_write_scope": [
+    "backend/services/advisory_historical_range/catalog_postgres.py",
+    "backend/services/advisory_historical_range/catalog_source_cache.py",
+    "backend/services/advisory_historical_range/composition.py",
+    "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py",
     "tests/aistock_validation/bugs/20260806_BUG-991-batch-b-catalog-repeatedly-queries-overlapping-windows-and-respawns-24-w.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,10 +27,16 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Each catalog phase bulk-extracts every required PostgreSQL source range once into an immutable repo-external file cache, resolves all requirements from that cache with bounded in-memory indexes and persistent bounded workers, remains below 8 GB, preserves exact PIT/source-revision hashes and fail-closed errors, and never silently falls back to per-requirement database reads.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
+    "added_files": [
+      "backend/services/advisory_historical_range/catalog_source_cache.py"
+    ],
+    "changed_files": [
+      "backend/services/advisory_historical_range/catalog_postgres.py",
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py"
+    ],
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -36,7 +46,12 @@
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/advisory_historical_range/catalog_postgres.py",
+      "backend/services/advisory_historical_range/catalog_source_cache.py",
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/tests/advisory_historical_range/test_catalog_postgres_performance.py"
+    ]
   },
   "first_seen_at": "2026-08-06T05:38:31.146155Z",
   "fix_branch": null,
