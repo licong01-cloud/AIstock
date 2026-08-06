@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
 import shlex
 from datetime import datetime
@@ -38,6 +39,10 @@ from .qe_dataset_contract import (
     QE_FROZEN_CALENDAR_SHA256,
     QE_FROZEN_INSTRUMENTS_SHA256,
     QE_FROZEN_META_EXPORT_SHA256,
+    QE_FROZEN_SUSPEND_DATASET_ID,
+    QE_FROZEN_SUSPEND_MANIFEST_SHA256,
+    QE_FROZEN_SUSPEND_PARQUET_SHA256,
+    QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
     QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256,
     QE_ST_PIT_UNIVERSE_KEY,
     require_qe_dataset_window,
@@ -444,6 +449,7 @@ QE_STRATEGY_RUNTIME_HELPER_FILES = (
     "qe_suspend_filter.py",
     "qe_event_risk_policy.py",
     "qe_build_frozen_risk_policy.py",
+    "qe_build_frozen_suspend_filter.py",
     "qe_suspend_filter_strategy.py",
     "qe_suspend_filter_score_weighted_strategy.py",
     "score_weighted_strategy_v2.py",
@@ -1213,7 +1219,7 @@ class ConfigComposer:
         strategy_info: Optional[Dict],
         execution_algo: Optional[str],
     ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """Build the suspend artifact needed by signal filtering or V25 execution."""
+        """Wire the frozen-file suspend artifact for signal filtering or V25 execution."""
 
         # Mandatory event-risk policies can force exits or block buys before
         # ``filter_suspended_on_signal`` is explicitly set.  In that mode the
@@ -1233,20 +1239,19 @@ class ConfigComposer:
             strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
             self._ensure_suspend_filter_supported(strategy_class_for_suspend)
 
-        # BUG-989 zero-DB data plane: the frozen qlib bin dataset ships no
-        # per-day suspend field (bin features carry no $paused), so the suspend
-        # artifact cannot be derived from frozen files.  Querying market.*
-        # tables here is forbidden; fail closed and report the offline dataset
-        # construction gap instead of falling back to the database.
-        raise RuntimeError(
-            "reason_code=qe_suspend_filter_offline_dataset_gap: "
-            "suspend filtering (signal filter or V25 execution) requires per-day "
-            "suspend flags, but the frozen qlib bin dataset "
-            f"{QE_FROZEN_BIN_SNAPSHOT_ID} has no suspend/$paused field. "
-            "离线数据集构建缺口: rebuild the frozen dataset with suspend data "
-            "(separate dataset-construction task); the QE computation data plane "
-            "must not query market.suspend_d / market.trading_calendar."
-        )
+        # BUG-989 zero-DB data plane: the suspend artifact is built on the
+        # compute node by qe_build_frozen_suspend_filter.py from the frozen
+        # suspend_d candidate dataset pinned in qe_frozen_build_spec.json
+        # (written by _prepare_risk_policy_runtime for every new QE
+        # workspace).  The composer only wires the runtime contract here: the
+        # strict QESuspendFilter reads qe_suspend_filter.json, whose keys must
+        # cover every trading day of the pinned frozen calendar inside the
+        # window.  Querying market.* tables is forbidden; any pin, identity,
+        # date-coverage or field mismatch fails closed on the compute node
+        # and there is no database fallback.
+        custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
+        custom_params["suspend_filter_strict"] = True
+        return custom_params, None
 
     @staticmethod
     def _risk_policy_profile(custom_params: Optional[Dict[str, Any]]):
@@ -1337,6 +1342,23 @@ class ConfigComposer:
                 "instruments_sha256": QE_FROZEN_INSTRUMENTS_SHA256,
                 "calendar_sha256": QE_FROZEN_CALENDAR_SHA256,
                 "meta_export_sha256": QE_FROZEN_META_EXPORT_SHA256,
+            },
+            # Frozen suspend_d candidate dataset pins (BUG-989 continuation):
+            # the suspend sidecar is a versioned sibling of the frozen bin
+            # directory on every compute node.  qe_build_frozen_suspend_filter.py
+            # rebuilds qe_suspend_filter.json from these pins before qrun;
+            # any pin/identity/coverage mismatch fails closed on the compute
+            # node and there is no database fallback.
+            "suspend": {
+                "dataset_id": QE_FROZEN_SUSPEND_DATASET_ID,
+                "provider_uri": posixpath.join(
+                    posixpath.dirname(provider_uri_day.rstrip("/")),
+                    QE_FROZEN_SUSPEND_DATASET_ID,
+                ),
+                "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
+                "parquet_sha256": QE_FROZEN_SUSPEND_PARQUET_SHA256,
+                "manifest_sha256": QE_FROZEN_SUSPEND_MANIFEST_SHA256,
+                "source_contract": QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
             },
         }
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)

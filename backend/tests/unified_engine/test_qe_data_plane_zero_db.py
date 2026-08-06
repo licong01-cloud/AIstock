@@ -331,24 +331,29 @@ def test_gate4_composer_has_no_market_sql_or_dataset_freshness_audit():
     assert "FactorUniverseMaskService" not in source
 
 
-def test_gate4_suspend_filter_gap_fails_closed_instead_of_querying_db(monkeypatch):
+def test_gate4_suspend_filter_wires_frozen_artifact_without_querying_db(monkeypatch):
     def _boom(*_args, **_kwargs):
         raise AssertionError("suspend filter assembly must not open DB connections")
 
     monkeypatch.setattr(composer_module, "get_conn", _boom)
-    with pytest.raises(RuntimeError, match="qe_suspend_filter_offline_dataset_gap"):
-        ConfigComposer()._prepare_suspend_filter_runtime(
-            custom_params={
-                "risk_policy": {
-                    "enabled": True,
-                    "providers": ["st_pit"],
-                    "hard_actions": ["block_buy", "force_exit"],
-                }
-            },
-            data_split=DATA_SPLIT,
-            strategy_info=None,
-            execution_algo=None,
-        )
+    custom_params, artifact = ConfigComposer()._prepare_suspend_filter_runtime(
+        custom_params={
+            "risk_policy": {
+                "enabled": True,
+                "providers": ["st_pit"],
+                "hard_actions": ["block_buy", "force_exit"],
+            }
+        },
+        data_split=DATA_SPLIT,
+        strategy_info=None,
+        execution_algo=None,
+    )
+    # The suspend artifact is rebuilt on the compute node from the frozen
+    # suspend_d candidate dataset pinned in qe_frozen_build_spec.json; the
+    # composer wires the strict runtime contract without touching the DB.
+    assert artifact is None
+    assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
+    assert custom_params["suspend_filter_strict"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +412,7 @@ def test_gate5_workspace_payload_has_no_db_driver_credentials_or_market_sql():
     assert "score_weighted_strategy.py" in names
     assert "tail_twap_strategy.py" in names
     assert "qe_build_frozen_risk_policy.py" in names
+    assert "qe_build_frozen_suspend_filter.py" in names
 
     offenders = []
     for path in files:
@@ -428,10 +434,15 @@ def test_gate5_both_qrun_runners_rebuild_frozen_risk_policy_before_qlib_init():
         hook_at = text.index("ensure_frozen_risk_policy_artifact(cwd=")
         qlib_init_at = text.index("qlib.init(")
         assert hook_at < qlib_init_at, f"{name} must rebuild the artifact before qlib init"
+        assert "ensure_frozen_suspend_filter_artifact" in text, f"{name} lost the suspend rebuild hook"
+        assert "qe_build_frozen_suspend_filter.py" in text
+        suspend_hook_at = text.index("ensure_frozen_suspend_filter_artifact(cwd=")
+        assert suspend_hook_at < qlib_init_at, f"{name} must rebuild the suspend artifact before qlib init"
 
 
 def test_gate5_helper_manifest_includes_frozen_builder():
     assert "qe_build_frozen_risk_policy.py" in composer_module.QE_STRATEGY_RUNTIME_HELPER_FILES
+    assert "qe_build_frozen_suspend_filter.py" in composer_module.QE_STRATEGY_RUNTIME_HELPER_FILES
     assert composer_module.FROZEN_BUILD_SPEC_FILE == frozen_builder.SPEC_FILE
 
 
@@ -496,6 +507,16 @@ def test_gate6_composer_spec_pins_full_traceability_triplet():
     assert spec["pins"]["universe_key"] == QE_FROZEN_BIN_UNIVERSE_KEY
     for key in ("instruments_sha256", "calendar_sha256", "meta_export_sha256"):  # hash
         assert re.fullmatch(r"[0-9a-f]{64}", spec["pins"][key]), key
+    # Suspend pins (BUG-989 continuation): the frozen suspend_d candidate is a
+    # versioned sibling of the frozen bin directory and carries the same
+    # path+version+hash traceability triplet.
+    suspend = spec["suspend"]
+    assert suspend["provider_uri"] == "/frozen/suspend_d_daily_candidate_20180801_20260630"
+    assert suspend["dataset_id"] == "suspend_d_daily_candidate_20180801_20260630"
+    assert suspend["universe_key"] == QE_FROZEN_BIN_UNIVERSE_KEY
+    assert suspend["source_contract"] == "tushare_suspend_d_shsz_S_v1"
+    for key in ("parquet_sha256", "manifest_sha256"):
+        assert re.fullmatch(r"[0-9a-f]{64}", suspend[key]), key
 
 
 def test_gate6_runtime_risk_policy_validators_accept_frozen_artifact(tmp_path):

@@ -81,6 +81,7 @@ rules:
     include:
       - aistock_models/**
       - scripts/qe_build_frozen_*.py
+      - scripts/export_suspend_d_candidate.py
     primary_module: qe.core
     impact_modules: [qe.single_experiment, qe.custom_evolution, qe.auto_evolution, qe.sector_risk_overlay]
     layer: data_pipeline

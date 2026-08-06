@@ -13,7 +13,7 @@
 >
 > 本文中所有 `market.sw_index_member` / `sw_index_classify` 读取均属于**冻结数据集构建期**导出（生成 `sector_data.h5` 的 `l2_code_id`、`stock2concept` 等），保持合法不变；QE/多 Alpha 运行期只允许读取这些冻结文件（行业 provider 为文件专用 `SectorDataIndustryIdProvider`，原 `SwIndexMemberIndustryIdProvider` 运行期 DB 查询设计已废止；第 1 节 R4 对照为历史实验事实，予以保留）。禁止运行期回退数据库、在线补齐、静默降级或以当前快照替代 PIT。
 >
-> 关联缺口（独立任务，不属于本蓝图交付）：停牌/交易日历输入在冻结 qlib bin 数据集中无 `suspend`/`$paused` 字段，新装配一律以 `qe_suspend_filter_offline_dataset_gap` fail closed，属"离线数据集构建缺口"，由独立的数据集构建任务补齐。
+> 关联缺口（已解除，2026-08-06）：停牌输入不再依赖数据库——已构建版本化冻结候选数据集 `suspend_d_daily_candidate_20180801_20260630`（`suspend_d.parquet` + `manifest.json`，含逐交易日完整性回执，离线构建期只读导出自 `market.suspend_d`，`suspend_type='S'`，仅 sh/sz、剔除 BJ），作为冻结 bin 目录的同级 sidecar 同步至全部计算节点；新装配由 `qe_build_frozen_suspend_filter.py` 在计算节点按 `qe_frozen_build_spec.json` 的 suspend 钉（dataset_id/cutoff/universe key/SHA256）重建 `qe_suspend_filter.json`，钉/身份/日期覆盖/字段不符一律 fail closed，无数据库回退。原 `qe_suspend_filter_offline_dataset_gap` 阻断随之解除。
 
 ---
 

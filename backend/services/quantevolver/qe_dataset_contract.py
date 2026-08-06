@@ -47,6 +47,20 @@ QE_FROZEN_META_EXPORT_SHA256 = "66c5c070b368ec1352ce4031dce4be982d44894e58968bb3
 # digest, not any market.stock_universe_pit_state row.
 QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256 = QE_FROZEN_INSTRUMENTS_SHA256
 
+# Frozen suspend_d candidate dataset pins (BUG-989 continuation).  The suspend
+# sidecar lives in a versioned candidate directory that is a *sibling* of the
+# frozen qlib bin directory on every compute node (same layout on WSL and
+# node1): ``<parent of provider_uri_day>/suspend_d_daily_candidate_20180801_20260630``.
+# It was exported read-only from market.suspend_d (suspend_type='S', sh/sz
+# only, BJ excluded) by scripts/export_suspend_d_candidate.py and carries a
+# per-trading-day completeness receipt in manifest.json.  The QE computation
+# data plane verifies these pins instead of querying market.suspend_d; a
+# mismatch, like any missing frozen input, fails closed.
+QE_FROZEN_SUSPEND_DATASET_ID = "suspend_d_daily_candidate_20180801_20260630"
+QE_FROZEN_SUSPEND_PARQUET_SHA256 = "493f694312f514d39960aefc275c23ddc6bb60a6a2606cd57e39c428090cc33d"
+QE_FROZEN_SUSPEND_MANIFEST_SHA256 = "eea71b92e9098c598db671e6c4bc4f0195516805cb657e3b85a978d60f047ff0"
+QE_FROZEN_SUSPEND_SOURCE_CONTRACT = "tushare_suspend_d_shsz_S_v1"
+
 
 def require_qe_dataset_window(*, start_date: dt.date, end_date: dt.date) -> None:
     """Fail fast when a QE consumer escapes the deployed dataset contract."""

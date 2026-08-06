@@ -16,7 +16,10 @@
     "tests/aistock_validation/bugs/20260806_BUG-989-qe-alpha-postgresql.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "docs/standards/aistock_runtime_targets_v1.yaml",
-    "tests/aistock_validation/history/qe/20260806_134857_l3_qe-read-only-workspace-access-regression.md"
+    "tests/aistock_validation/history/qe/20260806_134857_l3_qe-read-only-workspace-access-regression.md",
+    "scripts/qe_build_frozen_suspend_filter.py",
+    "scripts/export_suspend_d_candidate.py",
+    "backend/tests/unified_engine/test_qe_frozen_suspend_filter.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-989",
@@ -34,6 +37,30 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260806-8ba7ad4e1a47",
       "timestamp": "2026-08-06T02:41:04.362159Z"
+    },
+    {
+      "action": "extend_write_scope",
+      "actor": "claude_code",
+      "note": "BUG-989 continuation: unblock qe_suspend_filter_offline_dataset_gap via frozen suspend_d candidate dataset; add builder/export script and test file to scope before source edits",
+      "timestamp": "2026-08-06T07:28:47.074Z"
+    },
+    {
+      "action": "offline_dataset_candidate_built",
+      "actor": "claude_code",
+      "note": "suspend_d_daily_candidate_20180801_20260630 built read-only from market.suspend_d (suspend_type='S', sh/sz, BJ excluded) and synced to WSL+node1; parquet_sha256=493f694312f514d39960aefc275c23ddc6bb60a6a2606cd57e39c428090cc33d manifest_sha256=eea71b92e9098c598db671e6c4bc4f0195516805cb657e3b85a978d60f047ff0; rows=29804 trade_dates=1917 zero_suspension_days=4; per-day completeness receipt in manifest.daily_row_counts; production bin/symlinks untouched",
+      "timestamp": "2026-08-06T08:38:46.784Z"
+    },
+    {
+      "action": "suspend_fail_closed_unblocked",
+      "actor": "claude_code",
+      "note": "config_composer._prepare_suspend_filter_runtime no longer raises qe_suspend_filter_offline_dataset_gap; frozen build spec gains a suspend pin section; new compute-node builder scripts/qe_build_frozen_suspend_filter.py rebuilds qe_suspend_filter.json from the pinned frozen suspend_d candidate with one key per pinned calendar day (strict QESuspendFilter contract); qrun_limit.py/qrun_limit_minute.py invoke it before qlib init; pin/identity/window/field/coverage mismatch or missing pandas/pyarrow fails closed with stable reason_code; no DB fallback",
+      "timestamp": "2026-08-06T08:38:46.784Z"
+    },
+    {
+      "action": "validation_evidence",
+      "actor": "claude_code",
+      "note": "pytest 4 files -> 163 passed, 38 skipped (pre-existing torch/qlib importorskip); new test_qe_frozen_suspend_filter.py 18 passed; nox validation_module_registry_l0/guardrail_changed_files/qe_read_backend/qe_sector_risk_overlay_backend all passed; F1 design validator PASS; WSL real-data smoke: risk artifact spans=5410 trade_dates=1917 from real frozen all.txt, suspend artifact rows=29804 keys=1917 with 4 explicit zero-suspension days; poisoned psycopg2 (PYTHONPATH) on WSL+node1 did not trigger; WSL/node1 artifact sha256 identical=0e3ed7490746a160d0f7f4977463d7ba7b6b302f127013fde4bb4a90dc4bb2cc; git diff --check OK; full qrun training smoke not run (stop boundary: no formal experiments)",
+      "timestamp": "2026-08-06T08:38:46.784Z"
     }
   ],
   "evidence_uris": [],

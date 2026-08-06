@@ -760,30 +760,37 @@ def test_qe_risk_policy_runtime_rejects_disabled_policy():
         )
 
 
-def test_v25_execution_suspend_artifact_fails_closed_offline_gap():
-    with pytest.raises(RuntimeError, match="qe_suspend_filter_offline_dataset_gap"):
-        ConfigComposer()._prepare_suspend_filter_runtime(
-            custom_params={},
-            data_split=DATA_SPLIT,
-            strategy_info=None,
-            execution_algo="V25_TWO_STAGE",
-        )
+def test_v25_execution_suspend_filter_wires_frozen_artifact():
+    custom_params, artifact = ConfigComposer()._prepare_suspend_filter_runtime(
+        custom_params={},
+        data_split=DATA_SPLIT,
+        strategy_info=None,
+        execution_algo="V25_TWO_STAGE",
+    )
+    # The artifact itself is rebuilt on the compute node from the frozen
+    # suspend_d candidate dataset pinned in qe_frozen_build_spec.json; the
+    # composer only wires the strict runtime contract.
+    assert artifact is None
+    assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
+    assert custom_params["suspend_filter_strict"] is True
 
 
-def test_qe_risk_policy_suspend_artifact_fails_closed_offline_gap():
-    with pytest.raises(RuntimeError, match="qe_suspend_filter_offline_dataset_gap"):
-        ConfigComposer()._prepare_suspend_filter_runtime(
-            custom_params={
-                "risk_policy": {
-                    "enabled": True,
-                    "providers": ["st_pit"],
-                    "hard_actions": ["block_buy", "force_exit"],
-                }
-            },
-            data_split=DATA_SPLIT,
-            strategy_info=None,
-            execution_algo=None,
-        )
+def test_qe_risk_policy_suspend_filter_wires_frozen_artifact():
+    custom_params, artifact = ConfigComposer()._prepare_suspend_filter_runtime(
+        custom_params={
+            "risk_policy": {
+                "enabled": True,
+                "providers": ["st_pit"],
+                "hard_actions": ["block_buy", "force_exit"],
+            }
+        },
+        data_split=DATA_SPLIT,
+        strategy_info=None,
+        execution_algo=None,
+    )
+    assert artifact is None
+    assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
+    assert custom_params["suspend_filter_strict"] is True
 
 
 def test_hmm_precomputed_coefficients_skip_runtime_precompute(monkeypatch):
