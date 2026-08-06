@@ -4,6 +4,7 @@
     "backend/services/simulation_runtime/scheduler.py",
     "backend/services/simulation_runtime/repository.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -17,6 +18,13 @@
   ],
   "created_at": "2026-08-06T07:34:59.747195Z",
   "description": "The production-equivalent run has 246 frozen/submitted intents but 492 durable state rows. The post-close validator assumes one row per intent, raises LOCALSIM_POST_CLOSE_STATE_PLAN_MISMATCH, leaves the run INTRADAY_RUNNING, and repeats the typed failure on every post-close cadence.",
+  "design_acceptance_ids": [
+    "F-007",
+    "F-009",
+    "F-012",
+    "F-014",
+    "F-021"
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -34,13 +42,15 @@
     "changed_files": [
       "backend/services/simulation_runtime/scheduler.py",
       "backend/services/simulation_runtime/repository.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/scheduler.py",
         "backend/services/simulation_runtime/repository.py",
-        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
       ],
       "impacted_modules": [
         "simulation_runtime",
@@ -93,10 +103,12 @@
     "scope_files": [
       "backend/services/simulation_runtime/scheduler.py",
       "backend/services/simulation_runtime/repository.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
     ]
   },
   "first_seen_at": "2026-08-06T07:34:59.747195Z",
+  "fix_summary": "LocalSIM lifecycle paths now select the exact durable state set named by the latest committed economic receipt. Terminal historical incarnations remain auditable, while duplicate active authority, missing state, extra intent, identity drift, malformed authority, and hash conflict remain typed fail-loud.",
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
@@ -116,9 +128,16 @@
     "simulation_core_l2"
   ],
   "risk_area": "bug",
+  "root_cause": "Scheduler continuation, restore, recovery, state readback, and post-close closure collapsed the repository's state_id-keyed lifecycle history into a single intent_id map. This ignored the economic receipt's exact state_id/state_hash generation authority and treated legal terminal history as a duplicate current writer.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055",
+    "fresh_process_evidence": [
+      "python -m nox -s simulation_core_l2 -> 418 passed in a fresh Python process",
+      "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> 190 passed in a fresh Python process"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
@@ -135,6 +154,16 @@
     "simulation_runtime"
   ],
   "title": "P0 LocalSIM post-close terminalizer cannot close duplicated durable intent states",
+  "validation_evidence": [
+    "targeted LocalSIM authority/restart/post-close matrix -> 7 passed",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py with branch coverage -> 190 passed",
+    "changed-code coverage -> line 83.33%, branch 70.00%",
+    "python -m nox -s simulation_core_l2 -> 418 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+    "python -m nox -s l0 -> blocking=0",
+    "changed-file classifier -> simulation_core_l2, unmapped_code_files=[]",
+    "F2 validator -> 112/112, warnings=0"
+  ],
   "trigger_condition": {
     "fingerprint": "c9c540e614fe3040bc9dd6e4",
     "source_event_id": "FE-20260806-c9c540e614fe"

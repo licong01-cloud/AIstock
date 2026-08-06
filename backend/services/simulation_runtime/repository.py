@@ -121,6 +121,124 @@ def _local_sim_state_map(payload: dict[str, Any]) -> dict[str, LocalSimExecution
     return states
 
 
+def _local_sim_state_authority_map(
+    payload: dict[str, Any], states: dict[str, LocalSimExecutionStateV1] | None = None
+) -> dict[str, LocalSimExecutionStateV1]:
+    """Return the exact state set named by the latest committed generation.
+
+    State history is keyed by ``state_id`` because a lifecycle incarnation may
+    legitimately supersede an older incarnation for the same intent.  The
+    latest economic receipt is the durable authority for which incarnation is
+    active; selecting by insertion order or timestamps would silently revive
+    the wrong writer.
+    """
+    state_map = states if states is not None else _local_sim_state_map(payload)
+    receipts = _local_sim_economic_receipt_map(payload)
+    if not receipts:
+        return dict(state_map)
+    latest_generation = max(receipt.generation for receipt in receipts.values())
+    latest_receipts = tuple(receipt for receipt in receipts.values() if receipt.generation == latest_generation)
+    if len(latest_receipts) != 1:
+        raise InvalidStateTransitionError(
+            "LocalSIM economic receipt history has no unique latest generation",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_GENERATION_CONFLICT",
+                "generation": latest_generation,
+                "receipt_ids": sorted(receipt.receipt_id for receipt in latest_receipts),
+            },
+        )
+    latest = latest_receipts[0]
+    raw_hashes = latest.economic_facts.get("state_hashes")
+    # Historical LocalSIM submits do not persist durable minute state hashes;
+    # their complete state map remains the only available authority.
+    if raw_hashes is None:
+        return dict(state_map)
+    if raw_hashes == {} and not state_map:
+        return {}
+    if not isinstance(raw_hashes, dict) or not raw_hashes:
+        raise InvalidStateTransitionError(
+            "LocalSIM latest economic generation has no exact state authority",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_MISSING",
+                "receipt_id": latest.receipt_id,
+                "generation": latest.generation,
+            },
+        )
+    authoritative: dict[str, LocalSimExecutionStateV1] = {}
+    for state_id, expected_hash in raw_hashes.items():
+        if not isinstance(state_id, str) or not state_id or not isinstance(expected_hash, str) or not expected_hash:
+            raise InvalidStateTransitionError(
+                "LocalSIM economic generation state authority is malformed",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_SCHEMA_INVALID",
+                    "receipt_id": latest.receipt_id,
+                    "generation": latest.generation,
+                },
+            )
+        state = state_map.get(state_id)
+        if state is None:
+            raise InvalidStateTransitionError(
+                "LocalSIM economic generation references a missing durable state",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_STATE_MISSING",
+                    "receipt_id": latest.receipt_id,
+                    "generation": latest.generation,
+                    "state_id": state_id,
+                },
+            )
+        if state.state_hash != expected_hash:
+            raise InvalidStateTransitionError(
+                "LocalSIM economic generation state authority hash conflicts with durable state",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_HASH_CONFLICT",
+                    "receipt_id": latest.receipt_id,
+                    "generation": latest.generation,
+                    "state_id": state_id,
+                    "expected_state_hash": expected_hash,
+                    "actual_state_hash": state.state_hash,
+                },
+            )
+        authoritative[state_id] = state
+    authority_identities = {
+        (state.run_id, state.binding_id, state.trade_date, state.plan_id) for state in authoritative.values()
+    }
+    authority_intents = {state.intent_id for state in authoritative.values()}
+    invalid_history = tuple(
+        state
+        for state_id, state in state_map.items()
+        if state_id not in authoritative
+        and (
+            state.intent_id not in authority_intents
+            or len(authority_identities) != 1
+            or (state.run_id, state.binding_id, state.trade_date, state.plan_id) not in authority_identities
+        )
+    )
+    if invalid_history:
+        raise InvalidStateTransitionError(
+            "LocalSIM durable state history does not belong to the committed plan authority",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_HISTORY_IDENTITY_CONFLICT",
+                "receipt_id": latest.receipt_id,
+                "generation": latest.generation,
+                "state_ids": sorted(state.state_id for state in invalid_history),
+            },
+        )
+    active_history = tuple(
+        state for state_id, state in state_map.items() if state_id not in authoritative and not state.is_terminal
+    )
+    if active_history:
+        raise InvalidStateTransitionError(
+            "LocalSIM durable state history contains a second active authority",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_ACTIVE_AUTHORITY_CONFLICT",
+                "receipt_id": latest.receipt_id,
+                "generation": latest.generation,
+                "active_state_ids": sorted(state.state_id for state in active_history),
+            },
+        )
+    return authoritative
+
+
 def _merge_local_sim_state_batch(
     *,
     run_id: str,
@@ -1213,9 +1331,14 @@ class SimulationRuntimeRepository:
                 )
         return self.get_simulation_daily_run(run_id)
 
-    def list_local_sim_execution_states(self, run_id: str) -> list[LocalSimExecutionStateV1]:
+    def list_local_sim_execution_states(
+        self, run_id: str, *, authoritative: bool = False
+    ) -> list[LocalSimExecutionStateV1]:
         run = self.get_simulation_daily_run(run_id)
-        states = list(_local_sim_state_map(run.run_payload_json).values())
+        state_map = _local_sim_state_map(run.run_payload_json)
+        if authoritative:
+            state_map = _local_sim_state_authority_map(run.run_payload_json, state_map)
+        states = list(state_map.values())
         states.sort(key=lambda item: (item.intent_id, item.algo_instance_id, item.state_id))
         return states
 
@@ -1313,7 +1436,11 @@ class SimulationRuntimeRepository:
         if persisted_outbox is None or persisted_outbox.outbox_hash != outbox.outbox_hash:
             raise InvalidStateTransitionError("LocalSIM projection outbox independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_READBACK_FAILED", "run_id": run_id})
         persisted_states = {item.state_id: item.state_hash for item in self.list_local_sim_execution_states(run_id)}
-        if any(persisted_states.get(key) != value for key, value in (receipt.economic_facts.get("state_hashes") or {}).items()):
+        expected_states = receipt.economic_facts.get("state_hashes")
+        if (
+            not isinstance(expected_states, dict)
+            or any(persisted_states.get(key) != value for key, value in expected_states.items())
+        ):
             raise InvalidStateTransitionError("LocalSIM economic state independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_STATE_READBACK_FAILED", "run_id": run_id})
         return run
 
@@ -2171,9 +2298,14 @@ class InMemorySimulationRuntimeRepository:
         self.daily_runs[run_id] = updated
         return updated
 
-    def list_local_sim_execution_states(self, run_id: str) -> list[LocalSimExecutionStateV1]:
+    def list_local_sim_execution_states(
+        self, run_id: str, *, authoritative: bool = False
+    ) -> list[LocalSimExecutionStateV1]:
         run = self.get_simulation_daily_run(run_id)
-        states = list(_local_sim_state_map(run.run_payload_json).values())
+        state_map = _local_sim_state_map(run.run_payload_json)
+        if authoritative:
+            state_map = _local_sim_state_authority_map(run.run_payload_json, state_map)
+        states = list(state_map.values())
         states.sort(key=lambda item: (item.intent_id, item.algo_instance_id, item.state_id))
         return states
 
@@ -2240,7 +2372,11 @@ class InMemorySimulationRuntimeRepository:
         if persisted_outbox is None or persisted_outbox.outbox_hash != outbox.outbox_hash:
             raise InvalidStateTransitionError("LocalSIM projection outbox independent readback failed", context={"reason_code": "LOCALSIM_PROJECTION_OUTBOX_READBACK_FAILED", "run_id": run_id})
         persisted_states = {item.state_id: item.state_hash for item in self.list_local_sim_execution_states(run_id)}
-        if any(persisted_states.get(key) != value for key, value in (receipt.economic_facts.get("state_hashes") or {}).items()):
+        expected_states = receipt.economic_facts.get("state_hashes")
+        if (
+            not isinstance(expected_states, dict)
+            or any(persisted_states.get(key) != value for key, value in expected_states.items())
+        ):
             raise InvalidStateTransitionError("LocalSIM economic state independent readback failed", context={"reason_code": "LOCALSIM_ECONOMIC_STATE_READBACK_FAILED", "run_id": run_id})
         return run
 

@@ -7072,6 +7072,196 @@ def test_scheduler_post_close_terminalizes_localsim_persisted_active_run_with_sh
     assert terminalization["local_sim_persistence_status"] == "PERSISTED"
 
 
+def test_localsim_post_close_uses_committed_generation_authority_over_terminal_history() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="portfolio_localsim_generation_authority",
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    for as_of_time in (
+        datetime(2026, 5, 21, 9, 32),
+        datetime(2026, 5, 21, 9, 34),
+        datetime(2026, 5, 21, 9, 36),
+    ):
+        scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source=MinuteDataSource.TDX_REALTIME.value,
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=True,
+            as_of_time=as_of_time,
+        )
+        broker = context.local_broker
+        assert broker is not None
+        if (
+            repo.get_simulation_daily_run(planned.results[0].run.run_id).status
+            == SimulationDailyRunStatus.INTRADAY_RUNNING
+        ):
+            context = _local_sim_realtime_context_with_real_broker(
+                portfolio_id="portfolio_localsim_generation_authority",
+                release=release,
+                paper_repository=paper_repo,
+                cash=float(broker.query_account().cash),
+                positions=broker.query_positions(),
+            )
+            scheduler.context_provider = StaticSimulationRunContextProvider(
+                by_binding_id={local_binding.binding_id: context}
+            )
+
+    run_id = planned.results[0].run.run_id
+    finished = repo.get_simulation_daily_run(run_id)
+    authority_states = tuple(repo.list_local_sim_execution_states(run_id, authoritative=True))
+    assert authority_states and all(state.is_terminal for state in authority_states)
+    raw_states = dict(finished.run_payload_json["local_sim_execution_states_v1"])
+    for state in authority_states:
+        historical = LocalSimExecutionStateV1.model_validate(
+            {
+                **state.model_dump(mode="json"),
+                "state_id": "",
+                "algo_instance_id": f"historical_{state.algo_instance_id}",
+                "state_hash": "",
+                "created_at": (state.created_at - timedelta(seconds=1)).isoformat(),
+                "updated_at": (state.updated_at - timedelta(seconds=1)).isoformat(),
+            }
+        )
+        raw_states[historical.state_id] = historical.model_dump(mode="json")
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={"local_sim_execution_states_v1": raw_states},
+    )
+
+    post_close = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 7, 5, tzinfo=UTC),
+    )
+    latest = repo.get_simulation_daily_run(run_id)
+    assert post_close.stale_terminalized_count == 1
+    assert latest.status == SimulationDailyRunStatus.SUCCEEDED
+    assert len(repo.list_local_sim_execution_states(run_id)) == 2 * len(authority_states)
+    assert len(repo.list_local_sim_execution_states(run_id, authoritative=True)) == len(authority_states)
+
+
+def test_localsim_state_authority_rejects_duplicate_missing_extra_and_hash_conflict() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="portfolio_localsim_duplicate_active_authority",
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    assert first.results[0].run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    run = repo.get_simulation_daily_run(planned.results[0].run.run_id)
+    authority_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    raw_states = dict(run.run_payload_json["local_sim_execution_states_v1"])
+    active = authority_states[0]
+    duplicate = LocalSimExecutionStateV1.model_validate(
+        {
+            **active.model_dump(mode="json"),
+            "state_id": "",
+            "algo_instance_id": f"duplicate_{active.algo_instance_id}",
+            "state_hash": "",
+        }
+    )
+    raw_states[duplicate.state_id] = duplicate.model_dump(mode="json")
+    repo.update_simulation_daily_run(run.run_id, payload_patch={"local_sim_execution_states_v1": raw_states})
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_ACTIVE_AUTHORITY_CONFLICT"
+
+    raw_states.pop(duplicate.state_id)
+    raw_states.pop(active.state_id)
+    repo.update_simulation_daily_run(run.run_id, payload_patch={"local_sim_execution_states_v1": raw_states})
+    with pytest.raises(InvalidStateTransitionError) as missing_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert missing_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_AUTHORITY_STATE_MISSING"
+
+    raw_states[active.state_id] = active.model_dump(mode="json")
+    extra = LocalSimExecutionStateV1.model_validate(
+        {
+            **active.model_dump(mode="json"),
+            "state_id": "",
+            "intent_id": f"extra_{active.intent_id}",
+            "algo_instance_id": f"extra_{active.algo_instance_id}",
+            "filled_quantity": active.total_quantity,
+            "remaining_quantity": 0,
+            "runtime_status": LocalSimExecutionRuntimeStatus.FILLED.value,
+            "state_hash": "",
+        }
+    )
+    raw_states[extra.state_id] = extra.model_dump(mode="json")
+    repo.update_simulation_daily_run(run.run_id, payload_patch={"local_sim_execution_states_v1": raw_states})
+    with pytest.raises(InvalidStateTransitionError) as extra_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert extra_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_HISTORY_IDENTITY_CONFLICT"
+
+    raw_states.pop(extra.state_id)
+    original_receipt = next(iter(_local_sim_economic_receipt_map(run.run_payload_json).values()))
+    tampered_facts = deepcopy(original_receipt.economic_facts)
+    tampered_facts["state_hashes"][active.state_id] = "0" * 64
+    tampered_receipt = LocalSimEconomicReceiptV1(
+        run_id=original_receipt.run_id,
+        binding_id=original_receipt.binding_id,
+        trade_date=original_receipt.trade_date,
+        plan_id=original_receipt.plan_id,
+        generation=original_receipt.generation,
+        economic_facts=tampered_facts,
+        committed_at=original_receipt.committed_at,
+    )
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={
+            "local_sim_execution_states_v1": raw_states,
+            "local_sim_economic_receipts_v1": {tampered_receipt.receipt_id: tampered_receipt.model_dump(mode="json")},
+        },
+    )
+    with pytest.raises(InvalidStateTransitionError) as hash_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert hash_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_AUTHORITY_HASH_CONFLICT"
+
+
 def _legacy_scheduler_miniqmt_account_level_reconciliation_warning_does_not_fail_current_slot() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
