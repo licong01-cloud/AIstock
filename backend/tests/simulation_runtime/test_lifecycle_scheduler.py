@@ -3166,6 +3166,166 @@ def _legacy_scheduler_miniqmt_submit_timeout_skips_binding_and_continues_later_b
         hanging_broker.release_place.set()
 
 
+def test_scheduler_localsim_watchdog_keeps_one_owned_binding_tick_until_result_is_consumed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: _position_context(portfolio_id="portfolio_binding_single_flight"),
+                qmt_binding.binding_id: _position_context(portfolio_id="portfolio_binding_fast_peer"),
+            }
+        ),
+    )
+    started = threading.Event()
+    release_worker = threading.Event()
+    finished = threading.Event()
+    call_count: dict[str, int] = {}
+    call_count_lock = threading.Lock()
+
+    def slow_binding(**values: Any) -> SimulationSchedulerBindingResult:
+        binding = values["binding"]
+        with call_count_lock:
+            call_count[binding.binding_id] = call_count.get(binding.binding_id, 0) + 1
+        if binding.binding_id == local_binding.binding_id:
+            started.set()
+            assert release_worker.wait(timeout=2.0)
+            finished.set()
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status="LOCALSIM_TEST_COMPLETED",
+        )
+
+    scheduler._run_binding = slow_binding  # type: ignore[method-assign]
+    monkeypatch.setenv("SIMULATION_RUNTIME_BINDING_WATCHDOG_TIMEOUT_SEC", "0.05")
+    try:
+        first = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="TDX_REALTIME",
+            submit=True,
+        )
+        assert started.wait(timeout=0.5)
+        second = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="TDX_REALTIME",
+            submit=True,
+        )
+
+        assert first.failed_count == 0
+        assert second.failed_count == 0
+        first_by_binding = {item.binding_id: item for item in first.results}
+        second_by_binding = {item.binding_id: item for item in second.results}
+        assert first_by_binding[local_binding.binding_id].status == "LOCALSIM_BINDING_TICK_IN_PROGRESS"
+        assert second_by_binding[local_binding.binding_id].status == "LOCALSIM_BINDING_TICK_IN_PROGRESS"
+        assert first_by_binding[local_binding.binding_id].lifecycle_diagnostic["alert"]["auto_clear"] == (
+            "owner_result_consumed"
+        )
+        assert first_by_binding[qmt_binding.binding_id].status == "LOCALSIM_TEST_COMPLETED"
+        assert second_by_binding[qmt_binding.binding_id].status == "LOCALSIM_TEST_COMPLETED"
+        assert call_count == {local_binding.binding_id: 1, qmt_binding.binding_id: 2}
+        in_flight = scheduler.status()["binding_watchdog"]["in_flight"]
+        assert len(in_flight) == 1
+        assert in_flight[0]["binding_id"] == local_binding.binding_id
+        assert in_flight[0]["thread_alive"] is True
+        shutdown_observation = scheduler.shutdown_binding_ticks(wait=False)
+        assert shutdown_observation == {
+            "schema_version": "localsim_binding_tick_shutdown_observation_v1",
+            "wait_requested": False,
+            "observed_owner_count": 1,
+            "thread_alive_count": 1,
+            "all_threads_stopped": False,
+            "alive_binding_ids": [local_binding.binding_id],
+        }
+
+        release_worker.set()
+        assert finished.wait(timeout=1.0)
+        completed = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="TDX_REALTIME",
+            submit=True,
+        )
+        completed_by_binding = {item.binding_id: item for item in completed.results}
+        assert completed_by_binding[local_binding.binding_id].status == "LOCALSIM_TEST_COMPLETED"
+        assert completed_by_binding[qmt_binding.binding_id].status == "LOCALSIM_TEST_COMPLETED"
+        assert call_count == {local_binding.binding_id: 1, qmt_binding.binding_id: 3}
+        assert scheduler.status()["binding_watchdog"]["in_flight_count"] == 0
+    finally:
+        release_worker.set()
+
+
+def test_scheduler_localsim_late_worker_failure_is_consumed_once_and_keeps_original_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_binding_late_failure")}
+        ),
+    )
+    started = threading.Event()
+    release_worker = threading.Event()
+    call_count = 0
+
+    def fail_late(**_values: Any) -> SimulationSchedulerBindingResult:
+        nonlocal call_count
+        call_count += 1
+        started.set()
+        assert release_worker.wait(timeout=2.0)
+        raise DataUnavailableError(
+            "late LocalSIM market snapshot failure",
+            context={
+                "reason_code": "LOCALSIM_TEST_LATE_MARKET_FAILURE",
+                "failure_stage": "LOCAL_SIM_INTRADAY_ADVANCE",
+            },
+        )
+
+    scheduler._run_binding = fail_late  # type: ignore[method-assign]
+    monkeypatch.setenv("SIMULATION_RUNTIME_BINDING_WATCHDOG_TIMEOUT_SEC", "0.05")
+    try:
+        first = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="TDX_REALTIME",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=True,
+        )
+        assert started.wait(timeout=0.5)
+        assert first.results[0].status == "LOCALSIM_BINDING_TICK_IN_PROGRESS"
+        assert first.failed_count == 0
+
+        release_worker.set()
+        deadline = time_module.monotonic() + 1.0
+        while time_module.monotonic() < deadline:
+            in_flight = scheduler.status()["binding_watchdog"]["in_flight"]
+            if in_flight and in_flight[0]["result_ready"]:
+                break
+            time_module.sleep(0.01)
+        else:
+            pytest.fail("late LocalSIM failure was not published by its owning worker")
+
+        failed = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="TDX_REALTIME",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=True,
+        )
+        assert call_count == 1
+        assert failed.failed_count == 1
+        assert failed.results[0].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+        assert failed.results[0].error["context"]["reason_code"] == "LOCALSIM_TEST_LATE_MARKET_FAILURE"
+        assert scheduler.status()["binding_watchdog"]["in_flight_count"] == 0
+    finally:
+        release_worker.set()
+
+
 def _legacy_scheduler_miniqmt_reconcile_timeout_skips_binding_and_continues_later_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
