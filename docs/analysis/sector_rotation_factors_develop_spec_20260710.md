@@ -9,6 +9,12 @@
 - 多 Alpha 基础研发详细设计：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
 - F-014 Phase 2 实现级设计：`docs/architecture/qe_long_trend_evaluation_phase2_compute_cas_f2_design_20260722.md`
 
+> **修订记录（BUG-989，2026-08-06）——数据面零数据库不变量（强制）：QE/多 Alpha 的训练、预测、回测和组合计算数据面不得访问数据库。数据库只用于控制面和结果面。所有计算输入来自具有版本、cutoff 和哈希的冻结 bin/H5/Parquet/sidecar 文件；缺失时 fail closed。**
+>
+> 本文中所有 `market.sw_index_member` / `sw_index_classify` 读取均属于**冻结数据集构建期**导出（生成 `sector_data.h5` 的 `l2_code_id`、`stock2concept` 等），保持合法不变；QE/多 Alpha 运行期只允许读取这些冻结文件（行业 provider 为文件专用 `SectorDataIndustryIdProvider`，原 `SwIndexMemberIndustryIdProvider` 运行期 DB 查询设计已废止；第 1 节 R4 对照为历史实验事实，予以保留）。禁止运行期回退数据库、在线补齐、静默降级或以当前快照替代 PIT。
+>
+> 关联缺口（独立任务，不属于本蓝图交付）：停牌/交易日历输入在冻结 qlib bin 数据集中无 `suspend`/`$paused` 字段，新装配一律以 `qe_suspend_filter_offline_dataset_gap` fail closed，属"离线数据集构建缺口"，由独立的数据集构建任务补齐。
+
 ---
 
 ## 1. 背景与已确认事实

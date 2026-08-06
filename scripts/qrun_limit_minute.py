@@ -1646,6 +1646,21 @@ def _run_main(args):
     yaml = YAML(typ="safe", pure=True)
     config = yaml.load(rendered)
 
+    # BUG-989 zero-DB data plane: rebuild qe_event_risk_policy.json from the
+    # frozen qlib bin dataset (pinned by qe_frozen_build_spec.json) before
+    # qlib init.  No database fallback; pin/identity mismatches fail closed.
+    try:
+        from qe_build_frozen_risk_policy import ensure_frozen_risk_policy_artifact
+    except ImportError:
+        ensure_frozen_risk_policy_artifact = None
+    if ensure_frozen_risk_policy_artifact is not None:
+        ensure_frozen_risk_policy_artifact(cwd=Path.cwd(), print_fn=print)
+    elif (Path.cwd() / "qe_frozen_build_spec.json").exists():
+        raise RuntimeError(
+            "qe_frozen_build_spec.json present but qe_build_frozen_risk_policy.py "
+            "helper is missing from the workspace"
+        )
+
     patch_backtest_config(config)
     apply_qe_fixed_seed(config)
     sys_config(config, config_path=args.yaml_path)

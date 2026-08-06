@@ -31,6 +31,22 @@ QE_DATASET_START_DATE = dt.date(2018, 8, 1)
 QE_DATASET_SIGNAL_END_DATE = dt.date(2026, 6, 30)
 QE_ST_PIT_UNIVERSE_KEY = f"shsz_st_pit_qe_dataset_{QE_DATASET_CONTRACT_ID}"
 
+# Frozen qlib-bin universe pins for the deployed dataset (BUG-989 zero-DB data
+# plane).  These values are computed over the frozen bin files at dataset
+# deploy time: sha256 of instruments/all.txt, calendars/day.txt and
+# meta_export.json plus the snapshot identity they must declare.  The QE
+# computation data plane verifies these pins instead of querying market.*
+# tables; a mismatch, like any missing frozen input, fails closed.  Deploying
+# a new dataset means updating every constant in this module together.
+QE_FROZEN_BIN_SNAPSHOT_ID = "qlib_bin_st_pit_active_daily_candidate_20180801_20260630"
+QE_FROZEN_BIN_UNIVERSE_KEY = "shsz_st_pit_active_v1"
+QE_FROZEN_INSTRUMENTS_SHA256 = "94c9d82de1ba60446d7d6114b39b1066fa3bda3f2a7b9787bb7f0ad4a2a05ca4"
+QE_FROZEN_CALENDAR_SHA256 = "6ab71db126fd8c0173831162d5413691c33bfecbbc81db687d8a2de7cc776031"
+QE_FROZEN_META_EXPORT_SHA256 = "66c5c070b368ec1352ce4031dce4be982d44894e58968bb3ead0cdc5b65eefb3"
+# Universe fingerprint stamped onto QE factor caches: the frozen span file
+# digest, not any market.stock_universe_pit_state row.
+QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256 = QE_FROZEN_INSTRUMENTS_SHA256
+
 
 def require_qe_dataset_window(*, start_date: dt.date, end_date: dt.date) -> None:
     """Fail fast when a QE consumer escapes the deployed dataset contract."""
