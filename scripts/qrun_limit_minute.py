@@ -1646,6 +1646,43 @@ def _run_main(args):
     yaml = YAML(typ="safe", pure=True)
     config = yaml.load(rendered)
 
+    # BUG-989 zero-DB data plane: rebuild qe_event_risk_policy.json from the
+    # frozen qlib bin dataset (pinned by qe_frozen_build_spec.json) before
+    # qlib init.  No database fallback; pin/identity mismatches fail closed.
+    try:
+        from qe_build_frozen_risk_policy import ensure_frozen_risk_policy_artifact
+    except ImportError:
+        ensure_frozen_risk_policy_artifact = None
+    if ensure_frozen_risk_policy_artifact is not None:
+        ensure_frozen_risk_policy_artifact(cwd=Path.cwd(), print_fn=print)
+    elif (Path.cwd() / "qe_frozen_build_spec.json").exists():
+        raise RuntimeError(
+            "qe_frozen_build_spec.json present but qe_build_frozen_risk_policy.py "
+            "helper is missing from the workspace"
+        )
+
+    # BUG-989 continuation: rebuild qe_suspend_filter.json from the frozen
+    # suspend_d candidate dataset pinned in the same build spec.  No database
+    # fallback; pin/identity/coverage mismatches fail closed.
+    try:
+        from qe_build_frozen_suspend_filter import ensure_frozen_suspend_filter_artifact
+    except ImportError:
+        ensure_frozen_suspend_filter_artifact = None
+    if ensure_frozen_suspend_filter_artifact is not None:
+        ensure_frozen_suspend_filter_artifact(cwd=Path.cwd(), print_fn=print)
+    else:
+        _spec_path = Path.cwd() / "qe_frozen_build_spec.json"
+        if _spec_path.exists():
+            try:
+                _spec = json.loads(_spec_path.read_text(encoding="utf-8"))
+            except Exception:
+                _spec = {}
+            if isinstance(_spec, dict) and isinstance(_spec.get("suspend"), dict):
+                raise RuntimeError(
+                    "qe_frozen_build_spec.json declares a suspend section but "
+                    "qe_build_frozen_suspend_filter.py helper is missing from the workspace"
+                )
+
     patch_backtest_config(config)
     apply_qe_fixed_seed(config)
     sys_config(config, config_path=args.yaml_path)

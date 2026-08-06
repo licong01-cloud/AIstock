@@ -7,7 +7,6 @@ import importlib.util
 import inspect
 import pickle
 import types
-from contextlib import contextmanager
 from pathlib import Path
 import yaml
 
@@ -53,8 +52,12 @@ from backend.services.quantevolver.stock_pool_sync import (
     sync_stock_pool_to_remote_node,
 )
 from backend.services.quantevolver.qe_dataset_contract import (
-    QE_DATASET_SIGNAL_END_DATE,
-    QE_DATASET_START_DATE,
+    QE_DATASET_CONTRACT_ID,
+    QE_FROZEN_BIN_SNAPSHOT_ID,
+    QE_FROZEN_BIN_UNIVERSE_KEY,
+    QE_FROZEN_CALENDAR_SHA256,
+    QE_FROZEN_INSTRUMENTS_SHA256,
+    QE_FROZEN_META_EXPORT_SHA256,
     QE_ST_PIT_UNIVERSE_KEY,
 )
 
@@ -651,25 +654,21 @@ def test_qe_risk_policy_wraps_score_weighted_v2_strategy():
     assert "filter_suspended_on_signal: true" in yaml_text
 
 
-def test_qe_risk_policy_runtime_prepares_local_artifact(monkeypatch):
+def test_qe_risk_policy_runtime_prepares_frozen_build_spec(monkeypatch):
     composer = ConfigComposer()
     calls = []
 
-    def fake_build_risk_policy_artifact(data_split, custom_params):
-        calls.append((data_split, custom_params["risk_policy"]["st_universe_key"]))
+    def fake_build_spec(data_split, custom_params, *, qlib_data_path=None):
+        calls.append((data_split, custom_params["risk_policy"]["st_universe_key"], qlib_data_path))
         return json.dumps(
             {
-                "enabled": True,
-                "contract": "stock_event_risk_policy_v1",
-                "active_spans": [
-                    {"ts_code": "600000.SH", "eligible_start": "2021-01-01", "eligible_end": "2021-12-31"},
-                    {"ts_code": "000001.SZ", "eligible_start": "2021-01-01", "eligible_end": "2021-12-31"},
-                ],
+                "schema_version": "qe_frozen_build_spec_v1",
+                "kind": "qe_event_risk_policy",
             }
         )
 
-    monkeypatch.setattr(composer, "_build_qe_risk_policy_artifact", fake_build_risk_policy_artifact)
-    custom_params, artifact = composer._prepare_risk_policy_runtime(
+    monkeypatch.setattr(composer, "_build_qe_frozen_risk_policy_spec", fake_build_spec)
+    custom_params, spec = composer._prepare_risk_policy_runtime(
         custom_params={
             "risk_policy": {
                 "enabled": True,
@@ -679,112 +678,78 @@ def test_qe_risk_policy_runtime_prepares_local_artifact(monkeypatch):
             }
         },
         data_split=DATA_SPLIT,
+        qlib_data_path="/frozen/bin",
     )
 
-    assert artifact.startswith('{"enabled": true')
-    assert calls == [(DATA_SPLIT, QE_ST_PIT_UNIVERSE_KEY)]
+    assert spec.startswith('{"schema_version": "qe_frozen_build_spec_v1"')
+    assert calls == [(DATA_SPLIT, QE_ST_PIT_UNIVERSE_KEY, "/frozen/bin")]
     assert custom_params["risk_policy_enabled"] is True
     assert custom_params["risk_policy_file"] == RISK_POLICY_FILE
     assert custom_params["risk_policy_strict"] is True
-    assert custom_params["quote_universe_codes"] == ["000001.SZ", "600000.SH"]
+    assert "quote_universe_codes" not in custom_params
 
 
-def test_qe_risk_policy_uses_immutable_dataset_pit_snapshot(monkeypatch):
+def test_qe_frozen_risk_policy_spec_pins_frozen_dataset_without_db(monkeypatch):
     import backend.services.quantevolver.config_composer as composer_module
-    from backend.services.stock_universe_pit_service import StockUniversePitService
 
-    ensure_calls = []
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("composer must not touch the DB for the computation data plane")
 
-    def fake_ensure(_self, **kwargs):
-        ensure_calls.append(kwargs)
-        return {"status": "ready", "rebuilt": False}
+    monkeypatch.setattr(composer_module, "get_conn", _boom)
 
-    class FakeCursor:
-        sql = ""
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def execute(self, sql, _params):
-            self.sql = sql
-
-        def fetchall(self):
-            if "FROM market.trading_calendar" in self.sql:
-                return [(pd.Timestamp("2021-07-01").date(),), (pd.Timestamp("2021-12-31").date(),)]
-            if "FROM market.stock_universe_pit_spans" in self.sql:
-                return []
-            raise AssertionError(f"unexpected fetchall SQL: {self.sql}")
-
-        def fetchone(self):
-            if "FROM market.stock_universe_pit_state" in self.sql:
-                return (
-                    QE_ST_PIT_UNIVERSE_KEY,
-                    "st_pub_next_trade_restore_active_l_v1",
-                    "st_only_active",
-                    "ready",
-                    False,
-                    "fingerprint",
-                    None,
-                )
-            raise AssertionError(f"unexpected fetchone SQL: {self.sql}")
-
-    class FakeConn:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def cursor(self):
-            return FakeCursor()
-
-    monkeypatch.setattr(StockUniversePitService, "ensure_immutable_dataset_snapshot", fake_ensure)
-    monkeypatch.setattr(composer_module, "get_conn", lambda: FakeConn())
-
-    artifact = ConfigComposer()._build_qe_risk_policy_artifact(
-        DATA_SPLIT,
-        {"risk_policy": {"enabled": True, "providers": ["st_pit"]}},
+    spec = json.loads(
+        ConfigComposer()._build_qe_frozen_risk_policy_spec(
+            DATA_SPLIT,
+            # Mirrors the ensure_qe_risk_policy-enforced payload shape.
+            {"risk_policy": {"enabled": True, "providers": ["st_pit"], "policy_version": "stock_event_risk_policy_v1"}},
+            qlib_data_path="/frozen/bin",
+        )
     )
 
-    assert json.loads(artifact)["end_date"] == DATA_SPLIT["backtest_end"]
-    assert ensure_calls == [
-        {
-            "universe_key": QE_ST_PIT_UNIVERSE_KEY,
-            "start_date": QE_DATASET_START_DATE,
-            "end_date": QE_DATASET_SIGNAL_END_DATE,
-            "bootstrap_if_missing": True,
-        }
-    ]
+    assert spec["schema_version"] == "qe_frozen_build_spec_v1"
+    assert spec["kind"] == "qe_event_risk_policy"
+    assert spec["provider_uri_day"] == "/frozen/bin"
+    assert spec["start_date"] == DATA_SPLIT["test_start"]
+    assert spec["end_date"] == DATA_SPLIT["backtest_end"]
+    assert spec["profile"]["providers"] == ["st_pit"]
+    assert spec["profile"]["contract"] == "stock_event_risk_policy_v1"
+    assert spec["dataset"]["contract_id"] == QE_DATASET_CONTRACT_ID
+    assert spec["dataset"]["st_universe_key"] == QE_ST_PIT_UNIVERSE_KEY
+    assert spec["pins"]["snapshot_id"] == QE_FROZEN_BIN_SNAPSHOT_ID
+    assert spec["pins"]["universe_key"] == QE_FROZEN_BIN_UNIVERSE_KEY
+    assert spec["pins"]["instruments_sha256"] == QE_FROZEN_INSTRUMENTS_SHA256
+    assert spec["pins"]["calendar_sha256"] == QE_FROZEN_CALENDAR_SHA256
+    assert spec["pins"]["meta_export_sha256"] == QE_FROZEN_META_EXPORT_SHA256
 
 
-def test_qe_risk_policy_runtime_defaults_and_overwrites_stale_quote_universe(monkeypatch):
-    composer = ConfigComposer()
-
-    def fake_build_risk_policy_artifact(data_split, custom_params):
-        assert custom_params["risk_policy"]["enabled"] is True
-        assert custom_params["risk_policy"]["providers"] == ["st_pit"]
-        return json.dumps(
-            {
-                "enabled": True,
-                "contract": "stock_event_risk_policy_v1",
-                "active_spans": [
-                    {"ts_code": "000001.SZ", "eligible_start": "2021-01-01", "eligible_end": "2021-12-31"},
-                ],
-            }
+def test_qe_frozen_risk_policy_spec_requires_provider_uri():
+    with pytest.raises(RuntimeError, match="reason_code=qe_frozen_build_spec_invalid"):
+        ConfigComposer()._build_qe_frozen_risk_policy_spec(
+            DATA_SPLIT,
+            {"risk_policy": {"enabled": True, "providers": ["st_pit"]}},
+            qlib_data_path="",
         )
 
-    monkeypatch.setattr(composer, "_build_qe_risk_policy_artifact", fake_build_risk_policy_artifact)
-    custom_params, artifact = composer._prepare_risk_policy_runtime(
+
+def test_qe_risk_policy_runtime_defaults_and_drops_stale_quote_universe(monkeypatch):
+    composer = ConfigComposer()
+
+    def fake_build_spec(data_split, custom_params, *, qlib_data_path=None):
+        assert custom_params["risk_policy"]["enabled"] is True
+        assert custom_params["risk_policy"]["providers"] == ["st_pit"]
+        return json.dumps({"schema_version": "qe_frozen_build_spec_v1"})
+
+    monkeypatch.setattr(composer, "_build_qe_frozen_risk_policy_spec", fake_build_spec)
+    custom_params, spec = composer._prepare_risk_policy_runtime(
         custom_params={"topk": 20, "quote_universe_codes": ["STALE.SH"]},
         data_split=DATA_SPLIT,
     )
 
-    assert json.loads(artifact)["enabled"] is True
+    assert json.loads(spec)["schema_version"] == "qe_frozen_build_spec_v1"
     assert custom_params["risk_policy"]["st_universe_key"] == QE_ST_PIT_UNIVERSE_KEY
-    assert custom_params["quote_universe_codes"] == ["000001.SZ"]
+    # The quote/sell universe defaults to qlib "all" (the frozen bin universe);
+    # no span-derived quote_universe_codes list is assembled anymore.
+    assert "quote_universe_codes" not in custom_params
 
 
 def test_qe_risk_policy_runtime_rejects_disabled_policy():
@@ -795,39 +760,23 @@ def test_qe_risk_policy_runtime_rejects_disabled_policy():
         )
 
 
-def test_v25_execution_prepares_suspend_artifact_without_signal_filter(monkeypatch):
-    composer = ConfigComposer()
-    calls = []
-
-    def fake_build_suspend_filter_artifact(data_split, *, strict_audit=True):
-        calls.append((data_split, strict_audit))
-        return '{"enabled": true, "suspended_by_date": {}}'
-
-    monkeypatch.setattr(composer, "_build_suspend_filter_artifact", fake_build_suspend_filter_artifact)
-    custom_params, artifact = composer._prepare_suspend_filter_runtime(
+def test_v25_execution_suspend_filter_wires_frozen_artifact():
+    custom_params, artifact = ConfigComposer()._prepare_suspend_filter_runtime(
         custom_params={},
         data_split=DATA_SPLIT,
         strategy_info=None,
         execution_algo="V25_TWO_STAGE",
     )
-
-    assert artifact == '{"enabled": true, "suspended_by_date": {}}'
-    assert calls == [(DATA_SPLIT, True)]
+    # The artifact itself is rebuilt on the compute node from the frozen
+    # suspend_d candidate dataset pinned in qe_frozen_build_spec.json; the
+    # composer only wires the strict runtime contract.
+    assert artifact is None
     assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
     assert custom_params["suspend_filter_strict"] is True
-    assert "filter_suspended_on_signal" not in custom_params
 
 
-def test_qe_risk_policy_prepares_suspend_artifact_for_signal_filter(monkeypatch):
-    composer = ConfigComposer()
-    calls = []
-
-    def fake_build_suspend_filter_artifact(data_split, *, strict_audit=True):
-        calls.append((data_split, strict_audit))
-        return '{"enabled": true, "suspended_by_date": {}}'
-
-    monkeypatch.setattr(composer, "_build_suspend_filter_artifact", fake_build_suspend_filter_artifact)
-    custom_params, artifact = composer._prepare_suspend_filter_runtime(
+def test_qe_risk_policy_suspend_filter_wires_frozen_artifact():
+    custom_params, artifact = ConfigComposer()._prepare_suspend_filter_runtime(
         custom_params={
             "risk_policy": {
                 "enabled": True,
@@ -839,10 +788,7 @@ def test_qe_risk_policy_prepares_suspend_artifact_for_signal_filter(monkeypatch)
         strategy_info=None,
         execution_algo=None,
     )
-
-    assert artifact == '{"enabled": true, "suspended_by_date": {}}'
-    assert calls == [(DATA_SPLIT, True)]
-    assert custom_params["filter_suspended_on_signal"] is True
+    assert artifact is None
     assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
     assert custom_params["suspend_filter_strict"] is True
 
@@ -2185,77 +2131,28 @@ class _MiniGatsDataset:
         return self._segments[segment]
 
 
-class _FakeSwMemberCursor:
-    def __init__(self, rows):
-        self._rows = rows
-        self.executed = []
-        self._result = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def execute(self, sql, params):
-        symbols, trade_date, asof_date = params
-        assert "ROW_NUMBER() OVER" in sql
-        assert "in_date <= %s" in sql
-        assert "(out_date IS NULL OR out_date >= %s)" in sql
-        assert trade_date == asof_date
-        self.executed.append({"sql": sql, "params": params})
-        selected = []
-        for row in self._rows:
-            ts_code, l2_code, in_date, out_date = row[:4]
-            if ts_code not in symbols:
-                continue
-            if pd.Timestamp(in_date).date() > trade_date:
-                continue
-            if out_date is not None and pd.Timestamp(out_date).date() < trade_date:
-                continue
-            selected.append((ts_code, l2_code, pd.Timestamp(in_date).date(), out_date))
-        selected.sort(
-            key=lambda item: (
-                item[0],
-                pd.Timestamp(item[2]),
-                pd.Timestamp(item[3]) if item[3] is not None else pd.Timestamp.max,
-            ),
-            reverse=True,
-        )
-        result = {}
-        for row in selected:
-            result.setdefault(row[0], row)
-        self._result = sorted(result.values(), key=lambda item: item[0])
-
-    def fetchall(self):
-        return list(self._result)
+def _write_sector_parquet(tmp_path, rows, *, name="sector_data_fixture.parquet"):
+    """Write a frozen sector fixture: rows are (date, instrument, l2_code_id)."""
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp(day), instrument) for day, instrument, _code in rows],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame(
+        {"l2_code_id": [code for _day, _instrument, code in rows]},
+        index=index,
+    )
+    path = tmp_path / name
+    frame.to_parquet(path)
+    return path
 
 
-class _FakeSwMemberConn:
-    def __init__(self, rows):
-        self.cursor_obj = _FakeSwMemberCursor(rows)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def cursor(self):
-        return self.cursor_obj
-
-
-def _fake_sw_member_conn_factory(rows):
-    conns = []
-
-    @contextmanager
-    def _factory():
-        conn = _FakeSwMemberConn(rows)
-        conns.append(conn)
-        yield conn
-
-    _factory.conns = conns
-    return _factory
+def _sector_rows_from_spans(spans):
+    """Expand (instrument, l2_code_id, start, end) spans into bdate daily rows."""
+    rows = []
+    for instrument, code, start, end in spans:
+        for day in pd.bdate_range(start, end):
+            rows.append((day, instrument, code))
+    return rows
 
 
 def test_gats_seed_composes_direct_qlib_model_with_tsdataseth():
@@ -3808,11 +3705,14 @@ def test_efficient_gats_industry_embedding_updates_weights_changes_predictions_a
     efficient_gats = _import_efficient_gats_module()
 
     dataset = _MiniGatsDataset(include_industry=False)
-    rows = [(f"STK{i:03d}", f"8010{i // 2:02d}.SI", "2020-01-01", None) for i in range(1, dataset.stocks)]
-    provider = provider_mod.SwIndexMemberIndustryIdProvider(
-        min_coverage=0.80,
-        conn_factory=_fake_sw_member_conn_factory(rows),
-    )
+    days = pd.bdate_range("2021-01-01", "2021-01-15")
+    rows = [
+        (day, f"STK{i:03d}", i // 2)
+        for day in days
+        for i in range(1, dataset.stocks)
+    ]
+    source_path = _write_sector_parquet(tmp_path, rows)
+    provider = provider_mod.SectorDataIndustryIdProvider(source_path=source_path, min_coverage=0.80)
     common_kwargs = dict(
         d_feat=dataset.d_feat,
         hidden_size=4,
@@ -3910,7 +3810,7 @@ def test_efficient_gats_industry_embedding_resident_and_streaming_side_channel()
     assert torch.equal(resident_ids.cpu(), streaming_ids.cpu())
     assert resident_ids.shape == (dataset.stocks,)
 
-def test_gats_industry_provider_db_pit_asof_migration_and_no_future_leakage():
+def test_gats_industry_provider_file_pit_asof_and_no_future_leakage(tmp_path):
     provider_mod = _import_gats_industry_provider_module()
 
     index = pd.MultiIndex.from_tuples(
@@ -3921,95 +3821,84 @@ def test_gats_industry_provider_db_pit_asof_migration_and_no_future_leakage():
         ],
         names=["datetime", "instrument"],
     )
-    rows = [
-        ("000001.SZ", "801010.SI", "2021-01-01", "2021-01-04"),
-        ("000001.SZ", "801020.SI", "2021-01-05", None),
-        ("000002.SZ", "801030.SI", "2021-01-06", None),
-    ]
-    conn_factory = _fake_sw_member_conn_factory(rows)
-
-    provider = provider_mod.SwIndexMemberIndustryIdProvider(
-        min_coverage=0.50,
-        conn_factory=conn_factory,
+    rows = _sector_rows_from_spans(
+        [
+            ("000001.SZ", 10, "2021-01-01", "2021-01-04"),
+            ("000001.SZ", 20, "2021-01-05", "2021-01-06"),
+            ("000002.SZ", 30, "2021-01-06", "2021-01-06"),
+        ]
     )
+    source_path = _write_sector_parquet(tmp_path, rows)
+
+    provider = provider_mod.SectorDataIndustryIdProvider(source_path=source_path, min_coverage=0.50)
     values = provider(index)
 
-    assert values.loc[(pd.Timestamp("2021-01-04"), "SZ000001")] == "801010.SI"
-    assert values.loc[(pd.Timestamp("2021-01-05"), "000001.SZ")] == "801020.SI"
+    assert values.loc[(pd.Timestamp("2021-01-04"), "SZ000001")] == 10
+    assert values.loc[(pd.Timestamp("2021-01-05"), "000001.SZ")] == 20
+    # 000002.SZ first becomes known on 2021-01-06; the backward as-of lookup
+    # must not leak that future row into 2021-01-05.
     assert pd.isna(values.loc[(pd.Timestamp("2021-01-05"), "000002.SZ")])
     assert provider.last_coverage["covered_rows"] == 2
-    assert provider.last_coverage["source"] == "market.sw_index_member"
-    executed_sql = "\n".join(conn.cursor_obj.executed[0]["sql"] for conn in conn_factory.conns)
-    assert "ROW_NUMBER() OVER" in executed_sql
-    assert "in_date <= %s" in executed_sql
-    assert "(out_date IS NULL OR out_date >= %s)" in executed_sql
+    assert provider.last_coverage["source"] == str(source_path)
+    assert provider.last_coverage["id_source"] == "l2_code_id"
 
 
-def test_gats_industry_provider_normalises_qlib_and_ts_code_instruments():
+def test_gats_industry_provider_normalises_qlib_and_ts_code_instruments(tmp_path):
     provider_mod = _import_gats_industry_provider_module()
 
-    conn_factory = _fake_sw_member_conn_factory([("000001.SZ", "801010.SI", "2021-01-01", None)])
+    source_path = _write_sector_parquet(tmp_path, [("2021-01-04", "000001.SZ", 10)])
     target_index = pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "SZ000001")], names=["datetime", "instrument"])
 
-    provider = provider_mod.SwIndexMemberIndustryIdProvider(
-        min_coverage=1.0,
-        conn_factory=conn_factory,
-    )
+    provider = provider_mod.SectorDataIndustryIdProvider(source_path=source_path, min_coverage=1.0)
     values = provider(target_index)
 
-    assert values.loc[(pd.Timestamp("2021-01-04"), "SZ000001")] == "801010.SI"
+    assert values.loc[(pd.Timestamp("2021-01-04"), "SZ000001")] == 10
     assert provider.last_coverage["coverage"] == 1.0
 
 
-def test_gats_industry_provider_lookup_failure_and_coverage_zero_are_loud():
+def test_gats_industry_provider_missing_file_and_zero_coverage_fail_loud(tmp_path):
     provider_mod = _import_gats_industry_provider_module()
-
-    @contextmanager
-    def failing_factory():
-        raise RuntimeError("db offline")
-        yield
 
     index = pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "MISSING")], names=["datetime", "instrument"])
 
-    provider = provider_mod.SwIndexMemberIndustryIdProvider(min_coverage=0.90, conn_factory=failing_factory)
-    with pytest.raises(provider_mod.GatsIndustryProviderError, match="reason_code=qe_gats_industry_lookup_failed"):
+    provider = provider_mod.SectorDataIndustryIdProvider(
+        source_path=tmp_path / "does_not_exist.parquet",
+        min_coverage=0.90,
+    )
+    with pytest.raises(provider_mod.GatsIndustryProviderError, match="reason_code=qe_gats_industry_source_missing"):
         provider(index)
 
-    provider = provider_mod.SwIndexMemberIndustryIdProvider(
-        min_coverage=0.90,
-        conn_factory=_fake_sw_member_conn_factory([("STK000", "801010.SI", "2021-01-01", None)]),
-    )
+    source_path = _write_sector_parquet(tmp_path, [("2021-01-04", "STK000", 10)])
+    provider = provider_mod.SectorDataIndustryIdProvider(source_path=source_path, min_coverage=0.90)
     with pytest.raises(provider_mod.GatsIndustryProviderError, match="reason_code=qe_gats_industry_coverage_below_threshold"):
         provider(index)
 
 
-def test_gats_industry_provider_missing_db_password_fails_loud(monkeypatch):
+def test_gats_industry_provider_missing_explicit_l2_code_id_fails_loud(tmp_path):
     provider_mod = _import_gats_industry_provider_module()
-    for key in ("TDX_DB_PASSWORD", "POSTGRES_PASSWORD", "PG_PASSWORD"):
-        monkeypatch.delenv(key, raising=False)
 
-    def _unexpected_connect(**_kwargs):
-        raise AssertionError("psycopg2.connect must not run without a password")
-
-    monkeypatch.setitem(sys.modules, "psycopg2", types.SimpleNamespace(connect=_unexpected_connect))
-
-    with pytest.raises(provider_mod.GatsIndustryProviderError) as exc_info:
-        with provider_mod._default_conn_factory():
-            pass
-
-    assert str(exc_info.value) == (
-        "reason_code=qe_gats_industry_db_password_missing: "
-        "set one of TDX_DB_PASSWORD/POSTGRES_PASSWORD/PG_PASSWORD"
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2021-01-04"), "STK000")],
+        names=["datetime", "instrument"],
     )
+    # A file without the explicit l2_code_id column must fail loud; inferring
+    # industry identity from feature signatures is forbidden.
+    frame = pd.DataFrame({"l2_code": ["801010.SI"]}, index=index)
+    source_path = tmp_path / "sector_no_explicit_id.parquet"
+    frame.to_parquet(source_path)
+
+    provider = provider_mod.SectorDataIndustryIdProvider(source_path=source_path, min_coverage=0.90)
+    with pytest.raises(provider_mod.GatsIndustryProviderError, match="reason_code=qe_gats_industry_source_schema_invalid"):
+        provider(index)
 
 
 def test_gats_industry_provider_off_mode_does_not_resolve_source(tmp_path, monkeypatch):
     provider_mod = _import_gats_industry_provider_module()
 
     def _boom(*_args, **_kwargs):
-        raise AssertionError("DB should not be resolved in off mode")
+        raise AssertionError("provider must not be constructed in off mode")
 
-    monkeypatch.setattr(provider_mod, "_default_conn_factory", _boom)
+    monkeypatch.setattr(provider_mod, "SectorDataIndustryIdProvider", _boom)
     result = provider_mod.inject_gats_industry_provider_if_needed(
         {"task": {"model": {"kwargs": {"gats_adjacency_mode": "off"}}}},
         cwd=tmp_path,
@@ -4022,10 +3911,11 @@ def test_gats_industry_provider_off_mode_does_not_resolve_source(tmp_path, monke
 def test_gats_industry_provider_injects_for_embedding_on_without_db_connect(tmp_path, monkeypatch):
     provider_mod = _import_gats_industry_provider_module()
 
-    def _boom(*_args, **_kwargs):
-        raise AssertionError("inject should not connect before fit/predict")
-
-    monkeypatch.setattr(provider_mod, "_default_conn_factory", _boom)
+    source_path = _write_sector_parquet(
+        tmp_path,
+        [("2021-01-04", "000001.SZ", 10)],
+        name="static_factors.parquet",
+    )
     config = {"task": {"model": {"kwargs": {"gats_adjacency_mode": "off", "gats_industry_embedding": "on"}}}}
 
     provider = provider_mod.inject_gats_industry_provider_if_needed(
@@ -4034,25 +3924,28 @@ def test_gats_industry_provider_injects_for_embedding_on_without_db_connect(tmp_
         print_fn=lambda *_args, **_kwargs: None,
     )
 
-    assert isinstance(provider, provider_mod.SwIndexMemberIndustryIdProvider)
+    assert isinstance(provider, provider_mod.SectorDataIndustryIdProvider)
     assert config["task"]["model"]["kwargs"]["gats_industry_id_provider"] is provider
+    assert provider.source_path == str(source_path)
 
 
-def test_gats_industry_provider_pickle_does_not_embed_source_rows_or_connection():
+def test_gats_industry_provider_pickle_does_not_embed_source_rows(tmp_path):
     provider_mod = _import_gats_industry_provider_module()
-    conn_factory = _fake_sw_member_conn_factory([("STK000", "801010.SI", "2021-01-01", None)])
-    provider = provider_mod.SwIndexMemberIndustryIdProvider(min_coverage=1.0, conn_factory=conn_factory)
+    source_path = _write_sector_parquet(tmp_path, [("2021-01-04", "STK000", 10)])
+    provider = provider_mod.SectorDataIndustryIdProvider(source_path=source_path, min_coverage=1.0)
     index = pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "STK000")], names=["datetime", "instrument"])
 
-    assert provider(index).iloc[0] == "801010.SI"
-    assert provider._daily_cache
+    assert provider(index).iloc[0] == 10
+    assert provider._frame is not None
     blob = pickle.dumps(provider)
     restored = pickle.loads(blob)
 
-    assert b"801010.SI" not in blob
-    assert restored.conn_factory is None
-    assert restored._daily_cache == {}
+    assert b"STK000" not in blob
+    assert restored._frame is None
     assert restored.coverage_history
+    assert restored.source_path == str(source_path)
+    # The restored provider lazily reloads the frozen file on next use.
+    assert restored(index).iloc[0] == 10
 
 
 def test_efficient_gats_industry_bias_runner_injection_fit_predict(tmp_path):
@@ -4062,11 +3955,14 @@ def test_efficient_gats_industry_bias_runner_injection_fit_predict(tmp_path):
     efficient_gats = _import_efficient_gats_module()
 
     dataset = _MiniGatsDataset(include_industry=False)
-    rows = [(f"STK{i:03d}", f"8010{i // 2:02d}.SI", "2020-01-01", None) for i in range(dataset.stocks)]
-    provider = provider_mod.SwIndexMemberIndustryIdProvider(
-        min_coverage=0.90,
-        conn_factory=_fake_sw_member_conn_factory(rows),
-    )
+    days = pd.bdate_range("2021-01-01", "2021-01-15")
+    rows = [
+        (day, f"STK{i:03d}", i // 2)
+        for day in days
+        for i in range(dataset.stocks)
+    ]
+    source_path = _write_sector_parquet(tmp_path, rows)
+    provider = provider_mod.SectorDataIndustryIdProvider(source_path=source_path, min_coverage=0.90)
 
     model = efficient_gats.EfficientGATs(
         d_feat=dataset.d_feat,
