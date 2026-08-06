@@ -15,7 +15,8 @@
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260806_BUG-989-qe-alpha-postgresql.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "docs/standards/aistock_runtime_targets_v1.yaml"
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/history/qe/20260806_134857_l3_qe-read-only-workspace-access-regression.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-989",
@@ -44,7 +45,8 @@
       "docs/architecture/qe_efficient_gats_l2_industry_embedding_f1_design_20260710.md",
       "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
       "tests/aistock_validation/catalog/file_ownership.yaml",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/history/qe/20260806_134857_l3_qe-read-only-workspace-access-regression.md"
     ],
     "ownership": {
       "changed_files": [
@@ -52,7 +54,8 @@
         "docs/architecture/qe_efficient_gats_l2_industry_embedding_f1_design_20260710.md",
         "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
         "tests/aistock_validation/catalog/file_ownership.yaml",
-        "docs/standards/aistock_runtime_targets_v1.yaml"
+        "docs/standards/aistock_runtime_targets_v1.yaml",
+        "tests/aistock_validation/history/qe/20260806_134857_l3_qe-read-only-workspace-access-regression.md"
       ],
       "impacted_modules": [
         "qe.sector_risk_overlay",
