@@ -2,8 +2,10 @@
   "actual": "PostgreSQL UndefinedColumn; run remains SUBMITTING; durable batch absent; broker_called=false.",
   "allowed_write_scope": [
     "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+    "backend/services/simulation_runtime/lifecycle.py",
     "backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py",
     "backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260806_BUG-987-p0-miniqmt-kernel-v2-pre-run-reads-nonexistent-parent-benchmark-release.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -24,6 +26,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260806-293ad843a783",
       "timestamp": "2026-08-06T02:31:18.788824Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Production call-chain audit proved that product runtime construction occurs after SUBMITTING and outside lifecycle mark_submit_failure; added lifecycle source and its direct scheduler test so the fix closes both schema authority and ambiguous no-broker run state.",
+      "timestamp": "2026-08-06T02:45:29.5887895Z"
     }
   ],
   "evidence_uris": [
@@ -34,20 +42,25 @@
     "added_files": [],
     "changed_files": [
       "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+      "backend/services/simulation_runtime/lifecycle.py",
       "backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py",
       "backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+        "backend/services/simulation_runtime/lifecycle.py",
         "backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py",
         "backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
         "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
       ],
       "impacted_modules": [
         "miniqmt_execution_runtime",
         "paper_v2",
+        "simulation_runtime",
         "docs.architecture",
         "validation.module_quality"
       ],
@@ -60,6 +73,16 @@
           "primary_module": "miniqmt_execution_runtime",
           "risk_level": "critical",
           "rule_id": "miniqmt_execution_runtime_services"
+        },
+        {
+          "file": "backend/services/simulation_runtime/lifecycle.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
         },
         {
           "file": "backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py",
@@ -80,6 +103,16 @@
           "rule_id": "miniqmt_execution_runtime_tests"
         },
         {
+          "file": "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
           "file": "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
           "impact_modules": [
             "validation.module_quality"
@@ -95,8 +128,10 @@
       ],
       "suggested_scope": [
         "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+        "backend/services/simulation_runtime/lifecycle.py",
         "backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py",
         "backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
         "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
       ],
       "unmatched_files": []
@@ -104,8 +139,10 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/miniqmt_execution_runtime/kernel_product_repository.py",
+      "backend/services/simulation_runtime/lifecycle.py",
       "backend/tests/miniqmt_execution_runtime/test_kernel_product_repository_postgres.py",
       "backend/tests/miniqmt_execution_runtime/test_kernel_product_cutover.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
     ]
   },
@@ -126,14 +163,21 @@
   "reproduce_command": "GET /api/v1/simulation-runtime/runs/simrun_717960dc879ccef1 shows PRE_RUN_FAILED release_hash does not exist",
   "required_verification": [
     "l0",
-    "miniqmt_execution_runtime_l2"
+    "miniqmt_execution_runtime_l2",
+    "simulation_core_l2"
   ],
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "fresh_process_evidence": [
+      "python -m nox -s miniqmt_execution_runtime_l2 -> exit 0; persistent source loaded in fresh Python process"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
