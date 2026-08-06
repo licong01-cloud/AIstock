@@ -155,7 +155,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "fresh Python pytest process ran backend/tests/unified_engine/test_qe_config_truth.py + backend/tests/unified_engine/test_qe_data_plane_zero_db.py + backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 145 passed, 38 skipped (torch/qlib importorskip, pre-existing)"
+      "fresh Python pytest process ran backend/tests/unified_engine/test_qe_config_truth.py + backend/tests/unified_engine/test_qe_data_plane_zero_db.py + backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 145 passed, 38 skipped (torch/qlib importorskip, pre-existing)",
+      "fresh Python pytest interpreter loaded the reworked provider/composer/helper modules and ran the focused trio -> 145 passed, 38 skipped"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
