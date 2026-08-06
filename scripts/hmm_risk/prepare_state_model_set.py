@@ -3010,11 +3010,15 @@ def _validate_b3_d1_historical_request_authority(
 
 def _c010_a5_semantic_payload(value: Any) -> Any:
     if isinstance(value, dict):
-        return {
+        normalized = {
             key: _c010_a5_semantic_payload(item)
             for key, item in sorted(value.items())
             if key not in B3_D1_C010_A5_LINEAGE_EXCLUDED_FIELDS
         }
+        authority_identities = normalized.get("authority_identities")
+        if isinstance(authority_identities, list):
+            normalized["authority_identities"] = sorted(authority_identities, key=canonical_sha256)
+        return normalized
     if isinstance(value, list):
         return [_c010_a5_semantic_payload(item) for item in value]
     return value
