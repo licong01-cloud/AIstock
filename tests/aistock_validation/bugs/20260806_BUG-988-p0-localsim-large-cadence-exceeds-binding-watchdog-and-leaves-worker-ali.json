@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-988",
-  "closed_at": null,
+  "closed_at": "2026-08-06T06:57:14.587351Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -147,8 +147,8 @@
   },
   "first_seen_at": "2026-08-06T02:33:39.819990Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "da696982442759d58245f91fa36f42611f53b1a5",
+  "fixed_at": "2026-08-06T05:10:08Z",
   "github_issue_number": 3170,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3170",
   "last_seen_at": "2026-08-06T02:33:39.819990Z",
@@ -156,6 +156,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3175",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -175,8 +176,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-988/post-restart-verify.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -186,7 +188,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -195,6 +197,13 @@
     "fingerprint": "aad5548bf8db98f0e9d231a8",
     "source_event_id": "FE-20260806-aad5548bf8db"
   },
+  "validation_evidence": [
+    "validation-receipt: id=ef03e066007d3f7f commit=e833bf9f2634ef8e87e335c739edf90b1d9f2e95 kind=nox plan=paper_v2_backend status=passed command=`python -m nox -s paper_v2_backend` result=`1051 passed, 2 skipped, 2 xfailed`",
+    "validation-receipt: id=c6228fa483380e2a commit=e833bf9f2634ef8e87e335c739edf90b1d9f2e95 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`413 passed`",
+    "validation-receipt: id=d0c73f00360a33d2 commit=e833bf9f2634ef8e87e335c739edf90b1d9f2e95 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking 0`",
+    "validation-receipt: id=e3d9bc8059d214f9 commit=e833bf9f2634ef8e87e335c739edf90b1d9f2e95 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed, 14/14 mapped`",
+    "validation-receipt: id=eeb30fcbe075aa30 commit=e833bf9f2634ef8e87e335c739edf90b1d9f2e95 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2` result=`112/112 passed, warnings 0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
