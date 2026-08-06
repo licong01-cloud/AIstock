@@ -66,13 +66,28 @@
   "evidence_uris": [],
   "expected": "QE/多Alpha训练、预测、回测、组合计算的全部计算输入来自具有版本、cutoff和哈希的冻结bin/H5/Parquet/sidecar文件；数据库仅用于控制面和结果面；缺失时fail closed。",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/tests/unified_engine/test_qe_frozen_suspend_filter.py",
+      "scripts/export_suspend_d_candidate.py",
+      "scripts/qe_build_frozen_suspend_filter.py"
+    ],
     "changed_files": [
+      "aistock_models/aistock_models/gats_industry_provider.py",
       "backend/services/quantevolver/config_composer.py",
-      "docs/architecture/qe_efficient_gats_l2_industry_embedding_f1_design_20260710.md",
+      "backend/services/quantevolver/qe_dataset_contract.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+      "backend/tests/unified_engine/test_qe_frozen_suspend_filter.py",
       "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/architecture/qe_efficient_gats_l2_industry_embedding_f1_design_20260710.md",
       "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/export_suspend_d_candidate.py",
+      "scripts/qe_build_frozen_risk_policy.py",
+      "scripts/qe_build_frozen_suspend_filter.py",
+      "scripts/qrun_limit.py",
+      "scripts/qrun_limit_minute.py",
+      "tests/aistock_validation/bugs/20260806_BUG-989-qe-alpha-postgresql.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
       "tests/aistock_validation/history/qe/20260806_134857_l3_qe-read-only-workspace-access-regression.md"
     ],
     "ownership": {
