@@ -2520,6 +2520,19 @@ class _SelectionInferenceInFlight:
     timed_out: bool = False
 
 
+@dataclass
+class _BindingTickInFlight:
+    key: tuple[str, date]
+    result_queue: queue.Queue[tuple[str, Any]]
+    thread: threading.Thread
+    started_monotonic: float
+    started_at: str
+    context: dict[str, Any]
+    timeout_seconds: float
+    waiter_active: bool = True
+    timed_out: bool = False
+
+
 class SimulationLifecycleScheduler:
     """Run one unattended lifecycle tick for eligible simulation bindings."""
 
@@ -2595,6 +2608,8 @@ class SimulationLifecycleScheduler:
         self._selection_inference_lock = threading.RLock()
         self._selection_inference_inflight: dict[tuple[Any, ...], _SelectionInferenceInFlight] = {}
         self._selection_inference_shutdown = False
+        self._binding_tick_lock = threading.RLock()
+        self._binding_tick_inflight: dict[tuple[str, date], _BindingTickInFlight] = {}
         if trading_calendar_service is not None:
             self.trading_calendar_service = trading_calendar_service
         elif isinstance(self.repository, InMemorySimulationRuntimeRepository):
@@ -2696,6 +2711,7 @@ class SimulationLifecycleScheduler:
                     SIMULATION_MINIQMT_TICK_DRIVER_TIMEOUT_ENV,
                     DEFAULT_MINIQMT_TICK_DRIVER_TIMEOUT_SECONDS,
                 ),
+                **self._binding_tick_status(),
             },
             "selection_inference": self._selection_inference_status(),
         }
@@ -3305,22 +3321,19 @@ class SimulationLifecycleScheduler:
         shared_selection_keys: set[tuple[Any, ...]] | None,
         as_of_time: datetime | None,
     ) -> SimulationSchedulerBindingResult:
-        return self._run_callable_with_timeout(
-            stage="BINDING_TICK",
-            reason_code="SIMULATION_BINDING_STAGE_TIMEOUT",
-            timeout_env_var=SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV,
-            default_timeout_seconds=DEFAULT_SIMULATION_BINDING_WATCHDOG_TIMEOUT_SECONDS,
-            context={
-                "binding_id": binding.binding_id,
-                "strategy_id": binding.strategy_id,
-                "broker_backend": binding.broker_backend.value,
-                "package_id": binding.package_id,
-                "trade_date": trade_date.isoformat(),
-                "data_source": data_source,
-                "submit": bool(submit),
-                "mode": str(mode or "SIM").strip().upper(),
-            },
-            func=lambda: self._run_binding(
+        context = {
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "broker_backend": binding.broker_backend.value,
+            "package_id": binding.package_id,
+            "trade_date": trade_date.isoformat(),
+            "data_source": data_source,
+            "submit": bool(submit),
+            "mode": str(mode or "SIM").strip().upper(),
+        }
+
+        def func() -> SimulationSchedulerBindingResult:
+            return self._run_binding(
                 binding=binding,
                 trade_date=trade_date,
                 data_source=data_source,
@@ -3330,8 +3343,188 @@ class SimulationLifecycleScheduler:
                 selection_cache=selection_cache,
                 shared_selection_keys=shared_selection_keys,
                 as_of_time=as_of_time,
-            ),
+            )
+
+        if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+            return self._run_local_sim_binding_single_flight(
+                binding=binding,
+                trade_date=trade_date,
+                context=context,
+                func=func,
+            )
+        return self._run_callable_with_timeout(
+            stage="BINDING_TICK",
+            reason_code="SIMULATION_BINDING_STAGE_TIMEOUT",
+            timeout_env_var=SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV,
+            default_timeout_seconds=DEFAULT_SIMULATION_BINDING_WATCHDOG_TIMEOUT_SECONDS,
+            context=context,
+            func=func,
         )
+
+    def _run_local_sim_binding_single_flight(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        context: dict[str, Any],
+        func: Callable[[], SimulationSchedulerBindingResult],
+    ) -> SimulationSchedulerBindingResult:
+        key = (binding.binding_id, trade_date)
+        timeout_seconds = self._timeout_seconds_from_env(
+            SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV,
+            DEFAULT_SIMULATION_BINDING_WATCHDOG_TIMEOUT_SECONDS,
+        )
+        with self._binding_tick_lock:
+            entry = self._binding_tick_inflight.get(key)
+            if entry is not None:
+                if entry.waiter_active:
+                    raise self._binding_tick_in_progress_error(entry)
+                return self._consume_or_report_binding_tick(entry)
+            result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+            def target() -> None:
+                try:
+                    result_queue.put(("result", func()))
+                except BaseException as exc:  # noqa: BLE001 - preserve the exact worker failure for its owner.
+                    result_queue.put(("exception", exc))
+
+            thread = threading.Thread(
+                target=target,
+                name=f"localsim-binding-{binding.binding_id[:32]}",
+                daemon=True,
+            )
+            entry = _BindingTickInFlight(
+                key=key,
+                result_queue=result_queue,
+                thread=thread,
+                started_monotonic=monotonic_time.monotonic(),
+                started_at=datetime.now(UTC).isoformat(),
+                context=deepcopy(context),
+                timeout_seconds=timeout_seconds,
+            )
+            self._binding_tick_inflight[key] = entry
+            thread.start()
+        try:
+            outcome, value = result_queue.get(timeout=timeout_seconds)
+        except queue.Empty:
+            with self._binding_tick_lock:
+                current = self._binding_tick_inflight.get(key)
+                if current is not entry:
+                    raise RuntimeConfigInvalidError(
+                        "LocalSIM binding tick owner changed before timeout readback",
+                        context={
+                            **context,
+                            "reason_code": "LOCALSIM_BINDING_TICK_OWNER_DRIFT",
+                            "stage": "BINDING_TICK",
+                        },
+                    )
+                try:
+                    outcome, value = result_queue.get_nowait()
+                except queue.Empty:
+                    entry.waiter_active = False
+                    entry.timed_out = True
+                    raise self._binding_tick_in_progress_error(entry) from None
+                self._binding_tick_inflight.pop(key, None)
+        else:
+            with self._binding_tick_lock:
+                if self._binding_tick_inflight.get(key) is entry:
+                    self._binding_tick_inflight.pop(key, None)
+        return self._resolve_binding_tick_outcome(entry=entry, outcome=outcome, value=value)
+
+    def _consume_or_report_binding_tick(self, entry: _BindingTickInFlight) -> SimulationSchedulerBindingResult:
+        try:
+            outcome, value = entry.result_queue.get_nowait()
+        except queue.Empty:
+            if not entry.thread.is_alive():
+                self._binding_tick_inflight.pop(entry.key, None)
+                raise RuntimeConfigInvalidError(
+                    "LocalSIM binding tick worker ended without a result",
+                    context={
+                        **entry.context,
+                        "reason_code": "LOCALSIM_BINDING_TICK_RESULT_MISSING",
+                        "stage": "BINDING_TICK",
+                    },
+                )
+            raise self._binding_tick_in_progress_error(entry) from None
+        self._binding_tick_inflight.pop(entry.key, None)
+        return self._resolve_binding_tick_outcome(entry=entry, outcome=outcome, value=value)
+
+    @staticmethod
+    def _resolve_binding_tick_outcome(
+        *,
+        entry: _BindingTickInFlight,
+        outcome: str,
+        value: Any,
+    ) -> SimulationSchedulerBindingResult:
+        if outcome == "exception" and isinstance(value, BaseException):
+            raise value
+        if outcome == "result" and isinstance(value, SimulationSchedulerBindingResult):
+            return value
+        raise RuntimeConfigInvalidError(
+            "LocalSIM binding tick worker returned an invalid outcome carrier",
+            context={
+                **entry.context,
+                "reason_code": "LOCALSIM_BINDING_TICK_OUTCOME_INVALID",
+                "stage": "BINDING_TICK",
+                "outcome": outcome,
+                "value_type": type(value).__name__,
+            },
+        )
+
+    @staticmethod
+    def _binding_tick_in_progress_error(entry: _BindingTickInFlight) -> DataUnavailableError:
+        elapsed_seconds = max(0.0, monotonic_time.monotonic() - entry.started_monotonic)
+        return DataUnavailableError(
+            "LocalSIM binding tick remains owned by its original worker; later bindings may continue",
+            context={
+                **entry.context,
+                "reason_code": "LOCALSIM_BINDING_TICK_IN_PROGRESS",
+                "stage": "BINDING_TICK",
+                "failure_stage": "BINDING_TICK",
+                "started_at": entry.started_at,
+                "elapsed_seconds": round(elapsed_seconds, 3),
+                "timeout_seconds": entry.timeout_seconds,
+                "thread_alive": entry.thread.is_alive(),
+                "timed_out": entry.timed_out,
+            },
+        )
+
+    def _binding_tick_status(self) -> dict[str, Any]:
+        now = monotonic_time.monotonic()
+        with self._binding_tick_lock:
+            in_flight = [
+                {
+                    **entry.context,
+                    "started_at": entry.started_at,
+                    "elapsed_seconds": round(max(0.0, now - entry.started_monotonic), 3),
+                    "timeout_seconds": entry.timeout_seconds,
+                    "timed_out": entry.timed_out,
+                    "thread_alive": entry.thread.is_alive(),
+                    "result_ready": not entry.result_queue.empty(),
+                }
+                for entry in sorted(self._binding_tick_inflight.values(), key=lambda item: item.key)
+            ]
+        return {
+            "single_flight_scope": "binding_id+trade_date",
+            "in_flight_count": len(in_flight),
+            "in_flight": in_flight,
+        }
+
+    def shutdown_binding_ticks(self, *, wait: bool = True) -> dict[str, Any]:
+        with self._binding_tick_lock:
+            entries = tuple(self._binding_tick_inflight.values())
+        if wait:
+            for entry in entries:
+                entry.thread.join(timeout=5.0)
+        alive = [entry for entry in entries if entry.thread.is_alive()]
+        return {
+            "schema_version": "localsim_binding_tick_shutdown_observation_v1",
+            "wait_requested": bool(wait),
+            "observed_owner_count": len(entries),
+            "thread_alive_count": len(alive),
+            "all_threads_stopped": not alive,
+            "alive_binding_ids": sorted(entry.context["binding_id"] for entry in alive),
+        }
 
     def _record_pre_run_binding_failure_result(
         self,
@@ -3342,6 +3535,13 @@ class SimulationLifecycleScheduler:
         created_by: str,
         exc: Exception,
     ) -> SimulationSchedulerBindingResult:
+        if self._is_binding_tick_in_progress_error(exc):
+            return self._record_binding_tick_in_progress_result(
+                binding=binding,
+                trade_date=trade_date,
+                data_source=data_source,
+                exc=exc,
+            )
         if self._is_selection_inference_pending_error(exc):
             pending = self._record_selection_inference_pending_result(
                 binding=binding,
@@ -3425,6 +3625,58 @@ class SimulationLifecycleScheduler:
             run=failed_run,
             error=self._pre_run_failure_error_payload(failed_run, exc=exc),
             data_source=effective_data_source,
+        )
+
+    @staticmethod
+    def _is_binding_tick_in_progress_error(exc: Exception) -> bool:
+        context = getattr(exc, "context", None)
+        return (
+            isinstance(exc, DataUnavailableError)
+            and isinstance(context, dict)
+            and str(context.get("reason_code") or "").upper() == "LOCALSIM_BINDING_TICK_IN_PROGRESS"
+        )
+
+    def _record_binding_tick_in_progress_result(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        data_source: str,
+        exc: Exception,
+    ) -> SimulationSchedulerBindingResult:
+        existing = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id,
+            binding_id=binding.binding_id,
+            trade_date=trade_date,
+        )
+        context = self._exception_context(exc)
+        diagnostic = {
+            "schema_version": "localsim_binding_tick_in_progress_v1",
+            "status": "IN_PROGRESS",
+            "reason_code": "LOCALSIM_BINDING_TICK_IN_PROGRESS",
+            "stage": "BINDING_TICK",
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "trade_date": trade_date.isoformat(),
+            "context": context,
+            "alert": {
+                "severity": "WARNING",
+                "reason_code": "LOCALSIM_BINDING_TICK_IN_PROGRESS",
+                "binding_id": binding.binding_id,
+                "trade_date": trade_date.isoformat(),
+                "timed_out": bool(context.get("timed_out")),
+                "auto_clear": "owner_result_consumed",
+            },
+        }
+        logger.info("LocalSIM binding tick remains single-flight: %s", diagnostic)
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status="LOCALSIM_BINDING_TICK_IN_PROGRESS",
+            run=existing,
+            lifecycle_diagnostic=diagnostic,
+            data_source=data_source,
         )
 
     @staticmethod
@@ -15288,6 +15540,17 @@ class SimulationLifecycleBackgroundScheduler:
                 graceful,
                 thread_alive,
             )
+        shutdown_binding_ticks = getattr(self.lifecycle_scheduler, "shutdown_binding_ticks", None)
+        if callable(shutdown_binding_ticks):
+            graceful = bool(wait and not thread_alive)
+            binding_shutdown = shutdown_binding_ticks(wait=graceful)
+            logger.info(
+                "Simulation runtime scheduler LocalSIM binding owner shutdown observed wait=%s "
+                "scheduler_thread_alive=%s observation=%s",
+                graceful,
+                thread_alive,
+                binding_shutdown,
+            )
         shutdown_quote_ingress = getattr(self.lifecycle_scheduler, "shutdown_miniqmt_quote_ingress", None)
         if callable(shutdown_quote_ingress):
             shutdown_quote_ingress()
@@ -15403,6 +15666,11 @@ class SimulationLifecycleBackgroundScheduler:
                     alert = capacity_fields.get("alert")
                     if isinstance(alert, dict):
                         alerts.append(alert)
+                    lifecycle_alert = (
+                        item.lifecycle_diagnostic.get("alert") if isinstance(item.lifecycle_diagnostic, dict) else None
+                    )
+                    if item.status == "LOCALSIM_BINDING_TICK_IN_PROGRESS" and isinstance(lifecycle_alert, dict):
+                        alerts.append(lifecycle_alert)
                     processed.append(
                         {
                             "binding_id": item.binding_id,

@@ -1287,6 +1287,12 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 
 `SIM-P-068` 的 PR #2978 initial required CI run `30630489853` 在 Linux/Python 3.12 显式拒绝了 Windows/Python 3.13 生成的 K5 binding。根因不是算法或 route，而是 K4 AST hash 依赖 Python minor-version 的 empty-field 默认值，且 source executor signature 绑定绝对 checkout 路径与 `WindowsPath/PosixPath`。复审补修将 AST 固定为 Python 3.12 full-field canonical shape，将 executor signature 固定为 repo-relative structured payload；Windows/Python 3.13 K5 direct=`12 passed`，Linux/Python 3.12 exact authority=`3 passed`且 fresh binding相同，final required CI run `30640380170`全绿。该补修不改变 Iceberg/Stop、signal/target/side/quantity、B0、OMS/Gateway、K2 shadow 或产品 route，也不新增 gate/审批；source merge已通过PR #2978 / merge `4bf54cf2`闭合。
 
+### 15.1 运行阻断修复增量账本
+
+| Progress ID | Acceptance IDs | Current state | Evidence | Status | Remaining runtime state |
+| --- | --- | --- | --- | --- | --- |
+| `SIM-P-073` | `F-007,F-009,F-021` | BUG-988 修复大规模 LocalSIM cadence 的串行实时分钟取证和 watchdog owner 丢失：同一 cadence 对 active-order/passive-position symbol union 使用 code-owned 16-worker 上限并发读取，结果仍按 canonical symbol order 聚合且 per-symbol typed failure 隔离；binding watchdog 以 `(binding_id,trade_date)` single-flight owner 保留原 worker/result/exception，后续 tick 不启动第二 writer，返回显式非失败 `IN_PROGRESS` 并继续其他 binding，owner 完成后只消费一次原 result/exception。未提高 timeout、未删除 watchdog、未写假成功或增加人工 gate | RED：并发峰值=`1`、超时 tick=`FAILED_RETRYABLE`且 second writer 可启动；GREEN：20-symbol bounded concurrency、same-binding single writer、peer binding isolation、late failure reason preservation；LocalSIM direct=`52 passed`、scheduler direct=`3 passed`；`paper_v2_backend=1051 passed,2 skipped,2 xfailed`；`simulation_core_l2=413 passed`；GitHub Issue #3170 | BUG_988_SOURCE_VERIFIED_READY_FOR_PR | `source_merge=pending_pr`；`post_restart_effective_gate=pending_user_restart`；production DDL/DML/dependency/config/binding/broker/service-control 全部 `noop` |
+
 ## 16. DESIGN-COMPLIANCE-001 设计复核
 
 | Control | Review result | Design evidence |
@@ -1516,6 +1522,16 @@ P0-H MiniQMT execution kernel/plugin F2 设计的逐项复核：
 | `no_business_semantic_drift` | pass | canonical value 语义与 scheduler economic hash 一致；未改变 Selection、策略信号、选股、资产、方向、数量、算法、T+1、行情 authority、MiniQMT 或 broker route；Paper upsert、single-writer、receipt/outbox/readback identity 不变 |
 | `no_unrequested_gate_or_approval` | pass | 未增加 RBAC、审批、人工 acknowledge、人工恢复、业务开关或 execution gate；合法 immutable payload 沿既有自动 scheduler transaction 提交，非法数据只是既有 durability contract 的 typed failure |
 | `production state separation` | pass | 本 slice 只修改 source/test/唯一蓝图/BUG 元数据；未执行 DDL/DML/config、未调用 broker、未启停或重启服务；source PR/CI/merge、用户重启和正常交易日 runtime readback 分开记录 |
+
+`BUG-988` LocalSIM cadence/single-writer closure 的逐项复核：
+
+| Control | Review result | Implementation evidence |
+| --- | --- | --- |
+| `no_simplified_delivery` | pass for BUG-988 source scope；CI/runtime verification pending | 同时修复生产 `LocalSimBackend` 的 symbol-union取证和真实 scheduler `run_once` owner lifecycle；不是单纯提高 600 秒、删除 watchdog、mock-only 并发或忽略 lag；Paper/Simulation 两个 ownership 模块计划均已通过 |
+| `no_silent_error` | pass | per-symbol connectivity failure仍进入 snapshot errors；unexpected worker/result carrier、owner drift、result missing、late exception均 typed fail loud；完成/异常 outcome只消费一次，不返回固定成功或清除原 failure identity |
+| `no_business_semantic_drift` | pass | selection、target、side、quantity、算法、causal minute cursor/bar identity、TDX authority、T+1、涨跌停/停牌、Paper transaction与MiniQMT route均未改变；只并发读取独立 symbol输入并串行应用既有 canonical结果 |
+| `no_unrequested_gate_or_approval` | pass | 未增加 RBAC、审批、人工 acknowledge、人工恢复、confirm-run或新业务开关；single-flight是既有 durable writer ownership的自动调度实现，合法 binding沿scheduler cadence自动继续 |
+| `production state separation` | pass | 当前只修改source/test/唯一蓝图/BUG元数据；未执行DDL/DML/dependency/config/binding、broker调用或服务控制；source merge、用户restart、runtime identity和正常交易日readback分开记录 |
 
 ## 17. Definition of Done
 
