@@ -566,6 +566,10 @@ def build_explicit_historical_range_r5_runtime_factory(
             context={"invalid_configuration": invalid},
         )
     repository_root = repository_root.resolve(strict=True)
+    task_runtime_root = task_runtime_root.resolve(strict=True)
+    catalog_source_cache_root = task_runtime_root / "catalog-source-cache"
+    catalog_source_cache_root.mkdir(parents=True, exist_ok=True)
+    catalog_source_cache_root = catalog_source_cache_root.resolve(strict=True)
     policy_component_root.mkdir(parents=True, exist_ok=True)
     policy_component_root = policy_component_root.resolve(strict=True)
     artifact_store = HistoricalRangeArtifactStore(root=artifact_root)
@@ -606,6 +610,7 @@ def build_explicit_historical_range_r5_runtime_factory(
                     "_aistock_process_worker_dsn",
                     None,
                 ),
+                source_cache_root=catalog_source_cache_root,
             ),
             repository=repository,
             artifact_store=artifact_store,

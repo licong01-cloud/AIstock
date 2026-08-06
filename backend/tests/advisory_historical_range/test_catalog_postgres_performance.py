@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import pickle
 import threading
 import time
 import tracemalloc
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import psycopg2
 import pytest
 
+from backend.services.advisory_historical_range import catalog_postgres as catalog_postgres_module
 from backend.services.advisory_historical_range.catalog_planner import (
     HistoricalRangeSourceInputUnavailable,
 )
@@ -20,10 +23,18 @@ from backend.services.advisory_historical_range.catalog_postgres import (
     _RequirementResolutionFailure,
     _canonical_bytes,
     _canonicalize_payload_batch,
+    _plan_uses_source_cache,
     _requirement_uses_process_worker,
     _requirement_work_weight,
     _resolve_requirement_batch_process,
 )
+from backend.services.advisory_historical_range.catalog_source_cache import (
+    CatalogSourceCacheError,
+    CatalogSourceFileCache,
+    canonical_payload_bytes,
+    frame_payloads,
+)
+from backend.services.advisory_historical_range.canonical import canonical_json_sha256
 from backend.services.advisory_historical_range.models import (
     HistoricalRangeCatalogPhase,
     HistoricalRangeRequirementPurpose,
@@ -67,6 +78,28 @@ def _plan(count: int) -> HistoricalRangeSourceRequirementPlanV1:
         calendar_identity_hash=digest("calendar-identity"),
         code_release_hash=resolved.frozen_programs[0].code_release_hash,
         requirements=requirements,
+    )
+
+
+def _cacheable_plan(count: int) -> HistoricalRangeSourceRequirementPlanV1:
+    base = _plan(count)
+    return base.model_copy(
+        update={
+            "requirements": tuple(
+                requirement.model_copy(
+                    update={
+                        "source_role": "pit_universe",
+                        "dataset_id": "market.stock_universe_pit_spans",
+                        "query_template_id": "historical_pit_universe_existing_readonly",
+                        "parameter_template": {
+                            "trade_date": "2026-06-02",
+                            "universe_key": "shsz_st_pit_active_v1",
+                        },
+                    }
+                )
+                for requirement in base.requirements
+            )
+        }
     )
 
 
@@ -595,3 +628,369 @@ def test_invalid_catalog_request_fails_before_opening_database_connection() -> N
         )
 
     assert tracker.max_active_connections == 0
+
+
+def _write_complete_source_cache(
+    *,
+    root,
+    plan: HistoricalRangeSourceRequirementPlanV1,
+) -> CatalogSourceFileCache:
+    cache = CatalogSourceFileCache(
+        root=root,
+        plan=plan,
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+    )
+    with cache._connect(cache.path) as conn:
+        cache._create_schema(conn)
+        conn.execute(
+            "INSERT INTO pit VALUES(?,?,?,?)",
+            ("shsz_st_pit_active_v1", "000001.SZ", "2020-01-01", "2099-12-31"),
+        )
+        conn.execute(
+            "INSERT INTO cache_manifest(singleton,payload_json) VALUES(1,?)",
+            (
+                json.dumps(
+                    {
+                        "schema_version": "advisory_historical_range_catalog_source_cache_v1",
+                        "planning_identity_hash": plan.planning_identity_hash,
+                        "requirement_plan_hash": plan.requirement_plan_hash,
+                        "catalog_generation": 1,
+                        "phase": HistoricalRangeCatalogPhase.DISCOVER.value,
+                        "observed_at": OBSERVED_AT.isoformat(),
+                        "status": "COMPLETE",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ),
+        )
+        conn.commit()
+    return cache
+
+
+def test_complete_source_cache_resolves_without_database_or_process_pool(
+    tmp_path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    plan = _cacheable_plan(2)
+    _write_complete_source_cache(root=tmp_path, plan=plan)
+
+    def forbidden_connection():  # noqa: ANN202
+        raise AssertionError("completed cache must not reconnect to PostgreSQL")
+
+    def forbidden_process_pool(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("file-cache catalog mode must not spawn a process pool")
+
+    monkeypatch.setattr(catalog_postgres_module, "ProcessPoolExecutor", forbidden_process_pool)
+    result = PostgresHistoricalRangeCatalogExecutor(
+        conn_factory=forbidden_connection,
+        process_worker_dsn="dbname=must-not-be-used",
+        source_cache_root=tmp_path,
+    ).resolve_chunk(
+        plan=plan,
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+        start_ordinal=1,
+        resolved_members={},
+        chunk_size=2,
+    )
+
+    assert [item.member.row_count for item in result.checkpoint.member_delta] == [1, 1]
+    assert not any(
+        thread.name.startswith("advisory-catalog-cache")
+        for thread in threading.enumerate()
+    )
+
+
+def test_source_cache_mode_rejects_formal_and_hmm_special_contracts() -> None:
+    plan = _cacheable_plan(1)
+    requirement = plan.requirements[0]
+    formal = requirement.model_copy(
+        update={
+            "parameter_template": {
+                **requirement.parameter_template,
+                "formal_partition_key": {"trade_date": "2026-06-02"},
+            }
+        }
+    )
+    hmm = requirement.model_copy(
+        update={"query_template_id": "historical_hmm_frozen_evidence_bundle"}
+    )
+
+    assert _plan_uses_source_cache(plan) is True
+    assert _plan_uses_source_cache(plan.model_copy(update={"requirements": (formal,)})) is False
+    assert _plan_uses_source_cache(plan.model_copy(update={"requirements": (hmm,)})) is False
+
+
+class _EmptyBulkCursor:
+    def __init__(self, statements: list[str]) -> None:
+        self._statements = statements
+        self.itersize = 0
+
+    def execute(self, sql, _params) -> None:  # noqa: ANN001
+        self._statements.append(" ".join(str(sql).split()))
+
+    def fetchmany(self, _size: int) -> list[dict]:
+        return []
+
+    def close(self) -> None:
+        return None
+
+
+class _EmptyBulkConnection:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def cursor(self, *, name: str, cursor_factory):  # noqa: ANN001, ANN201
+        assert name.startswith("ahr_bulk_cache_")
+        assert cursor_factory is not None
+        return _EmptyBulkCursor(self.statements)
+
+
+def test_bulk_extract_statement_count_is_independent_of_requirement_count(
+    tmp_path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    monkeypatch.setattr(psycopg2.extras, "register_default_jsonb", lambda *_args, **_kwargs: None)
+    statement_counts: list[int] = []
+    for count in (1, 512):
+        root = tmp_path / str(count)
+        root.mkdir()
+        source = _EmptyBulkConnection()
+        CatalogSourceFileCache(
+            root=root,
+            plan=_cacheable_plan(count),
+            catalog_generation=1,
+            phase=HistoricalRangeCatalogPhase.DISCOVER,
+        ).ensure(conn=source, observed_at=OBSERVED_AT)
+        statement_counts.append(len(source.statements))
+
+    assert statement_counts == [11, 11]
+
+
+def test_corrupt_source_cache_fails_loudly_without_database_fallback(tmp_path) -> None:  # noqa: ANN001
+    cache = CatalogSourceFileCache(
+        root=tmp_path,
+        plan=_cacheable_plan(1),
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+    )
+    cache.path.write_bytes(b"not-a-sqlite-database")
+
+    with pytest.raises(CatalogSourceCacheError, match="readback failed"):
+        cache.ready_observed_at()
+
+
+def test_concurrent_duplicate_cache_requests_compute_content_once(
+    tmp_path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    cache = _write_complete_source_cache(root=tmp_path, plan=_cacheable_plan(1))
+    original = CatalogSourceFileCache._retrospective_content_on_connection
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def tracked(**kwargs):  # noqa: ANN003, ANN202
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.02)
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        CatalogSourceFileCache,
+        "_retrospective_content_on_connection",
+        staticmethod(tracked),
+    )
+    parameters = {
+        "trade_date": "2026-06-02",
+        "universe_key": "shsz_st_pit_active_v1",
+    }
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(
+            executor.map(
+                lambda _index: cache.retrospective_content(
+                    "historical_pit_universe_existing_readonly",
+                    parameters,
+                ),
+                range(8),
+            )
+        )
+
+    assert calls == 1
+    assert len(set(results)) == 1
+
+
+def test_file_cache_hashes_match_existing_catalog_contract_for_batch_b_sources(tmp_path) -> None:  # noqa: ANN001
+    cache = CatalogSourceFileCache(
+        root=tmp_path,
+        plan=_cacheable_plan(1),
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+    )
+    history_payloads = (
+        canonical_payload_bytes(
+            {
+                "trade_date": "2026-06-01",
+                "ts_code": "000001.SZ",
+                "open_li": 10.0,
+                "high_li": 11.0,
+                "low_li": 9.5,
+                "close_li": 10.5,
+                "volume_hand": 1000.0,
+                "amount_li": 10500.0,
+                "adj_factor": 1.2,
+            }
+        ),
+        canonical_payload_bytes(
+            {
+                "trade_date": "2026-06-02",
+                "ts_code": "000001.SZ",
+                "open_li": 10.5,
+                "high_li": 11.5,
+                "low_li": 10.0,
+                "close_li": 11.0,
+                "volume_hand": 1200.0,
+                "amount_li": 13200.0,
+                "adj_factor": 1.2,
+            }
+        ),
+    )
+    daily_payload = canonical_payload_bytes(
+        {
+            "trade_date": "2026-06-02",
+            "ts_code": "000001.SZ",
+            "close_li": 11.0,
+            "adj_factor": 1.2,
+        }
+    )
+    calendar_payloads = (
+        canonical_payload_bytes({"cal_date": "2026-06-01", "is_trading": True}),
+        canonical_payload_bytes({"cal_date": "2026-06-02", "is_trading": True}),
+    )
+    fundamental_payloads = {
+        dataset: canonical_payload_bytes(
+            {"trade_date": "2026-06-02", "ts_code": "000001.SZ", "value": index}
+        )
+        for index, dataset in enumerate(
+            ("daily_basic", "moneyflow_ts", "bak_basic", "cyq_perf", "sector_data"),
+            start=1,
+        )
+    }
+    with cache._connect(cache.path) as conn:
+        cache._create_schema(conn)
+        conn.execute(
+            "INSERT INTO pit VALUES(?,?,?,?)",
+            ("shsz_st_pit_active_v1", "000001.SZ", "2020-01-01", "2099-12-31"),
+        )
+        conn.executemany(
+            "INSERT INTO calendar VALUES(?,?)",
+            ((day, payload) for day, payload in zip(("2026-06-01", "2026-06-02"), calendar_payloads, strict=True)),
+        )
+        conn.executemany(
+            "INSERT INTO market VALUES(?,?,?,?,?,?)",
+            (
+                ("2026-06-01", "000001.SZ", 1, history_payloads[0], canonical_payload_bytes({"trade_date": "2026-06-01", "ts_code": "000001.SZ", "close_li": 10.5, "adj_factor": 1.2}), 0),
+                ("2026-06-02", "000001.SZ", 1, history_payloads[1], daily_payload, 0),
+            ),
+        )
+        conn.execute("INSERT INTO stock_basic VALUES(?,?,?,?)", ("000001.SZ", "1991-04-03", None, "L"))
+        conn.executemany(
+            "INSERT INTO fundamental VALUES(?,?,?,?)",
+            ((dataset, "2026-06-02", "000001.SZ", payload) for dataset, payload in fundamental_payloads.items()),
+        )
+        conn.commit()
+
+    common = {
+        "universe_key": "shsz_st_pit_active_v1",
+        "start_date": "2026-06-01",
+        "trade_date": "2026-06-02",
+    }
+    pit = cache.retrospective_content("historical_pit_universe_existing_readonly", common)
+    calendar = cache.retrospective_content(
+        "historical_trading_calendar_window",
+        {"range_start": "2026-06-01", "trade_date": "2026-06-02"},
+    )
+    market = cache.retrospective_content("historical_market_history_window", common)
+    daily = cache.retrospective_content("historical_decision_mark_daily_market", common)
+    state = cache.retrospective_content("historical_decision_mark_market_state", common)
+    fundamental = cache.retrospective_content("historical_fundamental_moneyflow_window", common)
+
+    assert pit[:2] == (1, canonical_json_sha256(["000001.SZ"]))
+    assert calendar[:2] == frame_payloads(calendar_payloads)
+    assert market[:2] == frame_payloads(history_payloads)
+    assert daily[:2] == frame_payloads((daily_payload,))
+    expected_state = canonical_payload_bytes(
+        {
+            "ts_code": "000001.SZ",
+            "list_date": "1991-04-03",
+            "delist_date": None,
+            "list_status": "L",
+            "suspended": False,
+            "pit_eligible": True,
+        }
+    )
+    assert state[:2] == frame_payloads((expected_state,))
+    composite = hashlib.sha256()
+    for dataset, payload in fundamental_payloads.items():
+        _, content_hash = frame_payloads((payload,))
+        marker = canonical_payload_bytes(
+            {"dataset_name": dataset, "content_hash": content_hash, "row_count": 1}
+        )
+        composite.update(len(marker).to_bytes(8, "big"))
+        composite.update(marker)
+    assert fundamental[:2] == (5, composite.hexdigest())
+
+
+def test_file_cache_market_window_hashing_keeps_memory_bounded(tmp_path) -> None:  # noqa: ANN001
+    cache = CatalogSourceFileCache(
+        root=tmp_path,
+        plan=_cacheable_plan(1),
+        catalog_generation=1,
+        phase=HistoricalRangeCatalogPhase.DISCOVER,
+    )
+    row_count = 20_000
+    with cache._connect(cache.path) as conn:
+        cache._create_schema(conn)
+        conn.executemany(
+            "INSERT INTO pit VALUES(?,?,?,?)",
+            (
+                ("shsz_st_pit_active_v1", f"{index:06d}.SZ", "2020-01-01", "2099-12-31")
+                for index in range(row_count)
+            ),
+        )
+        conn.executemany(
+            "INSERT INTO market VALUES(?,?,?,?,?,?)",
+            (
+                (
+                    "2026-06-02",
+                    f"{index:06d}.SZ",
+                    1,
+                    canonical_payload_bytes(
+                        {"trade_date": "2026-06-02", "ts_code": f"{index:06d}.SZ", "adj_factor": 1.0}
+                    ),
+                    canonical_payload_bytes(
+                        {"trade_date": "2026-06-02", "ts_code": f"{index:06d}.SZ", "close_li": 1.0, "adj_factor": 1.0}
+                    ),
+                    0,
+                )
+                for index in range(row_count)
+            ),
+        )
+        conn.commit()
+
+    tracemalloc.start()
+    resolved = cache.retrospective_content(
+        "historical_market_history_window",
+        {
+            "universe_key": "shsz_st_pit_active_v1",
+            "start_date": "2026-06-02",
+            "trade_date": "2026-06-02",
+        },
+    )
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert resolved[0] == row_count
+    assert peak < 32 * 1024 * 1024

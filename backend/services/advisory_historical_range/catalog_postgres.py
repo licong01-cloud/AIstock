@@ -6,12 +6,15 @@ import hashlib
 import json
 import multiprocessing
 import re
+import threading
 import traceback
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any
 
 import orjson
@@ -24,6 +27,11 @@ from backend.services.advisory_historical_range.catalog_planner import (
     HistoricalRangeCatalogPlanner,
     HistoricalRangeSourceInputUnavailable,
     HistoricalRangeSourceRequirementResolver,
+)
+from backend.services.advisory_historical_range.catalog_source_cache import (
+    CACHEABLE_QUERY_IDS,
+    CatalogSourceContentError,
+    CatalogSourceFileCache,
 )
 from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactRefV1,
@@ -48,6 +56,8 @@ _DEFAULT_CATALOG_WORKERS = 24
 _MAX_CATALOG_WORKERS = 24
 _DEFAULT_STREAM_FETCH_SIZE = 1000
 _MAX_STREAM_FETCH_SIZE = 1000
+_MAX_ACTIVE_SOURCE_CACHES = 2
+_MAX_SOURCE_CACHE_WORKERS = 4
 _ORJSON_EXPONENT_NUMBER = re.compile(rb"e-?\d")
 
 
@@ -243,11 +253,11 @@ _FUNDAMENTAL_QUERIES: tuple[tuple[str, str], ...] = (
 
 
 class PostgresHistoricalRangeCatalogExecutor:
-    """Resolve one bounded chunk concurrently against one exported read-only snapshot.
+    """Resolve a bounded chunk against one phase-consistent read-only snapshot.
 
-    Only the at-most-32 member results live in memory. Existing content-addressed
-    checkpoints provide the durable file cache between chunks; raw database rows are
-    deliberately not reused across snapshots because VERIFY must detect source drift.
+    Fully cacheable plans bulk-extract each source range once per DISCOVER or VERIFY
+    phase and resolve later chunks from a repo-external SQLite file. Formal-event and
+    HMM special contracts retain the existing exported-snapshot worker path.
     """
 
     def __init__(
@@ -258,6 +268,7 @@ class PostgresHistoricalRangeCatalogExecutor:
         max_workers: int = _DEFAULT_CATALOG_WORKERS,
         stream_fetch_size: int = _DEFAULT_STREAM_FETCH_SIZE,
         process_worker_dsn: str | None = None,
+        source_cache_root: Path | None = None,
     ) -> None:
         if conn_factory is None:
             raise ValueError("conn_factory is required")
@@ -270,6 +281,13 @@ class PostgresHistoricalRangeCatalogExecutor:
         self._max_workers = max_workers
         self._stream_fetch_size = stream_fetch_size
         self._process_worker_dsn = str(process_worker_dsn or "").strip() or None
+        self._source_cache_root = (
+            source_cache_root.resolve(strict=True) if source_cache_root is not None else None
+        )
+        if self._source_cache_root is not None and not self._source_cache_root.is_dir():
+            raise ValueError("source_cache_root must be an existing directory")
+        self._source_caches: OrderedDict[str, CatalogSourceFileCache] = OrderedDict()
+        self._source_cache_lock = threading.Lock()
 
     def resolve_chunk(
         self,
@@ -303,6 +321,18 @@ class PostgresHistoricalRangeCatalogExecutor:
             previous_checkpoint_ref=previous_checkpoint_ref,
             previous_checkpoint=previous_checkpoint,
         )
+        if self._source_cache_root is not None and _plan_uses_source_cache(plan):
+            return self._resolve_chunk_from_source_cache(
+                plan=plan,
+                catalog_generation=catalog_generation,
+                phase=phase,
+                start_ordinal=start_ordinal,
+                resolved_members=resolved_members,
+                expected_members=expected_members,
+                previous_checkpoint_ref=previous_checkpoint_ref,
+                previous_checkpoint=previous_checkpoint,
+                chunk_size=chunk_size,
+            )
         with self._conn_factory() as conn:
             conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -335,6 +365,166 @@ class PostgresHistoricalRangeCatalogExecutor:
                 )
             conn.rollback()
             return result
+
+    def _resolve_chunk_from_source_cache(
+        self,
+        *,
+        plan: HistoricalRangeSourceRequirementPlanV1,
+        catalog_generation: int,
+        phase: HistoricalRangeCatalogPhase,
+        start_ordinal: int,
+        resolved_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+        expected_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1] | None,
+        previous_checkpoint_ref: HistoricalRangeArtifactRefV1 | None,
+        previous_checkpoint: HistoricalRangeSourceCatalogCheckpointV1 | None,
+        chunk_size: int,
+    ) -> HistoricalRangeCatalogChunkResult:
+        source_cache = self._source_cache(
+            plan=plan,
+            catalog_generation=catalog_generation,
+            phase=phase,
+        )
+        observed_at = source_cache.ready_observed_at()
+        if observed_at is None:
+            with self._conn_factory() as conn:
+                conn.set_session(
+                    isolation_level="REPEATABLE READ",
+                    readonly=True,
+                    autocommit=False,
+                )
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute("SELECT transaction_timestamp() AS observed_at")
+                    row = cur.fetchone()
+                    source_cache.ensure(conn=conn, observed_at=row["observed_at"])
+                conn.rollback()
+            observed_at = source_cache.ready_observed_at()
+        if observed_at is None:
+            raise RuntimeError("catalog source cache did not publish a complete manifest")
+        cached = self._resolve_source_cache_chunk_requirements(
+            plan=plan,
+            phase=phase,
+            start_ordinal=start_ordinal,
+            chunk_size=chunk_size,
+            observed_at=observed_at,
+            source_cache=source_cache,
+            resolved_members=resolved_members,
+            expected_members=expected_members,
+        )
+        return self._planner.resolve_chunk(
+            plan=plan,
+            catalog_generation=catalog_generation,
+            phase=phase,
+            start_ordinal=start_ordinal,
+            resolver=_CachedRequirementResolver(cached),
+            resolved_members=resolved_members,
+            expected_members=expected_members,
+            previous_checkpoint_ref=previous_checkpoint_ref,
+            previous_checkpoint=previous_checkpoint,
+            chunk_size=chunk_size,
+        )
+
+    def _resolve_source_cache_chunk_requirements(
+        self,
+        *,
+        plan: HistoricalRangeSourceRequirementPlanV1,
+        phase: HistoricalRangeCatalogPhase,
+        start_ordinal: int,
+        chunk_size: int,
+        observed_at: datetime,
+        source_cache: CatalogSourceFileCache,
+        resolved_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1],
+        expected_members: Mapping[str, HistoricalRangeSourceRevisionMemberV1] | None,
+    ) -> dict[str, HistoricalRangeSourceRevisionMemberV1 | _RequirementResolutionFailure]:
+        ordinal_end = min(len(plan.requirements), start_ordinal + chunk_size - 1)
+        pending = list(plan.requirements[start_ordinal - 1 : ordinal_end])
+        dependency_source = dict(expected_members or resolved_members)
+        cached: dict[str, HistoricalRangeSourceRevisionMemberV1 | _RequirementResolutionFailure] = {}
+        resolver = _FileCacheRequirementResolver(
+            source_cache=source_cache,
+            observed_at=observed_at,
+        )
+        with ThreadPoolExecutor(
+            max_workers=min(self._max_workers, _MAX_SOURCE_CACHE_WORKERS, len(pending)),
+            thread_name_prefix="advisory-catalog-cache",
+        ) as executor:
+            while pending:
+                ready = [
+                    requirement
+                    for requirement in pending
+                    if all(
+                        dependency in dependency_source
+                        for dependency in requirement.depends_on_requirement_ids
+                    )
+                ]
+                if not ready:
+                    break
+                futures = [
+                    (
+                        requirement,
+                        executor.submit(
+                            resolver.resolve,
+                            requirement=requirement,
+                            dependency_members={
+                                dependency: dependency_source[dependency]
+                                for dependency in requirement.depends_on_requirement_ids
+                            },
+                            phase=phase,
+                            expected_member=(
+                                expected_members.get(requirement.requirement_id)
+                                if expected_members is not None
+                                else None
+                            ),
+                        ),
+                    )
+                    for requirement in ready
+                ]
+                for requirement, future in futures:
+                    try:
+                        resolved = future.result()
+                    except Exception as exc:
+                        cached[requirement.requirement_id] = _requirement_failure_from_exception(exc)
+                    else:
+                        cached[requirement.requirement_id] = resolved
+                        dependency_source[requirement.requirement_id] = resolved
+                ready_ids = {requirement.requirement_id for requirement in ready}
+                pending = [
+                    requirement
+                    for requirement in pending
+                    if requirement.requirement_id not in ready_ids
+                ]
+        return cached
+
+    def _source_cache(
+        self,
+        *,
+        plan: HistoricalRangeSourceRequirementPlanV1,
+        catalog_generation: int,
+        phase: HistoricalRangeCatalogPhase,
+    ) -> CatalogSourceFileCache:
+        if self._source_cache_root is None:
+            raise RuntimeError("source cache root is unavailable")
+        key = canonical_json_sha256(
+            {
+                "requirement_plan_hash": plan.requirement_plan_hash,
+                "catalog_generation": catalog_generation,
+                "phase": phase.value,
+            }
+        )
+        with self._source_cache_lock:
+            cached = self._source_caches.get(key)
+            if cached is not None:
+                self._source_caches.move_to_end(key)
+                return cached
+            cached = CatalogSourceFileCache(
+                root=self._source_cache_root,
+                plan=plan,
+                catalog_generation=catalog_generation,
+                phase=phase,
+            )
+            self._source_caches[key] = cached
+            while len(self._source_caches) > _MAX_ACTIVE_SOURCE_CACHES:
+                self._source_caches.popitem(last=False)
+            return cached
 
     def _resolve_chunk_requirements(
         self,
@@ -667,6 +857,17 @@ def _requirement_uses_process_worker(requirement: HistoricalRangeSourceRequireme
         "frozen_artifact_identity",
         "historical_hmm_frozen_evidence_bundle",
     }
+
+
+def _plan_uses_source_cache(plan: HistoricalRangeSourceRequirementPlanV1) -> bool:
+    for requirement in plan.requirements:
+        if requirement.query_template_id == "frozen_artifact_identity":
+            continue
+        if requirement.query_template_id not in CACHEABLE_QUERY_IDS:
+            return False
+        if isinstance(requirement.parameter_template.get("formal_partition_key"), Mapping):
+            return False
+    return True
 
 
 class PostgresHistoricalRangeSourceRevisionVerifier:
@@ -1190,6 +1391,37 @@ class _PostgresRequirementResolver(HistoricalRangeSourceRequirementResolver):
                 for item in cur.description
             ]
         )
+
+
+class _FileCacheRequirementResolver(_PostgresRequirementResolver):
+    def __init__(
+        self,
+        *,
+        source_cache: CatalogSourceFileCache,
+        observed_at: datetime,
+    ) -> None:
+        super().__init__(cur=None, observed_at=observed_at)
+        self._source_cache = source_cache
+
+    def _retrospective_content(
+        self,
+        requirement: HistoricalRangeSourceRequirementV1,
+        *,
+        parameters: Mapping[str, Any],
+    ) -> tuple[int, str, str]:
+        if requirement.query_template_id == "frozen_artifact_identity":
+            return super()._retrospective_content(requirement, parameters=parameters)
+        try:
+            return self._source_cache.retrospective_content(
+                requirement.query_template_id,
+                parameters,
+            )
+        except CatalogSourceContentError as exc:
+            raise HistoricalRangeSourceInputUnavailable(
+                requirement.missing_reason_code,
+                str(exc),
+                context={"requirement_id": requirement.requirement_id, **exc.context},
+            ) from exc
 
 
 def _canonical_bytes(value: Any) -> bytes:
