@@ -7,7 +7,15 @@ from typing import Any
 
 import numpy as np
 
-from backend.services.hmm_risk.state_model_set import canonical_sha256
+from backend.services.hmm_risk.b3_mixed_dimension import (
+    INACTIVE_DIMENSION_REASON_CODE,
+    MIXED_DIMENSION_CONTRACT_VERSION,
+    MIXED_REPEAT_SCHEMA_VERSION,
+    MIXED_TRAINING_ENTRY_SCHEMA_VERSION,
+    uses_mixed_dimension_level,
+    validate_projection_receipt,
+)
+from backend.services.hmm_risk.state_model_set import StateModelSetError, canonical_sha256
 
 
 D3_CONTRACT_VERSION = "hmm_risk_c008_b3_d3_03_a_v1"
@@ -655,6 +663,7 @@ def select_level_restart(
     codes = tuple(sorted(str(value) for value in expected_sector_codes))
     policy_identity_valid = _valid_sha256(feature_domain_policy_sha256)
     expected_count = 31 if level == "L1" else 131 if level == "L2" else 0
+    mixed_dimension = uses_mixed_dimension_level(family, level)
     blockers: list[str] = []
     failures: list[str] = []
     if len(codes) != expected_count or len(set(codes)) != expected_count:
@@ -670,6 +679,12 @@ def select_level_restart(
             failures.append("hmm_risk_model_selection_level_incomplete")
         if len(tuple(repeat.get("feature_names") or ())) != feature_count:
             failures.append("hmm_risk_model_selection_contract_unsatisfied")
+        if mixed_dimension and (
+            repeat.get("schema_version") != MIXED_REPEAT_SCHEMA_VERSION
+            or repeat.get("dimension_contract_version") != MIXED_DIMENSION_CONTRACT_VERSION
+            or repeat.get("feature_count") != feature_count
+        ):
+            failures.append(INACTIVE_DIMENSION_REASON_CODE)
         if repeat.get("validation_accessed") is not False or repeat.get("future_utility_accessed") is not False:
             failures.append("hmm_risk_model_selection_contract_unsatisfied")
         if repeat.get("semantic_labelability_accessed") is not False or repeat.get("d6_status_accessed") is not False:
@@ -691,6 +706,32 @@ def select_level_restart(
                 failures.append("hmm_risk_model_selection_level_incomplete")
             entry_keys.add(key)
             if entry.get("fit_status") == "accepted":
+                if mixed_dimension:
+                    projection = entry.get("projection_receipt")
+                    try:
+                        if not isinstance(projection, Mapping):
+                            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+                        effective_count = validate_projection_receipt(
+                            projection,
+                            family=family,
+                            level=level,
+                            sector_code=str(entry.get("sector_code") or ""),
+                            full_feature_names=repeat.get("feature_names") or (),
+                            preprocess=repeat.get("preprocess") or {},
+                        )
+                        if (
+                            entry.get("schema_version") != MIXED_TRAINING_ENTRY_SCHEMA_VERSION
+                            or entry.get("dimension_contract_version") != MIXED_DIMENSION_CONTRACT_VERSION
+                            or entry.get("feature_count") != feature_count
+                            or entry.get("likelihood_feature_count") != effective_count
+                            or entry.get("projection_sha256") != projection["projection_sha256"]
+                            or projection.get("projected_matrix_shape", [None])[0] != entry.get("training_rows")
+                            or projection.get("source_identities", {}).get("feature_domain_policy_sha256")
+                            != feature_domain_policy_sha256
+                        ):
+                            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+                    except (StateModelSetError, TypeError, ValueError):
+                        failures.append(INACTIVE_DIMENSION_REASON_CODE)
                 for field, contract in (
                     ("likelihood", D4_LIKELIHOOD_VERSION),
                     ("covariance", D4_COVARIANCE_VERSION),
@@ -722,6 +763,34 @@ def select_level_restart(
             ):
                 failures.append("hmm_risk_model_selection_repeat_mismatch")
                 continue
+            if mixed_dimension:
+                projection = model.get("projection_receipt")
+                try:
+                    if not isinstance(projection, Mapping):
+                        raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+                    effective_count = validate_projection_receipt(
+                        projection,
+                        family=family,
+                        level=level,
+                        sector_code=key[1],
+                        full_feature_names=model.get("feature_names") or (),
+                        preprocess=model.get("preprocess") or {},
+                        means_shape=np.asarray(model.get("means"), dtype=np.float64).shape,
+                        covariance_shape=np.asarray(model.get("covars"), dtype=np.float64).shape,
+                    )
+                    if (
+                        model.get("schema_version") != "hmm_risk_b3_inactive_dimension_model_entry_v1"
+                        or model.get("dimension_contract_version") != MIXED_DIMENSION_CONTRACT_VERSION
+                        or model.get("feature_count") != feature_count
+                        or model.get("likelihood_feature_count") != effective_count
+                        or model.get("projection_sha256") != projection["projection_sha256"]
+                        or projection.get("source_identities", {}).get("feature_domain_policy_sha256")
+                        != feature_domain_policy_sha256
+                    ):
+                        raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+                except (StateModelSetError, TypeError, ValueError):
+                    failures.append(INACTIVE_DIMENSION_REASON_CODE)
+                    continue
             model_map[key] = model
         for entry in entries:
             if isinstance(entry, Mapping) and entry.get("fit_status") == "accepted":
@@ -729,6 +798,11 @@ def select_level_restart(
                 model = model_map.get(key)
                 if model is None or entry.get("model_payload_sha256") != model.get("model_payload_sha256"):
                     failures.append("hmm_risk_model_selection_repeat_mismatch")
+                elif mixed_dimension and (
+                    entry.get("projection_sha256") != model.get("projection_sha256")
+                    or entry.get("likelihood_feature_count") != model.get("likelihood_feature_count")
+                ):
+                    failures.append(INACTIVE_DIMENSION_REASON_CODE)
         model_maps.append(model_map)
         if canonical_sha256(models) != repeat.get("model_payload_sha256"):
             failures.append("hmm_risk_model_selection_repeat_mismatch")
@@ -743,6 +817,8 @@ def select_level_restart(
             "entries": entries,
             "models": models,
         }
+        if mixed_dimension:
+            candidate_payload["dimension_contract_version"] = repeat.get("dimension_contract_version")
         if canonical_sha256(candidate_payload) != repeat.get("candidate_payload_sha256"):
             failures.append("hmm_risk_model_selection_repeat_mismatch")
     if canonical_sha256(first_entries) != canonical_sha256(second_entries):
@@ -791,32 +867,85 @@ def select_level_restart(
             and all((seed, code) in model_maps[0] for code in codes)
         )
         scores: list[float] = []
+        score_dimensions: list[int] = []
         if eligible:
             for entry in entries:
                 try:
                     final = float(entry["final_train_log_likelihood"])
                     rows = int(entry["training_rows"])
-                    dimensions = int(entry["feature_count"])
+                    dimensions = int(entry["likelihood_feature_count"] if mixed_dimension else entry["feature_count"])
                     score = final / (rows * dimensions)
                 except (KeyError, TypeError, ValueError, ZeroDivisionError):
                     eligible = False
                     candidate_failures.append("hmm_risk_model_selection_contract_unsatisfied")
                     break
-                if rows <= 0 or dimensions != feature_count or not math.isfinite(score):
+                expected_dimension = feature_count
+                if mixed_dimension:
+                    projection = entry.get("projection_receipt")
+                    try:
+                        if not isinstance(projection, Mapping):
+                            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+                        expected_dimension = validate_projection_receipt(
+                            projection,
+                            family=family,
+                            level=level,
+                            sector_code=str(entry.get("sector_code") or ""),
+                            full_feature_names=first_repeat.get("feature_names") or (),
+                            preprocess=first_repeat.get("preprocess") or {},
+                        )
+                        if projection.get("projected_matrix_shape", [None])[0] != rows:
+                            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+                    except StateModelSetError:
+                        eligible = False
+                        candidate_failures.append(INACTIVE_DIMENSION_REASON_CODE)
+                        break
+                if rows <= 0 or dimensions != expected_dimension:
                     eligible = False
-                    candidate_failures.append("hmm_risk_model_selection_contract_unsatisfied")
+                    candidate_failures.append(
+                        INACTIVE_DIMENSION_REASON_CODE
+                        if mixed_dimension
+                        else "hmm_risk_model_selection_contract_unsatisfied"
+                    )
+                    break
+                if not math.isfinite(score):
+                    eligible = False
+                    candidate_failures.append("hmm_risk_model_selection_score_non_finite")
                     break
                 scores.append(score)
+                score_dimensions.append(dimensions)
         aggregate = None
         if eligible:
             ordered_scores = sorted(scores)
+            ordered_sector_scores = []
+            for code, entry, score, dimension in zip(codes, entries, scores, score_dimensions, strict=True):
+                score_body = {
+                    "sector_code": code,
+                    "score": score,
+                    "training_rows": int(entry["training_rows"]),
+                    "final_train_log_likelihood": float(entry["final_train_log_likelihood"]),
+                    "effective_dimension": dimension,
+                    "denominator": int(entry["training_rows"]) * dimension,
+                    "formula": "final_train_log_likelihood/(training_rows*effective_dimension)",
+                }
+                if mixed_dimension:
+                    score_body.update(
+                        {
+                            "schema_version": "hmm_risk_b3_d5_effective_dimension_score_receipt_v1",
+                            "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                            "projection_sha256": entry["projection_sha256"],
+                        }
+                    )
+                ordered_sector_scores.append(
+                    {
+                        **score_body,
+                        **({"score_sha256": canonical_sha256(score_body)} if mixed_dimension else {}),
+                    }
+                )
             aggregate = {
                 "minimum": ordered_scores[0],
                 "median": ordered_scores[len(ordered_scores) // 2],
                 "mean": math.fsum(scores) / len(scores),
-                "ordered_sector_scores": [
-                    {"sector_code": code, "score": score} for code, score in zip(codes, scores, strict=True)
-                ],
+                "ordered_sector_scores": ordered_sector_scores,
             }
         candidates.append(
             {
@@ -887,6 +1016,8 @@ def select_level_restart(
         "d6_status_accessed": False,
         "selection_followed_by_refit": False,
     }
+    if mixed_dimension:
+        evidence["dimension_contract_version"] = MIXED_DIMENSION_CONTRACT_VERSION
     receipt = _status_receipt(
         contract_version=D5_SELECTION_VERSION,
         failures=failures,

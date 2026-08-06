@@ -7,6 +7,16 @@ import numpy as np
 import pytest
 
 from backend.services.hmm_risk import b3_acceptance as subject
+from backend.services.hmm_risk.b3_mixed_dimension import (
+    INACTIVE_DIMENSION_REASON_CODE,
+    MIXED_DIMENSION_CONTRACT_VERSION,
+    MIXED_MODEL_SCHEMA_VERSION,
+    MIXED_REPEAT_SCHEMA_VERSION,
+    MIXED_TRAINING_ENTRY_SCHEMA_VERSION,
+    TARGET_SECTOR,
+    build_projection_receipt,
+)
+from backend.services.hmm_risk.state_model_set import ALL_CORE_FEATURES
 
 
 def _monitor(history: list[float], *, converged: bool = True) -> dict:
@@ -208,6 +218,284 @@ def _selection_repeat(*, level: str, preferred_seed: int) -> dict:
     repeat["model_payload_sha256"] = subject.canonical_sha256(models)
     repeat["candidate_payload_sha256"] = subject.canonical_sha256(candidate_payload)
     return repeat
+
+
+def _mixed_dimension_selection_repeat(*, preferred_seed: int) -> dict:
+    codes = sorted([f"S{index:03d}" for index in range(130)] + [TARGET_SECTOR])
+    entries = []
+    models = []
+    likelihood = subject.evaluate_likelihood_acceptance(_monitor([-2.0, -1.995]))
+    covariance = subject.evaluate_covariance_acceptance(_covariance_evidence())
+    train_dates = _train_dates(30)
+    train_occupancy = subject.evaluate_train_occupancy(
+        _posterior([index % 3 for index in range(30)]),
+        train_dates,
+        frozen_input_manifest=_train_manifest(train_dates),
+    )
+    preprocess = {
+        "family": "winsor_zscore_1_99_train_global_v1",
+        "winsor_low": [-3.0] * 20,
+        "winsor_high": [3.0] * 20,
+        "center": [0.0] * 20,
+        "scale": [1.0] * 20,
+    }
+    manifest = {
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "e" * 64,
+        "feature_domain_policy_sha256": "e" * 64,
+        "formula_version": "hmm_risk_c010_feature_formula_v1",
+    }
+    projections = {}
+    for code in codes:
+        observations = np.ones((100, 20), dtype=np.float64)
+        if code == TARGET_SECTOR:
+            observations[:, 19] = 0.0
+        projection, _ = build_projection_receipt(
+            family="autocycle_all_core",
+            level="L2",
+            sector_code=code,
+            full_feature_names=ALL_CORE_FEATURES,
+            preprocess=preprocess,
+            raw_observations=observations,
+            preprocessed_observations=observations,
+            train_input_manifest=manifest,
+        )
+        projections[code] = projection
+    for seed in subject.RESTART_SCHEDULE:
+        normalized_score = -1.0 if seed == preferred_seed else -2.0 - 0.01 * (seed - 42)
+        for code in codes:
+            projection = projections[code]
+            dimension = int(projection["likelihood_feature_count"])
+            model_body = {
+                "schema_version": MIXED_MODEL_SCHEMA_VERSION,
+                "contract_version": subject.D3_CONTRACT_VERSION,
+                "family": "autocycle_all_core",
+                "level": "L2",
+                "seed": seed,
+                "sector_code": code,
+                "feature_names": list(ALL_CORE_FEATURES),
+                "preprocess": preprocess,
+                "startprob": [1 / 3, 1 / 3, 1 / 3],
+                "transmat": [[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]],
+                "means": [[0.0] * dimension for _ in range(3)],
+                "covariance_type": "diag",
+                "covars": [[1.0] * dimension for _ in range(3)],
+                "parameter_profile_sha256": "a" * 64,
+                "numeric_environment_sha256": "b" * 64,
+                "observation_manifest_hash": "c" * 64,
+                "pit_constituent_manifest_hash": "d" * 64,
+                "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                "feature_count": 20,
+                "likelihood_feature_names": projection["active_feature_names"],
+                "likelihood_feature_count": dimension,
+                "projection_receipt": projection,
+                "projection_sha256": projection["projection_sha256"],
+            }
+            model = {**model_body, "model_payload_sha256": subject.canonical_sha256(model_body)}
+            models.append(model)
+            entry_body = {
+                "schema_version": MIXED_TRAINING_ENTRY_SCHEMA_VERSION,
+                "family": "autocycle_all_core",
+                "level": "L2",
+                "seed": seed,
+                "sector_code": code,
+                "fit_status": "accepted",
+                "likelihood": likelihood,
+                "covariance": covariance,
+                "train_occupancy": train_occupancy,
+                "model_entry_status": "accepted",
+                "model_entry_valid": True,
+                "model_payload_sha256": model["model_payload_sha256"],
+                "final_train_log_likelihood": normalized_score * 100 * dimension,
+                "training_rows": 100,
+                "feature_count": 20,
+                "likelihood_feature_count": dimension,
+                "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                "projection_receipt": projection,
+                "projection_sha256": projection["projection_sha256"],
+            }
+            entries.append({**entry_body, "entry_receipt_sha256": subject.canonical_sha256(entry_body)})
+    repeat = {
+        "schema_version": MIXED_REPEAT_SCHEMA_VERSION,
+        "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+        "feature_count": 20,
+        "family": "autocycle_all_core",
+        "level": "L2",
+        "schedule": list(subject.RESTART_SCHEDULE),
+        "canonical_sector_codes": codes,
+        "feature_names": list(ALL_CORE_FEATURES),
+        "preprocess": preprocess,
+        "numeric_environment": {"scope": "test"},
+        "entries": entries,
+        "models": models,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "semantic_labelability_accessed": False,
+        "d6_status_accessed": False,
+    }
+    candidate_payload = {
+        key: repeat[key]
+        for key in (
+            "family",
+            "level",
+            "schedule",
+            "canonical_sector_codes",
+            "feature_names",
+            "preprocess",
+            "numeric_environment",
+            "entries",
+            "models",
+            "dimension_contract_version",
+        )
+    }
+    repeat["model_payload_sha256"] = subject.canonical_sha256(models)
+    repeat["candidate_payload_sha256"] = subject.canonical_sha256(candidate_payload)
+    return repeat
+
+
+def test_d5_mixed_dimension_uses_effective_entry_dimension_without_reducing_completeness() -> None:
+    first = _mixed_dimension_selection_repeat(preferred_seed=46)
+    second = _mixed_dimension_selection_repeat(preferred_seed=46)
+    codes = first["canonical_sector_codes"]
+    receipt = subject.select_level_restart(
+        first,
+        second,
+        family="autocycle_all_core",
+        level="L2",
+        expected_sector_codes=codes,
+        feature_count=20,
+        feature_domain_policy_sha256="e" * 64,
+    )
+
+    assert receipt["level_selection_valid"] is True
+    assert receipt["evidence"]["selected_seed"] == 46
+    selected = next(candidate for candidate in receipt["evidence"]["candidates"] if candidate["seed"] == 46)
+    assert len(selected["aggregate"]["ordered_sector_scores"]) == 131
+    target = next(
+        item for item in selected["aggregate"]["ordered_sector_scores"] if item["sector_code"] == TARGET_SECTOR
+    )
+    assert target["effective_dimension"] == 19
+    assert target["denominator"] == 1900
+    assert target["score"] == pytest.approx(-1.0)
+    target_body = {key: value for key, value in target.items() if key != "score_sha256"}
+    assert target["score_sha256"] == subject.canonical_sha256(target_body)
+    assert {item["effective_dimension"] for item in selected["aggregate"]["ordered_sector_scores"]} == {19, 20}
+
+
+def test_d5_mixed_dimension_rejects_rehashed_dimension_drift() -> None:
+    first = _mixed_dimension_selection_repeat(preferred_seed=46)
+    second = _mixed_dimension_selection_repeat(preferred_seed=46)
+    for repeat in (first, second):
+        entry = next(item for item in repeat["entries"] if item["sector_code"] == TARGET_SECTOR)
+        entry["likelihood_feature_count"] = 20
+        entry_body = {key: value for key, value in entry.items() if key != "entry_receipt_sha256"}
+        entry["entry_receipt_sha256"] = subject.canonical_sha256(entry_body)
+        candidate_payload = {
+            key: repeat[key]
+            for key in (
+                "family",
+                "level",
+                "schedule",
+                "canonical_sector_codes",
+                "feature_names",
+                "preprocess",
+                "numeric_environment",
+                "entries",
+                "models",
+                "dimension_contract_version",
+            )
+        }
+        repeat["candidate_payload_sha256"] = subject.canonical_sha256(candidate_payload)
+    receipt = subject.select_level_restart(
+        first,
+        second,
+        family="autocycle_all_core",
+        level="L2",
+        expected_sector_codes=first["canonical_sector_codes"],
+        feature_count=20,
+        feature_domain_policy_sha256="e" * 64,
+    )
+    assert receipt["level_selection_valid"] is False
+    assert INACTIVE_DIMENSION_REASON_CODE in receipt["failure_reason_codes"]
+
+
+def test_d5_mixed_dimension_rejects_projected_row_count_drift() -> None:
+    first = _mixed_dimension_selection_repeat(preferred_seed=46)
+    second = _mixed_dimension_selection_repeat(preferred_seed=46)
+    for repeat in (first, second):
+        entry = next(item for item in repeat["entries"] if item["sector_code"] == TARGET_SECTOR)
+        entry["training_rows"] = 99
+        entry_body = {key: value for key, value in entry.items() if key != "entry_receipt_sha256"}
+        entry["entry_receipt_sha256"] = subject.canonical_sha256(entry_body)
+        candidate_payload = {
+            key: repeat[key]
+            for key in (
+                "family",
+                "level",
+                "schedule",
+                "canonical_sector_codes",
+                "feature_names",
+                "preprocess",
+                "numeric_environment",
+                "entries",
+                "models",
+                "dimension_contract_version",
+            )
+        }
+        repeat["candidate_payload_sha256"] = subject.canonical_sha256(candidate_payload)
+    receipt = subject.select_level_restart(
+        first,
+        second,
+        family="autocycle_all_core",
+        level="L2",
+        expected_sector_codes=first["canonical_sector_codes"],
+        feature_count=20,
+        feature_domain_policy_sha256="e" * 64,
+    )
+    assert receipt["level_selection_valid"] is False
+    assert INACTIVE_DIMENSION_REASON_CODE in receipt["failure_reason_codes"]
+
+
+def test_d5_mixed_dimension_keeps_nonfinite_score_as_typed_candidate_failure() -> None:
+    first = _mixed_dimension_selection_repeat(preferred_seed=46)
+    second = _mixed_dimension_selection_repeat(preferred_seed=46)
+    for repeat in (first, second):
+        entry = next(item for item in repeat["entries"] if item["seed"] == 46 and item["sector_code"] == TARGET_SECTOR)
+        entry["final_train_log_likelihood"] = "nan"
+        entry_body = {key: value for key, value in entry.items() if key != "entry_receipt_sha256"}
+        entry["entry_receipt_sha256"] = subject.canonical_sha256(entry_body)
+        candidate_payload = {
+            key: repeat[key]
+            for key in (
+                "family",
+                "level",
+                "schedule",
+                "canonical_sector_codes",
+                "feature_names",
+                "preprocess",
+                "numeric_environment",
+                "entries",
+                "models",
+                "dimension_contract_version",
+            )
+        }
+        repeat["candidate_payload_sha256"] = subject.canonical_sha256(candidate_payload)
+    receipt = subject.select_level_restart(
+        first,
+        second,
+        family="autocycle_all_core",
+        level="L2",
+        expected_sector_codes=first["canonical_sector_codes"],
+        feature_count=20,
+        feature_domain_policy_sha256="e" * 64,
+    )
+    rejected = next(candidate for candidate in receipt["evidence"]["candidates"] if candidate["seed"] == 46)
+    assert rejected["eligible"] is False
+    assert rejected["failure_reason_codes"] == ["hmm_risk_model_selection_score_non_finite"]
+    assert receipt["level_selection_valid"] is True
+    assert receipt["evidence"]["selected_seed"] != 46
 
 
 @pytest.mark.parametrize(("level", "count", "preferred_seed"), [("L1", 31, 46), ("L2", 131, 48)])

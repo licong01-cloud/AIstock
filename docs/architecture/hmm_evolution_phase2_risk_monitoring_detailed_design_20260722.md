@@ -1843,12 +1843,10 @@ invalid语义fail closed；finite但非零只记录true，不动态激活feature
 - full20 observation/preprocess/projection evidence是独立`projection_status`，不推导fit/convergence/covariance/occupancy accepted；
 - hard hidden-state assignment、future utility、fading/neutral/trending mapping均不在controlled-refit输入中，B2继续NOT_APPROVED。
 
-未来formal grid若采用D1-B，`801207.SI`的D5 sector score分母存在必须单独确认的comparability问题：既有批准公式为
-`LL_final/(N*d_family)`且autocycle family的`d_family=20`；改为`d_effective=19`会改变D5合同，继续使用20又可能使19维likelihood与
-其他20维sector不可直接比较。因此登记`C-008-B3-REMEDIATION-D1-D5-COMPAT-01=PROPOSED_PENDING_USER_DECISION_NOT_IMPLEMENTATION_READY`；
-REFIT-03已补足fit/covariance pattern证据，但仍未证明19D/20D score可比，故该状态不自动转为批准。
-controlled-refit固定`selection_performed=false`，不得通过本节私自选择19或20、不得执行D5，也不得因该gap把局部fit写成
-implementation ready。
+未来formal grid采用D1-B时，`801207.SI`的D5 sector score分母使用用户已批准的
+`LL_final/(N*d_effective)`：该entry的`d_effective=19`，其余130个entry为20。该决定是明确业务公式，不是从REFIT-03样本推导出的
+普遍统计可比性结论，也不增加经验性阈值。`C-008-B3-REMEDIATION-D1-D5-COMPAT-01-A`已完成源码实现和本模块审核；
+controlled-refit历史证据仍固定`selection_performed=false`，不得把历史局部fit写成implementation ready或正式D5结果。
 
 **6. Controlled refit 精确合同。** 仅当用户选择D1-B并单独批准该执行后，允许运行
 `hmm_risk_c008_b3_d1_controlled_refit_v1`：
@@ -2162,16 +2160,16 @@ threadpoolctl 3.6.0 且有效线程池为1。该相等性只证明同一host和�
 4. report明确`d3_d4_descriptive_contracts_applied=true`，但
    `formal_model_set_acceptance_performed=false`。validation、future utility、semantic labelability、D6、selection、
    model/READY、数据库与runtime访问/写入均为false；因此REFIT-03不改变D3/D4正式验收状态，也不构成D5输入。
-5. `C-008-B3-D1-POST-REFIT03-A=PROPOSED_PENDING_USER_DECISION`：建议把已经选择的D1-B固化为
+5. `C-008-B3-D1-POST-REFIT03-A=RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_LOCAL_REVIEWED`：用户已把D1-B固化为
    **level-local engineering robustness contract**。证据边界严格限定为：在本次冻结输入、已批准参数、seeds 42..49与固定单线程
    数值环境下，保留exact inactive coordinate的matched 20D为16/16 covariance failure，而删除该coordinate的19D为16/16
    `fit_completed`且descriptive `covariance_status=accepted`；不得外推为GaussianHMM普遍不能处理常量维，
-   也不得再宣称D1-B已证明唯一统计因果机制。该语义变更须用户确认，不能由诊断结果自动生效。
+   也不得再宣称D1-B已证明唯一统计因果机制。该批准只激活本节固定projection工程合同，不改变历史诊断的`inconclusive`结论。
 
-`C-008-B3-REMEDIATION-D1-D5-COMPAT-01`的精确选项如下，全部仍为设计候选而非已批准gate：
+`C-008-B3-REMEDIATION-D1-D5-COMPAT-01`的精确选项如下；用户已批准方案A，其他方案仅保留决策审计记录：
 
-- **A（推荐，`PROPOSED_PENDING_USER_DECISION`）— effective-dimension train-only score。** 继承已批准D5-01-B的
-  `L_final/(N*d)`归一化结构，但提议将该`d`从level-wide 20精确化为entry effective dimension `d_i`；这一dimension identity本身尚未批准。
+- **A（已批准并完成源码实现，`RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_NOT_EXECUTED`）— effective-dimension train-only score。** 继承已批准D5-01-B的
+  `L_final/(N*d)`归一化结构，并将该`d`从level-wide 20精确化为entry effective dimension `d_i`。
   只有exact proposed identity `autocycle_all_core:L2/801207.SI`使用`d_i=19`，
   其他entry使用`d_i=20`。同一level仍须131/131 sectors全部通过D3/D4才eligible，D5继续在全部131个score上按
   `(minimum, median, math.fsum mean)` tolerance-aware lexicographic maximize；禁止排除sector、per-sector seed stitching、
@@ -2180,7 +2178,7 @@ threadpoolctl 3.6.0 且有效线程池为1。该相等性只证明同一host和�
   业务公式，不再设置经验性“可比性阈值”或额外研究门禁。实现PR只执行确定性直接测试：19D/20D正反例逐项重算
   `L_final/(N_i*d_i)`；active feature list/mask/hash与`d_i`不一致必须fail closed；writer/parser/readback/canonical hash必须一致；
   131-entry aggregate不得漏sector；测试固定`validation_accessed=false/future_utility_accessed=false/selection_performed=false`。
-  在方案A获批前保持`hmm_risk_model_inactive_dimension_d5_comparability_unresolved`；dimension identity/hash/`d_i`冲突使用
+  方案A批准后不再使用`hmm_risk_model_inactive_dimension_d5_comparability_unresolved`阻断；dimension identity/hash/`d_i`冲突使用
   `hmm_risk_model_inactive_dimension_contract_invalid`，score非有限使用`hmm_risk_model_selection_score_non_finite`，131-entry缺失使用
   `hmm_risk_model_selection_level_incomplete`，两fresh-process receipt不一致使用`hmm_risk_model_selection_repeat_mismatch`；不得压缩为generic failure。
   这些测试只证明实现忠实于获批公式，不宣称从一组样本统计证明跨维度普遍可比，也不阻断后续2096-fit正式制备之外的研究方向。
@@ -2191,9 +2189,9 @@ threadpoolctl 3.6.0 且有效线程池为1。该相等性只证明同一host和�
 - **D（`PROPOSED_NOT_RECOMMENDED_PENDING_USER_DECISION`）— 全level改用within-sector rank/z-score。** 虽消除直接维度尺度，但会改变全部131个
   sector的D5算法和历史决策语义，属于没有当前证据支持的广泛模型迁移；本次不替用户淘汰该方向。
 
-执行顺序因此修正为：先由用户决定`C-008-B3-D1-POST-REFIT03-A`与
-`C-008-B3-REMEDIATION-D1-D5-COMPAT-01`；若选择A，再实现最小mixed-dimension artifact/parser、train-only score receipt及上述
-确定性直接测试；实现验证通过后运行受影响的`autocycle_all_core:L2` 2096 fits并按获批D5/D6合同fail closed。当前没有证据再次运行
+执行顺序因此修正为：`C-008-B3-D1-POST-REFIT03-A`与
+`C-008-B3-REMEDIATION-D1-D5-COMPAT-01-A`已获用户批准；mixed-dimension artifact/parser、train-only score receipt及上述
+确定性直接测试已完成源码实现与本模块审核，但尚未运行正式grid。下一步另行授权后运行受影响的`autocycle_all_core:L2` 2096 fits并按获批D5/D6合同fail closed。当前没有证据再次运行
 相同48-fit诊断或扩大seed grid；后者会引入post-hoc
 selection风险。D1-B未修改共享KMeans/EM/covariance合同，所以没有证据重跑完整5184 grid。任一步失败均保持两family blocked、READY=0。
 
@@ -2220,7 +2218,7 @@ aggregate all-reasons以及全部no-access/no-write flags。源码审核通过�
 - `hmm_risk_model_inactive_dimension_repeat_mismatch`；
 - `hmm_risk_model_inactive_dimension_attempt_set_incomplete`；
 - `hmm_risk_inactive_dimension_observation_receipt_conflict`；
-- `hmm_risk_model_inactive_dimension_d5_comparability_unresolved`；
+- `hmm_risk_model_inactive_dimension_d5_comparability_unresolved`（批准前历史artifact只读reason；新实现不再产生）；
 - 既有最具体的initialization/monitor/likelihood/covariance/train-structure reason codes。
 
 不得把exact-zero写成普通missing data，不得把projection失败压缩成generic fit failure，也不得把control drift或repeat mismatch降级为warning。
@@ -2239,9 +2237,8 @@ aggregate all-reasons以及全部no-access/no-write flags。源码审核通过�
 - D4各状态独立，0 D5/D6/validation/future utility/model/READY/DB/runtime write；
 - changed-file ownership、`hmm_risk_backend` required plan、F2 validator、scope、Ruff/compile与`git diff --check`。
 
-D1-B P1最小源码已实现；该源码状态本身不授权controlled-refit fit。用户后续独立授权的controlled-refit已启动，但在首个fit前由
-C-010-A5阻断，不能冒充32-fit完成。D5 comparability未闭合前仍禁止formal grid/selection/model/READY。该限制是既有D5业务语义的准确边界，
-不是新增runtime人工审批。
+D1-B P1与P5 mixed-dimension源码均已实现；源码状态本身不授权formal grid/selection/model/READY。历史controlled-refit及后续
+REFIT-03证据保持各自原始状态；正式2096-fit执行仍须单独授权。该限制是训练副作用与交付状态的准确边界，不是新增runtime人工审批。
 
 **9. Evidence-first执行优先级与反过度工程边界。** 完整设计合同不删减，但实现按最短可证伪路径逐步推进；每个slice必须完整实现其
 声明范围、保留typed failure与durable evidence，且不得把局部机制、受控训练或单level结果宣称为family/Phase 2完成。
@@ -2253,8 +2250,8 @@ C-010-A5阻断，不能冒充32-fit完成。D5 comparability未闭合前仍禁�
 | P2 | 最小源码修订 | 扩展现有D1 runner/入口/直接测试，支持current-A5 snapshot、matched negative、harness与历史drift receipt | BUG-977 source/PR/close-sync已合入并清理；不建设通用实验平台、scheduler、API/UI、runtime或mixed-dimension READY writer |
 | P3 | 真实受控训练 | REFIT-02-B已在两fresh processes完成48 attempts/48真实fits | 19D treatment与20D harness通过、matched 20D全部covariance failure；mechanism保持inconclusive，固定0 D5/D6/validation/model/READY |
 | P3A | covariance evidence执行 | `C-008-B3-D1-REFIT-03-COVARIANCE-DIAG-01`完成raw cell/bit-pattern/三角色pair双fresh-process `48/48` fits | canonical `7e8a1755…76b9`、payload `53574f62…088f` bitwise equal；结论为`mixed_seed_pattern/inconclusive`、D5 readiness=false，不得写成D4/D5 gate |
-| P4 | 模型合同决策 | 用户决定`C-008-B3-D1-POST-REFIT03-A`是否把D1-B固化为level-local engineering robustness，以及`C-008-B3-REMEDIATION-D1-D5-COMPAT-01`是否选择effective-dimension方案A | 当前均为`PROPOSED_PENDING_USER_DECISION`；不得由实现自动采用19维分母、排除sector或validation-driven选择 |
-| P5 | 必要模型制备管线 | 仅在P4获批后，实现完整mixed-dimension level entry、writer/parser same-authority、manifest/hash与train-only D5 score receipt，并执行公式/identity/131-entry完整性的确定性直接测试 | 直接测试只验证获批公式的实现，不建立经验性可比阈值；禁止先造静态model、伪造READY或无真实consumer的通用框架 |
+| P4 | 模型合同决策 | `C-008-B3-D1-POST-REFIT03-A`与`C-008-B3-REMEDIATION-D1-D5-COMPAT-01-A` | `RESOLVED_USER_APPROVED`；采用level-local D1-B与effective-dimension公式，禁止排除sector或validation-driven选择 |
+| P5 | 必要模型制备管线 | 完整mixed-dimension level entry、writer/parser same-authority、manifest/hash与train-only D5 score receipt，并执行公式/identity/131-entry完整性的确定性直接测试 | `SOURCE_IMPLEMENTED_LOCAL_REVIEWED`；直接测试只验证获批公式，不建立经验性可比阈值；未运行2096 fits、D5/D6或生成model/READY |
 | P6 | 正式真实训练 | P5实现验证通过且依赖仍严格level-local后，重训受影响的`autocycle_all_core:L2`：131 sectors × 8 seeds × 2 fresh processes = 2096 fits | 按获批D5/D6合同fail closed；只有共享KMeans/EM/covariance或公共算法合同变化时才有证据重跑完整5184，不得扩大seed |
 | P7 | 正式模型验收 | 对新`autocycle_all_core:L2`执行D5 train-only selection与唯一selected identity的D6 hard validation | D6失败不得返回D5换seed；不得用单level通过推导family READY |
 | P8 | 其余模型阻塞修复 | 分别处理autocycle L1 `801030.SI`、legacy L2 `801019.SI/801207.SI/801782.SI`及独立likelihood/covariance机制 | 一次只改一个可归因机制；禁止把多类根因塞入“大重构”或放宽统一阈值 |
@@ -3009,7 +3006,7 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-D3-03/D4-02-DIAG-04 | 是否用 scale-aware initialization/prior 在固定环境执行两次完整 refit 诊断 | `VERIFIED_DIAGNOSTIC_ONLY_NO_SELECTION_NO_ARTIFACT` | producer `94abea6c...`；992 fits；payload hash `3abb384e...19aac` bitwise equal；report canonical `2c9136d5...74c9b`；无正式 acceptance、selection、model/READY/DB/runtime write |
 | C-008-B3-D4-02 | covariance reference/bounds/floor/anomaly budget | `RESOLVED_USER_APPROVED_D4_02_A` | dynamic `L/U`、`τ_bound=0.005` 闭区间、tolerance 后 total/per-state/per-feature zero anomaly、M-step residual `<=0.02`、raw-only posterior 与禁止 clip/projection 已批准 |
 | C-008-B3-D1-REFIT-03-COVARIANCE-DIAG-01 | REFIT-02-B matched 20D covariance failure是否严格局限于exact-zero inactive coordinate，如何保存raw shape/cell/bit-pattern与三角色pair证据 | `VERIFIED_DIAGNOSTIC_COMPLETE_INCONCLUSIVE_MIXED_SEED_PATTERN` | producer `b474170f…`、48/48 fits、report canonical `7e8a1755…76b9`、两process payload `53574f62…088f` bitwise equal；treatment/harness 16/16 `fit_completed`且descriptive covariance accepted，matched 16/16 covariance failed，seeds 45/47/48仅feature 19失效而其余seed全active set失效。formal acceptance=false、D5 readiness=false；未执行selection/D6/model/READY/DB/runtime |
-| C-008-B3-D1-REFIT-03-RESULT-AUDIT-01 | REFIT-03执行事实、D1证据边界、D5兼容选项与后续最小实现顺序是否完整回填 | `VERIFIED_RESULT_AUDIT_COMPLETE_PROPOSED_DECISIONS_PENDING` | canonical `7e8a1755…76b9`与mixed-seed/inconclusive结论已回填；`POST-REFIT03-A`和`REMEDIATION-D1-D5-COMPAT-01`仍待用户决定。未把descriptive accepted改写为formal acceptance，未新增经验性score阈值或自动淘汰方案 |
+| C-008-B3-D1-REFIT-03-RESULT-AUDIT-01 | REFIT-03执行事实、D1证据边界、D5兼容选项与后续最小实现顺序是否完整回填 | `VERIFIED_RESULT_AUDIT_COMPLETE_DECISIONS_LATER_RESOLVED` | canonical `7e8a1755…76b9`与mixed-seed/inconclusive结论已回填；当次审核保持pending，后续用户已批准`POST-REFIT03-A`和`REMEDIATION-D1-D5-COMPAT-01-A`。未把descriptive accepted改写为formal acceptance，未新增经验性score阈值或自动淘汰方案 |
 | C-008-B3-D4-03 | train hard occupancy/month/run/transition acceptance | `RESOLVED_USER_APPROVED_D4_03_B` | `hmm_risk_c008_b3_d4_03_b_v1`：causal train hard authority；每 state count `>=max(5,ceil(1%*N))`、occupancy `>=1%`、month/run `>=3`、incoming/outgoing `>=2`、max-run-share `<=0.8`、row-sum error `<=1e-12`、margin严格 `>1e-12`；historical DIAG 不反写正式 acceptance |
 | C-008-B3-D5-01 | train-only family/level-global identity、score/aggregation/tie-break | `RESOLVED_USER_APPROVED_D5_01_B` | `hmm_risk_c008_b3_d5_01_b_v1`：每family分别选择L1 31/31与L2 131/131 level-global seed；`L_final/(N*d)`；min/median/`math.fsum` mean lex maximize；relative+absolute tolerance逐维过滤，最终按schedule index；validation/D6不可见、D6失败不得reselection；historical DIAG不写selection |
 | C-008-B3-D5-02 | 固定数值环境内的可复现性 | `RESOLVED_USER_APPROVED_D5_02_B_FIXED_ENVIRONMENT` | 两个 fresh process canonical hash 必须 bitwise equal；不外推跨 host/BLAS/依赖版本 |
@@ -3024,8 +3021,8 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-REMEDIATION-D1-B | 显式20→19 inactive-dimension model identity | `RESOLVED_USER_SELECTED_P1_SOURCE_MERGED_REFIT_03_DIAGNOSTIC_COMPLETE_INCONCLUSIVE` | `b3_d1_inactive_dimension.py`已实现exact-zero authority与固定projection；REFIT-03证明19D treatment在16/16 fits通过，但mixed seed raw pattern不证明唯一因果机制。是否固化为level-local engineering robustness由`POST-REFIT03-A`另行决定，mixed-dimension artifact/parser/runtime仍未实施 |
 | C-008-B3-REMEDIATION-D1-B-REFIT-01 | 历史frozen control payload与current-A5输入能否同时闭合 | `VERIFIED_ATTEMPTED_INCONCLUSIVE_TRAIN_CORE_DRIFT_ZERO_FITS` | BUG-962 final report：current-A5 `train_observation_sha256`与历史train core不同；0 attempts/0 fits，mechanism inconclusive，禁止忽略hash、回退v1或覆盖历史artifact |
 | C-008-B3-REMEDIATION-D1-B-REFIT-02-A | 是否以同一current-A5 authority运行801207 19D treatment、801207 identity20 matched negative和801011 identity20 harness | `RESOLVED_USER_APPROVED_SOURCE_MERGED_EXECUTED_INCONCLUSIVE` | REFIT-02-A/B已完成双process受控执行并暴露matched covariance failure；后续REFIT-03以current authority冻结bundle重跑48/48 fits并形成exact mixed-seed evidence。D5/D6/validation/model/READY/DB/runtime仍未执行 |
-| C-008-B3-D1-POST-REFIT03-A | REFIT-03 mixed seed结果后，D1-B能否作为level-local engineering robustness而不宣称唯一统计因果机制 | `PROPOSED_PENDING_USER_DECISION` | 推荐采用；证据仅限当前冻结输入/参数/seeds/固定环境下19D 16/16 fit completed、matched 20D 16/16 covariance failed。不得外推GaussianHMM普遍不能处理常量维，也不得自动实施或改写历史机制结论 |
-| C-008-B3-REMEDIATION-D1-D5-COMPAT-01 | inactive dimension后D5 `LL/(N*d_i)`分母与跨sector score如何保持批准语义 | `PROPOSED_PENDING_USER_DECISION_NOT_IMPLEMENTATION_READY` | 推荐A：仅801207使用`d_i=19`，其他entry为20，131/131 eligibility与min/median/mean lexicographic保持；批准后以公式/identity/131-entry完整性直接测试验证实现，不设置经验性可比阈值。固定20、排除sector、全level rank/z-score均仍为未获批准选项 |
+| C-008-B3-D1-POST-REFIT03-A | REFIT-03 mixed seed结果后，D1-B能否作为level-local engineering robustness而不宣称唯一统计因果机制 | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_LOCAL_REVIEWED` | 已限定为当前冻结输入/参数/seeds/固定环境下的level-local engineering robustness；不外推GaussianHMM普遍机制，不改写历史`inconclusive`结论 |
+| C-008-B3-REMEDIATION-D1-D5-COMPAT-01 | inactive dimension后D5 `LL/(N*d_i)`分母与跨sector score如何保持批准语义 | `RESOLVED_USER_APPROVED_A_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_NOT_EXECUTED` | 仅801207使用`d_i=19`，其他130 entry为20，131/131 eligibility与min/median/mean lexicographic保持；mixed schema、projection receipt、parser/readback、READY writer与公式/identity/完整性直接测试已实现。不设置经验性可比阈值；未运行2096 fits、D5/D6或生成model/READY |
 
 C-001-A/C-002-A/C-003-A 已于 2026-07-22 获用户明确批准并回填本文；它们不是运行时人工审批。
 C-006-A 已于 2026-07-23 获用户明确批准并回填本文；它不新增运行时审批或第二套股票池。
@@ -3075,7 +3072,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_remediation_diagnostic,b3_d1_inactive_dimension,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `python -m nox -s hmm_risk_backend`；formal canonical `e7992f87…39f`；current-A5 preflight `cd70e597…fee5`；REFIT-02-B canonical `3a4de927…36cf`；REFIT-03 canonical `7e8a1755…76b9`、48/48 fits与双process payload `53574f62…088f` equality | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_C010_A5_MERGED_D1_REFIT_03_DIAGNOSTIC_COMPLETE_INCONCLUSIVE_D5_COMPAT_PENDING_BLOCKED_MODEL_ACCEPTANCE | 两family blocked、READY=0；REFIT-03 treatment/harness 16/16 `fit_completed`且descriptive covariance accepted，matched 16/16 covariance failure，formal acceptance=false，raw pattern为mixed seed。D1 engineering语义与D5 effective-dimension方案仍待用户决定；不得自动改阈值、选择seed、运行2096 fits或重跑完整grid |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_mixed_dimension,b3_remediation_diagnostic,b3_d1_inactive_dimension,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `python -m nox -s hmm_risk_backend`；formal canonical `e7992f87…39f`；current-A5 preflight `cd70e597…fee5`；REFIT-02-B canonical `3a4de927…36cf`；REFIT-03 canonical `7e8a1755…76b9`、48/48 fits与双process payload `53574f62…088f` equality；D1-D5 direct mixed-dimension tests | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_C010_A5_MERGED_D1_REFIT_03_DIAGNOSTIC_COMPLETE_INCONCLUSIVE_D1_D5_COMPAT_SOURCE_IMPLEMENTED_BLOCKED_MODEL_ACCEPTANCE | 两family blocked、READY=0；REFIT-03历史结论仍为mixed seed/inconclusive。D1 engineering语义与D5 effective-dimension方案已批准并完成源码实现；尚未运行2096 fits、D5/D6或生成model/READY，不得自动改阈值、扩大grid或声明模型验收完成 |
 | F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A/C-009/C-010 contracts | `backend/tests/hmm_risk/test_observation_eligibility.py`；`backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`；C-010-A5 preflight与partition canonical `03d78534…ead6` | APPROVED_BY_USER_C010_A5_SOURCE_MERGED_601_DAY_PREFLIGHT_VERIFIED | `P_all=502/P_in=501/P_out=1`，已知002951 key按SW-domain-out保留完整证据；v1历史只读、v2新写、out-only denominator与同symbol in/out均闭合。不得伪造SW、删证券/absence、填值或回退v1输入 |
 | F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,b3_remediation_diagnostic,b3_d1_inactive_dimension,state_model_set}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal rejection summaries；blocker diagnostic `10287e84…cffe8`；DIAG-02 `48157a42…bb58`；REFIT-02-B `3a4de927…36cf`；REFIT-03 `7e8a1755…76b9`；`backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_REFIT_03_DIAGNOSTIC_COMPLETE_INCONCLUSIVE_BLOCKED_D3_D4 | REFIT-03已完成raw exact cell/shape/bit-pattern、partial-stage、三角色pair与48/48真实fit；mixed seed pattern使机制保持inconclusive，formal acceptance未执行。不能改阈值、选择seed、删feature、宣称D5 readiness或直接运行formal grid |
 | F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | formal D5/D6 receipts；blocker diagnostic 3-entry replay canonical `10287e84…cffe8`；`backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_DIAGNOSED_BLOCKED_D5_D6 | selection train-only且无refit；D6失败未reselection；`801980.SI` assignment/utility有效但temporal evidence失败；B2不采用，remediation待用户批准 |
@@ -3547,7 +3544,7 @@ database或runtime已执行。
 审核结论：`PASS_DESIGN_CONTRACT_COMPLETE_PROPOSED_NOT_APPROVED_NOT_IMPLEMENTATION_READY`。该结论只表示REFIT-03诊断设计已经
 达到可供用户决策的精确程度；不表示用户已批准、源码可直接实施、48-fit可执行或D1/D5机制已闭合。
 
-### 23.12 REFIT-03真实结果与D5兼容决策包正式审核
+### 23.12 REFIT-03真实结果与D5兼容决策包正式审核（批准前历史快照）
 
 - **证据权威与可复现性**：`PASS`。report canonical `7e8a1755…76b9`、bundle canonical `7ac88ef9…46e2`、
   两进程 comparable payload `53574f62…088f` 已按仓库 canonical JSON 规则回读；48/48 attempts/fits与三角色×8 seeds×2
@@ -3574,6 +3571,39 @@ database或runtime已执行。
 
 审核结论：`PASS_RESULT_AUDIT_COMPLETE_PROPOSED_DECISIONS_NOT_APPROVED_NOT_IMPLEMENTATION_READY`。该结论只证明REFIT-03结果被
 完整、非简化、非静默地纳入设计；不批准D1工程语义、D5-A、mixed-dimension实现、2096-fit训练或模型交付。
+
+### 23.13 D1-D5 mixed-dimension源码正式审核
+
+- **批准边界**：`PASS`。用户已批准`C-008-B3-D1-POST-REFIT03-A`和
+  `C-008-B3-REMEDIATION-D1-D5-COMPAT-01-A`；本切片只实现mixed-dimension model/level schema、projection receipt、
+  repeat/parser、selected-level/READY readback与D5 effective-dimension score。未运行2096 fits、未执行真实D5/D6、未写model/READY、
+  未访问数据库或控制runtime。
+- **禁止简化/子集/POC**：`PASS`。`autocycle_all_core:L2`仍要求131/131 entries和单一family-global seed；
+  `801207.SI`固定19维，其余130 entries显式identity20，histogram固定`{"19":1,"20":130}`。没有padding、伪inactive参数、
+  sector排除、per-sector seed stitching或single-family完成声明。
+- **禁止静默错误**：`PASS`。unknown/missing projection、preprocess/source/hash/mask/count/shape drift、额外19维entry、非有限score、
+  repeat mismatch与level缺失分别fail closed；entry与model projection identity必须一致。projection receipt持久化raw/preprocessed
+  variance、zero/sign count、归一化bit-pattern count、固定treatment source-profile receipt及current formal profile identity；projected row count
+  必须与D5 `training_rows`相等。旧v1 repeat/model/selected artifact路径保持不变，不把缺失projection默认为identity20。
+- **禁止业务逻辑迁移**：`PASS`。full20 observation与full20 preprocess先执行，再按固定indices投影；D5仍使用train-only
+  `(minimum, median, math.fsum mean)` lexicographic selection，只把批准公式分母明确为entry `d_i`。validation、future utility、
+  hard semantic authority、D4阈值、两family和31/131完整性均未改变。
+- **禁止未经确认的门禁和审批**：`PASS`。没有经验性19D/20D可比阈值、runtime人工确认、research淘汰或发布审批；
+  `hmm_risk_model_inactive_dimension_d5_comparability_unresolved`仅保留为历史artifact reason，新路径不再产生。
+- **writer/parser同权威**：`PASS`。model hash覆盖dimension contract与projection hash；level identity覆盖按sector升序的
+  model/projection/dimension list及histogram；READY layer hash继续覆盖D5 receipt与dimension identity。训练入口、repeat回读、D6输入投影、
+  selected-level validator、READY writer及落盘selected-level/four-layer model-set readback parser共用同一projection validator；readback拒绝
+  非canonical bytes、path escape、manifest/layer/artifact/hash/source-profile/score drift，不fallback到previous或partial artifact。
+- **确定性直接验证**：`PASS`。正反例覆盖19D target、20D identity、full preprocess后固定projection、model/repeat roundtrip、
+  rehashed mask/count/source-profile/exact-zero drift、非零inactive拒绝、projected row-count drift、effective-dimension公式、per-entry
+  denominator/score hash、131-entry完整性、落盘READY roundtrip与旧v1回归；直接矩阵`56 passed`，
+  `hmm_risk_backend=320 passed`、总覆盖率`75.70%`，F2 validator为`PASS`且warnings=0。该证据不替代后续正式2096-fit执行结果。
+- **第二轮审核修复**：`RESOLVED`。补齐五项阻塞：exact-zero/source-profile durable evidence、projection rows与D5分母闭合、
+  per-entry D5 denominator/score receipt hash、独立落盘selected-level/four-layer readback parser，以及本节审核状态与真实实现一致性。
+  修复未改变D1 active indices、D5公式、D4/D6阈值、family completeness或runtime边界。
+
+审核结论：`PASS_D1_D5_COMPAT_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_FORMAL_GRID_NOT_EXECUTED`。该结论只表示源码达到可提交条件；
+不表示已commit、PR、merge、运行2096 fits、选择seed、执行D6或生成model/READY。
 
 ## 24. 当前完成状态与下一步
 
@@ -3620,9 +3650,8 @@ treatment/harness均16/16 `fit_completed`且descriptive covariance accepted，ma
 `diagnostic_complete/mixed_seed_pattern/mechanism_assessment=inconclusive`、D5 readiness=false。该结果不批准feature删除、阈值变化、
 formal D4 acceptance、D5 selection或READY。
 
-下一步先由用户决定`C-008-B3-D1-POST-REFIT03-A`与`C-008-B3-REMEDIATION-D1-D5-COMPAT-01`。本文唯一推荐为：
-把D1-B限定为level-local engineering robustness且不宣称唯一统计因果机制，并采用effective-dimension D5-A；获批后才实现P5正式
-mixed-dimension artifact/parser、dimension receipt与公式/identity/131-entry完整性的确定性直接测试。实现验证通过后执行P6的
+`C-008-B3-D1-POST-REFIT03-A`与`C-008-B3-REMEDIATION-D1-D5-COMPAT-01-A`已获批准，且P5正式
+mixed-dimension artifact/parser、dimension receipt与公式/identity/131-entry完整性的确定性直接测试已完成源码实现和本模块审核。下一步另行授权后执行P6的
 `autocycle_all_core:L2` 2096-fit正式重训和该level D5/D6；失败则保持blocked，不扩大seed、不返回validation换seed。
 公共KMeans/EM/covariance或算法合同未变化，不重跑完整5184。之后逐项修复其余persistent blocker、闭合两family READY，最终才实现
 generator/job/repository/API/UI/runtime。任何局部结果都不得冒充family/Phase 2完成。当前revision的DDL/DML、依赖、runtime、数据库、
