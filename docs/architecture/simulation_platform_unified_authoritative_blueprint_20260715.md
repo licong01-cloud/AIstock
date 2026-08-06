@@ -1287,6 +1287,14 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 
 `SIM-P-068` 的 PR #2978 initial required CI run `30630489853` 在 Linux/Python 3.12 显式拒绝了 Windows/Python 3.13 生成的 K5 binding。根因不是算法或 route，而是 K4 AST hash 依赖 Python minor-version 的 empty-field 默认值，且 source executor signature 绑定绝对 checkout 路径与 `WindowsPath/PosixPath`。复审补修将 AST 固定为 Python 3.12 full-field canonical shape，将 executor signature 固定为 repo-relative structured payload；Windows/Python 3.13 K5 direct=`12 passed`，Linux/Python 3.12 exact authority=`3 passed`且 fresh binding相同，final required CI run `30640380170`全绿。该补修不改变 Iceberg/Stop、signal/target/side/quantity、B0、OMS/Gateway、K2 shadow 或产品 route，也不新增 gate/审批；source merge已通过PR #2978 / merge `4bf54cf2`闭合。
 
+### 15.1 运行阻断修复增量账本
+
+| Progress ID | Acceptance IDs | Current state | Evidence | Status | Remaining runtime state |
+| --- | --- | --- | --- | --- | --- |
+| `SIM-P-072` | `F-021,F-107,F-109` | BUG-987 修复 KERNEL_V2 pre-run 的父 benchmark schema 权威漂移与无 broker 调用时的 run 状态闭合：父表只读取已由 Phase 0A DDL 声明的 plan/binding/release/package/trade-date 字段，release hash 继续由唯一 `strategy_runtime_release` 与 binding strict readback authority 持有；product-root factory、coordinator 与 worker-incarnation 的 pre-broker failure 均在返回前持久化 `FAILED_RETRYABLE`，重复 scheduler tick 不得把同一 run 留在 `SUBMITTING`。不新增 DDL、route、fallback、审批或人工恢复 | DEV PostgreSQL 无 `execution_parent_benchmark.release_hash` 的真实 disposable schema、七类 frozen-field drift、factory/coordinator/worker pre-broker failure、restart idempotency 与双 binding isolation direct matrix=`6 passed`；GitHub Issue #3169 | BUG_987_SOURCE_VERIFIED_READY_FOR_PR | `source_merge=pending_pr`；`post_restart_effective_gate=pending_user_restart`；production DDL/DML/dependency/config/binding/broker/service-control 全部 `noop` |
+
+BUG-987 source verification closure：`miniqmt_execution_runtime_l2=1346 passed,69 skipped`、`simulation_core_l2=414 passed`、L0 blocking=`0`、ownership registry=`8 passed/14-of-14 mapped`、F2=`112/112,warnings=0`。2026-08-06 生产只读证据确认当前 MiniQMT 已选择唯一 `KERNEL_V2` route，但旧进程仍包含本 BUG；source merge、用户 restart、runtime identity match 与修复后正常交易日业务闭环继续分开记录。
+
 ## 16. DESIGN-COMPLIANCE-001 设计复核
 
 | Control | Review result | Design evidence |
@@ -1516,6 +1524,16 @@ P0-H MiniQMT execution kernel/plugin F2 设计的逐项复核：
 | `no_business_semantic_drift` | pass | canonical value 语义与 scheduler economic hash 一致；未改变 Selection、策略信号、选股、资产、方向、数量、算法、T+1、行情 authority、MiniQMT 或 broker route；Paper upsert、single-writer、receipt/outbox/readback identity 不变 |
 | `no_unrequested_gate_or_approval` | pass | 未增加 RBAC、审批、人工 acknowledge、人工恢复、业务开关或 execution gate；合法 immutable payload 沿既有自动 scheduler transaction 提交，非法数据只是既有 durability contract 的 typed failure |
 | `production state separation` | pass | 本 slice 只修改 source/test/唯一蓝图/BUG 元数据；未执行 DDL/DML/config、未调用 broker、未启停或重启服务；source PR/CI/merge、用户重启和正常交易日 runtime readback 分开记录 |
+
+`BUG-987` KERNEL_V2 pre-run schema 与 run-state closure 的逐项复核：
+
+| Control | Review result | Implementation evidence |
+| --- | --- | --- |
+| `no_simplified_delivery` | pass for BUG-987 source scope；runtime activation pending | 修复同时闭合真实 DEV PostgreSQL parent/binding/release/plan readback 与 scheduler 重试状态，不以删除单列、mock repository 或仅捕获异常代替生产路径；七个 declared parent frozen fields 均有 conflict 反例 |
+| `no_silent_error` | pass | 未声明列不再被查询；factory、缺失 coordinator、缺失 worker incarnation 分别保留精确 stage/type/message/context，先写 `FAILED_RETRYABLE` 和 `broker_called=false` 后向 scheduler 抛出原异常；持久化失败不会返回成功 |
+| `no_business_semantic_drift` | pass | 未改变 selection、target、side、quantity、执行算法、B0 quote、OMS/Gateway、broker route 或 KERNEL_V2 ownership；release hash 仍由既有 release/binding authority 唯一持有，未复制到 parent 表 |
+| `no_unrequested_gate_or_approval` | pass | 未增加 RBAC、审批、人工 acknowledge、人工恢复、运行开关或额外准入；合法 run 仍由既有 scheduler cadence 自动重试 |
+| `production state separation` | pass | 当前只修改 source/test/唯一蓝图/BUG 元数据；DEV 测试只使用 disposable schema；未执行生产 DDL/DML、broker、config/binding 或服务控制；source merge、用户 restart 与正常交易日 runtime readback 分开记录 |
 
 ## 17. Definition of Done
 

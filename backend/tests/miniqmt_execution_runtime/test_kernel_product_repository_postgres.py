@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 import os
 
@@ -51,6 +52,8 @@ from backend.tests.miniqmt_execution_runtime.test_kernel_migration_postgres impo
 from backend.tests.miniqmt_execution_runtime.test_kernel_repository_postgres import _conn_factory
 from backend.tests.miniqmt_execution_runtime.test_kernel_repository_postgres import _commit_unknown_factory
 from backend.tests.miniqmt_execution_runtime.test_kernel_repository_postgres import _forbidden_conn_factory
+from backend.tests.miniqmt_execution_runtime.test_kernel_repository_postgres import _SchemaConnection
+from backend.tests.miniqmt_execution_runtime.test_kernel_repository_postgres import _SchemaCursor
 
 
 NOW = datetime(2026, 7, 25, 1, 30, tzinfo=timezone.utc)
@@ -322,6 +325,197 @@ def _seed_schema(cur: object, schema: str) -> None:
         """,
         (sha, sha),
     )
+
+
+class _ProductAuthoritySchemaCursor(_SchemaCursor):
+    def execute(self, query: object, parameters: object = None) -> object:
+        rewritten = query
+        if isinstance(rewritten, str):
+            rewritten = (
+                rewritten.replace("strategy_pkg.strategy_runtime_release", f"{self._schema}.strategy_runtime_release")
+                .replace("paper_v2.", f"{self._schema}.")
+                .replace("qmt_strategy.", f"{self._schema}.")
+            )
+        return self._cursor.execute(rewritten, parameters)  # type: ignore[attr-defined]
+
+
+class _ProductAuthoritySchemaConnection(_SchemaConnection):
+    def cursor(self, *args: object, **kwargs: object) -> _ProductAuthoritySchemaCursor:
+        return _ProductAuthoritySchemaCursor(  # type: ignore[attr-defined]
+            self._connection.cursor(*args, **kwargs), self._schema
+        )
+
+
+def _product_authority_conn_factory(schema: str):
+    @contextmanager
+    def factory(*, autocommit: bool = False, manage_transaction: bool = False):
+        connection = psycopg2.connect(**_dev_dsn())
+        connection.autocommit = autocommit
+        proxy = _ProductAuthoritySchemaConnection(connection, schema)
+        try:
+            yield proxy
+            if manage_transaction and not autocommit:
+                connection.commit()
+        except Exception:
+            if not autocommit:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    return factory
+
+
+def _seed_k6d_runtime_authority(cur: object, schema: str) -> tuple[str, str, str]:
+    _apply_k2_and_k6(cur, schema)
+    release_hash = _sha("b")
+    manifest_sha256 = _sha("c")
+    binding_hash = _sha("d")
+    cur.execute(  # type: ignore[attr-defined]
+        f"""
+        ALTER TABLE {schema}.execution_runtime
+            ADD COLUMN account_group_id TEXT,
+            ADD COLUMN mode TEXT,
+            ADD COLUMN event_loop_state TEXT,
+            ADD COLUMN gateway_state TEXT,
+            ADD COLUMN oms_state TEXT,
+            ADD COLUMN runtime_config_hash TEXT,
+            ADD COLUMN metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb;
+        CREATE TABLE {schema}.strategy_runtime_release(
+            release_id TEXT PRIMARY KEY, release_hash TEXT NOT NULL, package_id TEXT NOT NULL,
+            manifest_sha256 TEXT NOT NULL
+        );
+        CREATE TABLE {schema}.simulation_release_binding(
+            binding_id TEXT PRIMARY KEY, release_id TEXT NOT NULL, release_hash TEXT NOT NULL,
+            package_id TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, broker_backend TEXT NOT NULL,
+            broker_account_id TEXT NOT NULL, account_group_id TEXT NOT NULL, effective_from DATE,
+            effective_to DATE, binding_hash TEXT NOT NULL
+        );
+        CREATE TABLE {schema}.execution_plan(
+            plan_id TEXT PRIMARY KEY, plan_hash TEXT NOT NULL, binding_id TEXT NOT NULL,
+            binding_hash TEXT NOT NULL, release_id TEXT NOT NULL, release_hash TEXT NOT NULL,
+            package_id TEXT NOT NULL, target_trade_date DATE NOT NULL,
+            execution_policy_sha256 TEXT NOT NULL, tail_policy_sha256 TEXT NOT NULL
+        );
+        CREATE TABLE {schema}.execution_parent_benchmark(
+            parent_intent_id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL,
+            execution_plan_id TEXT NOT NULL, execution_plan_hash TEXT NOT NULL,
+            binding_id TEXT NOT NULL, binding_hash TEXT NOT NULL, release_id TEXT NOT NULL,
+            package_id TEXT NOT NULL, trade_date DATE NOT NULL
+        );
+        """
+    )
+    cur.execute(  # type: ignore[attr-defined]
+        f"INSERT INTO {schema}.strategy_runtime_release VALUES (%s,%s,%s,%s)",
+        ("release_k6d", release_hash, "package_k6d", manifest_sha256),
+    )
+    cur.execute(  # type: ignore[attr-defined]
+        f"INSERT INTO {schema}.simulation_release_binding VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (
+            "binding_k6d",
+            "release_k6d",
+            release_hash,
+            "package_k6d",
+            manifest_sha256,
+            "minqmt_sim",
+            "broker_k6d",
+            "account_group_k6d",
+            date(2026, 8, 6),
+            None,
+            binding_hash,
+        ),
+    )
+    cur.execute(  # type: ignore[attr-defined]
+        f"INSERT INTO {schema}.execution_plan VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (
+            "plan_k6d",
+            _sha("e"),
+            "binding_k6d",
+            binding_hash,
+            "release_k6d",
+            release_hash,
+            "package_k6d",
+            date(2026, 8, 6),
+            _sha("f"),
+            _sha("0"),
+        ),
+    )
+    cur.execute(  # type: ignore[attr-defined]
+        f"INSERT INTO {schema}.execution_parent_benchmark VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (
+            "intent_k6d",
+            "runtime_k6d",
+            "plan_k6d",
+            _sha("e"),
+            "binding_k6d",
+            binding_hash,
+            "release_k6d",
+            "package_k6d",
+            date(2026, 8, 6),
+        ),
+    )
+    return "runtime_k6d", "binding_k6d", "plan_k6d"
+
+
+def test_k6d_runtime_uses_declared_parent_schema_and_release_join_on_dev_postgres() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K6 DEV PostgreSQL fixture")
+    schema = _fixture_schema().replace("k2a_", "k6d_authority_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            runtime_id, binding_id, plan_id = _seed_k6d_runtime_authority(cur, schema)
+        repository = PostgresMiniQMTKernelRepository(conn_factory=_product_authority_conn_factory(schema))
+
+        readback = repository.ensure_product_runtime_v1(
+            runtime_id=runtime_id,
+            binding_id=binding_id,
+            execution_plan_id=plan_id,
+        )
+        assert readback["runtime_id"] == runtime_id
+        assert readback["metadata"]["route"] == "KERNEL_V2"
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema=%s "
+                "AND table_name='execution_parent_benchmark' ORDER BY ordinal_position",
+                (schema,),
+            )
+            assert "release_hash" not in {row[0] for row in cur.fetchall()}
+        drift_cases = (
+            ("execution_plan_id", "plan_conflict", plan_id),
+            ("execution_plan_hash", _sha("1"), _sha("e")),
+            ("binding_id", "binding_conflict", binding_id),
+            ("binding_hash", _sha("2"), _sha("d")),
+            ("release_id", "release_conflict", "release_k6d"),
+            ("package_id", "package_conflict", "package_k6d"),
+            ("trade_date", date(2026, 8, 5), date(2026, 8, 6)),
+        )
+        for field_name, conflicting, restored in drift_cases:
+            with conn.cursor() as cur:
+                cur.execute(f"DELETE FROM {schema}.execution_runtime WHERE runtime_id=%s", (runtime_id,))
+                cur.execute(
+                    f"UPDATE {schema}.execution_parent_benchmark SET {field_name}=%s "
+                    "WHERE parent_intent_id='intent_k6d'",
+                    (conflicting,),
+                )
+            with pytest.raises(KernelRepositoryConflict, match="frozen parent benchmark"):
+                repository.ensure_product_runtime_v1(
+                    runtime_id=runtime_id,
+                    binding_id=binding_id,
+                    execution_plan_id=plan_id,
+                )
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE {schema}.execution_parent_benchmark SET {field_name}=%s "
+                    "WHERE parent_intent_id='intent_k6d'",
+                    (restored,),
+                )
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
 
 
 def test_k6_repository_public_surface_is_complete() -> None:
