@@ -1654,6 +1654,102 @@ def test_scheduler_miniqmt_uses_only_kernel_v2_product_root_and_is_restart_idemp
     assert broker.place_order_payloads == []
 
 
+def test_scheduler_miniqmt_product_root_pre_run_failure_never_strands_submitting_run() -> None:
+    scheduler, repo, broker, _binding = _miniqmt_event_loop_test_scheduler()
+
+    def fail_product_runtime(**_values: Any) -> Any:
+        raise RuntimeError('column "release_hash" does not exist')
+
+    scheduler.orchestrator.miniqmt_product_runtime_factory = fail_product_runtime
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+
+    assert first.results[0].status == "FAILED_RETRYABLE"
+    assert second.results[0].status == "FAILED_RETRYABLE"
+    assert second.results[0].run is not None
+    run = repo.get_simulation_daily_run(second.results[0].run.run_id)
+    assert run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert run.run_payload_json["last_stage"] == "FAILED_RETRYABLE"
+    assert run.run_payload_json["broker_called"] is False
+    assert run.run_payload_json["submitted_intents"] == 0
+    assert run.run_payload_json["failed_intents"] == 0
+    assert run.run_payload_json["submit_failure"] == {
+        "stage": "MINIQMT_KERNEL_V2_PRODUCT_ROOT_BUILD_FAILED",
+        "outer_stage": "MINIQMT_KERNEL_V2_PRODUCT_ROOT_BUILD_FAILED",
+        "type": "RuntimeError",
+        "message": 'column "release_hash" does not exist',
+        "context": None,
+    }
+    assert broker.place_order_payloads == []
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "expected_stage", "expected_type"),
+    (
+        (
+            "coordinator_missing",
+            "MINIQMT_KERNEL_V2_PRODUCT_ROOT_UNAVAILABLE",
+            "BrokerUnavailableError",
+        ),
+        (
+            "worker_incarnation_missing",
+            "MINIQMT_KERNEL_V2_WORKER_INCARNATION_MISSING",
+            "RuntimeConfigInvalidError",
+        ),
+    ),
+)
+def test_scheduler_miniqmt_invalid_product_root_is_persisted_before_broker(
+    failure_mode: str,
+    expected_stage: str,
+    expected_type: str,
+) -> None:
+    scheduler, repo, broker, _binding = _miniqmt_event_loop_test_scheduler()
+    if failure_mode == "coordinator_missing":
+        product_runtime = SimpleNamespace(coordinator=None, worker_incarnation_id="worker_k6d")
+    else:
+        product_runtime = SimpleNamespace(
+            coordinator=SimpleNamespace(start_execution_plan_v1=lambda **_values: None),
+            worker_incarnation_id="",
+        )
+    scheduler.orchestrator.miniqmt_product_runtime_factory = lambda **_values: product_runtime
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+
+    assert result.results[0].status == "FAILED_RETRYABLE"
+    assert result.results[0].run is not None
+    run = repo.get_simulation_daily_run(result.results[0].run.run_id)
+    assert run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert run.run_payload_json["broker_called"] is False
+    assert run.run_payload_json["submitted_intents"] == 0
+    assert run.run_payload_json["failed_intents"] == 0
+    failure = run.run_payload_json["submit_failure"]
+    assert failure["stage"] == expected_stage
+    assert failure["outer_stage"] == expected_stage
+    assert failure["type"] == expected_type
+    assert broker.place_order_payloads == []
+
+
 def test_scheduler_miniqmt_kernel_v2_keeps_two_bindings_independent() -> None:
     scheduler, _repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
     observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
