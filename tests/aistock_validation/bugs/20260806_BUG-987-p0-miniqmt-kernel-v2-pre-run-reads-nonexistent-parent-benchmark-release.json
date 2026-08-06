@@ -148,8 +148,8 @@
   },
   "first_seen_at": "2026-08-06T02:31:18.788833Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fe6ab005014104318fc60ad475b6f3245c5f196f",
+  "fixed_at": "2026-08-06T04:58:35Z",
   "github_issue_number": 3169,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3169",
   "last_seen_at": "2026-08-06T02:31:18.788833Z",
@@ -157,6 +157,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3173",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -177,6 +178,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -187,7 +189,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -196,6 +198,13 @@
     "fingerprint": "293ad843a783ab75720fc723",
     "source_event_id": "FE-20260806-293ad843a783"
   },
+  "validation_evidence": [
+    "validation-receipt: id=5d0eaac280d86696 commit=52af380ec492f862493c037353bf7300fcb0d9b4 kind=nox plan=miniqmt_execution_runtime_l2 status=passed command=`python -m nox -s miniqmt_execution_runtime_l2` result=`1346 passed, 69 skipped`",
+    "validation-receipt: id=93bdf36935891a7f commit=52af380ec492f862493c037353bf7300fcb0d9b4 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`414 passed`",
+    "validation-receipt: id=68dc96aaecf8b6a5 commit=52af380ec492f862493c037353bf7300fcb0d9b4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking 0`",
+    "validation-receipt: id=5f3e0c1f192a92f9 commit=52af380ec492f862493c037353bf7300fcb0d9b4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed, 14/14 mapped`",
+    "validation-receipt: id=81f6a308673a0b1e commit=52af380ec492f862493c037353bf7300fcb0d9b4 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2` result=`112/112 passed, warnings 0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
