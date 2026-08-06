@@ -1943,6 +1943,65 @@ def test_d1_v2_migration_uses_a5_mapping_identity_and_historical_non_mapping_ide
         )
 
 
+def test_d1_lineage_migration_normalizes_authority_identity_order_but_rejects_business_drift() -> None:
+    def receipt(body: dict) -> dict:
+        return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    pit_authority = {
+        "authority_type": "stock_universe_pit_state_and_spans",
+        "identity_sha256": "1" * 64,
+        "authority": {"universe_key": "frozen", "validated_status": "ready"},
+    }
+    mapping_authority = {
+        "authority_type": "sw_index_member_and_classify_mapping",
+        "identity_sha256": "2" * 64,
+        "authority": {"canonical_l1_count": 31, "canonical_l2_count": 131},
+    }
+    approved_opportunity = receipt(
+        {
+            "schema_version": "hmm_risk_c010_expected_opportunity_dates_v2",
+            "authority_identities": [pit_authority, mapping_authority],
+        }
+    )
+    current_opportunity = receipt(
+        {
+            "schema_version": "hmm_risk_c010_expected_opportunity_dates_v2",
+            "authority_identities": [
+                {**mapping_authority, "identity_sha256": "0" * 64},
+                {**pit_authority, "identity_sha256": "f" * 64},
+            ],
+        }
+    )
+    a5_report = _d1_c010_a5_report()
+    a5_report["expected_opportunity_receipt"] = approved_opportunity
+    a5_report["expected_opportunity_receipt_sha256"] = approved_opportunity["receipt_sha256"]
+    current_policy = {
+        "provider_absence_partition_receipt": a5_report["provider_absence_partition_receipt"],
+        "expected_opportunity_receipt": current_opportunity,
+        "eligibility_receipt": a5_report["observation_eligibility_receipt"],
+    }
+
+    migration = subject._build_b3_d1_c010_a5_lineage_migration_receipt(
+        current_policy,
+        a5_report,
+        producer_commit="8" * 40,
+    )
+
+    opportunity_pair = migration["receipt_pairs"]["expected_opportunity"]
+    assert opportunity_pair["approved_semantic_payload_sha256"] == opportunity_pair["current_semantic_payload_sha256"]
+
+    drifted_policy = deepcopy(current_policy)
+    drifted_policy["expected_opportunity_receipt"]["authority_identities"][0]["authority"][
+        "canonical_l2_count"
+    ] = 130
+    with pytest.raises(StateModelSetError, match="expected_opportunity business payload drifted"):
+        subject._build_b3_d1_c010_a5_lineage_migration_receipt(
+            drifted_policy,
+            a5_report,
+            producer_commit="8" * 40,
+        )
+
+
 def test_d1_controlled_parent_runs_exactly_two_fresh_processes_with_fixed_threads(monkeypatch, tmp_path) -> None:
     args = _d1_args(tmp_path)
     monkeypatch.setattr(subject, "B3_D1_C010_A5_REPORT_SHA256", subject.canonical_sha256({}))

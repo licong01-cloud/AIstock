@@ -14,10 +14,12 @@ Covers Engine §3.6.1 (R-Q9 D1) BrokerBackend protocol:
 
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -373,6 +375,28 @@ class ObservedMarketDataProvider(FakeMarketDataProvider):
             minute_bars=[bar for bar in source_input.minute_bars if bar.bar_time <= until_time],
             market_context={**source_input.market_context, "data_source": source.value},
         )
+
+
+class ConcurrentObservedMarketDataProvider(ObservedMarketDataProvider):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._concurrency_lock = threading.Lock()
+        self._release_concurrent_reads = threading.Event()
+        self.active_read_count = 0
+        self.max_active_read_count = 0
+
+    def load_observed_intraday(self, **kwargs: Any) -> MinuteExecutionMarketInput:
+        with self._concurrency_lock:
+            self.active_read_count += 1
+            self.max_active_read_count = max(self.max_active_read_count, self.active_read_count)
+            if self.active_read_count >= 2:
+                self._release_concurrent_reads.set()
+        try:
+            self._release_concurrent_reads.wait(timeout=0.2)
+            return super().load_observed_intraday(**kwargs)
+        finally:
+            with self._concurrency_lock:
+                self.active_read_count -= 1
 
 
 def test_localsim_realtime_submission_uses_only_bars_after_plan_cursor() -> None:
@@ -800,7 +824,7 @@ def test_realtime_next_cadence_snapshot_covers_active_orders_and_passive_positio
         as_of_time=first_as_of,
     )
     backend.submit_order_intent(intent)
-    assert [call["symbol"] for call in provider.calls] == ["000001.SZ", "000002.SZ"]
+    assert {call["symbol"] for call in provider.calls[:2]} == {"000001.SZ", "000002.SZ"}
 
     second_as_of = first_as_of + timedelta(minutes=1)
     handles = backend.advance_realtime_execution(as_of_time=second_as_of)
@@ -810,13 +834,54 @@ def test_realtime_next_cadence_snapshot_covers_active_orders_and_passive_positio
         as_of_time=second_as_of,
         pre_trade_tradability={},
     )
-    assert [call["symbol"] for call in provider.calls] == [
-        "000001.SZ",
-        "000002.SZ",
-        "000001.SZ",
-        "000002.SZ",
-    ]
+    assert {call["symbol"] for call in provider.calls[2:]} == {"000001.SZ", "000002.SZ"}
+    assert len(provider.calls) == 4
     assert handles
+
+
+def test_realtime_market_snapshot_fetches_symbol_union_concurrently() -> None:
+    symbols = tuple(f"{index:06d}.SZ" for index in range(1, 21))
+    provider = ConcurrentObservedMarketDataProvider(
+        inputs_by_symbol={symbol: _make_market_input(symbol, bar_count=3) for symbol in symbols}
+    )
+    passive_positions = {
+        symbol: PositionLot(
+            portfolio_id="paper_local_p1",
+            symbol=symbol,
+            quantity=100,
+            available_quantity=100,
+            avg_cost=10.0,
+            trade_date=TRADE_DATE - timedelta(days=1),
+        )
+        for symbol in symbols[1:]
+    }
+    backend, _, _ = _build_backend(
+        initial_cash=1_000_000,
+        initial_positions=passive_positions,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
+    )
+    backend.configure_execution_runtime(run_id="run_snapshot_parallel", binding_id="binding_snapshot_parallel")
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31)
+    intent = _buy_intent(backend, symbol="000001.SZ", quantity=100)
+
+    backend.bind_execution_plan(
+        plan=SimpleNamespace(
+            plan_id="plan_snapshot_parallel",
+            target_trade_date=TRADE_DATE,
+            intents=(intent,),
+            plan_payload_json={
+                "local_sim_execution_causality": {
+                    "eligible_bar_after": as_of.replace(hour=9, minute=30).isoformat(),
+                }
+            },
+        ),
+        as_of_time=as_of,
+    )
+
+    assert 2 <= provider.max_active_read_count <= 16
+    assert {call["symbol"] for call in provider.calls} == set(symbols)
+    assert len(provider.calls) == len(symbols)
 
 
 def test_one_symbol_market_data_failure_does_not_rollback_healthy_intent() -> None:

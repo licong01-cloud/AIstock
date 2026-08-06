@@ -720,35 +720,43 @@ class SimulationLifecycleOrchestrator:
             )
 
         if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
-            if not callable(self.miniqmt_product_runtime_factory):
-                product_runtime = None
-            else:
-                product_runtime = self.miniqmt_product_runtime_factory(
-                    plan=plan,
-                    binding=binding,
-                    managed_order_service=managed_order_service,
-                    as_of_time=as_of_time,
+            try:
+                if not callable(self.miniqmt_product_runtime_factory):
+                    product_runtime = None
+                else:
+                    product_runtime = self.miniqmt_product_runtime_factory(
+                        plan=plan,
+                        binding=binding,
+                        managed_order_service=managed_order_service,
+                        as_of_time=as_of_time,
+                    )
+                miniqmt_product_coordinator = getattr(product_runtime, "coordinator", None)
+                miniqmt_worker_incarnation_id = getattr(product_runtime, "worker_incarnation_id", None)
+            except Exception as exc:
+                self.mark_submit_failure(
+                    run=run,
+                    stage="MINIQMT_KERNEL_V2_PRODUCT_ROOT_BUILD_FAILED",
+                    exc=exc,
+                    pre_broker_failure=True,
                 )
-            miniqmt_product_coordinator = getattr(product_runtime, "coordinator", None)
-            miniqmt_worker_incarnation_id = getattr(product_runtime, "worker_incarnation_id", None)
+                raise
             if miniqmt_product_coordinator is None or not callable(
                 getattr(miniqmt_product_coordinator, "start_execution_plan_v1", None)
             ):
-                self.mark_submit_failure(
-                    run=run,
-                    stage="MINIQMT_KERNEL_V2_PRODUCT_ROOT_UNAVAILABLE",
-                    exc=BrokerUnavailableError(
-                        "MiniQMT execution requires the KERNEL_V2 product coordinator",
-                        context={"run_id": run.run_id, "plan_id": plan.plan_id},
-                    ),
-                )
-                raise BrokerUnavailableError(
+                exc = BrokerUnavailableError(
                     "MiniQMT execution requires the KERNEL_V2 product coordinator",
                     context={"run_id": run.run_id, "plan_id": plan.plan_id},
                 )
+                self.mark_submit_failure(
+                    run=run,
+                    stage="MINIQMT_KERNEL_V2_PRODUCT_ROOT_UNAVAILABLE",
+                    exc=exc,
+                    pre_broker_failure=True,
+                )
+                raise exc
             worker_incarnation_id = str(miniqmt_worker_incarnation_id or "").strip()
             if not worker_incarnation_id:
-                raise RuntimeConfigInvalidError(
+                exc = RuntimeConfigInvalidError(
                     "MiniQMT KERNEL_V2 product coordinator requires its durable worker incarnation",
                     context={
                         "reason_code": "MINIQMT_KERNEL_V2_WORKER_INCARNATION_MISSING",
@@ -757,6 +765,13 @@ class SimulationLifecycleOrchestrator:
                         "broker_called": False,
                     },
                 )
+                self.mark_submit_failure(
+                    run=run,
+                    stage="MINIQMT_KERNEL_V2_WORKER_INCARNATION_MISSING",
+                    exc=exc,
+                    pre_broker_failure=True,
+                )
+                raise exc
             runtime_id = _miniqmt_kernel_runtime_id(plan=plan, binding=binding)
             submit_stage = "MINIQMT_KERNEL_V2_PLAN_START_FAILED"
             try:
@@ -928,7 +943,14 @@ class SimulationLifecycleOrchestrator:
         context.setdefault("submitted_intents", 0)
         context.setdefault("failed_intents", len(plan.intents))
 
-    def mark_submit_failure(self, *, run: SimulationDailyRun, stage: str, exc: BaseException) -> SimulationDailyRun:
+    def mark_submit_failure(
+        self,
+        *,
+        run: SimulationDailyRun,
+        stage: str,
+        exc: BaseException,
+        pre_broker_failure: bool = False,
+    ) -> SimulationDailyRun:
         context = getattr(exc, "context", None)
         payload_patch: dict[str, Any] = {
             "last_stage": "FAILED_RETRYABLE",
@@ -944,6 +966,14 @@ class SimulationLifecycleOrchestrator:
             for key in ("broker_called", "submitted_intents", "failed_intents"):
                 if key in context:
                     payload_patch[key] = context[key]
+        if pre_broker_failure:
+            payload_patch.update(
+                {
+                    "broker_called": False,
+                    "submitted_intents": 0,
+                    "failed_intents": 0,
+                }
+            )
         return self.repository.update_simulation_daily_run(
             run.run_id,
             status=SimulationDailyRunStatus.FAILED_RETRYABLE,

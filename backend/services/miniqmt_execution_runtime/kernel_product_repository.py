@@ -642,6 +642,8 @@ class KernelProductRepositoryMixin:
                         runtime_id=runtime_id,
                         binding_id=binding_id,
                         trade_date=plan["target_trade_date"],
+                        execution_plan_id=plan["plan_id"],
+                        execution_plan_hash=plan["plan_hash"],
                     )
                     if (
                         plan["binding_hash"] != binding["binding_hash"]
@@ -1790,7 +1792,11 @@ class KernelProductRepositoryMixin:
         runtime_id: str,
         binding_id: str,
         trade_date: date,
+        execution_plan_id: str | None = None,
+        execution_plan_hash: str | None = None,
     ) -> dict[str, Any]:
+        if (execution_plan_id is None) != (execution_plan_hash is None):
+            raise KernelRepositoryConflict("K6-D parent plan authority must be supplied as one complete pair")
         cur.execute(
             "SELECT binding_id,release_id,release_hash,package_id,manifest_sha256,broker_backend,"
             "broker_account_id,account_group_id,effective_from,effective_to,binding_hash "
@@ -1830,22 +1836,45 @@ class KernelProductRepositoryMixin:
             release[name] != binding[name] for name in ("release_id", "release_hash", "package_id", "manifest_sha256")
         ):
             raise KernelRepositoryConflict("K6-D binding/release/package strict readback differs")
+        # The immutable release hash is owned by strategy_runtime_release and
+        # has already been closed against the binding above.  Parent benchmark
+        # rows freeze the declared plan/binding/release/package/trade-date
+        # fields; do not invent a parallel release_hash column in that
+        # authority.
         # PostgreSQL forbids a row lock on a DISTINCT result.  Lock concrete
         # benchmark rows, then derive the uniqueness assertion locally.
         cur.execute(
-            "SELECT parent_intent_id,binding_id,release_id,release_hash,trade_date "
+            "SELECT parent_intent_id,execution_plan_id,execution_plan_hash,binding_id,binding_hash,"
+            "release_id,package_id,trade_date "
             "FROM qmt_strategy.execution_parent_benchmark WHERE runtime_id=%s "
             "ORDER BY parent_intent_id FOR SHARE",
             (runtime_id,),
         )
         parents = cur.fetchall()
+        parent_plan_authority = {(parent["execution_plan_id"], parent["execution_plan_hash"]) for parent in parents}
+        if len(parent_plan_authority) > 1:
+            raise KernelRepositoryConflict("K6-D frozen parent benchmark contains multiple plan authorities")
         for parent in parents:
             if (
                 parent["binding_id"],
+                parent["binding_hash"],
                 parent["release_id"],
-                parent["release_hash"],
+                parent["package_id"],
                 parent["trade_date"],
-            ) != (binding_id, binding["release_id"], binding["release_hash"], trade_date):
+            ) != (
+                binding_id,
+                binding["binding_hash"],
+                binding["release_id"],
+                binding["package_id"],
+                trade_date,
+            ) or (
+                execution_plan_id is not None
+                and (
+                    parent["execution_plan_id"],
+                    parent["execution_plan_hash"],
+                )
+                != (execution_plan_id, execution_plan_hash)
+            ):
                 raise KernelRepositoryConflict("K6-D frozen parent benchmark does not close to binding/release/date")
         return binding
 

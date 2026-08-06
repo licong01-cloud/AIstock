@@ -23,6 +23,7 @@ parallel portfolios per process.
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, date, datetime, time
@@ -87,6 +88,9 @@ from .base import (
     OrderHandleStatusState,
     SubscriptionHandle,
 )
+
+
+_REALTIME_SNAPSHOT_MAX_WORKERS = 16
 
 
 _BACKEND_ID: BackendId = "local_sim"
@@ -1294,22 +1298,55 @@ class LocalSimBackend(BrokerBackend):
                     "missing_symbols": sorted(requested_symbols - current_symbols),
                 },
             )
-        market_inputs: dict[str, Any] = {}
-        errors: dict[str, dict[str, Any]] = {}
-        for symbol in normalized:
+
+        def load_symbol(symbol: str) -> tuple[Any | None, dict[str, Any] | None]:
             try:
-                market_inputs[symbol] = self._load_realtime_market_input_uncached(
-                    symbol=symbol,
-                    trade_date=trade_date,
-                    as_of_time=as_of_time,
+                return (
+                    self._load_realtime_market_input_uncached(
+                        symbol=symbol,
+                        trade_date=trade_date,
+                        as_of_time=as_of_time,
+                    ),
+                    None,
                 )
             except BrokerConnectivityError as exc:
                 context = dict(getattr(exc, "context", None) or {})
-                errors[symbol] = {
-                    "reason_code": str(context.get("reason_code") or "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"),
-                    "message": str(getattr(exc, "message", None) or str(exc)),
-                    "context": context,
-                }
+                return (
+                    None,
+                    {
+                        "reason_code": str(context.get("reason_code") or "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE"),
+                        "message": str(getattr(exc, "message", None) or str(exc)),
+                        "context": context,
+                    },
+                )
+
+        if len(normalized) <= 1:
+            outcomes = {symbol: load_symbol(symbol) for symbol in normalized}
+        else:
+            with ThreadPoolExecutor(
+                max_workers=min(_REALTIME_SNAPSHOT_MAX_WORKERS, len(normalized)),
+                thread_name_prefix="localsim-market-snapshot",
+            ) as executor:
+                futures = {symbol: executor.submit(load_symbol, symbol) for symbol in normalized}
+                outcomes = {symbol: futures[symbol].result() for symbol in normalized}
+        market_inputs: dict[str, Any] = {}
+        errors: dict[str, dict[str, Any]] = {}
+        for symbol in normalized:
+            market_input, error = outcomes[symbol]
+            if market_input is not None:
+                market_inputs[symbol] = market_input
+            elif error is not None:
+                errors[symbol] = error
+            else:
+                raise BrokerConnectivityError(
+                    "LocalSim realtime market snapshot worker returned no result",
+                    context={
+                        "reason_code": "LOCALSIM_MARKET_SNAPSHOT_WORKER_RESULT_MISSING",
+                        "symbol": symbol,
+                        "trade_date": trade_date.isoformat(),
+                        "as_of_time": as_of_time.isoformat(),
+                    },
+                )
         snapshot = LocalSimMarketSnapshotV1(
             trade_date=trade_date,
             as_of_time=as_of_time,
