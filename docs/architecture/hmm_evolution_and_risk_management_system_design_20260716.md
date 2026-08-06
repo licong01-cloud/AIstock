@@ -1,9 +1,9 @@
 # HMM 演进与风险管理系统详细设计
 
-> **版本**: v2.17
+> **版本**: v2.19
 > **日期**: 2026-07-16  
-> **修订日期**: 2026-08-03
-> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活。Phase 2 的数据/PIT/observation政策、D3-D7精确合同、Slice 0源码、C-009/C-010与C-010-A5均已合入；历史正式制备完成`5184/5184` fits后两family仍blocked、READY=0。D1-B P1源码已实现。BUG-962/PR #3089修复了current C-010-A5 authority与历史v1 readback不能同时满足的程序问题，但REFIT-01最终仍因current-A5重构后的`train_observation_sha256`与历史frozen train core真实不同，在0 fits处fail closed，`mechanism_assessment=inconclusive`。历史payload继续只读，不得通过忽略observation hash伪造兼容。`C-008-B3-REMEDIATION-D1-B-REFIT-02-A`已获用户批准：同一current-A5下的801207 19D treatment、801207 identity20 matched negative与801011 identity20 harness，两fresh processes固定48 terminal attempts/32真实fits；最小runner与v4 receipt已在独立worktree实现并通过正式源码审核，但尚未commit/PR/merge或执行真实fit。后续继续evidence-first：源码合入→独立授权32-fit真实受控训练→D5兼容决策→证据支持时才实现mixed-dimension artifact/parser→受影响level正式训练与D5/D6；不先建设通用动态维度框架、调度器、API/UI或占位READY。F-011为`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_C010_A5_MERGED_D1_REFIT_01_INCONCLUSIVE_REFIT_02_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_NOT_EXECUTED_BLOCKED_MODEL_ACCEPTANCE`，F-012为`DESIGN_READY_USER_APPROVED`，F-013为`PENDING_UPSTREAM_MODEL_SET`。严格进度仍为`11/17=64.71%`；本次runner源码不增加完成计数。Gate truth：既有`hmm_evolution_v1/v2/v3` production `applied_and_verified`；本次DDL/DML/dependency/runtime均为`noop`（§13）
+> **修订日期**: 2026-08-06
+> **状态**: Phase 0 已完成；Phase 1 全部外部验收完成（F-006～F-010A verified）且 production v3 已激活。Phase 2 的数据/PIT/observation政策、D3-D7精确合同、Slice 0、C-009/C-010/C-010-A5、D1-B与REFIT-03 diagnostic源码均已合入；历史正式制备完成`5184/5184` fits后两family仍blocked、READY=0。REFIT-03已在current authority冻结bundle上以producer `b474170fd58a466959e595ce7d245bae7da88ab8`完成两fresh-process、三角色、seeds 42..49的`48/48`真实fits；report canonical=`7e8a17556aaf610de4bd7b2449cae5f224d032ce8acafdcbcb9a594bbf6276b9`，两process payload=`53574f62608f6860e6ee59b7b31aafc7772a16d7637fe4a119e0128eda50888f` bitwise equal。19D treatment与20D positive harness均16/16 accepted，matched 20D 16/16 covariance failed；三seed仅inactive coordinate失效、五seed出现active/cross-role失效，故结论为`diagnostic_complete/mixed_seed_pattern/mechanism_assessment=inconclusive`、D5 readiness=false。下一步不是继续扩大诊断或建设通用平台，而是由用户决定D1-B是否作为level-local engineering robustness以及D5 effective-dimension score合同；获批后才实现mixed-dimension artifact/parser与train-only score replay，通过后仅训练受影响L2 2096 fits并执行D5/D6。F-011为`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_C010_A5_MERGED_D1_REFIT_03_DIAGNOSTIC_COMPLETE_INCONCLUSIVE_D5_COMPAT_PENDING_BLOCKED_MODEL_ACCEPTANCE`，F-012为`DESIGN_READY_USER_APPROVED`，F-013为`PENDING_UPSTREAM_MODEL_SET`。严格进度仍为`11/17=64.71%`；诊断完成不增加产品验收计数。Gate truth：既有`hmm_evolution_v1/v2/v3` production `applied_and_verified`；本次DDL/DML/dependency/runtime均为`noop`（§13）
 > **范围**: HMM 快速演进、风险监控、滚动训练、数据隔离  
 > **作者**: Kiro (Claude Code)
 > **维护者**: AIstock HMM Evolution
@@ -369,13 +369,15 @@ covariance与train structure，不支持只换seed、只放宽阈值、排除fam
 11/11 initialization sources闭合，0 HMM refit/D5/D6/validation/model/READY/DB/runtime。证据只确认唯一zero-variance profile、
 46个train-structure failed entries、4个跨8-seed persistent sector identity与6个statistic-insufficient groups，不批准模型修订。
 
-F-011当前为`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_C010_A5_MERGED_D1_REFIT_01_INCONCLUSIVE_REFIT_02_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_NOT_EXECUTED_BLOCKED_MODEL_ACCEPTANCE`。
+F-011当前为`APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_C010_A5_MERGED_D1_REFIT_03_DIAGNOSTIC_COMPLETE_INCONCLUSIVE_D5_COMPAT_PENDING_BLOCKED_MODEL_ACCEPTANCE`。
 用户已选择`C-008-B3-REMEDIATION-D1-B`显式inactive-dimension identity设计方向，D1-A为`NOT_SELECTED`；P1已实现exact-zero authority、
-固定20→19 projection、identity20 control与受控report。REFIT-01在BUG-962修复后仍因current-A5 `train_observation_sha256`与历史
-frozen train core不同而在0 fits处正确fail closed；不得忽略该业务数据变化或复用历史数组。REFIT-02-A已获用户批准，固定同一current-A5下的
-801207 treatment、801207 matched negative与801011 harness，两fresh processes共48 terminal attempts/32真实fits；其详细合同已通过正式
-设计审核；最小runner与v4 receipt已在独立worktree实现并审核，但尚未提交/合入或执行32-fit。D5 19/20维score comparability继续独立blocked；正式mixed-dimension READY writer/runtime/API/UI
-均后置。F-012保持设计批准，F-013继续等待完整READY model set；generator/job/API/UI/runtime均未实施。
+固定20→19 projection、identity20 control与受控report。REFIT-03已在current authority冻结bundle上完成两fresh-process、三角色、
+seeds 42..49的48/48真实fits：19D treatment和20D harness均16/16 accepted，matched 20D 16/16 covariance failed；raw exact evidence
+呈三seed inactive-only、五seed active/cross-role的mixed pattern，因此mechanism保持inconclusive，D5 readiness=false。下一设计决策必须明确
+D1-B只作为level-local engineering robustness而不宣称唯一统计因果机制，并决定D5 19/20维score comparability；当前推荐effective-dimension
+`L_final/(N*d_i)`且仍要求131/131 eligibility、train-only min/median/mean selection与实现后的controlled score replay。正式mixed-dimension
+writer/parser、2096-fit affected-level训练、D5/D6、READY、runtime/API/UI均后置。F-012保持设计批准，F-013继续等待完整READY model set；
+generator/job/API/UI/runtime均未实施。
 
 **数据库 Schema**：父设计不复制一份可能漂移的简化 DDL。唯一 implementation-level schema contract 位于
 Phase 2 详细设计 §8，精确定义 `daily_generation_run`、`sector_state_timeline`、`daily_alert`、`risk_event`、
@@ -846,7 +848,7 @@ docs/
    BUG-788、BUG-798、BUG-800 和 BUG-804 补齐源 loop 股票池 ∩ QE ST-PIT universe、全股票收益证据、
    逐日状态、内容校验重放和 pre-ST-PIT allowlisted compatibility；F-007/F-009 已验证。
 6. **P1-C API/UI（外部验收已完成）**：F-010 API/UI、worker CLI/service 和 BUG-742～BUG-748 审计修复已实现；schema v2 worker、10-case、10/9 候选性能、进程中断 fail-closed 与显式 retry receipt 已完成；2026-07-22 严格冷热缓存分段 timing/RSS benchmark matrix、真实 UI/Playwright 18 场景与 worker bounded soak 全部完成（Phase 1 详细设计 §17.4.6）。
-7. **P2 风险分析**：独立F2详细设计、数据/PIT/observation政策、Slice 0与C-010-A5源码均已完成；正式5184-fit grid、D5/D6、targeted blocker diagnostic与no-fit REMEDIATION-DIAG-02均已执行但fail closed，READY=0。D1-B P1源码已实现；REFIT-01因current-A5 train observation与历史payload真实漂移在0 fits处inconclusive。REFIT-02-A已获用户批准，最小runner与v4 receipt已在独立worktree实现并审核；下一步先完成源码提交/PR/合入，再另行授权在同一current-A5运行801207 19D treatment、801207 identity20 matched negative和801011 identity20 harness；两fresh processes固定48 terminal attempts/32真实fits。该训练只验证常量维机制，仍为0 D5/D6/validation/model/READY。D5 19/20维score comparability保持独立blocked，不得由实现猜测。只有D1证据支持且D5兼容合同获批，才实现正式mixed-dimension level artifact/parser，并仅重训受影响的`autocycle_all_core:L2`：131 sectors × 8 seeds × 2 fresh processes = 2096 fits；只有共享KMeans/EM/covariance或公共算法合同变化时才重跑完整5184 grid。之后依次执行该level的D5/D6、逐项处理其余persistent blocker、闭合两family READY，最后才进入generator/job/repository/API/UI/runtime；不得先建设通用动态维度框架、训练平台、调度器或占位产品层。每个PR合入仍须用户逐PR确认。
+7. **P2 风险分析**：独立F2详细设计、数据/PIT/observation政策、Slice 0与C-010-A5源码均已完成；正式5184-fit grid、D5/D6、targeted blocker diagnostic与no-fit REMEDIATION-DIAG-02均已执行但fail closed，READY=0。REFIT-03又完成current authority下两fresh-process三角色48/48 fits，精确raw covariance证据为`mixed_seed_pattern`，机制仍inconclusive、D5 readiness=false。下一步先由用户决定D1-B的level-local engineering语义与D5 effective-dimension兼容合同；获批后只实现必要mixed-dimension level artifact/parser、dimension/denominator receipt和train-only controlled score replay。只有score replay通过，才重训受影响的`autocycle_all_core:L2`：131 sectors × 8 seeds × 2 fresh processes = 2096 fits，并执行该level D5/D6；不得扩大seed或用validation换seed。共享KMeans/EM/covariance与公共算法合同没有变化，因此不重跑完整5184 grid。之后逐项处理其余persistent blocker、闭合两family READY，最后才进入generator/job/repository/API/UI/runtime；不得先建设通用动态维度框架、训练平台、调度器或占位产品层。每个PR合入仍须用户逐PR确认。
 8. **P3 研究训练**：F-014 research-only rolling candidate 与 F-015 manual-first/automation boundary 只有跨阶段方向；必须先建立独立实现级 F2 设计、Design Acceptance Index 和验证矩阵。自动调度仍未批准，不得直接进入代码或复用旧 production training tick。
 
 每个实现 PR 只承担一个可验证 slice，并在 PR body 中列设计项、实现引用、验证证据、生产门禁与未批准缺口；
@@ -855,7 +857,8 @@ branch/commit/push/PR/CI 可按流程继续，但所有 PR 必须在 merge 前�
 
 本文对 Phase 2/3 给出跨阶段权威边界和已确认 UI 契约。Phase 2 从属详细设计只有明确标记为
 用户已批准的精确条目可进入实现；F-011的D3-D7与Slice 0源码已完成，但formal acceptance与两family READY仍blocked。
-REMEDIATION-DIAG-02已执行且仅形成诊断证据；D1-B设计方向与P1源码已完成，但REFIT-01为0-fit inconclusive。REFIT-02-A已获用户批准且runner源码已在独立worktree实现并审核；真实32-fit执行仍需单独授权，D5 comparability继续独立blocked。
+REMEDIATION-DIAG-02与REFIT-03均已执行且仅形成诊断证据；D1-B方向与源码已完成，但REFIT-03 raw pattern为mixed seed、机制仍inconclusive。
+D1-B engineering解释与D5 effective-dimension comparability继续等待用户决定，mixed-dimension实现、score replay、2096-fit训练和D5/D6均未授权。
 Phase 3仍须独立
 实现级详细设计。开始对应代码前必须先具备对应 F2 validator PASS 与正式审核结论；这是
 DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产品审批流。
@@ -879,7 +882,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 
 ## 11. Design Acceptance Matrix（设计验收矩阵）
 
-本表记录 v2.17 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
+本表记录 v2.19 设计验收状态；`implementation_refs` 和 `test_or_evidence` 中的“目标”不是完成声明，每个实现 PR 必须将对应行替换为真实引用和证据后才能报告该设计项完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -894,7 +897,7 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | Phase 2 F2详细设计 §4～§9；`backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_remediation_diagnostic,b3_d1_inactive_dimension,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`；`scripts/hmm_risk/prepare_state_model_set.py` | formal `e7992f87…39f`；blocker diagnostic `10287e84…cffe8`；DIAG-02 `48157a42…bb58`；C-010-A5 `e7f7edc9…773d`；BUG-962 REFIT-01 failure report；REFIT-02-A直接测试与v4 readback | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_C010_A5_MERGED_D1_REFIT_01_INCONCLUSIVE_REFIT_02_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_NOT_EXECUTED_BLOCKED_MODEL_ACCEPTANCE | 两family blocked、READY=0；REFIT-01因current-A5 train observation drift在0 fits处inconclusive。REFIT-02-A runner已实现并审核但尚未提交/合入或执行32-fit；D5 19/20 score comparability继续blocked。禁止忽略hash、自动改阈值、扩大seed、排除family/sector或把受控训练冒充family/READY完成 |
+| F-011 | Phase 2 F2详细设计 §4～§9；`backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_remediation_diagnostic,b3_d1_inactive_dimension,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`；`scripts/hmm_risk/prepare_state_model_set.py` | `python -m pytest backend/tests/hmm_risk/test_b3_d1_inactive_dimension.py -q`；formal artifact `F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_e2c01bae_bug912/b3_formal_preparation.json` canonical `e7992f87…39f`；blocker diagnostic `10287e84…cffe8`；DIAG-02 `48157a42…bb58`；current-A5 `cd70e597…fee5`；REFIT-03 artifact `F:/Dev/AIstock_artifacts/hmm_risk/d1_refit03_current_a5_20260806_b474170f_v9/d1_controlled_refit.json` canonical `7e8a1755…76b9`、48/48 fits与双process payload `53574f62…088f` equality | APPROVED_BY_USER_SOURCE_IMPLEMENTED_FORMAL_EXECUTED_C010_A5_MERGED_D1_REFIT_03_DIAGNOSTIC_COMPLETE_INCONCLUSIVE_D5_COMPAT_PENDING_BLOCKED_MODEL_ACCEPTANCE | 两family blocked、READY=0；REFIT-03 treatment/harness 16/16 accepted、matched 16/16 covariance failure，mixed seed证据不证明唯一常量维机制。D1 engineering解释与D5 effective-dimension合同待用户决定；禁止自动改阈值、扩大seed、排除family/sector或把诊断冒充family/READY完成 |
 | F-012 | Phase 2 F2 详细设计 §14：advisory-only service boundary | `backend/tests/hmm_risk/test_isolation.py`（目标路径，断言 Selection/Paper/QMT 无写入） | DESIGN_READY_USER_APPROVED | 用户明确批准 legacy producer/consumer 冻结与 advisory-only 隔离；源码与结果证据待实现 PR 回填 |
 | F-013 | Phase 2 F2 详细设计 §9～§11：C-003-A report + `/hmm-risk` 默认首页 | `backend/tests/hmm_risk/test_retrospective_report.py`、`frontend/tests/hmm-risk/hmm-risk.spec.ts`（目标路径：L1/L2/7 日 heatmap、固定详情、预警、renderer/error、report denominator） | USER_APPROVED_PENDING_UPSTREAM_MODEL_SET | 用户明确批准 API/UI 合同；真实验收依赖 F-011 READY model set，源码未实施 |
 | F-014 | 本文 Phase 3 UI/隔离方向；research-only rolling candidate + `/hmm-research-training` | `backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts`（目标路径，尚未建立） | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 用户批准跨阶段方向；不得从父蓝图直接编码，身份、训练任务、artifact、状态机、API/UI 和验证合同待独立设计 |
@@ -956,8 +959,9 @@ DESIGN-COMPLIANCE-001 的设计完整性要求，不是每次研究操作的产�
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
-| v2.17 | 2026-08-03 | 收敛BUG-962与REFIT-01真实结果：C-010-A5 authority/readback程序缺陷已修复，但current-A5 `train_observation_sha256`与历史frozen train core不同，REFIT-01在0 fits处inconclusive且不可继续。新增待用户批准REFIT-02-A：同一current-A5的801207 19D treatment、801207 identity20 matched negative与801011 identity20 harness，两fresh processes固定48 terminal attempts/32真实fits；历史payload仅作只读drift审计。设计审核通过但未实施源码/fit/D5/D6/model/READY，严格进度仍为`11/17=64.71%`，DDL/DML/dependency/runtime均noop。 |
+| v2.19 | 2026-08-06 | 回填REFIT-03真实执行：producer `b474170f…`、48/48 fits、report canonical `7e8a1755…76b9`、两process payload `53574f62…088f` bitwise equal；19D treatment/20D harness各16/16 accepted，matched 20D 16/16 covariance failed且呈三seed inactive-only、五seed active/cross-role mixed pattern。机制保持inconclusive、D5 readiness=false。新增待用户决定的D1 level-local engineering解释与D5 effective-dimension方案A；获批后才实现mixed-dimension artifact/parser及train-only score replay，通过后仅运行受影响L2 2096 fits。未执行selection/D6/model/READY/DDL/DML/dependency/runtime，严格进度仍为`11/17=64.71%`。 |
 | v2.18 | 2026-08-03 | 用户批准REFIT-02-A后完成最小runner、current-A5 authority、same-sector matched receipt、historical drift receipt与v4 immutable writer/readback源码，并通过正式代码审核。源码仍位于独立worktree，尚未commit/PR/merge；真实32-fit、D5/D6、mixed-dimension artifact/parser、model/READY、DDL/DML/runtime均未执行，严格进度仍为`11/17=64.71%`。 |
+| v2.17 | 2026-08-03 | 收敛BUG-962与REFIT-01真实结果：C-010-A5 authority/readback程序缺陷已修复，但current-A5 `train_observation_sha256`与历史frozen train core不同，REFIT-01在0 fits处inconclusive且不可继续。新增待用户批准REFIT-02-A：同一current-A5的801207 19D treatment、801207 identity20 matched negative与801011 identity20 harness，两fresh processes固定48 terminal attempts/32真实fits；历史payload仅作只读drift审计。设计审核通过但未实施源码/fit/D5/D6/model/READY，严格进度仍为`11/17=64.71%`，DDL/DML/dependency/runtime均noop。 |
 | v2.16 | 2026-07-31 | 回填D1-B P1最小必要源码：共享artifact-neutral train-only HMM核心、exact-zero authority、full20→19固定projection、identity20 frozen-payload control、16-attempt no-early-stop process、双process report与immutable canonical writer；32 fits、D5/D6、model/READY、DB/runtime均未执行。后续优先级保持P2真实受控训练，不提前实现P4/P9。严格进度仍为`11/17=64.71%`，DDL/dependency/runtime均noop。 |
 | v2.15 | 2026-07-31 | 记录用户选择`C-008-B3-REMEDIATION-D1-B`、D1-A不采用；保持源码、32-fit执行与D5 19/20维comparability为独立pending。将Phase 2后续改为evidence-first：最小必要模型机制→32-fit真实受控训练→D5兼容决策→必要mixed-dimension artifact/parser→受影响`autocycle_all_core:L2` 2096-fit正式训练→该level D5/D6→其余blocker→两family READY→产品功能。明确不先建设通用动态维度框架、训练平台、调度器、API/UI或占位READY；分阶段执行不改变完整验收合同。严格进度仍为`11/17=64.71%`，本次仅文档修订，DDL/DML/dependency/runtime均noop。 |
 | v2.14 | 2026-07-31 | 同步Phase 2 REMEDIATION-DIAG-02正式执行：producer `b2456424…`、canonical `48157a42…bb58`、324/324 profiles、163/163 completed entries与11/11 initialization sources闭合，0 HMM refit/D5/D6/model/READY/DB/runtime。登记D1-A/B精确设计、mixed-dimension level/family artifact、runtime inactive-observation receipt、32-fit controlled-refit结果分类与D5 19/20维comparability blocker；A/B和执行均未获批准。F-011与严格进度仍为blocked和`11/17=64.71%`，不把diagnostic/design completion计为交付。本次仅文档修订，DDL/DML/dependency/runtime均noop。 |
