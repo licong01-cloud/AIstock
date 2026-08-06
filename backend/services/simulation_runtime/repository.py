@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+import math
 from typing import Any, Callable, Iterable, Iterator
 
 import psycopg2.extras
@@ -47,6 +48,28 @@ LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY = "local_sim_projection_outbox_v1"
 LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY = "local_sim_projection_receipts_v1"
 LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY = "local_sim_economic_generation"
 LOCAL_SIM_PROJECTION_TERMINAL_FAILURE_PAYLOAD_KEY = "local_sim_projection_terminal_failure"
+LOCAL_SIM_PROJECTION_GENERATION_PAYLOAD_KEY = "local_sim_projection_generation"
+LOCAL_SIM_PROJECTION_READBACK_FAILURE_PAYLOAD_KEY = "local_sim_projection_readback_failure"
+LOCAL_SIM_PROJECTION_READBACK_TERMINAL_FAILURE_PAYLOAD_KEY = "local_sim_projection_readback_terminal_failure"
+LOCAL_SIM_VALUATION_PENDING_PAYLOAD_KEY = "local_sim_valuation_pending_v1"
+LOCAL_SIM_VALUATION_COMPLETION_PAYLOAD_KEY = "local_sim_valuation_completion_v1"
+
+_LOCAL_SIM_EMPTY_AUTHORITY_DIRECT_CARRIERS = (
+    LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_GENERATION_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_TERMINAL_FAILURE_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_READBACK_FAILURE_PAYLOAD_KEY,
+    LOCAL_SIM_PROJECTION_READBACK_TERMINAL_FAILURE_PAYLOAD_KEY,
+    LOCAL_SIM_VALUATION_PENDING_PAYLOAD_KEY,
+    LOCAL_SIM_VALUATION_COMPLETION_PAYLOAD_KEY,
+    "local_sim_persistence",
+    "local_sim_durable_minute_loop",
+)
+_LOCAL_SIM_EMPTY_AUTHORITY_PROJECTION_SUMMARIES = (
+    "strategy_performance",
+    "performance_projection",
+)
 
 
 def _local_sim_economic_receipt_map(payload: dict[str, Any]) -> dict[str, LocalSimEconomicReceiptV1]:
@@ -143,6 +166,102 @@ def _local_sim_state_map(payload: dict[str, Any]) -> dict[str, LocalSimExecution
     return states
 
 
+def _local_sim_json_safe_context_value(value: Any) -> Any:
+    if value is None or type(value) in {bool, int, str}:
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    return str(value)
+
+
+def _local_sim_empty_authority_carrier_context(
+    payload: dict[str, Any],
+    *,
+    raw_generation: Any,
+) -> dict[str, Any] | None:
+    carrier_type: str | None = None
+    carrier: Any = None
+    for candidate in _LOCAL_SIM_EMPTY_AUTHORITY_DIRECT_CARRIERS:
+        if candidate in payload:
+            carrier_type = candidate
+            carrier = payload.get(candidate)
+            break
+    if carrier_type is None:
+        for candidate in _LOCAL_SIM_EMPTY_AUTHORITY_PROJECTION_SUMMARIES:
+            raw = payload.get(candidate)
+            if isinstance(raw, dict) and any(
+                key in raw
+                for key in (
+                    "local_sim_generation",
+                    "local_sim_outbox_id",
+                    "local_sim_economic_hash",
+                    "tca_generation",
+                )
+            ):
+                carrier_type = candidate
+                carrier = raw
+                break
+    if carrier_type is None and payload.get("broker_order_handles"):
+        carrier_type = "broker_order_handles"
+        carrier = payload.get("broker_order_handles")
+    broker_called = payload.get("broker_called")
+    if carrier_type is None and broker_called is not None and (
+        type(broker_called) is not bool or broker_called
+    ):
+        carrier_type = "broker_called"
+        carrier = broker_called
+    submitted_intents = payload.get("submitted_intents")
+    if carrier_type is None and submitted_intents is not None and (
+        type(submitted_intents) is not int or submitted_intents != 0
+    ):
+        carrier_type = "submitted_intents"
+        carrier = submitted_intents
+    if carrier_type is None:
+        return None
+
+    carrier_payload = carrier if isinstance(carrier, dict) else {}
+    receipt_payload: dict[str, Any] = {}
+    receipt_map_id: Any = None
+    if carrier_type == LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY and isinstance(carrier, dict) and carrier:
+        receipt_map_id, raw_receipt = sorted(carrier.items(), key=lambda item: str(item[0]))[0]
+        if isinstance(raw_receipt, dict):
+            receipt_payload = raw_receipt
+
+    generation = carrier_payload.get("generation")
+    if generation is None:
+        generation = carrier_payload.get("local_sim_generation")
+    if generation is None and isinstance(carrier_payload.get("tca_generation"), dict):
+        generation = carrier_payload["tca_generation"].get("generation")
+    if generation is None:
+        generation = receipt_payload.get("generation")
+    if generation is None:
+        generation = raw_generation
+
+    outbox_id = (
+        carrier_payload.get("outbox_id")
+        or carrier_payload.get("local_sim_outbox_id")
+        or receipt_payload.get("outbox_id")
+    )
+    projection_receipt_id = (
+        carrier_payload.get("projection_receipt_id")
+        or receipt_payload.get("projection_receipt_id")
+        or receipt_map_id
+    )
+    receipt_id = carrier_payload.get("receipt_id") or receipt_payload.get("receipt_id")
+    if receipt_id is None and carrier_type == LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY:
+        receipt_id = projection_receipt_id
+    carrier_identity = outbox_id or receipt_id or projection_receipt_id
+    return {
+        "carrier_type": carrier_type,
+        "carrier_identity": _local_sim_json_safe_context_value(carrier_identity),
+        "outbox_id": _local_sim_json_safe_context_value(outbox_id),
+        "receipt_id": _local_sim_json_safe_context_value(receipt_id),
+        "projection_receipt_id": _local_sim_json_safe_context_value(projection_receipt_id),
+        "expected_generation": 0,
+        "actual_generation": _local_sim_json_safe_context_value(generation),
+    }
+
+
 @dataclass(frozen=True)
 class _LocalSimStateAuthority:
     generation: int
@@ -177,17 +296,35 @@ def _local_sim_state_authority_closure(
         ) from exc
 
     if not state_map and not receipts:
-        if raw_generation is None or (type(raw_generation) is int and raw_generation == 0):
-            return _LocalSimStateAuthority(generation=0, receipt=None, states={})
-        raise InvalidStateTransitionError(
-            "LocalSIM economic generation is invalid for an empty durable authority",
-            context={
-                "reason_code": "LOCALSIM_ECONOMIC_GENERATION_INVALID",
-                "run_id": run_id,
-                "expected_generation": 0,
-                "actual_generation": raw_generation,
-            },
+        if raw_generation is not None and not (type(raw_generation) is int and raw_generation == 0):
+            raise InvalidStateTransitionError(
+                "LocalSIM economic generation is invalid for an empty durable authority",
+                context={
+                    "reason_code": "LOCALSIM_ECONOMIC_GENERATION_INVALID",
+                    "run_id": run_id,
+                    "carrier_type": LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY,
+                    "carrier_identity": None,
+                    "outbox_id": None,
+                    "receipt_id": None,
+                    "projection_receipt_id": None,
+                    "expected_generation": 0,
+                    "actual_generation": _local_sim_json_safe_context_value(raw_generation),
+                },
+            )
+        orphan_carrier = _local_sim_empty_authority_carrier_context(
+            payload,
+            raw_generation=raw_generation,
         )
+        if orphan_carrier is not None:
+            raise InvalidStateTransitionError(
+                "LocalSIM empty durable authority contains an orphan economic or projection carrier",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER",
+                    "run_id": run_id,
+                    **orphan_carrier,
+                },
+            )
+        return _LocalSimStateAuthority(generation=0, receipt=None, states={})
     if not receipts:
         raise InvalidStateTransitionError(
             "LocalSIM durable state authority is missing its committed economic receipt",

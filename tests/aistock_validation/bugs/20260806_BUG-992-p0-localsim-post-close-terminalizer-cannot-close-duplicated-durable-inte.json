@@ -110,7 +110,7 @@
   "first_seen_at": "2026-08-06T07:34:59.747195Z",
   "fix_branch": null,
   "fix_commit": null,
-  "fix_summary": "LocalSIM lifecycle and economic readback now reuse one strict durable authority closure over the current run identity, continuous receipt generations, the generation high-watermark, exact receipt/outbox identities, and the committed state_id-to-state_hash set. Terminal historical incarnations remain auditable, while missing or forged receipts, malformed generations, missing/hash-drift states, identity drift, and extra non-terminal authority fail loud with typed context.",
+  "fix_summary": "LocalSIM lifecycle and economic readback reuse one strict durable authority closure over current run identity, continuous receipt generations, the generation high-watermark, exact receipt/outbox identities, and the committed state_id-to-state_hash set. Empty authority now also requires every economic/projection generation carrier to be absent; orphan outbox/receipt/generation or broker-side-effect facts fail loud without terminalizing the damaged run, while independent bindings continue. PostgreSQL evidence comes from committed guarded DEV rows read through real repository connections and independent post-commit readback.",
   "fixed_at": null,
   "github_issue_number": 3184,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3184",
@@ -129,14 +129,15 @@
     "simulation_core_l2"
   ],
   "risk_area": "bug",
-  "root_cause": "The original lifecycle closure collapsed state_id-keyed history into an intent_id map and treated legal terminal incarnations as duplicate current writers. The first PR repair then left two P0 gaps: the authority selector fell back to raw state history when receipt authority was absent or incomplete and did not close receipt/generation/run identity, while economic readback only checked receipt state hashes as a subset and therefore returned false success when an extra active state existed.",
+  "root_cause": "The original lifecycle closure collapsed state_id-keyed history into an intent_id map and treated legal terminal incarnations as duplicate current writers. The first PR repair then left strict authority/readback gaps, and the next review found that the empty-state/empty-receipt branch still returned generation zero while orphan projection/economic carriers remained. The prior PostgreSQL-labelled tests also monkeypatched an InMemory daily-run getter, so they did not prove committed PostgreSQL row JSON or independent post-commit readback.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055",
     "fresh_process_evidence": [
-      "python -m nox -s simulation_core_l2 -> 461 passed in a fresh Python process",
-      "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> 233 passed in a fresh Python process",
-      "python -m nox -s simulation_core_l2 -> 461 passed in a fresh Python process; lifecycle scheduler coverage process -> 233 passed"
+      "python -m nox -s simulation_core_l2 -> 466 passed, 1 explicitly gated DEV PostgreSQL skip in a fresh Python process",
+      "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> 239 passed in a fresh Python process",
+      "committed aistock_dev row JSON through real SimulationRuntimeRepository connections -> independent writer/readback backend PIDs; repeated legal readback and typed extra-active/orphan/forged failures passed; exact disposable-row cleanup readback returned 0",
+      "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> passed: 239 tests with committed independent aistock_dev readback"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -165,15 +166,16 @@
     "final-review RED public authority matrix before implementation -> 20 failed, 2 passed",
     "final-review RED extra-active economic readback -> 0 passed, 2 failed with DID NOT RAISE",
     "strict empty-generation RED -> 2 failed, 19 passed",
-    "targeted LocalSIM authority/readback/PostgreSQL matrix -> 25 passed",
-    "strict receipt/high-watermark/outbox/empty-path public seam matrix -> 21 passed",
-    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py with branch coverage -> 233 passed, 3 warnings",
-    "changed-code coverage against origin/main -> line 94.78% (109/115), branch 89.29% (50/56)",
-    "python -m nox -s simulation_core_l2 -> 461 passed",
+    "orphan-carrier RED before implementation -> 5 passed, 6 failed; orphan scheduler run was incorrectly terminalized",
+    "final LocalSIM authority/readback matrix with real committed DEV PostgreSQL node -> 50 passed",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py with branch coverage and DEV PostgreSQL enabled -> 239 passed",
+    "changed-code coverage against origin/main -> line 90.71% (166/183), branch 87.23% (82/94)",
+    "python -m nox -s simulation_core_l2 -> 466 passed, 1 explicitly gated DEV PostgreSQL skip",
     "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
     "python -m nox -s l0 -> blocking=0",
     "changed-file classifier -> simulation_core_l2, unmapped_code_files=[]",
-    "Ruff check, test-file Ruff format check, targeted py_compile, and git diff --check -> passed",
+    "real DEV PostgreSQL readback -> aistock_dev, committed row JSON, disjoint writer/readback backend PIDs, repeated independent readback, typed extra-active/orphan/forged failures, cleanup readback 0",
+    "Ruff check, targeted py_compile, and git diff --check -> passed",
     "F2 validator -> 112/112, warnings=0"
   ],
   "verification_budget": {
