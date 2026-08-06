@@ -53,8 +53,6 @@ from backend.services.quantevolver.stock_pool_sync import (
 )
 from backend.services.quantevolver.qe_dataset_contract import (
     QE_DATASET_CONTRACT_ID,
-    QE_DATASET_SIGNAL_END_DATE,
-    QE_DATASET_START_DATE,
     QE_FROZEN_BIN_SNAPSHOT_ID,
     QE_FROZEN_BIN_UNIVERSE_KEY,
     QE_FROZEN_CALENDAR_SHA256,

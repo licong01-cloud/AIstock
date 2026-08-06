@@ -32,7 +32,6 @@ import re
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -52,9 +51,7 @@ from backend.services.quantevolver.qe_dataset_contract import (  # noqa: E402
     QE_DATASET_CONTRACT_ID,
     QE_FROZEN_BIN_SNAPSHOT_ID,
     QE_FROZEN_BIN_UNIVERSE_KEY,
-    QE_FROZEN_CALENDAR_SHA256,
     QE_FROZEN_INSTRUMENTS_SHA256,
-    QE_FROZEN_META_EXPORT_SHA256,
     QE_ST_PIT_UNIVERSE_KEY,
 )
 
