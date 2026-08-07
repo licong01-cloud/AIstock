@@ -1,0 +1,176 @@
+{
+  "actual": "现象: 本地数据管理 stock_st_events(Tushare st 接口) 2026-08-06 增量同步目标 dst_fcc8eb2b847da35d50370285 最终阻断(final_blocked), 自动重试耗尽(11 次 attempt), 产生 error 级活跃告警 a0d564b4-791c-4eec-8770-3e9426636daa(未确认)。根因线索: 每次失败错误均为 provider_contract_error: missing required fields ['st_type'] for 2026-08-06, 即 Tushare st 接口响应缺少必需字段 st_type, 属数据源契约错误而非本地故障; next_retry_at=null 不会自行恢复。证据: GET /api/v1/local-data/targets/dst_fcc8eb2b847da35d50370285 (attempt_no=11 final_blocked, blocked_at=2026-08-06T23:40:15+08:00); 关联失败 job 1dab063c/6527a055/2555abbd/944875dd。影响: stock_st_events 2026-08-06 数据未入库, ready_date 停留在 2026-08-05, 影响本地数据同步/股票分析模块。修复方向: 1) tushare_sync_engine 对 st 接口契约适配(st_type 字段缺失容错/字段映射修正); 2) 修复后补同步 2026-08-06 目标日数据并确认目标 reconciled。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260807_BUG-994-stock-st-events-tushare-st-api-contract-error-missing-st-type-blocks-202.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-994",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-07T02:39:27.557476Z",
+  "description": "现象: 本地数据管理 stock_st_events(Tushare st 接口) 2026-08-06 增量同步目标 dst_fcc8eb2b847da35d50370285 最终阻断(final_blocked), 自动重试耗尽(11 次 attempt), 产生 error 级活跃告警 a0d564b4-791c-4eec-8770-3e9426636daa(未确认)。根因线索: 每次失败错误均为 provider_contract_error: missing required fields ['st_type'] for 2026-08-06, 即 Tushare st 接口响应缺少必需字段 st_type, 属数据源契约错误而非本地故障; next_retry_at=null 不会自行恢复。证据: GET /api/v1/local-data/targets/dst_fcc8eb2b847da35d50370285 (attempt_no=11 final_blocked, blocked_at=2026-08-06T23:40:15+08:00); 关联失败 job 1dab063c/6527a055/2555abbd/944875dd。影响: stock_st_events 2026-08-06 数据未入库, ready_date 停留在 2026-08-05, 影响本地数据同步/股票分析模块。修复方向: 1) tushare_sync_engine 对 st 接口契约适配(st_type 字段缺失容错/字段映射修正); 2) 修复后补同步 2026-08-06 目标日数据并确认目标 reconciled。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260807-50096d8b2dbf",
+      "timestamp": "2026-08-07T02:39:27.557472Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-07T02:39:27.557476Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3191,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3191",
+  "last_seen_at": "2026-08-07T02:39:27.557476Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "stock_st_events tushare st API contract error missing st_type blocks 2026-08-06 sync target",
+  "trigger_condition": {
+    "fingerprint": "50096d8b2dbf5c62ef0278e1",
+    "source_event_id": "FE-20260807-50096d8b2dbf"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
