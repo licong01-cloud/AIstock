@@ -308,6 +308,14 @@ def test_trade_date_tushare_specs_use_trading_day_sequence():
     assert "margin_detail" not in sync_engine.ZERO_ROW_VALID_DATASETS
 
 
+def test_stock_st_events_requests_current_tushare_st_type_field():
+    """BUG-994: Tushare fixed the historical "st_tpye" typo; the spec must
+    request the current "st_type" field so the mapped column is populated."""
+    spec = DATASET_REGISTRY["stock_st_events"]
+    assert spec.api_field_map.get("st_type", "st_type") == "st_type"
+    assert "st_tpye" not in set(spec.api_field_map.values())
+
+
 def test_trading_day_sequence_uses_calendar_service_for_trade_date_specs(monkeypatch):
     engine = TushareSyncEngine(target_repository=None)
     calls = []

@@ -194,7 +194,10 @@ STOCK_ST_EVENTS = DatasetSpec(
         "st_reason": "text",
         "st_explain": "text",
     },
-    api_field_map={"st_type": "st_tpye"},
+    # BUG-994: Tushare fixed the historical "st_tpye" typo server-side and now
+    # returns "st_type". The old api_field_map made Tushare silently drop the
+    # unknown column, tripping the fail-closed contract check. Request the
+    # current field name directly; do not re-add a stale mapping.
     date_column="pub_date",
     date_param_name="pub_date",
     batch_sleep=0.3,
