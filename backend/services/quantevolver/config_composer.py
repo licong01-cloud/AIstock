@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
 import shlex
 from datetime import datetime
@@ -33,6 +34,16 @@ from .qe_dataset_contract import (
     QE_DATASET_CONTRACT_ID,
     QE_DATASET_SIGNAL_END_DATE,
     QE_DATASET_START_DATE,
+    QE_FROZEN_BIN_SNAPSHOT_ID,
+    QE_FROZEN_BIN_UNIVERSE_KEY,
+    QE_FROZEN_CALENDAR_SHA256,
+    QE_FROZEN_INSTRUMENTS_SHA256,
+    QE_FROZEN_META_EXPORT_SHA256,
+    QE_FROZEN_SUSPEND_DATASET_ID,
+    QE_FROZEN_SUSPEND_MANIFEST_SHA256,
+    QE_FROZEN_SUSPEND_PARQUET_SHA256,
+    QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
+    QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256,
     QE_ST_PIT_UNIVERSE_KEY,
     require_qe_dataset_window,
 )
@@ -428,6 +439,7 @@ SUPPORTED_QE_EXECUTION_ALGOS = {
 DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
 RISK_POLICY_FILE = "qe_event_risk_policy.json"
+FROZEN_BUILD_SPEC_FILE = "qe_frozen_build_spec.json"
 SECTOR_RISK_OVERLAY_MANIFEST_FILE = "qe_sector_risk_overlay_manifest.json"
 SECTOR_RISK_OVERLAY_DATA_FILE = "qe_sector_risk_overlay.parquet"
 SECTOR_RISK_OVERLAY_ACTION_LOG = "qe_sector_risk_overlay_actions.jsonl"
@@ -436,6 +448,8 @@ QE_STRATEGY_RUNTIME_HELPER_FILES = (
     "qe_board_lot_exchange.py",
     "qe_suspend_filter.py",
     "qe_event_risk_policy.py",
+    "qe_build_frozen_risk_policy.py",
+    "qe_build_frozen_suspend_filter.py",
     "qe_suspend_filter_strategy.py",
     "qe_suspend_filter_score_weighted_strategy.py",
     "score_weighted_strategy_v2.py",
@@ -1019,84 +1033,6 @@ class ConfigComposer:
         from datetime import date
         return date.fromisoformat(str(value)[:10])
 
-    def _build_suspend_filter_artifact(
-        self,
-        data_split: Dict[str, str],
-        *,
-        strict_audit: bool = True,
-    ) -> str:
-        """Export suspend_d rows to a local JSON artifact for Qlib runtime."""
-        backtest_start = self._parse_date(data_split["test_start"])
-        backtest_end = self._parse_date(data_split["backtest_end"])
-        if backtest_end < backtest_start:
-            raise ValueError("backtest_end is earlier than test_start; cannot build suspend filter")
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT cal_date
-                    FROM market.trading_calendar
-                    WHERE is_trading = TRUE
-                      AND cal_date BETWEEN %s AND %s
-                    ORDER BY cal_date
-                    """,
-                    (backtest_start, backtest_end),
-                )
-                trade_dates = [row[0] for row in cur.fetchall()]
-                if not trade_dates:
-                    raise RuntimeError(
-                        f"No trading dates found for suspend filter: {backtest_start}..{backtest_end}"
-                    )
-
-                if strict_audit:
-                    cur.execute(
-                        """
-                        SELECT trade_date, status
-                        FROM market.dataset_date_refresh_audit
-                        WHERE dataset = 'suspend_d'
-                          AND trade_date = ANY(%s)
-                        """,
-                        (trade_dates,),
-                    )
-                    audit_rows = {row[0]: row[1] for row in cur.fetchall()}
-                    missing = [d.isoformat() for d in trade_dates if audit_rows.get(d) != "success"]
-                    if missing:
-                        raise RuntimeError(
-                            "suspend_d refresh audit is incomplete; "
-                            f"missing_or_failed_dates={missing[:20]} total={len(missing)}. "
-                            "Refresh/seed market.dataset_date_refresh_audit before enabling filter_suspended_on_signal."
-                        )
-
-                cur.execute(
-                    """
-                    SELECT trade_date, ts_code
-                    FROM market.suspend_d
-                    WHERE suspend_type = 'S'
-                      AND trade_date BETWEEN %s AND %s
-                    ORDER BY trade_date, ts_code
-                    """,
-                    (backtest_start, backtest_end),
-                )
-                suspended_by_date: Dict[str, List[str]] = {d.isoformat(): [] for d in trade_dates}
-                for trade_date, ts_code in cur.fetchall():
-                    key = trade_date.isoformat()
-                    if key in suspended_by_date:
-                        suspended_by_date[key].append(str(ts_code))
-
-        payload = {
-            "enabled": True,
-            "source": "market.suspend_d",
-            "audit_dataset": "suspend_d",
-            "strict_audit": strict_audit,
-            "start_date": backtest_start.isoformat(),
-            "end_date": backtest_end.isoformat(),
-            "trade_date_count": len(trade_dates),
-            "suspended_row_count": sum(len(v) for v in suspended_by_date.values()),
-            "suspended_by_date": suspended_by_date,
-        }
-        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-
     def _get_strategy_class_name(self, strategy_info: Optional[Dict]) -> str:
         if not strategy_info:
             return "TopkDropoutStrategy"
@@ -1283,7 +1219,7 @@ class ConfigComposer:
         strategy_info: Optional[Dict],
         execution_algo: Optional[str],
     ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """Build the suspend artifact needed by signal filtering or V25 execution."""
+        """Wire the frozen-file suspend artifact for signal filtering or V25 execution."""
 
         # Mandatory event-risk policies can force exits or block buys before
         # ``filter_suspended_on_signal`` is explicitly set.  In that mode the
@@ -1303,17 +1239,19 @@ class ConfigComposer:
             strategy_class_for_suspend = self._get_strategy_class_name(strategy_info)
             self._ensure_suspend_filter_supported(strategy_class_for_suspend)
 
-        suspend_filter_json = self._build_suspend_filter_artifact(
-            data_split,
-            strict_audit=bool(custom_params.get("suspend_filter_strict", True)),
-        )
+        # BUG-989 zero-DB data plane: the suspend artifact is built on the
+        # compute node by qe_build_frozen_suspend_filter.py from the frozen
+        # suspend_d candidate dataset pinned in qe_frozen_build_spec.json
+        # (written by _prepare_risk_policy_runtime for every new QE
+        # workspace).  The composer only wires the runtime contract here: the
+        # strict QESuspendFilter reads qe_suspend_filter.json, whose keys must
+        # cover every trading day of the pinned frozen calendar inside the
+        # window.  Querying market.* tables is forbidden; any pin, identity,
+        # date-coverage or field mismatch fails closed on the compute node
+        # and there is no database fallback.
         custom_params["suspend_filter_file"] = SUSPEND_FILTER_FILE
-        custom_params.setdefault("suspend_filter_strict", True)
-
-        if signal_filter_enabled:
-            custom_params["filter_suspended_on_signal"] = True
-
-        return custom_params, suspend_filter_json
+        custom_params["suspend_filter_strict"] = True
+        return custom_params, None
 
     @staticmethod
     def _risk_policy_profile(custom_params: Optional[Dict[str, Any]]):
@@ -1335,8 +1273,24 @@ class ConfigComposer:
     def _is_qe_risk_policy_enabled(cls, custom_params: Optional[Dict[str, Any]]) -> bool:
         return bool(cls._risk_policy_profile(custom_params).enabled)
 
-    def _build_qe_risk_policy_artifact(self, data_split: Dict[str, str], custom_params: Dict[str, Any]) -> str:
-        """Export ST PIT spans to a local JSON artifact for Qlib runtime."""
+    def _build_qe_frozen_risk_policy_spec(
+        self,
+        data_split: Dict[str, str],
+        custom_params: Dict[str, Any],
+        *,
+        qlib_data_path: Optional[str] = None,
+    ) -> str:
+        """Emit the frozen-dataset build spec for the ST PIT risk policy.
+
+        BUG-989 zero-DB data plane: the composer never queries market.* tables
+        to materialize backtest inputs.  It writes ``qe_frozen_build_spec.json``
+        (window, risk profile, dataset identity, sha256 pins) into the
+        workspace; ``qe_build_frozen_risk_policy.py`` runs on the compute node
+        before ``qrun`` and derives ``qe_event_risk_policy.json`` exclusively
+        from the frozen qlib bin files referenced by ``provider_uri.day``.
+        Any pin/identity mismatch or missing frozen file fails closed on the
+        compute node; there is no database fallback.
+        """
 
         profile = self._risk_policy_profile(custom_params)
         if not profile.enabled:
@@ -1356,94 +1310,55 @@ class ConfigComposer:
             raise ValueError("backtest_end is earlier than test_start; cannot build QE risk policy")
         require_qe_dataset_window(start_date=backtest_start, end_date=backtest_end)
 
-        from backend.services.stock_universe_pit_service import (
-            StockUniversePitService,
-        )
-
-        # QE consumes a dataset-versioned snapshot.  It never reads, marks dirty,
-        # extends, or rebuilds the rolling live-selection/Paper PIT universe.
-        StockUniversePitService().ensure_immutable_dataset_snapshot(
-            universe_key=QE_ST_PIT_UNIVERSE_KEY,
-            start_date=QE_DATASET_START_DATE,
-            end_date=QE_DATASET_SIGNAL_END_DATE,
-            bootstrap_if_missing=True,
-        )
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT cal_date
-                    FROM market.trading_calendar
-                    WHERE is_trading = TRUE
-                      AND cal_date BETWEEN %s AND %s
-                    ORDER BY cal_date
-                    """,
-                    (backtest_start, backtest_end),
-                )
-                trade_dates = [row[0] for row in cur.fetchall()]
-                if not trade_dates:
-                    raise RuntimeError(
-                        f"No trading dates found for QE risk policy: {backtest_start}..{backtest_end}"
-                    )
-                cur.execute(
-                    """
-                    SELECT ts_code, eligible_start, eligible_end, entry_reason,
-                           exit_reason, rule_version, metadata
-                    FROM market.stock_universe_pit_spans
-                    WHERE universe_key = %s
-                      AND eligible_start <= %s
-                      AND eligible_end >= %s
-                    ORDER BY ts_code, eligible_start, eligible_end
-                    """,
-                    (QE_ST_PIT_UNIVERSE_KEY, backtest_end, backtest_start),
-                )
-                spans = [
-                    {
-                        "ts_code": row[0],
-                        "eligible_start": row[1].isoformat(),
-                        "eligible_end": row[2].isoformat(),
-                        "entry_reason": row[3],
-                        "exit_reason": row[4],
-                        "rule_version": row[5],
-                        "metadata": row[6] or {},
-                    }
-                    for row in cur.fetchall()
-                ]
-                cur.execute(
-                    """
-                    SELECT universe_key, rule_version, scope, status, dirty,
-                           source_fingerprint_sha256, generated_at
-                    FROM market.stock_universe_pit_state
-                    WHERE universe_key = %s
-                    """,
-                    (QE_ST_PIT_UNIVERSE_KEY,),
-                )
-                state = cur.fetchone()
+        provider_uri_day = str(qlib_data_path or QLIB_DATA_PATH_WSL).strip()
+        if not provider_uri_day:
+            raise RuntimeError(
+                "reason_code=qe_frozen_build_spec_invalid: "
+                "qlib_data_path/QLIB_DATA_PATH_WSL is empty; "
+                "cannot pin the frozen risk policy source"
+            )
 
         payload = {
-            "enabled": True,
-            "contract": profile.policy_version,
-            "source": "market.stock_universe_pit_spans",
-            "providers": list(profile.providers),
-            "hard_actions": list(profile.hard_actions),
-            "visible_time_mode": profile.visible_time_mode,
-            "strict_data_ready": profile.strict_data_ready,
-            "dataset_contract_id": QE_DATASET_CONTRACT_ID,
-            "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
+            "schema_version": "qe_frozen_build_spec_v1",
+            "kind": "qe_event_risk_policy",
+            "provider_uri_day": provider_uri_day,
             "start_date": backtest_start.isoformat(),
             "end_date": backtest_end.isoformat(),
-            "trade_date_count": len(trade_dates),
-            "span_count": len(spans),
-            "active_spans": spans,
-            "state": {
-                "universe_key": state[0] if state else QE_ST_PIT_UNIVERSE_KEY,
-                "rule_version": state[1] if state else None,
-                "scope": state[2] if state else None,
-                "status": state[3] if state else "missing",
-                "dirty": bool(state[4]) if state else True,
-                "source_fingerprint_sha256": state[5] if state else None,
-                "generated_at": state[6].isoformat() if state and state[6] else None,
+            "profile": {
+                "contract": profile.policy_version,
+                "providers": list(profile.providers),
+                "hard_actions": list(profile.hard_actions),
+                "visible_time_mode": profile.visible_time_mode,
+                "strict_data_ready": profile.strict_data_ready,
+            },
+            "dataset": {
+                "contract_id": QE_DATASET_CONTRACT_ID,
+                "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
+                "rule_version": "frozen_qlib_bin_universe_v1",
+            },
+            "pins": {
+                "snapshot_id": QE_FROZEN_BIN_SNAPSHOT_ID,
+                "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
+                "instruments_sha256": QE_FROZEN_INSTRUMENTS_SHA256,
+                "calendar_sha256": QE_FROZEN_CALENDAR_SHA256,
+                "meta_export_sha256": QE_FROZEN_META_EXPORT_SHA256,
+            },
+            # Frozen suspend_d candidate dataset pins (BUG-989 continuation):
+            # the suspend sidecar is a versioned sibling of the frozen bin
+            # directory on every compute node.  qe_build_frozen_suspend_filter.py
+            # rebuilds qe_suspend_filter.json from these pins before qrun;
+            # any pin/identity/coverage mismatch fails closed on the compute
+            # node and there is no database fallback.
+            "suspend": {
+                "dataset_id": QE_FROZEN_SUSPEND_DATASET_ID,
+                "provider_uri": posixpath.join(
+                    posixpath.dirname(provider_uri_day.rstrip("/")),
+                    QE_FROZEN_SUSPEND_DATASET_ID,
+                ),
+                "universe_key": QE_FROZEN_BIN_UNIVERSE_KEY,
+                "parquet_sha256": QE_FROZEN_SUSPEND_PARQUET_SHA256,
+                "manifest_sha256": QE_FROZEN_SUSPEND_MANIFEST_SHA256,
+                "source_contract": QE_FROZEN_SUSPEND_SOURCE_CONTRACT,
             },
         }
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
@@ -1453,6 +1368,7 @@ class ConfigComposer:
         *,
         custom_params: Optional[Dict[str, Any]],
         data_split: Dict[str, str],
+        qlib_data_path: Optional[str] = None,
     ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
         custom_params = ensure_qe_risk_policy(
             custom_params,
@@ -1461,22 +1377,20 @@ class ConfigComposer:
         custom_params["risk_policy"]["st_universe_key"] = QE_ST_PIT_UNIVERSE_KEY
         if not self._is_qe_risk_policy_enabled(custom_params):
             return custom_params, None
-        risk_policy_json = self._build_qe_risk_policy_artifact(data_split, custom_params)
+        frozen_build_spec_json = self._build_qe_frozen_risk_policy_spec(
+            data_split,
+            custom_params,
+            qlib_data_path=qlib_data_path,
+        )
         profile = self._risk_policy_profile(custom_params)
         custom_params["risk_policy_file"] = RISK_POLICY_FILE
         custom_params["risk_policy_enabled"] = True
         custom_params["risk_policy_strict"] = profile.strict_data_ready
-        payload = json.loads(risk_policy_json)
-        quote_universe_codes = sorted(
-            {
-                str(span.get("ts_code") or "").strip().upper()
-                for span in payload.get("active_spans", [])
-                if str(span.get("ts_code") or "").strip()
-            }
-        )
-        if quote_universe_codes:
-            custom_params["quote_universe_codes"] = quote_universe_codes
-        return custom_params, risk_policy_json
+        # The quote/sell universe intentionally defaults to qlib's "all",
+        # which resolves to the frozen bin instruments universe; no
+        # quote_universe_codes list is derived from spans anymore.
+        custom_params.pop("quote_universe_codes", None)
+        return custom_params, frozen_build_spec_json
 
     @staticmethod
     def _validate_hmm_coefficients_json(content: str) -> None:
@@ -1640,6 +1554,7 @@ class ConfigComposer:
         self._validate_historical_stock_pool_window(custom_params, data_split)
         rdagent_cfg = self._fetch_workspace_config()
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
+        qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -1745,9 +1660,10 @@ class ConfigComposer:
                     f"支持的策略: {', '.join(sorted(_hmm_supported_classes))}"
                 )
 
-        custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
+        custom_params, frozen_build_spec_json = self._prepare_risk_policy_runtime(
             custom_params=custom_params,
             data_split=data_split,
+            qlib_data_path=qlib_data_path,
         )
         custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
             custom_params=custom_params,
@@ -1797,10 +1713,8 @@ class ConfigComposer:
             hmm_path = exp_dir / "hmm_sector_coefficients.json"
             hmm_path.write_text(hmm_json_content, encoding="utf-8")
 
-        if suspend_filter_json:
-            (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
-        if risk_policy_json:
-            (exp_dir / RISK_POLICY_FILE).write_text(risk_policy_json, encoding="utf-8")
+        if frozen_build_spec_json:
+            (exp_dir / FROZEN_BUILD_SPEC_FILE).write_text(frozen_build_spec_json, encoding="utf-8")
         if sector_risk_manifest_json is not None and sector_risk_runtime_bytes is not None:
             (exp_dir / SECTOR_RISK_OVERLAY_MANIFEST_FILE).write_text(
                 sector_risk_manifest_json,
@@ -2122,20 +2036,19 @@ class ConfigComposer:
             custom_params["hmm_risk_gate_file"] = "hmm_risk_gate.json"
             custom_params["enable_hmm_risk_gate"] = True
 
-        custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
+        custom_params, frozen_build_spec_json = self._prepare_risk_policy_runtime(
             custom_params=custom_params,
             data_split=data_split,
+            qlib_data_path=qlib_data_path,
         )
-        if risk_policy_json:
-            experiment_files[RISK_POLICY_FILE] = risk_policy_json
+        if frozen_build_spec_json:
+            experiment_files[FROZEN_BUILD_SPEC_FILE] = frozen_build_spec_json
         custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
             custom_params=custom_params,
             data_split=data_split,
             strategy_info=strategy_info,
             execution_algo=execution_algo,
         )
-        if suspend_filter_json:
-            experiment_files[SUSPEND_FILTER_FILE] = suspend_filter_json
         custom_params, sector_risk_manifest_json, sector_risk_runtime_bytes = (
             self._prepare_sector_risk_overlay_runtime(
                 custom_params=custom_params,
@@ -2831,6 +2744,7 @@ class ConfigComposer:
         self._validate_historical_stock_pool_window(custom_params, data_split)
         rdagent_cfg = self._fetch_workspace_config()
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
+        qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names)
@@ -2882,9 +2796,10 @@ class ConfigComposer:
             execution_algo_params["unfilled_trigger_minute"] = _cp["unfilled_trigger_minute"]
         if _cp.get("unfilled_backup_depth"):
             execution_algo_params["unfilled_backup_depth"] = _cp["unfilled_backup_depth"]
-        custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
+        custom_params, frozen_build_spec_json = self._prepare_risk_policy_runtime(
             custom_params=custom_params,
             data_split=data_split,
+            qlib_data_path=qlib_data_path,
         )
         custom_params, suspend_filter_json = self._prepare_suspend_filter_runtime(
             custom_params=custom_params,
@@ -2928,10 +2843,8 @@ class ConfigComposer:
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
         conf_path.write_text(conf_yaml, encoding="utf-8")
-        if suspend_filter_json:
-            (exp_dir / SUSPEND_FILTER_FILE).write_text(suspend_filter_json, encoding="utf-8")
-        if risk_policy_json:
-            (exp_dir / RISK_POLICY_FILE).write_text(risk_policy_json, encoding="utf-8")
+        if frozen_build_spec_json:
+            (exp_dir / FROZEN_BUILD_SPEC_FILE).write_text(frozen_build_spec_json, encoding="utf-8")
         if sector_risk_manifest_json is not None and sector_risk_runtime_bytes is not None:
             (exp_dir / SECTOR_RISK_OVERLAY_MANIFEST_FILE).write_text(
                 sector_risk_manifest_json,
@@ -4296,7 +4209,16 @@ class ConfigComposer:
         start_date: str,
         end_date: str,
     ) -> Dict[str, Any]:
-        """Return official ST PIT metadata that generated factor caches must match."""
+        """Return frozen ST PIT metadata that generated factor caches must match.
+
+        BUG-989 zero-DB data plane: the universe fingerprint stamped onto QE
+        factor caches is the sha256 of the frozen qlib bin ``instruments/all.txt``
+        span file (pinned in ``qe_dataset_contract`` at dataset deploy time), not
+        any ``market.stock_universe_pit_state`` row.  The composer bakes this
+        metadata into both the cache writer and the cache reader of the same
+        workspace, so the pair stays self-consistent without touching the
+        database.
+        """
 
         from .factor_universe_mask_service import (
             OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
@@ -4304,28 +4226,17 @@ class ConfigComposer:
             OFFICIAL_FACTOR_UNIVERSE_KEY,
             OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
             QE_BACKTEST_FRESHNESS_PROFILE,
-            FactorUniverseMaskService,
         )
 
-        fallback = {
+        _ = (start_date, end_date)  # window is validated against the dataset contract upstream
+        return {
             "data_freshness_profile": QE_BACKTEST_FRESHNESS_PROFILE,
             "universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY,
             "universe_rule_version": OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
-            "universe_fingerprint_sha256": "",
+            "universe_fingerprint_sha256": QE_FROZEN_UNIVERSE_FINGERPRINT_SHA256,
             "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
             "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
         }
-        metadata = FactorUniverseMaskService().metadata(
-            start_date=start_date,
-            end_date=end_date,
-            refresh_policy="coverage",
-        )
-        if not metadata.get("universe_fingerprint_sha256"):
-            raise RuntimeError(
-                "QE immutable ST PIT snapshot has no fingerprint; refusing to compose a cache writer"
-            )
-
-        return {key: metadata.get(key) if metadata.get(key) is not None else fallback[key] for key in fallback}
 
     def _compose_prepare_factors(
         self,

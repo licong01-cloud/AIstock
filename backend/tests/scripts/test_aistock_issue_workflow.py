@@ -1611,6 +1611,365 @@ def test_post_restart_verify_rejects_unproven_deployed_commit(
     assert any(expected_error in item for item in payload["blocking"])
 
 
+_BUG_993_BUG989_CHANGED_FILES = [
+    "aistock_models/aistock_models/gats_industry_provider.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/qe_dataset_contract.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qe_data_plane_zero_db.py",
+    "backend/tests/unified_engine/test_qe_frozen_suspend_filter.py",
+    "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+    "docs/architecture/qe_efficient_gats_l2_industry_embedding_f1_design_20260710.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "scripts/export_suspend_d_candidate.py",
+    "scripts/qe_build_frozen_risk_policy.py",
+    "scripts/qe_build_frozen_suspend_filter.py",
+    "scripts/qrun_limit.py",
+    "scripts/qrun_limit_minute.py",
+    "tests/aistock_validation/bugs/20260806_BUG-989-qe-alpha-postgresql.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/history/qe/20260806_134857_l3_qe-read-only-workspace-access-regression.md",
+]
+
+
+def _write_bug993_runtime_catalog(root: Path) -> Path:
+    path = root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "aistock_runtime_target_catalog_v1",
+                "targets": {
+                    "backend-main": {
+                        "runtime_kind": "backend",
+                        "source_globs": [
+                            "backend/**/*.py",
+                            "scripts/qe_build_frozen_risk_policy.py",
+                            "scripts/qe_build_frozen_suspend_filter.py",
+                            "scripts/qrun_limit.py",
+                            "scripts/qrun_limit_minute.py",
+                            "aistock_models/**/*.py",
+                            "requirements*.txt",
+                        ],
+                        "production_port": 8001,
+                        "isolated_validation_ports": [8011, 8012],
+                        "probe_origins": ["http://127.0.0.1:8001"],
+                        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+                        "expected_identity_ref": "merged_commit",
+                        "probes": {
+                            "health_ref": "bug_record.runtime_contract.health_ref",
+                            "identity_ref": "bug_record.runtime_contract.identity_ref",
+                            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+                            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+                        },
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _file_scope_contract(changed_files: list[str]) -> dict[str, Any]:
+    return {
+        "schema_version": "aistock_submit_bug_file_scope_v1",
+        "changed_files": list(changed_files),
+        "added_files": [],
+        "scope_files": list(changed_files),
+        "ownership": {},
+    }
+
+
+def _bug993_bug989_record(root: Path) -> dict[str, Any]:
+    record = _runtime_bug(root)
+    record["bug_id"] = "BUG-989"
+    record["allowed_write_scope"] = [
+        *_BUG_993_BUG989_CHANGED_FILES,
+        "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ]
+    record["file_scope_contract"] = _file_scope_contract(_BUG_993_BUG989_CHANGED_FILES)
+    return record
+
+
+def test_post_restart_verify_bug989_record_infers_backend_main_from_actual_changed_files(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_bug993_runtime_catalog(isolated_workflow_root)
+    record = _bug993_bug989_record(isolated_workflow_root)
+
+    resolved = workflow.resolve_record_runtime_changed_files(record)
+    assert resolved == sorted(_BUG_993_BUG989_CHANGED_FILES)
+    inference = workflow._classify_runtime_impact(resolved, root=isolated_workflow_root)
+    assert inference["runtime_impact"] == "backend"
+    assert inference["target_ids"] == ["backend-main"]
+    assert "unknown" not in inference["observed_impacts"]
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=resolved,
+        root=isolated_workflow_root,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+    assert contract["runtime_impact"] == "backend"
+    assert contract["target_id"] == "backend-main"
+    assert contract["target_ids"] == ["backend-main"]
+    assert contract["backend_restart_required"] is True
+    assert contract["blocking"] == []
+
+
+def test_resolve_record_runtime_changed_files_prefers_actual_changed_files_over_allowed_scope(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["allowed_write_scope"] = [
+        "backend/services/example.py",
+        "docs/operations/example_backend_restart.md",
+        "scripts/unmodified_unknown_tool.py",
+    ]
+    record["file_scope_contract"] = _file_scope_contract(
+        ["backend/services/example.py", "docs/operations/example_backend_restart.md"]
+    )
+
+    resolved = workflow.resolve_record_runtime_changed_files(record)
+    assert resolved == ["backend/services/example.py", "docs/operations/example_backend_restart.md"]
+    assert "scripts/unmodified_unknown_tool.py" not in resolved
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=resolved,
+        root=isolated_workflow_root,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+    assert contract["runtime_impact"] == "backend"
+    assert contract["blocking"] == []
+
+
+@pytest.mark.parametrize(
+    "file_scope_contract",
+    [
+        None,
+        {"schema_version": "aistock_submit_bug_file_scope_v1", "changed_files": []},
+        {"schema_version": "aistock_submit_bug_file_scope_v1", "changed_files": ["", "  "]},
+        {"schema_version": "aistock_submit_bug_file_scope_v1", "changed_files": "not-a-list"},
+        "not-a-dict",
+    ],
+)
+def test_resolve_record_runtime_changed_files_legacy_fallback_stays_fail_closed(
+    isolated_workflow_root: Path,
+    file_scope_contract: Any,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["allowed_write_scope"] = [
+        "backend/services/example.py",
+        "scripts/unclassified_executable_tool.py",
+    ]
+    if file_scope_contract is not None:
+        record["file_scope_contract"] = file_scope_contract
+
+    resolved = workflow.resolve_record_runtime_changed_files(record)
+    assert resolved == ["backend/services/example.py", "scripts/unclassified_executable_tool.py"]
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=resolved,
+        root=isolated_workflow_root,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+    assert contract["runtime_impact"] == "unknown"
+    assert contract["pre_pr_ready"] is False
+    assert any("conflicts with changed-file inference" in item for item in contract["blocking"])
+
+
+def test_runtime_contract_keeps_unknown_executable_blocking_with_actual_changed_files(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    record = _runtime_bug(isolated_workflow_root)
+    record["file_scope_contract"] = _file_scope_contract(
+        ["backend/services/example.py", "scripts/brand_new_unclassified.py"]
+    )
+
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=workflow.resolve_record_runtime_changed_files(record),
+        root=isolated_workflow_root,
+        fresh_process_evidence=["isolated port 8012 import smoke passed"],
+    )
+    assert contract["runtime_impact"] == "unknown"
+    assert contract["pre_pr_ready"] is False
+    assert any("conflicts with changed-file inference" in item for item in contract["blocking"])
+
+
+def test_export_suspend_d_candidate_classified_as_non_runtime_offline_tool(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    inference = workflow._classify_runtime_impact(
+        ["scripts/export_suspend_d_candidate.py"],
+        root=isolated_workflow_root,
+    )
+    assert inference["runtime_impact"] == "none"
+    assert inference["target_ids"] == []
+    assert inference["runtime_files"] == []
+
+    record = _bug(
+        allowed_write_scope=["scripts/export_suspend_d_candidate.py"],
+        file_scope_contract=_file_scope_contract(["scripts/export_suspend_d_candidate.py"]),
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+            "persistence_basis": "not_required",
+            "post_restart_effective_gate": "not_required",
+            "target_id": None,
+            "target_ids": [],
+        },
+    )
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=workflow.resolve_record_runtime_changed_files(record),
+        root=isolated_workflow_root,
+    )
+    assert contract["runtime_impact"] == "none"
+    assert contract["target_ids"] == []
+    assert contract["backend_restart_required"] is False
+
+
+def test_mixed_backend_main_file_and_exporter_infers_backend_main_only(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    inference = workflow._classify_runtime_impact(
+        ["backend/services/example.py", "scripts/export_suspend_d_candidate.py"],
+        root=isolated_workflow_root,
+    )
+    assert inference["runtime_impact"] == "backend"
+    assert inference["target_ids"] == ["backend-main"]
+    assert inference["runtime_files"] == ["backend/services/example.py"]
+
+
+def test_post_restart_verify_executes_probes_for_bug989_contract(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_bug993_runtime_catalog(isolated_workflow_root)
+    record = _bug993_bug989_record(isolated_workflow_root)
+    issue = _write_json(isolated_workflow_root / "runtime-bug.json", record)
+    expected = "2ff0e0aed0670b2611cb91b5dedd587659dea4ad"
+    requested_urls: list[str] = []
+
+    class _Response:
+        status = 200
+
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return self.body
+
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        assert request.method == "GET"
+        requested_urls.append(request.full_url)
+        if "runtime-identity" in request.full_url:
+            return _Response(json.dumps({"status": "ready", "merge_commit": expected}).encode())
+        return _Response(b'{"status":"ok"}')
+
+    monkeypatch.setattr(
+        workflow,
+        "_open_read_only_url",
+        lambda request, timeout_seconds: fake_urlopen(request, timeout_seconds),
+    )
+    payload = workflow.build_post_restart_verify(
+        bug_id=None,
+        issue_json=str(issue),
+        target_id="backend-main",
+        expected_identity=expected,
+        timeout_seconds=3.0,
+    )
+
+    assert payload["workflow_gate"] == "verified"
+    assert payload["blocking"] == []
+    assert payload["target_id"] == "backend-main"
+    assert len(requested_urls) == 3
+    assert [probe["name"] for probe in payload["probes"]] == ["health_ref", "identity_ref", "business_smoke_ref"]
+    assert all(probe["status"] == "passed" for probe in payload["probes"])
+    assert payload["observed_identity"] == expected
+    assert payload["runtime_identity_match"] is True
+    assert payload["process_control_performed"] is False
+    assert payload["tracked_files_written"] is False
+    assert payload["required_probe_names"] == ["health_ref", "identity_ref", "business_smoke_ref"]
+    assert payload["probe_evidence_digest"]
+    assert payload["contract_digest"]
+    assert payload["catalog_sha256"]
+    receipt = json.loads((isolated_workflow_root / payload["receipt_path"]).read_text(encoding="utf-8"))
+    assert receipt["runtime_identity_match"] is True
+    assert receipt["probe_evidence_digest"] == payload["probe_evidence_digest"]
+    assert receipt["process_control_performed"] is False
+    assert receipt["tracked_files_written"] is False
+
+
+def test_runtime_classification_matrix_unchanged_for_known_target_kinds(
+    isolated_workflow_root: Path,
+) -> None:
+    catalog_path = _write_runtime_catalog(isolated_workflow_root)
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    catalog["targets"]["worker-scheduler"] = {
+        "runtime_kind": "worker_scheduler",
+        "source_globs": ["backend/services/**/*worker*.py", "scripts/**/*scheduler*.py"],
+        "production_port": 8002,
+        "isolated_validation_ports": [8013],
+        "probe_origins": ["http://127.0.0.1:8002"],
+        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+        "expected_identity_ref": "merged_commit",
+        "probes": {
+            "health_ref": "bug_record.runtime_contract.health_ref",
+            "identity_ref": "bug_record.runtime_contract.identity_ref",
+            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+        },
+    }
+    catalog_path.write_text(yaml.safe_dump(catalog, sort_keys=False), encoding="utf-8")
+    cases = [
+        (["backend/services/example.py"], "backend", ["backend-main"]),
+        (["backend/services/worker_scheduler_runner.py"], "worker_scheduler", ["worker-scheduler"]),
+        (["tdx-api-main/web/server.go"], "backend", ["tdx-go-backend"]),
+        (["frontend/src/app/paper-v2/page.tsx"], "frontend", []),
+        (["migrations/20260807_example.sql"], "database", []),
+        (["backend/migrations/20260807_example.sql"], "database", []),
+        ([".claude/commands/fix-aistock-issue.md"], "client", []),
+        (["scripts/other_unclassified_export.py"], "unknown", []),
+    ]
+    for files, expected_impact, expected_targets in cases:
+        inference = workflow._classify_runtime_impact(files, root=isolated_workflow_root)
+        assert inference["runtime_impact"] == expected_impact, files
+        assert inference["target_ids"] == expected_targets, files
+
+    downgraded = workflow.build_runtime_contract(
+        record=_bug(runtime_contract={"schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "none"}),
+        changed_files=["backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+    assert downgraded["runtime_impact"] == "backend"
+    assert any("cannot downgrade" in item for item in downgraded["blocking"])
+
+    multi_target_record = _runtime_bug(isolated_workflow_root)
+    multiple = workflow.build_runtime_contract(
+        record=multi_target_record,
+        changed_files=["backend/services/example.py", "backend/services/worker_scheduler_runner.py"],
+        root=isolated_workflow_root,
+    )
+    assert multiple["target_ids"] == ["backend-main", "worker-scheduler"]
+    assert any("multiple runtime targets" in item for item in multiple["blocking"])
+
+
 def test_close_sync_rejects_forged_runtime_identity_proof(
     isolated_workflow_root: Path,
 ) -> None:
