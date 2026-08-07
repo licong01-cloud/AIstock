@@ -26,6 +26,7 @@ from backend.services.multi_alpha.combine_backtest import (
     ingest_enhanced_metrics,
     prepare_pred_backtest_workspace,
 )
+from backend.services.multi_alpha.qe_subprocess_env import db_credential_scrub_command
 from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
 from backend.services.quantevolver.qe_active_execution_capacity import (
     QEExecutionSourceClaimFactory,
@@ -1147,6 +1148,9 @@ def _remote_wsl_command(
     command = "".join(
         [
             "set -euo pipefail; ",
+            # QE data plane is file-only: the QE workspace subprocess must never
+            # inherit PostgreSQL credentials or have any database fallback.
+            db_credential_scrub_command(),
             workspace_cd,
             "test -f conf.yaml; test -f qrun_limit_minute.py; test -f read_exp_res.py; ",
             env_exports,
