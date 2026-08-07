@@ -1,0 +1,287 @@
+{
+  "actual": "The production-equivalent run has 246 frozen/submitted intents but 492 durable state rows. The post-close validator assumes one row per intent, raises LOCALSIM_POST_CLOSE_STATE_PLAN_MISMATCH, leaves the run INTRADAY_RUNNING, and repeats the typed failure on every post-close cadence.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/repository.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "tests/aistock_validation/bugs/20260806_BUG-992-p0-localsim-post-close-terminalizer-cannot-close-duplicated-durable-inte.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-992",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-06T07:34:59.747195Z",
+  "description": "The production-equivalent run has 246 frozen/submitted intents but 492 durable state rows. The post-close validator assumes one row per intent, raises LOCALSIM_POST_CLOSE_STATE_PLAN_MISMATCH, leaves the run INTRADAY_RUNNING, and repeats the typed failure on every post-close cadence.",
+  "design_acceptance_ids": [
+    "F-007",
+    "F-009",
+    "F-012",
+    "F-014",
+    "F-021"
+  ],
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260806-c9c540e614fe",
+      "timestamp": "2026-08-06T07:34:59.747190Z"
+    }
+  ],
+  "evidence_uris": [
+    "run=simrun_7bf1e0c1b6b7d055 binding=simbind_ce1ae94bcc4788d8 plan=plan_4e346c75b6a5f0e5 trade_date=2026-08-06 states=492 intents=246"
+  ],
+  "expected": "The durable LocalSIM execution-state authority closes over the frozen plan, restart/recovery, and the legal lifecycle epoch. Post-close terminalization deterministically selects only contract-authorized state authority, reaches the correct run terminal state, rejects genuine duplicate/corrupt/missing/extra/identity-drift evidence, and one binding failure does not block other scheduler bindings.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/repository.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/services/simulation_runtime/repository.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/repository.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/services/simulation_runtime/repository.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/repository.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ]
+  },
+  "first_seen_at": "2026-08-06T07:34:59.747195Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_summary": "LocalSIM lifecycle and economic readback reuse one strict durable authority closure over current run identity, continuous receipt generations, the generation high-watermark, exact receipt/outbox identities, and the committed state_id-to-state_hash set. Empty authority now also requires every economic/projection generation carrier to be absent; orphan outbox/receipt/generation or broker-side-effect facts fail loud without terminalizing the damaged run, while independent bindings continue. PostgreSQL evidence comes from committed guarded DEV rows read through real repository connections and independent post-commit readback.",
+  "fixed_at": null,
+  "github_issue_number": 3184,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3184",
+  "last_seen_at": "2026-08-06T07:34:59.747195Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "root_cause": "The original lifecycle closure collapsed state_id-keyed history into an intent_id map and treated legal terminal incarnations as duplicate current writers. The first PR repair then left strict authority/readback gaps, and the next review found that the empty-state/empty-receipt branch still returned generation zero while orphan projection/economic carriers remained. The prior PostgreSQL-labelled tests also monkeypatched an InMemory daily-run getter, so they did not prove committed PostgreSQL row JSON or independent post-commit readback.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055",
+    "fresh_process_evidence": [
+      "python -m nox -s simulation_core_l2 -> 466 passed, 1 explicitly gated DEV PostgreSQL skip in a fresh Python process",
+      "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> 239 passed in a fresh Python process",
+      "committed aistock_dev row JSON through real SimulationRuntimeRepository connections -> independent writer/readback backend PIDs; repeated legal readback and typed extra-active/orphan/forged failures passed; exact disposable-row cleanup readback returned 0",
+      "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> passed: 239 tests with committed independent aistock_dev readback",
+      "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py <BUG-992 authority/orphan/readback matrix> -q -> passed: 51 tests; independent cleanup readback asserted disposable package/release/binding/evidence/plan/run counts all 0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "P0 LocalSIM post-close terminalizer cannot close duplicated durable intent states",
+  "trigger_condition": {
+    "fingerprint": "c9c540e614fe3040bc9dd6e4",
+    "source_event_id": "FE-20260806-c9c540e614fe"
+  },
+  "validation_evidence": [
+    "final-review RED public authority matrix before implementation -> 20 failed, 2 passed",
+    "final-review RED extra-active economic readback -> 0 passed, 2 failed with DID NOT RAISE",
+    "strict empty-generation RED -> 2 failed, 19 passed",
+    "orphan-carrier RED before implementation -> 5 passed, 6 failed; orphan scheduler run was incorrectly terminalized",
+    "pre-main-sync LocalSIM authority/readback matrix with real committed DEV PostgreSQL node -> 50 passed",
+    "post-origin/main 21b5522a0ca5df4459d8cf1fef0d4957b719ea12 authority/orphan/readback matrix with real committed DEV PostgreSQL node and independent six-table cleanup readback -> 51 passed",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py with branch coverage and DEV PostgreSQL enabled -> 239 passed",
+    "changed-code coverage against origin/main -> line 90.71% (166/183), branch 87.23% (82/94)",
+    "python -m nox -s simulation_core_l2 -> 466 passed, 1 explicitly gated DEV PostgreSQL skip",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+    "python -m nox -s l0 -> blocking=0",
+    "changed-file classifier -> simulation_core_l2, unmapped_code_files=[]",
+    "real DEV PostgreSQL readback -> aistock_dev, committed row JSON, disjoint writer/readback backend PIDs, repeated independent readback, typed extra-active/orphan/forged failures, independent cleanup readback asserted package/release/binding/evidence/plan/run counts all 0",
+    "Ruff check, targeted py_compile, and git diff --check -> passed",
+    "F2 validator -> 112/112, warnings=0"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
