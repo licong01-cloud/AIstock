@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-994",
-  "closed_at": null,
+  "closed_at": "2026-08-07T06:52:52.590005Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,6 +34,12 @@
       "actor": "claude_code",
       "note": "backend/services change requires user backend restart to take effect; contract set per BUG-957/966 convention; fix verified in fresh process against live Tushare st API.",
       "timestamp": "2026-08-07T00:00:00Z"
+    },
+    {
+      "action": "identity_ref_updated",
+      "actor": "claude_code",
+      "note": "openapi.json carries no git commit identity; switched identity_ref to /api/v1/runtime-identity per BUG-989 convention (returns merge_commit); post-restart-verify passed against it.",
+      "timestamp": "2026-08-07T06:55:00Z"
     }
   ],
   "evidence_uris": [],
@@ -85,12 +91,12 @@
       "fresh Python process loaded backend.services.tushare_dataset_specs; STOCK_ST_EVENTS api_field_map has no st_type->st_tpye entry; live Tushare st API pub_date=20260806 returned st_type values and _validate_rows_for_date passed -> PASS",
       "fresh Python process loaded backend.services.tushare_dataset_specs; STOCK_ST_EVENTS api_field_map empty, st_type in columns; live Tushare st API pub_date=20260806 returned st_type values and _validate_rows_for_date passed -> PASS"
     ],
-    "identity_ref": "http://127.0.0.1:8001/openapi.json",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-994/post-restart-verify.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -100,7 +106,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -113,7 +119,8 @@
     "pytest backend/tests/test_tushare_sync_engine.py -q -> 35 passed",
     "python -m nox -s validation_module_registry_l0 -> 8 passed, session successful",
     "python -m nox -s data_sync_autonomy_backend -> 154 passed, session successful",
-    "git diff --check -> passed (clean)"
+    "git diff --check -> passed (clean)",
+    "pytest backend/tests/test_tushare_sync_engine.py -> 35 passed"
   ],
   "verification_budget": {
     "budget": "standard",
