@@ -8118,6 +8118,50 @@ def test_localsim_economic_readback_uses_committed_independent_dev_postgres_conn
             for connection in [*writer_connections, *readback_connections]:
                 connection.close()
 
+        cleanup_readback = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with cleanup_readback.cursor() as cursor:
+                disposable_rows = (
+                    (
+                        "strategy_pkg.package.package_id",
+                        "SELECT count(*) FROM strategy_pkg.package WHERE package_id = %s",
+                        release.package_id,
+                    ),
+                    (
+                        "strategy_pkg.strategy_runtime_release.release_id",
+                        "SELECT count(*) FROM strategy_pkg.strategy_runtime_release WHERE release_id = %s",
+                        release.release_id,
+                    ),
+                    (
+                        "paper_v2.simulation_release_binding.binding_id",
+                        "SELECT count(*) FROM paper_v2.simulation_release_binding WHERE binding_id = %s",
+                        binding.binding_id,
+                    ),
+                    (
+                        "selection.daily_selection_evidence.evidence_id",
+                        "SELECT count(*) FROM selection.daily_selection_evidence WHERE evidence_id = %s",
+                        evidence.evidence_id,
+                    ),
+                    (
+                        "paper_v2.execution_plan.plan_id",
+                        "SELECT count(*) FROM paper_v2.execution_plan WHERE plan_id = %s",
+                        plan.plan_id,
+                    ),
+                    (
+                        "paper_v2.simulation_daily_run.run_id",
+                        "SELECT count(*) FROM paper_v2.simulation_daily_run WHERE run_id = %s",
+                        run.run_id,
+                    ),
+                )
+                for identity_label, query, identity_value in disposable_rows:
+                    cursor.execute(query, (identity_value,))
+                    assert cursor.fetchone()[0] == 0, (
+                        f"cleanup left disposable DEV row for {identity_label}"
+                    )
+        finally:
+            cleanup_readback.rollback()
+            cleanup_readback.close()
+
 
 def _legacy_scheduler_miniqmt_account_level_reconciliation_warning_does_not_fail_current_slot() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
