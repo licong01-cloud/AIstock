@@ -1,0 +1,321 @@
+{
+  "actual": "## Root cause\n\nThe Multi-Alpha durable orchestrator (backend/services/multi_alpha/durable_orchestrator.py) runs on a 2-second poll cycle\n(poll_seconds=2.0) and repeatedly re-claims long-running remote attempts. For a running attempt, each cycle:\n\n- claim_next_attempt writes a \"claimed\" event (durable_repository.py:2733)\n- _apply_remote_status writes a \"remote_active\" event for unchanged running state (durable_orchestrator.py:1324)\n- yield_attempt_ownership -> _yield_owned_entity writes a \"waiting_remote\" event (durable_repository.py:4640)\n\nReconciling control commands write \"command_claimed\" (durable_repository.py:2822) and\n\"control_reconciliation_pending\" (durable_control.py:240) on every cycle. A run that fails parent finalization\nwrites \"business_finalize_error\" status + error events on every cycle (durable_orchestrator.py:1211-1216).\narchive_pass re-scans every terminal run and writes \"archive_skipped_disabled\" per run per cycle for disabled\ncapture (durable_orchestrator.py:1229-1260) because list_runs_pending_archive does not treat archive_skipped_disabled\nas final.\n\n## Production evidence (read-only)\n\n- strategy_pkg.multi_alpha_combine_backtest_event: 1,063,819 rows (~796 MB with indexes)\n- 10s DB sample: xact_commit +702, blks_hit +1.4M, tup_returned +12.3M, tup_fetched +3.2M; connections only 7; no deadlock\n- Storm persists after WSL experiment completes (5s sample still +271 commits, +479k blks_hit)\n- Noise rows: business_finalize/claimed 179,883; command_claimed/control 179,750; control_reconciliation_pending 179,701;\n  business_finalize_error/status 179,640; business_finalize_error/error 179,640  (~84.5% of the table)\n- 3 historical abnormal runs produced 899,193 events (~84.5%)\n- Single normal running MA-E12 run: waiting_remote 520, remote_active 520, remote_running/claimed 519 (~99% poll noise)\n- 86 terminal runs hold archive_skipped_disabled and are re-scanned each 2s archive pass\n\n## Required design constraints\n\nA. Remote running-state fallback polling per Attempt throttled to >= 60s; queued submission / explicit cancel/pause/resume\n   wake immediately; no single global sleep; reuse heartbeat_at/updated_at/lease_expires_at (no DDL); restart recovery\n   re-checks within ~1 minute; never re-submit an already-running process.\nB. No event insert when state is unchanged (claimed, remote_active, waiting_remote, control_reconciliation_pending,\n   duplicate business_finalize_error); lease renewal only updates heartbeat_at/lease_expires_at at most 1/min;\n   fencing_token/row_version/owner_id are current state, not audit events; only real transitions write events;\n   same error fingerprint keeps first event and updates current row only; never silently swallow new errors.\nC. Preserve events for run/child/attempt creation, first submission, real transitions, terminal states, recovery tasks,\n   first occurrence of a new error, real cancel/pause/resume transitions, archive final disposition. Event API/SSE\n   cursor semantics stay compatible (gaps allowed).\nD. When archive capture is globally disabled, archive_pass exits before querying terminal runs; archive_skipped_disabled is\n   a final disposition (no 2s retry); archive_error retries use explicit >= 60s backoff. No new archive features.\nE. Parent finalization / control reconciliation failures may retry safely but same failure at most 1/min; no re-writing\n   claimed/pending/status/error each round; business readback / child count / scheme result / LOO count consistency\n   unchanged; no lowering consistency to suppress errors; restart recovery, fencing and idempotency preserved.\n\n## Tests to add\n\n1. 120 orchestrator cycles at 2s: remote always running -> remote status reads <= 5, no new durable events after initial\n   confirmation, heartbeat/current row overwritten at 1/min.\n2. running -> succeeded produces one real transition + one terminal event; result written once.\n3. Backend restart recovery: new orchestrator resumes from persisted Attempt, does not re-submit, next check within 60s.\n4. Archive disabled: 86 archive_skipped_disabled runs -> no per-run capture calls, no new archive_skipped_disabled events,\n   no duplicate event-table scan.\n5. Same business_finalize_error 100x: first error evidence kept, no duplicate status/error events, fail-closed rules intact.\n6. Control command long reconciling: no new control_reconciliation_pending while unchanged; one event on real transition.\n7. Event list / SSE / logs / archive-status / cancellation / recovery read compatibility.\n8. Existing multi_alpha durable orchestrator/repository/control regression.",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/durable_orchestrator.py",
+    "backend/services/multi_alpha/durable_repository.py",
+    "backend/services/multi_alpha/durable_control.py",
+    "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+    "backend/tests/multi_alpha/test_durable_repository.py",
+    "backend/tests/multi_alpha/test_durable_control.py",
+    "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+    "tests/aistock_validation/bugs/20260807_BUG-996-multi-alpha-durable-orchestrator-repeatedly-polls-unchanged-runtime-stat.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-996",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-07T08:11:58.483571Z",
+  "description": "## Root cause\n\nThe Multi-Alpha durable orchestrator (backend/services/multi_alpha/durable_orchestrator.py) runs on a 2-second poll cycle\n(poll_seconds=2.0) and repeatedly re-claims long-running remote attempts. For a running attempt, each cycle:\n\n- claim_next_attempt writes a \"claimed\" event (durable_repository.py:2733)\n- _apply_remote_status writes a \"remote_active\" event for unchanged running state (durable_orchestrator.py:1324)\n- yield_attempt_ownership -> _yield_owned_entity writes a \"waiting_remote\" event (durable_repository.py:4640)\n\nReconciling control commands write \"command_claimed\" (durable_repository.py:2822) and\n\"control_reconciliation_pending\" (durable_control.py:240) on every cycle. A run that fails parent finalization\nwrites \"business_finalize_error\" status + error events on every cycle (durable_orchestrator.py:1211-1216).\narchive_pass re-scans every terminal run and writes \"archive_skipped_disabled\" per run per cycle for disabled\ncapture (durable_orchestrator.py:1229-1260) because list_runs_pending_archive does not treat archive_skipped_disabled\nas final.\n\n## Production evidence (read-only)\n\n- strategy_pkg.multi_alpha_combine_backtest_event: 1,063,819 rows (~796 MB with indexes)\n- 10s DB sample: xact_commit +702, blks_hit +1.4M, tup_returned +12.3M, tup_fetched +3.2M; connections only 7; no deadlock\n- Storm persists after WSL experiment completes (5s sample still +271 commits, +479k blks_hit)\n- Noise rows: business_finalize/claimed 179,883; command_claimed/control 179,750; control_reconciliation_pending 179,701;\n  business_finalize_error/status 179,640; business_finalize_error/error 179,640  (~84.5% of the table)\n- 3 historical abnormal runs produced 899,193 events (~84.5%)\n- Single normal running MA-E12 run: waiting_remote 520, remote_active 520, remote_running/claimed 519 (~99% poll noise)\n- 86 terminal runs hold archive_skipped_disabled and are re-scanned each 2s archive pass\n\n## Required design constraints\n\nA. Remote running-state fallback polling per Attempt throttled to >= 60s; queued submission / explicit cancel/pause/resume\n   wake immediately; no single global sleep; reuse heartbeat_at/updated_at/lease_expires_at (no DDL); restart recovery\n   re-checks within ~1 minute; never re-submit an already-running process.\nB. No event insert when state is unchanged (claimed, remote_active, waiting_remote, control_reconciliation_pending,\n   duplicate business_finalize_error); lease renewal only updates heartbeat_at/lease_expires_at at most 1/min;\n   fencing_token/row_version/owner_id are current state, not audit events; only real transitions write events;\n   same error fingerprint keeps first event and updates current row only; never silently swallow new errors.\nC. Preserve events for run/child/attempt creation, first submission, real transitions, terminal states, recovery tasks,\n   first occurrence of a new error, real cancel/pause/resume transitions, archive final disposition. Event API/SSE\n   cursor semantics stay compatible (gaps allowed).\nD. When archive capture is globally disabled, archive_pass exits before querying terminal runs; archive_skipped_disabled is\n   a final disposition (no 2s retry); archive_error retries use explicit >= 60s backoff. No new archive features.\nE. Parent finalization / control reconciliation failures may retry safely but same failure at most 1/min; no re-writing\n   claimed/pending/status/error each round; business readback / child count / scheme result / LOO count consistency\n   unchanged; no lowering consistency to suppress errors; restart recovery, fencing and idempotency preserved.\n\n## Tests to add\n\n1. 120 orchestrator cycles at 2s: remote always running -> remote status reads <= 5, no new durable events after initial\n   confirmation, heartbeat/current row overwritten at 1/min.\n2. running -> succeeded produces one real transition + one terminal event; result written once.\n3. Backend restart recovery: new orchestrator resumes from persisted Attempt, does not re-submit, next check within 60s.\n4. Archive disabled: 86 archive_skipped_disabled runs -> no per-run capture calls, no new archive_skipped_disabled events,\n   no duplicate event-table scan.\n5. Same business_finalize_error 100x: first error evidence kept, no duplicate status/error events, fail-closed rules intact.\n6. Control command long reconciling: no new control_reconciliation_pending while unchanged; one event on real transition.\n7. Event list / SSE / logs / archive-status / cancellation / recovery read compatibility.\n8. Existing multi_alpha durable orchestrator/repository/control regression.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260807-8c5e8b808075",
+      "timestamp": "2026-08-07T08:11:58.483568Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py"
+    ],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/services/multi_alpha/durable_control.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+      "backend/tests/multi_alpha/test_durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_control.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/multi_alpha/durable_orchestrator.py",
+        "backend/services/multi_alpha/durable_repository.py",
+        "backend/services/multi_alpha/durable_control.py",
+        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+        "backend/tests/multi_alpha/test_durable_repository.py",
+        "backend/tests/multi_alpha/test_durable_control.py",
+        "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/durable_orchestrator.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/services/multi_alpha/durable_repository.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/services/multi_alpha/durable_control.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_repository.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_control.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/durable_orchestrator.py",
+        "backend/services/multi_alpha/durable_repository.py",
+        "backend/services/multi_alpha/durable_control.py",
+        "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+        "backend/tests/multi_alpha/test_durable_repository.py",
+        "backend/tests/multi_alpha/test_durable_control.py",
+        "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/services/multi_alpha/durable_control.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
+      "backend/tests/multi_alpha/test_durable_repository.py",
+      "backend/tests/multi_alpha/test_durable_control.py",
+      "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py"
+    ]
+  },
+  "first_seen_at": "2026-08-07T08:11:58.483571Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3199,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3199",
+  "last_seen_at": "2026-08-07T08:11:58.483571Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "Multi-Alpha durable orchestrator repeatedly polls unchanged runtime state and archive-disabled runs, causing DB query/event amplification",
+  "trigger_condition": {
+    "fingerprint": "8c5e8b80807547f361b389d3",
+    "source_event_id": "FE-20260807-8c5e8b808075"
+  },
+  "verification_budget": {
+    "budget": "deep",
+    "deferred_nightly_verification": {
+      "modules": [
+        "multi_alpha",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "45-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "deep",
+      "deferred_nightly_verification": {
+        "modules": [
+          "multi_alpha",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "45-60%"
+    }
+  }
+}
