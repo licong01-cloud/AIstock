@@ -109,9 +109,9 @@
   },
   "first_seen_at": "2026-08-06T07:34:59.747195Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "60261969efcba6fa760fcc29e83b4ac938f2ad2c",
   "fix_summary": "LocalSIM lifecycle and economic readback reuse one strict durable authority closure over current run identity, continuous receipt generations, the generation high-watermark, exact receipt/outbox identities, and the committed state_id-to-state_hash set. Empty authority now also requires every economic/projection generation carrier to be absent; orphan outbox/receipt/generation or broker-side-effect facts fail loud without terminalizing the damaged run, while independent bindings continue. PostgreSQL evidence comes from committed guarded DEV rows read through real repository connections and independent post-commit readback.",
-  "fixed_at": null,
+  "fixed_at": "2026-08-07T06:19:15Z",
   "github_issue_number": 3184,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3184",
   "last_seen_at": "2026-08-06T07:34:59.747195Z",
@@ -119,6 +119,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3186",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -144,6 +145,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -154,7 +156,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -179,6 +181,11 @@
     "real DEV PostgreSQL readback -> aistock_dev, committed row JSON, disjoint writer/readback backend PIDs, repeated independent readback, typed extra-active/orphan/forged failures, independent cleanup readback asserted package/release/binding/evidence/plan/run counts all 0",
     "Ruff check, targeted py_compile, and git diff --check -> passed",
     "F2 validator -> 112/112, warnings=0"
+  ],
+  "validation_receipts": [
+    "validation-receipt: id=68c8daf0a1b7d9fe commit=8fb4aa7c234a8dcbb4faceb0a0d7b8688e277825 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`passed: 466 tests, 1 explicitly gated DEV PostgreSQL skip`",
+    "validation-receipt: id=e6411b93a751ed26 commit=8fb4aa7c234a8dcbb4faceb0a0d7b8688e277825 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 tests and 14/14 mapped`",
+    "validation-receipt: id=2877d318c0431f7a commit=8fb4aa7c234a8dcbb4faceb0a0d7b8688e277825 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed: blocking=0`"
   ],
   "verification_budget": {
     "budget": "standard",
