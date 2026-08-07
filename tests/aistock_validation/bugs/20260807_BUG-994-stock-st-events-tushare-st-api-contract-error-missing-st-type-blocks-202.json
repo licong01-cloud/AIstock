@@ -57,8 +57,8 @@
   },
   "first_seen_at": "2026-08-07T02:39:27.557476Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "21b5522a0ca5df4459d8cf1fef0d4957b719ea12",
+  "fixed_at": "2026-08-07T03:42:42Z",
   "github_issue_number": 3191,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3191",
   "last_seen_at": "2026-08-07T02:39:27.557476Z",
@@ -66,6 +66,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3194",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -99,7 +100,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -108,6 +109,12 @@
     "fingerprint": "50096d8b2dbf5c62ef0278e1",
     "source_event_id": "FE-20260807-50096d8b2dbf"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_tushare_sync_engine.py -q -> 35 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, session successful",
+    "python -m nox -s data_sync_autonomy_backend -> 154 passed, session successful",
+    "git diff --check -> passed (clean)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
