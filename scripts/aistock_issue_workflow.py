@@ -1641,6 +1641,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/issue_flow.py",
         "scripts/aistock_guardrail_scan.py",
         "scripts/ci_failure_issue_summary.py",
+        "scripts/export_suspend_d_candidate.py",
         "scripts/llm_provider_adapter.py",
         "scripts/nightly_session_runner.py",
         "scripts/ci_change_classifier.py",
@@ -1703,6 +1704,36 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "runtime_files": runtime_files,
         "target_ids": sorted(target_ids),
     }
+
+
+def _record_has_file_scope_changed_files(record: dict[str, Any]) -> bool:
+    contract = record.get("file_scope_contract")
+    changed = contract.get("changed_files") if isinstance(contract, dict) else None
+    return isinstance(changed, list) and any(str(item).strip() for item in changed)
+
+
+def resolve_record_runtime_changed_files(record: dict[str, Any]) -> list[str]:
+    """Return the authoritative changed-file list for record-based runtime inference.
+
+    Prefers ``file_scope_contract.changed_files`` (the actual changed files
+    registered for the BUG). Only legacy records without a valid non-empty
+    ``changed_files`` list fall back to ``allowed_write_scope``; the fallback
+    keeps fail-closed semantics and never downgrades ``unknown`` to ``none``.
+    Normalization matches ``_classify_runtime_impact``: unify ``/``, strip
+    ``./``, drop empties, dedupe, deterministic sort.
+    """
+    source: Iterable[Any]
+    if _record_has_file_scope_changed_files(record):
+        source = (record.get("file_scope_contract") or {}).get("changed_files") or []
+    else:
+        source = flow._as_list(record.get("allowed_write_scope"))
+    return sorted(
+        {
+            str(item).replace("\\", "/").removeprefix("./")
+            for item in source
+            if str(item).strip()
+        }
+    )
 
 
 def _resolve_runtime_ref(value: Any, explicit: dict[str, Any]) -> str | None:
@@ -1902,7 +1933,7 @@ def build_restart_plan(*, bug_id: str | None, issue_json: str | None) -> dict[st
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
     contract = build_runtime_contract(
         record=record,
-        changed_files=flow._as_list(record.get("allowed_write_scope")),
+        changed_files=resolve_record_runtime_changed_files(record),
         fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
         if isinstance(record.get("runtime_contract"), dict)
         else [],
@@ -2179,7 +2210,7 @@ def build_post_restart_verify(
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
     contract = build_runtime_contract(
         record=record,
-        changed_files=flow._as_list(record.get("allowed_write_scope")),
+        changed_files=resolve_record_runtime_changed_files(record),
         fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
         if isinstance(record.get("runtime_contract"), dict)
         else [],
@@ -5571,7 +5602,7 @@ def build_task_card(
     verification_budget = record.get("verification_budget") if isinstance(record.get("verification_budget"), dict) else _verification_budget_for_record(record)
     runtime_contract = build_runtime_contract(
         record=record,
-        changed_files=fix_ready.get("allowed_write_scope") or [],
+        changed_files=resolve_record_runtime_changed_files(record),
         root=root,
     )
     return {
@@ -12322,7 +12353,7 @@ def build_close_sync_plan(
     runtime_changed_files = (
         _merged_commit_changed_files(merge_commit)
         if merge_commit
-        else flow._as_list(record.get("allowed_write_scope"))
+        else resolve_record_runtime_changed_files(record)
     )
     runtime_contract = build_runtime_contract(
         record=record,
@@ -12451,7 +12482,11 @@ def build_close_sync_plan(
         "merged_pr": pr_url,
         "merge_commit": merge_commit,
         "runtime_changed_files": runtime_changed_files,
-        "runtime_changed_files_source": "merge_commit" if merge_commit else "allowed_write_scope",
+        "runtime_changed_files_source": "merge_commit" if merge_commit else (
+            "file_scope_contract.changed_files"
+            if _record_has_file_scope_changed_files(record)
+            else "allowed_write_scope"
+        ),
         "validation_evidence": evidence,
         "production_gates": gates,
         "backend_restart": {
@@ -12637,7 +12672,7 @@ def build_close_sync_batch_plan(
     runtime_contracts = {
         row["bug_id"]: build_runtime_contract(
             record=row["record"],
-            changed_files=flow._as_list(row["record"].get("allowed_write_scope")),
+            changed_files=resolve_record_runtime_changed_files(row["record"]),
             root=REPO_ROOT,
             fresh_process_evidence=flow._as_list((row["record"].get("runtime_contract") or {}).get("fresh_process_evidence"))
             if isinstance(row["record"].get("runtime_contract"), dict)
