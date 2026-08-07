@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import deque
 from datetime import date, timedelta
 
@@ -24,11 +25,28 @@ from backend.services.hmm_risk.b3_training import (
     audit_train_only_coverage,
     build_train_only_series,
     models_from_repeat,
+    read_b3_ready_model_set,
+    read_b3_selected_level_artifact,
     run_level_repeat,
     write_b3_ready_model_set,
 )
+from backend.services.hmm_risk.b3_mixed_dimension import (
+    MIXED_DIMENSION_CONTRACT_VERSION,
+    MIXED_LEVEL_SCHEMA_VERSION,
+    MIXED_MODEL_SCHEMA_VERSION,
+    MIXED_REPEAT_SCHEMA_VERSION,
+    MIXED_TRAINING_ENTRY_SCHEMA_VERSION,
+    TARGET_SECTOR,
+    TARGET_SOURCE_PROFILE_RECEIPT_SHA256,
+    build_level_dimension_identity,
+    build_projection_receipt,
+)
 from backend.services.hmm_risk import b3_training as training_subject
-from backend.services.hmm_risk.state_model_set import StateModelSetError, canonical_sha256
+from backend.services.hmm_risk.state_model_set import (
+    StateModelSetError,
+    canonical_json_bytes,
+    canonical_sha256,
+)
 from backend.services.hmm_risk.state_model_set import ALL_CORE_FEATURES, BASE_FEATURES
 from backend.services.hmm_risk.stock_fact_observation import (
     C010_APPROVED_TRAIN_END,
@@ -36,6 +54,7 @@ from backend.services.hmm_risk.stock_fact_observation import (
     C010_CROSS_SECTION_FEATURES,
     C010_CROSS_SECTION_OPERATORS,
     C010_FORMULA_DIFF_BY_FEATURE,
+    C010_FORMULA_VERSION,
     C010_MONEYFLOW_DENOMINATOR_BY_FEATURE,
     validate_c010_policy_manifest,
 )
@@ -515,8 +534,32 @@ def _model(*, family: str = "legacy_covfix", level: str = "L1", seed: int = 42, 
             "scale": [1.0] * feature_count,
         }
     )
+    projection_receipt = None
+    effective_count = feature_count
+    if family == "autocycle_all_core" and level == "L2":
+        raw = np.ones((180, feature_count), dtype=np.float64)
+        if code == TARGET_SECTOR:
+            raw[:, -1] = 0.0
+        projection_receipt, _ = build_projection_receipt(
+            family=family,
+            level=level,
+            sector_code=code,
+            full_feature_names=feature_names,
+            preprocess=preprocess,
+            raw_observations=raw,
+            preprocessed_observations=raw,
+            train_input_manifest={
+                "dataset_manifest_hash": "a" * 64,
+                "mapping_manifest_hash": "b" * 64,
+                "calendar_manifest_hash": "c" * 64,
+                "l2_stock_fact_manifest_hash": "d" * 64,
+                "feature_domain_policy_sha256": TEST_POLICY_SHA256,
+                "formula_version": C010_FORMULA_VERSION,
+            },
+        )
+        effective_count = int(projection_receipt["likelihood_feature_count"])
     body = {
-        "schema_version": "hmm_risk_b3_fitted_model_v1",
+        "schema_version": MIXED_MODEL_SCHEMA_VERSION if projection_receipt else "hmm_risk_b3_fitted_model_v1",
         "contract_version": D3_CONTRACT_VERSION,
         "family": family,
         "level": level,
@@ -526,14 +569,25 @@ def _model(*, family: str = "legacy_covfix", level: str = "L1", seed: int = 42, 
         "preprocess": preprocess,
         "startprob": [1 / 3, 1 / 3, 1 / 3],
         "transmat": [[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]],
-        "means": [[-1.0] * feature_count, [0.0] * feature_count, [1.0] * feature_count],
+        "means": [[-1.0] * effective_count, [0.0] * effective_count, [1.0] * effective_count],
         "covariance_type": "diag",
-        "covars": [[1.0] * feature_count, [1.0] * feature_count, [1.0] * feature_count],
+        "covars": [[1.0] * effective_count, [1.0] * effective_count, [1.0] * effective_count],
         "parameter_profile_sha256": "a" * 64,
         "numeric_environment_sha256": "b" * 64,
         "observation_manifest_hash": "c" * 64,
         "pit_constituent_manifest_hash": "d" * 64,
     }
+    if projection_receipt is not None:
+        body.update(
+            {
+                "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                "feature_count": feature_count,
+                "likelihood_feature_names": list(projection_receipt["active_feature_names"]),
+                "likelihood_feature_count": effective_count,
+                "projection_receipt": projection_receipt,
+                "projection_sha256": projection_receipt["projection_sha256"],
+            }
+        )
     return B3FittedModel(
         family=family,
         level=level,
@@ -550,6 +604,7 @@ def _model(*, family: str = "legacy_covfix", level: str = "L1", seed: int = 42, 
         observation_manifest_hash=body["observation_manifest_hash"],
         pit_constituent_manifest_hash=body["pit_constituent_manifest_hash"],
         model_payload_sha256=canonical_sha256(body),
+        projection_receipt=projection_receipt,
     )
 
 
@@ -571,6 +626,193 @@ def test_repeat_model_payload_roundtrip_rejects_hash_drift() -> None:
     drifted["models"][0]["covars"][0][0] = 2.0
     with pytest.raises(StateModelSetError, match="payload hash mismatch"):
         models_from_repeat(drifted)
+
+
+def test_mixed_dimension_repeat_roundtrip_preserves_target_19d_and_identity_20d() -> None:
+    target = _model(family="autocycle_all_core", level="L2", code=TARGET_SECTOR)
+    identity = _model(family="autocycle_all_core", level="L2", code="801011.SI")
+    payloads = [identity.payload(), target.payload()]
+    repeat = {
+        "schema_version": MIXED_REPEAT_SCHEMA_VERSION,
+        "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+        "feature_count": 20,
+        "family": "autocycle_all_core",
+        "level": "L2",
+        "canonical_sector_codes": ["801011.SI", TARGET_SECTOR],
+        "feature_names": list(ALL_CORE_FEATURES),
+        "models": payloads,
+        "model_payload_sha256": canonical_sha256(payloads),
+    }
+
+    restored = models_from_repeat(repeat)
+
+    assert restored[(42, TARGET_SECTOR)].means.shape == (3, 19)
+    assert restored[(42, "801011.SI")].means.shape == (3, 20)
+
+
+def test_mixed_dimension_repeat_rejects_rehashed_projection_mask_drift() -> None:
+    target = _model(family="autocycle_all_core", level="L2", code=TARGET_SECTOR)
+    payload = json.loads(json.dumps(target.payload()))
+    projection = payload["projection_receipt"]
+    projection["active_feature_mask"][-1] = True
+    projection_body = {key: value for key, value in projection.items() if key != "projection_sha256"}
+    projection["projection_sha256"] = canonical_sha256(projection_body)
+    payload["projection_sha256"] = projection["projection_sha256"]
+    model_body = {key: value for key, value in payload.items() if key != "model_payload_sha256"}
+    payload["model_payload_sha256"] = canonical_sha256(model_body)
+    repeat = {
+        "schema_version": MIXED_REPEAT_SCHEMA_VERSION,
+        "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+        "feature_count": 20,
+        "family": "autocycle_all_core",
+        "level": "L2",
+        "canonical_sector_codes": [TARGET_SECTOR],
+        "feature_names": list(ALL_CORE_FEATURES),
+        "models": [payload],
+        "model_payload_sha256": canonical_sha256([payload]),
+    }
+
+    with pytest.raises(StateModelSetError, match="inactive_dimension_contract_invalid"):
+        models_from_repeat(repeat)
+
+
+@pytest.mark.parametrize("drift", ["source_profile", "exact_zero_evidence"])
+def test_mixed_dimension_repeat_rejects_rehashed_authority_evidence_drift(drift: str) -> None:
+    target = _model(family="autocycle_all_core", level="L2", code=TARGET_SECTOR)
+    payload = json.loads(json.dumps(target.payload()))
+    projection = payload["projection_receipt"]
+    if drift == "source_profile":
+        projection["source_profile_receipt_sha256"] = "0" * 64
+    else:
+        exact_evidence = projection["inactive_exact_zero_evidence"]
+        exact_evidence["raw"]["variance_ddof0_by_feature"] = [1.0]
+        exact_body = {key: value for key, value in exact_evidence.items() if key != "exact_zero_evidence_sha256"}
+        exact_evidence["exact_zero_evidence_sha256"] = canonical_sha256(exact_body)
+    projection_body = {key: value for key, value in projection.items() if key != "projection_sha256"}
+    projection["projection_sha256"] = canonical_sha256(projection_body)
+    payload["projection_sha256"] = projection["projection_sha256"]
+    model_body = {key: value for key, value in payload.items() if key != "model_payload_sha256"}
+    payload["model_payload_sha256"] = canonical_sha256(model_body)
+    repeat = {
+        "schema_version": MIXED_REPEAT_SCHEMA_VERSION,
+        "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+        "feature_count": 20,
+        "family": "autocycle_all_core",
+        "level": "L2",
+        "canonical_sector_codes": [TARGET_SECTOR],
+        "feature_names": list(ALL_CORE_FEATURES),
+        "models": [payload],
+        "model_payload_sha256": canonical_sha256([payload]),
+    }
+
+    with pytest.raises(StateModelSetError, match="inactive_dimension_contract_invalid"):
+        models_from_repeat(repeat)
+
+
+def test_target_projection_rejects_nonzero_inactive_feature() -> None:
+    model = _model(family="autocycle_all_core", level="L2", code="801011.SI")
+    raw = np.ones((180, 20), dtype=np.float64)
+    with pytest.raises(StateModelSetError, match="inactive_dimension_contract_invalid"):
+        build_projection_receipt(
+            family="autocycle_all_core",
+            level="L2",
+            sector_code=TARGET_SECTOR,
+            full_feature_names=ALL_CORE_FEATURES,
+            preprocess=model.preprocess,
+            raw_observations=raw,
+            preprocessed_observations=raw,
+            train_input_manifest={
+                "dataset_manifest_hash": "a" * 64,
+                "mapping_manifest_hash": "b" * 64,
+                "calendar_manifest_hash": "c" * 64,
+                "l2_stock_fact_manifest_hash": "d" * 64,
+                "feature_domain_policy_sha256": TEST_POLICY_SHA256,
+                "formula_version": C010_FORMULA_VERSION,
+            },
+        )
+
+
+@pytest.mark.parametrize(("sector_code", "expected_dimension"), [(TARGET_SECTOR, 19), ("801011.SI", 20)])
+def test_formal_autocycle_l2_fit_applies_full_preprocess_then_fixed_projection(
+    monkeypatch, sector_code: str, expected_dimension: int
+) -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index * 7) for index in range(120))
+    observations = np.ones((120, 20), dtype=np.float64)
+    if sector_code == TARGET_SECTOR:
+        observations[:, 19] = 0.0
+    manifest = _train_manifest(
+        dates,
+        observations,
+        sector_code=sector_code,
+        direct_sector_level="L2",
+    )
+    manifest.update(
+        {
+            "l2_stock_fact_manifest_hash": "d" * 64,
+            "formula_version": C010_FORMULA_VERSION,
+        }
+    )
+    item = B3TrainOnlySeries(
+        sector_code=sector_code,
+        sector_name=sector_code,
+        train_observations=observations,
+        train_dates=dates,
+        pit_l2_constituents=(sector_code,),
+        pit_constituent_manifest_hash="a" * 64,
+        observation_manifest_hash="b" * 64,
+        train_input_manifest=manifest,
+    )
+    preprocess = {
+        "family": "winsor_zscore_1_99_train_global_v1",
+        "winsor_low": [-3.0] * 20,
+        "winsor_high": [3.0] * 20,
+        "center": [0.0] * 20,
+        "scale": [1.0] * 20,
+    }
+    captured = {}
+
+    def fake_fit(series, *, train, seed):
+        captured["shape"] = train.shape
+        return training_subject.B3CoreFitEvidence(
+            initialization={},
+            monitor_evidence={},
+            likelihood={},
+            covariance={},
+            train_occupancy={},
+            startprob=np.asarray([1 / 3, 1 / 3, 1 / 3]),
+            transmat=np.asarray([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]),
+            means=np.zeros((3, train.shape[1])),
+            covars=np.ones((3, train.shape[1])),
+            terminal_likelihood=-1.0,
+            model_entry_status="accepted",
+            model_entry_valid=True,
+        )
+
+    monkeypatch.setattr(training_subject, "fit_b3_preprocessed_train_only", fake_fit)
+    entry, model = training_subject._fit_b3_train_only(
+        item,
+        family="autocycle_all_core",
+        level="L2",
+        feature_names=ALL_CORE_FEATURES,
+        preprocess=preprocess,
+        seed=42,
+        numeric_environment={"scope": "test"},
+        dimension_contract_version=MIXED_DIMENSION_CONTRACT_VERSION,
+    )
+
+    assert captured["shape"] == (120, expected_dimension)
+    assert model.means.shape == (3, expected_dimension)
+    assert entry["feature_count"] == 20
+    assert entry["likelihood_feature_count"] == expected_dimension
+    assert entry["projection_sha256"] == model.projection_receipt["projection_sha256"]
+    evidence = model.projection_receipt["inactive_exact_zero_evidence"]
+    assert evidence["observation_rows"] == 120
+    assert evidence["inactive_feature_count"] == (1 if sector_code == TARGET_SECTOR else 0)
+    assert evidence["raw"]["all_values_zero"] is True
+    assert evidence["preprocessed"]["all_values_zero"] is True
+    assert len(model.projection_receipt["source_profile_receipt_sha256"]) == 64
+    if sector_code == TARGET_SECTOR:
+        assert model.projection_receipt["source_profile_receipt_sha256"] == TARGET_SOURCE_PROFILE_RECEIPT_SHA256
 
 
 def test_train_only_builder_does_not_materialize_validation_or_future_utility() -> None:
@@ -1067,12 +1309,13 @@ def _training_receipt(model: B3FittedModel) -> dict:
     likelihood = evaluate_likelihood_acceptance(
         {"converged": True, "iterations": 2, "maximum_iterations": 300, "history": [-1.0, -0.995]}
     )
+    effective_count = int(model.means.shape[1])
     covariance = evaluate_covariance_acceptance(
         {
-            "raw_covars": np.ones((3, len(model.feature_names))).tolist(),
-            "sector_local_reference_variance_R_sj": [1.0] * len(model.feature_names),
+            "raw_covars": np.ones((3, effective_count)).tolist(),
+            "sector_local_reference_variance_R_sj": [1.0] * effective_count,
             "state_posterior_mass": [60.0, 60.0, 60.0],
-            "posterior_second_moment_about_fitted_mean": np.ones((3, len(model.feature_names))).tolist(),
+            "posterior_second_moment_about_fitted_mean": np.ones((3, effective_count)).tolist(),
             "train_rows": 180,
             "nu": 1.0,
             "postfit_projection_performed": False,
@@ -1089,6 +1332,11 @@ def _training_receipt(model: B3FittedModel) -> dict:
         ),
     )
     body = {
+        "schema_version": (
+            MIXED_TRAINING_ENTRY_SCHEMA_VERSION
+            if model.projection_receipt is not None
+            else "hmm_risk_b3_training_entry_receipt_v1"
+        ),
         "family": model.family,
         "level": model.level,
         "seed": model.seed,
@@ -1104,18 +1352,58 @@ def _training_receipt(model: B3FittedModel) -> dict:
         "training_rows": 180,
         "feature_count": len(model.feature_names),
     }
+    if model.projection_receipt is not None:
+        body.update(
+            {
+                "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                "likelihood_feature_count": effective_count,
+                "projection_receipt": dict(model.projection_receipt),
+                "projection_sha256": model.projection_receipt["projection_sha256"],
+            }
+        )
     return {**body, "entry_receipt_sha256": canonical_sha256(body)}
 
 
 def _selection(family: str, level: str, training_receipts: list[dict]) -> dict:
     codes = [str(receipt["sector_code"]) for receipt in training_receipts]
     hashes = [str(receipt["entry_receipt_sha256"]) for receipt in training_receipts]
+    mixed_dimension = family == "autocycle_all_core" and level == "L2"
+    aggregate = {"minimum": -1.0, "median": -1.0, "mean": -1.0}
+    if mixed_dimension:
+        score_receipts = []
+        scores = []
+        for receipt in training_receipts:
+            final = float(receipt["final_train_log_likelihood"])
+            rows = int(receipt["training_rows"])
+            dimension = int(receipt["likelihood_feature_count"])
+            score = final / (rows * dimension)
+            score_body = {
+                "sector_code": receipt["sector_code"],
+                "score": score,
+                "training_rows": rows,
+                "final_train_log_likelihood": final,
+                "effective_dimension": dimension,
+                "denominator": rows * dimension,
+                "formula": "final_train_log_likelihood/(training_rows*effective_dimension)",
+                "schema_version": "hmm_risk_b3_d5_effective_dimension_score_receipt_v1",
+                "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
+                "projection_sha256": receipt["projection_sha256"],
+            }
+            score_receipts.append({**score_body, "score_sha256": canonical_sha256(score_body)})
+            scores.append(score)
+        ordered_scores = sorted(scores)
+        aggregate = {
+            "minimum": ordered_scores[0],
+            "median": ordered_scores[len(ordered_scores) // 2],
+            "mean": math.fsum(scores) / len(scores),
+            "ordered_sector_scores": score_receipts,
+        }
     candidates = [
         {
             "seed": seed,
             "schedule_index": index,
             "eligible": seed == 42,
-            "aggregate": {"minimum": -1.0, "median": -1.0, "mean": -1.0} if seed == 42 else None,
+            "aggregate": aggregate if seed == 42 else None,
             "entry_receipt_hashes": hashes if seed == 42 else [],
             "warning_reason_codes": [],
         }
@@ -1152,15 +1440,21 @@ def _selection(family: str, level: str, training_receipts: list[dict]) -> dict:
         "level_selection_status": "accepted",
         "level_selection_valid": True,
     }
+    if mixed_dimension:
+        body["evidence"]["dimension_contract_version"] = MIXED_DIMENSION_CONTRACT_VERSION
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 def _selected_artifact(family: str, level: str) -> tuple[dict, dict]:
     count = 31 if level == "L1" else 131
+    codes = [f"{level}-{index:03d}" for index in range(count)]
+    if family == "autocycle_all_core" and level == "L2":
+        codes[-1] = TARGET_SECTOR
+        codes = sorted(codes)
     entries = []
     training_receipts = []
-    for index in range(count):
-        model = _model(family=family, level=level, code=f"{level}-{index:03d}")
+    for code in codes:
+        model = _model(family=family, level=level, code=code)
         training_receipt = _training_receipt(model)
         training_receipts.append(training_receipt)
         semantic_mapping = {"0": "fading", "1": "neutral", "2": "trending"}
@@ -1177,7 +1471,11 @@ def _selected_artifact(family: str, level: str) -> tuple[dict, dict]:
         entries.append({**entry_body, "selected_entry_sha256": canonical_sha256(entry_body)})
     selection = _selection(family, level, training_receipts)
     body = {
-        "schema_version": "hmm_risk_b3_selected_level_artifact_v1",
+        "schema_version": (
+            MIXED_LEVEL_SCHEMA_VERSION
+            if family == "autocycle_all_core" and level == "L2"
+            else "hmm_risk_b3_selected_level_artifact_v1"
+        ),
         "family": family,
         "level": level,
         "selected_seed": 42,
@@ -1188,6 +1486,15 @@ def _selected_artifact(family: str, level: str) -> tuple[dict, dict]:
         "selection_reexecuted": False,
         "ready": False,
     }
+    if family == "autocycle_all_core" and level == "L2":
+        body.update(
+            build_level_dimension_identity(
+                entries,
+                family=family,
+                level=level,
+                expected_sector_codes=codes,
+            )
+        )
     return {**body, "artifact_sha256": canonical_sha256(body)}, selection
 
 
@@ -1214,6 +1521,8 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
         producer_commit="c" * 40,
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    readback = read_b3_ready_model_set(manifest_path)
+    assert readback == manifest
     assert manifest["schema_version"] == "hmm_risk_state_model_set_v1"
     assert manifest["status"] == "READY"
     assert len(manifest["layers"]) == 4
@@ -1268,6 +1577,42 @@ def test_ready_writer_requires_both_families_and_direct_levels(tmp_path) -> None
             feature_domain_policy_sha256=policy_manifest["receipt_sha256"],
             feature_domain_policy_manifest=policy_manifest,
             producer_commit="c" * 40,
+        )
+
+
+def test_selected_level_readback_rejects_self_consistent_score_receipt_drift(tmp_path) -> None:
+    artifact, selection = _selected_artifact("autocycle_all_core", "L2")
+    selection = json.loads(json.dumps(selection))
+    artifact = json.loads(json.dumps(artifact))
+    selected = next(candidate for candidate in selection["evidence"]["candidates"] if candidate["seed"] == 42)
+    score_receipt = selected["aggregate"]["ordered_sector_scores"][0]
+    score_receipt["denominator"] += 1
+    score_body = {key: value for key, value in score_receipt.items() if key != "score_sha256"}
+    score_receipt["score_sha256"] = canonical_sha256(score_body)
+    selection_body = {key: value for key, value in selection.items() if key != "receipt_sha256"}
+    selection["receipt_sha256"] = canonical_sha256(selection_body)
+    artifact["selection_receipt_sha256"] = selection["receipt_sha256"]
+    artifact_body = {key: value for key, value in artifact.items() if key != "artifact_sha256"}
+    artifact["artifact_sha256"] = canonical_sha256(artifact_body)
+    artifact_path = tmp_path / "selected.json"
+    artifact_path.write_bytes(canonical_json_bytes(artifact))
+
+    with pytest.raises(StateModelSetError, match="selection_contract_unsatisfied"):
+        read_b3_selected_level_artifact(
+            artifact_path,
+            selection=selection,
+            family="autocycle_all_core",
+            level="L2",
+            expected_count=131,
+            dataset_manifest_hash="a" * 64,
+            mapping_manifest_hash="b" * 64,
+            calendar_manifest_hash="c" * 64,
+            l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="e" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
+            feature_domain_policy_sha256=TEST_POLICY_SHA256,
         )
 
 
