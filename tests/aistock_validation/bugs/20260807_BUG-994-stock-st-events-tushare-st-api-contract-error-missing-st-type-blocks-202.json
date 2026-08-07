@@ -81,7 +81,8 @@
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/stock_st_events/status",
     "fresh_process_evidence": [
       "fresh Python process loaded backend.services.tushare_dataset_specs DATASET_REGISTRY['stock_st_events'] and verified api_field_map no longer maps st_type->st_tpye; live Tushare st API pub_date=20260806 returned st_type values ('叠加*ST','撤销*ST') and _validate_rows_for_date passed -> PASS",
-      "fresh Python process loaded backend.services.tushare_dataset_specs; STOCK_ST_EVENTS api_field_map has no st_type->st_tpye entry; live Tushare st API pub_date=20260806 returned st_type values and _validate_rows_for_date passed -> PASS"
+      "fresh Python process loaded backend.services.tushare_dataset_specs; STOCK_ST_EVENTS api_field_map has no st_type->st_tpye entry; live Tushare st API pub_date=20260806 returned st_type values and _validate_rows_for_date passed -> PASS",
+      "fresh Python process loaded backend.services.tushare_dataset_specs; STOCK_ST_EVENTS api_field_map empty, st_type in columns; live Tushare st API pub_date=20260806 returned st_type values and _validate_rows_for_date passed -> PASS"
     ],
     "identity_ref": "http://127.0.0.1:8001/openapi.json",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
