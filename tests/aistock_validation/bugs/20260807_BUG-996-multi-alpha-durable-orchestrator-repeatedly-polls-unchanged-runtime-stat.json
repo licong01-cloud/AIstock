@@ -9,7 +9,8 @@
     "backend/tests/multi_alpha/test_durable_control.py",
     "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
     "tests/aistock_validation/bugs/20260807_BUG-996-multi-alpha-durable-orchestrator-repeatedly-polls-unchanged-runtime-stat.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/multi_alpha/test_archive_health.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-996",
@@ -41,7 +42,8 @@
       "backend/services/multi_alpha/durable_control.py",
       "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
       "backend/tests/multi_alpha/test_durable_repository.py",
-      "backend/tests/multi_alpha/test_durable_control.py"
+      "backend/tests/multi_alpha/test_durable_control.py",
+      "backend/tests/multi_alpha/test_archive_health.py"
     ],
     "ownership": {
       "changed_files": [
@@ -51,7 +53,8 @@
         "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
         "backend/tests/multi_alpha/test_durable_repository.py",
         "backend/tests/multi_alpha/test_durable_control.py",
-        "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py"
+        "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+        "backend/tests/multi_alpha/test_archive_health.py"
       ],
       "impacted_modules": [
         "qe.auto_evolution",
@@ -144,6 +147,18 @@
           "primary_module": "qe.auto_evolution",
           "risk_level": "high",
           "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_archive_health.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
         }
       ],
       "risk_levels": [
@@ -156,7 +171,8 @@
         "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
         "backend/tests/multi_alpha/test_durable_repository.py",
         "backend/tests/multi_alpha/test_durable_control.py",
-        "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py"
+        "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+        "backend/tests/multi_alpha/test_archive_health.py"
       ],
       "unmatched_files": []
     },
@@ -168,7 +184,8 @@
       "backend/tests/multi_alpha/test_durable_orchestrator_restart.py",
       "backend/tests/multi_alpha/test_durable_repository.py",
       "backend/tests/multi_alpha/test_durable_control.py",
-      "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py"
+      "backend/tests/multi_alpha/test_durable_orchestrator_poll_throttle.py",
+      "backend/tests/multi_alpha/test_archive_health.py"
     ]
   },
   "first_seen_at": "2026-08-07T08:11:58.483571Z",
