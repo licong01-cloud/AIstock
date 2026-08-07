@@ -2077,6 +2077,64 @@ def _frozen_input_identity(inputs: dict[str, Any]) -> dict[str, Any]:
     return identity
 
 
+def _direct_l2_series_for_family(
+    inputs: dict[str, Any],
+    family: dict[str, Any],
+) -> dict[str, Any]:
+    """Minimal formal L2-only semantic/validation series; never touches L1 panel or L1 constituents.
+
+    This is the P6 D6 construction path. It builds only the canonical 131-sector L2
+    validation series and must not access ``inputs["panel"]`` or ``inputs["constituents"]``,
+    so L1 data or L1 construction anomalies cannot block an L2-only execution.
+    """
+
+    features = tuple(str(value) for value in family.get("feature_names") or ())
+    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+        raise StateModelSetError("B3 family feature_names must match the approved 7/20-dimensional order")
+    train_start = _date(family.get("train_start"), "train_start")
+    train_end = _date(family.get("train_end"), "train_end")
+    validation_start = _date(family.get("validation_start"), "validation_start")
+    validation_end = _date(family.get("validation_end"), "validation_end")
+    return build_l1_training_series(
+        inputs["l2_panel"],
+        feature_names=features,
+        train_start=train_start,
+        train_end=train_end,
+        validation_start=validation_start,
+        validation_end=validation_end,
+        constituent_manifest_by_l1=_direct_l2_constituents(inputs),
+        expected_sector_count=131,
+        direct_sector_level="L2",
+        frozen_input_identity=_frozen_input_identity(inputs),
+    )
+
+
+def _direct_l2_train_series_for_family(
+    inputs: dict[str, Any],
+    family: dict[str, Any],
+) -> dict[str, Any]:
+    """Minimal formal L2-only train-only series; never touches L1 panel or L1 constituents.
+
+    This is the P6 child construction path. It builds only the canonical 131-sector L2
+    train-only series and must not access ``inputs["panel"]`` or ``inputs["constituents"]``,
+    so L1 data or L1 construction anomalies cannot block an L2-only execution.
+    """
+
+    features = tuple(str(value) for value in family.get("feature_names") or ())
+    train_start = _date(family.get("train_start"), "train_start")
+    train_end = _date(family.get("train_end"), "train_end")
+    return build_train_only_series(
+        inputs["l2_panel"],
+        feature_names=features,
+        train_start=train_start,
+        train_end=train_end,
+        constituent_manifest=_direct_l2_constituents(inputs),
+        expected_sector_count=131,
+        direct_sector_level="L2",
+        frozen_input_identity=_frozen_input_identity(inputs),
+    )
+
+
 def _direct_series_for_family(
     inputs: dict[str, Any],
     family: dict[str, Any],
@@ -2100,19 +2158,7 @@ def _direct_series_for_family(
         direct_sector_level="L1",
         frozen_input_identity=_frozen_input_identity(inputs),
     )
-    l2 = build_l1_training_series(
-        inputs["l2_panel"],
-        feature_names=features,
-        train_start=train_start,
-        train_end=train_end,
-        validation_start=validation_start,
-        validation_end=validation_end,
-        constituent_manifest_by_l1=_direct_l2_constituents(inputs),
-        expected_sector_count=131,
-        direct_sector_level="L2",
-        frozen_input_identity=_frozen_input_identity(inputs),
-    )
-    return {"L1": l1, "L2": l2}
+    return {"L1": l1, "L2": _direct_l2_series_for_family(inputs, family)}
 
 
 def _direct_train_series_for_family(
@@ -2122,28 +2168,17 @@ def _direct_train_series_for_family(
     features = tuple(str(value) for value in family.get("feature_names") or ())
     train_start = _date(family.get("train_start"), "train_start")
     train_end = _date(family.get("train_end"), "train_end")
-    return {
-        "L1": build_train_only_series(
-            inputs["panel"],
-            feature_names=features,
-            train_start=train_start,
-            train_end=train_end,
-            constituent_manifest=inputs["constituents"],
-            expected_sector_count=31,
-            direct_sector_level="L1",
-            frozen_input_identity=_frozen_input_identity(inputs),
-        ),
-        "L2": build_train_only_series(
-            inputs["l2_panel"],
-            feature_names=features,
-            train_start=train_start,
-            train_end=train_end,
-            constituent_manifest=_direct_l2_constituents(inputs),
-            expected_sector_count=131,
-            direct_sector_level="L2",
-            frozen_input_identity=_frozen_input_identity(inputs),
-        ),
-    }
+    l1 = build_train_only_series(
+        inputs["panel"],
+        feature_names=features,
+        train_start=train_start,
+        train_end=train_end,
+        constituent_manifest=inputs["constituents"],
+        expected_sector_count=31,
+        direct_sector_level="L1",
+        frozen_input_identity=_frozen_input_identity(inputs),
+    )
+    return {"L1": l1, "L2": _direct_l2_train_series_for_family(inputs, family)}
 
 
 def _load_b3_formal_train_authority(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
@@ -2273,8 +2308,8 @@ def prepare_b3_p6_autocycle_l2_single_pass(
     family_map = {str(item["family"]): item for item in authority["families"]}
     family = family_map[B3_P6_FAMILY]
     feature_names = tuple(str(value) for value in family.get("feature_names") or ())
-    series_by_level = _direct_train_series_for_family(authority["inputs"], family)
-    series = series_by_level[B3_P6_LEVEL]
+    preprocess_family = str(family.get("preprocess_family") or "")
+    series = _direct_l2_train_series_for_family(authority["inputs"], family)
     if len(series) != B3_P6_EXPECTED_SECTOR_COUNT:
         raise StateModelSetError("B3 P6 requires exactly 131 autocycle L2 sectors")
     repeat, _ = run_level_repeat(
@@ -2282,7 +2317,7 @@ def prepare_b3_p6_autocycle_l2_single_pass(
         family=B3_P6_FAMILY,
         level=B3_P6_LEVEL,
         feature_names=feature_names,
-        preprocess_family=str(family.get("preprocess_family") or ""),
+        preprocess_family=preprocess_family,
         process_identity=process_identity,
     )
     expected_entry_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE)
@@ -2300,6 +2335,8 @@ def prepare_b3_p6_autocycle_l2_single_pass(
         "process_identity": process_identity,
         "target_family": B3_P6_FAMILY,
         "target_level": B3_P6_LEVEL,
+        "feature_names": list(feature_names),
+        "preprocess_family": preprocess_family,
         "planned_fit_count": expected_entry_count,
         "terminal_entry_count": expected_entry_count,
         "dataset_manifest_hash": authority["dataset_manifest_hash"],
@@ -3790,6 +3827,61 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
         ) from exc
 
 
+def _b3_p6_closure_from_inputs(
+    inputs: dict[str, Any],
+    request: dict[str, Any],
+    *,
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Derive the parent-side P6 L2 closure from the reloaded formal train inputs.
+
+    The closure is the single authoritative contract every fresh-process child must
+    match before D5 selection is allowed: the exact autocycle_all_core family, the
+    exact ALL_CORE_FEATURES ordered identity, the approved preprocess family, and
+    the canonical 131-sector L2 set/hash derived from the parent's own reload (never
+    from a child-declared sector set).
+    """
+
+    family_map = {str(item["family"]): item for item in request["families"]}
+    if B3_P6_FAMILY not in family_map:
+        raise StateModelSetError("B3 P6 parent authority is missing the autocycle_all_core family")
+    family = family_map[B3_P6_FAMILY]
+    feature_names = tuple(str(value) for value in family.get("feature_names") or ())
+    if feature_names != ALL_CORE_FEATURES:
+        raise StateModelSetError("B3 P6 parent authority requires the exact ALL_CORE_FEATURES ordered identity")
+    preprocess_family = str(family.get("preprocess_family") or "")
+    if preprocess_family not in {"identity", "winsor_zscore_1_99_train_global_v1"}:
+        raise StateModelSetError("B3 P6 parent authority has an unsupported approved preprocess family")
+    series = _direct_l2_train_series_for_family(inputs, family)
+    canonical_sector_codes = tuple(sorted(series))
+    if len(canonical_sector_codes) != B3_P6_EXPECTED_SECTOR_COUNT or len(set(canonical_sector_codes)) != (
+        B3_P6_EXPECTED_SECTOR_COUNT
+    ):
+        raise StateModelSetError("B3 P6 parent authority L2 sector set is not the exact canonical 131")
+    canonical_sector_set_sha256 = canonical_sha256(list(canonical_sector_codes))
+    return {
+        "family": family,
+        "feature_names": feature_names,
+        "preprocess_family": preprocess_family,
+        "canonical_sector_codes": canonical_sector_codes,
+        "canonical_sector_set_sha256": canonical_sector_set_sha256,
+        "feature_count": len(feature_names),
+        "entry_count": len(canonical_sector_codes) * len(RESTART_SCHEDULE),
+        "authority_keys": {
+            "producer_commit": _formal_producer_commit(),
+            "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+            "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+            "calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+            "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+            "feature_domain_policy_sha256": policy["receipt_sha256"],
+            "feature_domain_policy_manifest": policy,
+            "provider_absence_partition_receipt": policy["provider_absence_partition_receipt"],
+            "provider_absence_partition_receipt_sha256": policy["provider_absence_partition_receipt_sha256"],
+            "formula_version": C010_FORMULA_VERSION,
+        },
+    }
+
+
 def _b3_p6_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
     return [
         sys.executable,
@@ -3844,7 +3936,12 @@ def _parse_b3_p6_child_payload(payload: bytes, *, process_identity: str) -> dict
     return value
 
 
-def _validate_b3_p6_child_payload(value: dict[str, Any], *, process_identity: str) -> None:
+def _validate_b3_p6_child_payload(
+    value: dict[str, Any],
+    *,
+    process_identity: str,
+    expected: dict[str, Any] | None = None,
+) -> None:
     expected_entry_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE)
     receipt_hash = value.get("single_pass_receipt_sha256")
     body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
@@ -3873,6 +3970,40 @@ def _validate_b3_p6_child_payload(value: dict[str, Any], *, process_identity: st
         or receipt_hash != canonical_sha256(body)
     ):
         raise StateModelSetError(f"B3 P6 child receipt is invalid: {process_identity}")
+    if expected is not None:
+        expected_keys = expected.get("authority_keys") or {}
+        for key, expected_value in expected_keys.items():
+            if value.get(key) != expected_value:
+                raise StateModelSetError(
+                    f"B3 P6 child authority key drifted from the parent formal authority "
+                    f"key={key} process={process_identity}"
+                )
+        if tuple(str(item) for item in value.get("feature_names") or ()) != tuple(expected["feature_names"]):
+            raise StateModelSetError(
+                f"B3 P6 child feature_names differ from the parent formal authority: {process_identity}"
+            )
+        if str(value.get("preprocess_family") or "") != str(expected["preprocess_family"]):
+            raise StateModelSetError(
+                f"B3 P6 child preprocess family differs from the parent formal authority: {process_identity}"
+            )
+        if tuple(str(item) for item in repeat.get("feature_names") or ()) != tuple(expected["feature_names"]):
+            raise StateModelSetError(
+                f"B3 P6 child repeat feature_names differ from the parent formal authority: {process_identity}"
+            )
+        if tuple(str(item) for item in repeat.get("canonical_sector_codes") or ()) != tuple(
+            expected["canonical_sector_codes"]
+        ):
+            raise StateModelSetError(
+                f"B3 P6 child canonical L2 sector set differs from the parent formal authority: {process_identity}"
+            )
+        if str(repeat.get("canonical_sector_set_sha256") or "") != str(expected["canonical_sector_set_sha256"]):
+            raise StateModelSetError(
+                f"B3 P6 child canonical L2 sector hash differs from the parent formal authority: {process_identity}"
+            )
+        if tuple(str(item) for item in repeat.get("schedule") or ()) != tuple(str(seed) for seed in RESTART_SCHEDULE):
+            raise StateModelSetError(
+                f"B3 P6 child restart schedule differs from the approved 8-seed contract: {process_identity}"
+            )
 
 
 def _persist_b3_p6_child_failure(
@@ -3943,7 +4074,18 @@ def _b3_p6_process_receipt_path(args: argparse.Namespace, process_identity: str)
     return output_path.with_name(f"{output_path.stem}.{process_identity}.json")
 
 
-def _build_b3_p6_parent_failure(args: argparse.Namespace, error: Exception) -> dict[str, Any]:
+def _b3_p6_parent_failure_path(args: argparse.Namespace) -> Path:
+    output_path = Path(args.b3_p6_autocycle_l2_output).resolve()
+    return output_path.with_name(f"{output_path.stem}.parent.failure.json")
+
+
+def _build_b3_p6_parent_failure(
+    args: argparse.Namespace,
+    error: Exception,
+    *,
+    known_report: dict[str, Any] | None = None,
+    failure_stage: str = "execution",
+) -> dict[str, Any]:
     process_receipts: list[dict[str, Any]] = []
     terminal_entry_count = 0
     verified_process_count = 0
@@ -3986,6 +4128,17 @@ def _build_b3_p6_parent_failure(args: argparse.Namespace, error: Exception) -> d
             }
         )
     planned_fit_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE) * 2
+    if known_report is not None:
+        selection = known_report.get("selection") or {}
+        selection_performed = bool(known_report.get("selection_performed"))
+        selection_status = str(selection.get("level_selection_status") or "unknown")
+        d6_performed = bool(known_report.get("d6_performed_after_selection"))
+        selected_level_write = bool(known_report.get("selected_level_artifact_write_performed"))
+    else:
+        selection_performed = None
+        selection_status = "unknown_due_parent_failure"
+        d6_performed = None
+        selected_level_write = None
     body = {
         "schema_version": B3_P6_FAILURE_SCHEMA,
         "status": "failed",
@@ -3993,6 +4146,7 @@ def _build_b3_p6_parent_failure(args: argparse.Namespace, error: Exception) -> d
         "target_family": B3_P6_FAMILY,
         "target_level": B3_P6_LEVEL,
         "reason_code": "hmm_risk_model_p6_parent_finalization_failed",
+        "failure_stage": failure_stage,
         "error_type": type(error).__name__,
         "error": str(error)[-4000:],
         "planned_fit_count": planned_fit_count,
@@ -4000,10 +4154,10 @@ def _build_b3_p6_parent_failure(args: argparse.Namespace, error: Exception) -> d
         "terminal_entry_count": terminal_entry_count,
         "fit_grid_completed": verified_process_count == 2 and terminal_entry_count == planned_fit_count,
         "process_receipts": process_receipts,
-        "selection_performed": None,
-        "selection_status": "unknown_due_parent_failure",
-        "d6_performed_after_selection": None,
-        "selected_level_artifact_write_performed": None,
+        "selection_performed": selection_performed,
+        "selection_status": selection_status,
+        "d6_performed_after_selection": d6_performed,
+        "selected_level_artifact_write_performed": selected_level_write,
         "family_model_set_status": "blocked",
         "phase2_ready": False,
         "ready_artifact_write_performed": False,
@@ -4358,31 +4512,6 @@ def run_b3_p6_autocycle_l2_repeated(args: argparse.Namespace, request: dict[str,
             raise StateModelSetError(f"B3 P6 {process_identity} durable receipt readback mismatch")
         repeats.append(child)
         process_receipt_paths.append(str(process_receipt_path))
-    authority_keys = (
-        "producer_commit",
-        "dataset_manifest_hash",
-        "mapping_manifest_hash",
-        "calendar_manifest_hash",
-        "l2_stock_fact_manifest_hash",
-        "feature_domain_policy_sha256",
-        "feature_domain_policy_manifest",
-        "provider_absence_partition_receipt",
-        "provider_absence_partition_receipt_sha256",
-        "formula_version",
-    )
-    if any(repeats[0].get(key) != repeats[1].get(key) for key in authority_keys):
-        raise StateModelSetError("B3 P6 fresh processes used different formal authorities")
-    if repeats[0].get("feature_domain_policy_sha256") != request.get("feature_domain_policy_sha256"):
-        raise StateModelSetError("B3 P6 fresh-process policy identity differs from request")
-    if (
-        repeats[0].get("feature_domain_policy_manifest") != request.get("feature_domain_policy_manifest")
-        or repeats[0].get("provider_absence_partition_receipt")
-        != request.get("feature_domain_policy_manifest", {}).get("provider_absence_partition_receipt")
-        or repeats[0].get("provider_absence_partition_receipt_sha256")
-        != request.get("feature_domain_policy_manifest", {}).get("provider_absence_partition_receipt_sha256")
-    ):
-        raise StateModelSetError("B3 P6 fresh-process policy manifest differs from request")
-
     train_inputs = _load_l1_source_inputs(request, db_prefix=str(args.db_env_prefix), c010_formal=True)
     if canonical_sha256(train_inputs["dataset_manifest"]) != repeats[0]["dataset_manifest_hash"]:
         raise StateModelSetError("B3 P6 D6 reload drifted from the frozen dataset manifest")
@@ -4396,18 +4525,23 @@ def run_b3_p6_autocycle_l2_repeated(args: argparse.Namespace, request: dict[str,
     if recomputed_policy["receipt_sha256"] != repeats[0]["feature_domain_policy_sha256"]:
         raise StateModelSetError("B3 P6 D6 reload drifted from the C-010 policy identity")
 
-    family_map = {str(item["family"]): item for item in request["families"]}
-    family = family_map[B3_P6_FAMILY]
+    # The parent-authoritative closure is derived from the parent's own reload of the
+    # formal train authority, never from a child-declared sector set. Both fresh-process
+    # receipts must match it item-by-item before any D5 selection call is allowed.
+    closure = _b3_p6_closure_from_inputs(train_inputs, request, policy=recomputed_policy)
+    for process_identity, child in zip(("fresh_process_1", "fresh_process_2"), repeats):
+        _validate_b3_p6_child_payload(child, process_identity=process_identity, expected=closure)
+    family = closure["family"]
     first_repeat = repeats[0]["level_repeat"]
     second_repeat = repeats[1]["level_repeat"]
-    expected_sector_codes = tuple(str(value) for value in first_repeat.get("canonical_sector_codes") or ())
+    expected_sector_codes = closure["canonical_sector_codes"]
     selection = select_level_restart(
         first_repeat,
         second_repeat,
         family=B3_P6_FAMILY,
         level=B3_P6_LEVEL,
         expected_sector_codes=expected_sector_codes,
-        feature_count=len(tuple(family["feature_names"])),
+        feature_count=closure["feature_count"],
         feature_domain_policy_sha256=repeats[0]["feature_domain_policy_sha256"],
     )
     semantic_identities = {
@@ -4430,7 +4564,7 @@ def run_b3_p6_autocycle_l2_repeated(args: argparse.Namespace, request: dict[str,
         if verified_semantic_identities != semantic_identities:
             raise StateModelSetError("B3 P6 semantic input identities differ after D5 selection")
         semantic_inputs["feature_domain_policy_sha256"] = recomputed_policy["receipt_sha256"]
-        series = _direct_series_for_family(semantic_inputs, family)[B3_P6_LEVEL]
+        series = _direct_l2_series_for_family(semantic_inputs, family)
         if tuple(sorted(series)) != expected_sector_codes or len(series) != B3_P6_EXPECTED_SECTOR_COUNT:
             raise StateModelSetError("B3 P6 D6 sector identity differs from the frozen D5 level")
         semantic_source_accessed_after_selection = True
@@ -4938,17 +5072,29 @@ def main() -> int:
             return 0
         if p6_parent:
             report_path = Path(p6_output).resolve()
+            failure_path = _b3_p6_parent_failure_path(args)
+            report = None
+            failure_stage = "execution"
             try:
                 report = run_b3_p6_autocycle_l2_repeated(args, request)
+                failure_stage = "report_write"
+                report_sha256 = _write_diagnostic_report(report_path, report)
+                failure_stage = "report_readback"
+                if _load_json_mapping(report_path, label="B3 P6 report") != report:
+                    raise StateModelSetError("B3 P6 durable report readback differs from the built report")
             except Exception as exc:
-                failure = _build_b3_p6_parent_failure(args, exc)
-                _write_diagnostic_report(report_path, failure)
+                known_report = report if isinstance(report, dict) else None
+                failure = _build_b3_p6_parent_failure(
+                    args,
+                    exc,
+                    known_report=known_report,
+                    failure_stage=failure_stage,
+                )
+                _write_diagnostic_report(failure_path, failure)
                 raise StateModelSetError(
-                    f"B3 P6 parent failed error_type={type(exc).__name__} error={exc} failure_receipt={report_path}"
+                    f"B3 P6 parent finalization failed error_type={type(exc).__name__} "
+                    f"error={exc} failure_receipt={failure_path}"
                 ) from exc
-            report_sha256 = _write_diagnostic_report(report_path, report)
-            if _load_json_mapping(report_path, label="B3 P6 report") != report:
-                raise StateModelSetError("B3 P6 durable report readback differs from the built report")
             receipt = {
                 "schema_version": B3_P6_CLI_SCHEMA,
                 "status": report["status"],
