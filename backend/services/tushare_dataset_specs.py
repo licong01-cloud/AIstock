@@ -194,7 +194,8 @@ STOCK_ST_EVENTS = DatasetSpec(
         "st_reason": "text",
         "st_explain": "text",
     },
-    api_field_map={"st_type": "st_tpye"},
+    # BUG-994: Tushare fixed the "st_tpye" typo server-side and now returns
+    # "st_type"; do not re-add a stale api_field_map (silent column drop).
     date_column="pub_date",
     date_param_name="pub_date",
     batch_sleep=0.3,
