@@ -2,13 +2,13 @@
 
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
-- 修订日期：2026-08-06
-- 状态：`B3_FORMAL_EXECUTED_BLOCKED_D1_B_REFIT_03_DIAGNOSTIC_COMPLETE_INCONCLUSIVE_MIXED_SEED_PATTERN_D5_COMPAT_PENDING_USER_DECISION`
+- 修订日期：2026-08-07
+- 状态：`B3_FORMAL_EXECUTED_BLOCKED_D1_D5_COMPAT_MERGED_P6_EXECUTOR_SOURCE_FIXED_NOT_EXECUTED`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.19
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已固化；Slice 0 B3/L2 retrain、C-009、C-010-FORMAL-A、C-010-A5、BUG-977、BUG-982 与 REFIT-03 diagnostic 源码均已合入。历史 formal producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已完成两次 fresh-process `5184/5184` fits；D5/D6 fail closed、两 family blocked、READY=0。REFIT-03 又以 producer `b474170fd58a466959e595ce7d245bae7da88ab8` 在同一冻结 bundle、两个 fresh processes、三角色和 seeds 42..49 完成 `48/48` attempts 与 `48/48` 真实 fits；canonical report SHA-256=`7e8a17556aaf610de4bd7b2449cae5f224d032ce8acafdcbcb9a594bbf6276b9`，两进程 comparable payload SHA-256 均为 `53574f62608f6860e6ee59b7b31aafc7772a16d7637fe4a119e0128eda50888f`。19D treatment 与 20D positive harness 均为 `16/16 fit_completed`且descriptive `covariance_status=accepted`，matched current-A5 20D control `16/16` 于 covariance stage fail closed；其中 seeds 45/47/48 的 invalid feature set 仅为 `[19]`，其余 seeds 42/43/44/46/49 为 `[0..19]`，故正式结论为 `diagnostic_complete`、`mixed_seed_pattern`、`mechanism_assessment=inconclusive`、`d5_compatibility_evidence_ready=false`。`formal_model_set_acceptance_performed=false`，不得把 descriptive accepted、19D局部成功写成常量维唯一根因、D4 formal acceptance、D5 readiness、feature删除或READY；D5 19/20维score可比语义仍须用户另行决定。selection、D6、model/READY、数据库和 runtime 动作均未执行。
+- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已固化；Slice 0 B3/L2 retrain、C-009、C-010-FORMAL-A、C-010-A5、BUG-977、BUG-982、REFIT-03 diagnostic 与 D1-D5 mixed-dimension 源码均已合入。历史 formal producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已完成两次 fresh-process `5184/5184` fits；D5/D6 fail closed、两 family blocked、READY=0。REFIT-03 又以 producer `b474170fd58a466959e595ce7d245bae7da88ab8` 在同一冻结 bundle、两个 fresh processes、三角色和 seeds 42..49 完成 `48/48` attempts 与 `48/48` 真实 fits；canonical report SHA-256=`7e8a17556aaf610de4bd7b2449cae5f224d032ce8acafdcbcb9a594bbf6276b9`，两进程 comparable payload SHA-256 均为 `53574f62608f6860e6ee59b7b31aafc7772a16d7637fe4a119e0128eda50888f`。19D treatment 与 20D positive harness 均为 `16/16 fit_completed`且 descriptive `covariance_status=accepted`，matched current-A5 20D control `16/16` 于 covariance stage fail closed；其中 seeds 45/47/48 的 invalid feature set 仅为 `[19]`，其余 seeds 42/43/44/46/49 为 `[0..19]`，故历史诊断结论仍为 `diagnostic_complete`、`mixed_seed_pattern`、`mechanism_assessment=inconclusive`。用户已批准 level-local D1-B 与 D5 effective-dimension 方案，PR #3189 已合入源码；BUG-995 又修复正式 P6 缺少 exact level-local executor 的缺陷。当前尚未运行 P6 的2096 fits、正式 D5/D6 或写 selected-level artifact；model/READY、数据库和 runtime 动作均未执行。
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -24,7 +24,7 @@ Phase 2 的输出是研究分析事实，不是交易门禁、可买性、调仓
 
 ### 0.2 成功边界
 
-- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 源码已实现并通过本模块 required plan。历史双 fresh-process 训练已完成 5184/5184 fits，D5/D6 已按批准合同执行但 fail closed；C-010-A5 已合入并完成601日只读preflight。REFIT-03又闭合48 attempts/48 fits、raw covariance exact evidence与双进程bitwise证据；19D treatment/20D harness均通过，matched 20D全部covariance failure且呈mixed seed pattern，故`diagnostic_complete`与`mechanism_assessment=inconclusive`并存、D5 readiness=false。当前为 `FORMAL_EXECUTED_C010_A5_MERGED_D1_REFIT_03_DIAGNOSTIC_COMPLETE_INCONCLUSIVE_D5_COMPAT_PENDING_BLOCKED_MODEL_ACCEPTANCE_NO_READY`。不得以源码完成、历史 fit、单一失败stage、单个 selected artifact、单 family、部分 sector、忽略 train observation drift、放宽阈值或 validation-picked seed冒充完成。
+- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 源码已实现并通过本模块 required plan。历史双 fresh-process 训练已完成 5184/5184 fits，D5/D6 已按批准合同执行但 fail closed；C-010-A5 已合入并完成601日只读preflight。REFIT-03又闭合48 attempts/48 fits、raw covariance exact evidence与双进程bitwise证据；19D treatment/20D harness均通过，matched 20D全部covariance failure且呈mixed seed pattern，故`diagnostic_complete`与`mechanism_assessment=inconclusive`并存。D1-D5 mixed-dimension源码已合入，BUG-995 P6 exact level-local executor 已实现但尚未合入或执行。当前为 `FORMAL_EXECUTED_C010_A5_MERGED_D1_D5_COMPAT_MERGED_P6_EXECUTOR_SOURCE_FIXED_NOT_EXECUTED_BLOCKED_MODEL_ACCEPTANCE_NO_READY`。不得以源码完成、历史 fit、单一失败stage、单个 selected artifact、单 family、部分 sector、忽略 train observation drift、放宽阈值或 validation-picked seed冒充完成。
 - F-012：所有生成、查询和报告均为 advisory-only，只写 `hmm_risk.*`，不产生任何交易副作用。
 - F-013：真实 API/UI 完成 L1/L2、7 日热力图、今日预警、固定详情、状态分布、事件与回测证据。
 
@@ -3604,6 +3604,18 @@ database或runtime已执行。
 
 审核结论：`PASS_D1_D5_COMPAT_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_FORMAL_GRID_NOT_EXECUTED`。该结论只表示源码达到可提交条件；
 不表示已commit、PR、merge、运行2096 fits、选择seed、执行D6或生成model/READY。
+
+### 23.14 BUG-995：P6 exact level-local formal executor 正式审核
+
+- **根因与修复范围**：`PASS`。批准的 P6 只允许 `autocycle_all_core:L2` 的 `131 sectors × 8 seeds × 2 fresh processes = 2096 fits`，但历史 `--b3-preparation-output` 只能执行两 family、L1/L2 的完整 5184-fit grid。BUG-995 新增独立 `--b3-p6-autocycle-l2-output` 与隐藏 child 入口；旧 full-grid 入口保持不变，P6 与其他 output/child/diagnostic authority 参数互斥，禁止通过组合参数意外扩大训练范围。
+- **训练与选择顺序**：`PASS`。两个 fresh child 必须按固定单线程环境顺序完成，各自产生 `131 × 8 = 1048` 个 terminal entry；两份 request、producer、dataset、mapping、calendar、L2 stock-fact、feature-domain policy 与 sector/schedule identity 全部相同后，父进程才执行该 level 的 train-only D5。D5 未接受时不得读取 semantic validation；D5 identity 冻结后才允许读取批准的 validation 输入并执行 D6，D6 失败不得返回 D5 换 seed，也不得扩大 seed grid、按 sector 拼 seed或改用另一 family。
+- **持久化与失败语义**：`PASS`。每个 child receipt、child failure 与 parent report 都是 canonical JSON、append-only 路径、collision/readback fail closed。第二进程失败必须保留第一进程 receipt；两个进程完成后若 D5/D6 或 readback 失败，parent failure receipt 必须保留 `terminal_entry_count=2096`，同时把尚不能证明的 selection/D6 状态写为 `unknown_due_parent_failure`，不得伪造为未执行或成功。typed failure 不得被 stderr 文本、进程完成或 fit count 吞并。
+- **artifact 与 READY 边界**：`PASS`。只有 D5 与 D6 均通过时才允许写该 `autocycle_all_core:L2` 的 immutable selected-level artifact，并立即用共同 parser 回读；该写入仍不表示 family model set 或 Phase 2 READY。P6 永远写明 `family_model_set_status=blocked`、`phase2_ready=false`、`ready_manifest_path=null`、`ready_artifact_write_performed=false`，不写数据库、不控制 runtime。
+- **禁止简化与业务漂移**：`PASS`。实现不得减少 131 sectors、跳过任何 restart、early stop、复用单进程结果、使用 validation/future utility 做 D5、用 D6 换 seed、排除失败 sector、执行 autocycle-only 的 Phase 2 完成声明或回退到历史 full-grid。hard semantic authority、D3/D4/D5/D6 数值合同、train/validation 窗口、D1 projection 与 effective-dimension 分母均未改变。
+- **验证边界**：`PASS`。direct fix-point 覆盖 exact single-pass、双 child 与单线程环境、D5 前禁止 semantic access、D5 后单次 D6、selected-level canonical write/readback、child/parent failure receipt、scope/hash drift、mode isolation、timeout recovery，以及 CLI 不调用历史 full-grid executor。required plan 仍只路由 `hmm.risk`；不扩展其他模块测试。
+- **当前状态**：`SOURCE_FIXED_LOCAL_REVIEWED_NOT_EXECUTED_PENDING_PR`。本节记录源码合同与审核结果，不代表 BUG-995 已提交 PR、已合入，亦不代表 2096 fits、D5、D6、selected-level artifact、model/READY、DDL/DML、依赖或 runtime 动作已经发生。
+
+审核结论：`PASS_BUG_995_EXACT_P6_SOURCE_FIXED_LOCAL_REVIEWED_NOT_EXECUTED_PENDING_PR`。
 
 ## 24. 当前完成状态与下一步
 
