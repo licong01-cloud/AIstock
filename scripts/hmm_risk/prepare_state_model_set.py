@@ -39,7 +39,7 @@ from backend.services.hmm_risk.state_model_set import (  # noqa: E402
     diagnose_l1_seed_grid_b3_diag04,
     sha256_bytes,
 )
-from backend.services.hmm_risk.b3_acceptance import select_level_restart  # noqa: E402
+from backend.services.hmm_risk.b3_acceptance import RESTART_SCHEDULE, select_level_restart  # noqa: E402
 from backend.services.hmm_risk.b3_blocker_diagnostic import (  # noqa: E402
     DIAGNOSTIC_VERSION as B3_BLOCKER_DIAGNOSTIC_VERSION,
     FORMAL_AUTHORITY as B3_BLOCKER_FORMAL_AUTHORITY,
@@ -66,6 +66,7 @@ from backend.services.hmm_risk.b3_training import (  # noqa: E402
     formal_b3_parameter_profile,
     iter_train_only_series,
     models_from_repeat,
+    read_b3_selected_level_artifact,
     run_level_repeat,
     write_b3_ready_model_set,
 )
@@ -151,6 +152,21 @@ C009_STOCK_FACT_PREFLIGHT_SCHEMA = "hmm_risk_c009_stock_fact_preflight_v1"
 C010_A5_DOMAIN_PARTITION_PREFLIGHT_SCHEMA = "hmm_risk_c010_a5_domain_partition_preflight_v1"
 C010_OBSERVATION_ELIGIBILITY_SCHEMA = "hmm_risk_c010_observation_eligibility_diagnostic_v1"
 B3_TRAIN_COVERAGE_PREFLIGHT_VERSION = "hmm_risk_b3_train_coverage_preflight_set_v1"
+B3_P6_FAMILY = "autocycle_all_core"
+B3_P6_LEVEL = "L2"
+B3_P6_EXPECTED_SECTOR_COUNT = 131
+B3_P6_SINGLE_PASS_SCHEMA = "hmm_risk_b3_p6_autocycle_l2_single_pass_v1"
+B3_P6_REPORT_SCHEMA = "hmm_risk_b3_p6_autocycle_l2_preparation_v1"
+B3_P6_FAILURE_SCHEMA = "hmm_risk_b3_p6_autocycle_l2_parent_failure_v1"
+B3_P6_CLI_SCHEMA = "hmm_risk_b3_p6_autocycle_l2_cli_receipt_v1"
+B3_P6_OUTPUT_ARGUMENT = "b3_p6_autocycle_l2_output"
+B3_HIDDEN_CHILD_ARGUMENTS = (
+    "_c008_b3_diag02_child",
+    "_c008_b3_diag04_child",
+    "_b3_child",
+    "_b3_blocker_diag01_child",
+    "_b3_d1_controlled_child",
+)
 B3_APPROVED_FROZEN_IDENTITIES = {
     "dataset_manifest_hash": "c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f",
     "mapping_manifest_hash": "9cdddd98db3cacd9949ac5b7ba007c16eb66de46375e848eea676b0168b58159",
@@ -2061,6 +2077,64 @@ def _frozen_input_identity(inputs: dict[str, Any]) -> dict[str, Any]:
     return identity
 
 
+def _direct_l2_series_for_family(
+    inputs: dict[str, Any],
+    family: dict[str, Any],
+) -> dict[str, Any]:
+    """Minimal formal L2-only semantic/validation series; never touches L1 panel or L1 constituents.
+
+    This is the P6 D6 construction path. It builds only the canonical 131-sector L2
+    validation series and must not access ``inputs["panel"]`` or ``inputs["constituents"]``,
+    so L1 data or L1 construction anomalies cannot block an L2-only execution.
+    """
+
+    features = tuple(str(value) for value in family.get("feature_names") or ())
+    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+        raise StateModelSetError("B3 family feature_names must match the approved 7/20-dimensional order")
+    train_start = _date(family.get("train_start"), "train_start")
+    train_end = _date(family.get("train_end"), "train_end")
+    validation_start = _date(family.get("validation_start"), "validation_start")
+    validation_end = _date(family.get("validation_end"), "validation_end")
+    return build_l1_training_series(
+        inputs["l2_panel"],
+        feature_names=features,
+        train_start=train_start,
+        train_end=train_end,
+        validation_start=validation_start,
+        validation_end=validation_end,
+        constituent_manifest_by_l1=_direct_l2_constituents(inputs),
+        expected_sector_count=131,
+        direct_sector_level="L2",
+        frozen_input_identity=_frozen_input_identity(inputs),
+    )
+
+
+def _direct_l2_train_series_for_family(
+    inputs: dict[str, Any],
+    family: dict[str, Any],
+) -> dict[str, Any]:
+    """Minimal formal L2-only train-only series; never touches L1 panel or L1 constituents.
+
+    This is the P6 child construction path. It builds only the canonical 131-sector L2
+    train-only series and must not access ``inputs["panel"]`` or ``inputs["constituents"]``,
+    so L1 data or L1 construction anomalies cannot block an L2-only execution.
+    """
+
+    features = tuple(str(value) for value in family.get("feature_names") or ())
+    train_start = _date(family.get("train_start"), "train_start")
+    train_end = _date(family.get("train_end"), "train_end")
+    return build_train_only_series(
+        inputs["l2_panel"],
+        feature_names=features,
+        train_start=train_start,
+        train_end=train_end,
+        constituent_manifest=_direct_l2_constituents(inputs),
+        expected_sector_count=131,
+        direct_sector_level="L2",
+        frozen_input_identity=_frozen_input_identity(inputs),
+    )
+
+
 def _direct_series_for_family(
     inputs: dict[str, Any],
     family: dict[str, Any],
@@ -2084,19 +2158,7 @@ def _direct_series_for_family(
         direct_sector_level="L1",
         frozen_input_identity=_frozen_input_identity(inputs),
     )
-    l2 = build_l1_training_series(
-        inputs["l2_panel"],
-        feature_names=features,
-        train_start=train_start,
-        train_end=train_end,
-        validation_start=validation_start,
-        validation_end=validation_end,
-        constituent_manifest_by_l1=_direct_l2_constituents(inputs),
-        expected_sector_count=131,
-        direct_sector_level="L2",
-        frozen_input_identity=_frozen_input_identity(inputs),
-    )
-    return {"L1": l1, "L2": l2}
+    return {"L1": l1, "L2": _direct_l2_series_for_family(inputs, family)}
 
 
 def _direct_train_series_for_family(
@@ -2106,37 +2168,21 @@ def _direct_train_series_for_family(
     features = tuple(str(value) for value in family.get("feature_names") or ())
     train_start = _date(family.get("train_start"), "train_start")
     train_end = _date(family.get("train_end"), "train_end")
-    return {
-        "L1": build_train_only_series(
-            inputs["panel"],
-            feature_names=features,
-            train_start=train_start,
-            train_end=train_end,
-            constituent_manifest=inputs["constituents"],
-            expected_sector_count=31,
-            direct_sector_level="L1",
-            frozen_input_identity=_frozen_input_identity(inputs),
-        ),
-        "L2": build_train_only_series(
-            inputs["l2_panel"],
-            feature_names=features,
-            train_start=train_start,
-            train_end=train_end,
-            constituent_manifest=_direct_l2_constituents(inputs),
-            expected_sector_count=131,
-            direct_sector_level="L2",
-            frozen_input_identity=_frozen_input_identity(inputs),
-        ),
-    }
+    l1 = build_train_only_series(
+        inputs["panel"],
+        feature_names=features,
+        train_start=train_start,
+        train_end=train_end,
+        constituent_manifest=inputs["constituents"],
+        expected_sector_count=31,
+        direct_sector_level="L1",
+        frozen_input_identity=_frozen_input_identity(inputs),
+    )
+    return {"L1": l1, "L2": _direct_l2_train_series_for_family(inputs, family)}
 
 
-def prepare_b3_single_pass(
-    request: dict[str, Any],
-    *,
-    db_prefix: str,
-    process_identity: str,
-) -> dict[str, Any]:
-    """Run one complete train-only B3 pass; selection and D6 are parent-only."""
+def _load_b3_formal_train_authority(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+    """Load and revalidate the single formal train authority shared by full B3 and P6."""
 
     producer_commit = _formal_producer_commit()
     _require_approved_b3_windows(request)
@@ -2179,6 +2225,35 @@ def prepare_b3_single_pass(
     family_names = {str(family.get("family") or "") for family in families}
     if family_names != {"legacy_covfix", "autocycle_all_core"} or len(families) != 2:
         raise StateModelSetError("B3 requires exactly legacy_covfix and autocycle_all_core")
+    return {
+        "producer_commit": producer_commit,
+        "inputs": inputs,
+        "dataset_manifest_hash": dataset_hash,
+        "mapping_manifest_hash": mapping_hash,
+        "calendar_manifest_hash": calendar_hash,
+        "l2_stock_fact_manifest_hash": l2_stock_fact_hash,
+        "feature_domain_policy": recomputed_policy,
+        "families": families,
+    }
+
+
+def prepare_b3_single_pass(
+    request: dict[str, Any],
+    *,
+    db_prefix: str,
+    process_identity: str,
+) -> dict[str, Any]:
+    """Run one complete train-only B3 pass; selection and D6 are parent-only."""
+
+    authority = _load_b3_formal_train_authority(request, db_prefix=db_prefix)
+    producer_commit = str(authority["producer_commit"])
+    inputs = authority["inputs"]
+    dataset_hash = str(authority["dataset_manifest_hash"])
+    mapping_hash = str(authority["mapping_manifest_hash"])
+    calendar_hash = str(authority["calendar_manifest_hash"])
+    l2_stock_fact_hash = str(authority["l2_stock_fact_manifest_hash"])
+    recomputed_policy = authority["feature_domain_policy"]
+    families = authority["families"]
     level_repeats: dict[str, Any] = {}
     for family in sorted(families, key=lambda item: str(item.get("family") or "")):
         family_name = str(family["family"])
@@ -2208,6 +2283,72 @@ def prepare_b3_single_pass(
         "provider_absence_partition_receipt_sha256": recomputed_policy["provider_absence_partition_receipt_sha256"],
         "formula_version": C010_FORMULA_VERSION,
         "level_repeats": level_repeats,
+        "selection_performed": False,
+        "validation_accessed_for_selection": False,
+        "future_utility_accessed_for_selection": False,
+        "artifact_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "single_pass_receipt_sha256": canonical_sha256(body)}
+
+
+def prepare_b3_p6_autocycle_l2_single_pass(
+    request: dict[str, Any],
+    *,
+    db_prefix: str,
+    process_identity: str,
+) -> dict[str, Any]:
+    """Run exactly the approved P6 autocycle L2 train-only grid in one fresh process."""
+
+    if process_identity not in {"fresh_process_1", "fresh_process_2"}:
+        raise StateModelSetError("B3 P6 child process identity is invalid")
+    authority = _load_b3_formal_train_authority(request, db_prefix=db_prefix)
+    family_map = {str(item["family"]): item for item in authority["families"]}
+    family = family_map[B3_P6_FAMILY]
+    feature_names = tuple(str(value) for value in family.get("feature_names") or ())
+    preprocess_family = str(family.get("preprocess_family") or "")
+    series = _direct_l2_train_series_for_family(authority["inputs"], family)
+    if len(series) != B3_P6_EXPECTED_SECTOR_COUNT:
+        raise StateModelSetError("B3 P6 requires exactly 131 autocycle L2 sectors")
+    repeat, _ = run_level_repeat(
+        series,
+        family=B3_P6_FAMILY,
+        level=B3_P6_LEVEL,
+        feature_names=feature_names,
+        preprocess_family=preprocess_family,
+        process_identity=process_identity,
+    )
+    expected_entry_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE)
+    if (
+        repeat.get("family") != B3_P6_FAMILY
+        or repeat.get("level") != B3_P6_LEVEL
+        or len(repeat.get("entries") or ()) != expected_entry_count
+        or len(repeat.get("canonical_sector_codes") or ()) != B3_P6_EXPECTED_SECTOR_COUNT
+    ):
+        raise StateModelSetError("B3 P6 child did not complete the exact 131-sector x 8-seed grid")
+    policy = authority["feature_domain_policy"]
+    body = {
+        "schema_version": B3_P6_SINGLE_PASS_SCHEMA,
+        "producer_commit": authority["producer_commit"],
+        "process_identity": process_identity,
+        "target_family": B3_P6_FAMILY,
+        "target_level": B3_P6_LEVEL,
+        "feature_names": list(feature_names),
+        "preprocess_family": preprocess_family,
+        "planned_fit_count": expected_entry_count,
+        "terminal_entry_count": expected_entry_count,
+        "dataset_manifest_hash": authority["dataset_manifest_hash"],
+        "mapping_manifest_hash": authority["mapping_manifest_hash"],
+        "calendar_manifest_hash": authority["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": authority["l2_stock_fact_manifest_hash"],
+        "feature_domain_policy_sha256": policy["receipt_sha256"],
+        "feature_domain_policy_manifest": policy,
+        "provider_absence_partition_receipt": policy["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": policy["provider_absence_partition_receipt_sha256"],
+        "formula_version": C010_FORMULA_VERSION,
+        "level_repeat": repeat,
         "selection_performed": False,
         "validation_accessed_for_selection": False,
         "future_utility_accessed_for_selection": False,
@@ -3686,6 +3827,373 @@ def run_b3_d1_controlled_repeated(args: argparse.Namespace) -> dict[str, Any]:
         ) from exc
 
 
+def _b3_p6_closure_from_inputs(
+    inputs: dict[str, Any],
+    request: dict[str, Any],
+    *,
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Derive the parent-side P6 L2 closure from the reloaded formal train inputs.
+
+    The closure is the single authoritative contract every fresh-process child must
+    match before D5 selection is allowed: the exact autocycle_all_core family, the
+    exact ALL_CORE_FEATURES ordered identity, the approved preprocess family, and
+    the canonical 131-sector L2 set/hash derived from the parent's own reload (never
+    from a child-declared sector set).
+    """
+
+    family_map = {str(item["family"]): item for item in request["families"]}
+    if B3_P6_FAMILY not in family_map:
+        raise StateModelSetError("B3 P6 parent authority is missing the autocycle_all_core family")
+    family = family_map[B3_P6_FAMILY]
+    feature_names = tuple(str(value) for value in family.get("feature_names") or ())
+    if feature_names != ALL_CORE_FEATURES:
+        raise StateModelSetError("B3 P6 parent authority requires the exact ALL_CORE_FEATURES ordered identity")
+    preprocess_family = str(family.get("preprocess_family") or "")
+    if preprocess_family not in {"identity", "winsor_zscore_1_99_train_global_v1"}:
+        raise StateModelSetError("B3 P6 parent authority has an unsupported approved preprocess family")
+    series = _direct_l2_train_series_for_family(inputs, family)
+    canonical_sector_codes = tuple(sorted(series))
+    if len(canonical_sector_codes) != B3_P6_EXPECTED_SECTOR_COUNT or len(set(canonical_sector_codes)) != (
+        B3_P6_EXPECTED_SECTOR_COUNT
+    ):
+        raise StateModelSetError("B3 P6 parent authority L2 sector set is not the exact canonical 131")
+    canonical_sector_set_sha256 = canonical_sha256(list(canonical_sector_codes))
+    return {
+        "family": family,
+        "feature_names": feature_names,
+        "preprocess_family": preprocess_family,
+        "canonical_sector_codes": canonical_sector_codes,
+        "canonical_sector_set_sha256": canonical_sector_set_sha256,
+        "feature_count": len(feature_names),
+        "entry_count": len(canonical_sector_codes) * len(RESTART_SCHEDULE),
+        "authority_keys": {
+            "producer_commit": _formal_producer_commit(),
+            "dataset_manifest_hash": canonical_sha256(inputs["dataset_manifest"]),
+            "mapping_manifest_hash": canonical_sha256(inputs["mapping_manifest"]),
+            "calendar_manifest_hash": canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+            "l2_stock_fact_manifest_hash": canonical_sha256(inputs["l2_stock_fact_manifest"]),
+            "feature_domain_policy_sha256": policy["receipt_sha256"],
+            "feature_domain_policy_manifest": policy,
+            "provider_absence_partition_receipt": policy["provider_absence_partition_receipt"],
+            "provider_absence_partition_receipt_sha256": policy["provider_absence_partition_receipt_sha256"],
+            "formula_version": C010_FORMULA_VERSION,
+        },
+    }
+
+
+def _b3_p6_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--request",
+        str(Path(args.request).resolve()),
+        "--output-root",
+        str(Path(args.output_root).resolve()),
+        "--env-file",
+        str(Path(args.env_file).resolve()),
+        "--db-env-prefix",
+        str(args.db_env_prefix),
+        "--_b3-p6-autocycle-l2-child",
+        "--b3-process-identity",
+        process_identity,
+    ]
+
+
+def _require_b3_p6_mode_isolation(
+    args: argparse.Namespace,
+    *,
+    p6_parent: bool,
+    p6_child: bool,
+) -> None:
+    if p6_parent and p6_child:
+        raise StateModelSetError("B3 P6 parent and child modes are mutually exclusive")
+    active_outputs = {
+        name
+        for name, value in vars(args).items()
+        if name.endswith("_output") and name != "b3_request_candidate_output" and bool(value)
+    }
+    other_hidden_children = [name for name in B3_HIDDEN_CHILD_ARGUMENTS if bool(getattr(args, name, False))]
+    if p6_parent:
+        if active_outputs != {B3_P6_OUTPUT_ARGUMENT} or other_hidden_children:
+            raise StateModelSetError("B3 P6 parent cannot be combined with another output or child mode")
+        if args.b3_process_identity:
+            raise StateModelSetError("B3 P6 parent must not declare a child process identity")
+    if p6_child:
+        if active_outputs or other_hidden_children:
+            raise StateModelSetError("B3 P6 child cannot be combined with another output or child mode")
+        if args.b3_process_identity not in {"fresh_process_1", "fresh_process_2"}:
+            raise StateModelSetError("B3 P6 child process identity is invalid")
+
+
+def _parse_b3_p6_child_payload(payload: bytes, *, process_identity: str) -> dict[str, Any]:
+    try:
+        value = json.loads(payload.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateModelSetError(f"B3 P6 {process_identity} returned invalid JSON: {exc}") from exc
+    if not isinstance(value, dict) or canonical_json_bytes(value) != payload:
+        raise StateModelSetError(f"B3 P6 {process_identity} did not return one canonical JSON object")
+    return value
+
+
+def _validate_b3_p6_child_payload(
+    value: dict[str, Any],
+    *,
+    process_identity: str,
+    expected: dict[str, Any] | None = None,
+) -> None:
+    expected_entry_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE)
+    receipt_hash = value.get("single_pass_receipt_sha256")
+    body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
+    repeat = value.get("level_repeat")
+    if (
+        value.get("schema_version") != B3_P6_SINGLE_PASS_SCHEMA
+        or value.get("process_identity") != process_identity
+        or value.get("producer_commit") != _formal_producer_commit()
+        or value.get("target_family") != B3_P6_FAMILY
+        or value.get("target_level") != B3_P6_LEVEL
+        or value.get("planned_fit_count") != expected_entry_count
+        or value.get("terminal_entry_count") != expected_entry_count
+        or not isinstance(repeat, dict)
+        or repeat.get("family") != B3_P6_FAMILY
+        or repeat.get("level") != B3_P6_LEVEL
+        or len(repeat.get("canonical_sector_codes") or ()) != B3_P6_EXPECTED_SECTOR_COUNT
+        or len(repeat.get("entries") or ()) != expected_entry_count
+        or value.get("selection_performed") is not False
+        or value.get("validation_accessed_for_selection") is not False
+        or value.get("future_utility_accessed_for_selection") is not False
+        or value.get("artifact_write_performed") is not False
+        or value.get("ready_artifact_write_performed") is not False
+        or value.get("database_write_performed") is not False
+        or value.get("runtime_action_performed") is not False
+        or not isinstance(receipt_hash, str)
+        or receipt_hash != canonical_sha256(body)
+    ):
+        raise StateModelSetError(f"B3 P6 child receipt is invalid: {process_identity}")
+    if expected is not None:
+        expected_keys = expected.get("authority_keys") or {}
+        for key, expected_value in expected_keys.items():
+            if value.get(key) != expected_value:
+                raise StateModelSetError(
+                    f"B3 P6 child authority key drifted from the parent formal authority "
+                    f"key={key} process={process_identity}"
+                )
+        if tuple(str(item) for item in value.get("feature_names") or ()) != tuple(expected["feature_names"]):
+            raise StateModelSetError(
+                f"B3 P6 child feature_names differ from the parent formal authority: {process_identity}"
+            )
+        if str(value.get("preprocess_family") or "") != str(expected["preprocess_family"]):
+            raise StateModelSetError(
+                f"B3 P6 child preprocess family differs from the parent formal authority: {process_identity}"
+            )
+        if tuple(str(item) for item in repeat.get("feature_names") or ()) != tuple(expected["feature_names"]):
+            raise StateModelSetError(
+                f"B3 P6 child repeat feature_names differ from the parent formal authority: {process_identity}"
+            )
+        if tuple(str(item) for item in repeat.get("canonical_sector_codes") or ()) != tuple(
+            expected["canonical_sector_codes"]
+        ):
+            raise StateModelSetError(
+                f"B3 P6 child canonical L2 sector set differs from the parent formal authority: {process_identity}"
+            )
+        if str(repeat.get("canonical_sector_set_sha256") or "") != str(expected["canonical_sector_set_sha256"]):
+            raise StateModelSetError(
+                f"B3 P6 child canonical L2 sector hash differs from the parent formal authority: {process_identity}"
+            )
+        if tuple(str(item) for item in repeat.get("schedule") or ()) != tuple(str(seed) for seed in RESTART_SCHEDULE):
+            raise StateModelSetError(
+                f"B3 P6 child restart schedule differs from the approved 8-seed contract: {process_identity}"
+            )
+
+
+def _persist_b3_p6_child_failure(
+    args: argparse.Namespace,
+    *,
+    process_identity: str,
+    returncode: int | None,
+    stdout: bytes,
+    stderr: bytes,
+    completed_processes: list[dict[str, Any]] | None = None,
+    error: Exception | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    decoded = stderr.decode("utf-8", errors="replace").strip()
+    parsed: dict[str, Any] = {}
+    if decoded:
+        try:
+            candidate = json.loads(decoded.splitlines()[-1])
+            if isinstance(candidate, dict):
+                parsed = candidate
+        except json.JSONDecodeError:
+            parsed = {}
+    body = {
+        "schema_version": "hmm_risk_b3_p6_child_failure_receipt_v1",
+        "status": "failed",
+        "target_family": B3_P6_FAMILY,
+        "target_level": B3_P6_LEVEL,
+        "process_identity": process_identity,
+        "returncode": returncode,
+        "error_type": str(parsed.get("error_type") or (type(error).__name__ if error else "unparsed_child_error"))[
+            :256
+        ],
+        "error": str(parsed.get("error") or error or decoded[-4000:] or "child failed without stderr")[-4000:],
+        "stdout_byte_count": len(stdout),
+        "stdout_sha256": sha256_bytes(stdout),
+        "stderr_byte_count": len(stderr),
+        "stderr_sha256": sha256_bytes(stderr),
+        "planned_fit_count": B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE),
+        "completed_process_count": len(completed_processes or ()),
+        "completed_process_receipt_hashes": [
+            str(value["single_pass_receipt_sha256"]) for value in completed_processes or ()
+        ],
+        "fit_grid_completed": False,
+        "selection_performed": False,
+        "selected_level_artifact_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    report = {**body, "receipt_sha256": canonical_sha256(body)}
+    output_path = Path(args.b3_p6_autocycle_l2_output).resolve()
+    failure_path = output_path.with_name(f"{output_path.stem}.{process_identity}.failure.json")
+    _write_diagnostic_report(failure_path, report)
+    return failure_path, report
+
+
+def _b3_p6_failure_stream_bytes(value: Any) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace")
+    return repr(value).encode("utf-8", errors="replace")
+
+
+def _b3_p6_process_receipt_path(args: argparse.Namespace, process_identity: str) -> Path:
+    output_path = Path(args.b3_p6_autocycle_l2_output).resolve()
+    return output_path.with_name(f"{output_path.stem}.{process_identity}.json")
+
+
+def _b3_p6_parent_failure_path(args: argparse.Namespace) -> Path:
+    output_path = Path(args.b3_p6_autocycle_l2_output).resolve()
+    return output_path.with_name(f"{output_path.stem}.parent.failure.json")
+
+
+def _build_b3_p6_parent_failure(
+    args: argparse.Namespace,
+    error: Exception,
+    *,
+    known_report: dict[str, Any] | None = None,
+    failure_stage: str = "execution",
+) -> dict[str, Any]:
+    process_receipts: list[dict[str, Any]] = []
+    terminal_entry_count = 0
+    verified_process_count = 0
+    for process_identity in ("fresh_process_1", "fresh_process_2"):
+        path = _b3_p6_process_receipt_path(args, process_identity)
+        if not path.exists():
+            process_receipts.append(
+                {
+                    "process_identity": process_identity,
+                    "path": str(path),
+                    "status": "missing",
+                    "single_pass_receipt_sha256": None,
+                }
+            )
+            continue
+        try:
+            receipt = _load_json_mapping(path, label=f"B3 P6 {process_identity} failure readback")
+            _validate_b3_p6_child_payload(receipt, process_identity=process_identity)
+        except Exception as receipt_error:
+            process_receipts.append(
+                {
+                    "process_identity": process_identity,
+                    "path": str(path),
+                    "status": "invalid",
+                    "file_byte_sha256": sha256_bytes(path.read_bytes()),
+                    "readback_error_type": type(receipt_error).__name__,
+                    "readback_error": str(receipt_error)[-1000:],
+                    "single_pass_receipt_sha256": None,
+                }
+            )
+            continue
+        verified_process_count += 1
+        terminal_entry_count += int(receipt["terminal_entry_count"])
+        process_receipts.append(
+            {
+                "process_identity": process_identity,
+                "path": str(path),
+                "status": "verified",
+                "single_pass_receipt_sha256": receipt["single_pass_receipt_sha256"],
+            }
+        )
+    planned_fit_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE) * 2
+    if known_report is not None:
+        selection = known_report.get("selection") or {}
+        selection_performed = bool(known_report.get("selection_performed"))
+        selection_status = str(selection.get("level_selection_status") or "unknown")
+        d6_performed = bool(known_report.get("d6_performed_after_selection"))
+        selected_level_write = bool(known_report.get("selected_level_artifact_write_performed"))
+    else:
+        selection_performed = None
+        selection_status = "unknown_due_parent_failure"
+        d6_performed = None
+        selected_level_write = None
+    body = {
+        "schema_version": B3_P6_FAILURE_SCHEMA,
+        "status": "failed",
+        "producer_commit": _git_commit(),
+        "target_family": B3_P6_FAMILY,
+        "target_level": B3_P6_LEVEL,
+        "reason_code": "hmm_risk_model_p6_parent_finalization_failed",
+        "failure_stage": failure_stage,
+        "error_type": type(error).__name__,
+        "error": str(error)[-4000:],
+        "planned_fit_count": planned_fit_count,
+        "verified_process_count": verified_process_count,
+        "terminal_entry_count": terminal_entry_count,
+        "fit_grid_completed": verified_process_count == 2 and terminal_entry_count == planned_fit_count,
+        "process_receipts": process_receipts,
+        "selection_performed": selection_performed,
+        "selection_status": selection_status,
+        "d6_performed_after_selection": d6_performed,
+        "selected_level_artifact_write_performed": selected_level_write,
+        "family_model_set_status": "blocked",
+        "phase2_ready": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _write_b3_p6_selected_level_artifact(output_root: Path, artifact: dict[str, Any]) -> Path:
+    artifact_hash = str(artifact.get("artifact_sha256") or "")
+    if len(artifact_hash) != 64 or any(character not in "0123456789abcdef" for character in artifact_hash):
+        raise StateModelSetError("B3 P6 selected-level artifact hash is invalid")
+    path = output_root.resolve() / "b3_p6_autocycle_all_core_l2" / artifact_hash / "selected_level.json"
+    payload = canonical_json_bytes(artifact)
+    if path.exists():
+        if path.read_bytes() != payload:
+            raise StateModelSetError(f"B3 P6 selected-level artifact collision: {path}")
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+    return path
+
+
 def _b3_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
     return [
         sys.executable,
@@ -3927,6 +4435,209 @@ def run_b3_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[s
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def run_b3_p6_autocycle_l2_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
+    """Run exactly P6 autocycle L2 twice, then execute only its D5 and frozen D6."""
+
+    _require_approved_b3_windows(request)
+    _require_formal_semantic_identity(request)
+    _require_c010_policy_identity(request)
+    _require_formal_train_coverage_identity(request)
+    environment = os.environ.copy()
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        environment[key] = "1"
+    repeats: list[dict[str, Any]] = []
+    process_receipt_paths: list[str] = []
+    for process_identity in ("fresh_process_1", "fresh_process_2"):
+        try:
+            completed = subprocess.run(
+                _b3_p6_child_command(args, process_identity),
+                check=False,
+                capture_output=True,
+                env=environment,
+                timeout=7200,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            failure_path, failure = _persist_b3_p6_child_failure(
+                args,
+                process_identity=process_identity,
+                returncode=None,
+                stdout=_b3_p6_failure_stream_bytes(getattr(exc, "stdout", None)),
+                stderr=_b3_p6_failure_stream_bytes(getattr(exc, "stderr", None)),
+                completed_processes=repeats,
+                error=exc,
+            )
+            raise StateModelSetError(
+                f"B3 P6 child could not complete process={process_identity} "
+                f"error_type={failure['error_type']} error={failure['error']} failure_receipt={failure_path}"
+            ) from exc
+        if completed.returncode != 0:
+            failure_path, failure = _persist_b3_p6_child_failure(
+                args,
+                process_identity=process_identity,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                completed_processes=repeats,
+            )
+            raise StateModelSetError(
+                f"B3 P6 child failed process={process_identity} returncode={completed.returncode} "
+                f"error_type={failure['error_type']} error={failure['error']} failure_receipt={failure_path}"
+            )
+        try:
+            child = _parse_b3_p6_child_payload(completed.stdout, process_identity=process_identity)
+            _validate_b3_p6_child_payload(child, process_identity=process_identity)
+        except Exception as exc:
+            failure_path, failure = _persist_b3_p6_child_failure(
+                args,
+                process_identity=process_identity,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                completed_processes=repeats,
+                error=exc,
+            )
+            raise StateModelSetError(
+                f"B3 P6 child receipt failed process={process_identity} "
+                f"error_type={failure['error_type']} error={failure['error']} failure_receipt={failure_path}"
+            ) from exc
+        process_receipt_path = _b3_p6_process_receipt_path(args, process_identity)
+        _write_diagnostic_report(process_receipt_path, child)
+        if _load_json_mapping(process_receipt_path, label=f"B3 P6 {process_identity} receipt") != child:
+            raise StateModelSetError(f"B3 P6 {process_identity} durable receipt readback mismatch")
+        repeats.append(child)
+        process_receipt_paths.append(str(process_receipt_path))
+    train_inputs = _load_l1_source_inputs(request, db_prefix=str(args.db_env_prefix), c010_formal=True)
+    if canonical_sha256(train_inputs["dataset_manifest"]) != repeats[0]["dataset_manifest_hash"]:
+        raise StateModelSetError("B3 P6 D6 reload drifted from the frozen dataset manifest")
+    if canonical_sha256(train_inputs["mapping_manifest"]) != repeats[0]["mapping_manifest_hash"]:
+        raise StateModelSetError("B3 P6 D6 reload drifted from the frozen mapping manifest")
+    if canonical_sha256(train_inputs["dataset_manifest"]["calendar_benchmark"]) != repeats[0]["calendar_manifest_hash"]:
+        raise StateModelSetError("B3 P6 D6 reload drifted from the frozen calendar manifest")
+    if canonical_sha256(train_inputs["l2_stock_fact_manifest"]) != repeats[0]["l2_stock_fact_manifest_hash"]:
+        raise StateModelSetError("B3 P6 D6 reload drifted from the frozen L2 stock-fact manifest")
+    recomputed_policy = _c010_policy_manifest(train_inputs, request, producer_commit=_formal_producer_commit())
+    if recomputed_policy["receipt_sha256"] != repeats[0]["feature_domain_policy_sha256"]:
+        raise StateModelSetError("B3 P6 D6 reload drifted from the C-010 policy identity")
+
+    # The parent-authoritative closure is derived from the parent's own reload of the
+    # formal train authority, never from a child-declared sector set. Both fresh-process
+    # receipts must match it item-by-item before any D5 selection call is allowed.
+    closure = _b3_p6_closure_from_inputs(train_inputs, request, policy=recomputed_policy)
+    for process_identity, child in zip(("fresh_process_1", "fresh_process_2"), repeats):
+        _validate_b3_p6_child_payload(child, process_identity=process_identity, expected=closure)
+    family = closure["family"]
+    first_repeat = repeats[0]["level_repeat"]
+    second_repeat = repeats[1]["level_repeat"]
+    expected_sector_codes = closure["canonical_sector_codes"]
+    selection = select_level_restart(
+        first_repeat,
+        second_repeat,
+        family=B3_P6_FAMILY,
+        level=B3_P6_LEVEL,
+        expected_sector_codes=expected_sector_codes,
+        feature_count=closure["feature_count"],
+        feature_domain_policy_sha256=repeats[0]["feature_domain_policy_sha256"],
+    )
+    semantic_identities = {
+        field: str(request[field])
+        for field in (
+            "semantic_dataset_manifest_hash",
+            "semantic_mapping_manifest_hash",
+            "semantic_calendar_manifest_hash",
+            "semantic_l2_stock_fact_manifest_hash",
+        )
+    }
+    semantic_source_accessed_after_selection = False
+    selected_artifact = None
+    selected_artifact_path = None
+    selected_artifact_write_performed = False
+    d6_performed = False
+    if selection["level_selection_valid"]:
+        semantic_inputs = _load_verified_formal_semantic_inputs(request, db_prefix=str(args.db_env_prefix))
+        verified_semantic_identities = _semantic_input_identities(semantic_inputs)
+        if verified_semantic_identities != semantic_identities:
+            raise StateModelSetError("B3 P6 semantic input identities differ after D5 selection")
+        semantic_inputs["feature_domain_policy_sha256"] = recomputed_policy["receipt_sha256"]
+        series = _direct_l2_series_for_family(semantic_inputs, family)
+        if tuple(sorted(series)) != expected_sector_codes or len(series) != B3_P6_EXPECTED_SECTOR_COUNT:
+            raise StateModelSetError("B3 P6 D6 sector identity differs from the frozen D5 level")
+        semantic_source_accessed_after_selection = True
+        d6_performed = True
+        selected_artifact = build_selected_level_artifact(
+            selection,
+            models_from_repeat(first_repeat),
+            series,
+            first_repeat,
+        )
+        if selected_artifact.get("status") == "accepted":
+            selected_artifact_path = _write_b3_p6_selected_level_artifact(Path(args.output_root), selected_artifact)
+            readback = read_b3_selected_level_artifact(
+                selected_artifact_path,
+                selection=selection,
+                family=B3_P6_FAMILY,
+                level=B3_P6_LEVEL,
+                expected_count=B3_P6_EXPECTED_SECTOR_COUNT,
+                dataset_manifest_hash=repeats[0]["dataset_manifest_hash"],
+                mapping_manifest_hash=repeats[0]["mapping_manifest_hash"],
+                calendar_manifest_hash=repeats[0]["calendar_manifest_hash"],
+                l2_stock_fact_manifest_hash=repeats[0]["l2_stock_fact_manifest_hash"],
+                semantic_dataset_manifest_hash=semantic_identities["semantic_dataset_manifest_hash"],
+                semantic_mapping_manifest_hash=semantic_identities["semantic_mapping_manifest_hash"],
+                semantic_calendar_manifest_hash=semantic_identities["semantic_calendar_manifest_hash"],
+                semantic_l2_stock_fact_manifest_hash=semantic_identities["semantic_l2_stock_fact_manifest_hash"],
+                feature_domain_policy_sha256=repeats[0]["feature_domain_policy_sha256"],
+            )
+            if readback != selected_artifact:
+                raise StateModelSetError("B3 P6 selected-level durable readback differs from the built artifact")
+            selected_artifact_write_performed = True
+
+    accepted = selected_artifact is not None and selected_artifact.get("status") == "accepted"
+    body = {
+        "schema_version": B3_P6_REPORT_SCHEMA,
+        "status": "accepted" if accepted else "blocked",
+        "producer_commit": _git_commit(),
+        "target_family": B3_P6_FAMILY,
+        "target_level": B3_P6_LEVEL,
+        "planned_fit_count": B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE) * 2,
+        "terminal_entry_count": sum(int(repeat["terminal_entry_count"]) for repeat in repeats),
+        "dataset_manifest_hash": repeats[0]["dataset_manifest_hash"],
+        "mapping_manifest_hash": repeats[0]["mapping_manifest_hash"],
+        "calendar_manifest_hash": repeats[0]["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": repeats[0]["l2_stock_fact_manifest_hash"],
+        **semantic_identities,
+        "feature_domain_policy_sha256": repeats[0]["feature_domain_policy_sha256"],
+        "feature_domain_policy_manifest": repeats[0]["feature_domain_policy_manifest"],
+        "provider_absence_partition_receipt": repeats[0]["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": repeats[0]["provider_absence_partition_receipt_sha256"],
+        "formula_version": repeats[0]["formula_version"],
+        "fresh_process_receipt_hashes": [repeat["single_pass_receipt_sha256"] for repeat in repeats],
+        "fresh_process_receipt_paths": process_receipt_paths,
+        "selection": selection,
+        "selected_artifact": selected_artifact,
+        "selected_level_artifact_path": None if selected_artifact_path is None else str(selected_artifact_path),
+        "selected_level_artifact_write_performed": selected_artifact_write_performed,
+        "selection_performed": True,
+        "selection_used_validation": False,
+        "selection_used_future_utility": False,
+        "selection_followed_by_refit": False,
+        "semantic_source_accessed_after_selection": semantic_source_accessed_after_selection,
+        "d6_performed_after_selection": d6_performed,
+        "family_model_set_status": "blocked",
+        "phase2_ready": False,
+        "ready_manifest_path": None,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def _write_diagnostic_report(path: Path, report: dict[str, Any]) -> str:
     payload = canonical_json_bytes(report) + b"\n"
     if path.exists():
@@ -3995,6 +4706,13 @@ def parse_args() -> argparse.Namespace:
         help="Run formal two-process B3 L1/L2 preparation and write its immutable receipt.",
     )
     diagnostic_group.add_argument(
+        "--b3-p6-autocycle-l2-output",
+        help=(
+            "Run only the approved P6 autocycle_all_core:L2 131-sector x 8-seed x two-process grid, "
+            "then that level's D5/D6; never write Phase 2 READY."
+        ),
+    )
+    diagnostic_group.add_argument(
         "--b3-blocker-diagnostic-output",
         help="Run the approved 174-pair x two-process blocker diagnostic and zero-refit D6 replay.",
     )
@@ -4013,6 +4731,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--_c008-b3-diag02-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_c008-b3-diag04-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--_b3-p6-autocycle-l2-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-blocker-diag01-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-d1-controlled-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--b3-process-identity", default="", help=argparse.SUPPRESS)
@@ -4060,6 +4779,7 @@ def main() -> int:
         blocker_output = getattr(args, "b3_blocker_diagnostic_output", None)
         remediation_output = getattr(args, "b3_remediation_diag02_output", None)
         d1_output = getattr(args, "b3_d1_controlled_refit_output", None)
+        p6_output = getattr(args, "b3_p6_autocycle_l2_output", None)
         blocker_formal_report = getattr(args, "b3_formal_report", None)
         remediation_blocker_report = getattr(args, "b3_blocker_report", None)
         d1_remediation_report = getattr(args, "b3_remediation_report", None)
@@ -4071,7 +4791,21 @@ def main() -> int:
         blocker_child = bool(getattr(args, "_b3_blocker_diag01_child", False))
         d1_parent = bool(d1_output)
         d1_child = bool(getattr(args, "_b3_d1_controlled_child", False))
-        if d1_parent or d1_child:
+        p6_parent = bool(p6_output)
+        p6_child = bool(getattr(args, "_b3_p6_autocycle_l2_child", False))
+        if p6_parent or p6_child:
+            _require_b3_p6_mode_isolation(args, p6_parent=p6_parent, p6_child=p6_child)
+            if (
+                blocker_formal_report
+                or remediation_blocker_report
+                or d1_remediation_report
+                or d1_c010_a5_report
+                or blocker_target_sha256
+                or d1_frozen_input_bundle
+                or d1_frozen_input_bundle_sha256
+            ):
+                raise StateModelSetError("B3 diagnostic authority arguments are not valid for P6")
+        elif d1_parent or d1_child:
             if (
                 not blocker_formal_report
                 or not remediation_blocker_report
@@ -4318,6 +5052,14 @@ def main() -> int:
             )
             sys.stdout.buffer.write(canonical_json_bytes(report))
             return 0
+        if p6_child:
+            report = prepare_b3_p6_autocycle_l2_single_pass(
+                request,
+                db_prefix=str(args.db_env_prefix),
+                process_identity=str(args.b3_process_identity),
+            )
+            sys.stdout.buffer.write(canonical_json_bytes(report))
+            return 0
         if args._b3_child:
             if args.b3_process_identity not in {"fresh_process_1", "fresh_process_2"}:
                 raise StateModelSetError("formal B3 child process identity is invalid")
@@ -4328,6 +5070,50 @@ def main() -> int:
             )
             sys.stdout.buffer.write(canonical_json_bytes(report))
             return 0
+        if p6_parent:
+            report_path = Path(p6_output).resolve()
+            failure_path = _b3_p6_parent_failure_path(args)
+            report = None
+            failure_stage = "execution"
+            try:
+                report = run_b3_p6_autocycle_l2_repeated(args, request)
+                failure_stage = "report_write"
+                report_sha256 = _write_diagnostic_report(report_path, report)
+                failure_stage = "report_readback"
+                if _load_json_mapping(report_path, label="B3 P6 report") != report:
+                    raise StateModelSetError("B3 P6 durable report readback differs from the built report")
+            except Exception as exc:
+                known_report = report if isinstance(report, dict) else None
+                failure = _build_b3_p6_parent_failure(
+                    args,
+                    exc,
+                    known_report=known_report,
+                    failure_stage=failure_stage,
+                )
+                _write_diagnostic_report(failure_path, failure)
+                raise StateModelSetError(
+                    f"B3 P6 parent finalization failed error_type={type(exc).__name__} "
+                    f"error={exc} failure_receipt={failure_path}"
+                ) from exc
+            receipt = {
+                "schema_version": B3_P6_CLI_SCHEMA,
+                "status": report["status"],
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "planned_fit_count": report["planned_fit_count"],
+                "terminal_entry_count": report["terminal_entry_count"],
+                "selection_performed": report["selection_performed"],
+                "selection_used_validation": False,
+                "selection_used_future_utility": False,
+                "d6_performed_after_selection": report["d6_performed_after_selection"],
+                "selected_level_artifact_write_performed": report["selected_level_artifact_write_performed"],
+                "ready_artifact_write_performed": False,
+                "ready_manifest_path": None,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0 if report["status"] == "accepted" else 1
         if args.b3_preparation_output:
             report = run_b3_repeated(args, request)
             report_path = Path(args.b3_preparation_output).resolve()

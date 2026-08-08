@@ -1717,6 +1717,833 @@ def test_formal_single_pass_rejects_stale_train_coverage_receipt_before_fit(monk
     assert fit_called is False
 
 
+def _p6_series() -> dict[str, object]:
+    return {f"L2-{index:03d}": object() for index in range(subject.B3_P6_EXPECTED_SECTOR_COUNT)}
+
+
+def _p6_repeat(process_identity: str) -> dict:
+    codes = tuple(sorted(_p6_series()))
+    return {
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "process_identity": process_identity,
+        "schedule": list(subject.RESTART_SCHEDULE),
+        "canonical_sector_codes": list(codes),
+        "canonical_sector_set_sha256": subject.canonical_sha256(list(codes)),
+        "feature_names": list(subject.ALL_CORE_FEATURES),
+        "entries": [{"seed": seed, "sector_code": code} for seed in subject.RESTART_SCHEDULE for code in codes],
+    }
+
+
+def _p6_child_payload(process_identity: str, *, inputs: dict, policy: dict) -> bytes:
+    repeat = _p6_repeat(process_identity)
+    entry_count = subject.B3_P6_EXPECTED_SECTOR_COUNT * len(subject.RESTART_SCHEDULE)
+    body = {
+        "schema_version": subject.B3_P6_SINGLE_PASS_SCHEMA,
+        "producer_commit": "c" * 40,
+        "process_identity": process_identity,
+        "target_family": subject.B3_P6_FAMILY,
+        "target_level": subject.B3_P6_LEVEL,
+        "feature_names": list(subject.ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "planned_fit_count": entry_count,
+        "terminal_entry_count": entry_count,
+        "dataset_manifest_hash": subject.canonical_sha256(inputs["dataset_manifest"]),
+        "mapping_manifest_hash": subject.canonical_sha256(inputs["mapping_manifest"]),
+        "calendar_manifest_hash": subject.canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+        "l2_stock_fact_manifest_hash": subject.canonical_sha256(inputs["l2_stock_fact_manifest"]),
+        "feature_domain_policy_sha256": policy["receipt_sha256"],
+        "feature_domain_policy_manifest": policy,
+        "provider_absence_partition_receipt": policy["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": policy["provider_absence_partition_receipt_sha256"],
+        "formula_version": subject.C010_FORMULA_VERSION,
+        "level_repeat": repeat,
+        "selection_performed": False,
+        "validation_accessed_for_selection": False,
+        "future_utility_accessed_for_selection": False,
+        "artifact_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return subject.canonical_json_bytes({**body, "single_pass_receipt_sha256": subject.canonical_sha256(body)})
+
+
+def _p6_expected_closure(inputs: dict, policy: dict) -> dict:
+    family = next(item for item in _request()["families"] if item["family"] == subject.B3_P6_FAMILY)
+    codes = tuple(sorted(_p6_series()))
+    return {
+        "family": family,
+        "feature_names": tuple(family["feature_names"]),
+        "preprocess_family": family["preprocess_family"],
+        "canonical_sector_codes": codes,
+        "canonical_sector_set_sha256": subject.canonical_sha256(list(codes)),
+        "feature_count": len(family["feature_names"]),
+        "entry_count": len(codes) * len(subject.RESTART_SCHEDULE),
+        "authority_keys": {
+            "producer_commit": "c" * 40,
+            "dataset_manifest_hash": subject.canonical_sha256(inputs["dataset_manifest"]),
+            "mapping_manifest_hash": subject.canonical_sha256(inputs["mapping_manifest"]),
+            "calendar_manifest_hash": subject.canonical_sha256(inputs["dataset_manifest"]["calendar_benchmark"]),
+            "l2_stock_fact_manifest_hash": subject.canonical_sha256(inputs["l2_stock_fact_manifest"]),
+            "feature_domain_policy_sha256": policy["receipt_sha256"],
+            "feature_domain_policy_manifest": policy,
+            "provider_absence_partition_receipt": policy["provider_absence_partition_receipt"],
+            "provider_absence_partition_receipt_sha256": policy["provider_absence_partition_receipt_sha256"],
+            "formula_version": subject.C010_FORMULA_VERSION,
+        },
+    }
+
+
+def _p6_parent_setup(monkeypatch, tmp_path):
+    request = _request()
+    policy = _minimal_c010_policy()
+    request.update(
+        {
+            "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
+            "train_coverage_receipt_sha256": "a" * 64,
+            "feature_domain_policy_manifest": policy,
+            "feature_domain_policy_sha256": policy["receipt_sha256"],
+            "semantic_dataset_manifest_hash": "1" * 64,
+            "semantic_mapping_manifest_hash": "2" * 64,
+            "semantic_calendar_manifest_hash": "3" * 64,
+            "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+            "semantic_source": {
+                "dataset_manifest_hash": "1" * 64,
+                "mapping_manifest_hash": "2" * 64,
+                "calendar_manifest_hash": "3" * 64,
+                "l2_stock_fact_manifest_hash": "4" * 64,
+            },
+        }
+    )
+    inputs = {
+        "dataset_manifest": {"schema_version": "dataset_v1", "calendar_benchmark": {"schema_version": "calendar_v1"}},
+        "mapping_manifest": {"schema_version": "mapping_v1"},
+        "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
+    }
+    semantic_identities = {
+        "semantic_dataset_manifest_hash": "1" * 64,
+        "semantic_mapping_manifest_hash": "2" * 64,
+        "semantic_calendar_manifest_hash": "3" * 64,
+        "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+    }
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
+    monkeypatch.setattr(subject, "_git_commit", lambda: "c" * 40)
+    monkeypatch.setattr(subject, "_require_approved_b3_windows", lambda request: None)
+    monkeypatch.setattr(subject, "_require_formal_semantic_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda request: None)
+    monkeypatch.setattr(subject, "_load_verified_formal_semantic_inputs", lambda request, db_prefix: {})
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda request, db_prefix, c010_formal=False: inputs)
+    monkeypatch.setattr(subject, "_c010_policy_manifest", lambda values, request, producer_commit: policy)
+    monkeypatch.setattr(subject, "_semantic_input_identities", lambda values: semantic_identities)
+    monkeypatch.setattr(
+        subject,
+        "_b3_p6_closure_from_inputs",
+        lambda inputs, request, *, policy: _p6_expected_closure(inputs, policy),
+    )
+    monkeypatch.setattr(subject, "_direct_l2_series_for_family", lambda values, family: _p6_series())
+    monkeypatch.setattr(
+        subject,
+        "_direct_series_for_family",
+        lambda *args, **kwargs: pytest.fail("P6 D6 must use the L2-only semantic series constructor"),
+    )
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "models"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_DEV_",
+        b3_p6_autocycle_l2_output=str(tmp_path / "p6.json"),
+    )
+    return request, policy, inputs, args
+
+
+def test_p6_single_pass_runs_only_autocycle_l2_exact_grid(monkeypatch) -> None:
+    series = _p6_series()
+    authority = {
+        "producer_commit": "c" * 40,
+        "inputs": {},
+        "dataset_manifest_hash": "1" * 64,
+        "mapping_manifest_hash": "2" * 64,
+        "calendar_manifest_hash": "3" * 64,
+        "l2_stock_fact_manifest_hash": "4" * 64,
+        "feature_domain_policy": _minimal_c010_policy(),
+        "families": _request()["families"],
+    }
+    calls = []
+    monkeypatch.setattr(subject, "_load_b3_formal_train_authority", lambda request, db_prefix: authority)
+    monkeypatch.setattr(subject, "_direct_l2_train_series_for_family", lambda inputs, family: series)
+    monkeypatch.setattr(
+        subject,
+        "_direct_train_series_for_family",
+        lambda *args, **kwargs: pytest.fail("P6 child must use the L2-only train series constructor"),
+    )
+
+    def fake_repeat(values, *, family, level, feature_names, preprocess_family, process_identity):
+        calls.append((values, family, level, process_identity))
+        return _p6_repeat(process_identity), {}
+
+    monkeypatch.setattr(subject, "run_level_repeat", fake_repeat)
+    receipt = subject.prepare_b3_p6_autocycle_l2_single_pass(
+        _request(),
+        db_prefix="TDX_DB_DEV_",
+        process_identity="fresh_process_1",
+    )
+
+    assert calls == [(series, "autocycle_all_core", "L2", "fresh_process_1")]
+    assert receipt["planned_fit_count"] == 1048
+    assert receipt["terminal_entry_count"] == 1048
+    assert receipt["selection_performed"] is False
+    assert receipt["ready_artifact_write_performed"] is False
+
+
+def test_p6_l2_only_train_constructor_never_touches_l1(monkeypatch) -> None:
+    inputs = {
+        "panel": "L1_PANEL_SENTINEL",
+        "constituents": "L1_CONSTITUENTS_SENTINEL",
+        "l2_panel": "L2_PANEL_SENTINEL",
+    }
+    family = next(item for item in _request()["families"] if item["family"] == subject.B3_P6_FAMILY)
+    captured = {}
+
+    def guarded_build_train_only_series(
+        panel,
+        *,
+        feature_names,
+        train_start,
+        train_end,
+        constituent_manifest,
+        expected_sector_count,
+        direct_sector_level,
+        frozen_input_identity=None,
+    ):
+        captured["panel"] = panel
+        captured["constituent_manifest"] = constituent_manifest
+        captured["direct_sector_level"] = direct_sector_level
+        captured["expected_sector_count"] = expected_sector_count
+        return _p6_series()
+
+    monkeypatch.setattr(subject, "build_train_only_series", guarded_build_train_only_series)
+    monkeypatch.setattr(
+        subject,
+        "_direct_l2_constituents",
+        lambda inputs: {"L2-000": {"l2_codes": ["L2-000"]}},
+    )
+    monkeypatch.setattr(subject, "_frozen_input_identity", lambda inputs: {})
+    monkeypatch.setattr(subject, "_date", lambda value, label: value)
+
+    series = subject._direct_l2_train_series_for_family(inputs, family)
+
+    assert captured["panel"] == "L2_PANEL_SENTINEL"
+    assert captured["constituent_manifest"] == {"L2-000": {"l2_codes": ["L2-000"]}}
+    assert captured["direct_sector_level"] == "L2"
+    assert captured["expected_sector_count"] == subject.B3_P6_EXPECTED_SECTOR_COUNT
+    assert set(series) == set(_p6_series())
+
+
+def test_p6_l2_only_validation_constructor_never_touches_l1(monkeypatch) -> None:
+    inputs = {
+        "panel": "L1_PANEL_SENTINEL",
+        "constituents": "L1_CONSTITUENTS_SENTINEL",
+        "l2_panel": "L2_PANEL_SENTINEL",
+    }
+    family = next(item for item in _request()["families"] if item["family"] == subject.B3_P6_FAMILY)
+    captured = {}
+
+    def guarded_build_l1_training_series(
+        panel,
+        *,
+        feature_names,
+        train_start,
+        train_end,
+        validation_start,
+        validation_end,
+        constituent_manifest_by_l1,
+        expected_sector_count,
+        direct_sector_level,
+        frozen_input_identity=None,
+    ):
+        captured["panel"] = panel
+        captured["constituent_manifest_by_l1"] = constituent_manifest_by_l1
+        captured["direct_sector_level"] = direct_sector_level
+        captured["expected_sector_count"] = expected_sector_count
+        return _p6_series()
+
+    monkeypatch.setattr(subject, "build_l1_training_series", guarded_build_l1_training_series)
+    monkeypatch.setattr(
+        subject,
+        "_direct_l2_constituents",
+        lambda inputs: {"L2-000": {"l2_codes": ["L2-000"]}},
+    )
+    monkeypatch.setattr(subject, "_frozen_input_identity", lambda inputs: {})
+    monkeypatch.setattr(subject, "_date", lambda value, label: value)
+
+    series = subject._direct_l2_series_for_family(inputs, family)
+
+    assert captured["panel"] == "L2_PANEL_SENTINEL"
+    assert captured["constituent_manifest_by_l1"] == {"L2-000": {"l2_codes": ["L2-000"]}}
+    assert captured["direct_sector_level"] == "L2"
+    assert captured["expected_sector_count"] == subject.B3_P6_EXPECTED_SECTOR_COUNT
+    assert set(series) == set(_p6_series())
+
+
+def _p6_drift_fixture() -> tuple[dict, dict, dict]:
+    policy = _minimal_c010_policy()
+    inputs = {
+        "dataset_manifest": {"schema_version": "dataset_v1", "calendar_benchmark": {"schema_version": "calendar_v1"}},
+        "mapping_manifest": {"schema_version": "mapping_v1"},
+        "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
+    }
+    return inputs, policy, _p6_expected_closure(inputs, policy)
+
+
+def _p6_rehash_child(value: dict) -> dict:
+    body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
+    value["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+    return value
+
+
+def test_p6_child_validator_rejects_self_hashed_feature_names_drift(monkeypatch) -> None:
+    inputs, policy, closure = _p6_drift_fixture()
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
+    value = json.loads(_p6_child_payload("fresh_process_1", inputs=inputs, policy=policy))
+    value["feature_names"] = list(subject.BASE_FEATURES)
+    value["level_repeat"]["feature_names"] = list(subject.BASE_FEATURES)
+    _p6_rehash_child(value)
+
+    with pytest.raises(StateModelSetError, match="feature_names differ"):
+        subject._validate_b3_p6_child_payload(value, process_identity="fresh_process_1", expected=closure)
+
+
+def test_p6_child_validator_rejects_self_hashed_preprocess_family_drift(monkeypatch) -> None:
+    inputs, policy, closure = _p6_drift_fixture()
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
+    value = json.loads(_p6_child_payload("fresh_process_1", inputs=inputs, policy=policy))
+    value["preprocess_family"] = "identity"
+    _p6_rehash_child(value)
+
+    with pytest.raises(StateModelSetError, match="preprocess family differs"):
+        subject._validate_b3_p6_child_payload(value, process_identity="fresh_process_1", expected=closure)
+
+
+def test_p6_child_validator_rejects_self_hashed_replaced_l2_sector(monkeypatch) -> None:
+    inputs, policy, closure = _p6_drift_fixture()
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
+    value = json.loads(_p6_child_payload("fresh_process_1", inputs=inputs, policy=policy))
+    codes = value["level_repeat"]["canonical_sector_codes"]
+    codes.remove("L2-000")
+    codes.append("L2-999")
+    value["level_repeat"]["canonical_sector_set_sha256"] = subject.canonical_sha256(codes)
+    _p6_rehash_child(value)
+
+    with pytest.raises(StateModelSetError, match="canonical L2 sector set differs"):
+        subject._validate_b3_p6_child_payload(value, process_identity="fresh_process_1", expected=closure)
+
+
+def test_p6_child_validator_rejects_self_hashed_missing_l2_sector(monkeypatch) -> None:
+    inputs, policy, closure = _p6_drift_fixture()
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
+    value = json.loads(_p6_child_payload("fresh_process_1", inputs=inputs, policy=policy))
+    codes = value["level_repeat"]["canonical_sector_codes"]
+    value["level_repeat"]["canonical_sector_codes"] = codes[:-1]
+    value["level_repeat"]["canonical_sector_set_sha256"] = subject.canonical_sha256(codes[:-1])
+    _p6_rehash_child(value)
+
+    with pytest.raises(StateModelSetError, match="child receipt is invalid"):
+        subject._validate_b3_p6_child_payload(value, process_identity="fresh_process_1", expected=closure)
+
+
+def test_p6_parent_fails_closed_before_d5_on_child_feature_drift(monkeypatch, tmp_path) -> None:
+    request, policy, inputs, args = _p6_parent_setup(monkeypatch, tmp_path)
+    drifted = json.loads(_p6_child_payload("fresh_process_1", inputs=inputs, policy=policy))
+    drifted["feature_names"] = list(subject.BASE_FEATURES)
+    drifted["level_repeat"]["feature_names"] = list(subject.BASE_FEATURES)
+    _p6_rehash_child(drifted)
+    payloads = [
+        subject.canonical_json_bytes(drifted),
+        _p6_child_payload("fresh_process_2", inputs=inputs, policy=policy),
+    ]
+    call_index = 0
+
+    def fake_run(command, *, check, capture_output, env, timeout):
+        nonlocal call_index
+        payload = payloads[call_index]
+        call_index += 1
+        return SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        subject,
+        "select_level_restart",
+        lambda *args, **kwargs: pytest.fail("D5 must not run on child authority drift"),
+    )
+
+    with pytest.raises(StateModelSetError, match="feature_names differ"):
+        subject.run_b3_p6_autocycle_l2_repeated(args, request)
+
+
+def test_p6_parent_fails_closed_on_two_process_sector_mismatch(monkeypatch, tmp_path) -> None:
+    request, policy, inputs, args = _p6_parent_setup(monkeypatch, tmp_path)
+    second = json.loads(_p6_child_payload("fresh_process_2", inputs=inputs, policy=policy))
+    codes = second["level_repeat"]["canonical_sector_codes"]
+    codes.remove("L2-001")
+    codes.append("L2-998")
+    second["level_repeat"]["canonical_sector_set_sha256"] = subject.canonical_sha256(codes)
+    _p6_rehash_child(second)
+    payloads = [
+        _p6_child_payload("fresh_process_1", inputs=inputs, policy=policy),
+        subject.canonical_json_bytes(second),
+    ]
+    call_index = 0
+
+    def fake_run(command, *, check, capture_output, env, timeout):
+        nonlocal call_index
+        payload = payloads[call_index]
+        call_index += 1
+        return SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        subject,
+        "select_level_restart",
+        lambda *args, **kwargs: pytest.fail("D5 must not run when fresh-process authorities differ"),
+    )
+
+    with pytest.raises(StateModelSetError, match="canonical L2 sector set differs"):
+        subject.run_b3_p6_autocycle_l2_repeated(args, request)
+
+
+def _p6_cli_setup(monkeypatch, tmp_path, output_path) -> None:
+    request_path = tmp_path / "request.json"
+    request_path.write_text("{}", encoding="utf-8")
+    env_path = tmp_path / ".env"
+    env_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        subject.sys,
+        "argv",
+        [
+            str(Path(subject.__file__).resolve()),
+            "--request",
+            str(request_path),
+            "--output-root",
+            str(tmp_path / "models"),
+            "--env-file",
+            str(env_path),
+            "--db-env-prefix",
+            "TDX_DB_DEV_",
+            "--b3-p6-autocycle-l2-output",
+            str(output_path),
+        ],
+    )
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
+    monkeypatch.setattr(subject, "_git_commit", lambda: "c" * 40)
+
+
+def _p6_write_child_receipts(tmp_path, output_path) -> None:
+    policy = _minimal_c010_policy()
+    inputs = {
+        "dataset_manifest": {"schema_version": "dataset_v1", "calendar_benchmark": {"schema_version": "calendar_v1"}},
+        "mapping_manifest": {"schema_version": "mapping_v1"},
+        "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
+    }
+    args = SimpleNamespace(b3_p6_autocycle_l2_output=str(output_path))
+    for process_identity in ("fresh_process_1", "fresh_process_2"):
+        receipt = json.loads(_p6_child_payload(process_identity, inputs=inputs, policy=policy))
+        subject._write_diagnostic_report(subject._b3_p6_process_receipt_path(args, process_identity), receipt)
+
+
+def _p6_accepted_report() -> dict:
+    return {
+        "status": "accepted",
+        "planned_fit_count": 2096,
+        "terminal_entry_count": 2096,
+        "selection_performed": True,
+        "selection": {"level_selection_status": "accepted", "receipt_sha256": "a" * 64},
+        "d6_performed_after_selection": True,
+        "selected_level_artifact_write_performed": True,
+        "ready_artifact_write_performed": False,
+    }
+
+
+def test_p6_cli_report_write_failure_writes_durable_parent_failure(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "p6.json"
+    _p6_cli_setup(monkeypatch, tmp_path, output_path)
+    _p6_write_child_receipts(tmp_path, output_path)
+    monkeypatch.setattr(subject, "run_b3_p6_autocycle_l2_repeated", lambda args, request: _p6_accepted_report())
+    real_write = subject._write_diagnostic_report
+
+    def failing_write(path, report):
+        if Path(path).resolve() == output_path.resolve():
+            raise OSError("simulated report write failure")
+        return real_write(path, report)
+
+    monkeypatch.setattr(subject, "_write_diagnostic_report", failing_write)
+
+    assert subject.main() == 1
+
+    failure = json.loads((tmp_path / "p6.parent.failure.json").read_text(encoding="utf-8"))
+    assert failure["schema_version"] == subject.B3_P6_FAILURE_SCHEMA
+    assert failure["status"] == "failed"
+    assert failure["failure_stage"] == "report_write"
+    assert failure["verified_process_count"] == 2
+    assert failure["terminal_entry_count"] == 2096
+    assert failure["fit_grid_completed"] is True
+    assert failure["selection_performed"] is True
+    assert failure["selection_status"] == "accepted"
+    assert failure["d6_performed_after_selection"] is True
+    assert failure["selected_level_artifact_write_performed"] is True
+    assert failure["phase2_ready"] is False
+    assert failure["ready_artifact_write_performed"] is False
+    assert not output_path.exists()
+
+
+def test_p6_cli_report_readback_mismatch_writes_durable_parent_failure(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "p6.json"
+    _p6_cli_setup(monkeypatch, tmp_path, output_path)
+    _p6_write_child_receipts(tmp_path, output_path)
+    monkeypatch.setattr(subject, "run_b3_p6_autocycle_l2_repeated", lambda args, request: _p6_accepted_report())
+    real_readback = subject._load_json_mapping
+
+    def tampered_readback(path, *, label):
+        if Path(path).resolve() == output_path.resolve():
+            value = json.loads(Path(path).read_text(encoding="utf-8"))
+            value["_tampered"] = True
+            return value
+        return real_readback(path, label=label)
+
+    monkeypatch.setattr(subject, "_load_json_mapping", tampered_readback)
+
+    assert subject.main() == 1
+
+    failure = json.loads((tmp_path / "p6.parent.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_stage"] == "report_readback"
+    assert failure["verified_process_count"] == 2
+    assert failure["terminal_entry_count"] == 2096
+    assert failure["fit_grid_completed"] is True
+    assert failure["selection_performed"] is True
+    assert failure["selection_status"] == "accepted"
+    assert failure["d6_performed_after_selection"] is True
+    assert failure["phase2_ready"] is False
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8")).get("_tampered") is None
+
+
+def test_p6_cli_report_collision_preserves_existing_report(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "p6.json"
+    _p6_cli_setup(monkeypatch, tmp_path, output_path)
+    _p6_write_child_receipts(tmp_path, output_path)
+    old_report = {"status": "blocked", "old": True, "planned_fit_count": 2096, "terminal_entry_count": 2096}
+    output_path.write_bytes(subject.canonical_json_bytes(old_report))
+    monkeypatch.setattr(subject, "run_b3_p6_autocycle_l2_repeated", lambda args, request: _p6_accepted_report())
+
+    assert subject.main() == 1
+
+    assert json.loads(output_path.read_text(encoding="utf-8")) == old_report
+    failure = json.loads((tmp_path / "p6.parent.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_stage"] == "report_write"
+    assert failure["status"] == "failed"
+    assert failure["selection_performed"] is True
+    assert failure["d6_performed_after_selection"] is True
+    assert failure["phase2_ready"] is False
+    assert failure["ready_artifact_write_performed"] is False
+
+
+def test_p6_cli_execution_failure_writes_parent_failure_with_unknown_states(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "p6.json"
+    _p6_cli_setup(monkeypatch, tmp_path, output_path)
+
+    def boom(args, request):
+        raise StateModelSetError("D6 failed before report")
+
+    monkeypatch.setattr(subject, "run_b3_p6_autocycle_l2_repeated", boom)
+
+    assert subject.main() == 1
+
+    failure = json.loads((tmp_path / "p6.parent.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_stage"] == "execution"
+    assert failure["error_type"] == "StateModelSetError"
+    assert failure["selection_performed"] is None
+    assert failure["selection_status"] == "unknown_due_parent_failure"
+    assert failure["d6_performed_after_selection"] is None
+    assert failure["selected_level_artifact_write_performed"] is None
+    assert failure["phase2_ready"] is False
+    assert failure["ready_artifact_write_performed"] is False
+    assert not output_path.exists()
+
+
+def test_p6_parent_runs_two_exact_children_and_blocks_without_d5_candidate(monkeypatch, tmp_path) -> None:
+    request, policy, inputs, args = _p6_parent_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        subject,
+        "_load_verified_formal_semantic_inputs",
+        lambda *args, **kwargs: pytest.fail("D5 blocked must not access semantic validation inputs"),
+    )
+    payloads = [
+        _p6_child_payload("fresh_process_1", inputs=inputs, policy=policy),
+        _p6_child_payload("fresh_process_2", inputs=inputs, policy=policy),
+    ]
+    child_calls = []
+
+    def fake_run(command, *, check, capture_output, env, timeout):
+        child_calls.append((command, dict(env), timeout))
+        return SimpleNamespace(returncode=0, stdout=payloads[len(child_calls) - 1], stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    selection_body = {
+        "level_selection_valid": False,
+        "level_selection_status": "blocked",
+        "failure_reason_codes": ["hmm_risk_model_selection_unavailable"],
+    }
+    selection = {**selection_body, "receipt_sha256": subject.canonical_sha256(selection_body)}
+    monkeypatch.setattr(subject, "select_level_restart", lambda *args, **kwargs: selection)
+    monkeypatch.setattr(
+        subject,
+        "build_selected_level_artifact",
+        lambda *args, **kwargs: pytest.fail("D6 must not run without an accepted D5 candidate"),
+    )
+
+    report = subject.run_b3_p6_autocycle_l2_repeated(args, request)
+
+    assert len(child_calls) == 2
+    assert all(
+        call[1][key] == "1"
+        for call in child_calls
+        for key in (
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+        )
+    )
+    assert report["planned_fit_count"] == 2096
+    assert report["terminal_entry_count"] == 2096
+    assert report["status"] == "blocked"
+    assert report["semantic_source_accessed_after_selection"] is False
+    assert report["d6_performed_after_selection"] is False
+    assert report["family_model_set_status"] == "blocked"
+    assert report["phase2_ready"] is False
+    assert report["ready_artifact_write_performed"] is False
+
+
+def test_p6_parent_persists_only_accepted_selected_level_and_never_ready(monkeypatch, tmp_path) -> None:
+    request, policy, inputs, args = _p6_parent_setup(monkeypatch, tmp_path)
+    semantic_load_count = 0
+
+    def load_semantic_after_selection(request, db_prefix):
+        nonlocal semantic_load_count
+        semantic_load_count += 1
+        return {}
+
+    monkeypatch.setattr(subject, "_load_verified_formal_semantic_inputs", load_semantic_after_selection)
+    payloads = [
+        _p6_child_payload("fresh_process_1", inputs=inputs, policy=policy),
+        _p6_child_payload("fresh_process_2", inputs=inputs, policy=policy),
+    ]
+    call_index = 0
+
+    def fake_run(command, *, check, capture_output, env, timeout):
+        nonlocal call_index
+        payload = payloads[call_index]
+        call_index += 1
+        return SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    selection_body = {"level_selection_valid": True, "level_selection_status": "accepted", "evidence": {}}
+    selection = {**selection_body, "receipt_sha256": subject.canonical_sha256(selection_body)}
+    artifact_body = {"schema_version": "test", "status": "accepted", "family": "autocycle_all_core", "level": "L2"}
+    artifact = {**artifact_body, "artifact_sha256": subject.canonical_sha256(artifact_body)}
+    monkeypatch.setattr(subject, "select_level_restart", lambda *args, **kwargs: selection)
+    monkeypatch.setattr(subject, "models_from_repeat", lambda repeat: {})
+    monkeypatch.setattr(subject, "build_selected_level_artifact", lambda *args, **kwargs: artifact)
+    monkeypatch.setattr(subject, "read_b3_selected_level_artifact", lambda path, **kwargs: artifact)
+
+    report = subject.run_b3_p6_autocycle_l2_repeated(args, request)
+
+    artifact_path = Path(report["selected_level_artifact_path"])
+    assert report["status"] == "accepted"
+    assert semantic_load_count == 1
+    assert report["semantic_source_accessed_after_selection"] is True
+    assert report["d6_performed_after_selection"] is True
+    assert report["selected_level_artifact_write_performed"] is True
+    assert artifact_path.read_bytes() == subject.canonical_json_bytes(artifact)
+    assert report["family_model_set_status"] == "blocked"
+    assert report["phase2_ready"] is False
+    assert report["ready_manifest_path"] is None
+    assert report["ready_artifact_write_performed"] is False
+
+
+def test_p6_child_failure_receipt_never_claims_selection_or_ready(tmp_path) -> None:
+    args = SimpleNamespace(b3_p6_autocycle_l2_output=str(tmp_path / "p6.json"))
+    path, receipt = subject._persist_b3_p6_child_failure(
+        args,
+        process_identity="fresh_process_1",
+        returncode=2,
+        stdout=b"partial",
+        stderr=b'{"error_type":"covariance","error":"failed"}',
+    )
+
+    assert path.is_file()
+    assert receipt["fit_grid_completed"] is False
+    assert receipt["selection_performed"] is False
+    assert receipt["selected_level_artifact_write_performed"] is False
+    assert receipt["ready_artifact_write_performed"] is False
+
+
+def test_p6_child_validator_rejects_self_hashed_target_scope_drift(monkeypatch) -> None:
+    policy = _minimal_c010_policy()
+    inputs = {
+        "dataset_manifest": {"calendar_benchmark": {}},
+        "mapping_manifest": {},
+        "l2_stock_fact_manifest": {},
+    }
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)
+    value = json.loads(_p6_child_payload("fresh_process_1", inputs=inputs, policy=policy))
+    value["target_level"] = "L1"
+    body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
+    value["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(StateModelSetError, match="child receipt is invalid"):
+        subject._validate_b3_p6_child_payload(value, process_identity="fresh_process_1")
+
+
+def test_p6_mode_isolation_rejects_legacy_full_child_combination(tmp_path) -> None:
+    args = SimpleNamespace(
+        b3_p6_autocycle_l2_output=str(tmp_path / "p6.json"),
+        b3_request_candidate_output=None,
+        b3_process_identity="",
+        _b3_child=True,
+        _c008_b3_diag02_child=False,
+        _c008_b3_diag04_child=False,
+        _b3_blocker_diag01_child=False,
+        _b3_d1_controlled_child=False,
+    )
+
+    with pytest.raises(StateModelSetError, match="cannot be combined"):
+        subject._require_b3_p6_mode_isolation(args, p6_parent=True, p6_child=False)
+
+
+def test_p6_second_process_timeout_preserves_first_receipt_without_selection(monkeypatch, tmp_path) -> None:
+    request, policy, inputs, args = _p6_parent_setup(monkeypatch, tmp_path)
+    first_payload = _p6_child_payload("fresh_process_1", inputs=inputs, policy=policy)
+    calls = 0
+
+    def fake_run(command, *, check, capture_output, env, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(returncode=0, stdout=first_payload, stderr=b"")
+        raise subject.subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+
+    with pytest.raises(StateModelSetError, match="could not complete process=fresh_process_2"):
+        subject.run_b3_p6_autocycle_l2_repeated(args, request)
+
+    failure_path = tmp_path / "p6.fresh_process_2.failure.json"
+    failure = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert failure["completed_process_count"] == 1
+    assert len(failure["completed_process_receipt_hashes"]) == 1
+    assert failure["selection_performed"] is False
+    assert failure["selected_level_artifact_write_performed"] is False
+    assert failure["ready_artifact_write_performed"] is False
+
+
+def test_p6_zero_return_with_invalid_receipt_persists_child_evidence(monkeypatch, tmp_path) -> None:
+    request, _, _, args = _p6_parent_setup(monkeypatch, tmp_path)
+    stdout = b'{"not":"canonical"}\n'
+    stderr = b"child diagnostic context"
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=stdout, stderr=stderr),
+    )
+
+    with pytest.raises(StateModelSetError, match="child receipt failed process=fresh_process_1"):
+        subject.run_b3_p6_autocycle_l2_repeated(args, request)
+
+    failure = json.loads((tmp_path / "p6.fresh_process_1.failure.json").read_text(encoding="utf-8"))
+    assert failure["returncode"] == 0
+    assert failure["stdout_byte_count"] == len(stdout)
+    assert failure["stdout_sha256"] == subject.sha256_bytes(stdout)
+    assert failure["stderr_byte_count"] == len(stderr)
+    assert failure["stderr_sha256"] == subject.sha256_bytes(stderr)
+    assert failure["fit_grid_completed"] is False
+    assert failure["selection_performed"] is False
+    assert failure["ready_artifact_write_performed"] is False
+
+
+def test_p6_parent_failure_after_two_processes_never_fabricates_selection_state(monkeypatch, tmp_path) -> None:
+    _, policy, inputs, args = _p6_parent_setup(monkeypatch, tmp_path)
+    for process_identity in ("fresh_process_1", "fresh_process_2"):
+        receipt = json.loads(_p6_child_payload(process_identity, inputs=inputs, policy=policy))
+        subject._write_diagnostic_report(subject._b3_p6_process_receipt_path(args, process_identity), receipt)
+
+    failure = subject._build_b3_p6_parent_failure(args, StateModelSetError("D5 readback failed"))
+
+    assert failure["verified_process_count"] == 2
+    assert failure["terminal_entry_count"] == 2096
+    assert failure["fit_grid_completed"] is True
+    assert failure["selection_performed"] is None
+    assert failure["selection_status"] == "unknown_due_parent_failure"
+    assert failure["d6_performed_after_selection"] is None
+    assert failure["phase2_ready"] is False
+    assert failure["ready_artifact_write_performed"] is False
+
+
+def test_p6_cli_routes_only_to_level_local_executor(monkeypatch, tmp_path, capsys) -> None:
+    request_path = tmp_path / "request.json"
+    request_path.write_text("{}", encoding="utf-8")
+    env_path = tmp_path / ".env"
+    env_path.write_text("", encoding="utf-8")
+    output_path = tmp_path / "p6.json"
+    report = {
+        "status": "blocked",
+        "planned_fit_count": 2096,
+        "terminal_entry_count": 2096,
+        "selection_performed": True,
+        "d6_performed_after_selection": False,
+        "selected_level_artifact_write_performed": False,
+        "ready_artifact_write_performed": False,
+    }
+    monkeypatch.setattr(
+        subject.sys,
+        "argv",
+        [
+            str(Path(subject.__file__).resolve()),
+            "--request",
+            str(request_path),
+            "--output-root",
+            str(tmp_path / "models"),
+            "--env-file",
+            str(env_path),
+            "--db-env-prefix",
+            "TDX_DB_DEV_",
+            "--b3-p6-autocycle-l2-output",
+            str(output_path),
+        ],
+    )
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "run_b3_p6_autocycle_l2_repeated", lambda args, request: report)
+    monkeypatch.setattr(
+        subject,
+        "run_b3_repeated",
+        lambda *args, **kwargs: pytest.fail("P6 CLI must never invoke the historical full-grid executor"),
+    )
+
+    assert subject.main() == 1
+
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["schema_version"] == subject.B3_P6_CLI_SCHEMA
+    assert receipt["planned_fit_count"] == 2096
+    assert receipt["terminal_entry_count"] == 2096
+    assert receipt["ready_artifact_write_performed"] is False
+    assert output_path.read_bytes() == subject.canonical_json_bytes(report) + b"\n"
+
+
 def _d1_args(tmp_path) -> SimpleNamespace:
     values = _remediation_args(tmp_path)
     remediation = tmp_path / "source-remediation.json"
@@ -1991,9 +2818,7 @@ def test_d1_lineage_migration_normalizes_authority_identity_order_but_rejects_bu
     assert opportunity_pair["approved_semantic_payload_sha256"] == opportunity_pair["current_semantic_payload_sha256"]
 
     drifted_policy = deepcopy(current_policy)
-    drifted_policy["expected_opportunity_receipt"]["authority_identities"][0]["authority"][
-        "canonical_l2_count"
-    ] = 130
+    drifted_policy["expected_opportunity_receipt"]["authority_identities"][0]["authority"]["canonical_l2_count"] = 130
     with pytest.raises(StateModelSetError, match="expected_opportunity business payload drifted"):
         subject._build_b3_d1_c010_a5_lineage_migration_receipt(
             drifted_policy,
