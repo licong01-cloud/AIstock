@@ -121,7 +121,8 @@
   },
   "first_seen_at": "2026-08-05T09:41:16.812676Z",
   "fix_branch": "bug/BUG-984-historical-failed-terminal-active-state-recovery-20260808",
-  "fix_commit": null,
+  "fix_commit": "7102f25b2409d2818a85c0a0146cd6e4dc457bf4",
+  "fix_summary": "The continuation admits only historical LocalSIM FAILED_TERMINAL runs that still own one strict PROJECTED non-terminal generation. It closes run/release/binding/plan, outbox, state, receipt and Paper authority, then uses the existing per-binding single-flight LocalSIM minute loop at the original trade-date EOD. It never resubmits the parent or replays the predecessor projection, preserves legitimate terminal history, writes bounded hash-closed recovery evidence, and leaves malformed or incomplete authority as an explicit per-run recovery failure.",
   "fixed_at": null,
   "github_issue_number": 3158,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3158",
@@ -140,10 +141,12 @@
     "simulation_core_l2"
   ],
   "risk_area": "regression",
+  "root_cause": "The first BUG-984 slice prevented new active runs from being summary-terminalized and removed broker_called ownership, but the old process had already stored the exact production run as FAILED_TERMINAL. Cross-day scans admitted active statuses and FAILED_RETRYABLE only, so a FAILED_TERMINAL row with strict non-terminal durable authority was permanently excluded from the only minute-loop continuation path.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?trade_date=2026-08-05&limit=100",
     "fresh_process_evidence": [
+      "Fresh pytest process exercised public SimulationLifecycleScheduler.run_once across a malformed historical FAILED_TERMINAL outbox, exact typed per-run failure, restored strict predecessor authority, original-trade-date EOD durable minute-loop advancement, terminal state/persistence closure, stable parent/order identity and repeated-cadence zero order/fill replay: 1 passed; changed-code line 85.00%, branch 77.27%",
       "Fresh Python pytest process exercised SimulationLifecycleScheduler.run_once through a production-equivalent LocalSIM durable restart with broker_called=false, exact plan/state/outbox/economic/projection/Paper readback, no parent resubmit, stable order identities, generation advance, explicit malformed-outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control or broker call",
       "Fresh pytest process exercised broker_called=false durable restart continuation, exact readback, malformed outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control"
     ],
@@ -172,10 +175,21 @@
     "source_event_id": "FE-20260805-dfdb96720c0d"
   },
   "validation_evidence": [
+    "BUG-984 continuation exact and authority matrix -> 8 passed",
+    "changed-code coverage -> line 85.00%, branch 77.27%",
+    "python -m nox -s simulation_core_l2 -> 481 passed, 1 skipped",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14/14",
+    "F2 validator -> 112/112 passed, warnings=0",
     "python -m nox -s simulation_core_l2 -> 411 passed after rebase",
     "GitHub required CI -> CI verdict passed at d9069f7b436810ba25d5bf6f820c7a4a69522266"
   ],
   "validation_receipts": [
+    "validation-receipt: id=984c0a1d1e2f3001 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=pytest plan=direct status=passed command=`python -m coverage run --branch -m pytest <BUG-984 continuation authority nodeids> -q` result=`8 passed; changed-code line 85.00% branch 77.27%`",
+    "validation-receipt: id=984c0a1d1e2f3002 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`481 passed, 1 skipped`",
+    "validation-receipt: id=984c0a1d1e2f3003 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+    "validation-receipt: id=984c0a1d1e2f3004 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed ownership 14/14`",
+    "validation-receipt: id=984c0a1d1e2f3005 commit=7102f25b2409d2818a85c0a0146cd6e4dc457bf4 kind=feature_validation plan=direct status=passed command=`python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2` result=`112/112 passed warnings=0`",
     "validation-receipt: id=b4e84f9b120eb5e7 commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`411 passed after rebase`",
     "validation-receipt: id=091977cbba721175 commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0 after rebase`",
     "validation-receipt: id=5997c5c581320a1e commit=d9069f7b436810ba25d5bf6f820c7a4a69522266 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed ownership 14/14 after rebase`",
