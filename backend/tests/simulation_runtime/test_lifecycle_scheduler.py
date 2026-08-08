@@ -12390,6 +12390,11 @@ def test_scheduler_cross_day_recovers_historical_failed_terminal_localsim_active
     assert result["historical_failed_terminal_active_recovery"] is True
 
     terminal_fill_ids = {fill["fill_id"] for fill in paper_repo.list_fills_for_run(run_id)}
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_TERMINAL,
+        payload_patch={"last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value},
+    )
     repeated = restarted.run_once(
         trade_date=TRADE_DATE + timedelta(days=2),
         data_source="DB_HISTORICAL",
@@ -12398,6 +12403,7 @@ def test_scheduler_cross_day_recovers_historical_failed_terminal_localsim_active
         as_of_time=datetime(2026, 5, 23, 10, 0),
     )
     assert not any(item.get("run_id") == run_id for item in repeated.stale_run_results)
+    assert repo.get_simulation_daily_run(run_id).status == SimulationDailyRunStatus.FAILED_TERMINAL
     assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == initial_order_ids
     assert {fill["fill_id"] for fill in paper_repo.list_fills_for_run(run_id)} == terminal_fill_ids
 
