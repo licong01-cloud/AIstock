@@ -1239,6 +1239,63 @@ def test_control_acceptance_invalidates_planner_and_blocks_dispatch_before_worke
     }
 
 
+def test_claim_next_command_reconciling_throttle_executes_on_postgres() -> None:
+    repository = MultiAlphaDurableRepository(connection_provider=_connection_provider)
+    command_id = "macmd_bug998_alias"
+    with _connection_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO strategy_pkg.multi_alpha_combine_backtest_command
+                    (command_id, run_id, action, target_key, idempotency_key,
+                     payload_hash, status, requested_by)
+                VALUES (%s, 'macb_legacy_pg', 'pause', 'run:macb_legacy_pg',
+                        'bug998-alias', %s, 'reconciling', 'postgres-test')
+                """,
+                (command_id, "0" * 64),
+            )
+    try:
+        assert repository.claim_next_command(
+            owner_id="bug998_postgres",
+            lease_seconds=60,
+            actions=("pause",),
+            min_recheck_interval_seconds=60,
+            write_claim_event=False,
+        ) is None
+
+        with _connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.multi_alpha_combine_backtest_command
+                    SET updated_at = NOW() - INTERVAL '61 seconds'
+                    WHERE command_id = %s
+                    """,
+                    (command_id,),
+                )
+
+        claimed = repository.claim_next_command(
+            owner_id="bug998_postgres",
+            lease_seconds=60,
+            actions=("pause",),
+            min_recheck_interval_seconds=60,
+            write_claim_event=False,
+        )
+        assert claimed is not None
+        assert claimed["command_id"] == command_id
+        assert claimed["status"] == "reconciling"
+    finally:
+        with _connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM strategy_pkg.multi_alpha_combine_backtest_command
+                    WHERE command_id = %s
+                    """,
+                    (command_id,),
+                )
+
+
 def _schema_digest(cur: Any) -> str:
     cur.execute(
         """

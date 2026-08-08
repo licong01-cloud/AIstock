@@ -12279,6 +12279,135 @@ def test_scheduler_localsim_post_close_drives_active_durable_states_before_run_t
     assert schema_conflict.value.context["reason_code"] == "LOCALSIM_POST_CLOSE_PERSISTENCE_SCHEMA_INVALID"
 
 
+def test_scheduler_cross_day_recovers_historical_failed_terminal_localsim_active_generation() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    portfolio_id = "portfolio_localsim_historical_failed_terminal_active"
+    first_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: first_context}),
+    )
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    run_id = first.results[0].run.run_id
+    initial_states = tuple(repo.list_local_sim_execution_states(run_id))
+    initial_order_ids = {order.order_id for order in paper_repo.list_orders_for_run(run_id)}
+    assert initial_states and any(not state.is_terminal for state in initial_states)
+    valid_outbox = deepcopy(first.results[0].run.run_payload_json["local_sim_projection_outbox_v1"])
+
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_TERMINAL,
+        payload_patch={
+            "last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+            "broker_called": False,
+            "submitted_intents": 0,
+            "failed_intents": len(initial_states),
+        },
+    )
+    first_broker = first_context.local_broker
+    assert first_broker is not None
+    recovery_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id,
+        release=release,
+        paper_repository=paper_repo,
+        cash=float(first_broker.query_account().cash),
+        positions=first_broker.query_positions(),
+    )
+    restarted = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: recovery_context}),
+    )
+
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"local_sim_projection_outbox_v1": {"schema_version": "invalid"}},
+    )
+    invalid = restarted.run_once(
+        trade_date=TRADE_DATE + timedelta(days=1),
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 22, 10, 0),
+    )
+    invalid_result = next(item for item in invalid.stale_run_results if item.get("run_id") == run_id)
+    assert invalid_result["status"] == "RECOVERY_FAILED"
+    assert invalid_result["error"]["context"]["reason_code"] == ("LOCALSIM_HISTORICAL_RECOVERY_OUTBOX_SCHEMA_INVALID")
+    assert tuple(repo.list_local_sim_execution_states(run_id)) == initial_states
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == initial_order_ids
+    repo.update_simulation_daily_run(
+        run_id,
+        payload_patch={"local_sim_projection_outbox_v1": valid_outbox},
+    )
+
+    next_day = restarted.run_once(
+        trade_date=TRADE_DATE + timedelta(days=1),
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 22, 10, 0),
+    )
+
+    recovered = repo.get_simulation_daily_run(run_id)
+    recovered_states = tuple(repo.list_local_sim_execution_states(run_id))
+    assert recovered_states and all(state.is_terminal for state in recovered_states)
+    assert recovered.status in {
+        SimulationDailyRunStatus.SUCCEEDED,
+        SimulationDailyRunStatus.FAILED_TERMINAL,
+    }
+    assert recovered.run_payload_json["local_sim_persistence"]["terminal"] is True
+    recovery = recovered.run_payload_json["localsim_historical_failed_terminal_active_recovery_v1"]
+    assert recovery["previous_status"] == SimulationDailyRunStatus.FAILED_TERMINAL.value
+    assert recovery["parent_resubmitted"] is False
+    assert recovery["predecessor_projection_replayed"] is False
+    assert recovery["durable_minute_loop_advanced"] is True
+    assert recovery["predecessor_state_count"] == len(initial_states)
+    assert recovery["terminal_state_count"] == len(recovered_states)
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == initial_order_ids
+    result = next(item for item in next_day.stale_run_results if item.get("run_id") == run_id)
+    assert result["historical_failed_terminal_active_recovery"] is True
+
+    terminal_fill_ids = {fill["fill_id"] for fill in paper_repo.list_fills_for_run(run_id)}
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.FAILED_TERMINAL,
+        payload_patch={"last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value},
+    )
+    repeated = restarted.run_once(
+        trade_date=TRADE_DATE + timedelta(days=2),
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 23, 10, 0),
+    )
+    assert not any(item.get("run_id") == run_id for item in repeated.stale_run_results)
+    assert repo.get_simulation_daily_run(run_id).status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == initial_order_ids
+    assert {fill["fill_id"] for fill in paper_repo.list_fills_for_run(run_id)} == terminal_fill_ids
+
+
 def test_scheduler_localsim_waiting_for_capital_is_not_terminal_residual() -> None:
     release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
     assert local_binding is not None

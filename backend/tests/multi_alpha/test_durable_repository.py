@@ -1048,6 +1048,7 @@ def test_command_claim_throttles_reconciling_and_suppresses_repeat_command_claim
 
     assert claimed is not None
     sql = provider.cursor.executions[0][0]
+    assert "FROM strategy_pkg.multi_alpha_combine_backtest_command AS command" in sql
     assert "OR command.status <> 'reconciling'" in sql
     assert "command.updated_at <= clock_timestamp() - (%s::int * INTERVAL '1 second')" in sql
     # reconciling re-claim -> command_claimed event suppressed

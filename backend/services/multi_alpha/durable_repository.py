@@ -2791,7 +2791,7 @@ class MultiAlphaDurableRepository:
                     """
                     WITH candidate AS (
                         SELECT command_id
-                        FROM strategy_pkg.multi_alpha_combine_backtest_command
+                        FROM strategy_pkg.multi_alpha_combine_backtest_command AS command
                         WHERE status = ANY(%s)
                           AND (
                               cardinality(%s::text[]) = 0
