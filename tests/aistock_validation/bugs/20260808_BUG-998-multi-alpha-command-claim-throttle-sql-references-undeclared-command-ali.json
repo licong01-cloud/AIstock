@@ -158,12 +158,60 @@
     "source_event_id": "FE-20260808-ebf0a25a6e23"
   },
   "validation_evidence": [
-    "{'command': 'python -m pytest backend/tests/multi_alpha/test_durable_repository.py backend/tests/multi_alpha/test_durable_repository_postgres.py::test_claim_next_command_reconciling_throttle_executes_on_postgres -q -p no:cacheprovider', 'commit': 'c4a6430190395c5a3a8944c6d1623e913c60b24a', 'evidence_kind': 'pytest', 'receipt_id': '3dc428be5116df88', 'result': '31 passed, 1 skipped', 'schema_version': 'aistock_validation_receipt_v1', 'status': 'passed'}",
-    "{'command': 'python -m nox -s l0', 'commit': 'c4a6430190395c5a3a8944c6d1623e913c60b24a', 'evidence_kind': 'nox', 'receipt_id': 'ff5e957d8e0b7996', 'result': 'successful', 'schema_version': 'aistock_validation_receipt_v1', 'status': 'passed'}",
-    "{'command': 'python -m nox -s validation_module_registry_l0', 'commit': 'c4a6430190395c5a3a8944c6d1623e913c60b24a', 'evidence_kind': 'nox', 'receipt_id': '5a2c5d9d26f4fae7', 'result': '8 passed; ownership files 14 mapped 14', 'schema_version': 'aistock_validation_receipt_v1', 'status': 'passed'}",
-    "{'command': 'python -m nox -s qe_read_backend', 'commit': 'c4a6430190395c5a3a8944c6d1623e913c60b24a', 'evidence_kind': 'nox', 'receipt_id': 'fd61bf5fa4d64ccc', 'result': '14 passed', 'schema_version': 'aistock_validation_receipt_v1', 'status': 'passed'}",
-    "{'command': 'python read-only PostgreSQL EXPLAIN of generated claim_next_command SQL', 'commit': 'c4a6430190395c5a3a8944c6d1623e913c60b24a', 'evidence_kind': 'workflow_smoke', 'receipt_id': 'e344234ad1026fce', 'result': 'passed; 12 plan rows; transaction read only; analyze false', 'schema_version': 'aistock_validation_receipt_v1', 'status': 'passed'}",
-    "{'command': 'python -m ruff check and python -m py_compile on BUG-998 changed Python files', 'commit': 'c4a6430190395c5a3a8944c6d1623e913c60b24a', 'evidence_kind': 'ruff', 'receipt_id': '2281a8cc3e9a1bed', 'result': 'passed', 'schema_version': 'aistock_validation_receipt_v1', 'status': 'passed'}",
+    {
+      "command": "python -m pytest backend/tests/multi_alpha/test_durable_repository.py backend/tests/multi_alpha/test_durable_repository_postgres.py::test_claim_next_command_reconciling_throttle_executes_on_postgres -q -p no:cacheprovider",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "pytest",
+      "receipt_id": "3dc428be5116df88",
+      "result": "31 passed, 1 skipped",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s l0",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "nox",
+      "receipt_id": "ff5e957d8e0b7996",
+      "result": "successful",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "nox",
+      "receipt_id": "5a2c5d9d26f4fae7",
+      "result": "8 passed; ownership files 14 mapped 14",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s qe_read_backend",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "nox",
+      "receipt_id": "fd61bf5fa4d64ccc",
+      "result": "14 passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python read-only PostgreSQL EXPLAIN of generated claim_next_command SQL",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "workflow_smoke",
+      "receipt_id": "e344234ad1026fce",
+      "result": "passed; 12 plan rows; transaction read only; analyze false",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m ruff check and python -m py_compile on BUG-998 changed Python files",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "ruff",
+      "receipt_id": "2281a8cc3e9a1bed",
+      "result": "passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
     "python -m pytest backend/tests/multi_alpha/test_durable_repository.py -q -p no:cacheprovider -> 31 passed",
     "python -m nox -s l0 -> passed",
     "python -m nox -s validation_module_registry_l0 -> 8 passed",
