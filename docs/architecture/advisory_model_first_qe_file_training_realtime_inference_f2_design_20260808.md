@@ -1,12 +1,14 @@
-# AIstock 荐股模型优先垂直切片 F2 详细设计 v1.2
+# AIstock 荐股模型优先垂直切片 F2 详细设计 v1.3
 
 > 日期：2026-08-08
 > Feature tier：`F2`
-> 当前状态：`M0_M1_IMPLEMENTED_TRAINING_PENDING`
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v2.4
+> 当前状态：`M0_M1_TRAINED_EXPERIMENTAL_SHADOW`
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v2.5
 > 首个目标：原生多 Alpha 父包 `pkg_ma_8ec5e389fa2c5e484a1ac7e9` 的 SHORT_REBOUND Top20→Top5 真实模型
 > 训练边界：只在 WSL Conda 环境读取已有 QE H5/Parquet/Qlib Bin 和 Prediction Store PKL
 > 推理边界：只在 Advisory 消费层读取数据库当前/实时输入，不修改 Selection、Paper、模拟盘或 QE
+> 训练结果：request `advmreq_ac5959aa8dc14a25e3b8c139`；bundle `9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629`；WSL 128.921 秒；峰值 RSS 2,262,388,736 bytes；shadow binding 未激活
+> 质量结论：80 日 test Top5 完整，但 5 日平均超额收益 `-0.0002833`，低于原始排名 Top5 `0.0085591` 和固定 seed 随机 Top5 `0.0055652`；该结果只能作为未校准实验影子模型，不得描述为排序优化成功
 
 ## 0. 文档定位与权威顺序
 
@@ -15,7 +17,7 @@
 发生冲突时按以下顺序处理：
 
 1. 用户当前明确要求。
-2. 父级蓝图 v2.4 的模型优先顺序、数据边界和模块隔离边界。
+2. 父级蓝图 v2.5 的模型优先顺序、数据边界和模块隔离边界。
 3. 本文档冻结的目标资产、候选、特征、标签、时间切分和 API 合同。
 4. 当前源码中与以上内容不冲突的既有实现。
 
@@ -682,6 +684,8 @@ ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE
 
 完成判定：真实 model 和 fresh HMM continuation state 可加载；test Top5 非空；baseline comparison 非空；无旧 HMM 输入、无未来泄漏、无 Windows 训练，且 shadow 使用与 holdout 相同的 HMM/reranker 参数。
 
+实际验收：`2026-08-08` 在 WSL `rdagent-gpu` 完成真实训练。406 日产生 8120 个 Top20 候选；fresh HMM 为 110 个可用行业、22 个明确 unavailable 行业；348 日特征 group 可用，标签 406 日可用；最终 train/validation/test 分别为 191/57/80 个模型可用日期，test 为 1599 行且 80 日均有 Top5。LightGBM best iteration 为 1，模型文件包含 103 个冻结特征并可读回。模型质量低于三个主要对照，因此 bundle 保持 `EXPERIMENTAL_SHADOW` 且不写 shadow binding；这不是新增收益门禁，而是对真实实验结果的准确状态描述。
+
 ### Batch 3：M2 数据库推理与页面
 
 1. 实现数据库批量 FeatureSource。
@@ -781,28 +785,28 @@ Batch 1 完成后立即进入 Batch 2，不插入历史证据、归档或通用�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-301 | planned `backend/services/advisory_model_first/target_binding.py` | `backend/tests/advisory_modeling/test_model_first_target_binding.py` | design_ready | none |
-| F-302 | planned `backend/services/advisory_model_first/qe_file_source.py` | `backend/tests/advisory_modeling/test_model_first_runtime_equivalent_parent_source.py` | design_ready | none |
-| F-303 | planned `backend/services/advisory_model_first/qe_file_source.py` | `backend/tests/advisory_modeling/test_model_first_file_only_training.py` | design_ready | none |
-| F-304 | planned `backend/services/advisory_model_first/candidate_group.py` | `backend/tests/advisory_modeling/test_model_first_candidate_clock_and_stage.py` | design_ready | none |
-| F-305 | planned `backend/services/advisory_model_first/shared_feature_builder.py` | `backend/tests/advisory_modeling/test_model_first_feature_source_parity.py` | design_ready | none |
-| F-306 | planned `backend/services/advisory_model_first/feature_schema_v1.py` | `backend/tests/advisory_modeling/test_model_first_feature_missing_policy.py` | design_ready | none |
-| F-307 | planned `backend/services/advisory_model_first/fresh_hmm.py` | `backend/tests/advisory_modeling/test_model_first_fresh_hmm_continuation.py` | design_ready | none |
-| F-308 | planned `backend/services/advisory_model_first/labels.py` | `backend/tests/advisory_modeling/test_model_first_exact_labels.py` | design_ready | none |
-| F-309 | planned `backend/services/advisory_model_first/time_split.py` | `backend/tests/advisory_modeling/test_model_first_purged_time_split.py` | design_ready | none |
-| F-310 | planned `backend/services/advisory_model_first/reranker_training.py` | `backend/tests/advisory_modeling/test_model_first_real_lambdarank.py` | design_ready | none |
-| F-311 | planned `scripts/advisory_model_train_wsl.py` | `backend/tests/advisory_modeling/test_model_first_wsl_only.py` | design_ready | none |
-| F-312 | planned projected reader/trainer | `backend/tests/advisory_modeling/test_model_first_resource_budget.py` | design_ready | none |
-| F-313 | planned `backend/services/advisory_model_first/model_bundle.py` | `backend/tests/advisory_modeling/test_model_first_atomic_exact_bundle.py` | design_ready | none |
+| F-301 | `backend/services/advisory_model_first/target_binding.py`; `contracts.py` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; frozen request readback | verified | none |
+| F-302 | `prediction_source.py`; `candidate_group.py`; `diagnostics.py` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; `test_review_regressions.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/runs/advmreq_ac5959aa8dc14a25e3b8c139/parent_diagnostics.json` | verified | none |
+| F-303 | `qe_file_source.py`; `training_pipeline.py` | `backend/tests/advisory_model_first/test_qe_file_source.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/training_request.json` | verified | none |
+| F-304 | `candidate_group.py` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/runs/advmreq_ac5959aa8dc14a25e3b8c139/candidate_coverage.json` | verified | none |
+| F-305 | `shared_feature_builder.py`; `feature_schema_v1.py` | `backend/tests/advisory_model_first/test_shared_feature_builder.py` | design_ready | none |
+| F-306 | `feature_schema_v1.py`; `reranker_training.py` | `backend/tests/advisory_model_first/test_shared_feature_builder.py`; `test_review_regressions.py` | verified | none |
+| F-307 | `fresh_hmm.py` | `backend/tests/advisory_model_first/test_fresh_hmm.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/fresh_hmm_models.json` | verified | none |
+| F-308 | `labels.py` | `backend/tests/advisory_model_first/test_labels.py`; `test_review_regressions.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/runs/advmreq_ac5959aa8dc14a25e3b8c139/label_coverage.json` | verified | none |
+| F-309 | `time_split.py`; `labels.py` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/split.json` | verified | none |
+| F-310 | `reranker_training.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/baseline_comparison.json`; `backend/tests/advisory_model_first/test_review_regressions.py` | verified | none |
+| F-311 | `scripts/advisory_model_train_wsl.py`; `scripts/wsl/advisory_model_train.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/manifest.json`; `backend/tests/advisory_model_first/test_candidate_and_contracts.py` | verified | none |
+| F-312 | projected reader；`training_pipeline.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/runs/advmreq_ac5959aa8dc14a25e3b8c139/training_receipt.json`; `backend/tests/advisory_model_first/test_qe_file_source.py` | verified | none |
+| F-313 | `model_bundle.py` | `backend/tests/advisory_model_first/test_review_regressions.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/manifest.json` | design_ready | none |
 | F-314 | planned `backend/services/advisory_model_first/model_inference.py` + router | `backend/tests/advisory_modeling/test_model_first_api_decision_clock.py` | design_ready | none |
 | F-315 | planned Advisory page | `frontend/tests/advisory-model-first-shadow.spec.ts` | design_ready | none |
 | F-316 | planned Program composition | `backend/tests/advisory_modeling/test_model_first_program_isolation.py` | design_ready | none |
 | F-317 | planned inference error envelope | `backend/tests/advisory_modeling/test_model_first_baseline_continuity.py` | design_ready | none |
-| F-318 | planned Advisory-only modules | `backend/tests/advisory_modeling/test_model_first_protected_module_isolation.py` | design_ready | none |
-| F-319 | planned dependency boundary | `backend/tests/advisory_modeling/test_model_first_no_historical_dependency.py` | design_ready | none |
-| F-320 | this design and code scan | `backend/tests/advisory_modeling/test_model_first_no_unapproved_gates.py` | design_ready | none |
-| F-321 | planned input descriptor | `backend/tests/advisory_modeling/test_model_first_minute_exclusion.py` | design_ready | none |
-| F-322 | planned typed errors/logging | `backend/tests/advisory_modeling/test_model_first_error_visibility.py` | design_ready | none |
+| F-318 | `backend/services/advisory_model_first/**` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; changed-file review | verified | none |
+| F-319 | dependency scan | `backend/tests/advisory_model_first/test_review_regressions.py`; no Historical Range/SEALED/source revision import | verified | none |
+| F-320 | design/code review | `backend/tests/advisory_model_first/test_review_regressions.py`; no role/approval/package admission implementation | verified | none |
+| F-321 | `qe_file_source.py`; frozen request | `backend/tests/advisory_model_first/test_qe_file_source.py`; minute Bin absent from request | verified | none |
+| F-322 | `errors.py`; WSL driver；trainer typed errors | `backend/tests/advisory_model_first/test_review_regressions.py` | design_ready | none |
 
 ## 18. Rollout / Rollback
 
@@ -834,4 +838,4 @@ Batch 1 完成后立即进入 Batch 2，不插入历史证据、归档或通用�
 
 ## 20. 开工条件与下一步
 
-本设计通过 F2 validator 和正式审核后即可进入 Batch 1/M0 代码开发，不再新增其它前置设计。Batch 1 的首个执行目标是生成一份真实 `FrozenAdvisoryTrainingRequestV1` 并完成 406 日 Top20/feature/label coverage；通过后立即进入 Batch 2 的真实 WSL 训练。
+M0/M1 源码、正式 WSL 训练和 bundle 读回已经完成。下一任务直接进入 Batch 3/M2：实现数据库 decision-cutoff FeatureSource、exact bundle loader、只读影子推理 API 和 Advisory 页面 readback；不得在此之前插入历史证据、归档、通用 ModelOps 或遗留任务处理。当前 bundle 质量低于对照，页面必须如实展示实验状态和 baseline，禁止描述为已校准或已优化。

@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.4
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.5
 
 > 初始日期：2026-07-10
 > 修订日期：2026-08-08
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M0_M1_IMPLEMENTED_TRAINING_PENDING`
-> 当前功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`
-> 规划进度：M0/M1 源码、406 日 runtime-equivalent Top20、QE 文件 reader、共享 FeatureBuilder、fresh HMM、标签和 WSL LambdaRank 训练器已实现并通过定向测试；真实文件 smoke 已确认 406 日、8120 个候选和可训练标签，正式 WSL 全量训练与 bundle 验收待执行
+> 当前状态：`MODEL_FIRST_M1_TRAINED_M2_NEXT`
+> 当前用户可见功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`；离线模型里程碑 M0/M1 `2/2`，尚未计入用户可见功能
+> 规划进度：M0/M1 源码与正式 WSL 训练已完成；406 日 runtime-equivalent Top20、110 个 fresh HMM、80 日 test Top5 和原子 bundle 已验收；模型 test 质量低于原始排名与随机对照，保持未激活实验影子状态；下一项直接进入 M2 数据库实时特征、API 和页面 readback
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -63,7 +63,7 @@
 
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
-| SHORT_REBOUND Top20→Top5 | `NOT_IMPLEMENTED` | WSL 真实训练、留出集预测、Advisory 推理和页面 readback 全部存在 |
+| SHORT_REBOUND Top20→Top5 | `MODEL_TRAINED_NOT_USER_VISIBLE` | WSL 真实训练与留出集预测已存在；Advisory 推理和页面 readback 待 M2 |
 | 预期收益与持股周期 | `NOT_IMPLEMENTED` | 真实模型输出分位数、概率和周期范围 |
 | 买入/止盈/止损区间 | `NOT_IMPLEMENTED` | 真实模型和价格转换层输出范围 |
 | 荐股页面模型展示 | `NOT_IMPLEMENTED` | 页面读取真实预测，不是 mock、规则冒充或静态示例 |
@@ -340,7 +340,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW`。
 
-状态：`IMPLEMENTED_AWAITING_FORMAL_TRAINING_BASELINE`。基础数据、Prediction Store、涨跌停、分钟边界、冻结 request 合同和 runtime-equivalent candidate coverage 已核实并实现；真实文件 smoke 为 406 日、8120 个 Top20 候选。待源码形成不可变训练 commit 后生成正式 request 并启动 WSL 全量训练。
+状态：`COMPLETED`。基础数据、Prediction Store、涨跌停、分钟边界、冻结 request 合同和 runtime-equivalent candidate coverage 已核实并实现；正式 request 为 `advmreq_ac5959aa8dc14a25e3b8c139`，真实文件训练覆盖 406 日、8120 个 Top20 候选。
 
 - 绑定当前目标父包精确 roster、两个代表 seed/model SHA、zscore、terminal weights、raw Top25、Program target_count 和 runtime semantics hash。
 - 完整 38 seed、逐日权重和 `combined_prediction.pkl` 只生成显式对照诊断，不进入在线 feature，也不替代 current runtime candidate。
@@ -356,6 +356,8 @@ calibration_state = UNCALIBRATED or PARTIAL
 ### M1：首个真实Top20→Top5模型
 
 优先级：`P0_NOW`。
+
+状态：`COMPLETED_EXPERIMENTAL_SHADOW`。WSL 真实训练生成 bundle `9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629`，80 日 test 均有 Top5，峰值 RSS 约 2.11GB，总耗时约 129 秒。真实 test 平均超额收益低于原始排名与随机对照，因此 bundle 未激活；该负面质量结论不回溯否定训练功能完成，也不得被隐藏或描述为优化成功。
 
 - 实现QE文件reader、共享FeatureBuilder和WSL launcher/trainer。
 - 使用当前文件数据从头训练HMM，固定状态映射并生成可从文件 cutoff 连续追加数据库观测的 posterior；旧HMM结果只进入对照报告。
@@ -587,4 +589,4 @@ runtime_activation = separate user-confirmed action
 8. 明确真实影子推理API和页面readback。
 9. 明确禁止Historical Range、Source Catalog、SEALED、历史DML和旧任务处理。
 
-下一项任务是以当前 M0/M1 源码形成不可变训练 commit，生成真实 `FrozenAdvisoryTrainingRequestV1`，立即在 WSL 执行 fresh HMM 与 LightGBM LambdaRank 全量训练，并验收非空 test Top5、baseline comparison、资源上限和原子 bundle。训练通过后直接进入 M2 数据库 decision-cutoff FeatureSource、影子推理 API 和页面 readback；不得插入其它基础设施、证据、历史固化或治理任务。
+下一项任务直接进入 M2：实现数据库 decision-cutoff FeatureSource、exact bundle loader、只读影子推理 API 和 Advisory 页面 readback，并展示真实 baseline 与 `EXPERIMENTAL_SHADOW` 状态。不得在 M2 前插入其它基础设施、证据、历史固化或治理任务；模型质量优化按 M5 排序，不得用规则或基线替代真实模型输出。
