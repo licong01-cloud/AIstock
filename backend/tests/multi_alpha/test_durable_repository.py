@@ -972,6 +972,229 @@ def test_attempt_claim_policy_never_dispatches_queued_work_for_cancelling_parent
     assert set(params[1]) == {"cancel_requested", "cancelling"}
 
 
+def _claimed_reconcile_attempt() -> dict[str, Any]:
+    return {
+        "attempt_id": "macba_throttle",
+        "child_id": "macbc_throttle",
+        "run_id": "macb_throttle",
+        "run_status": "running",
+        "phase": "running",
+        "owner_id": "worker_1",
+        "fencing_token": 1,
+        "row_version": 2,
+        "node_id": "wsl2-5080",
+    }
+
+
+def test_reconcile_claim_throttles_running_attempts_and_suppresses_claimed_event() -> None:
+    """A reconcile claim with min_recheck_interval_seconds adds a remote-status
+    recheck throttle and does not write a claimed event (unchanged-state poll)."""
+    provider = ScriptedProvider(
+        [
+            Step(contains="FOR UPDATE SKIP LOCKED", one=_claimed_reconcile_attempt()),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    claimed = repository.claim_next_attempt(
+        owner_id="worker_1",
+        lease_seconds=600,
+        claim_kind="reconcile",
+        min_recheck_interval_seconds=60,
+        write_claim_event=False,
+    )
+
+    assert claimed is not None
+    sql = provider.cursor.executions[0][0]
+    assert "OR attempt.status = 'submitting'" in sql
+    assert "attempt.updated_at <= clock_timestamp() - (%s::int * INTERVAL '1 second')" in sql
+    # write_claim_event=False -> no claimed event insert
+    assert not any(
+        "INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event" in step.contains
+        for step in provider.cursor.steps
+    )
+    params = provider.cursor.executions[0][1]
+    assert params[5] == 60 and params[6] == 60
+
+
+def test_command_claim_throttles_reconciling_and_suppresses_repeat_command_claimed() -> None:
+    """A re-claimed reconciling command is throttled and its repeated
+    command_claimed audit event is suppressed."""
+    provider = ScriptedProvider(
+        [
+            Step(
+                contains="FOR UPDATE SKIP LOCKED",
+                one={
+                    "command_id": "macmd_throttle",
+                    "run_id": "macb_throttle",
+                    "child_id": None,
+                    "attempt_id": None,
+                    "status": "reconciling",
+                    "action": "pause",
+                    "owner_id": "worker_1",
+                    "fencing_token": 1,
+                    "row_version": 2,
+                },
+            ),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    claimed = repository.claim_next_command(
+        owner_id="worker_1",
+        lease_seconds=600,
+        min_recheck_interval_seconds=60,
+    )
+
+    assert claimed is not None
+    sql = provider.cursor.executions[0][0]
+    assert "OR command.status <> 'reconciling'" in sql
+    assert "command.updated_at <= clock_timestamp() - (%s::int * INTERVAL '1 second')" in sql
+    # reconciling re-claim -> command_claimed event suppressed
+    assert not any(
+        "INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event" in step.contains
+        for step in provider.cursor.steps
+    )
+
+
+def test_list_runs_pending_archive_excludes_skipped_disabled_and_backs_off_archive_error() -> None:
+    """archive_skipped_disabled is a final disposition and archive_error retries
+    use an explicit backoff instead of per-cycle re-scans."""
+    provider = ScriptedProvider([Step(contains="SELECT run.*", all_rows=[])])
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    assert repository.list_runs_pending_archive(
+        limit=10,
+        archive_retry_backoff_seconds=60,
+    ) == []
+    sql = provider.cursor.executions[0][0]
+    assert "'archive_skipped_disabled'" in sql
+    assert "event.phase = 'archive_error'" in sql
+    assert "event.created_at > clock_timestamp() - (%s::int * INTERVAL '1 second')" in sql
+    params = provider.cursor.executions[0][1]
+    assert params[1] == 60 and params[2] == 60
+
+
+def test_append_error_if_fingerprint_new_keeps_first_error_only() -> None:
+    """Identical error fingerprints append one event; a new error still records."""
+    insert_provider = ScriptedProvider(
+        [
+            Step(
+                contains="ORDER BY event_id DESC",
+                one=None,
+            ),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 11}),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=insert_provider)
+    error = {
+        "reason_code": "business_readback_mismatch",
+        "message": "child count mismatch",
+        "context": {"expected": 3, "actual": 2},
+    }
+    inserted = repository.append_error_if_fingerprint_new(
+        run_id="macb_throttle",
+        phase="business_finalize_error",
+        error=error,
+    )
+    assert inserted is not None
+    assert inserted["event_id"] == 11
+
+    dedup_provider = ScriptedProvider(
+        [
+            Step(
+                contains="ORDER BY event_id DESC",
+                one={
+                    "payload_json": {
+                        "error": {
+                            "reason_code": "business_readback_mismatch",
+                            "message": "child count mismatch",
+                            "context": {"expected": 3, "actual": 2},
+                        }
+                    }
+                },
+            ),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=dedup_provider)
+    suppressed = repository.append_error_if_fingerprint_new(
+        run_id="macb_throttle",
+        phase="business_finalize_error",
+        error=error,
+    )
+    assert suppressed is not None
+    # identical fingerprint -> no second insert
+    assert not any(
+        "INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event" in step.contains
+        for step in dedup_provider.cursor.steps
+    )
+
+    new_provider = ScriptedProvider(
+        [
+            Step(
+                contains="ORDER BY event_id DESC",
+                one={
+                    "payload_json": {
+                        "error": {
+                            "reason_code": "business_readback_mismatch",
+                            "message": "child count mismatch",
+                            "context": {"expected": 3, "actual": 2},
+                        }
+                    }
+                },
+            ),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 12}),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=new_provider)
+    changed = repository.append_error_if_fingerprint_new(
+        run_id="macb_throttle",
+        phase="business_finalize_error",
+        error={**error, "message": "different failure"},
+    )
+    assert changed is not None
+    assert changed["event_id"] == 12
+
+
+def test_append_event_if_phase_new_dedups_same_phase() -> None:
+    """A control poll phase is appended once; the same phase is not re-appended."""
+    insert_provider = ScriptedProvider(
+        [
+            Step(contains="JOIN strategy_pkg.multi_alpha_combine_backtest_child_attempt", one={"match": True}),
+            Step(contains="SELECT event_id", one=None),
+            Step(contains="INSERT INTO strategy_pkg.multi_alpha_combine_backtest_event", one={"event_id": 21}),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=insert_provider)
+    inserted = repository.append_event_if_phase_new(
+        run_id="macb_throttle",
+        phase="cancel_waiting_remote_terminal",
+        event_type="control",
+        payload={"cancellation": {"remote_status": "running"}},
+        attempt_id="macba_throttle",
+        child_id="macbc_throttle",
+    )
+    assert inserted is not None
+    assert inserted["event_id"] == 21
+
+    dedup_provider = ScriptedProvider(
+        [
+            Step(contains="JOIN strategy_pkg.multi_alpha_combine_backtest_child_attempt", one={"match": True}),
+            Step(contains="SELECT event_id", one={"event_id": 21}),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=dedup_provider)
+    suppressed = repository.append_event_if_phase_new(
+        run_id="macb_throttle",
+        phase="cancel_waiting_remote_terminal",
+        event_type="control",
+        payload={"cancellation": {"remote_status": "running"}},
+        attempt_id="macba_throttle",
+        child_id="macbc_throttle",
+    )
+    assert suppressed is None
+
+
 def test_control_reason_does_not_pollute_error_columns() -> None:
     current = {**_claimed_run(), "status": "running"}
     updated = {**current, "status": "pause_requested", "phase": "pause", "row_version": 3, "error_code": None}

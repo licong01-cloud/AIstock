@@ -19,10 +19,15 @@ class _Repository:
         }
         self.events: dict[tuple[str, str], dict[str, Any]] = {}
 
-    def list_runs_pending_archive(self, *, limit: int) -> list[Mapping[str, Any]]:
+    def list_runs_pending_archive(
+        self,
+        *,
+        limit: int,
+        archive_retry_backoff_seconds: int = 0,
+    ) -> list[Mapping[str, Any]]:
         assert limit == 10
         terminal_delivery = any(
-            phase in {"archive_enqueued", "archive_duplicate"}
+            phase in {"archive_enqueued", "archive_duplicate", "archive_skipped_disabled"}
             for _event_id, phase in self.events
         )
         return [] if terminal_delivery else [dict(self.run)]
@@ -51,9 +56,10 @@ class _Repository:
 
 
 class _Capture:
-    def __init__(self, results: list[Any]) -> None:
+    def __init__(self, results: list[Any], *, enabled: bool = True) -> None:
         self.results = list(results)
         self.calls = 0
+        self.enabled = enabled
 
     def enqueue_multi_alpha_combine_completed_result(self, **_kwargs: Any) -> Mapping[str, Any]:
         self.calls += 1
@@ -86,14 +92,28 @@ def _orchestrator(repository: _Repository, capture: _Capture) -> DurableMultiAlp
     )
 
 
-def test_post_terminal_archive_states_are_visible_and_retry_is_idempotent() -> None:
+def test_archive_pass_exits_before_scanning_when_capture_disabled() -> None:
+    """A globally disabled archive capture must not query terminal runs at all."""
+    repository = _Repository()
+    capture = _Capture(
+        [{"inserted": True, "event_id": "qear_evt_archive", "duplicate": False}],
+        enabled=False,
+    )
+    orchestrator = _orchestrator(repository, capture)
+
+    assert asyncio.run(orchestrator.archive_pass()) == 0
+    assert capture.calls == 0
+    assert repository.events == {}
+
+
+def test_post_terminal_archive_enqueue_is_visible_and_retry_is_idempotent() -> None:
     repository = _Repository()
     capture = _Capture(
         [
             {
-                "inserted": False,
-                "skipped_reason": "disabled",
+                "inserted": True,
                 "event_id": "qear_evt_archive",
+                "duplicate": False,
             },
             {
                 "inserted": True,
@@ -106,14 +126,12 @@ def test_post_terminal_archive_states_are_visible_and_retry_is_idempotent() -> N
 
     assert asyncio.run(orchestrator.archive_pass()) == 1
     assert repository.run["status"] == "succeeded"
-    assert ("qear_evt_archive", "archive_skipped_disabled") in repository.events
-
-    assert asyncio.run(orchestrator.archive_pass()) == 1
     assert ("qear_evt_archive", "archive_enqueued") in repository.events
-    assert repository.run["status"] == "succeeded"
 
+    # archive_enqueued is a final disposition for the current configuration;
+    # the terminal run is no longer re-scanned on the next cycle.
     assert asyncio.run(orchestrator.archive_pass()) == 0
-    assert capture.calls == 2
+    assert capture.calls == 1
 
 
 def test_archive_enqueue_error_is_durable_and_never_rolls_back_terminal_run() -> None:
