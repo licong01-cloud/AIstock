@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.3
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.5
 
 > 初始日期：2026-07-10
 > 修订日期：2026-08-08
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_VERTICAL_SLICE_DESIGNED`
-> 当前功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`
-> 规划进度：M0 数据可用性、目标父包当前 runtime 语义、406 个 decision dates 和 246/10/60/10/80 时间切分已在垂直切片详细设计中冻结；M0/M1 代码与真实 WSL 训练尚未开始
+> 当前状态：`MODEL_FIRST_M1_TRAINED_M2_NEXT`
+> 当前用户可见功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`；离线模型里程碑 M0/M1 `2/2`，尚未计入用户可见功能
+> 规划进度：M0/M1 源码与正式 WSL 训练已完成；406 日 runtime-equivalent Top20、110 个 fresh HMM、80 日 test Top5 和原子 bundle 已验收；模型 test 质量低于原始排名与随机对照，保持未激活实验影子状态；下一项直接进入 M2 数据库实时特征、API 和页面 readback
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -63,7 +63,7 @@
 
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
-| SHORT_REBOUND Top20→Top5 | `NOT_IMPLEMENTED` | WSL 真实训练、留出集预测、Advisory 推理和页面 readback 全部存在 |
+| SHORT_REBOUND Top20→Top5 | `MODEL_TRAINED_NOT_USER_VISIBLE` | WSL 真实训练与留出集预测已存在；Advisory 推理和页面 readback 待 M2 |
 | 预期收益与持股周期 | `NOT_IMPLEMENTED` | 真实模型输出分位数、概率和周期范围 |
 | 买入/止盈/止损区间 | `NOT_IMPLEMENTED` | 真实模型和价格转换层输出范围 |
 | 荐股页面模型展示 | `NOT_IMPLEMENTED` | 页面读取真实预测，不是 mock、规则冒充或静态示例 |
@@ -147,11 +147,11 @@ WSL environment identity
 | suspend sidecar | `suspend_d_daily_candidate_20180801_20260630/suspend_d.parquet` | 历史停牌状态 |
 | 沪深300 | 日线 Bin 内 `000300.SH` 可读 | benchmark和HMM超额收益 |
 
-当前基础数据能够启动真实训练。多 Alpha预测只覆盖到2024-07-01，因此依赖各腿预测的第二阶段模型样本起点不得早于该日。2026-06-30可以作为特征日，但任何需要未来收益的训练头都必须按各自 horizon 剔除或右删失尾部未成熟样本；不得把最后一日无未来结果的候选当作完整标签。
+当前基础数据能够启动真实训练。目标多 Alpha 各腿共同预测范围实际形成 406 个 decision dates：`2024-07-04..2026-03-10`，因此依赖各腿预测的第二阶段模型样本不得超出该共同范围。基础行情和 H5/Parquet 截止 `2026-06-30`，用于完成 `2026-03-10` 候选的未来标签，不代表候选或 HMM 连续状态可以延伸到 `2026-06-30`。任何需要未来收益的训练头都必须按各自 horizon 剔除或右删失尾部未成熟样本；不得把无未来结果的候选当作完整标签。
 
 当前活跃日线 Bin 未包含中证500、中证1000、创业板指或科创50。它们不是首个 Top20→Top5、收益、周期、日线价格范围或现有 HMM 架构的阻断输入；只有后续模型合同明确使用且实验证明有必要时才补充，不预建通用指数库。
 
-M0 已在从属详细设计中把历史候选冻结为 `OFFLINE_RUNTIME_EQUIVALENT_SELECTION_EFFECTIVE_TOP20_V2`：代表 seed + current zscore + terminal weights 先生成 raw Top25，再取 Program target_count 前20。它同时绑定 `decision_as_of_trade_date` 和下一交易日 `target_trade_date`；正式特征只能读取前者 cutoff。M0 代码尚未实现，因此实现状态仍为 `IN_PROGRESS`，但不再允许实现者自行选择 combined/ensemble/current-runtime 语义。
+M0 已实现 `OFFLINE_RUNTIME_EQUIVALENT_SELECTION_EFFECTIVE_TOP20_V2`：代表 seed + current zscore + terminal weights 先生成 raw Top25，再取 Program target_count 前20。它同时绑定 `decision_as_of_trade_date` 和下一交易日 `target_trade_date`；正式特征只能读取前者 cutoff。真实文件 smoke 已得到 406 日、8120 个候选且每日深度固定 20；combined/ensemble 只作为诊断，不进入 runtime-equivalent 候选语义。正式训练 bundle 尚未生成，因此 M1 仍不得标记完成。
 
 ### 4.2 正式预测数据
 
@@ -340,7 +340,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW`。
 
-状态：`IN_PROGRESS`。基础数据、Prediction Store、涨跌停、分钟边界和详细设计已经核实；尚未产生真实训练 request 和 runtime-equivalent candidate coverage，因此不冒充代码完成。
+状态：`COMPLETED`。基础数据、Prediction Store、涨跌停、分钟边界、冻结 request 合同和 runtime-equivalent candidate coverage 已核实并实现；正式 request 为 `advmreq_ac5959aa8dc14a25e3b8c139`，真实文件训练覆盖 406 日、8120 个 Top20 候选。
 
 - 绑定当前目标父包精确 roster、两个代表 seed/model SHA、zscore、terminal weights、raw Top25、Program target_count 和 runtime semantics hash。
 - 完整 38 seed、逐日权重和 `combined_prediction.pkl` 只生成显式对照诊断，不进入在线 feature，也不替代 current runtime candidate。
@@ -356,6 +356,8 @@ calibration_state = UNCALIBRATED or PARTIAL
 ### M1：首个真实Top20→Top5模型
 
 优先级：`P0_NOW`。
+
+状态：`COMPLETED_EXPERIMENTAL_SHADOW`。WSL 真实训练生成 bundle `9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629`，80 日 test 均有 Top5，峰值 RSS 约 2.11GB，总耗时约 129 秒。真实 test 平均超额收益低于原始排名与随机对照，因此 bundle 未激活；该负面质量结论不回溯否定训练功能完成，也不得被隐藏或描述为优化成功。
 
 - 实现QE文件reader、共享FeatureBuilder和WSL launcher/trainer。
 - 使用当前文件数据从头训练HMM，固定状态映射并生成可从文件 cutoff 连续追加数据库观测的 posterior；旧HMM结果只进入对照报告。
@@ -587,4 +589,4 @@ runtime_activation = separate user-confirmed action
 8. 明确真实影子推理API和页面readback。
 9. 明确禁止Historical Range、Source Catalog、SEALED、历史DML和旧任务处理。
 
-下一项任务是按该详细设计直接进入 Batch 1/M0 代码：实现精确父包 roster、两个代表 Prediction Store `pred.pkl`、current zscore、terminal weights、双日期、QE 日线/H5/Parquet/suspend 文件读取和 `OFFLINE_RUNTIME_EQUIVALENT_SELECTION_EFFECTIVE_TOP20_V2`；其余 seed、逐日权重和 combined reference 同批生成诊断但不进入在线 feature。Batch 1 完成后立即进入 M1 FeatureBuilder、fresh HMM 和真实 WSL LambdaRank 训练，不再插入其它基础设施、证据、历史固化或治理任务。
+下一项任务直接进入 M2：实现数据库 decision-cutoff FeatureSource、exact bundle loader、只读影子推理 API 和 Advisory 页面 readback，并展示真实 baseline 与 `EXPERIMENTAL_SHADOW` 状态。不得在 M2 前插入其它基础设施、证据、历史固化或治理任务；模型质量优化按 M5 排序，不得用规则或基线替代真实模型输出。

@@ -1,5 +1,13 @@
 schema_version: aistock_module_registry_v1
 modules:
+  - module_id: advisory.model_first
+    display_name: Advisory model-first WSL training
+    module_type: data_pipeline
+    risk_level: high
+    description: File-only runtime-equivalent candidate reconstruction, fresh HMM, real WSL reranker training, and isolated experimental bundles without Historical Range or trading-runtime dependencies.
+    description_zh: 荐股模型优先链路，使用 QE 文件重建当前运行候选、重新拟合 HMM、在 WSL 真实训练重排序模型并发布隔离实验 bundle，不依赖历史证据工程或交易运行时。
+    test_plans:
+      required_on_change: [l0, advisory_modeling_backend]
   - module_id: advisory.historical_range
     display_name: Advisory historical range research
     module_type: data_pipeline

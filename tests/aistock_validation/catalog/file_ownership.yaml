@@ -1,5 +1,19 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: advisory_model_first_training
+    priority: 130
+    include:
+      - backend/services/advisory_model_first/**
+      - backend/tests/advisory_model_first/**
+      - scripts/advisory_model_prepare_request.py
+      - scripts/advisory_model_train_wsl.py
+      - scripts/wsl/advisory_model_train.py
+      - docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_*.md
+    primary_module: advisory.model_first
+    impact_modules: []
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: File-only runtime-equivalent candidate reconstruction, fresh HMM, real WSL reranker training, and immutable experimental model bundles form one isolated Advisory research delivery.
   - rule_id: advisory_short_rebound_modeling
     priority: 129
     include:
