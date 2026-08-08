@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.2
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.3
 
 > 初始日期：2026-07-10
 > 修订日期：2026-08-08
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
 > 当前状态：`MODEL_FIRST_VERTICAL_SLICE_DESIGNED`
 > 当前功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`
-> 规划进度：M0 数据可用性、目标父包精确 roster、406 日训练矩阵和 256/5/60/5/80 时间切分已在垂直切片详细设计中冻结；M0/M1 代码与真实 WSL 训练尚未开始
+> 规划进度：M0 数据可用性、目标父包当前 runtime 语义、406 个 decision dates 和 246/10/60/10/80 时间切分已在垂直切片详细设计中冻结；M0/M1 代码与真实 WSL 训练尚未开始
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -113,8 +113,9 @@
 
 - 已有 QE H5/Parquet/Qlib Bin 中的日线、复权、成交量、资金、估值、行业、指数、停牌、涨跌停和因子特征。
 - 仅使用上述基础数据按本蓝图标签公式派生的收益、MFE/MAE、周期和价格标签；只有 QE `label.pkl` 与目标标签定义逐字段一致时才可直接复用，否则只作为对照，不得偷换标签语义。
-- Prediction Store 中目标父包精确 roster 引用的各腿 `pred.pkl`、seed ensemble、`combined_prediction.pkl`、Alpha score/rank、逐日 weight 和模型元数据。允许直接读取 PKL，不要求为形式统一复制成 Parquet。
-- 已有冻结候选或从目标父包精确预测输入确定性重建的逐日 Top20。不得把不同父包、不同演进实验或不同 roster 的“最新腿”临时拼成训练输入。
+- Prediction Store 中目标父包精确 roster 引用的各腿 `pred.pkl`、模型元数据、历史 seed ensemble、`combined_prediction.pkl` 和逐日 weight。允许直接读取 PKL，不要求为形式统一复制成 Parquet。
+- 当前父包正式 runtime 每腿只运行代表 seed，并使用 `frozen_backtest_terminal_weights`。首模历史候选必须按两个代表 seed、当前 zscore、terminal weights、raw Top25 和 Program target_count=20 确定性重建；完整 38-seed ensemble、逐日 weight 和 `combined_prediction.pkl` 只作不进入首模特征的显式分布诊断。
+- 不得把不同父包、不同演进实验、不同 roster 的“最新腿”临时拼成训练输入，也不得把代表模型结果复制为多 seed 后生成伪离散度。
 - Qlib 分钟 Bin；只在明确训练盘中成交概率或价格路径模型时使用，不作为 Top5、收益、持股周期或日线级价格范围模型的前置条件。
 
 训练过程只需记录直接保证模型可加载和特征一致性的最小信息：
@@ -139,10 +140,10 @@ WSL environment identity
 | 输入 | 已验证范围/内容 | 当前用途 |
 |---|---|---|
 | WSL `/home/lc999/data/qlib_bin` | 日线 `2018-08-01..2026-06-30`；包含 OHLCV、复权、`limit_up/down`、涨跌停价和 `prev_close` | 首模基础特征、标签、HMM重训和日线价格范围 |
-| Windows H5/Parquet candidate | `qlib_st_pit_active_h5_daily_candidate_20180801_20260630`；日线、基本面、资金、行业、筹码和静态因子 | 按需补充候选级特征 |
+| WSL H5/Parquet candidate | `/home/lc999/data/factor_data_versions/qlib_st_pit_active_h5_daily_candidate_20180801_20260630_moneyflow_v2`；日线、基本面、资金、行业、筹码和静态因子 | 首模候选级特征；训练不在 Windows 读取 |
 | WSL `/home/lc999/data/qlib_minute_bin` | `2024-01-02 09:30..2026-06-30 15:00`，约33GB，含分钟OHLCV与涨跌停字段 | 仅后续盘中路径模型 |
-| Prediction Store | 最新架构演进样本中12个唯一seed运行的 `pred.pkl`/`label.pkl` 均存在；抽样四类腿均为 `2024-07-01..2026-06-30`、2,206,952行、4,641标的 | 目标父包各腿分数、seed集成、腿间共识/分歧 |
-| combine workspace | `combined_prediction.pkl`、逐日权重和组合因子文件存在 | 合成分数、候选重建和父包输入对照 |
+| Prediction Store | 当前目标父包精确 roster 为 LSTM 33 seed + FUNDGROWTH 5 seed；两个 runtime 代表 seed 与完整 38 个 `pred.pkl` 均存在 | 代表 seed 用于 runtime-equivalent 候选；完整 ensemble 仅作诊断 |
+| combine workspace | 406 日 `combined_prediction.pkl`、逐日权重和组合因子文件存在 | 已回测 walk-forward 组合参考，不作为当前 runtime 候选权威 |
 | suspend sidecar | `suspend_d_daily_candidate_20180801_20260630/suspend_d.parquet` | 历史停牌状态 |
 | 沪深300 | 日线 Bin 内 `000300.SH` 可读 | benchmark和HMM超额收益 |
 
@@ -150,7 +151,7 @@ WSL environment identity
 
 当前活跃日线 Bin 未包含中证500、中证1000、创业板指或科创50。它们不是首个 Top20→Top5、收益、周期、日线价格范围或现有 HMM 架构的阻断输入；只有后续模型合同明确使用且实验证明有必要时才补充，不预建通用指数库。
 
-M0必须把历史候选阶段冻结为一个明确枚举，例如父包合成分数Top20或正式荐股实际消费的`selection_effective_rank` Top20，并证明它与正式预测入口一致。两种阶段不能混用，也不能在某日文件缺失时静默切换；该语义尚未冻结，因此M0保持`IN_PROGRESS`。
+M0 已在从属详细设计中把历史候选冻结为 `OFFLINE_RUNTIME_EQUIVALENT_SELECTION_EFFECTIVE_TOP20_V2`：代表 seed + current zscore + terminal weights 先生成 raw Top25，再取 Program target_count 前20。它同时绑定 `decision_as_of_trade_date` 和下一交易日 `target_trade_date`；正式特征只能读取前者 cutoff。M0 代码尚未实现，因此实现状态仍为 `IN_PROGRESS`，但不再允许实现者自行选择 combined/ensemble/current-runtime 语义。
 
 ### 4.2 正式预测数据
 
@@ -161,7 +162,7 @@ M0必须把历史候选阶段冻结为一个明确枚举，例如父包合成分
 - 本轮新训练模型产生的当前 HMM预测，以及当前risk policy、ST、停牌、涨跌停和股票池输入。
 - 当前 Program、binding 和模型配置。
 
-正式预测不得读取 QE H5/Parquet/Qlib Bin 作为当前行情替代，也不得用训练文件中最后一日数据冒充实时数据。历史 PKL只用于模型训练和离线评价；正式预测的 Alpha/多 Alpha分数必须来自该 Program 当次实际候选和父包组件输出。
+正式预测不得读取 QE H5/Parquet/Qlib Bin 作为当前行情替代，也不得用训练文件中最后一日数据冒充实时数据。历史 PKL只用于模型训练和离线评价；正式预测的 Alpha/多 Alpha分数必须来自该 Program 当次实际候选和父包组件输出。Advisory 的 `target_trade_date` 与 `decision_as_of_trade_date` 必须分别保存，任何正式数据库特征的 business date 都不得晚于 decision cutoff。
 
 ### 4.3 训练与预测 schema parity
 
@@ -193,9 +194,9 @@ HMM是行业状态先验、候选特征和对照基线，不是 Top5 模型的�
 
 - 保留现有行业级两状态 Gaussian HMM、因果 forward-filter 和状态解释架构。
 - 使用当前 QE H5/Parquet/Qlib Bin 中的行业收益、相对沪深300收益、行业成交量和真实 `$limit_up` 比例，从头拟合新HMM。
-- 每个训练/验证切分使用显式 as-of 截止日重新拟合或生成因果状态，不得用 `date.today()`隐式决定历史窗口。
+- 首个 holdout 只在 train 区间拟合 HMM 参数和 observation transform，validation/test 固定参数逐日 forward-filter；状态按 excess-return 均值确定性规范为 BEAR/BULL，不得用 `date.today()`隐式决定窗口。
 - 禁止用涨幅大于9.8%的近似值替代 Bin 中已存在的真实涨停标记，以免ST、创业板和科创板语义错误。
-- 当前数据库版 `SectorHMMTrainer` 的算法可复用，但训练数据适配必须改为文件读取；正式预测加载本轮新模型，并仅追加数据库当前/实时观测执行因果预测。
+- 当前数据库版 `SectorHMMTrainer` 的算法可复用，但训练数据适配必须改为文件读取；正式预测加载与 holdout 相同的参数和文件截止 posterior，并仅追加数据库 decision-cutoff 后续观测执行因果预测。若重拟合 HMM，必须同步重建特征和重训 reranker，不能单独替换。
 - HMM重训或预测失败必须显式记录，不得静默复用旧HMM系数，也不得阻断不依赖HMM的现有规则荐股。
 
 ## 5. Architecture / 唯一目标架构
@@ -232,7 +233,7 @@ existing admitted StrategyPackage
   -> Advisory page
 ```
 
-模型服务位于 Advisory 消费层，不反写 Selection、StrategyPackage、Paper 或模拟盘。多个 Program 独立执行，模型参数可以共享，但候选、排名、列表和状态不能跨 Program 混合。
+模型服务位于 Advisory 消费层，不反写 Selection、StrategyPackage、Paper 或模拟盘。多个 Program 独立执行；bundle 必须匹配 package/manifest/style/schema，模型参数不得因显示风格相同而自动跨包共享，候选、排名、列表和状态也不能跨 Program 混合。未来只有基于多个包共同训练并在设计中显式声明兼容集合的新 bundle 才能共享。
 
 ### 5.3 基线连续性
 
@@ -247,13 +248,13 @@ existing admitted StrategyPackage
 
 第一优先级模型固定为当前超跌反弹原生多 Alpha 包的 LightGBM LambdaRank：
 
-- group：同一策略包、同一预测交易日的候选 Top20。
-- 输入：父包精确 roster 的各腿/各seed score、合成 rank/score、逐日权重、腿间一致度/离散度，以及行情、量价、资金、估值和行业；本轮重新训练的 HMM只作为辅助特征和独立对照，不替代主特征模型。
-- 标签：文件数据可支持的 5 日风险调整后相对收益 relevance。
+- group：同一策略包、同一 `decision_as_of_trade_date/target_trade_date` 的 runtime-equivalent 候选 Top20。
+- 输入：父包当前两腿代表模型的 raw/normalized score、leg rank、terminal weight、combined rank/score，以及逐列冻结的行情、量价、资金、估值、筹码、行业和市场特征；完整 seed ensemble 的一致度/离散度只作诊断，不进入在线特征。本轮重新训练的 HMM只作为辅助特征和独立对照，不替代主特征模型。
+- 标签：文件数据构造的 5 日可执行风险调整超额收益 relevance；延迟退出时股票、benchmark和MFE/MAE使用同一实际退出日，10日purge覆盖最长窗口。
 - 输出：`advisory_model_score`、`advisory_model_rank`、Top5和主要特征贡献。
 - 对照：原始前5、HMM前5、模型前5、随机5和候选20等权。
 
-首次真实训练只要求选择一个覆盖最完整的现有文件时间范围和一个固定 seed，跑通真实训练、留出预测、模型加载和 Advisory 影子推理。它是正式的首个基线里程碑，不得冒充最终模型结论。
+首次真实训练只要求选择一个覆盖最完整的现有文件时间范围和一个固定 trainer seed，跑通真实训练、留出预测、模型加载和 Advisory 影子推理。它是正式的首个基线里程碑，不得冒充最终模型结论或 formal forward OOS。
 
 当前合法预测覆盖内的不同时间窗口、额外种子、完整消融和bootstrap属于首模跑通后的模型质量迭代，不得阻塞首次训练与页面实验展示；3/5年窗口只有存在同一目标父包的真实历史预测时才允许执行。
 
@@ -327,7 +328,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 | `AdvisoryFeatureSchemaV1` | 训练/预测共享的特征名、dtype、单位和缺失值语义 |
 | `AdvisoryTrainingRequestV1` | model family、参数、seed、WSL环境、输入和输出路径 |
 | `AdvisoryModelBundleV1` | 模型文件、feature schema、label version、训练区间、指标和SHA256 |
-| `AdvisoryPredictionV1` | program/package/date、候选、model score/rank、Top5、状态和reason |
+| `AdvisoryPredictionV1` | program/package、decision/target双日期、候选、model score/rank、Top5、状态和reason |
 | `AdvisoryOutcomePredictionV1` | 收益分位数、正收益概率、周期、MFE/MAE和状态 |
 | `AdvisoryPriceRangePredictionV1` | entry/take-profit/protection/stop范围、单位、置信状态和reason |
 
@@ -339,14 +340,15 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW`。
 
-状态：`IN_PROGRESS`。基础数据、Prediction Store、涨跌停和分钟覆盖已经只读核实；尚未产生精确绑定目标父包 roster、特征列和时间切分的训练请求，因此不冒充完成。
+状态：`IN_PROGRESS`。基础数据、Prediction Store、涨跌停、分钟边界和详细设计已经核实；尚未产生真实训练 request 和 runtime-equivalent candidate coverage，因此不冒充代码完成。
 
-- 绑定当前目标父包精确 roster、seed run ids、各腿 `pred.pkl`、`combined_prediction.pkl` 和对应权重。
-- 冻结历史Top20所在的确切业务阶段，并与正式预测入口保持一致。
+- 绑定当前目标父包精确 roster、两个代表 seed/model SHA、zscore、terminal weights、raw Top25、Program target_count 和 runtime semantics hash。
+- 完整 38 seed、逐日权重和 `combined_prediction.pkl` 只生成显式对照诊断，不进入在线 feature，也不替代 current runtime candidate。
+- 冻结 decision/target 双日期和 `OFFLINE_RUNTIME_EQUIVALENT_SELECTION_EFFECTIVE_TOP20_V2`，与正式预测入口保持一致。
 - 绑定当前 QE H5/Parquet/Qlib Bin 基础数据，不复制或转换合法预测PKL。
 - 只读核对日期范围、候选/特征/标签、缺失率和时间切分可行性。
 - 选择覆盖最完整的一个真实训练范围。
-- 冻结5日标签的最后成熟日期，并显式排除各 horizon 尾部未成熟样本。
+- 冻结5日标签、最多5日延迟退出和10交易日 purge，显式排除各 horizon 尾部未成熟或跨 split 边界样本。
 - 若首模合同必需字段缺失，继续只读搜索已有QE H5/Parquet/Qlib Bin或Prediction Store；仍不存在时报告精确阻断并停止M1，禁止静默简化特征或转向历史数据库证据工程。
 
 完成判定：产生一个可由WSL读取的真实训练请求，不要求新数据库DML或新历史snapshot。
@@ -356,23 +358,23 @@ calibration_state = UNCALIBRATED or PARTIAL
 优先级：`P0_NOW`。
 
 - 实现QE文件reader、共享FeatureBuilder和WSL launcher/trainer。
-- 使用当前文件数据从头训练HMM并生成因果历史状态；旧HMM结果只进入对照报告。
+- 使用当前文件数据从头训练HMM，固定状态映射并生成可从文件 cutoff 连续追加数据库观测的 posterior；旧HMM结果只进入对照报告。
 - 在WSL训练真实LightGBM LambdaRank。
 - 在时间留出集生成逐日Top5和基线对照。
 - 保存可加载模型文件和最小manifest。
 
-完成判定：真实reranker与本轮重新拟合的HMM均生成可加载模型和非空留出预测；旧HMM产物未作为输入；Top5留出预测非空且无未来数据泄漏。HMM失败不影响现有规则荐股，但不能把HMM增强对照标记为完成。
+完成判定：真实reranker与本轮重新拟合的HMM均生成可加载模型、连续续推状态和非空留出预测；旧HMM产物未作为输入；Top5留出预测非空且无未来数据泄漏。shadow 使用与 holdout 相同的 HMM/reranker 参数，不单独 refit HMM。HMM失败不影响现有规则荐股，但不能把HMM增强对照标记为完成。
 
 ### M2：真实荐股影子推理与页面
 
 优先级：`P0_NEXT`。
 
-- 实现数据库当前/实时特征source。
+- 实现数据库 decision-cutoff 特征source；目标交易日数据不得进入特征。
 - 对当前单 Alpha或原生多 Alpha候选执行模型推理。
 - API返回真实model score/rank/Top5。
 - 页面展示`EXPERIMENTAL_SHADOW`结果和基线对照。
 
-完成判定：从真实策略包候选和数据库当前行情到页面readback贯通；不修改Selection、Paper或模拟盘。
+完成判定：从真实策略包候选、Advisory decision/target context 和数据库 decision-cutoff 行情到页面readback贯通；不修改Selection、Paper或模拟盘。
 
 ### M3：预期收益与持股周期
 
@@ -420,21 +422,21 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-101 | 基础历史数据只读取现有QE H5/Parquet/Qlib Bin；预测/模型产物允许PKL；训练不读取生产数据库历史数据 |
 | F-102 | 真实训练仅在WSL Conda执行，Windows不训练 |
 | F-103 | 首模是实际LightGBM模型，不是mock、规则或随机结果 |
-| F-104 | 训练/验证/测试按时间切分且无未来数据泄漏 |
-| F-105 | 训练与正式预测共享同一FeatureBuilder/schema |
-| F-106 | 正式预测只读取数据库当前/实时行情和实际Program输入 |
+| F-104 | 训练/验证/测试按decision date执行246/10/60/10/80切分，10日purge覆盖最长退出窗口且无未来数据泄漏 |
+| F-105 | 训练与正式预测共享同一逐列FeatureBuilder/schema、公式、单位、missing和decision cutoff |
+| F-106 | 正式预测区分decision/target双日期，只读取数据库decision cutoff行情和实际Program输入 |
 | F-107 | 真实模型输出Top5并与原始/HMM/随机/等权基线比较 |
 | F-108 | 页面可展示明确标记的`EXPERIMENTAL_SHADOW`真实结果 |
-| F-109 | 模型失败不阻断现有荐股，不用基线冒充模型 |
+| F-109 | 模型失败不阻断现有荐股，不用基线冒充模型；bundle只按exact shadow binding加载，不扫描latest |
 | F-110 | 多个Program独立运行，支持单Alpha和原生多Alpha父包 |
 | F-111 | 收益、周期和价格范围均来自真实模型；规则只作为单独标记的对照或硬风险边界，不能替代模型结果或伪造概率 |
 | F-112 | Selection、Paper、模拟盘、QE资产和策略包业务逻辑零写入 |
 | F-113 | 不新增角色、审批、package二次准入或未经确认的门禁 |
 | F-114 | 不处理旧历史任务、旧root、归档和非阻碍性平台工作 |
 | F-115 | 只有真实功能计入进度；基础设施和证据不计入`N/4` |
-| F-116 | 原生多Alpha训练绑定父包精确roster、seed和权重，直接读取已固化各腿`pred.pkl`/`combined_prediction.pkl`，不跨实验拼腿 |
+| F-116 | 原生多Alpha首模按当前代表seed、zscore和terminal weights重建runtime-equivalent候选；完整seed/逐日权重/combined只作诊断，不跨实验拼腿或制造伪seed特征 |
 | F-117 | 历史涨跌停直接读取日线/分钟Bin中的状态、价格和昨收，不重复建设`stk_limit`训练文件 |
-| F-118 | HMM按现有算法用当前文件数据从头拟合并因果预测，旧模型/状态/系数只作对照 |
+| F-118 | HMM按当前文件数据从头拟合、确定性规范状态并保存可续推posterior；shadow不单独refit HMM，旧模型/状态/系数只作对照 |
 | F-119 | 分钟Bin不阻断Top5、收益、周期或首版日线价格范围；只有盘中路径模型明确需要时才消费 |
 | F-120 | 首模只要求沪深300；其它宽基指数在模型合同明确需要前不补充、不阻断 |
 | F-121 | WSL训练峰值内存低于8GB并以小时级完成首模；采用列/日期/候选分批与临时Parquet，不建设新缓存或证据平台 |
@@ -443,22 +445,22 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-101 | planned: `backend/services/advisory_modeling/qe_file_source.py` | planned: `backend/tests/advisory_modeling/test_qe_file_source.py` | design_ready | none |
-| F-102 | planned: `backend/services/advisory_modeling/wsl_training.py` | planned: `backend/tests/advisory_modeling/test_wsl_training.py` | design_ready | none |
-| F-103 | planned: `backend/services/advisory_modeling/short_rebound_trainer.py` | planned: `backend/tests/advisory_modeling/test_short_rebound_training.py` | design_ready | none |
-| F-104 | planned: `backend/services/advisory_modeling/time_split.py` | planned: `backend/tests/advisory_modeling/test_time_split.py` | design_ready | none |
-| F-105 | planned: `backend/services/advisory_modeling/feature_builder.py` | planned: `backend/tests/advisory_modeling/test_feature_source_parity.py` | design_ready | none |
-| F-106 | planned: `backend/services/advisory_modeling/database_realtime_source.py` | planned: `backend/tests/advisory_modeling/test_database_realtime_source.py` | design_ready | none |
-| F-107 | planned: `backend/services/advisory_modeling/reranker_evaluation.py` | planned: `backend/tests/advisory_modeling/test_reranker_evaluation.py` | design_ready | none |
-| F-108 | planned: `backend/routers/advisory.py`、`frontend/src/app/advisory/page.tsx` | planned: `frontend/tests/advisory-model-shadow.spec.ts` | design_ready | none |
-| F-109 | planned: `backend/services/advisory_modeling/inference.py` | planned: `backend/tests/advisory_modeling/test_inference_failures.py` | design_ready | none |
+| F-101 | planned: `backend/services/advisory_model_first/qe_file_source.py` | planned: `backend/tests/advisory_modeling/test_qe_file_source.py` | design_ready | none |
+| F-102 | planned: `backend/services/advisory_model_first/wsl_training.py` | planned: `backend/tests/advisory_modeling/test_wsl_training.py` | design_ready | none |
+| F-103 | planned: `backend/services/advisory_model_first/short_rebound_trainer.py` | planned: `backend/tests/advisory_modeling/test_short_rebound_training.py` | design_ready | none |
+| F-104 | planned: `backend/services/advisory_model_first/time_split.py` | planned: `backend/tests/advisory_modeling/test_time_split.py` | design_ready | none |
+| F-105 | planned: `backend/services/advisory_model_first/shared_feature_builder.py` | planned: `backend/tests/advisory_modeling/test_feature_source_parity.py` | design_ready | none |
+| F-106 | planned: `backend/services/advisory_model_first/realtime_feature_source.py` | planned: `backend/tests/advisory_modeling/test_database_realtime_source.py` | design_ready | none |
+| F-107 | planned: `backend/services/advisory_model_first/reranker_evaluation.py` | planned: `backend/tests/advisory_modeling/test_reranker_evaluation.py` | design_ready | none |
+| F-108 | planned: `backend/routers/advisory.py`、`frontend/src/app/paper-v2/advisory/page.tsx` | planned: `frontend/tests/advisory-model-shadow.spec.ts` | design_ready | none |
+| F-109 | planned: `backend/services/advisory_model_first/model_inference.py` | planned: `backend/tests/advisory_modeling/test_inference_failures.py` | design_ready | none |
 | F-110 | planned: Program级推理composition | planned: `backend/tests/advisory_modeling/test_program_isolation.py` | design_ready | none |
 | F-111 | planned: M3/M4模型头 | planned: `backend/tests/advisory_modeling/test_outcome_and_price_models.py` | design_ready | none |
 | F-112 | planned: Advisory消费层边界 | planned: `backend/tests/advisory_modeling/test_protected_module_isolation.py` | design_ready | none |
 | F-113 | 本蓝图§3、§12.4、§14 | planned: `backend/tests/advisory_modeling/test_no_unapproved_gates.py` | design_ready | none |
 | F-114 | 本蓝图§0、§3、§9 | planned: `backend/tests/advisory_modeling/test_no_historical_dependencies.py` | design_ready | none |
 | F-115 | 本蓝图§1、§9 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
-| F-116 | planned: `backend/services/advisory_modeling/qe_file_source.py` + existing `ModelStoreService` | planned: `backend/tests/advisory_modeling/test_qe_exact_roster_prediction_source.py` | design_ready | none |
+| F-116 | planned: `backend/services/advisory_model_first/qe_file_source.py` + existing `ModelStoreService` | planned: `backend/tests/advisory_modeling/test_qe_exact_roster_prediction_source.py` | design_ready | none |
 | F-117 | existing Qlib Bin fields + planned file source | planned: `backend/tests/advisory_modeling/test_qe_limit_bin_source.py` | design_ready | none |
 | F-118 | existing `backend/quant_models/hmm/sector_hmm.py` + planned file adapter | planned: `backend/tests/advisory_modeling/test_hmm_fresh_file_fit.py` | design_ready | none |
 | F-119 | planned: M1/M3/M4 model inputs | planned: `backend/tests/advisory_modeling/test_minute_data_phase_boundary.py` | design_ready | none |
@@ -575,14 +577,14 @@ runtime_activation = separate user-confirmed action
 
 该设计已经：
 
-1. 绑定目标父包精确roster、各腿seed预测PKL、合成预测和逐日权重。
+1. 绑定目标父包精确roster、两腿代表seed/model SHA、current zscore、terminal weights和runtime semantics；完整seed、合成预测和逐日权重只作诊断。
 2. 定位目标QE H5/Parquet/Qlib Bin和实际schema，确认基础数据只读文件来源。
-3. 明确首个可训练特征、标签成熟边界和时间切分。
-4. 明确HMM文件输入、重新拟合、因果预测和旧HMM仅对照边界。
+3. 明确逐列首模特征、decision/target双日期、完整标签公式、10日purge和时间切分。
+4. 明确HMM文件输入、状态规范化、因果预测、文件截止posterior续推和旧HMM仅对照边界。
 5. 明确首版日线价格范围不依赖分钟Bin，盘中路径属于后续增量。
 6. 明确WSL真实训练命令、资源上限和模型输出。
 7. 明确数据库实时FeatureSource与共享FeatureBuilder。
 8. 明确真实影子推理API和页面readback。
 9. 明确禁止Historical Range、Source Catalog、SEALED、历史DML和旧任务处理。
 
-下一项任务是按该详细设计直接进入 Batch 1/M0 代码：实现精确父包 roster、38 个 Prediction Store `pred.pkl`、406 日逐日权重、权威 `combined_prediction.pkl`、QE 日线/H5/Parquet/suspend 文件读取和离线 `selection_effective` Top20 构建。Batch 1 完成后立即进入 M1 FeatureBuilder、fresh HMM 和真实 WSL LambdaRank 训练，不再插入其它基础设施、证据、历史固化或治理任务。
+下一项任务是按该详细设计直接进入 Batch 1/M0 代码：实现精确父包 roster、两个代表 Prediction Store `pred.pkl`、current zscore、terminal weights、双日期、QE 日线/H5/Parquet/suspend 文件读取和 `OFFLINE_RUNTIME_EQUIVALENT_SELECTION_EFFECTIVE_TOP20_V2`；其余 seed、逐日权重和 combined reference 同批生成诊断但不进入在线 feature。Batch 1 完成后立即进入 M1 FeatureBuilder、fresh HMM 和真实 WSL LambdaRank 训练，不再插入其它基础设施、证据、历史固化或治理任务。
