@@ -147,7 +147,8 @@
       "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> 239 passed in a fresh Python process",
       "committed aistock_dev row JSON through real SimulationRuntimeRepository connections -> independent writer/readback backend PIDs; repeated legal readback and typed extra-active/orphan/forged failures passed; exact disposable-row cleanup readback returned 0",
       "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> passed: 239 tests with committed independent aistock_dev readback",
-      "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py <BUG-992 authority/orphan/readback matrix> -q -> passed: 51 tests; independent cleanup readback asserted disposable package/release/binding/evidence/plan/run counts all 0"
+      "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py <BUG-992 authority/orphan/readback matrix> -q -> passed: 51 tests; independent cleanup readback asserted disposable package/release/binding/evidence/plan/run counts all 0",
+      "python -m nox -s simulation_core_l2 -> passed: fresh Python process loaded HEAD; 480 tests, 1 explicit DEV PostgreSQL skip"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
