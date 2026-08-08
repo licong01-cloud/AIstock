@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.1
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.2
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-07
+> 修订日期：2026-08-08
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_DATA_INPUTS_VERIFIED`
+> 当前状态：`MODEL_FIRST_VERTICAL_SLICE_DESIGNED`
 > 当前功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`
-> 规划进度：M0 数据可用性已核实，目标父包精确 roster、训练矩阵与时间切分仍待详细设计冻结
+> 规划进度：M0 数据可用性、目标父包精确 roster、406 日训练矩阵和 256/5/60/5/80 时间切分已在垂直切片详细设计中冻结；M0/M1 代码与真实 WSL 训练尚未开始
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -569,7 +569,11 @@ runtime_activation = separate user-confirmed action
 
 ## 16. 当前下一步
 
-唯一下一项开发准备是编写并审核新的“QE文件训练与数据库实时推理垂直切片”详细设计。该设计必须：
+“QE文件训练与数据库实时推理垂直切片”详细设计已经形成：
+
+`docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_20260808.md`
+
+该设计已经：
 
 1. 绑定目标父包精确roster、各腿seed预测PKL、合成预测和逐日权重。
 2. 定位目标QE H5/Parquet/Qlib Bin和实际schema，确认基础数据只读文件来源。
@@ -581,4 +585,4 @@ runtime_activation = separate user-confirmed action
 8. 明确真实影子推理API和页面readback。
 9. 明确禁止Historical Range、Source Catalog、SEALED、历史DML和旧任务处理。
 
-该详细设计完成后立即进入M0/M1代码和真实训练，不再插入其它基础设施、证据、历史固化或治理任务。
+下一项任务是按该详细设计直接进入 Batch 1/M0 代码：实现精确父包 roster、38 个 Prediction Store `pred.pkl`、406 日逐日权重、权威 `combined_prediction.pkl`、QE 日线/H5/Parquet/suspend 文件读取和离线 `selection_effective` Top20 构建。Batch 1 完成后立即进入 M1 FeatureBuilder、fresh HMM 和真实 WSL LambdaRank 训练，不再插入其它基础设施、证据、历史固化或治理任务。
