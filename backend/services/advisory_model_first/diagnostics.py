@@ -86,12 +86,20 @@ def build_parent_diagnostics(
         )
         error = (comparison["score__reconstructed"] - comparison["score__reference"]).abs()
         ordering_match = _top_order_match(comparison)
+        max_absolute_error = float(error.max())
+        score_parity_within_tolerance = max_absolute_error <= 1e-8
         diagnostic["full_ensemble_walk_forward_reference"] = {
-            "status": "available" if float(error.max()) <= 1e-8 and ordering_match else "failed",
+            "status": "available",
             "leg_seed_counts": {leg: len(runs) for leg, runs in full_seed_roster.items()},
             "row_count": int(len(comparison)),
-            "max_absolute_error": float(error.max()),
+            "max_absolute_error": max_absolute_error,
+            "score_parity_tolerance": 1e-8,
+            "score_parity_within_tolerance": score_parity_within_tolerance,
             "top20_ordering_match": ordering_match,
+            "comparison_classification": _comparison_classification(
+                score_parity_within_tolerance=score_parity_within_tolerance,
+                ordering_match=ordering_match,
+            ),
         }
         diagnostic["representative_vs_full_ensemble"] = {
             leg_id: _representative_ensemble_summary(
@@ -191,6 +199,14 @@ def _top_order_match(comparison: pd.DataFrame) -> bool:
         if left != right:
             return False
     return True
+
+
+def _comparison_classification(*, score_parity_within_tolerance: bool, ordering_match: bool) -> str:
+    if score_parity_within_tolerance and ordering_match:
+        return "exact_within_tolerance"
+    if ordering_match:
+        return "ordering_match_with_numeric_drift"
+    return "ordering_divergence"
 
 
 def _representative_ensemble_summary(

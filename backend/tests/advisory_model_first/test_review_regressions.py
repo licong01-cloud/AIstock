@@ -8,7 +8,7 @@ import pytest
 
 from backend.services.advisory_model_first.candidate_group import build_runtime_equivalent_candidates
 from backend.services.advisory_model_first.contracts import build_frozen_training_request
-from backend.services.advisory_model_first.diagnostics import _ensemble_mean
+from backend.services.advisory_model_first.diagnostics import _comparison_classification, _ensemble_mean
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.labels import filter_labels_for_purged_split
 from backend.services.advisory_model_first.model_bundle import publish_model_bundle
@@ -74,6 +74,17 @@ def test_full_seed_diagnostic_uses_formal_inner_intersection() -> None:
     )
     assert result["instrument"].tolist() == ["000002.SZ", "000003.SZ"]
     assert result["score"].tolist() == [3.0, 4.0]
+
+
+def test_full_seed_diagnostic_keeps_numeric_drift_distinct_from_availability() -> None:
+    assert (
+        _comparison_classification(score_parity_within_tolerance=False, ordering_match=True)
+        == "ordering_match_with_numeric_drift"
+    )
+    assert (
+        _comparison_classification(score_parity_within_tolerance=False, ordering_match=False)
+        == "ordering_divergence"
+    )
 
 
 def test_purge_boundary_exclusion_recomputes_group_relevance() -> None:
