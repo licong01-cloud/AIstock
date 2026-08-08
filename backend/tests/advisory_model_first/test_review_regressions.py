@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -11,7 +12,10 @@ from backend.services.advisory_model_first.diagnostics import _ensemble_mean
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.labels import filter_labels_for_purged_split
 from backend.services.advisory_model_first.model_bundle import publish_model_bundle
-from backend.services.advisory_model_first.reranker_training import RerankerTrainingResult
+from backend.services.advisory_model_first.reranker_training import (
+    RerankerTrainingResult,
+    _coerce_numeric_feature_dtypes,
+)
 from backend.services.advisory_model_first.target_binding import FUND_LEG_ID, LSTM_LEG_ID, TERMINAL_WEIGHTS
 from backend.services.advisory_model_first.time_split import PurgedDateSplit
 
@@ -178,3 +182,14 @@ def test_existing_bundle_reuse_rejects_corrupt_file(tmp_path: Path) -> None:
     with pytest.raises(AdvisoryModelFirstError) as error:
         publish_model_bundle(**arguments)
     assert error.value.reason_code == "ADVISORY_MODEL_BUNDLE_INVALID"
+
+
+def test_numeric_object_feature_is_strictly_normalized_for_lightgbm() -> None:
+    numeric = _coerce_numeric_feature_dtypes(
+        pd.DataFrame({"market_up_ratio": [Decimal("0.5"), Decimal("0.75")]})
+    )
+    assert pd.api.types.is_float_dtype(numeric["market_up_ratio"])
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        _coerce_numeric_feature_dtypes(pd.DataFrame({"market_up_ratio": ["not-a-number"]}))
+    assert error.value.reason_code == "ADVISORY_MODEL_QE_SCHEMA_MISMATCH"

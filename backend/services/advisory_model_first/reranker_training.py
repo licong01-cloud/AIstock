@@ -97,6 +97,7 @@ def train_lambdarank(
             context={"all_null_train_features": all_null_train},
         )
     matrix = merged.loc[:, feature_names].copy()
+    matrix = _coerce_numeric_feature_dtypes(matrix)
     vocabulary: dict[str, tuple[int, ...]] = {}
     for column in CATEGORICAL_FEATURE_COLUMNS:
         values = pd.to_numeric(matrix.loc[train_mask, column], errors="coerce").dropna().astype(int)
@@ -233,6 +234,26 @@ def train_lambdarank(
         ).reset_index(drop=True),
         baseline_comparison=baseline_comparison,
     )
+
+
+def _coerce_numeric_feature_dtypes(matrix: pd.DataFrame) -> pd.DataFrame:
+    result = matrix.copy()
+    for column in result.columns:
+        if column in CATEGORICAL_FEATURE_COLUMNS:
+            continue
+        try:
+            result[column] = pd.to_numeric(result[column], errors="raise")
+        except (TypeError, ValueError) as exc:
+            raise AdvisoryModelFirstError(
+                "frozen model feature contains a non-numeric value",
+                reason_code="ADVISORY_MODEL_QE_SCHEMA_MISMATCH",
+                context={
+                    "feature": column,
+                    "dtype": str(result[column].dtype),
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
+    return result
 
 
 def _group_sizes(frame: pd.DataFrame) -> list[int]:
