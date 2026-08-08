@@ -1667,6 +1667,7 @@ class SimulationRuntimeRepository:
         self,
         *,
         trade_date: Any | None = None,
+        trade_date_before: Any | None = None,
         broker_backend: SimulationBrokerBackend | str | None = None,
         strategy_id: str | None = None,
         status: SimulationDailyRunStatus | str | None = None,
@@ -1677,6 +1678,9 @@ class SimulationRuntimeRepository:
         if trade_date is not None:
             clauses.append("trade_date = %s")
             params.append(trade_date)
+        if trade_date_before is not None:
+            clauses.append("trade_date < %s")
+            params.append(trade_date_before)
         if broker_backend is not None:
             backend = (
                 broker_backend.value
@@ -2672,6 +2676,7 @@ class InMemorySimulationRuntimeRepository:
         self,
         *,
         trade_date: Any | None = None,
+        trade_date_before: Any | None = None,
         broker_backend: SimulationBrokerBackend | str | None = None,
         strategy_id: str | None = None,
         status: SimulationDailyRunStatus | str | None = None,
@@ -2680,6 +2685,8 @@ class InMemorySimulationRuntimeRepository:
         rows = list(self.daily_runs.values())
         if trade_date is not None:
             rows = [row for row in rows if row.trade_date == trade_date]
+        if trade_date_before is not None:
+            rows = [row for row in rows if row.trade_date < trade_date_before]
         if broker_backend is not None:
             backend = broker_backend if isinstance(broker_backend, SimulationBrokerBackend) else SimulationBrokerBackend(str(broker_backend))
             rows = [row for row in rows if row.broker_backend == backend]

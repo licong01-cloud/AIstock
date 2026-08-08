@@ -1,5 +1,5 @@
 {
-  "actual": "The production-equivalent run has 246 frozen/submitted intents but 492 durable state rows. The post-close validator assumes one row per intent, raises LOCALSIM_POST_CLOSE_STATE_PLAN_MISMATCH, leaves the run INTRADAY_RUNNING, and repeats the typed failure on every post-close cadence.",
+  "actual": "The first BUG-992 source slice fixed receipt-authoritative state selection and was loaded after the user restart, but read-only post-restart verification on 2026-08-08 proved the production run simrun_7bf1e0c1b6b7d055 remained historical FAILED_RETRYABLE. The old process had already converted it from an active status after the original state-plan failure. The scheduler then excluded FAILED_RETRYABLE from both cross-day stale-active scanning and current-trade-date post-close scanning, so the fully projected terminal durable generation could never re-enter automatic recovery.",
   "allowed_write_scope": [
     "backend/services/simulation_runtime/scheduler.py",
     "backend/services/simulation_runtime/repository.py",
@@ -31,12 +31,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260806-c9c540e614fe",
       "timestamp": "2026-08-06T07:34:59.747190Z"
+    },
+    {
+      "action": "reopen_after_post_restart_business_failure",
+      "actor": "codex",
+      "note": "Runtime identity contained merged PR #3186, but target run simrun_7bf1e0c1b6b7d055 remained historical FAILED_RETRYABLE because no scheduler recovery stage admitted that status across trade dates. Continuation keeps the same BUG/Issue and forbids manual status DML.",
+      "timestamp": "2026-08-08T04:48:46.6038918Z"
     }
   ],
   "evidence_uris": [
     "run=simrun_7bf1e0c1b6b7d055 binding=simbind_ce1ae94bcc4788d8 plan=plan_4e346c75b6a5f0e5 trade_date=2026-08-06 states=492 intents=246"
   ],
-  "expected": "The durable LocalSIM execution-state authority closes over the frozen plan, restart/recovery, and the legal lifecycle epoch. Post-close terminalization deterministically selects only contract-authorized state authority, reaches the correct run terminal state, rejects genuine duplicate/corrupt/missing/extra/identity-drift evidence, and one binding failure does not block other scheduler bindings.",
+  "expected": "The durable LocalSIM execution-state authority closes over the frozen plan, restart/recovery, and the legal lifecycle epoch. A historical FAILED_RETRYABLE run with a strict PROJECTED terminal generation must automatically re-enter receipt-authoritative recovery on a later scheduler trade date, reach the existing correct post-close terminal state without replaying broker/order/fill/cash/projection side effects, remain idempotent across repeated cadence, reject genuine duplicate/corrupt/missing/extra/identity-drift evidence, and preserve per-run isolation.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -108,10 +114,10 @@
     ]
   },
   "first_seen_at": "2026-08-06T07:34:59.747195Z",
-  "fix_branch": null,
-  "fix_commit": "60261969efcba6fa760fcc29e83b4ac938f2ad2c",
-  "fix_summary": "LocalSIM lifecycle and economic readback reuse one strict durable authority closure over current run identity, continuous receipt generations, the generation high-watermark, exact receipt/outbox identities, and the committed state_id-to-state_hash set. Empty authority now also requires every economic/projection generation carrier to be absent; orphan outbox/receipt/generation or broker-side-effect facts fail loud without terminalizing the damaged run, while independent bindings continue. PostgreSQL evidence comes from committed guarded DEV rows read through real repository connections and independent post-commit readback.",
-  "fixed_at": "2026-08-07T06:19:15Z",
+  "fix_branch": "bug/BUG-992-bug-992-historical-failed-retryable-recovery-202-20260808",
+  "fix_commit": null,
+  "fix_summary": "The first source slice retains one strict LocalSIM durable authority closure. The continuation adds a bounded historical FAILED_RETRYABLE recovery stage whose repository query filters trade_date before LIMIT, validates frozen run/release/binding/plan/account-slot identity, continuous economic authority, PROJECTED outbox, unique projection receipt, terminal states/persistence and Paper economic facts, then reuses the existing post-close terminal decision in one run update. It records explicit no-resubmit/no-broker-replay/no-projection-replay evidence; pending projection remains retryable and malformed/corrupt authority fails loud.",
+  "fixed_at": null,
   "github_issue_number": 3184,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3184",
   "last_seen_at": "2026-08-06T07:34:59.747195Z",
@@ -119,7 +125,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3186",
+  "pr_url": null,
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,11 +136,13 @@
     "simulation_core_l2"
   ],
   "risk_area": "bug",
-  "root_cause": "The original lifecycle closure collapsed state_id-keyed history into an intent_id map and treated legal terminal incarnations as duplicate current writers. The first PR repair then left strict authority/readback gaps, and the next review found that the empty-state/empty-receipt branch still returned generation zero while orphan projection/economic carriers remained. The prior PostgreSQL-labelled tests also monkeypatched an InMemory daily-run getter, so they did not prove committed PostgreSQL row JSON or independent post-commit readback.",
+  "root_cause": "The original lifecycle closure collapsed state_id-keyed history into an intent_id map and treated legal terminal incarnations as duplicate current writers. PR #3186 repaired that authority and its PostgreSQL readback, but the old runtime had already persisted the observed run as FAILED_RETRYABLE. Cross-day LocalSIM recovery enumerated only active statuses, while post-close recovery required run.trade_date equal to the scheduler trade date. Therefore the valid projected terminal generation fell between both scanners. A second starvation risk existed because historical filtering occurred after a descending LIMIT, allowing newer failed rows to hide older candidates.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055",
     "fresh_process_evidence": [
+      "BUG-992 continuation: python -m nox -s simulation_core_l2 -> 472 passed, 1 explicitly gated DEV PostgreSQL skip in a fresh Python process",
+      "BUG-992 continuation: AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 245 passed with disposable DEV PostgreSQL authority/readback coverage",
       "python -m nox -s simulation_core_l2 -> 466 passed, 1 explicitly gated DEV PostgreSQL skip in a fresh Python process",
       "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> 239 passed in a fresh Python process",
       "committed aistock_dev row JSON through real SimulationRuntimeRepository connections -> independent writer/readback backend PIDs; repeated legal readback and typed extra-active/orphan/forged failures passed; exact disposable-row cleanup readback returned 0",
@@ -144,9 +152,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "failed_business_smoke_continuation_in_progress",
     "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": "matched_loaded_first_source_aca5ec6ce2ff317c58dbb9165647103da038a5a8",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -156,7 +164,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "fixed_source_pending_user_restart",
+  "status": "in_progress",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -166,6 +174,14 @@
     "source_event_id": "FE-20260806-c9c540e614fe"
   },
   "validation_evidence": [
+    "post-restart runtime identity readback -> backend-main ready at aca5ec6ce2ff317c58dbb9165647103da038a5a8, which contains BUG-992 first source merge 60261969",
+    "post-restart business readback -> simrun_7bf1e0c1b6b7d055 remained FAILED_RETRYABLE; first source runtime-effective claim withdrawn and close-sync kept pending",
+    "continuation RED -> production-equivalent fresh scheduler cross-day run remained FAILED_RETRYABLE and had no localsim_post_close_terminalization",
+    "continuation direct GREEN -> 6 passed for terminal-history restart/idempotency/no-replay, pending outbox, authority corruption, identity/failure-carrier drift and query-before-limit",
+    "continuation lifecycle with DEV PostgreSQL enabled -> 245 passed",
+    "continuation simulation_core_l2 -> 472 passed, 1 explicitly gated DEV PostgreSQL skip",
+    "continuation classifier -> targeted_ci_required, simulation_core_l2, unmapped_code_files=[]",
+    "continuation Ruff check, targeted py_compile, git diff --check and F2 112/112 warnings=0 -> passed",
     "final-review RED public authority matrix before implementation -> 20 failed, 2 passed",
     "final-review RED extra-active economic readback -> 0 passed, 2 failed with DID NOT RAISE",
     "strict empty-generation RED -> 2 failed, 19 passed",
