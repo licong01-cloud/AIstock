@@ -1,5 +1,5 @@
 {
-  "actual": "On 2026-08-05 run simrun_f318f4152b31c761 / binding simbind_3e17c6c15d9297e7 / plan plan_eeab8f7509e16b4b reached FAILED_TERMINAL with submitted_intents=0 and failed_intents=246, while platform diagnostics reported active_algo_count=246 and terminal/residual counts zero. Source continuation predicate requires broker_called=true.",
+  "actual": "After PR #3161 was merged and the user restarted backend-main, runtime identity included the first BUG-984 source fix but production run simrun_f318f4152b31c761 remained FAILED_TERMINAL with 246 authoritative non-terminal LocalSIM states and local_sim_persistence.terminal=false. The stale recovery scanner admits active statuses and FAILED_RETRYABLE, but excludes historical FAILED_TERMINAL active generations, so the contradictory durable state can never reach automatic EOD closure.",
   "allowed_write_scope": [
     "backend/services/simulation_runtime/scheduler.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
@@ -24,12 +24,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260805-dfdb96720c0d",
       "timestamp": "2026-08-05T09:41:16.812672Z"
+    },
+    {
+      "action": "reopen_after_post_restart_business_failure",
+      "actor": "codex",
+      "note": "Runtime identity contains merged PR #3161, but the exact production run remains FAILED_TERMINAL with 246 authoritative active durable states. Continue the same BUG/Issue with automatic strict-authority cross-day recovery; manual DML remains forbidden.",
+      "timestamp": "2026-08-08T07:28:35.7323534Z"
     }
   ],
   "evidence_uris": [
     "runtime:2026-08-05:simrun_f318f4152b31c761:simbind_3e17c6c15d9297e7:plan_eeab8f7509e16b4b:FAILED_TERMINAL:submitted=0:failed=246:active_algo=246"
   ],
-  "expected": "LocalSIM continuation must be derived from exact durable plan/state/persistence/outbox and receipt closure, not broker_called. Restart/fresh-process continuation must resume from the durable causality cursor without parent resubmission or duplicate side effects. Before any run reaches a terminal EOD state, every LocalSIM algo state must be atomically and deterministically terminalized with exact residual/failure facts; a terminal run with active states must fail loud and remain diagnosable. No fallback, manual DML, approval gate, RBAC, broker call, or forced broker_called=true is allowed.",
+  "expected": "LocalSIM continuation must be derived from exact durable plan/state/persistence/outbox and receipt closure, not broker_called. A historical FAILED_TERMINAL run that still owns one strict PROJECTED non-terminal durable generation must automatically re-enter the existing LocalSIM minute loop at its original trade-date EOD, without parent resubmission or predecessor projection replay, and persist terminal state/persistence facts idempotently. Missing, malformed, duplicate or identity/hash-drift authority must fail loud per run. No fallback, manual DML, approval gate, RBAC, real broker call, forced broker_called=true or silent historical abandonment is allowed.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -114,9 +120,9 @@
     ]
   },
   "first_seen_at": "2026-08-05T09:41:16.812676Z",
-  "fix_branch": null,
-  "fix_commit": "ab2ab67e8cd8b3ef06e5cd3ba64c5f0dd31a0169",
-  "fixed_at": "2026-08-05T16:20:06Z",
+  "fix_branch": "bug/BUG-984-historical-failed-terminal-active-state-recovery-20260808",
+  "fix_commit": null,
+  "fixed_at": null,
   "github_issue_number": 3158,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3158",
   "last_seen_at": "2026-08-05T09:41:16.812676Z",
@@ -124,7 +130,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3161",
+  "pr_url": null,
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -156,7 +162,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "fixed_source_pending_user_restart",
+  "status": "in_progress",
   "suspected_modules": [
     "simulation_runtime"
   ],
