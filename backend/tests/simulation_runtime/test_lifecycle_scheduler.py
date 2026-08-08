@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 import time as time_module
 from copy import deepcopy
@@ -10,9 +11,11 @@ from datetime import UTC, date, datetime, time as wall_time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Mapping
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import psycopg2
+import psycopg2.extras
 import pytest
 from pydantic import BaseModel, ConfigDict
 
@@ -108,6 +111,7 @@ from backend.services.simulation_runtime.models import (
     canonical_json_sha256,
 )
 from backend.services.simulation_runtime.repository import (
+    LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY,
     LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY,
     LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY,
     LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY,
@@ -305,6 +309,7 @@ def _miniqmt_runtime_repository_test_only(monkeypatch: pytest.MonkeyPatch, tmp_p
 def _release_and_bindings(
     *,
     qmt_only: bool = False,
+    package_id: str = "pkg_scheduler",
     release_metadata: dict | None = None,
     execution_policy_json: dict[str, Any] | None = None,
     approval_state: SimulationBindingApprovalState = SimulationBindingApprovalState.SIM_VALIDATING,
@@ -324,7 +329,7 @@ def _release_and_bindings(
     execution_policy_json = normalize_execution_policy_json(execution_policy_json)
     execution_policy_sha256 = compute_execution_policy_sha256(execution_policy_json)
     release = service.create_release(
-        package_id="pkg_scheduler",
+        package_id=package_id,
         manifest_sha256="manifest_scheduler",
         runtime_profile_id="runtime_profile_scheduler",
         runtime_profile_version_id="runtime_profile_scheduler_v1",
@@ -7072,6 +7077,1092 @@ def test_scheduler_post_close_terminalizes_localsim_persisted_active_run_with_sh
     assert terminalization["local_sim_persistence_status"] == "PERSISTED"
 
 
+def test_localsim_post_close_uses_committed_generation_authority_over_terminal_history() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="portfolio_localsim_generation_authority",
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    for as_of_time in (
+        datetime(2026, 5, 21, 9, 32),
+        datetime(2026, 5, 21, 9, 34),
+        datetime(2026, 5, 21, 9, 36),
+    ):
+        scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source=MinuteDataSource.TDX_REALTIME.value,
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=True,
+            as_of_time=as_of_time,
+        )
+        broker = context.local_broker
+        assert broker is not None
+        if (
+            repo.get_simulation_daily_run(planned.results[0].run.run_id).status
+            == SimulationDailyRunStatus.INTRADAY_RUNNING
+        ):
+            context = _local_sim_realtime_context_with_real_broker(
+                portfolio_id="portfolio_localsim_generation_authority",
+                release=release,
+                paper_repository=paper_repo,
+                cash=float(broker.query_account().cash),
+                positions=broker.query_positions(),
+            )
+            scheduler.context_provider = StaticSimulationRunContextProvider(
+                by_binding_id={local_binding.binding_id: context}
+            )
+
+    run_id = planned.results[0].run.run_id
+    finished = repo.get_simulation_daily_run(run_id)
+    authority_states = tuple(repo.list_local_sim_execution_states(run_id, authoritative=True))
+    assert authority_states and all(state.is_terminal for state in authority_states)
+    raw_states = dict(finished.run_payload_json["local_sim_execution_states_v1"])
+    for state in authority_states:
+        historical = LocalSimExecutionStateV1.model_validate(
+            {
+                **state.model_dump(mode="json"),
+                "state_id": "",
+                "algo_instance_id": f"historical_{state.algo_instance_id}",
+                "state_hash": "",
+                "created_at": (state.created_at - timedelta(seconds=1)).isoformat(),
+                "updated_at": (state.updated_at - timedelta(seconds=1)).isoformat(),
+            }
+        )
+        raw_states[historical.state_id] = historical.model_dump(mode="json")
+    repo.update_simulation_daily_run(
+        run_id,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        payload_patch={"local_sim_execution_states_v1": raw_states},
+    )
+
+    post_close = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 7, 5, tzinfo=UTC),
+    )
+    latest = repo.get_simulation_daily_run(run_id)
+    assert post_close.stale_terminalized_count == 1
+    assert latest.status == SimulationDailyRunStatus.SUCCEEDED
+    assert len(repo.list_local_sim_execution_states(run_id)) == 2 * len(authority_states)
+    assert len(repo.list_local_sim_execution_states(run_id, authoritative=True)) == len(authority_states)
+
+
+def test_localsim_state_authority_rejects_duplicate_missing_extra_and_hash_conflict() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="portfolio_localsim_duplicate_active_authority",
+        release=release,
+        paper_repository=paper_repo,
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    assert first.results[0].run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    run = repo.get_simulation_daily_run(planned.results[0].run.run_id)
+    authority_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    raw_states = dict(run.run_payload_json["local_sim_execution_states_v1"])
+    active = authority_states[0]
+    duplicate = LocalSimExecutionStateV1.model_validate(
+        {
+            **active.model_dump(mode="json"),
+            "state_id": "",
+            "algo_instance_id": f"duplicate_{active.algo_instance_id}",
+            "state_hash": "",
+        }
+    )
+    raw_states[duplicate.state_id] = duplicate.model_dump(mode="json")
+    repo.update_simulation_daily_run(run.run_id, payload_patch={"local_sim_execution_states_v1": raw_states})
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_ACTIVE_AUTHORITY_CONFLICT"
+
+    raw_states.pop(duplicate.state_id)
+    raw_states.pop(active.state_id)
+    repo.update_simulation_daily_run(run.run_id, payload_patch={"local_sim_execution_states_v1": raw_states})
+    with pytest.raises(InvalidStateTransitionError) as missing_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert missing_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_AUTHORITY_STATE_MISSING"
+
+    raw_states[active.state_id] = active.model_dump(mode="json")
+    extra = LocalSimExecutionStateV1.model_validate(
+        {
+            **active.model_dump(mode="json"),
+            "state_id": "",
+            "intent_id": f"extra_{active.intent_id}",
+            "algo_instance_id": f"extra_{active.algo_instance_id}",
+            "filled_quantity": active.total_quantity,
+            "remaining_quantity": 0,
+            "runtime_status": LocalSimExecutionRuntimeStatus.FILLED.value,
+            "state_hash": "",
+        }
+    )
+    raw_states[extra.state_id] = extra.model_dump(mode="json")
+    repo.update_simulation_daily_run(run.run_id, payload_patch={"local_sim_execution_states_v1": raw_states})
+    with pytest.raises(InvalidStateTransitionError) as extra_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert extra_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_HISTORY_IDENTITY_CONFLICT"
+
+    raw_states.pop(extra.state_id)
+    original_receipt = next(iter(_local_sim_economic_receipt_map(run.run_payload_json).values()))
+    tampered_facts = deepcopy(original_receipt.economic_facts)
+    tampered_facts["state_hashes"][active.state_id] = "0" * 64
+    tampered_receipt = LocalSimEconomicReceiptV1(
+        run_id=original_receipt.run_id,
+        binding_id=original_receipt.binding_id,
+        trade_date=original_receipt.trade_date,
+        plan_id=original_receipt.plan_id,
+        generation=original_receipt.generation,
+        economic_facts=tampered_facts,
+        committed_at=original_receipt.committed_at,
+    )
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={
+            "local_sim_execution_states_v1": raw_states,
+            "local_sim_economic_receipts_v1": {tampered_receipt.receipt_id: tampered_receipt.model_dump(mode="json")},
+        },
+    )
+    with pytest.raises(InvalidStateTransitionError) as hash_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert hash_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_AUTHORITY_HASH_CONFLICT"
+
+
+def _localsim_authority_review_fixture(
+    *,
+    package_id: str = "pkg_scheduler",
+    release_metadata: dict[str, Any] | None = None,
+) -> tuple[
+    InMemorySimulationRuntimeRepository,
+    SimulationDailyRun,
+    LocalSimEconomicReceiptV1,
+    LocalSimProjectionOutboxV1,
+]:
+    release, local_binding, _, repo = _release_and_bindings(
+        qmt_only=False,
+        package_id=package_id,
+        release_metadata=release_metadata,
+    )
+    assert local_binding is not None
+    context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id="portfolio_localsim_authority_review",
+        release=release,
+        paper_repository=InMemoryPaperTradingV2Repository(),
+        cash=100_000,
+        positions={},
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={local_binding.binding_id: context}),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    assert submitted.results[0].run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    run = repo.get_simulation_daily_run(planned.results[0].run.run_id)
+    receipt = max(_local_sim_economic_receipt_map(run.run_payload_json).values(), key=lambda item: item.generation)
+    outbox = _local_sim_projection_outbox(run.run_payload_json)
+    assert outbox is not None
+    return repo, run, receipt, outbox
+
+
+def _rebuilt_local_sim_receipt(
+    receipt: LocalSimEconomicReceiptV1,
+    **updates: object,
+) -> LocalSimEconomicReceiptV1:
+    payload = receipt.model_dump(
+        mode="python",
+        exclude={"receipt_id", "economic_hash", "idempotency_key", "receipt_hash"},
+    )
+    payload.update(updates)
+    return LocalSimEconomicReceiptV1.model_validate(payload)
+
+
+def _rebuilt_local_sim_outbox(
+    outbox: LocalSimProjectionOutboxV1,
+    **updates: object,
+) -> LocalSimProjectionOutboxV1:
+    payload = outbox.model_dump(
+        mode="python",
+        exclude={"outbox_id", "projection_payload_hash", "outbox_hash"},
+    )
+    payload.update(updates)
+    return LocalSimProjectionOutboxV1.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("corruption", "reason_code"),
+    [
+        ("receipt_key_missing", "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_MISSING"),
+        ("receipt_map_empty_with_generation", "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_MISSING"),
+        ("state_hashes_missing", "LOCALSIM_DURABLE_STATE_AUTHORITY_MISSING"),
+        ("state_hashes_empty", "LOCALSIM_DURABLE_STATE_AUTHORITY_MISSING"),
+        ("receipt_run_id", "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_IDENTITY_CONFLICT"),
+        ("receipt_binding_id", "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_IDENTITY_CONFLICT"),
+        ("receipt_trade_date", "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_IDENTITY_CONFLICT"),
+        ("receipt_plan_id", "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_IDENTITY_CONFLICT"),
+        ("facts_run_id", "LOCALSIM_DURABLE_STATE_AUTHORITY_FACT_IDENTITY_CONFLICT"),
+        ("facts_binding_id", "LOCALSIM_DURABLE_STATE_AUTHORITY_FACT_IDENTITY_CONFLICT"),
+        ("facts_trade_date", "LOCALSIM_DURABLE_STATE_AUTHORITY_FACT_IDENTITY_CONFLICT"),
+        ("facts_plan_id", "LOCALSIM_DURABLE_STATE_AUTHORITY_FACT_IDENTITY_CONFLICT"),
+        ("generation_highwater_low", "LOCALSIM_DURABLE_STATE_AUTHORITY_GENERATION_MISMATCH"),
+        ("generation_highwater_high", "LOCALSIM_DURABLE_STATE_AUTHORITY_GENERATION_MISMATCH"),
+        ("generation_duplicate", "LOCALSIM_DURABLE_STATE_AUTHORITY_GENERATION_CONFLICT"),
+        ("generation_gap", "LOCALSIM_DURABLE_STATE_AUTHORITY_GENERATION_GAP"),
+        ("authority_state_missing", "LOCALSIM_DURABLE_STATE_AUTHORITY_STATE_MISSING"),
+        ("authority_hash_conflict", "LOCALSIM_DURABLE_STATE_AUTHORITY_HASH_CONFLICT"),
+    ],
+)
+def test_localsim_public_authority_rejects_receipt_generation_and_identity_corruption(
+    corruption: str,
+    reason_code: str,
+) -> None:
+    repo, run, receipt, _ = _localsim_authority_review_fixture()
+    payload_patch: dict[str, object] = {}
+    payload_unset: tuple[str, ...] = ()
+    receipts = {receipt.receipt_id: receipt}
+    state_payload = deepcopy(run.run_payload_json[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY])
+    generation = receipt.generation
+
+    if corruption == "receipt_key_missing":
+        payload_unset = (LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY, LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY)
+    elif corruption == "receipt_map_empty_with_generation":
+        receipts = {}
+    elif corruption in {"state_hashes_missing", "state_hashes_empty"}:
+        facts = deepcopy(receipt.economic_facts)
+        if corruption == "state_hashes_missing":
+            facts.pop("state_hashes")
+        else:
+            facts["state_hashes"] = {}
+        forged = _rebuilt_local_sim_receipt(receipt, economic_facts=facts)
+        receipts = {forged.receipt_id: forged}
+    elif corruption.startswith("receipt_"):
+        field = corruption.removeprefix("receipt_")
+        forged_identity: object
+        if field == "trade_date":
+            forged_identity = run.trade_date - timedelta(days=1)
+        else:
+            forged_identity = f"forged_{field}"
+        forged = _rebuilt_local_sim_receipt(receipt, **{field: forged_identity})
+        receipts = {forged.receipt_id: forged}
+    elif corruption.startswith("facts_"):
+        field = corruption.removeprefix("facts_")
+        facts = deepcopy(receipt.economic_facts)
+        facts[field] = (run.trade_date - timedelta(days=1)).isoformat() if field == "trade_date" else f"forged_{field}"
+        forged = _rebuilt_local_sim_receipt(receipt, economic_facts=facts)
+        receipts = {forged.receipt_id: forged}
+    elif corruption in {"generation_highwater_low", "generation_duplicate", "generation_gap"}:
+        next_generation = 3 if corruption == "generation_gap" else (1 if corruption == "generation_duplicate" else 2)
+        facts = {**deepcopy(receipt.economic_facts), "review_generation_nonce": corruption}
+        second = _rebuilt_local_sim_receipt(receipt, generation=next_generation, economic_facts=facts)
+        receipts[second.receipt_id] = second
+        generation = 3 if corruption == "generation_gap" else 1
+    elif corruption == "generation_highwater_high":
+        generation = receipt.generation + 1
+    elif corruption == "authority_state_missing":
+        state_payload.pop(next(iter(receipt.economic_facts["state_hashes"])))
+    elif corruption == "authority_hash_conflict":
+        facts = deepcopy(receipt.economic_facts)
+        state_id = next(iter(facts["state_hashes"]))
+        facts["state_hashes"][state_id] = "0" * 64
+        forged = _rebuilt_local_sim_receipt(receipt, economic_facts=facts)
+        receipts = {forged.receipt_id: forged}
+    else:  # pragma: no cover - parametrization is exhaustive
+        raise AssertionError(f"unknown authority corruption: {corruption}")
+
+    if receipts or corruption != "receipt_key_missing":
+        payload_patch[LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY] = {
+            receipt_id: item.model_dump(mode="json") for receipt_id, item in receipts.items()
+        }
+    if corruption != "receipt_key_missing":
+        payload_patch[LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY] = generation
+    payload_patch[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY] = state_payload
+    repo.update_simulation_daily_run(run.run_id, payload_patch=payload_patch, payload_unset=payload_unset)
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert exc_info.value.context["reason_code"] == reason_code
+    assert exc_info.value.context["run_id"] == run.run_id
+
+
+@pytest.mark.parametrize("target", ["receipt", "highwater"])
+@pytest.mark.parametrize("raw_generation", [True, "1", 1.0])
+def test_localsim_public_authority_rejects_non_integer_generation_types(
+    target: str,
+    raw_generation: object,
+) -> None:
+    repo, run, receipt, _ = _localsim_authority_review_fixture()
+    payload_patch: dict[str, object] = {}
+    expected_reason = "LOCALSIM_ECONOMIC_GENERATION_INVALID"
+    if target == "receipt":
+        raw_receipt = receipt.model_dump(mode="json")
+        raw_receipt["generation"] = raw_generation
+        payload_patch[LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY] = {receipt.receipt_id: raw_receipt}
+        expected_reason = "LOCALSIM_ECONOMIC_RECEIPT_GENERATION_INVALID"
+    else:
+        payload_patch[LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY] = raw_generation
+    repo.update_simulation_daily_run(run.run_id, payload_patch=payload_patch)
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert exc_info.value.context["reason_code"] == expected_reason
+    assert exc_info.value.context["run_id"] == run.run_id
+
+
+@pytest.mark.parametrize(
+    ("raw_generation", "accepted"),
+    [(None, True), (0, True), (False, False), ("0", False), (0.0, False)],
+)
+def test_localsim_public_authority_empty_path_requires_strict_zero_generation(
+    raw_generation: object,
+    accepted: bool,
+) -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    payload_patch = {}
+    payload_unset = [
+        LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY,
+        LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY,
+        LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY,
+        LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY,
+        "local_sim_projection_generation",
+        "local_sim_projection_terminal_failure",
+        "local_sim_projection_readback_failure",
+        "local_sim_projection_readback_terminal_failure",
+        "local_sim_valuation_pending_v1",
+        "local_sim_valuation_completion_v1",
+        "local_sim_persistence",
+        "local_sim_durable_minute_loop",
+        "strategy_performance",
+        "performance_projection",
+        "broker_order_handles",
+        "broker_called",
+        "submitted_intents",
+    ]
+    if raw_generation is None:
+        payload_unset.append(LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY)
+    else:
+        payload_patch[LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY] = raw_generation
+    repo.update_simulation_daily_run(run.run_id, payload_patch=payload_patch, payload_unset=tuple(payload_unset))
+
+    if accepted:
+        assert repo.list_local_sim_execution_states(run.run_id, authoritative=True) == []
+        return
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_ECONOMIC_GENERATION_INVALID"
+    assert exc_info.value.context["run_id"] == run.run_id
+
+
+@pytest.mark.parametrize(
+    ("carrier_case", "carrier_type", "identity_field"),
+    [
+        ("pending_outbox", LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY, "outbox_id"),
+        ("projected_outbox", LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY, "outbox_id"),
+        ("projection_receipt", LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY, "receipt_id"),
+        ("projection_generation", "local_sim_projection_generation", "outbox_id"),
+    ],
+)
+def test_localsim_public_authority_rejects_orphan_projection_generation_carriers(
+    carrier_case: str,
+    carrier_type: str,
+    identity_field: str,
+) -> None:
+    repo, run, _, outbox = _localsim_authority_review_fixture()
+    projection_receipt = next(iter(_local_sim_projection_receipt_map(run.run_payload_json).values()))
+    if carrier_case in {"pending_outbox", "projected_outbox"}:
+        carrier_outbox = _rebuilt_local_sim_outbox(
+            outbox,
+            status="PENDING" if carrier_case == "pending_outbox" else "PROJECTED",
+            attempt_count=0,
+            last_error=None,
+        )
+        carrier_value: object = carrier_outbox.model_dump(mode="json")
+        expected_identity = carrier_outbox.outbox_id
+    elif carrier_case == "projection_receipt":
+        carrier_value = {
+            projection_receipt.projection_receipt_id: projection_receipt.model_dump(mode="json")
+        }
+        expected_identity = projection_receipt.projection_receipt_id
+    else:
+        carrier_value = {
+            "schema_version": "local_sim_projection_generation_v1",
+            "generation": outbox.generation,
+            "outbox_id": outbox.outbox_id,
+            "economic_hash": outbox.economic_hash,
+            "projection_receipt_id": projection_receipt.projection_receipt_id,
+        }
+        expected_identity = outbox.outbox_id
+
+    carrier_keys = {
+        LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY,
+        LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY,
+        "local_sim_projection_generation",
+        "local_sim_projection_terminal_failure",
+        "local_sim_projection_readback_failure",
+        "local_sim_projection_readback_terminal_failure",
+        "local_sim_valuation_pending_v1",
+        "local_sim_valuation_completion_v1",
+        "local_sim_persistence",
+        "local_sim_durable_minute_loop",
+        "strategy_performance",
+        "performance_projection",
+        "broker_order_handles",
+        "broker_called",
+        "submitted_intents",
+    }
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={
+            LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY: {},
+            LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY: {},
+            LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY: 0,
+            carrier_type: carrier_value,
+        },
+        payload_unset=tuple(sorted(carrier_keys - {carrier_type})),
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER"
+    assert exc_info.value.context["run_id"] == run.run_id
+    assert exc_info.value.context["carrier_type"] == carrier_type
+    assert exc_info.value.context[identity_field] == expected_identity
+    assert exc_info.value.context["expected_generation"] == 0
+    assert exc_info.value.context["actual_generation"] == outbox.generation
+
+
+@pytest.mark.parametrize(
+    ("carrier_type", "carrier_value"),
+    [
+        ("broker_called", True),
+        ("broker_called", 1),
+        ("broker_called", "false"),
+        ("submitted_intents", 1),
+        ("submitted_intents", False),
+        ("submitted_intents", 0.0),
+    ],
+)
+def test_localsim_public_authority_rejects_non_initial_broker_carriers(
+    carrier_type: str,
+    carrier_value: object,
+) -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={
+            LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY: {},
+            LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY: {},
+            LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY: 0,
+            carrier_type: carrier_value,
+        },
+        payload_unset=tuple(
+            key
+            for key in (
+                LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY,
+                LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY,
+                "local_sim_projection_generation",
+                "local_sim_projection_terminal_failure",
+                "local_sim_projection_readback_failure",
+                "local_sim_projection_readback_terminal_failure",
+                "local_sim_valuation_pending_v1",
+                "local_sim_valuation_completion_v1",
+                "local_sim_persistence",
+                "local_sim_durable_minute_loop",
+                "strategy_performance",
+                "performance_projection",
+                "broker_order_handles",
+                "broker_called",
+                "submitted_intents",
+            )
+            if key != carrier_type
+        ),
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER"
+    assert exc_info.value.context["carrier_type"] == carrier_type
+
+
+def test_localsim_public_authority_accepts_exact_initial_broker_facts() -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={
+            LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY: {},
+            LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY: {},
+            LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY: 0,
+            "broker_called": False,
+            "submitted_intents": 0,
+        },
+        payload_unset=(
+            LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY,
+            LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY,
+            "local_sim_projection_generation",
+            "local_sim_projection_terminal_failure",
+            "local_sim_projection_readback_failure",
+            "local_sim_projection_readback_terminal_failure",
+            "local_sim_valuation_pending_v1",
+            "local_sim_valuation_completion_v1",
+            "local_sim_persistence",
+            "local_sim_durable_minute_loop",
+            "strategy_performance",
+            "performance_projection",
+            "broker_order_handles",
+        ),
+    )
+
+    assert repo.list_local_sim_execution_states(run.run_id, authoritative=True) == []
+
+
+def test_localsim_post_close_orphan_carrier_fails_run_and_continues_independent_binding() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    peer_binding = StrategyRuntimeReleaseService(repository=repo).create_binding(
+        strategy_id="strategy_local_scheduler_peer",
+        release=release,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        capital_allocation=100_000,
+        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+        created_by="unit-test",
+        created_reason="orphan carrier isolation test",
+    )
+    orphan_outbox = LocalSimProjectionOutboxV1(
+        receipt_id="lsec_orphan_post_close",
+        run_id="run_orphan_post_close",
+        plan_id="plan_orphan_post_close",
+        generation=1,
+        economic_hash="economic_hash_orphan_post_close",
+        projection_payload={"schema_version": "local_sim_projection_payload_v1"},
+    )
+    bad_run = SimulationDailyRun(
+        run_id=orphan_outbox.run_id,
+        trade_date=TRADE_DATE,
+        strategy_id=local_binding.strategy_id,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        release_id=release.release_id,
+        release_hash=release.release_hash or "",
+        binding_id=local_binding.binding_id,
+        binding_hash=local_binding.binding_hash or "",
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        run_payload_json={
+            LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY: 0,
+            LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY: orphan_outbox.model_dump(mode="json"),
+        },
+    )
+    good_run = SimulationDailyRun(
+        run_id="run_empty_post_close_peer",
+        trade_date=TRADE_DATE,
+        strategy_id=peer_binding.strategy_id,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        release_id=release.release_id,
+        release_hash=release.release_hash or "",
+        binding_id=peer_binding.binding_id,
+        binding_hash=peer_binding.binding_hash or "",
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        run_payload_json={"no_rebalance_required": True, "broker_called": False},
+    )
+    repo.save_simulation_daily_run(bad_run)
+    repo.save_simulation_daily_run(good_run)
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+
+    results = scheduler._terminalize_post_close_localsim_runs(  # noqa: SLF001
+        trade_date=TRADE_DATE,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 21, 7, 5, tzinfo=UTC),
+    )
+
+    by_run_id = {item["run_id"]: item for item in results}
+    assert bad_run.run_id in by_run_id, results
+    failed = by_run_id[bad_run.run_id]
+    assert failed["status"] == "RECOVERY_FAILED"
+    assert failed["error"]["context"]["reason_code"] == (
+        "LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER"
+    )
+    latest_bad = repo.get_simulation_daily_run(bad_run.run_id)
+    assert latest_bad.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert "localsim_post_close_terminalization" not in latest_bad.run_payload_json
+    assert by_run_id[good_run.run_id]["reason_code"] == "LOCALSIM_POST_CLOSE_NO_REBALANCE_SUCCESS"
+    assert repo.get_simulation_daily_run(good_run.run_id).status == SimulationDailyRunStatus.SUCCEEDED
+
+
+def test_localsim_economic_readback_rejects_extra_active_state_on_public_repository_seam(
+) -> None:
+    repo, run, receipt, outbox = _localsim_authority_review_fixture()
+    active = repo.list_local_sim_execution_states(run.run_id, authoritative=True)[0]
+    duplicate = LocalSimExecutionStateV1.model_validate(
+        {
+            **active.model_dump(mode="json"),
+            "state_id": "",
+            "algo_instance_id": f"review_duplicate_{active.algo_instance_id}",
+            "state_hash": "",
+        }
+    )
+    raw_states = deepcopy(run.run_payload_json[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY])
+    raw_states[duplicate.state_id] = duplicate.model_dump(mode="json")
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY: raw_states},
+    )
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.readback_local_sim_economic_commit(run_id=run.run_id, receipt=receipt, outbox=outbox)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_ACTIVE_AUTHORITY_CONFLICT"
+    assert exc_info.value.context["run_id"] == run.run_id
+
+
+@pytest.mark.parametrize("field", ["receipt_id", "run_id", "plan_id", "generation", "economic_hash"])
+def test_localsim_economic_readback_rejects_forged_outbox_identity(
+    field: str,
+) -> None:
+    repo, run, receipt, outbox = _localsim_authority_review_fixture()
+    forged_value: object = outbox.generation + 1 if field == "generation" else f"forged_{field}"
+    forged = _rebuilt_local_sim_outbox(outbox, **{field: forged_value})
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY: forged.model_dump(mode="json")},
+    )
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.readback_local_sim_economic_commit(run_id=run.run_id, receipt=receipt, outbox=forged)
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_PROJECTION_OUTBOX_READBACK_IDENTITY_CONFLICT"
+    assert exc_info.value.context["run_id"] == run.run_id
+
+
+def test_localsim_economic_readback_accepts_terminal_history_and_is_repeatable(
+) -> None:
+    repo, run, receipt, outbox = _localsim_authority_review_fixture()
+    active = repo.list_local_sim_execution_states(run.run_id, authoritative=True)[0]
+    historical = LocalSimExecutionStateV1.model_validate(
+        {
+            **active.model_dump(mode="json"),
+            "state_id": "",
+            "algo_instance_id": f"review_history_{active.algo_instance_id}",
+            "filled_quantity": active.total_quantity,
+            "remaining_quantity": 0,
+            "runtime_status": LocalSimExecutionRuntimeStatus.FILLED.value,
+            "state_hash": "",
+            "created_at": (active.created_at - timedelta(seconds=1)).isoformat(),
+            "updated_at": (active.updated_at - timedelta(seconds=1)).isoformat(),
+        }
+    )
+    raw_states = deepcopy(run.run_payload_json[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY])
+    raw_states[historical.state_id] = historical.model_dump(mode="json")
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY: raw_states},
+    )
+    first = repo.readback_local_sim_economic_commit(run_id=run.run_id, receipt=receipt, outbox=outbox)
+    second = repo.readback_local_sim_economic_commit(run_id=run.run_id, receipt=receipt, outbox=outbox)
+    assert first.run_id == second.run_id == run.run_id
+    assert [
+        state.state_id for state in repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+    ] == sorted(receipt.economic_facts["state_hashes"])
+
+
+def test_localsim_economic_readback_uses_committed_independent_dev_postgres_connections() -> None:
+    if os.getenv("AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB") != "1":
+        pytest.skip("set AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 for disposable DEV PostgreSQL rows")
+    from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
+
+    nonce = uuid4().hex
+    source_repo, run, receipt, outbox = _localsim_authority_review_fixture(
+        package_id=f"pkg_scheduler_{nonce}",
+        release_metadata={"dev_db_nonce": nonce},
+    )
+    release = source_repo.releases[run.release_id]
+    binding = source_repo.bindings[run.binding_id]
+    evidence = source_repo.daily_selection_evidences[run.selection_evidence_id or ""]
+    plan = source_repo.execution_plans[run.execution_plan_id or ""]
+    dsn = _dev_dsn()
+    writer_connections: list[Any] = []
+    readback_connections: list[Any] = []
+    writer_pids: list[int] = []
+    readback_pids: list[int] = []
+
+    def connection_factory(connections: list[Any], pids: list[int]):
+        @contextmanager
+        def factory():
+            connection = psycopg2.connect(**dsn, connect_timeout=5)
+            connections.append(connection)
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_backend_pid()")
+                pids.append(int(cursor.fetchone()[0]))
+            try:
+                yield connection
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+        return factory
+
+    writer = SimulationRuntimeRepository(conn_factory=connection_factory(writer_connections, writer_pids))
+    readback = SimulationRuntimeRepository(conn_factory=connection_factory(readback_connections, readback_pids))
+
+    def replace_payload(payload: dict[str, Any]) -> None:
+        current = writer.get_simulation_daily_run(run.run_id)
+        writer.update_simulation_daily_run(
+            run.run_id,
+            payload_patch=payload,
+            payload_unset=tuple(sorted(set(current.run_payload_json) - set(payload))),
+        )
+
+    try:
+        package_connection = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with package_connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO strategy_pkg.package (
+                        package_id, package_name, package_version, source_type, source_id,
+                        package_status, manifest_json, manifest_sha256
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        release.package_id,
+                        "BUG-992 disposable DEV package",
+                        "1.0.0",
+                        "candidate_strategy_package",
+                        f"bug992_{nonce}",
+                        "ACTIVE",
+                        psycopg2.extras.Json({"schema_version": "strategy_package_manifest_v1"}),
+                        release.manifest_sha256,
+                    ),
+                )
+            package_connection.commit()
+        finally:
+            package_connection.close()
+        writer.save_strategy_runtime_release(release)
+        binding_connection = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with binding_connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO paper_v2.simulation_release_binding (
+                        binding_id, strategy_id, release_id, release_hash, package_id,
+                        manifest_sha256, broker_backend, broker_account_id, capital_allocation,
+                        strategy_name, order_remark_prefix, effective_from, effective_to,
+                        approval_state, binding_config_json, binding_hash, created_by,
+                        created_reason, created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        binding.binding_id,
+                        binding.strategy_id,
+                        binding.release_id,
+                        binding.release_hash,
+                        binding.package_id,
+                        binding.manifest_sha256,
+                        binding.broker_backend.value,
+                        binding.broker_account_id,
+                        binding.capital_allocation,
+                        binding.strategy_name,
+                        binding.order_remark_prefix,
+                        binding.effective_from,
+                        binding.effective_to,
+                        binding.approval_state.value,
+                        psycopg2.extras.Json(binding.binding_config_json),
+                        binding.binding_hash,
+                        binding.created_by,
+                        binding.created_reason,
+                        binding.created_at,
+                        binding.updated_at,
+                    ),
+                )
+            binding_connection.commit()
+        finally:
+            binding_connection.close()
+        writer.save_daily_selection_evidence(evidence)
+        writer.save_execution_plan(plan)
+        run_connection = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with run_connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO paper_v2.simulation_daily_run (
+                        run_id, trade_date, strategy_id, broker_backend, package_id,
+                        manifest_sha256, release_id, release_hash, binding_id, binding_hash,
+                        selection_evidence_id, selection_artifact_hash, execution_plan_id,
+                        execution_plan_hash, status, run_payload_json, created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        run.run_id,
+                        run.trade_date,
+                        run.strategy_id,
+                        run.broker_backend.value,
+                        run.package_id,
+                        run.manifest_sha256,
+                        run.release_id,
+                        run.release_hash,
+                        run.binding_id,
+                        run.binding_hash,
+                        run.selection_evidence_id,
+                        run.selection_artifact_hash,
+                        run.execution_plan_id,
+                        run.execution_plan_hash,
+                        run.status.value,
+                        psycopg2.extras.Json(run.run_payload_json),
+                        run.created_at,
+                        run.updated_at,
+                    ),
+                )
+            run_connection.commit()
+        finally:
+            run_connection.close()
+        assert writer.get_simulation_daily_run(run.run_id).run_id == run.run_id
+
+        raw_connection = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with raw_connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s",
+                    (run.run_id,),
+                )
+                row = cursor.fetchone()
+                assert row is not None
+                assert isinstance(row[0], dict)
+                assert row[0][LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY]["outbox_id"] == outbox.outbox_id
+        finally:
+            raw_connection.rollback()
+            raw_connection.close()
+
+        active = source_repo.list_local_sim_execution_states(run.run_id, authoritative=True)[0]
+        historical = LocalSimExecutionStateV1.model_validate(
+            {
+                **active.model_dump(mode="json"),
+                "state_id": "",
+                "algo_instance_id": f"postgres_history_{active.algo_instance_id}",
+                "filled_quantity": active.total_quantity,
+                "remaining_quantity": 0,
+                "runtime_status": LocalSimExecutionRuntimeStatus.FILLED.value,
+                "state_hash": "",
+                "created_at": (active.created_at - timedelta(seconds=1)).isoformat(),
+                "updated_at": (active.updated_at - timedelta(seconds=1)).isoformat(),
+            }
+        )
+        legal_payload = deepcopy(run.run_payload_json)
+        legal_payload[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY][historical.state_id] = historical.model_dump(
+            mode="json"
+        )
+        replace_payload(legal_payload)
+        first = readback.readback_local_sim_economic_commit(
+            run_id=run.run_id,
+            receipt=receipt,
+            outbox=outbox,
+        )
+        second = readback.readback_local_sim_economic_commit(
+            run_id=run.run_id,
+            receipt=receipt,
+            outbox=outbox,
+        )
+        assert first.run_id == second.run_id == run.run_id
+
+        duplicate = LocalSimExecutionStateV1.model_validate(
+            {
+                **active.model_dump(mode="json"),
+                "state_id": "",
+                "algo_instance_id": f"postgres_duplicate_{active.algo_instance_id}",
+                "state_hash": "",
+            }
+        )
+        extra_active_payload = deepcopy(run.run_payload_json)
+        extra_active_payload[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY][duplicate.state_id] = duplicate.model_dump(
+            mode="json"
+        )
+        replace_payload(extra_active_payload)
+        with pytest.raises(InvalidStateTransitionError) as active_info:
+            readback.readback_local_sim_economic_commit(
+                run_id=run.run_id,
+                receipt=receipt,
+                outbox=outbox,
+            )
+        assert active_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_ACTIVE_AUTHORITY_CONFLICT"
+
+        orphan_payload = deepcopy(run.run_payload_json)
+        orphan_payload[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY] = {}
+        orphan_payload[LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY] = {}
+        orphan_payload[LOCAL_SIM_ECONOMIC_GENERATION_PAYLOAD_KEY] = 0
+        orphan_payload[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY] = outbox.model_dump(mode="json")
+        orphan_payload.pop(LOCAL_SIM_PROJECTION_RECEIPTS_PAYLOAD_KEY, None)
+        orphan_payload.pop("local_sim_projection_generation", None)
+        replace_payload(orphan_payload)
+        with pytest.raises(InvalidStateTransitionError) as orphan_info:
+            readback.readback_local_sim_economic_commit(
+                run_id=run.run_id,
+                receipt=receipt,
+                outbox=outbox,
+            )
+        assert orphan_info.value.context["reason_code"] == (
+            "LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER"
+        )
+
+        forged_receipt = _rebuilt_local_sim_receipt(receipt, run_id=f"forged_{run.run_id}")
+        forged_receipt_payload = deepcopy(run.run_payload_json)
+        forged_receipt_payload[LOCAL_SIM_ECONOMIC_RECEIPTS_PAYLOAD_KEY] = {
+            forged_receipt.receipt_id: forged_receipt.model_dump(mode="json")
+        }
+        replace_payload(forged_receipt_payload)
+        with pytest.raises(InvalidStateTransitionError) as receipt_info:
+            readback.readback_local_sim_economic_commit(
+                run_id=run.run_id,
+                receipt=receipt,
+                outbox=outbox,
+            )
+        assert receipt_info.value.context["reason_code"] == (
+            "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_IDENTITY_CONFLICT"
+        )
+
+        forged_outbox = _rebuilt_local_sim_outbox(outbox, receipt_id="forged_receipt_id")
+        forged_outbox_payload = deepcopy(run.run_payload_json)
+        forged_outbox_payload[LOCAL_SIM_PROJECTION_OUTBOX_PAYLOAD_KEY] = forged_outbox.model_dump(mode="json")
+        replace_payload(forged_outbox_payload)
+        with pytest.raises(InvalidStateTransitionError) as outbox_info:
+            readback.readback_local_sim_economic_commit(
+                run_id=run.run_id,
+                receipt=receipt,
+                outbox=forged_outbox,
+            )
+        assert outbox_info.value.context["reason_code"] == (
+            "LOCALSIM_PROJECTION_OUTBOX_READBACK_IDENTITY_CONFLICT"
+        )
+        assert writer_pids and readback_pids
+        assert set(writer_pids).isdisjoint(readback_pids)
+    finally:
+        cleanup = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with cleanup.cursor() as cursor:
+                cursor.execute("DELETE FROM paper_v2.simulation_daily_run WHERE run_id = %s", (run.run_id,))
+                cursor.execute("DELETE FROM paper_v2.execution_plan WHERE plan_id = %s", (plan.plan_id,))
+                cursor.execute(
+                    "DELETE FROM selection.daily_selection_evidence WHERE evidence_id = %s",
+                    (evidence.evidence_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM paper_v2.simulation_release_binding WHERE binding_id = %s",
+                    (binding.binding_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM strategy_pkg.strategy_runtime_release WHERE release_id = %s",
+                    (release.release_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM strategy_pkg.package WHERE package_id = %s",
+                    (release.package_id,),
+                )
+            cleanup.commit()
+        finally:
+            cleanup.close()
+            for connection in [*writer_connections, *readback_connections]:
+                connection.close()
+
+        cleanup_readback = psycopg2.connect(**dsn, connect_timeout=5)
+        try:
+            with cleanup_readback.cursor() as cursor:
+                disposable_rows = (
+                    (
+                        "strategy_pkg.package.package_id",
+                        "SELECT count(*) FROM strategy_pkg.package WHERE package_id = %s",
+                        release.package_id,
+                    ),
+                    (
+                        "strategy_pkg.strategy_runtime_release.release_id",
+                        "SELECT count(*) FROM strategy_pkg.strategy_runtime_release WHERE release_id = %s",
+                        release.release_id,
+                    ),
+                    (
+                        "paper_v2.simulation_release_binding.binding_id",
+                        "SELECT count(*) FROM paper_v2.simulation_release_binding WHERE binding_id = %s",
+                        binding.binding_id,
+                    ),
+                    (
+                        "selection.daily_selection_evidence.evidence_id",
+                        "SELECT count(*) FROM selection.daily_selection_evidence WHERE evidence_id = %s",
+                        evidence.evidence_id,
+                    ),
+                    (
+                        "paper_v2.execution_plan.plan_id",
+                        "SELECT count(*) FROM paper_v2.execution_plan WHERE plan_id = %s",
+                        plan.plan_id,
+                    ),
+                    (
+                        "paper_v2.simulation_daily_run.run_id",
+                        "SELECT count(*) FROM paper_v2.simulation_daily_run WHERE run_id = %s",
+                        run.run_id,
+                    ),
+                )
+                for identity_label, query, identity_value in disposable_rows:
+                    cursor.execute(query, (identity_value,))
+                    assert cursor.fetchone()[0] == 0, (
+                        f"cleanup left disposable DEV row for {identity_label}"
+                    )
+        finally:
+            cleanup_readback.rollback()
+            cleanup_readback.close()
+
+
 def _legacy_scheduler_miniqmt_account_level_reconciliation_warning_does_not_fail_current_slot() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
@@ -9167,10 +10258,21 @@ def _atomic_simulation_repository(connection):
         yield connection
 
     repository = SimulationRuntimeRepository(conn_factory=factory)
-    repository.get_simulation_daily_run = lambda run_id: SimpleNamespace(
-        run_payload_json=deepcopy(connection.payload), status=connection.status
-    )
-    repository.list_local_sim_execution_states = lambda run_id: []
+
+    def get_run(run_id: str) -> SimpleNamespace:
+        payload = deepcopy(connection.payload)
+        receipts = _local_sim_economic_receipt_map(payload)
+        latest = max(receipts.values(), key=lambda item: item.generation) if receipts else None
+        return SimpleNamespace(
+            run_id=run_id,
+            binding_id=latest.binding_id if latest else "binding_atomic_empty",
+            trade_date=latest.trade_date if latest else TRADE_DATE,
+            execution_plan_id=latest.plan_id if latest else None,
+            run_payload_json=payload,
+            status=connection.status,
+        )
+
+    repository.get_simulation_daily_run = get_run  # type: ignore[method-assign]
     return repository
 
 

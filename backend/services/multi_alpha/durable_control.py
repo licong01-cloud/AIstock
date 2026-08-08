@@ -205,11 +205,15 @@ class DurableMultiAlphaControlService:
         owner_id: str,
         lease_seconds: int,
         excluded_command_ids: Sequence[str] = (),
+        min_recheck_interval_seconds: int = 0,
     ) -> dict[str, Any] | None:
         """Claim and atomically apply one local command intent.
 
         When the command remains reconciling, ownership is deliberately yielded
         so a restart or another worker can rediscover it from the durable row.
+        Re-claiming a reconciling command is throttled to
+        min_recheck_interval_seconds so unchanged-state control reconciliation
+        does not poll the event table every orchestrator cycle.
         """
 
         self._repository.preflight_p0_2_schema(raise_on_error=True)
@@ -217,6 +221,7 @@ class DurableMultiAlphaControlService:
             owner_id=owner_id,
             lease_seconds=lease_seconds,
             excluded_command_ids=excluded_command_ids,
+            min_recheck_interval_seconds=min_recheck_interval_seconds,
         )
         if command is None:
             return None
@@ -238,6 +243,7 @@ class DurableMultiAlphaControlService:
                         str(command["command_id"]),
                         token=_ownership_token(command),
                         phase="control_reconciliation_pending",
+                        write_event=False,
                     )
             return command
         except MultiAlphaDurableRepositoryError:
