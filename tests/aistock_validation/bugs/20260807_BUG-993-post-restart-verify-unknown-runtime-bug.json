@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-993",
-  "closed_at": null,
+  "closed_at": "2026-08-07T02:32:39Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -89,8 +89,8 @@
   },
   "first_seen_at": "2026-08-06T18:14:51.076855Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5f057ecedf469f5d1da8f5f0512d4eed961f573e",
+  "fixed_at": "2026-08-07T02:32:39Z",
   "github_issue_number": 3188,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3188",
   "last_seen_at": "2026-08-06T18:14:51.076855Z",
@@ -98,6 +98,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3190",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -112,6 +113,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -119,7 +122,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -128,6 +131,12 @@
     "fingerprint": "bf78c24325157f0ec875f212",
     "source_event_id": "FE-20260807-bf78c2432515"
   },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py -> 256 passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file backend/tests/scripts/test_aistock_issue_workflow.py --module validation -> passed",
+    "ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

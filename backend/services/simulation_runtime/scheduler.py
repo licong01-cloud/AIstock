@@ -4794,7 +4794,7 @@ class SimulationLifecycleScheduler:
         }
 
     def _validate_local_sim_post_close_state_closure(self, run: SimulationDailyRun) -> None:
-        states = tuple(self.repository.list_local_sim_execution_states(run.run_id))
+        states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
         if not states:
             return
         plan = self.repository.get_execution_plan(run.execution_plan_id or "")
@@ -7390,7 +7390,8 @@ class SimulationLifecycleScheduler:
                 )
             fact_maps[field_name] = raw_hashes
         actual_state_hashes = {
-            state.state_id: state.state_hash for state in self.repository.list_local_sim_execution_states(run.run_id)
+            state.state_id: state.state_hash
+            for state in self.repository.list_local_sim_execution_states(run.run_id, authoritative=True)
         }
         if (
             facts.get("schema_version") != "local_sim_valuation_pending_economic_facts_v1"
@@ -7603,7 +7604,7 @@ class SimulationLifecycleScheduler:
             or run.run_payload_json.get("local_sim_projection_readback_terminal_failure")
         ):
             return None
-        states = tuple(self.repository.list_local_sim_execution_states(run.run_id))
+        states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
         by_intent = {state.intent_id: state for state in states}
         expected_intents = {intent.intent_id for intent in plan.intents}
         if (
@@ -12702,7 +12703,7 @@ class SimulationLifecycleScheduler:
                     "outbox_plan_id": outbox.plan_id,
                 },
             )
-        states = tuple(self.repository.list_local_sim_execution_states(run.run_id))
+        states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
         by_intent = {state.intent_id: state for state in states}
         expected_intents = {intent.intent_id for intent in plan.intents}
         if (
@@ -14192,7 +14193,7 @@ class SimulationLifecycleScheduler:
         configure(run_id=run.run_id, binding_id=binding.binding_id)
         if not restore:
             return ()
-        states = tuple(self.repository.list_local_sim_execution_states(run.run_id))
+        states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
         if not states:
             raise DataUnavailableError(
                 "LocalSim active run has no durable per-intent execution state",
