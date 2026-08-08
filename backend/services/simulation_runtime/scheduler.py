@@ -4688,27 +4688,31 @@ class SimulationLifecycleScheduler:
         if broker_backend is not None and self._normalized_backend(broker_backend) != SimulationBrokerBackend.LOCAL_SIM:
             return []
         terminalized: list[dict[str, Any]] = []
-        for run in self.repository.list_simulation_daily_runs(
-            trade_date_before=trade_date,
-            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
-            strategy_id=strategy_id,
-            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
-            limit=limit,
+        for failed_status in (
+            SimulationDailyRunStatus.FAILED_RETRYABLE,
+            SimulationDailyRunStatus.FAILED_TERMINAL,
         ):
-            terminalized_run = self._run_recovery_item_isolated(
-                stage="STALE_LOCALSIM_FAILED_RUN_RECOVERY",
-                run=run,
-                raise_on_error=raise_on_error,
-                func=lambda run=run: self._terminalize_historical_localsim_durable_run_if_safe(
+            for run in self.repository.list_simulation_daily_runs(
+                trade_date_before=trade_date,
+                broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+                strategy_id=strategy_id,
+                status=failed_status,
+                limit=limit,
+            ):
+                terminalized_run = self._run_recovery_item_isolated(
+                    stage="STALE_LOCALSIM_FAILED_RUN_RECOVERY",
                     run=run,
-                    scheduler_trade_date=trade_date,
-                    as_of_time=as_of_time,
-                ),
-            )
-            if terminalized_run is not None:
-                terminalized.append(terminalized_run)
-            if len(terminalized) >= limit:
-                return terminalized
+                    raise_on_error=raise_on_error,
+                    func=lambda run=run: self._terminalize_historical_localsim_durable_run_if_safe(
+                        run=run,
+                        scheduler_trade_date=trade_date,
+                        as_of_time=as_of_time,
+                    ),
+                )
+                if terminalized_run is not None:
+                    terminalized.append(terminalized_run)
+                if len(terminalized) >= limit:
+                    return terminalized
         return terminalized
 
     def _terminalize_historical_localsim_durable_run_if_safe(
@@ -4775,7 +4779,21 @@ class SimulationLifecycleScheduler:
         )
         states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
         self._validate_local_sim_post_close_state_closure(run)
-        if any(not state.is_terminal for state in states):
+        active_states = tuple(state for state in states if not state.is_terminal)
+        if active_states:
+            if run.status != SimulationDailyRunStatus.FAILED_TERMINAL:
+                return None
+            return self._recover_historical_failed_terminal_localsim_active_generation(
+                run=run,
+                plan=plan,
+                binding=binding,
+                runtime_release=runtime_release,
+                outbox=outbox,
+                states=states,
+                scheduler_trade_date=scheduler_trade_date,
+                as_of_time=as_of_time,
+            )
+        if run.status == SimulationDailyRunStatus.FAILED_TERMINAL:
             return None
         self._readback_local_sim_recovery_generation(
             binding=binding,
@@ -4832,6 +4850,181 @@ class SimulationLifecycleScheduler:
             }
         )
         return terminalized
+
+    def _recover_historical_failed_terminal_localsim_active_generation(
+        self,
+        *,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        outbox: LocalSimProjectionOutboxV1,
+        states: tuple[LocalSimExecutionStateV1, ...],
+        scheduler_trade_date: date,
+        as_of_time: datetime | None,
+    ) -> dict[str, Any]:
+        """Finish an old incorrectly-terminal run from its exact durable generation."""
+
+        persistence = run.run_payload_json.get("local_sim_persistence")
+        if not isinstance(persistence, dict) or persistence.get("terminal") is not False:
+            raise DataUnavailableError(
+                "Historical failed-terminal LocalSim active generation has invalid persistence authority",
+                context={
+                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_PERSISTENCE_CONFLICT",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                    "persistence_type": type(persistence).__name__,
+                    "persistence_terminal": (persistence.get("terminal") if isinstance(persistence, dict) else None),
+                },
+            )
+        recovery_as_of = datetime.combine(
+            run.trade_date,
+            _POST_CLOSE_RECONCILE_TIME,
+            tzinfo=SCHEDULER_TZ,
+        )
+        context = self._load_run_context(
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=run.trade_date,
+            as_of_time=recovery_as_of,
+        )
+        recovery_data_source = str(context.market_data_source or "").strip()
+        if not recovery_data_source:
+            raise DataUnavailableError(
+                "Historical failed-terminal LocalSim recovery has no authoritative market-data source",
+                context={
+                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_MARKET_DATA_SOURCE_MISSING",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                },
+            )
+        self._readback_active_local_sim_durable_continuation(
+            binding=binding,
+            run=run,
+            plan=plan,
+            runtime_release=runtime_release,
+            trade_date=run.trade_date,
+            as_of_time=recovery_as_of,
+            context=context,
+        )
+        driven = self._run_local_sim_binding_single_flight(
+            binding=binding,
+            trade_date=run.trade_date,
+            context={
+                "stage": "STALE_LOCALSIM_FAILED_TERMINAL_ACTIVE_RECOVERY",
+                "run_id": run.run_id,
+                "binding_id": binding.binding_id,
+                "trade_date": run.trade_date.isoformat(),
+                "scheduler_trade_date": scheduler_trade_date.isoformat(),
+            },
+            func=lambda: self._drive_existing_local_sim(
+                binding=binding,
+                run=run,
+                plan=plan,
+                runtime_release=runtime_release,
+                trade_date=run.trade_date,
+                data_source=recovery_data_source,
+                as_of_time=recovery_as_of,
+                context=context,
+            ),
+        )
+        latest = self.repository.get_simulation_daily_run(run.run_id)
+        latest_states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
+        self._validate_local_sim_post_close_state_closure(latest)
+        latest_persistence = latest.run_payload_json.get("local_sim_persistence")
+        remaining_active = tuple(state for state in latest_states if not state.is_terminal)
+        if (
+            remaining_active
+            or not isinstance(latest_persistence, dict)
+            or latest_persistence.get("terminal") is not True
+        ):
+            raise DataUnavailableError(
+                "Historical failed-terminal LocalSim generation did not reach exact terminal closure",
+                context={
+                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_CLOSURE_INCOMPLETE",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                    "active_state_ids": sorted(state.state_id for state in remaining_active),
+                    "persistence_type": type(latest_persistence).__name__,
+                    "persistence_terminal": (
+                        latest_persistence.get("terminal") if isinstance(latest_persistence, dict) else None
+                    ),
+                },
+            )
+        try:
+            latest_outbox = LocalSimProjectionOutboxV1.model_validate(
+                latest.run_payload_json.get("local_sim_projection_outbox_v1")
+            )
+        except Exception as exc:
+            raise DataUnavailableError(
+                "Historical failed-terminal LocalSim terminal outbox is invalid",
+                context={
+                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_OUTBOX_INVALID",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                },
+            ) from exc
+        recovery_evidence = {
+            "schema_version": "localsim_historical_failed_terminal_active_recovery_v1",
+            "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_ACTIVE_GENERATION_RECOVERED",
+            "run_id": run.run_id,
+            "binding_id": binding.binding_id,
+            "plan_id": plan.plan_id,
+            "previous_status": run.status.value,
+            "terminal_status": latest.status.value,
+            "stale_trade_date": run.trade_date.isoformat(),
+            "scheduler_trade_date": scheduler_trade_date.isoformat(),
+            "predecessor_outbox_id": outbox.outbox_id,
+            "predecessor_generation": outbox.generation,
+            "terminal_outbox_id": latest_outbox.outbox_id,
+            "terminal_generation": latest_outbox.generation,
+            "predecessor_state_count": len(states),
+            "predecessor_state_set_sha256": canonical_json_sha256(
+                [
+                    {"state_id": state.state_id, "state_hash": state.state_hash}
+                    for state in sorted(states, key=lambda item: item.state_id)
+                ]
+            ),
+            "terminal_state_count": len(latest_states),
+            "terminal_state_set_sha256": canonical_json_sha256(
+                [
+                    {"state_id": state.state_id, "state_hash": state.state_hash}
+                    for state in sorted(latest_states, key=lambda item: item.state_id)
+                ]
+            ),
+            "parent_resubmitted": False,
+            "predecessor_projection_replayed": False,
+            "durable_minute_loop_advanced": True,
+            "recovery_as_of": recovery_as_of.isoformat(),
+            "verified_at": (
+                self._scheduler_time(as_of_time) if as_of_time is not None else self._scheduler_now()
+            ).isoformat(),
+        }
+        updated = self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=latest.status,
+            payload_patch={
+                "last_stage": latest.status.value,
+                "localsim_historical_failed_terminal_active_recovery_v1": recovery_evidence,
+            },
+        )
+        return {
+            "run_id": updated.run_id,
+            "trade_date": updated.trade_date.isoformat(),
+            "strategy_id": updated.strategy_id,
+            "broker_backend": updated.broker_backend.value,
+            "previous_status": run.status.value,
+            "status": updated.status.value,
+            "reason": "localsim_historical_failed_terminal_active_generation_recovered",
+            "reason_code": recovery_evidence["reason_code"],
+            "historical_failed_terminal_active_recovery": True,
+            "scheduler_trade_date": scheduler_trade_date.isoformat(),
+            "driven_status": driven.status,
+        }
 
     @staticmethod
     def _validate_historical_localsim_recovery_identity(
@@ -12824,10 +13017,15 @@ class SimulationLifecycleScheduler:
         trade_date: date,
         data_source: str,
         as_of_time: datetime | None,
+        context: SimulationRunContext | None = None,
     ) -> SimulationSchedulerBindingResult:
-        context = self._load_run_context(
-            runtime_release=runtime_release, binding=binding, trade_date=trade_date, as_of_time=as_of_time
-        )
+        if context is None:
+            context = self._load_run_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
+                as_of_time=as_of_time,
+            )
         self._readback_active_local_sim_durable_continuation(
             binding=binding,
             run=run,
