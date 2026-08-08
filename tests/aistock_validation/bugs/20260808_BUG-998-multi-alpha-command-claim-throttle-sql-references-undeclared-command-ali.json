@@ -126,7 +126,10 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh Python pytest process executed the durable repository matrix and the BUG-998 PostgreSQL node: 31 passed, 1 skipped because AISTOCK_MULTI_ALPHA_TEST_PG_DSN is not configured in this window",
+      "fresh Python process loaded the explicit F:/Dev/AIstock/.env credential location without printing values and ran EXPLAIN without ANALYZE inside SET TRANSACTION READ ONLY against the generated claim_next_command SQL: passed with 12 plan rows"
+    ],
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
@@ -151,6 +154,62 @@
     "fingerprint": "ebf0a25a6e23fd16e9691fdc",
     "source_event_id": "FE-20260808-ebf0a25a6e23"
   },
+  "validation_evidence": [
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "3dc428be5116df88",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "pytest",
+      "status": "passed",
+      "command": "python -m pytest backend/tests/multi_alpha/test_durable_repository.py backend/tests/multi_alpha/test_durable_repository_postgres.py::test_claim_next_command_reconciling_throttle_executes_on_postgres -q -p no:cacheprovider",
+      "result": "31 passed, 1 skipped"
+    },
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "ff5e957d8e0b7996",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "nox",
+      "status": "passed",
+      "command": "python -m nox -s l0",
+      "result": "successful"
+    },
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "5a2c5d9d26f4fae7",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "nox",
+      "status": "passed",
+      "command": "python -m nox -s validation_module_registry_l0",
+      "result": "8 passed; ownership files 14 mapped 14"
+    },
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "fd61bf5fa4d64ccc",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "nox",
+      "status": "passed",
+      "command": "python -m nox -s qe_read_backend",
+      "result": "14 passed"
+    },
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "e344234ad1026fce",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "workflow_smoke",
+      "status": "passed",
+      "command": "python read-only PostgreSQL EXPLAIN of generated claim_next_command SQL",
+      "result": "passed; 12 plan rows; transaction read only; analyze false"
+    },
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "2281a8cc3e9a1bed",
+      "commit": "c4a6430190395c5a3a8944c6d1623e913c60b24a",
+      "evidence_kind": "ruff",
+      "status": "passed",
+      "command": "python -m ruff check and python -m py_compile on BUG-998 changed Python files",
+      "result": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
