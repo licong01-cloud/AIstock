@@ -148,7 +148,8 @@
     "fresh_process_evidence": [
       "Fresh pytest process exercised public SimulationLifecycleScheduler.run_once across a malformed historical FAILED_TERMINAL outbox, exact typed per-run failure, restored strict predecessor authority, original-trade-date EOD durable minute-loop advancement, terminal state/persistence closure, stable parent/order identity and repeated-cadence zero order/fill replay: 1 passed; changed-code line 85.00%, branch 77.27%",
       "Fresh Python pytest process exercised SimulationLifecycleScheduler.run_once through a production-equivalent LocalSIM durable restart with broker_called=false, exact plan/state/outbox/economic/projection/Paper readback, no parent resubmit, stable order identities, generation advance, explicit malformed-outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control or broker call",
-      "Fresh pytest process exercised broker_called=false durable restart continuation, exact readback, malformed outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control"
+      "Fresh pytest process exercised broker_called=false durable restart continuation, exact readback, malformed outbox failure, and post-close state-first EOD closure: 2 passed; no backend process control",
+      "Fresh pytest process exercised public SimulationLifecycleScheduler.run_once through malformed outbox fail-loud, exact historical FAILED_TERMINAL active-generation recovery, original-trade-date EOD closure, stable parent/order identity and repeated-cadence zero order/fill replay -> passed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
