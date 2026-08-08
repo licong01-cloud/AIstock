@@ -1,11 +1,11 @@
 # AIstock 荐股模型优先垂直切片 F2 详细设计 v1.0
 
-> 日期：2026-08-08  
-> Feature tier：`F2`  
-> 当前状态：`DESIGN_READY_FOR_M0_M1_IMPLEMENTATION`  
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v2.2  
-> 首个目标：原生多 Alpha 父包 `pkg_ma_8ec5e389fa2c5e484a1ac7e9` 的 SHORT_REBOUND Top20→Top5 真实模型  
-> 训练边界：只在 WSL Conda 环境读取已有 QE H5/Parquet/Qlib Bin 和 Prediction Store PKL  
+> 日期：2026-08-08
+> Feature tier：`F2`
+> 当前状态：`DESIGN_READY_FOR_M0_M1_IMPLEMENTATION`
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v2.2
+> 首个目标：原生多 Alpha 父包 `pkg_ma_8ec5e389fa2c5e484a1ac7e9` 的 SHORT_REBOUND Top20→Top5 真实模型
+> 训练边界：只在 WSL Conda 环境读取已有 QE H5/Parquet/Qlib Bin 和 Prediction Store PKL
 > 推理边界：只在 Advisory 消费层读取数据库当前/实时输入，不修改 Selection、Paper、模拟盘或 QE
 
 ## 0. 文档定位与权威顺序
