@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-995",
-  "closed_at": null,
+  "closed_at": "2026-08-08T04:36:33Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -92,8 +92,8 @@
   },
   "first_seen_at": "2026-08-07T03:05:44.709171Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b91a371126a83762346f05e15bfff908f0b22fbc",
+  "fixed_at": "2026-08-08T04:36:33Z",
   "github_issue_number": 3193,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3193",
   "last_seen_at": "2026-08-07T03:05:44.709171Z",
@@ -101,6 +101,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3197",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -115,6 +116,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -122,7 +125,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -131,6 +134,12 @@
     "fingerprint": "bf1cd1d9f619bc83cbd0a860",
     "source_event_id": "FE-20260807-bf1cd1d9f619"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed: blocking=0 at 139e6630",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests; 14/14 mapped at 139e6630",
+    "python -m nox -s hmm_risk_backend -> passed: 342 tests; coverage 75.70% at 139e6630",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md --tier F2 -> passed: warnings=0 at 139e6630"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
