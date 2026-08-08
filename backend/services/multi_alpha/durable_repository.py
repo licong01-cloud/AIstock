@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -2662,6 +2663,8 @@ class MultiAlphaDurableRepository:
         claim_kind: str = "dispatch",
         node_id: str | None = None,
         excluded_attempt_ids: Sequence[str] = (),
+        min_recheck_interval_seconds: int = 0,
+        write_claim_event: bool = True,
     ) -> dict[str, Any] | None:
         policy = ATTEMPT_CLAIM_POLICIES.get(claim_kind)
         if policy is None:
@@ -2696,6 +2699,11 @@ class MultiAlphaDurableRepository:
                           AND (%s IS NULL OR attempt.node_id = %s)
                           AND NOT (attempt.attempt_id = ANY(%s))
                           AND (
+                              %s::int <= 0
+                              OR attempt.status = 'submitting'
+                              OR attempt.updated_at <= clock_timestamp() - (%s::int * INTERVAL '1 second')
+                          )
+                          AND (
                               attempt.owner_id IS NULL
                               OR attempt.lease_expires_at IS NULL
                               OR attempt.lease_expires_at < clock_timestamp()
@@ -2721,6 +2729,8 @@ class MultiAlphaDurableRepository:
                         node_id,
                         node_id,
                         list(excluded_attempt_ids),
+                        min_recheck_interval_seconds,
+                        min_recheck_interval_seconds,
                         owner_id,
                         lease_seconds,
                     ),
@@ -2730,6 +2740,8 @@ class MultiAlphaDurableRepository:
                     return None
                 row = dict(claimed)
                 run_id = str(row["run_id"])
+                if not write_claim_event:
+                    return row
                 self._insert_event(
                     cur,
                     run_id=run_id,
@@ -2756,6 +2768,8 @@ class MultiAlphaDurableRepository:
         lease_seconds: int,
         excluded_command_ids: Sequence[str] = (),
         actions: Sequence[str] | None = None,
+        min_recheck_interval_seconds: int = 0,
+        write_claim_event: bool = True,
     ) -> dict[str, Any] | None:
         active_statuses = ("accepted", "applying", "reconciling")
         self._validate_claim_inputs(
@@ -2786,6 +2800,11 @@ class MultiAlphaDurableRepository:
                           AND next_delivery_at <= clock_timestamp()
                           AND NOT (command_id = ANY(%s))
                           AND (
+                              %s::int <= 0
+                              OR command.status <> 'reconciling'
+                              OR command.updated_at <= clock_timestamp() - (%s::int * INTERVAL '1 second')
+                          )
+                          AND (
                               owner_id IS NULL
                               OR lease_expires_at IS NULL
                               OR lease_expires_at < clock_timestamp()
@@ -2811,6 +2830,8 @@ class MultiAlphaDurableRepository:
                         list(normalized_actions),
                         list(normalized_actions),
                         list(excluded_command_ids),
+                        min_recheck_interval_seconds,
+                        min_recheck_interval_seconds,
                         owner_id,
                         lease_seconds,
                     ),
@@ -2819,6 +2840,9 @@ class MultiAlphaDurableRepository:
                 if claimed is None:
                     return None
                 row = dict(claimed)
+                rechecking_reconciling = str(row.get("status")) == "reconciling"
+                if not write_claim_event or rechecking_reconciling:
+                    return row
                 self._insert_event(
                     cur,
                     run_id=str(row["run_id"]),
@@ -3997,6 +4021,7 @@ class MultiAlphaDurableRepository:
         *,
         token: OwnershipToken,
         phase: str,
+        write_event: bool = True,
     ) -> dict[str, Any]:
         return self._yield_owned_entity(
             entity="run",
@@ -4005,6 +4030,7 @@ class MultiAlphaDurableRepository:
             entity_id=run_id,
             token=token,
             phase=phase,
+            write_event=write_event,
         )
 
     def yield_attempt_ownership(
@@ -4013,6 +4039,7 @@ class MultiAlphaDurableRepository:
         *,
         token: OwnershipToken,
         phase: str,
+        write_event: bool = True,
     ) -> dict[str, Any]:
         return self._yield_owned_entity(
             entity="attempt",
@@ -4021,6 +4048,7 @@ class MultiAlphaDurableRepository:
             entity_id=attempt_id,
             token=token,
             phase=phase,
+            write_event=write_event,
         )
 
     def yield_command_ownership(
@@ -4029,6 +4057,7 @@ class MultiAlphaDurableRepository:
         *,
         token: OwnershipToken,
         phase: str,
+        write_event: bool = True,
     ) -> dict[str, Any]:
         return self._yield_owned_entity(
             entity="command",
@@ -4037,6 +4066,7 @@ class MultiAlphaDurableRepository:
             entity_id=command_id,
             token=token,
             phase=phase,
+            write_event=write_event,
         )
 
     def yield_cancel_delivery_ownership(
@@ -4045,6 +4075,7 @@ class MultiAlphaDurableRepository:
         *,
         token: OwnershipToken,
         phase: str,
+        write_event: bool = True,
     ) -> dict[str, Any]:
         return self._yield_owned_entity(
             entity="cancel_delivery",
@@ -4053,6 +4084,7 @@ class MultiAlphaDurableRepository:
             entity_id=delivery_id,
             token=token,
             phase=phase,
+            write_event=write_event,
         )
 
     def transition_run_with_event(
@@ -4520,6 +4552,152 @@ class MultiAlphaDurableRepository:
                     payload=payload,
                 )
 
+    def append_event_if_phase_new(
+        self,
+        *,
+        run_id: str,
+        phase: str,
+        event_type: str,
+        payload: Mapping[str, Any],
+        child_id: str | None = None,
+        attempt_id: str | None = None,
+        reason_code: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Append a control/status poll event only when no event with the same
+        (run_id, phase, event_type) already exists. Unchanged-state polling
+        (control_reconciliation_pending, cancel_waiting_remote_terminal, ...)
+        therefore does not amplify the append-only event table; the first event
+        for each phase is kept for observability and cursor compatibility."""
+        if event_type not in EVENT_TYPES:
+            raise MultiAlphaDurableRepositoryError(
+                "unsupported durable event type",
+                reason_code="multi_alpha_invalid_event_type",
+                context={"event_type": event_type},
+            )
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                self._validate_event_scope(cur, run_id=run_id, child_id=child_id, attempt_id=attempt_id)
+                cur.execute(
+                    """
+                    SELECT event_id
+                    FROM strategy_pkg.multi_alpha_combine_backtest_event
+                    WHERE run_id = %s
+                      AND phase = %s
+                      AND event_type = %s
+                    LIMIT 1
+                    """,
+                    (run_id, phase, event_type),
+                )
+                if cur.fetchone() is not None:
+                    return None
+                return self._insert_event(
+                    cur,
+                    run_id=run_id,
+                    child_id=child_id,
+                    attempt_id=attempt_id,
+                    event_type=event_type,
+                    phase=phase,
+                    reason_code=reason_code,
+                    payload=payload,
+                )
+
+    def append_error_if_fingerprint_new(
+        self,
+        *,
+        run_id: str,
+        phase: str,
+        error: Mapping[str, Any],
+        child_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Append an error event only when the error fingerprint is new for
+        (run_id, phase). A repeated identical failure keeps its first event and
+        is not re-appended every orchestrator cycle, while a genuinely new
+        error (changed reason_code / message / context) still records a fresh
+        event (new failures are never silently swallowed)."""
+        new_fingerprint = self._error_fingerprint(error)
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT payload_json
+                    FROM strategy_pkg.multi_alpha_combine_backtest_event
+                    WHERE run_id = %s
+                      AND phase = %s
+                      AND event_type = 'error'
+                    ORDER BY event_id DESC
+                    LIMIT 1
+                    """,
+                    (run_id, phase),
+                )
+                latest = cur.fetchone()
+                if latest is not None:
+                    existing_payload = dict(latest).get("payload_json") or {}
+                    existing_error = existing_payload.get("error") or {}
+                    if self._error_fingerprint(existing_error) == new_fingerprint:
+                        return dict(latest)
+                return self._insert_event(
+                    cur,
+                    run_id=run_id,
+                    child_id=child_id,
+                    attempt_id=attempt_id,
+                    event_type="error",
+                    phase=phase,
+                    reason_code=str(error.get("reason_code") or "") or None,
+                    payload={"error": dict(error)},
+                )
+
+    @staticmethod
+    def _error_fingerprint(error: Mapping[str, Any]) -> str:
+        reason_code = str(error.get("reason_code") or "error")
+        message = str(error.get("message") or "")
+        context = dict(error.get("context") or {})
+        try:
+            canonical_context = json.dumps(context, sort_keys=True, ensure_ascii=False, default=str)
+        except Exception:
+            canonical_context = str(context)
+        return f"{reason_code}|{message}|{canonical_context[:512]}"
+
+    def update_attempt_remote_status(
+        self,
+        attempt_id: str,
+        *,
+        token: OwnershipToken,
+        remote_status: str,
+    ) -> dict[str, Any]:
+        """Silently record a remote_status change within the active set. Current
+        row update only (no append-only event) so unchanged-state polling does
+        not amplify the event table while still persisting remote state."""
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt
+                    SET remote_status = %s,
+                        heartbeat_at = clock_timestamp(),
+                        row_version = row_version + 1,
+                        updated_at = NOW()
+                    WHERE attempt_id = %s
+                      AND owner_id = %s
+                      AND fencing_token = %s
+                      AND row_version = %s
+                      AND lease_expires_at > clock_timestamp()
+                    RETURNING *
+                    """,
+                    (remote_status, attempt_id, token.owner_id, token.fencing_token, token.row_version),
+                )
+                updated = cur.fetchone()
+                if not updated:
+                    self._raise_cas_failure(
+                        cur,
+                        "attempt",
+                        "strategy_pkg.multi_alpha_combine_backtest_child_attempt",
+                        "attempt_id",
+                        attempt_id,
+                        token,
+                    )
+                return dict(updated)
+
     def list_events(self, run_id: str, *, after_event_id: int = 0, limit: int = 500) -> list[dict[str, Any]]:
         if after_event_id < 0:
             raise MultiAlphaDurableRepositoryError(
@@ -4587,6 +4765,7 @@ class MultiAlphaDurableRepository:
         entity_id: str,
         token: OwnershipToken,
         phase: str,
+        write_event: bool = True,
     ) -> dict[str, Any]:
         if not str(phase or "").strip():
             raise MultiAlphaDurableRepositoryError(
@@ -4637,20 +4816,21 @@ class MultiAlphaDurableRepository:
                         reason_code="multi_alpha_invalid_contract_value",
                         context={"entity": entity},
                     )
-                self._insert_event(
-                    cur,
-                    run_id=run_id,
-                    child_id=child_id,
-                    attempt_id=attempt_id,
-                    event_type=event_type,
-                    phase=phase,
-                    payload={
-                        "ownership_yielded": True,
-                        "owner_id": token.owner_id,
-                        "fencing_token": token.fencing_token,
-                        "row_version": row["row_version"],
-                    },
-                )
+                if write_event:
+                    self._insert_event(
+                        cur,
+                        run_id=run_id,
+                        child_id=child_id,
+                        attempt_id=attempt_id,
+                        event_type=event_type,
+                        phase=phase,
+                        payload={
+                            "ownership_yielded": True,
+                            "owner_id": token.owner_id,
+                            "fencing_token": token.fencing_token,
+                            "row_version": row["row_version"],
+                        },
+                    )
                 return row
 
     def set_child_reconciling_attempt(
@@ -4766,6 +4946,8 @@ class MultiAlphaDurableRepository:
         owner_id: str,
         lease_seconds: int,
         excluded_run_ids: Sequence[str] = (),
+        min_recheck_interval_seconds: int = 0,
+        write_claim_event: bool = True,
     ) -> dict[str, Any] | None:
         """Claim only runs with business reconciliation or parent finalization work."""
         finalizable_statuses = ("running", "pause_requested", "cancel_requested", "cancelling")
@@ -4813,6 +4995,16 @@ class MultiAlphaDurableRepository:
                                     AND child.status <> ALL(%s)
                               )
                           )
+                          AND (
+                              %s::int <= 0
+                              OR NOT EXISTS (
+                                  SELECT 1
+                                  FROM strategy_pkg.multi_alpha_combine_backtest_event AS ev
+                                  WHERE ev.run_id = run.id
+                                    AND ev.phase = 'business_finalize_error'
+                                    AND ev.created_at > clock_timestamp() - (%s::int * INTERVAL '1 second')
+                              )
+                          )
                         ORDER BY run.updated_at, run.created_at, run.id
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
@@ -4832,6 +5024,8 @@ class MultiAlphaDurableRepository:
                         list(finalizable_statuses),
                         list(excluded_run_ids),
                         list(TERMINAL_CHILD_STATUSES),
+                        min_recheck_interval_seconds,
+                        min_recheck_interval_seconds,
                         owner_id,
                         lease_seconds,
                     ),
@@ -4840,6 +5034,8 @@ class MultiAlphaDurableRepository:
                 if claimed is None:
                     return None
                 row = dict(claimed)
+                if not write_claim_event:
+                    return row
                 self._insert_event(
                     cur,
                     run_id=str(row["id"]),
@@ -4854,7 +5050,12 @@ class MultiAlphaDurableRepository:
                 )
                 return row
 
-    def list_runs_pending_archive(self, *, limit: int = 200) -> list[dict[str, Any]]:
+    def list_runs_pending_archive(
+        self,
+        *,
+        limit: int = 200,
+        archive_retry_backoff_seconds: int = 0,
+    ) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(int(limit), 1000))
         return self._fetch_all(
             """
@@ -4867,12 +5068,31 @@ class MultiAlphaDurableRepository:
                   SELECT 1
                   FROM strategy_pkg.multi_alpha_combine_backtest_event AS event
                   WHERE event.run_id = run.id
-                    AND event.phase IN ('archive_enqueued', 'archive_duplicate')
+                    AND event.phase IN (
+                        'archive_enqueued',
+                        'archive_duplicate',
+                        'archive_skipped_disabled'
+                    )
+              )
+              AND (
+                  %s::int <= 0
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM strategy_pkg.multi_alpha_combine_backtest_event AS event
+                      WHERE event.run_id = run.id
+                        AND event.phase = 'archive_error'
+                        AND event.created_at > clock_timestamp() - (%s::int * INTERVAL '1 second')
+                  )
               )
             ORDER BY run.finished_at NULLS LAST, run.created_at, run.id
             LIMIT %s
             """,
-            (list(TERMINAL_RUN_STATUSES), bounded_limit),
+            (
+                list(TERMINAL_RUN_STATUSES),
+                archive_retry_backoff_seconds,
+                archive_retry_backoff_seconds,
+                bounded_limit,
+            ),
         )
 
     def claim_next_pause_drain_run(
