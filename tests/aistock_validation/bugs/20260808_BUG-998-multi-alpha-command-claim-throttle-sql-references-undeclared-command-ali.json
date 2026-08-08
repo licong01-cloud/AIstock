@@ -134,7 +134,11 @@
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
+    "database_readback_ref": "not_required"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
