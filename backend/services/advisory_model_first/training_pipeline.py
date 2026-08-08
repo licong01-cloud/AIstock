@@ -327,13 +327,45 @@ def _verify_training_environment(request: FrozenAdvisoryTrainingRequestV1) -> di
             context={"conda_env": conda_env or None},
         )
     repository_root = Path(request.repository_root).resolve()
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repository_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    git_command = ["git"]
+    git_pointer = repository_root / ".git"
+    if git_pointer.is_file():
+        pointer = git_pointer.read_text(encoding="utf-8").strip()
+        if not pointer.startswith("gitdir: "):
+            raise AdvisoryModelFirstError(
+                "WSL training worktree has an invalid .git pointer",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+                context={"repository_root": str(repository_root)},
+            )
+        raw_git_dir = pointer.removeprefix("gitdir: ").strip()
+        try:
+            translated = subprocess.run(
+                ["wslpath", "-u", raw_git_dir],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except subprocess.CalledProcessError as exc:
+            raise AdvisoryModelFirstError(
+                "WSL could not translate the Windows worktree git directory",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+        git_command.append(f"--git-dir={translated}")
+    try:
+        result = subprocess.run(
+            [*git_command, "rev-parse", "HEAD"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise AdvisoryModelFirstError(
+            "WSL could not resolve the frozen training repository commit",
+            reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            context={"error_type": type(exc).__name__, "git_exit_code": exc.returncode},
+        ) from exc
     actual_commit = result.stdout.strip().lower()
     if actual_commit != request.repository_commit:
         raise AdvisoryModelFirstError(
