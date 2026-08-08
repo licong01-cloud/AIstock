@@ -351,6 +351,15 @@ def test_default_local_pred_backtest_commands_use_configured_wsl_on_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(combine_backtest_module, "_is_windows_host", lambda: True)
+    monkeypatch.setenv("TDX_DB_HOST", "fake-host")
+    monkeypatch.setenv("TDX_DB_PORT", "5432")
+    monkeypatch.setenv("TDX_DB_USER", "fake-user")
+    monkeypatch.setenv("TDX_DB_PASSWORD", "fake-password")
+    monkeypatch.setenv("TDX_DB_NAME", "fake-db")
+    monkeypatch.setenv("PGHOST", "fake-pghost")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake")
+    monkeypatch.setenv("AISTOCK_PREDICTION_STORE_BASE_URL", "http://prediction-store")
+    monkeypatch.setenv("QLIB_DATA_PATH", "C:/qlib_data")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -375,7 +384,21 @@ def test_default_local_pred_backtest_commands_use_configured_wsl_on_windows(
     assert "conda activate rdagent-gpu; set -u;" in read_command[-1]
     assert "set -euo pipefail; source" not in read_command[-1]
     assert "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py" in read_command[-1]
-    assert read_env is None
+    # The child env is the scrubbed QE data-plane env: DB credentials removed,
+    # file-path / control-plane variables preserved.
+    assert read_env is not None
+    for leaked in (
+        "TDX_DB_HOST",
+        "TDX_DB_PORT",
+        "TDX_DB_USER",
+        "TDX_DB_PASSWORD",
+        "TDX_DB_NAME",
+        "PGHOST",
+        "DATABASE_URL",
+    ):
+        assert leaked not in read_env
+    assert read_env.get("AISTOCK_PREDICTION_STORE_BASE_URL") == "http://prediction-store"
+    assert read_env.get("QLIB_DATA_PATH") == "C:/qlib_data"
 
 
 def test_prepare_runtime_template_preserves_real_drvfs_linux_symlink(tmp_path: Path) -> None:
