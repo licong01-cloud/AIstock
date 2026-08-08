@@ -199,6 +199,7 @@ class _Repository:
         *,
         token: OwnershipToken,
         phase: str,
+        write_event: bool = True,
     ) -> Mapping[str, Any]:
         assert attempt_id == self.attempt["attempt_id"]
         assert phase in {

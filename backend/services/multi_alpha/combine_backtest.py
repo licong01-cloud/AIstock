@@ -38,6 +38,7 @@ from backend.services.model_store import ModelStoreService, PredictionStoreError
 from backend.services.multi_alpha.combiner import CombinerLeg, MultiAlphaCombiner, MultiAlphaCombinerError
 from backend.services.multi_alpha.orthogonality import MultiAlphaOrthogonalityError, normalize_prediction_frame
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError, PanelLegSpec
+from backend.services.multi_alpha.qe_subprocess_env import scrubbed_qe_subprocess_env
 from backend.services.quantevolver.config_composer import QE_STRATEGY_RUNTIME_HELPER_FILES
 
 
@@ -280,6 +281,7 @@ class ShellPredBacktestExecutor:
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest_qrun",
+                env=read_env,
                 error_context={**error_context, "stage": "qrun"},
             )
             if qrun.returncode != 0:
@@ -630,8 +632,11 @@ def _wsl_runtime_settings(
 def _default_local_pred_backtest_commands(
     *, workspace: Path, pred_name: str, backtest_config: Mapping[str, Any]
 ) -> tuple[list[str], list[str], Mapping[str, str] | None]:
+    # The QE data plane is file-only: qrun/read_exp_res must never inherit the
+    # backend PostgreSQL credentials or have any database fallback. Start from a
+    # scrubbed child env and only add the explicit recorder contract.
+    read_env = scrubbed_qe_subprocess_env()
     if not _is_windows_host():
-        read_env = dict(os.environ)
         read_env["QE_REQUIRE_RECORDER_ID"] = "1"
         return (
             [sys.executable, "qrun_limit_minute.py", "conf.yaml", "--pred-backtest", pred_name],
@@ -653,7 +658,7 @@ def _default_local_pred_backtest_commands(
     return (
         ["wsl", "-d", distro, "bash", "-lc", qrun_script],
         ["wsl", "-d", distro, "bash", "-lc", read_script],
-        None,
+        read_env,
     )
 
 
