@@ -141,7 +141,7 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_7bf1e0c1b6b7d055",
     "fresh_process_evidence": [
-      "BUG-992 continuation: python -m nox -s simulation_core_l2 -> final main-sync result recorded in validation receipts in a fresh Python process",
+      "BUG-992 continuation: python -m nox -s simulation_core_l2 -> 480 passed, 1 explicitly gated DEV PostgreSQL skip in a fresh Python process",
       "BUG-992 continuation: AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 253 passed with disposable DEV PostgreSQL authority/readback coverage",
       "python -m nox -s simulation_core_l2 -> 466 passed, 1 explicitly gated DEV PostgreSQL skip in a fresh Python process",
       "AISTOCK_RUN_SIMULATION_RUNTIME_DEV_DB=1 python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q --cov=backend.services.simulation_runtime.repository --cov=backend.services.simulation_runtime.scheduler --cov-branch -> 239 passed in a fresh Python process",
@@ -180,7 +180,7 @@
     "continuation direct GREEN -> 14 passed for active/failed terminal-history restart/idempotency/no-replay, pending/missing/malformed outbox, active generation, authority corruption, run/release/binding/plan identity, failure-carrier drift and query-before-limit",
     "continuation lifecycle with DEV PostgreSQL enabled -> 253 passed",
     "continuation changed-code coverage -> line 98.63% (72/73), branch 93.48% (43/46)",
-    "continuation simulation_core_l2 -> final main-sync result recorded in validation receipts",
+    "continuation simulation_core_l2 -> 480 passed, 1 explicitly gated DEV PostgreSQL skip",
     "continuation classifier -> targeted_ci_required, simulation_core_l2, unmapped_code_files=[]",
     "continuation Ruff check, targeted py_compile, git diff --check and F2 112/112 warnings=0 -> passed",
     "final-review RED public authority matrix before implementation -> 20 failed, 2 passed",
