@@ -176,7 +176,12 @@ def train_lambdarank(
         raise AdvisoryModelFirstError(
             "LightGBM LambdaRank training failed",
             reason_code="ADVISORY_MODEL_TRAINING_FAILED",
-            context={"error_type": type(exc).__name__},
+            context={
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "train_row_count": int(train_mask.sum()),
+                "validation_row_count": int(validation_mask.sum()),
+            },
         ) from exc
     test = merged.loc[test_mask].copy()
     test_matrix = matrix.loc[test_mask]
