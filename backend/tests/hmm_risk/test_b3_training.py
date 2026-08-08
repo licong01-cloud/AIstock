@@ -732,6 +732,113 @@ def test_target_projection_rejects_nonzero_inactive_feature() -> None:
         )
 
 
+@pytest.mark.parametrize("invalid_value", [1e-12, np.nan, np.inf, -np.inf])
+def test_target_projection_rejects_near_zero_or_nonfinite_raw_inactive_feature(invalid_value: float) -> None:
+    raw = np.ones((180, 20), dtype=np.float64)
+    raw[:, 19] = 0.0
+    raw[0, 19] = invalid_value
+    preprocess = _global_preprocess_with_nonzero_inactive_transform()
+    preprocessed = (
+        training_subject._apply_preprocess(raw, preprocess) if np.isfinite(invalid_value) else np.zeros_like(raw)
+    )
+
+    with pytest.raises(StateModelSetError, match="inactive_dimension_contract_invalid"):
+        build_projection_receipt(
+            family="autocycle_all_core",
+            level="L2",
+            sector_code=TARGET_SECTOR,
+            full_feature_names=ALL_CORE_FEATURES,
+            preprocess=preprocess,
+            raw_observations=raw,
+            preprocessed_observations=preprocessed,
+            train_input_manifest={
+                "dataset_manifest_hash": "a" * 64,
+                "mapping_manifest_hash": "b" * 64,
+                "calendar_manifest_hash": "c" * 64,
+                "l2_stock_fact_manifest_hash": "d" * 64,
+                "feature_domain_policy_sha256": TEST_POLICY_SHA256,
+                "formula_version": C010_FORMULA_VERSION,
+            },
+        )
+
+
+def _global_preprocess_with_nonzero_inactive_transform() -> dict[str, object]:
+    return {
+        "family": "winsor_zscore_1_99_train_global_v1",
+        "winsor_low": [-3.0] * 19 + [-0.12704857933790217],
+        "winsor_high": [3.0] * 19 + [-0.00268461666241596],
+        "center": [0.0] * 19 + [-0.041761032442194194],
+        "scale": [1.0] * 19 + [0.0231404684253839],
+    }
+
+
+def test_target_projection_accepts_raw_zero_after_approved_global_preprocess_maps_it_nonzero() -> None:
+    raw = np.ones((180, 20), dtype=np.float64)
+    raw[:, 19] = 0.0
+    preprocess = _global_preprocess_with_nonzero_inactive_transform()
+    preprocessed = training_subject._apply_preprocess(raw, preprocess)
+    assert np.all(preprocessed[:, 19] != 0.0)
+
+    receipt, projected = build_projection_receipt(
+        family="autocycle_all_core",
+        level="L2",
+        sector_code=TARGET_SECTOR,
+        full_feature_names=ALL_CORE_FEATURES,
+        preprocess=preprocess,
+        raw_observations=raw,
+        preprocessed_observations=preprocessed,
+        train_input_manifest={
+            "dataset_manifest_hash": "a" * 64,
+            "mapping_manifest_hash": "b" * 64,
+            "calendar_manifest_hash": "c" * 64,
+            "l2_stock_fact_manifest_hash": "d" * 64,
+            "feature_domain_policy_sha256": TEST_POLICY_SHA256,
+            "formula_version": C010_FORMULA_VERSION,
+        },
+    )
+
+    assert projected.shape == (180, 19)
+    evidence = receipt["inactive_exact_zero_evidence"]
+    assert receipt["inactive_exact_zero"] is True
+    assert evidence["raw_exact_zero"] is True
+    assert evidence["raw"]["all_values_zero"] is True
+    assert evidence["preprocessed_exact_zero_required"] is False
+    assert evidence["preprocessed"]["all_values_zero"] is False
+    assert evidence["preprocessed_matches_approved_transform"] is True
+    assert evidence["expected_preprocessed_vector_sha256"] == receipt["preprocessed_inactive_vector_sha256"]
+    assert evidence["observed_preprocessed_vector_sha256"] == receipt["preprocessed_inactive_vector_sha256"]
+
+
+@pytest.mark.parametrize("tampered_feature_index", [0, 19])
+def test_target_projection_rejects_preprocessed_matrix_not_produced_by_approved_transform(
+    tampered_feature_index: int,
+) -> None:
+    raw = np.ones((180, 20), dtype=np.float64)
+    raw[:, 19] = 0.0
+    preprocess = _global_preprocess_with_nonzero_inactive_transform()
+    preprocessed = training_subject._apply_preprocess(raw, preprocess)
+    preprocessed[0, tampered_feature_index] += 1.0
+
+    with pytest.raises(StateModelSetError, match="inactive_dimension_contract_invalid"):
+        build_projection_receipt(
+            family="autocycle_all_core",
+            level="L2",
+            sector_code=TARGET_SECTOR,
+            full_feature_names=ALL_CORE_FEATURES,
+            preprocess=preprocess,
+            raw_observations=raw,
+            preprocessed_observations=preprocessed,
+            train_input_manifest={
+                "dataset_manifest_hash": "a" * 64,
+                "mapping_manifest_hash": "b" * 64,
+                "calendar_manifest_hash": "c" * 64,
+                "l2_stock_fact_manifest_hash": "d" * 64,
+                "feature_domain_policy_sha256": TEST_POLICY_SHA256,
+                "formula_version": C010_FORMULA_VERSION,
+            },
+        )
+
+
 @pytest.mark.parametrize(("sector_code", "expected_dimension"), [(TARGET_SECTOR, 19), ("801011.SI", 20)])
 def test_formal_autocycle_l2_fit_applies_full_preprocess_then_fixed_projection(
     monkeypatch, sector_code: str, expected_dimension: int
