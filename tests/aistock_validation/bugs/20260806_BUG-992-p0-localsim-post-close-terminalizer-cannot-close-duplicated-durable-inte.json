@@ -115,9 +115,9 @@
   },
   "first_seen_at": "2026-08-06T07:34:59.747195Z",
   "fix_branch": "bug/BUG-992-bug-992-historical-failed-retryable-recovery-202-20260808",
-  "fix_commit": null,
+  "fix_commit": "152f1bca62929f0a4ca1433030957cbabeae8ddd",
   "fix_summary": "The first source slice retains one strict LocalSIM durable authority closure. The continuation adds a bounded historical FAILED_RETRYABLE recovery stage whose repository query filters trade_date before LIMIT, validates frozen run/release/binding/plan/account-slot identity, continuous economic authority, PROJECTED outbox, unique projection receipt, terminal states/persistence and Paper economic facts, then reuses the existing post-close terminal decision in one run update. It records explicit no-resubmit/no-broker-replay/no-projection-replay evidence; pending projection remains retryable and malformed/corrupt authority fails loud.",
-  "fixed_at": null,
+  "fixed_at": "2026-08-08T05:51:55Z",
   "github_issue_number": 3184,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3184",
   "last_seen_at": "2026-08-06T07:34:59.747195Z",
@@ -125,7 +125,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": null,
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3205",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -153,9 +153,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "failed_business_smoke_continuation_in_progress",
+    "post_restart_effective_gate": "pending_user_restart",
     "post_restart_receipt_ref": null,
-    "runtime_identity_match": "matched_loaded_first_source_aca5ec6ce2ff317c58dbb9165647103da038a5a8",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -165,7 +165,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "in_progress",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -198,7 +198,10 @@
     "changed-file classifier -> simulation_core_l2, unmapped_code_files=[]",
     "real DEV PostgreSQL readback -> aistock_dev, committed row JSON, disjoint writer/readback backend PIDs, repeated independent readback, typed extra-active/orphan/forged failures, independent cleanup readback asserted package/release/binding/evidence/plan/run counts all 0",
     "Ruff check, targeted py_compile, and git diff --check -> passed",
-    "F2 validator -> 112/112, warnings=0"
+    "F2 validator -> 112/112, warnings=0",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -k BUG-992-continuation -> passed: 14 tests",
+    "python -m nox -s simulation_core_l2 -> passed: 480 tests, 1 skipped",
+    "python -m nox -s validation_module_registry_l0 and python -m nox -s l0 -> passed: 8 tests, 14/14 mapped, blocking=0"
   ],
   "validation_receipts": [
     "validation-receipt: id=68c8daf0a1b7d9fe commit=8fb4aa7c234a8dcbb4faceb0a0d7b8688e277825 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`passed: 466 tests, 1 explicitly gated DEV PostgreSQL skip`",
