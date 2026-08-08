@@ -30,6 +30,12 @@
       "actor": "codex",
       "note": "Runtime identity contains merged PR #3161, but the exact production run remains FAILED_TERMINAL with 246 authoritative active durable states. Continue the same BUG/Issue with automatic strict-authority cross-day recovery; manual DML remains forbidden.",
       "timestamp": "2026-08-08T07:28:35.7323534Z"
+    },
+    {
+      "action": "source_merge_pending_user_restart",
+      "actor": "codex",
+      "note": "Continuation PR #3213 merged at 446910d18751cb1eb8c827f4da8842ff63b5c883 with required CI green. Issue remains OPEN; runtime identity and exact target-run business recovery require the next user-owned backend-main restart.",
+      "timestamp": "2026-08-08T08:08:54Z"
     }
   ],
   "evidence_uris": [
@@ -121,9 +127,9 @@
   },
   "first_seen_at": "2026-08-05T09:41:16.812676Z",
   "fix_branch": "bug/BUG-984-historical-failed-terminal-active-state-recovery-20260808",
-  "fix_commit": "7102f25b2409d2818a85c0a0146cd6e4dc457bf4",
+  "fix_commit": "446910d18751cb1eb8c827f4da8842ff63b5c883",
   "fix_summary": "The continuation admits only historical LocalSIM FAILED_TERMINAL runs that still own one strict PROJECTED non-terminal generation. It closes run/release/binding/plan, outbox, state, receipt and Paper authority, then uses the existing per-binding single-flight LocalSIM minute loop at the original trade-date EOD. It never resubmits the parent or replays the predecessor projection, preserves legitimate terminal history, writes bounded hash-closed recovery evidence, and leaves malformed or incomplete authority as an explicit per-run recovery failure.",
-  "fixed_at": null,
+  "fixed_at": "2026-08-08T08:08:54Z",
   "github_issue_number": 3158,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3158",
   "last_seen_at": "2026-08-05T09:41:16.812676Z",
@@ -166,7 +172,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "in_progress",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
