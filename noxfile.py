@@ -650,6 +650,7 @@ def advisory_modeling_backend(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/advisory_modeling",
+        "backend/tests/advisory_model_first",
         "-q",
         "-p",
         "no:cacheprovider",
