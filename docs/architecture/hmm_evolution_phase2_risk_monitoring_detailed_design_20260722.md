@@ -2,13 +2,13 @@
 
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
-- 修订日期：2026-08-07
-- 状态：`B3_FORMAL_EXECUTED_BLOCKED_D1_D5_COMPAT_MERGED_P6_EXECUTOR_REVIEW_FIXED_NOT_EXECUTED`
+- 修订日期：2026-08-08
+- 状态：`B3_FORMAL_EXECUTED_BLOCKED_D1_D5_COMPAT_MERGED_P6_EXECUTED_BLOCKED_BUG999_SOURCE_FIX_LOCAL`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.19
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已固化；Slice 0 B3/L2 retrain、C-009、C-010-FORMAL-A、C-010-A5、BUG-977、BUG-982、REFIT-03 diagnostic 与 D1-D5 mixed-dimension 源码均已合入。历史 formal producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已完成两次 fresh-process `5184/5184` fits；D5/D6 fail closed、两 family blocked、READY=0。REFIT-03 又以 producer `b474170fd58a466959e595ce7d245bae7da88ab8` 在同一冻结 bundle、两个 fresh processes、三角色和 seeds 42..49 完成 `48/48` attempts 与 `48/48` 真实 fits；canonical report SHA-256=`7e8a17556aaf610de4bd7b2449cae5f224d032ce8acafdcbcb9a594bbf6276b9`，两进程 comparable payload SHA-256 均为 `53574f62608f6860e6ee59b7b31aafc7772a16d7637fe4a119e0128eda50888f`。19D treatment 与 20D positive harness 均为 `16/16 fit_completed`且 descriptive `covariance_status=accepted`，matched current-A5 20D control `16/16` 于 covariance stage fail closed；其中 seeds 45/47/48 的 invalid feature set 仅为 `[19]`，其余 seeds 42/43/44/46/49 为 `[0..19]`，故历史诊断结论仍为 `diagnostic_complete`、`mixed_seed_pattern`、`mechanism_assessment=inconclusive`。用户已批准 level-local D1-B 与 D5 effective-dimension 方案，PR #3189 已合入源码；BUG-995 又修复正式 P6 缺少 exact level-local executor 的缺陷，并已在 PR #3197 按正式审核发现的三个阻塞问题（C-001 true L2-only construction、C-002 parent-authoritative child closure、C-003 whole-finalization durable failure）完成源码修复与正反例测试（见 §23.14）。当前尚未运行 P6 的2096 fits、正式 D5/D6 或写 selected-level artifact；model/READY、数据库和 runtime 动作均未执行。
+- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已固化；Slice 0 B3/L2 retrain、C-009、C-010-FORMAL-A、C-010-A5、BUG-977、BUG-982、REFIT-03 diagnostic 与 D1-D5 mixed-dimension 源码均已合入。历史 formal producer `e2c01bae156281d551b084156fec4a09ed5a84ee` 已完成两次 fresh-process `5184/5184` fits；D5/D6 fail closed、两 family blocked、READY=0。REFIT-03 又以 producer `b474170fd58a466959e595ce7d245bae7da88ab8` 在同一冻结 bundle、两个 fresh processes、三角色和 seeds 42..49 完成 `48/48` attempts 与 `48/48` 真实 fits；canonical report SHA-256=`7e8a17556aaf610de4bd7b2449cae5f224d032ce8acafdcbcb9a594bbf6276b9`，两进程 comparable payload SHA-256 均为 `53574f62608f6860e6ee59b7b31aafc7772a16d7637fe4a119e0128eda50888f`。19D treatment 与 20D positive harness 均为 `16/16 fit_completed`且 descriptive `covariance_status=accepted`，matched current-A5 20D control `16/16` 于 covariance stage fail closed；其中 seeds 45/47/48 的 invalid feature set 仅为 `[19]`，其余 seeds 42/43/44/46/49 为 `[0..19]`，故历史诊断结论仍为 `diagnostic_complete`、`mixed_seed_pattern`、`mechanism_assessment=inconclusive`。用户已批准 level-local D1-B 与 D5 effective-dimension 方案，PR #3189 已合入源码；BUG-995/PR #3197 已合入 exact level-local P6 executor。producer `d1b4c35f194fbec143ec5c23f62046acc862ecc8` 随后完成 P6 两 fresh processes 的 `2096/2096` terminal entries，但 BUG-999 暴露 D1-B projection 把 raw exact-zero 错误扩展为 preprocess 后也必须 exact-zero，导致 `801207.SI` 的 8 个 seed 均在 fit 前失败；D5 按合同返回 unavailable、D6=0、selected-level/model/READY=0。BUG-999 当前仅完成源码修复与直接测试，尚未合入或重跑 P6；数据库和 runtime 动作均未执行（见 §23.15）。
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -24,7 +24,7 @@ Phase 2 的输出是研究分析事实，不是交易门禁、可买性、调仓
 
 ### 0.2 成功边界
 
-- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 源码已实现并通过本模块 required plan。历史双 fresh-process 训练已完成 5184/5184 fits，D5/D6 已按批准合同执行但 fail closed；C-010-A5 已合入并完成601日只读preflight。REFIT-03又闭合48 attempts/48 fits、raw covariance exact evidence与双进程bitwise证据；19D treatment/20D harness均通过，matched 20D全部covariance failure且呈mixed seed pattern，故`diagnostic_complete`与`mechanism_assessment=inconclusive`并存。D1-D5 mixed-dimension源码已合入，BUG-995 P6 exact level-local executor 已实现但尚未合入或执行。当前为 `FORMAL_EXECUTED_C010_A5_MERGED_D1_D5_COMPAT_MERGED_P6_EXECUTOR_SOURCE_FIXED_NOT_EXECUTED_BLOCKED_MODEL_ACCEPTANCE_NO_READY`。不得以源码完成、历史 fit、单一失败stage、单个 selected artifact、单 family、部分 sector、忽略 train observation drift、放宽阈值或 validation-picked seed冒充完成。
+- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 源码已实现并通过本模块 required plan。历史双 fresh-process 训练已完成 5184/5184 fits，D5/D6 已按批准合同执行但 fail closed；C-010-A5 已合入并完成601日只读preflight。REFIT-03又闭合48 attempts/48 fits、raw covariance exact evidence与双进程bitwise证据；19D treatment/20D harness均通过，matched 20D全部covariance failure且呈mixed seed pattern，故`diagnostic_complete`与`mechanism_assessment=inconclusive`并存。D1-D5 mixed-dimension与BUG-995 P6 executor均已合入，首次 P6 已完成2096/2096 terminal entries但被BUG-999的preprocessed-exact-zero错误合同阻断。当前为 `FORMAL_EXECUTED_C010_A5_MERGED_D1_D5_COMPAT_MERGED_P6_EXECUTED_BLOCKED_BUG999_SOURCE_FIX_LOCAL_NO_READY`。不得以源码完成、历史 fit、单一失败stage、单个 selected artifact、单 family、部分 sector、忽略 train observation drift、放宽阈值或 validation-picked seed冒充完成。
 - F-012：所有生成、查询和报告均为 advisory-only，只写 `hmm_risk.*`，不产生任何交易副作用。
 - F-013：真实 API/UI 完成 L1/L2、7 日热力图、今日预警、固定详情、状态分布、事件与回测证据。
 
@@ -1752,8 +1752,10 @@ identity必须永久记录inactive维，runtime不得动态激活。主要false-
 1. 从冻结train input构造完整20维C-order little-endian float64矩阵`X_raw`，验证shape、feature order、dates、dataset/mapping/calendar、
    direct-L2与C-010 formula/provenance identity；任何non-finite或hash漂移失败。
 2. 使用既有批准的`autocycle_all_core` full-20 preprocess identity计算`X_pre20`；不得先删除第20维再重新估计winsor/center/scale。
-3. exact-zero资格要求index 19的raw与preprocessed向量均finite、variance_ddof0精确为0、unique bit-pattern count为1、所有raw值
-   精确等于`+0.0|-0.0`，且profile/formula/provenance hashes与DIAG-02 exact receipt一致。`-0.0`只在value identity归一为`+0.0`，
+3. exact-zero资格只由index 19的raw向量决定：raw必须finite、variance_ddof0精确为0、归一化unique bit-pattern count为1，且所有raw值
+   精确等于`+0.0|-0.0`；profile/formula/provenance hashes仍与批准receipt闭合。`X_pre20`必须与批准的full-20 preprocess公式精确重算结果
+   bitwise一致，但inactive列在winsor/center/scale后允许为确定性的非零常量；receipt必须同时保存expected/observed preprocessed vector hash并相等。
+   该列随后由固定mask删除且永不参与likelihood，不能因为preprocess改变其数值而动态激活。`-0.0`只在raw value identity归一为`+0.0`，
    raw bytes/hash仍保留原值。
 4. `inactive_feature_indices=[19]`；`active_feature_indices=[0..18]`。`active_feature_mask`固定为长度20的JSON boolean list，
    list index等于approved feature index，0..18为true、19为false；不得使用实现相关bit-endian整数。令`P`为按该固定顺序抽取column的20→19 projection，
@@ -1922,7 +1924,7 @@ REFIT-01 固定为 `VERIFIED_ATTEMPTED_INCONCLUSIVE_TRAIN_CORE_DRIFT_ZERO_FITS`�
    observation producer 构造。每个role保存完整 train input manifest、raw observation hash、preprocess hash、日期/row count、
    feature order和source identity。historical formal/blocker/remediation artifact 只作为 immutable provenance reference；不得再要求
    current model/training payload与历史payload相等，也不得用历史数组参与当前fit。运行child前必须先对current-A5的801207 full20
-   profile重算exact-zero资格；index 19若不再同时满足raw/preprocessed exact-zero、其余19维finite且positive variance，则顶层固定
+   profile重算exact-zero资格；index 19若不再满足raw exact-zero，或full-20 preprocessed matrix不能由批准preprocess精确重算，或其余19维不满足finite与positive variance，则顶层固定
    `status=not_applicable`、`mechanism_assessment=constant_dimension_mechanism_not_applicable_current_profile_changed`、attempts/fits=0，
    不得继续跑旧D1假设，也不得把not-applicable写成effect supported/rejected。
    `current_a5_experiment_authority_sha256`必须对固定envelope直接执行`canonical_sha256`；envelope只允许且必须包含
@@ -2225,7 +2227,7 @@ aggregate all-reasons以及全部no-access/no-write flags。源码审核通过�
 
 **8. 验证计划与可合入边界。** 未来D1-B源码PR至少验证：
 
-- exact allowlist、raw/preprocessed zero、`-0.0`、nonzero constant、near-zero、non-finite、source/hash drift正反例；
+- exact allowlist、raw exact-zero、preprocessed approved-transform exact replay、preprocessed deterministic nonzero constant、`-0.0`、raw nonzero constant、near-zero、non-finite、source/hash drift正反例；
 - full20 preprocess先于projection；active order/mask/hash固定；no-inactive control为identity20；
 - KMeans/HMM只接收19维，model参数shape为3×19，inactive维无伪参数；
 - parser/replay对unknown version、mask/shape/preprocess drift fail closed；runtime不动态激活inactive维；
@@ -3622,6 +3624,42 @@ PR #3197 正式代码审核发现三个阻塞问题（C-001/C-002/C-003），本
 
 审核结论：`PASS_BUG_995_REVIEW_FIXED_THREE_FINDINGS_CLOSED_NOT_EXECUTED_PENDING_PR`。
 
+### 23.15 BUG-999：raw exact-zero 与 full preprocess replay 合同修复
+
+首次 P6 执行使用 producer `d1b4c35f194fbec143ec5c23f62046acc862ecc8`、当前 C-010 policy
+`b1e72d95cd2c105d8e5561005cb9250b853d7598276801ae9cb8689da8e6c871` 和固定单线程 Conda `AIstock`
+环境，完成两个 fresh process 的 `1048+1048=2096` terminal entries。两次 child authority 闭合后 D5 正常执行，
+但 8 个 seed 均缺失 `801207.SI` model，最终 `hmm_risk_model_selection_unavailable`；D6 未运行，selected-level、
+model、READY、database 与 runtime 写入均为 0。正式 report canonical SHA-256 为
+`4f53347b4aa0bf957c3c4f7b4d073e267007b9c1502e6afc0bcb46e6c8555dd2`。
+
+- **根因**：`build_projection_receipt()` 正确地先计算批准的 global full-20 preprocess，再执行固定 20→19 projection，
+  但旧 projection v1 同时要求 raw inactive vector 与 preprocessed inactive vector exact-zero。本次真实 feature 19 的
+  `winsor_high=-0.00268461666241596`、`center=-0.041761032442194194`、`scale=0.0231404684253839`，因此 raw zero
+  会被批准公式确定性映射为非零；旧条件与“full preprocess 先于 fixed projection”自相矛盾，并在任何 HMM fit 前拒绝
+  `801207.SI` 的 seeds 42..49。该失败不是 D4 模型验收结论，也不能通过排除 sector 或放宽 D5 修复。
+- **修复合同**：projection receipt/algorithm 升级为 v2。raw inactive vector 继续必须 exact-zero，禁止 epsilon、近零、
+  imputation 或动态 mask；调用方提供的完整 preprocessed matrix 必须与 `_apply_preprocess(raw, approved_params)` bitwise
+  相同。preprocessed inactive vector允许是该公式产生的确定性非零值，并保存 expected/observed vector SHA-256、统计摘要与
+  `preprocessed_matches_approved_transform=true`；固定 mask 随后删除该列，KMeans/HMM 仍只接收19维。
+- **真实输入 fix-point**：在同一正式 request/data/policy authority 上仅重建输入、不执行 HMM，`801207.SI` train rows=`473`，
+  raw inactive zero count=`473`且all-zero；批准公式重算后的inactive列min=max=`1.6886613987862675`、all-zero=false，
+  expected/observed transform匹配，固定projection shape=`[473,19]`，projection SHA-256=
+  `c280a0fba3d6a4eced3a749a81f36d8e2b96842f53ba3115f153151bccbd9f60`。该检查的fit/selection/database-write均为false，
+  只证明原阻断点已被精确修复，不证明D4/D5/D6或READY通过。
+- **fail-closed 边界**：raw inactive nonzero/non-finite、preprocessed payload 篡改、preprocess identity/hash 漂移、mask/shape/hash
+  漂移仍使用 typed `hmm_risk_model_inactive_dimension_contract_invalid` 失败。其他130个 sector继续 identity20；
+  `likelihood_feature_count_histogram={"19":1,"20":130}`、D3/D4/D5/D6、seeds 42..49、两个 fresh processes、
+  hard semantic authority 与两-family READY 完整性均不改变。
+- **执行边界**：BUG-999 源码、测试与本节设计修订合入前不得重跑正式 P6；合入后使用新的 clean-main producer、同一
+  frozen request/data authority 和新 artifact 路径重新执行完整2096 fits，不复用本次失败 child model payload，不覆盖历史报告。
+  D5/D6 仍按结果 fail closed，不预设修复后必然产生 selected-level artifact。
+- **DESIGN-COMPLIANCE-001**：不删除 sector、不减少 seed/fits、不使用旧 model 或20维 fallback，满足禁止简化；preprocess
+  expected/observed 精确回放与typed failure满足禁止静默错误；full preprocess、fixed projection、effective-dimension D5 与hard D6
+  语义不变，满足禁止业务逻辑迁移；没有新增人工门禁、运行时审批或研究方向淘汰。
+
+当前状态：`BUG999_SOURCE_FIXED_LOCAL_TESTED_PENDING_FORMAL_REVIEW_PR_MERGE_P6_RERUN`。
+
 ## 24. 当前完成状态与下一步
 
 本文件已闭合 C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、C-008-B3-STRUCTURAL-A、
@@ -3668,11 +3706,13 @@ treatment/harness均16/16 `fit_completed`且descriptive covariance accepted，ma
 formal D4 acceptance、D5 selection或READY。
 
 `C-008-B3-D1-POST-REFIT03-A`与`C-008-B3-REMEDIATION-D1-D5-COMPAT-01-A`已获批准，且P5正式
-mixed-dimension artifact/parser、dimension receipt与公式/identity/131-entry完整性的确定性直接测试已完成源码实现和本模块审核。下一步另行授权后执行P6的
-`autocycle_all_core:L2` 2096-fit正式重训和该level D5/D6；失败则保持blocked，不扩大seed、不返回validation换seed。
-公共KMeans/EM/covariance或算法合同未变化，不重跑完整5184。之后逐项修复其余persistent blocker、闭合两family READY，最终才实现
-generator/job/repository/API/UI/runtime。任何局部结果都不得冒充family/Phase 2完成。当前revision的DDL/DML、依赖、runtime、数据库、
-model/READY与客户端同步均为`noop`，文档提交与PR merge仍等待用户单独确认；严格进度保持`11/17=64.71%`。
+mixed-dimension artifact/parser、dimension receipt与公式/identity/131-entry完整性的确定性直接测试已完成源码实现和本模块审核。
+首次 P6 已完成`autocycle_all_core:L2`双 fresh-process 的2096/2096 terminal entries；旧projection v1因错误要求preprocessed inactive
+vector仍exact-zero而使801207在8个seed中均于fit前失败，D5返回unavailable且D6/model/READY均未执行。BUG-999 projection v2当前仅完成
+源码修复与直接测试；下一步是正式审核、提交PR并由用户确认合入，随后在新的clean-main producer和append-only artifact路径完整重跑2096 fits。
+失败仍保持blocked，不扩大seed、不返回validation换seed。公共KMeans/EM/covariance与其他D3/D4/D5/D6算法合同未变化，不重跑完整5184。
+之后逐项修复其余persistent blocker、闭合两family READY，最终才实现generator/job/repository/API/UI/runtime。任何局部结果都不得冒充
+family/Phase 2完成。当前revision的DDL/DML、依赖、runtime、数据库、model/READY与客户端同步均为`noop`；严格进度保持`11/17=64.71%`。
 
 ### 24.1 BUG-982：REFIT-03 冻结输入可回放合同
 

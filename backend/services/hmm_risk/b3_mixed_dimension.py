@@ -10,6 +10,7 @@ import numpy as np
 from backend.services.hmm_risk.state_model_set import (
     ALL_CORE_FEATURES,
     StateModelSetError,
+    _apply_preprocess,
     canonical_json_bytes,
     canonical_sha256,
 )
@@ -20,8 +21,8 @@ MIXED_LEVEL_SCHEMA_VERSION = "hmm_risk_b3_level_model_set_v2_projection"
 MIXED_REPEAT_SCHEMA_VERSION = "hmm_risk_b3_level_repeat_receipt_v2_projection"
 MIXED_TRAINING_ENTRY_SCHEMA_VERSION = "hmm_risk_b3_training_entry_receipt_v2_projection"
 MIXED_MODEL_SCHEMA_VERSION = "hmm_risk_b3_inactive_dimension_model_entry_v1"
-PROJECTION_RECEIPT_SCHEMA_VERSION = "hmm_risk_b3_dimension_projection_receipt_v1"
-PROJECTION_ALGORITHM_VERSION = "hmm_risk_b3_fixed_column_projection_v1"
+PROJECTION_RECEIPT_SCHEMA_VERSION = "hmm_risk_b3_dimension_projection_receipt_v2"
+PROJECTION_ALGORITHM_VERSION = "hmm_risk_b3_fixed_column_projection_v2"
 TARGET_FAMILY = "autocycle_all_core"
 TARGET_LEVEL = "L2"
 TARGET_SECTOR = "801207.SI"
@@ -81,7 +82,11 @@ def _formal_source_profile_identity(
     )
 
 
-def _exact_zero_evidence(raw: np.ndarray, preprocessed: np.ndarray) -> dict[str, Any]:
+def _exact_zero_evidence(
+    raw: np.ndarray,
+    preprocessed: np.ndarray,
+    expected_preprocessed: np.ndarray,
+) -> dict[str, Any]:
     row_count = int(raw.shape[0])
     feature_count = int(raw.shape[1])
     raw_values = np.ascontiguousarray(raw, dtype="<f8")
@@ -102,11 +107,20 @@ def _exact_zero_evidence(raw: np.ndarray, preprocessed: np.ndarray) -> dict[str,
             "all_values_zero": bool(np.all(values == 0.0)),
         }
 
+    expected_values = np.ascontiguousarray(expected_preprocessed, dtype="<f8")
+    expected_sha256 = _float64_sha256(expected_values)
+    observed_sha256 = _float64_sha256(preprocessed_values)
     body = {
-        "schema_version": "hmm_risk_b3_inactive_exact_zero_evidence_v1",
+        "schema_version": "hmm_risk_b3_inactive_exact_zero_evidence_v2",
         "status": "accepted" if feature_count else "not_applicable_identity_projection",
         "observation_rows": row_count,
         "inactive_feature_count": feature_count,
+        "raw_exact_zero_required": bool(feature_count),
+        "raw_exact_zero": bool(not feature_count or np.all(raw_values == 0.0)),
+        "preprocessed_exact_zero_required": False,
+        "preprocessed_matches_approved_transform": bool(np.array_equal(preprocessed_values, expected_values)),
+        "expected_preprocessed_vector_sha256": expected_sha256,
+        "observed_preprocessed_vector_sha256": observed_sha256,
         "raw": summarize(raw_values),
         "preprocessed": summarize(preprocessed_values),
     }
@@ -144,18 +158,21 @@ def build_projection_receipt(
     )
     inactive = tuple(index for index in range(len(names)) if index not in active)
     mask = [index in active for index in range(len(names))]
+    expected_preprocessed = _apply_preprocess(raw, preprocess)
+    if not np.array_equal(preprocessed, expected_preprocessed):
+        raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
     raw_inactive = raw[:, inactive] if inactive else np.empty((raw.shape[0], 0), dtype=np.float64)
     preprocessed_inactive = (
         preprocessed[:, inactive] if inactive else np.empty((preprocessed.shape[0], 0), dtype=np.float64)
     )
+    expected_preprocessed_inactive = (
+        expected_preprocessed[:, inactive]
+        if inactive
+        else np.empty((expected_preprocessed.shape[0], 0), dtype=np.float64)
+    )
     exact_zero = bool(
         not inactive
-        or (
-            np.var(raw_inactive, axis=0, ddof=0).tolist() == [0.0] * len(inactive)
-            and np.var(preprocessed_inactive, axis=0, ddof=0).tolist() == [0.0] * len(inactive)
-            and np.all(raw_inactive == 0.0)
-            and np.all(preprocessed_inactive == 0.0)
-        )
+        or (np.var(raw_inactive, axis=0, ddof=0).tolist() == [0.0] * len(inactive) and np.all(raw_inactive == 0.0))
     )
     if inactive and not exact_zero:
         raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
@@ -182,7 +199,11 @@ def build_projection_receipt(
         full_preprocess_sha256=preprocess_sha256,
         train_input_manifest_sha256=train_manifest_sha256,
     )
-    exact_zero_evidence = _exact_zero_evidence(raw_inactive, preprocessed_inactive)
+    exact_zero_evidence = _exact_zero_evidence(
+        raw_inactive,
+        preprocessed_inactive,
+        expected_preprocessed_inactive,
+    )
     body = {
         "schema_version": PROJECTION_RECEIPT_SCHEMA_VERSION,
         "contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
@@ -285,42 +306,81 @@ def validate_projection_receipt(
         expected_unique_counts = [1] * len(inactive)
         expected_status = "accepted" if inactive else "not_applicable_identity_projection"
         exact_evidence_valid = (
-            exact_evidence.get("schema_version") == "hmm_risk_b3_inactive_exact_zero_evidence_v1"
+            exact_evidence.get("schema_version") == "hmm_risk_b3_inactive_exact_zero_evidence_v2"
             and exact_evidence.get("status") == expected_status
             and isinstance(projected_shape, list)
             and exact_evidence.get("observation_rows") == projected_shape[0]
             and exact_evidence.get("inactive_feature_count") == len(inactive)
             and isinstance(raw_evidence, Mapping)
             and isinstance(preprocessed_evidence, Mapping)
+            and exact_evidence.get("raw_exact_zero_required") is bool(inactive)
+            and exact_evidence.get("raw_exact_zero") is True
+            and exact_evidence.get("preprocessed_exact_zero_required") is False
+            and exact_evidence.get("preprocessed_matches_approved_transform") is True
+            and exact_evidence.get("expected_preprocessed_vector_sha256")
+            == exact_evidence.get("observed_preprocessed_vector_sha256")
+            and exact_evidence.get("observed_preprocessed_vector_sha256")
+            == receipt.get("preprocessed_inactive_vector_sha256")
             and exact_evidence.get("exact_zero_evidence_sha256") == canonical_sha256(exact_body)
         )
-        for evidence in (raw_evidence, preprocessed_evidence):
-            if not isinstance(evidence, Mapping):
-                exact_evidence_valid = False
-                continue
-            variances = evidence.get("variance_ddof0_by_feature")
-            unique_counts = evidence.get("normalized_unique_bit_pattern_count_by_feature")
-            zero_count = evidence.get("zero_count")
-            positive_zero_count = evidence.get("positive_zero_count")
-            negative_zero_count = evidence.get("negative_zero_count")
+        if isinstance(raw_evidence, Mapping):
+            raw_variances = raw_evidence.get("variance_ddof0_by_feature")
+            raw_unique_counts = raw_evidence.get("normalized_unique_bit_pattern_count_by_feature")
+            raw_zero_count = raw_evidence.get("zero_count")
+            raw_positive_zero_count = raw_evidence.get("positive_zero_count")
+            raw_negative_zero_count = raw_evidence.get("negative_zero_count")
             exact_evidence_valid = exact_evidence_valid and (
-                variances == expected_variances
-                and isinstance(variances, list)
-                and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in variances)
-                and unique_counts == (expected_unique_counts if inactive else [])
-                and isinstance(unique_counts, list)
-                and all(isinstance(value, int) and not isinstance(value, bool) for value in unique_counts)
-                and zero_count == expected_cells
-                and isinstance(zero_count, int)
-                and not isinstance(zero_count, bool)
-                and isinstance(positive_zero_count, int)
-                and not isinstance(positive_zero_count, bool)
-                and 0 <= positive_zero_count <= expected_cells
-                and isinstance(negative_zero_count, int)
-                and not isinstance(negative_zero_count, bool)
-                and 0 <= negative_zero_count <= expected_cells
-                and positive_zero_count + negative_zero_count == expected_cells
-                and evidence.get("all_values_zero") is True
+                raw_variances == expected_variances
+                and isinstance(raw_variances, list)
+                and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in raw_variances)
+                and raw_unique_counts == (expected_unique_counts if inactive else [])
+                and isinstance(raw_unique_counts, list)
+                and all(isinstance(value, int) and not isinstance(value, bool) for value in raw_unique_counts)
+                and raw_zero_count == expected_cells
+                and isinstance(raw_zero_count, int)
+                and not isinstance(raw_zero_count, bool)
+                and isinstance(raw_positive_zero_count, int)
+                and not isinstance(raw_positive_zero_count, bool)
+                and 0 <= raw_positive_zero_count <= expected_cells
+                and isinstance(raw_negative_zero_count, int)
+                and not isinstance(raw_negative_zero_count, bool)
+                and 0 <= raw_negative_zero_count <= expected_cells
+                and raw_positive_zero_count + raw_negative_zero_count == expected_cells
+                and raw_evidence.get("all_values_zero") is True
+            )
+        if isinstance(preprocessed_evidence, Mapping):
+            preprocessed_variances = preprocessed_evidence.get("variance_ddof0_by_feature")
+            preprocessed_unique_counts = preprocessed_evidence.get("normalized_unique_bit_pattern_count_by_feature")
+            preprocessed_zero_count = preprocessed_evidence.get("zero_count")
+            preprocessed_positive_zero_count = preprocessed_evidence.get("positive_zero_count")
+            preprocessed_negative_zero_count = preprocessed_evidence.get("negative_zero_count")
+            exact_evidence_valid = exact_evidence_valid and (
+                isinstance(preprocessed_variances, list)
+                and len(preprocessed_variances) == len(inactive)
+                and all(
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and np.isfinite(value)
+                    and value >= 0.0
+                    for value in preprocessed_variances
+                )
+                and isinstance(preprocessed_unique_counts, list)
+                and len(preprocessed_unique_counts) == len(inactive)
+                and all(
+                    isinstance(value, int) and not isinstance(value, bool) and value >= 1
+                    for value in preprocessed_unique_counts
+                )
+                and isinstance(preprocessed_zero_count, int)
+                and not isinstance(preprocessed_zero_count, bool)
+                and 0 <= preprocessed_zero_count <= expected_cells
+                and isinstance(preprocessed_positive_zero_count, int)
+                and not isinstance(preprocessed_positive_zero_count, bool)
+                and 0 <= preprocessed_positive_zero_count <= expected_cells
+                and isinstance(preprocessed_negative_zero_count, int)
+                and not isinstance(preprocessed_negative_zero_count, bool)
+                and 0 <= preprocessed_negative_zero_count <= expected_cells
+                and preprocessed_positive_zero_count + preprocessed_negative_zero_count == preprocessed_zero_count
+                and isinstance(preprocessed_evidence.get("all_values_zero"), bool)
             )
     formal_source_profile_sha256 = _formal_source_profile_identity(
         family=family,
