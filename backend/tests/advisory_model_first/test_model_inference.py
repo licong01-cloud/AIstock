@@ -11,7 +11,10 @@ import pandas as pd
 from backend.services.advisory_model_first.feature_schema_v1 import MODEL_FEATURE_COLUMNS
 from backend.services.advisory_model_first.model_bundle import LoadedAdvisoryModelBundle
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService, _score
-from backend.services.advisory_model_first.realtime_feature_source import RealtimeFeatureInputs
+from backend.services.advisory_model_first.realtime_feature_source import (
+    PersistedAdvisoryReviewIdentity,
+    RealtimeFeatureInputs,
+)
 from backend.services.advisory_model_first.target_binding import (
     BINDING_VERSION_ID,
     FUND_LEG_ID,
@@ -80,15 +83,16 @@ class _ProgramService:
             ],
         }
 
-    def recommendation_review_run(self, review_run_id: str):
+class _ReviewSource:
+    def get(self, review_run_id: str):
         assert review_run_id == "review-1"
-        return SimpleNamespace(
+        return PersistedAdvisoryReviewIdentity(
             review_run_id=review_run_id,
             program_id=PROGRAM_ID,
             binding_version_id=BINDING_VERSION_ID,
             trade_date=pd.Timestamp("2026-07-21").date(),
             selection_run_id="selection-1",
-            selection_run_ids=["selection-1"],
+            selection_run_ids=("selection-1",),
         )
 
 
@@ -272,6 +276,7 @@ def test_model_shadow_keeps_rule_path_available_when_model_root_is_missing() -> 
     service = AdvisoryModelShadowService(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
         feature_source=feature_source,
         model_root_provider=lambda: "",
     )
@@ -293,6 +298,7 @@ def test_model_shadow_never_applies_parent_bundle_to_another_program() -> None:
     service = AdvisoryModelShadowService(
         program_service=_OtherProgramService(),
         selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
         feature_source=feature_source,
         model_root_provider=lambda: "/model",
         bundle_loader=bundle_loader,
@@ -313,6 +319,7 @@ def test_model_shadow_scores_complete_persisted_candidate_group() -> None:
     service = AdvisoryModelShadowService(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
         feature_source=feature_source,
         model_root_provider=lambda: "/model",
         bundle_loader=lambda **_: _bundle(),
@@ -332,6 +339,7 @@ def test_model_shadow_accepts_legal_shallow_candidate_group() -> None:
     service = AdvisoryModelShadowService(
         program_service=_ProgramService(target_count=20),
         selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
         feature_source=feature_source,
         model_root_provider=lambda: "/model",
         bundle_loader=lambda **_: _bundle(),
@@ -354,6 +362,7 @@ def test_model_shadow_rejects_parent_score_that_differs_from_frozen_leg_sum() ->
     service = AdvisoryModelShadowService(
         program_service=_ProgramService(),
         selection_service=selection_service,
+        review_source=_ReviewSource(),
         feature_source=feature_source,
         model_root_provider=lambda: "/model",
         bundle_loader=lambda **_: _bundle(),
@@ -370,16 +379,15 @@ def test_model_shadow_rejects_parent_score_that_differs_from_frozen_leg_sum() ->
 
 
 def test_model_shadow_exposes_missing_review_run_as_typed_unavailable() -> None:
-    program_service = _ProgramService()
+    class _MissingReviewSource:
+        def get(self, _: str):
+            raise DataUnavailableError("advisory review run does not exist", context={"review_run_id": "review-1"})
 
-    def missing_review_run(_: str):
-        raise DataUnavailableError("advisory review run does not exist", context={"review_run_id": "review-1"})
-
-    program_service.recommendation_review_run = missing_review_run  # type: ignore[method-assign]
     feature_source = _FeatureSource(_feature_inputs())
     service = AdvisoryModelShadowService(
-        program_service=program_service,
+        program_service=_ProgramService(),
         selection_service=_SelectionService(),
+        review_source=_MissingReviewSource(),
         feature_source=feature_source,
         model_root_provider=lambda: "/model",
         bundle_loader=lambda **_: _bundle(),
@@ -403,6 +411,7 @@ def test_model_shadow_rejects_non_numeric_terminal_weight_as_typed_mismatch() ->
     service = AdvisoryModelShadowService(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
         feature_source=feature_source,
         model_root_provider=lambda: "/model",
         bundle_loader=lambda **_: bundle,

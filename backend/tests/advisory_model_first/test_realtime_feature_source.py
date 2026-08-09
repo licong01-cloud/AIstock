@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import date
 
 import numpy as np
@@ -8,6 +9,7 @@ import pandas as pd
 from backend.services.advisory_model_first import realtime_feature_source
 from backend.services.advisory_model_first.realtime_feature_source import (
     PostgresRealtimeFeatureSource,
+    PostgresAdvisoryReviewSource,
     _market_frame,
 )
 
@@ -75,3 +77,62 @@ def test_market_breadth_query_uses_authoritative_pit_universe(monkeypatch) -> No
     assert len(captured_sql) == 1
     assert "JOIN market.sector_data AS eligible" in captured_sql[0]
     assert "eligible.trade_date = price.trade_date" in captured_sql[0]
+
+
+def test_review_source_reads_exact_identity_in_a_read_only_transaction() -> None:
+    class _Cursor:
+        def __init__(self) -> None:
+            self.query = ""
+            self.parameters = ()
+            self.closed = False
+
+        def execute(self, query: str, parameters: tuple[str]) -> None:
+            self.query = query
+            self.parameters = parameters
+
+        @staticmethod
+        def fetchone():
+            return (
+                "review-1",
+                "program-1",
+                "binding-1",
+                date(2026, 7, 21),
+                "selection-1",
+                ["selection-1"],
+            )
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.readonly = False
+            self.rollback_count = 0
+            self.cursor_instance = _Cursor()
+
+        def cursor(self) -> _Cursor:
+            return self.cursor_instance
+
+        def set_session(self, *, isolation_level: str, readonly: bool, autocommit: bool) -> None:
+            assert isolation_level == "REPEATABLE READ"
+            assert autocommit is False
+            self.readonly = readonly
+
+        def rollback(self) -> None:
+            self.rollback_count += 1
+
+    connection = _Connection()
+    source = PostgresAdvisoryReviewSource(
+        connection_context_factory=lambda: nullcontext(connection),
+    )
+
+    identity = source.get("review-1")
+
+    assert identity.review_run_id == "review-1"
+    assert identity.selection_run_id == "selection-1"
+    assert identity.selection_run_ids == ("selection-1",)
+    assert connection.readonly is True
+    assert connection.rollback_count == 1
+    assert connection.cursor_instance.parameters == ("review-1",)
+    assert "FROM app.advisory_review_run" in connection.cursor_instance.query
+    assert connection.cursor_instance.closed is True

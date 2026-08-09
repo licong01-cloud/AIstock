@@ -32,6 +32,78 @@ class RealtimeFeatureInputs:
     trading_calendar: pd.DatetimeIndex
 
 
+@dataclass(frozen=True)
+class PersistedAdvisoryReviewIdentity:
+    review_run_id: str
+    program_id: str
+    binding_version_id: str
+    trade_date: date
+    selection_run_id: str | None
+    selection_run_ids: tuple[str, ...]
+
+
+class PostgresAdvisoryReviewSource:
+    """Read the immutable ReviewRun identity referenced by a recommendation list."""
+
+    def __init__(
+        self,
+        *,
+        connection_context_factory: ConnectionContextFactory | None = None,
+    ) -> None:
+        self._connection_context_factory = connection_context_factory or (
+            lambda: get_conn(autocommit=False, manage_transaction=False)
+        )
+
+    def get(self, review_run_id: str) -> PersistedAdvisoryReviewIdentity:
+        normalized_id = str(review_run_id).strip()
+        if not normalized_id:
+            raise AdvisoryModelFirstError(
+                "recommendation list does not identify its persisted Advisory review run",
+                reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
+            )
+        with self._connection_context_factory() as conn:
+            cursor = conn.cursor()
+            try:
+                conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+                cursor.execute(
+                    """
+                    SELECT review_run_id, program_id, binding_version_id, trade_date,
+                           selection_run_id, selection_run_ids
+                    FROM app.advisory_review_run
+                    WHERE review_run_id = %s
+                    """,
+                    (normalized_id,),
+                )
+                row = cursor.fetchone()
+                conn.rollback()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+        if row is None:
+            raise AdvisoryModelFirstError(
+                "persisted Advisory review run is unavailable",
+                reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
+                context={"review_run_id": normalized_id},
+            )
+        selection_run_ids = row[5]
+        if not isinstance(selection_run_ids, (list, tuple)):
+            raise AdvisoryModelFirstError(
+                "persisted Advisory review run has an invalid Selection identity set",
+                reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
+                context={"review_run_id": normalized_id},
+            )
+        return PersistedAdvisoryReviewIdentity(
+            review_run_id=str(row[0]),
+            program_id=str(row[1]),
+            binding_version_id=str(row[2]),
+            trade_date=pd.Timestamp(row[3]).date(),
+            selection_run_id=str(row[4]).strip() if row[4] is not None else None,
+            selection_run_ids=tuple(str(value).strip() for value in selection_run_ids),
+        )
+
+
 class PostgresRealtimeFeatureSource:
     """Read one decision-cutoff feature snapshot without writing or replaying selection."""
 

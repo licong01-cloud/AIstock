@@ -157,29 +157,6 @@ def test_create_and_apply_binding_use_dated_left_closed_right_open_intervals() -
     assert retired.effective_to_trade_date == date(2026, 6, 2)
 
 
-def test_recommendation_review_run_preserves_selection_identity() -> None:
-    service, repository = _service()
-    program = _program(service)
-    binding = repository.get_active_binding_version(program.program_id)
-    assert binding is not None
-    review_run = AdvisoryReviewRun(
-        review_run_id="review_selection_identity",
-        program_id=program.program_id,
-        binding_version_id=binding.binding_version_id,
-        trade_date=date(2026, 6, 1),
-        run_type=REVIEW_RUN_TYPE_RUN,
-        status=REVIEW_RUN_STATUS_FAILED,
-        data_source="DB_HISTORICAL",
-        selection_run_id="selection_run_1",
-        selection_run_ids=["selection_run_1"],
-    )
-    repository.create_review_run(review_run)
-
-    loaded = service.recommendation_review_run(review_run.review_run_id)
-
-    assert loaded == review_run
-
-
 def test_apply_binding_rejects_retroactive_date_and_stale_versions() -> None:
     service, repository = _service()
     program = _program(service)

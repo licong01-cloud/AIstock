@@ -18,7 +18,10 @@ from backend.services.advisory_model_first.model_bundle import (
     LoadedAdvisoryModelBundle,
     load_exact_shadow_bundle,
 )
-from backend.services.advisory_model_first.realtime_feature_source import PostgresRealtimeFeatureSource
+from backend.services.advisory_model_first.realtime_feature_source import (
+    PostgresAdvisoryReviewSource,
+    PostgresRealtimeFeatureSource,
+)
 from backend.services.advisory_model_first.reranker_training import _coerce_numeric_feature_dtypes
 from backend.services.advisory_model_first.shared_feature_builder import build_advisory_feature_matrix
 from backend.services.advisory_model_first.target_binding import (
@@ -49,12 +52,14 @@ class AdvisoryModelShadowService:
         *,
         program_service: AdvisoryProgramService | None = None,
         selection_service: SelectionCenterService | None = None,
+        review_source: Any | None = None,
         feature_source: PostgresRealtimeFeatureSource | None = None,
         model_root_provider: Any | None = None,
         bundle_loader: Any = load_exact_shadow_bundle,
     ) -> None:
         self._program_service = program_service or AdvisoryProgramService()
         self._selection_service = selection_service or SelectionCenterService()
+        self._review_source = review_source or PostgresAdvisoryReviewSource()
         self._feature_source = feature_source or PostgresRealtimeFeatureSource()
         self._model_root_provider = model_root_provider or (
             lambda: os.getenv("AISTOCK_ADVISORY_MODEL_ROOT", "").strip()
@@ -156,7 +161,7 @@ class AdvisoryModelShadowService:
                 "recommendation list does not identify its persisted Advisory review run",
                 reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
             )
-        review_run = self._program_service.recommendation_review_run(review_run_id)
+        review_run = self._review_source.get(review_run_id)
         review_selection_run_ids = tuple(
             str(value).strip() for value in review_run.selection_run_ids if str(value).strip()
         )
