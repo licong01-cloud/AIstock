@@ -7,7 +7,10 @@ rules:
       - backend/tests/advisory_model_first/**
       - scripts/advisory_model_prepare_request.py
       - scripts/advisory_model_train_wsl.py
+      - scripts/advisory_outcome_prepare_request.py
+      - scripts/advisory_outcome_train_wsl.py
       - scripts/wsl/advisory_model_train.py
+      - scripts/wsl/advisory_outcome_train.py
       - docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_*.md
     primary_module: advisory.model_first
     impact_modules: []
