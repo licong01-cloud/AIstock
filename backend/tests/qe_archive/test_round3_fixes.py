@@ -1,23 +1,19 @@
 """T24 (Codex round 2 BLOCKED) regression tests:
 
   P1.1  SCD2 replay completion marker (archive_complete column)
-  P2.1  factor_value data_start/data_end filter
   P2.2  runtime_profile SCD2 close-current
   P2.3  daily_snapshot benchmark + regime ETL join
 
 All require dev DB (5433/aistock_dev) per existing conftest fixtures.
+
+P2.1 (factor_value data_start/data_end filter) was removed by BUG-1001: the
+FactorValueArchiveHandler and its _apply_data_bounds helper were retired.
 """
 from __future__ import annotations
-
-from datetime import date, timedelta
 
 import pytest
 
 from backend.services.qe_archive.handlers.contract import HandlerStatus
-from backend.services.qe_archive.handlers.factor_value_archive_handler import (
-    FactorValueArchiveHandler,
-    _apply_data_bounds,
-)
 from backend.services.qe_archive.handlers.paper_v2_archive_handler import (
     PaperV2ArchiveHandler,
 )
@@ -147,74 +143,6 @@ class TestArchiveCompleteMarker:
 
 
 # ---------------------------------------------------------------------------
-# P2.1 — factor_value data bounds
-# ---------------------------------------------------------------------------
-
-class TestFactorValueDataBoundsFilter:
-    """Pure helper tests + integration via injected loader."""
-
-    def test_apply_data_bounds_both_none_returns_identity(self):
-        import pandas as pd
-        df = pd.DataFrame({
-            "trade_date": [date(2026, 1, 1), date(2026, 6, 1), date(2026, 12, 1)],
-            "code": ["A", "B", "C"],
-            "value": [1.0, 2.0, 3.0],
-        })
-        out = _apply_data_bounds(df, None, None)
-        assert len(out) == 3
-
-    def test_apply_data_bounds_inclusive_window(self):
-        import pandas as pd
-        df = pd.DataFrame({
-            "trade_date": [date(2026, 1, 1), date(2026, 6, 1), date(2026, 12, 1)],
-            "code": ["A", "B", "C"],
-            "value": [1.0, 2.0, 3.0],
-        })
-        out = _apply_data_bounds(df, "2026-03-01", "2026-09-30")
-        assert len(out) == 1
-        assert list(out["code"]) == ["B"]
-
-    def test_apply_data_bounds_open_start(self):
-        import pandas as pd
-        df = pd.DataFrame({
-            "trade_date": [date(2026, 1, 1), date(2026, 6, 1)],
-            "code": ["A", "B"], "value": [1.0, 2.0],
-        })
-        out = _apply_data_bounds(df, None, "2026-03-01")
-        assert list(out["code"]) == ["A"]
-
-    def test_apply_data_bounds_open_end(self):
-        import pandas as pd
-        df = pd.DataFrame({
-            "trade_date": [date(2026, 1, 1), date(2026, 6, 1)],
-            "code": ["A", "B"], "value": [1.0, 2.0],
-        })
-        out = _apply_data_bounds(df, "2026-03-01", None)
-        assert list(out["code"]) == ["B"]
-
-
-@pytest.mark.usefixtures("cleanup_qe_archive")
-class TestFactorValueLoaderHonorsDataBounds:
-    """Inject a synthetic loader that returns rows spanning years; verify
-    the handler's full pipeline (loader -> bulk_upsert) honors the window
-    declared in the payload. The default loader's slicing happens BEFORE
-    the rows reach _bulk_upsert, so we test at the loader level."""
-
-    def test_default_loader_slicing_via_apply_data_bounds(self):
-        """End-to-end: build a dataframe, slice via _apply_data_bounds (the
-        production code path), assert only in-window rows survive."""
-        import pandas as pd
-        all_rows = pd.DataFrame({
-            "trade_date": [date(2018, 1, 1), date(2022, 6, 1),
-                           date(2026, 5, 5), date(2099, 12, 31)],
-            "code": ["A", "B", "C", "D"],
-            "value": [0.1, 0.2, 0.3, 0.4],
-        })
-        windowed = _apply_data_bounds(all_rows, "2020-01-01", "2026-12-31")
-        assert list(windowed["code"]) == ["B", "C"]
-
-
-# ---------------------------------------------------------------------------
 # P2.2 — runtime_profile SCD2 close-current
 # ---------------------------------------------------------------------------
 
@@ -341,7 +269,7 @@ class TestDailySnapshotBenchmarkAndRegimeJoin:
                 )
                 bench, regime = cur.fetchone()
         assert bench is not None, \
-            f"benchmark_csi300 must be populated when market.index_daily has the row"
+            "benchmark_csi300 must be populated when market.index_daily has the row"
         # regime is allowed to be NULL (regime_label table is currently empty)
 
     def test_regime_null_when_regime_label_missing(
