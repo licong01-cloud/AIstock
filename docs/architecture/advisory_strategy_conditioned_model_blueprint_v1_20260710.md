@@ -3,9 +3,9 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-08-08
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M1_TRAINED_M2_NEXT`
+> 当前状态：`MODEL_FIRST_M2_RUNTIME_VERIFIED_M3A_TRAINING`
 > 当前用户可见功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`；离线模型里程碑 M0/M1 `2/2`，尚未计入用户可见功能
-> 规划进度：M0/M1 源码与正式 WSL 训练已完成；406 日 runtime-equivalent Top20、110 个 fresh HMM、80 日 test Top5 和原子 bundle 已验收；模型 test 质量低于原始排名与随机对照，保持未激活实验影子状态；下一项直接进入 M2 数据库实时特征、API 和页面 readback
+> 规划进度：M0/M1 真实训练已完成；M2 源码已由 PR #3225 合入并在 merge commit `41504a205b9372a4e709587dc2310fd8143c6c6d` 完成重启后真实数据库 API 验收，目标父包返回 Top20/Top5，单 Alpha 隔离正确；下一项已直接进入 M3A 预期收益、MFE/MAE 与持股周期真实训练
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -63,8 +63,8 @@
 
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
-| SHORT_REBOUND Top20→Top5 | `MODEL_TRAINED_NOT_USER_VISIBLE` | WSL 真实训练与留出集预测已存在；Advisory 推理和页面 readback 待 M2 |
-| 预期收益与持股周期 | `NOT_IMPLEMENTED` | 真实模型输出分位数、概率和周期范围 |
+| SHORT_REBOUND Top20→Top5 | `EXPERIMENTAL_SHADOW_RUNTIME_VERIFIED` | WSL 真实训练、数据库影子推理、API 和页面源码已贯通；真实 test 质量仍低于主要对照 |
+| 预期收益与持股周期 | `M3A_TRAINING_IN_PROGRESS` | 按 M3 详细设计训练真实分位数、概率、MFE/MAE和周期模型，随后进入 M3B 接入 |
 | 买入/止盈/止损区间 | `NOT_IMPLEMENTED` | 真实模型和价格转换层输出范围 |
 | 荐股页面模型展示 | `NOT_IMPLEMENTED` | 页面读取真实预测，不是 mock、规则冒充或静态示例 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
@@ -371,6 +371,8 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NEXT`。
 
+状态：`COMPLETED_RUNTIME_VERIFIED`。PR #3225 已合入；重启后运行时 commit 为 `41504a205b9372a4e709587dc2310fd8143c6c6d`。目标多 Alpha Program 在 `decision=2026-07-15 / target=2026-07-16` 返回 20 个真实候选、5 个模型 shortlist、exact bundle 和 11 个显式 HMM unavailable；单 Alpha Program 返回 `ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE`。前端生产路由 HTTP 200；当前验证窗口无可用交互浏览器，既有三视口 Playwright 继续作为视觉证据，该外部条件不阻断 M3。
+
 - 实现数据库 decision-cutoff 特征source；目标交易日数据不得进入特征。
 - 对当前单 Alpha或原生多 Alpha候选执行模型推理。
 - API返回真实model score/rank/Top5。
@@ -381,6 +383,8 @@ calibration_state = UNCALIBRATED or PARTIAL
 ### M3：预期收益与持股周期
 
 优先级：`P1`。
+
+状态：`IN_PROGRESS_M3A_REAL_TRAINING`。详细设计为 `docs/architecture/advisory_model_first_m3_outcome_holding_period_f2_design_20260809.md`；M3A 先生成真实 outcome bundle，M3B 紧接数据库推理/API/UI，不插入历史证据或治理任务。
 
 - 在现有QE文件上训练收益分位数、正收益概率和周期模型。
 - 接入同一Advisory预测和页面。
