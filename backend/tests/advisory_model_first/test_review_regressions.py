@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -10,14 +11,21 @@ from backend.services.advisory_model_first.candidate_group import build_runtime_
 from backend.services.advisory_model_first.contracts import build_frozen_training_request
 from backend.services.advisory_model_first.diagnostics import _comparison_classification, _ensemble_mean
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
+from backend.services.advisory_model_first.feature_schema_v1 import MODEL_FEATURE_COLUMNS
 from backend.services.advisory_model_first.labels import filter_labels_for_purged_split
-from backend.services.advisory_model_first.model_bundle import publish_model_bundle
+from backend.services.advisory_model_first.model_bundle import (
+    _bundle_member_path,
+    load_exact_shadow_bundle,
+    publish_model_bundle,
+    publish_shadow_binding,
+)
 from backend.services.advisory_model_first.reranker_training import (
     RerankerTrainingResult,
     _coerce_numeric_feature_dtypes,
 )
 from backend.services.advisory_model_first.target_binding import FUND_LEG_ID, LSTM_LEG_ID, TERMINAL_WEIGHTS
 from backend.services.advisory_model_first.time_split import PurgedDateSplit
+from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 
 
 def _leg(values: list[float]) -> pd.DataFrame:
@@ -166,8 +174,8 @@ def test_existing_bundle_reuse_rejects_corrupt_file(tmp_path: Path) -> None:
     )
     training = RerankerTrainingResult(
         booster=_FakeBooster(),
-        feature_names=("feature",),
-        categorical_vocabulary={},
+        feature_names=tuple(MODEL_FEATURE_COLUMNS),
+        categorical_vocabulary={"l2_code_id": (1, 2)},
         evaluation_history={"validation": {"ndcg@5": [1.0]}},
         metrics={"status": "available", "test_date_count": 1},
         test_predictions=pd.DataFrame({"instrument": ["000001.SZ"]}),
@@ -188,11 +196,58 @@ def test_existing_bundle_reuse_rejects_corrupt_file(tmp_path: Path) -> None:
     bundle_id, bundle_path, manifest = publish_model_bundle(**arguments)
     assert manifest["bundle_id"] == bundle_id
     assert manifest["full_seed_roster"] == {"leg": ["run"]}
+    binding_path = publish_shadow_binding(model_root=tmp_path, bundle_id=bundle_id)
+    assert binding_path.is_file()
+    loaded = load_exact_shadow_bundle(
+        model_root=tmp_path,
+        package_id=manifest["package_id"],
+        manifest_sha256=manifest["manifest_sha256"],
+        style_profile_hash=manifest["style_profile_hash"],
+        booster_factory=lambda _path: object(),
+    )
+    assert loaded.bundle_id == bundle_id
+    assert loaded.feature_schema["trained_feature_names"] == list(MODEL_FEATURE_COLUMNS)
+    binding_payload = json.loads(binding_path.read_text(encoding="utf-8"))
+    binding_payload["activated_at"] = "tampered"
+    binding_path.write_text(json.dumps(binding_payload), encoding="utf-8")
+    with pytest.raises(AdvisoryModelFirstError) as binding_error:
+        load_exact_shadow_bundle(
+            model_root=tmp_path,
+            package_id=manifest["package_id"],
+            manifest_sha256=manifest["manifest_sha256"],
+            style_profile_hash=manifest["style_profile_hash"],
+            booster_factory=lambda _path: object(),
+        )
+    assert binding_error.value.reason_code == "ADVISORY_MODEL_BUNDLE_INVALID"
+    binding_payload["binding_sha256"] = canonical_json_sha256(
+        {key: value for key, value in binding_payload.items() if key != "binding_sha256"}
+    )
+    binding_payload["selection_runtime_semantics_hash"] = "0" * 64
+    binding_payload["binding_sha256"] = canonical_json_sha256(
+        {key: value for key, value in binding_payload.items() if key != "binding_sha256"}
+    )
+    binding_path.write_text(json.dumps(binding_payload), encoding="utf-8")
+    with pytest.raises(AdvisoryModelFirstError) as declaration_error:
+        load_exact_shadow_bundle(
+            model_root=tmp_path,
+            package_id=manifest["package_id"],
+            manifest_sha256=manifest["manifest_sha256"],
+            style_profile_hash=manifest["style_profile_hash"],
+            booster_factory=lambda _path: object(),
+        )
+    assert declaration_error.value.reason_code == "ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH"
     (bundle_path / "model.txt").write_text("corrupt", encoding="ascii")
 
     with pytest.raises(AdvisoryModelFirstError) as error:
         publish_model_bundle(**arguments)
     assert error.value.reason_code == "ADVISORY_MODEL_BUNDLE_INVALID"
+
+
+def test_bundle_member_path_rejects_parent_or_nested_paths(tmp_path: Path) -> None:
+    with pytest.raises(AdvisoryModelFirstError):
+        _bundle_member_path(tmp_path, "../model.txt")
+    with pytest.raises(AdvisoryModelFirstError):
+        _bundle_member_path(tmp_path, "nested/model.txt")
 
 
 def test_numeric_object_feature_is_strictly_normalized_for_lightgbm() -> None:
