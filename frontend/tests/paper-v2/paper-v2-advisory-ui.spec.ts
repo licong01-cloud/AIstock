@@ -4,6 +4,7 @@ type JsonObject = Record<string, unknown>;
 
 const PROGRAM_ID = "adv_codex_smoke_20260604";
 const REVIEW_COUNT = 35;
+const OUTCOME_HORIZONS = [1, 3, 5, 10, 20] as const;
 const ACTIVE_SORT_COLUMNS = [
   "symbol",
   "status",
@@ -18,6 +19,30 @@ const ACTIVE_SORT_COLUMNS = [
   "price_quality_status",
   "exit_reason",
 ];
+
+function outcomeCandidate(symbol: string) {
+  return {
+    symbol,
+    horizons: OUTCOME_HORIZONS.map((horizon) => ({
+      horizon_days: horizon,
+      excess_return_q10: -horizon / 2000,
+      excess_return_q50: horizon / 1000,
+      excess_return_q90: horizon / 500,
+      positive_probability: 0.6,
+      signal_survival_probability: 0.55,
+      path_mfe_q50: horizon / 800,
+      path_mfe_q90: horizon / 400,
+      path_mae_loss_q50: horizon / 1600,
+      path_mae_loss_q90: horizon / 800,
+    })),
+    holding_period: {
+      probabilities: { "1": 0.1, "3": 0.2, "5": 0.4, "10": 0.2, "20": 0.1 },
+      mode_days: 5,
+      range_low_days: 3,
+      range_high_days: 10,
+    },
+  };
+}
 
 const program = {
   program_id: PROGRAM_ID,
@@ -582,6 +607,17 @@ async function mockAdvisoryApis(page: Page, options: {
           candidates: [],
           baselines: {},
           hmm_unavailable: [],
+          outcome: {
+            status: "OUTCOME_UNAVAILABLE",
+            calibration_state: "UNCALIBRATED",
+            outcome_bundle_id: null,
+            parent_bundle_id: null,
+            model_version: null,
+            horizons: OUTCOME_HORIZONS,
+            candidates: [],
+            reason_code: "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+            message: "parent model unavailable",
+          },
           reason_code: "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
           message: "no exact bundle",
         });
@@ -628,6 +664,17 @@ async function mockAdvisoryApis(page: Page, options: {
           random_top5: { mean_excess_return_5: 0.004 },
         },
         hmm_unavailable: [{ l2_code_id: 10, reason_code: "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE" }],
+        outcome: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: "outcome_bundle_ui",
+          parent_bundle_id: "bundle_ui",
+          model_version: "advoutreq_ui",
+          horizons: OUTCOME_HORIZONS,
+          candidates: [outcomeCandidate("000002.SZ"), outcomeCandidate("000001.SZ")],
+          reason_code: null,
+          message: null,
+        },
         reason_code: null,
         message: null,
       });
@@ -863,6 +910,12 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr")).toHaveCount(2);
   await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr").first()).toContainText("000002.SZ");
   await expect(page.getByTestId("advisory-model-shadow-baselines")).toContainText("-0.1%");
+  await expect(page.getByTestId("advisory-outcome-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+  await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr")).toHaveCount(2);
+  await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("0.5%");
+  await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("3-10日（5日）");
+  await page.getByTestId("advisory-outcome-horizon-20").click();
+  await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("2.0%");
 
   await page.getByTestId(`advisory-preview-${PROGRAM_ID}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/preview`)).length).toBe(1);
@@ -1000,6 +1053,90 @@ test("Advisory model unavailability remains isolated from the persisted rule lis
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("000001.SZ");
   await expect(page.getByTestId("advisory-model-shadow-table")).toHaveCount(0);
   expect(badResponses).toEqual([]);
+});
+
+test("Advisory outcome unavailability preserves the M2 ranking table", async ({ page }) => {
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "EXPERIMENTAL_SHADOW",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 1,
+        shortlist_count: 1,
+        candidates: [{
+          symbol: "000001.SZ",
+          selection_effective_rank: 1,
+          selection_score: 0.8,
+          advisory_model_rank: 1,
+          advisory_model_score: 0.9,
+          is_top5: true,
+          top_feature_contributions: [],
+        }],
+        baselines: {},
+        hmm_unavailable: [],
+        outcome: {
+          status: "OUTCOME_UNAVAILABLE",
+          calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: null,
+          parent_bundle_id: null,
+          model_version: null,
+          horizons: OUTCOME_HORIZONS,
+          candidates: [],
+          reason_code: "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+          message: "no exact outcome binding",
+        },
+        reason_code: null,
+        message: null,
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr")).toHaveCount(1);
+  await expect(page.getByTestId("advisory-outcome-unavailable")).toContainText(
+    "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+  );
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("000001.SZ");
+});
+
+test("Advisory missing outcome response is explicit and preserves M2 ranking", async ({ page }) => {
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "EXPERIMENTAL_SHADOW",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 1,
+        shortlist_count: 1,
+        candidates: [{
+          symbol: "000001.SZ",
+          selection_effective_rank: 1,
+          selection_score: 0.8,
+          advisory_model_rank: 1,
+          advisory_model_score: 0.9,
+          is_top5: true,
+          top_feature_contributions: [],
+        }],
+        baselines: {},
+        hmm_unavailable: [],
+        reason_code: null,
+        message: null,
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-model-shadow-table").locator("tbody tr")).toHaveCount(1);
+  await expect(page.getByTestId("advisory-outcome-unavailable")).toContainText(
+    "ADVISORY_OUTCOME_RESPONSE_MISSING",
+  );
 });
 
 test("Advisory model shadow does not create page overflow across approved viewports", async ({ page }) => {

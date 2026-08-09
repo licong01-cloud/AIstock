@@ -9,6 +9,7 @@ import {
   type AdvisoryListVersionDetail,
   type AdvisoryLeaderboardRow,
   type AdvisoryModelShadowResponse,
+  type AdvisoryOutcomeCandidate,
   type AdvisoryPackageMode,
   type AdvisoryProgram,
   type AdvisoryQualityReport,
@@ -131,6 +132,16 @@ function shadowBaselineMetric(
   if (!row || typeof row !== "object" || Array.isArray(row)) return null;
   const value = (row as JsonObject)[metric];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+const OUTCOME_HORIZONS = [1, 3, 5, 10, 20] as const;
+type OutcomeHorizon = (typeof OUTCOME_HORIZONS)[number];
+
+function outcomeHorizon(
+  candidate: AdvisoryOutcomeCandidate,
+  horizon: OutcomeHorizon,
+) {
+  return candidate.horizons.find((item) => item.horizon_days === horizon) || null;
 }
 
 function fmtPrice(value: number | null | undefined): string {
@@ -647,6 +658,7 @@ function AdvisoryPageContent() {
   const [modelShadow, setModelShadow] = useState<AdvisoryModelShadowResponse | null>(null);
   const [modelShadowLoading, setModelShadowLoading] = useState(false);
   const [modelShadowError, setModelShadowError] = useState<string | null>(null);
+  const [outcomeHorizonDays, setOutcomeHorizonDays] = useState<OutcomeHorizon>(5);
   const [selectedListVersionId, setSelectedListVersionId] = useState("");
   const [listVersionLoadingId, setListVersionLoadingId] = useState("");
   const [listDetailSource, setListDetailSource] = useState<ListDetailSource>("latest");
@@ -1888,6 +1900,72 @@ function AdvisoryPageContent() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div style={{ marginTop: 16 }} data-testid="advisory-outcome-shadow">
+                <div className="pv2-card-head">
+                  <div>
+                    <div className="pv2-kicker">收益与持股周期</div>
+                    <h3>实验预测</h3>
+                  </div>
+                  <div className="pv2-row-actions">
+                    <span className={`pv2-badge ${modelShadow.outcome?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                      {modelShadow.outcome?.status || "OUTCOME_UNAVAILABLE"}
+                    </span>
+                    <span className="pv2-badge pv2-badge-neutral">
+                      {modelShadow.outcome?.calibration_state || "UNCALIBRATED"}
+                    </span>
+                  </div>
+                </div>
+                {modelShadow.outcome?.status !== "EXPERIMENTAL_SHADOW" ? (
+                  <div data-testid="advisory-outcome-unavailable">
+                    <strong>{modelShadow.outcome?.reason_code || "ADVISORY_OUTCOME_RESPONSE_MISSING"}</strong>
+                    <span className="pv2-muted"> {modelShadow.outcome?.message || "收益与持股周期模型响应不可用"}</span>
+                  </div>
+                ) : null}
+                {modelShadow.outcome?.status === "EXPERIMENTAL_SHADOW" ? (
+                  <>
+                    <div className="pv2-tabs" role="tablist" aria-label="预测周期" data-testid="advisory-outcome-horizons">
+                      {OUTCOME_HORIZONS.map((horizon) => (
+                        <button
+                          key={horizon}
+                          className={`pv2-tab ${outcomeHorizonDays === horizon ? "pv2-tab-active" : ""}`}
+                          data-testid={`advisory-outcome-horizon-${horizon}`}
+                          onClick={() => setOutcomeHorizonDays(horizon)}
+                          role="tab"
+                          aria-selected={outcomeHorizonDays === horizon}
+                          type="button"
+                        >
+                          {horizon}日
+                        </button>
+                      ))}
+                    </div>
+                    <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+                      <table className="pv2-table" data-testid="advisory-outcome-table">
+                        <thead>
+                          <tr><th>股票</th><th>M2排名</th><th>超额收益 q10 / q50 / q90</th><th>正收益</th><th>信号存活</th><th>MFE q50 / q90</th><th>MAE q50 / q90</th><th>持股范围</th></tr>
+                        </thead>
+                        <tbody>
+                          {modelShadow.outcome.candidates.map((candidate) => {
+                            const horizon = outcomeHorizon(candidate, outcomeHorizonDays);
+                            const rank = modelShadow.candidates.find((item) => item.symbol === candidate.symbol)?.advisory_model_rank;
+                            return (
+                              <tr key={candidate.symbol} data-testid="advisory-outcome-row">
+                                <td>{candidate.symbol}</td>
+                                <td>{rank ?? "-"}</td>
+                                <td>{horizon ? `${fmtPct(horizon.excess_return_q10)} / ${fmtPct(horizon.excess_return_q50)} / ${fmtPct(horizon.excess_return_q90)}` : "-"}</td>
+                                <td>{horizon ? fmtPct(horizon.positive_probability) : "-"}</td>
+                                <td>{horizon ? fmtPct(horizon.signal_survival_probability) : "-"}</td>
+                                <td>{horizon ? `${fmtPct(horizon.path_mfe_q50)} / ${fmtPct(horizon.path_mfe_q90)}` : "-"}</td>
+                                <td>{horizon ? `${fmtPct(horizon.path_mae_loss_q50)} / ${fmtPct(horizon.path_mae_loss_q90)}` : "-"}</td>
+                                <td>{candidate.holding_period.range_low_days}-{candidate.holding_period.range_high_days}日（{candidate.holding_period.mode_days}日）</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : null}
               </div>
             </>
           ) : null}
