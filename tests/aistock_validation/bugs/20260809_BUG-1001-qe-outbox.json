@@ -10,7 +10,8 @@
     "docs/architecture/data_warehouse_extension_design_20260510.md",
     "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1001",
@@ -47,7 +48,8 @@
       "backend/tests/data_quality/test_jsonb_schema.py",
       "docs/architecture/data_warehouse_extension_design_20260510.md",
       "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
-      "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
+      "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "ownership": {
       "changed_files": [
@@ -189,7 +191,8 @@
       "backend/tests/data_quality/test_jsonb_schema.py",
       "docs/architecture/data_warehouse_extension_design_20260510.md",
       "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
-      "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
+      "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-08-09T04:58:42.469041Z",
