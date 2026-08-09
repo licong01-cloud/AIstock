@@ -37,20 +37,8 @@
   ],
   "expected": "独立指标保存成功后不再产生 factor.recompute.completed 归档事件; 不再向 qe_archive.factor_value 写入逐股票逐交易日因子值; 当前指标查询继续读取 aistock_factor_metrics / 月度 IC 权威表; 历史 run 查询继续读取冻结的 run_factor.independent_metrics_snapshot; run completion 阶段的合法指标快照写入保持闭合; QE archive 不可用不影响权威指标事务。",
   "file_scope_contract": {
-    "schema_version": "aistock_submit_bug_file_scope_v1",
-    "changed_files": [
-      "backend/services/quantevolver/factor_official_evaluation_service.py",
-      "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
-      "backend/tests/quantevolver/test_factor_emit_hook.py",
-      "backend/tests/qe_archive/test_factor_value_archive_handler.py",
-      "backend/tests/qe_archive/test_round3_fixes.py",
-      "backend/tests/data_quality/test_jsonb_schema.py",
-      "docs/architecture/data_warehouse_extension_design_20260510.md",
-      "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
-      "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
-    ],
     "added_files": [],
-    "scope_files": [
+    "changed_files": [
       "backend/services/quantevolver/factor_official_evaluation_service.py",
       "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
       "backend/tests/quantevolver/test_factor_emit_hook.py",
@@ -92,8 +80,6 @@
       "matched_rules": [
         {
           "file": "backend/services/quantevolver/factor_official_evaluation_service.py",
-          "rule_id": "qe_services",
-          "primary_module": "qe.core",
           "impact_modules": [
             "qe.single_experiment",
             "qe.custom_evolution",
@@ -101,80 +87,81 @@
             "qe.enhanced_metrics",
             "qe.data_completeness"
           ],
-          "risk_level": "high"
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
         },
         {
           "file": "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
-          "rule_id": "qe_archive_handlers",
-          "primary_module": "qe.archive_handlers",
           "impact_modules": [
             "qe.archive",
             "qe.data_completeness",
             "paper_v2"
           ],
-          "risk_level": "high"
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
         },
         {
           "file": "backend/tests/quantevolver/test_factor_emit_hook.py",
-          "rule_id": "backend_tests_default",
-          "primary_module": "tests.backend",
           "impact_modules": [],
-          "risk_level": "medium"
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
         },
         {
           "file": "backend/tests/qe_archive/test_factor_value_archive_handler.py",
-          "rule_id": "qe_archive_handlers",
-          "primary_module": "qe.archive_handlers",
           "impact_modules": [
             "qe.archive",
             "qe.data_completeness",
             "paper_v2"
           ],
-          "risk_level": "high"
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
         },
         {
           "file": "backend/tests/qe_archive/test_round3_fixes.py",
-          "rule_id": "qe_archive_handlers",
-          "primary_module": "qe.archive_handlers",
           "impact_modules": [
             "qe.archive",
             "qe.data_completeness",
             "paper_v2"
           ],
-          "risk_level": "high"
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
         },
         {
           "file": "backend/tests/data_quality/test_jsonb_schema.py",
-          "rule_id": "validation_data_quality_deep",
-          "primary_module": "validation.data_quality",
           "impact_modules": [
             "qe.archive",
             "qe.archive_handlers",
             "paper_v2",
             "market.regime_label"
           ],
-          "risk_level": "high"
+          "primary_module": "validation.data_quality",
+          "risk_level": "high",
+          "rule_id": "validation_data_quality_deep"
         },
         {
           "file": "docs/architecture/data_warehouse_extension_design_20260510.md",
-          "rule_id": "docs_architecture",
-          "primary_module": "docs.architecture",
           "impact_modules": [
             "validation.module_quality"
           ],
-          "risk_level": "low"
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
         },
         {
           "file": "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
-          "rule_id": "validation_bug_registry",
-          "primary_module": "validation.module_quality",
           "impact_modules": [
             "tests.validation_history"
           ],
-          "risk_level": "high"
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_bug_registry"
         }
       ],
-      "unmatched_files": [],
       "risk_levels": [
         "high",
         "medium",
@@ -189,8 +176,21 @@
         "backend/tests/data_quality/test_jsonb_schema.py",
         "docs/architecture/data_warehouse_extension_design_20260510.md",
         "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json"
-      ]
-    }
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/factor_official_evaluation_service.py",
+      "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
+      "backend/tests/quantevolver/test_factor_emit_hook.py",
+      "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
+      "backend/tests/data_quality/test_jsonb_schema.py",
+      "docs/architecture/data_warehouse_extension_design_20260510.md",
+      "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
+      "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
+    ]
   },
   "first_seen_at": "2026-08-09T04:58:42.469041Z",
   "fix_branch": null,
@@ -214,21 +214,24 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "runtime_impact": "backend",
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python pytest process (pid 102020) ran backend/tests/quantevolver/test_factor_emit_hook.py + backend/tests/qe_archive/test_factor_value_archive_handler.py -> 12 passed; 全新进程加载修复后模块, 不依赖进程内缓存"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "persistence_basis": "git_tracked_source",
-    "fresh_process_evidence": [],
-    "post_restart_effective_gate": "pending_user_restart",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
-    "database_readback_ref": "not_required"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
