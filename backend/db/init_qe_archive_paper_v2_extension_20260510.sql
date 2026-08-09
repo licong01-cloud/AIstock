@@ -862,7 +862,9 @@ COMMENT ON TABLE qe_archive.factor_value IS
     '因子代码变（hash 变）→ 自动新增一行（不覆盖旧版，保留多版本对比能力）。'
     '体量预估：500 因子 × 5000 股票 × 8 年 ≈ 50 亿行，~400 GB。'
     '生产部署用 pg_partman 自动管理分区 + 老分区压缩归档。'
-    '由 factor.recompute.completed 事件触发（factor_pipeline_v2._save_metrics() 完成后 emit）。';
+    '【BUG-1001 退役】原由 factor.recompute.completed 事件自动写入，现已退役：'
+    'emit hook 与 FactorValueArchiveHandler 已移除，本表无生产读取路径，保持 write-only 遗留态；'
+    '不新增写入。历史数据治理待单独授权。';
 
 COMMENT ON COLUMN qe_archive.factor_value.factor_name IS
     '因子标识（业务名）。';

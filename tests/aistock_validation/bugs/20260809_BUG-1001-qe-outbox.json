@@ -5,10 +5,12 @@
     "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
     "backend/tests/quantevolver/test_factor_emit_hook.py",
     "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+    "backend/tests/qe_archive/test_round3_fixes.py",
     "backend/tests/data_quality/test_jsonb_schema.py",
     "docs/architecture/data_warehouse_extension_design_20260510.md",
     "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1001",
@@ -41,9 +43,11 @@
       "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
       "backend/tests/quantevolver/test_factor_emit_hook.py",
       "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
       "backend/tests/data_quality/test_jsonb_schema.py",
       "docs/architecture/data_warehouse_extension_design_20260510.md",
-      "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json"
+      "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
+      "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
     ],
     "added_files": [],
     "scope_files": [
@@ -51,9 +55,11 @@
       "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
       "backend/tests/quantevolver/test_factor_emit_hook.py",
       "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+      "backend/tests/qe_archive/test_round3_fixes.py",
       "backend/tests/data_quality/test_jsonb_schema.py",
       "docs/architecture/data_warehouse_extension_design_20260510.md",
-      "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json"
+      "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json",
+      "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
     ],
     "ownership": {
       "changed_files": [
@@ -61,6 +67,7 @@
         "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
         "backend/tests/quantevolver/test_factor_emit_hook.py",
         "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+        "backend/tests/qe_archive/test_round3_fixes.py",
         "backend/tests/data_quality/test_jsonb_schema.py",
         "docs/architecture/data_warehouse_extension_design_20260510.md",
         "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json"
@@ -126,6 +133,17 @@
           "risk_level": "high"
         },
         {
+          "file": "backend/tests/qe_archive/test_round3_fixes.py",
+          "rule_id": "qe_archive_handlers",
+          "primary_module": "qe.archive_handlers",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "risk_level": "high"
+        },
+        {
           "file": "backend/tests/data_quality/test_jsonb_schema.py",
           "rule_id": "validation_data_quality_deep",
           "primary_module": "validation.data_quality",
@@ -167,6 +185,7 @@
         "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
         "backend/tests/quantevolver/test_factor_emit_hook.py",
         "backend/tests/qe_archive/test_factor_value_archive_handler.py",
+        "backend/tests/qe_archive/test_round3_fixes.py",
         "backend/tests/data_quality/test_jsonb_schema.py",
         "docs/architecture/data_warehouse_extension_design_20260510.md",
         "tests/aistock_validation/bugs/20260809_BUG-1001-qe-outbox.json"

@@ -191,15 +191,15 @@ def test_outbox_event_payload_declares_schema_version(
     if not cols:
         pytest.skip("qe_archive.outbox_event has no payload column on this dev DB.")
     payload_col = "payload" if "payload" in cols else "event_payload"
-    # Per D5 Q2.b: the 4 *archive* event types added under qe_archive MUST
+    # Per D5 Q2.b: the 3 surviving *archive* event types under qe_archive MUST
     # declare schema_version. paper.daemon.* telemetry events from T6.2 are
     # routing_class=telemetry (NOT archive) so they're out of scope here.
-    # See cross-tool drawer e943f994 + dispatch dispatch_protocol_d5.
+    # ``factor.recompute.completed`` was removed from this set by BUG-1001 —
+    # the factor-value archive event contract was retired.
     d5_archive_event_types = (
         "paper.portfolio_run.completed",
         "paper.daily_snapshot.captured",
         "paper.config.changed",
-        "factor.recompute.completed",
     )
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
@@ -216,9 +216,9 @@ def test_outbox_event_payload_declares_schema_version(
     if not rows:
         pytest.skip(
             "no D5 archive-side outbox events (paper.portfolio_run.completed / "
-            "paper.daily_snapshot.captured / paper.config.changed / "
-            "factor.recompute.completed) on dev DB; telemetry-only event types "
-            "(paper.daemon.*) are intentionally out of scope here."
+            "paper.daily_snapshot.captured / paper.config.changed) on dev DB; "
+            "telemetry-only event types (paper.daemon.*) are intentionally out "
+            "of scope here."
         )
     failures = []
     for r in rows:
