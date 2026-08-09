@@ -1463,7 +1463,7 @@ def _legacy_compatible_hashes(
         "covariance": dict(core.covariance),
         "train_occupancy": dict(core.train_occupancy),
         "final_train_log_likelihood": core.terminal_likelihood,
-        "final_train_log_likelihood_source": "monitor_history_terminal_value",
+        "final_train_log_likelihood_source": "map_joint_stop_raw_observed_log_likelihood",
         "model_payload_sha256": model_hash,
         "validation_accessed": False,
         "future_utility_accessed": False,
