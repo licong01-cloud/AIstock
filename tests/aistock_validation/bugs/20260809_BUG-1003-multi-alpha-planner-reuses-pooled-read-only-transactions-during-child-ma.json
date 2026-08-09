@@ -3,6 +3,9 @@
   "allowed_write_scope": [
     "backend/db/pg_pool.py",
     "backend/tests/test_pg_pool_audit.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -40,6 +43,12 @@
       "actor": "codex",
       "note": "Every checkout now resets READ COMMITTED/read-write/non-deferrable state; reset failures close the unsafe connection. Targeted regression, lint/compile, L0, registry/catalog, and qe_read_backend gates passed without process control or DDL/DML.",
       "timestamp": "2026-08-09T10:03:04Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR #3232 pre-test classification failed because the existing pg_pool audit test had no direct CI plan. Add only the exact source/test mapping, its classifier regression, and wire the existing platform_api_backend session to execute the direct pg_pool test.",
+      "timestamp": "2026-08-09T10:24:00Z"
     }
   ],
   "evidence_uris": [],
@@ -49,6 +58,9 @@
     "changed_files": [
       "backend/db/pg_pool.py",
       "backend/tests/test_pg_pool_audit.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
       "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
       "tests/aistock_validation/bugs/.bug_id_allocator.json"
     ],
@@ -56,6 +68,9 @@
       "changed_files": [
         "backend/db/pg_pool.py",
         "backend/tests/test_pg_pool_audit.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "noxfile.py",
+        "scripts/ci_change_classifier.py",
         "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
         "tests/aistock_validation/bugs/.bug_id_allocator.json"
       ],
@@ -67,7 +82,11 @@
         "strategy_package",
         "validation.center",
         "tests.backend",
+        "validation.guardrails",
+        "validation.runner",
+        "platform.config",
         "validation.module_quality",
+        "tests.frontend",
         "tests.validation_history"
       ],
       "matched_rules": [
@@ -90,6 +109,41 @@
           "primary_module": "tests.backend",
           "risk_level": "medium",
           "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "scripts/ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
         },
         {
           "file": "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
@@ -117,6 +171,9 @@
       "suggested_scope": [
         "backend/db/pg_pool.py",
         "backend/tests/test_pg_pool_audit.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "noxfile.py",
+        "scripts/ci_change_classifier.py",
         "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
         "tests/aistock_validation/bugs/.bug_id_allocator.json"
       ],
@@ -126,6 +183,9 @@
     "scope_files": [
       "backend/db/pg_pool.py",
       "backend/tests/test_pg_pool_audit.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
       "tests/aistock_validation/bugs/20260809_BUG-1003-multi-alpha-planner-reuses-pooled-read-only-transactions-during-child-ma.json",
       "tests/aistock_validation/bugs/.bug_id_allocator.json"
     ]
@@ -147,7 +207,11 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "qe_read_backend"
+    "qe_read_backend",
+    "platform_api_backend",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "validation_catalog_integrity"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -189,8 +253,12 @@
     "python -m py_compile backend/db/pg_pool.py backend/tests/test_pg_pool_audit.py -> passed",
     "python -m nox -s l0 -> passed; guardrail blocking=0",
     "python -m nox -s validation_module_registry_l0 -> 8 passed; files=14 mapped=14",
+    "python -m nox -s guardrail_changed_files -> files=4 mapped=4; blocking=0",
     "python -m nox -s validation_catalog_integrity -> 6 passed; findings=0",
     "python -m nox -s qe_read_backend -> 34 passed",
+    "python -m nox -s platform_api_backend -> 13 passed",
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/test_noxfile_validation_env.py -q -> 67 passed",
+    "python scripts/ci_change_classifier.py <BUG-1003 changed files> -> workflow_gate=passed; backend_sessions=platform_api_backend; unmapped_code_files=[]",
     "git diff --check -> passed"
   ],
   "verification_budget": {

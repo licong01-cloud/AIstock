@@ -2514,11 +2514,13 @@ def platform_api_backend(session: nox.Session) -> None:
         "-m",
         "compileall",
         "backend/routers/health.py",
+        "backend/db/pg_pool.py",
         external=True,
     )
     _run_pytest(
         session,
         "backend/tests/platform_api",
+        "backend/tests/test_pg_pool_audit.py",
         "-q",
         "-p",
         "no:cacheprovider",
