@@ -708,11 +708,12 @@ rules:
     priority: 80
     include:
       - requirements.txt
+      - requirements.lock.txt
     primary_module: platform.config
     impact_modules: []
     layer: backend_dependency_manifest
     risk_level: high
-    ownership_reason: The pinned Python dependency manifest controls reproducible backend runtime package identity and production dependency aftercare.
+    ownership_reason: The pinned Python dependency manifests control reproducible backend runtime package identity and production dependency aftercare.
   - rule_id: hmm_evolution_services
     priority: 90
     include:

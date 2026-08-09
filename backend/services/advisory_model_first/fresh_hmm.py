@@ -24,6 +24,12 @@ class FreshHMMResult:
     unavailable: tuple[dict[str, Any], ...]
 
 
+@dataclass(frozen=True)
+class FreshHMMContinuationResult:
+    states: pd.DataFrame
+    unavailable: tuple[dict[str, Any], ...]
+
+
 def fit_fresh_sector_hmm(
     *,
     static_all: pd.DataFrame,
@@ -253,6 +259,305 @@ def build_sector_observations(
     ratio = (limit_count / valid_count.where(valid_count > 0)).where(valid_count >= 5)
     sector["sector_limit_up_ratio"] = ratio.reindex(sector.index)
     return sector[list(OBSERVATION_COLUMNS)].sort_index()
+
+
+def continue_sector_hmm(
+    *,
+    static_all: pd.DataFrame,
+    market_daily: pd.DataFrame,
+    benchmark_daily: pd.DataFrame,
+    trading_calendar: Sequence[pd.Timestamp],
+    hmm_bundle: dict[str, Any],
+    continuation_cutoff: str,
+    required_l2_code_ids: Sequence[int],
+    precomputed_observations: pd.DataFrame | None = None,
+) -> FreshHMMContinuationResult:
+    """Continue frozen per-sector posteriors using only post-cutoff observations."""
+
+    if hmm_bundle.get("schema_version") != "fresh_sector_hmm_bundle_v1":
+        raise AdvisoryModelFirstError(
+            "fresh HMM bundle schema is invalid",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"schema_version": hmm_bundle.get("schema_version")},
+        )
+    if tuple(hmm_bundle.get("observation_order") or ()) != OBSERVATION_COLUMNS:
+        raise AdvisoryModelFirstError(
+            "fresh HMM observation order differs from the frozen feature contract",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+    cutoff = pd.Timestamp(continuation_cutoff).normalize()
+    calendar = pd.DatetimeIndex(pd.to_datetime(list(trading_calendar))).normalize().sort_values().unique()
+    continuation_dates = calendar[calendar > cutoff]
+    if continuation_dates.empty:
+        raise AdvisoryModelFirstError(
+            "realtime HMM continuation has no post-cutoff trading dates",
+            reason_code="ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+            context={"continuation_cutoff": cutoff.date().isoformat()},
+        )
+    observations = (
+        precomputed_observations.sort_index()
+        if precomputed_observations is not None
+        else build_sector_observations(
+            static_all=static_all,
+            market_daily=market_daily,
+            benchmark_daily=benchmark_daily,
+        )
+    )
+    if not isinstance(observations.index, pd.MultiIndex) or tuple(observations.index.names) != (
+        "datetime",
+        "l2_code_id",
+    ):
+        raise AdvisoryModelFirstError(
+            "realtime HMM observations have an invalid index",
+            reason_code="ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+            context={"index_names": list(observations.index.names)},
+        )
+    missing_observation_columns = sorted(set(OBSERVATION_COLUMNS) - set(observations.columns))
+    if missing_observation_columns:
+        raise AdvisoryModelFirstError(
+            "realtime HMM observations have an invalid schema",
+            reason_code="ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+            context={"missing_columns": missing_observation_columns},
+        )
+    models = hmm_bundle.get("models")
+    if not isinstance(models, dict) or not models:
+        raise AdvisoryModelFirstError(
+            "fresh HMM bundle has no sector models",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+
+    states: list[pd.DataFrame] = []
+    unavailable: list[dict[str, Any]] = []
+    for code in sorted({int(value) for value in required_l2_code_ids if int(value) >= 0}):
+        model = models.get(str(code))
+        if model is None:
+            unavailable.append(
+                {
+                    "l2_code_id": code,
+                    "reason_code": "ADVISORY_MODEL_HMM_SECTOR_NOT_TRAINED",
+                    "reason": "sector_model_unavailable_in_bundle",
+                }
+            )
+            continue
+        _validate_continuation_model(model, code=code, cutoff=cutoff)
+        try:
+            sector = observations.xs(code, level="l2_code_id").reindex(continuation_dates)
+        except KeyError:
+            unavailable.append(
+                {
+                    "l2_code_id": code,
+                    "reason_code": "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+                    "reason": "continuation_observations_absent",
+                }
+            )
+            continue
+        matrix_frame = sector[list(OBSERVATION_COLUMNS)]
+        missing = matrix_frame.isna().any(axis=1)
+        if missing.any():
+            first_missing_index = missing.index[missing][0]
+            first_missing = pd.Timestamp(first_missing_index).date().isoformat()
+            missing_columns = matrix_frame.loc[first_missing_index].index[
+                matrix_frame.loc[first_missing_index].isna()
+            ].tolist()
+            unavailable.append(
+                {
+                    "l2_code_id": code,
+                    "reason_code": "ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
+                    "reason": "continuation_observation_gap",
+                    "first_missing_date": first_missing,
+                    "missing_columns": missing_columns,
+                }
+            )
+            continue
+        mean = np.asarray(model["transform_mean"], dtype=float)
+        std = np.asarray(model["transform_std"], dtype=float)
+        if mean.shape != (len(OBSERVATION_COLUMNS),) or std.shape != mean.shape or (std <= 0).any():
+            raise AdvisoryModelFirstError(
+                "fresh HMM transform parameters are invalid",
+                reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+                context={"l2_code_id": code},
+            )
+        matrix = (matrix_frame.to_numpy(dtype=float) - mean) / std
+        posterior = _continue_causal_filter(
+            matrix=matrix,
+            previous_posterior=np.asarray(model["continuation_last_posterior"], dtype=float),
+            transmat=np.asarray(model["transmat"], dtype=float),
+            means=np.asarray(model["means"], dtype=float),
+            covariances=np.asarray(model["covariances"], dtype=float),
+        )
+        canonical_by_raw = {int(key): int(value) for key, value in model["canonical_state_by_raw"].items()}
+        raw_state = posterior.argmax(axis=1)
+        try:
+            canonical_state = np.asarray([canonical_by_raw[int(value)] for value in raw_state], dtype=np.int8)
+        except KeyError as exc:
+            raise AdvisoryModelFirstError(
+                "fresh HMM canonical state mapping is incomplete",
+                reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+                context={"l2_code_id": code},
+            ) from exc
+        bull_raw_states = [raw for raw, canonical in canonical_by_raw.items() if canonical == 1]
+        if len(bull_raw_states) != 1:
+            raise AdvisoryModelFirstError(
+                "fresh HMM bundle does not identify exactly one bull state",
+                reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+                context={"l2_code_id": code},
+            )
+        duration = _continued_state_duration(
+            canonical_state,
+            previous_state=int(model["continuation_state"]),
+            previous_duration=int(model["continuation_state_duration"]),
+        )
+        states.append(
+            pd.DataFrame(
+                {
+                    "decision_as_of_trade_date": continuation_dates,
+                    "l2_code_id": code,
+                    "hmm_bull_posterior": posterior[:, bull_raw_states[0]],
+                    "hmm_state": canonical_state,
+                    "hmm_state_duration": duration,
+                    "hmm_observation_completeness": 1.0,
+                }
+            )
+        )
+    if not states:
+        return FreshHMMContinuationResult(
+            states=pd.DataFrame(
+                columns=[
+                    "decision_as_of_trade_date",
+                    "l2_code_id",
+                    "hmm_bull_posterior",
+                    "hmm_state",
+                    "hmm_state_duration",
+                    "hmm_observation_completeness",
+                ]
+            ),
+            unavailable=tuple(unavailable),
+        )
+    return FreshHMMContinuationResult(
+        states=pd.concat(states, ignore_index=True).sort_values(
+            ["decision_as_of_trade_date", "l2_code_id"]
+        ).reset_index(drop=True),
+        unavailable=tuple(unavailable),
+    )
+
+
+def _validate_continuation_model(model: dict[str, Any], *, code: int, cutoff: pd.Timestamp) -> None:
+    required = {
+        "schema_version",
+        "l2_code_id",
+        "observation_order",
+        "transform_mean",
+        "transform_std",
+        "transmat",
+        "means",
+        "covariances",
+        "canonical_state_by_raw",
+        "continuation_cutoff",
+        "continuation_last_posterior",
+        "continuation_state",
+        "continuation_state_duration",
+        "continuation_last_observation_date",
+    }
+    missing = sorted(required - set(model))
+    if missing:
+        raise AdvisoryModelFirstError(
+            "fresh HMM sector model is incomplete",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"l2_code_id": code, "missing_fields": missing},
+        )
+    if (
+        model["schema_version"] != "fresh_sector_hmm_v1"
+        or int(model["l2_code_id"]) != code
+        or tuple(model["observation_order"]) != OBSERVATION_COLUMNS
+        or pd.Timestamp(model["continuation_cutoff"]).normalize() != cutoff
+        or pd.Timestamp(model["continuation_last_observation_date"]).normalize() != cutoff
+    ):
+        raise AdvisoryModelFirstError(
+            "fresh HMM continuation identity is inconsistent",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"l2_code_id": code},
+        )
+
+
+def _continue_causal_filter(
+    *,
+    matrix: np.ndarray,
+    previous_posterior: np.ndarray,
+    transmat: np.ndarray,
+    means: np.ndarray,
+    covariances: np.ndarray,
+) -> np.ndarray:
+    state_count = len(previous_posterior)
+    if (
+        previous_posterior.shape != (state_count,)
+        or transmat.shape != (state_count, state_count)
+        or means.shape != (state_count, matrix.shape[1])
+        or covariances.shape != (state_count, matrix.shape[1], matrix.shape[1])
+        or not np.isfinite(previous_posterior).all()
+        or previous_posterior.sum() <= 0
+    ):
+        raise AdvisoryModelFirstError(
+            "fresh HMM continuation parameters have invalid dimensions",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+    log_emission = _gaussian_log_likelihood(matrix, means=means, covariances=covariances)
+    log_transition = np.log(np.clip(transmat, 1e-300, None))
+    alpha = np.log(np.clip(previous_posterior / previous_posterior.sum(), 1e-300, None))
+    posterior = np.empty_like(log_emission)
+    for index in range(len(matrix)):
+        alpha = log_emission[index] + logsumexp(alpha[:, None] + log_transition, axis=0)
+        alpha -= logsumexp(alpha)
+        posterior[index] = np.exp(alpha)
+    return posterior
+
+
+def _gaussian_log_likelihood(
+    matrix: np.ndarray,
+    *,
+    means: np.ndarray,
+    covariances: np.ndarray,
+) -> np.ndarray:
+    output = np.empty((len(matrix), len(means)), dtype=float)
+    dimension = matrix.shape[1]
+    for state in range(len(means)):
+        sign, log_det = np.linalg.slogdet(covariances[state])
+        if sign <= 0 or not np.isfinite(log_det):
+            raise AdvisoryModelFirstError(
+                "fresh HMM covariance is not positive definite",
+                reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+                context={"raw_state": state},
+            )
+        try:
+            solved = np.linalg.solve(covariances[state], (matrix - means[state]).T).T
+        except np.linalg.LinAlgError as exc:
+            raise AdvisoryModelFirstError(
+                "fresh HMM covariance cannot be solved",
+                reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+                context={"raw_state": state},
+            ) from exc
+        quadratic = np.sum((matrix - means[state]) * solved, axis=1)
+        output[:, state] = -0.5 * (dimension * np.log(2.0 * np.pi) + log_det + quadratic)
+    return output
+
+
+def _continued_state_duration(
+    states: np.ndarray,
+    *,
+    previous_state: int,
+    previous_duration: int,
+) -> np.ndarray:
+    if previous_duration <= 0:
+        raise AdvisoryModelFirstError(
+            "fresh HMM continuation duration is invalid",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+    duration = np.ones(len(states), dtype=np.int32)
+    for index, state in enumerate(states):
+        if index == 0:
+            duration[index] = previous_duration + 1 if int(state) == previous_state else 1
+        else:
+            duration[index] = duration[index - 1] + 1 if state == states[index - 1] else 1
+    return duration
 
 
 def _causal_forward_filter(model: Any, matrix: np.ndarray) -> np.ndarray:
