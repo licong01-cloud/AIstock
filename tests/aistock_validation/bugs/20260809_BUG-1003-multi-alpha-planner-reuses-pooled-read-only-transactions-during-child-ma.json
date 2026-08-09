@@ -2,6 +2,7 @@
   "actual": "On runtime identity 41504a205b9372a4e709587dc2310fd8143c6c6d, two independent MA-E14 durable runs (macb_idem_6ebaee4ec80242a3632bae7c79efcf1abff9d358 and macb_idem_67bda61e726d6b371e5f5fc158ad63690542f401) failed while materializing their only orthogonality_aware child. Both recorded ReadOnlySqlTransaction: cannot execute UPDATE in a read-only transaction. The first then overwrote the primary failure at parent finalization with multi_alpha_row_version_conflict; the second ended multi_alpha_no_successful_scheme. Expected: a connection returned from any read-only control-plane operation cannot contaminate later durable writes; child materialization must run in a writable transaction, primary errors remain attributable, and row-version CAS still fails closed without hiding the root cause. Preserve QE file-only data plane and control/result DB use; no DDL/DML migration and no process control.",
   "allowed_write_scope": [
     "backend/db/pg_pool.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
     "backend/tests/test_pg_pool_audit.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
     "noxfile.py",
@@ -49,6 +50,12 @@
       "actor": "codex",
       "note": "PR #3232 pre-test classification failed because the existing pg_pool audit test had no direct CI plan. Add only the exact source/test mapping, its classifier regression, and wire the existing platform_api_backend session to execute the direct pg_pool test.",
       "timestamp": "2026-08-09T10:24:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR #3234 exposed a stale Paper v2 test that still rejected the BUG-1003 requirement to sanitize every pooled checkout. Add only that existing test so it preserves default autocommit and no-commit/rollback semantics while asserting the mandatory writable session reset.",
+      "timestamp": "2026-08-09T17:02:00Z"
     }
   ],
   "evidence_uris": [],
@@ -57,6 +64,7 @@
     "added_files": [],
     "changed_files": [
       "backend/db/pg_pool.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
       "backend/tests/test_pg_pool_audit.py",
       "backend/tests/scripts/test_ci_change_classifier.py",
       "noxfile.py",
@@ -67,6 +75,7 @@
     "ownership": {
       "changed_files": [
         "backend/db/pg_pool.py",
+        "backend/tests/paper_trading_v2/test_day_runner.py",
         "backend/tests/test_pg_pool_audit.py",
         "backend/tests/scripts/test_ci_change_classifier.py",
         "noxfile.py",
@@ -102,6 +111,16 @@
           "primary_module": "platform.db",
           "risk_level": "high",
           "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/tests/paper_trading_v2/test_day_runner.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
         },
         {
           "file": "backend/tests/test_pg_pool_audit.py",
@@ -165,11 +184,13 @@
         }
       ],
       "risk_levels": [
+        "critical",
         "high",
         "medium"
       ],
       "suggested_scope": [
         "backend/db/pg_pool.py",
+        "backend/tests/paper_trading_v2/test_day_runner.py",
         "backend/tests/test_pg_pool_audit.py",
         "backend/tests/scripts/test_ci_change_classifier.py",
         "noxfile.py",
@@ -182,6 +203,7 @@
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/db/pg_pool.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
       "backend/tests/test_pg_pool_audit.py",
       "backend/tests/scripts/test_ci_change_classifier.py",
       "noxfile.py",
