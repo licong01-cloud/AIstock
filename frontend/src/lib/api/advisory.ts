@@ -278,6 +278,43 @@ export type AdvisoryListVersionDetail = {
   items: AdvisoryRecommendationListItem[];
 };
 
+export type AdvisoryModelFeatureContribution = {
+  feature: string;
+  contribution: number;
+};
+
+export type AdvisoryModelShadowCandidate = {
+  symbol: string;
+  selection_effective_rank: number;
+  selection_score: number;
+  advisory_model_rank: number;
+  advisory_model_score: number;
+  is_top5: boolean;
+  top_feature_contributions: AdvisoryModelFeatureContribution[];
+};
+
+export type AdvisoryModelShadowResponse = {
+  status: "EXPERIMENTAL_SHADOW" | "MODEL_UNAVAILABLE";
+  calibration_state: "UNCALIBRATED";
+  program_id: string;
+  binding_version_id: string | null;
+  package_id: string | null;
+  manifest_sha256: string | null;
+  decision_as_of_trade_date: string | null;
+  target_trade_date: string;
+  selection_runtime_semantics_hash: string | null;
+  model_version: string | null;
+  bundle_id: string | null;
+  feature_schema_version: string | null;
+  candidate_count: number;
+  shortlist_count: number;
+  candidates: AdvisoryModelShadowCandidate[];
+  baselines: JsonObject;
+  hmm_unavailable: JsonObject[];
+  reason_code: string | null;
+  message: string | null;
+};
+
 export type WatchlistCategory = {
   id: number;
   name: string;
@@ -732,6 +769,11 @@ export const advisoryApi = {
   },
   async listVersionDetail(listVersionId: string): Promise<AdvisoryListVersionDetail> {
     return apiFetch<AdvisoryListVersionDetail>(`/advisory/list-versions/${encodeURIComponent(listVersionId)}`);
+  },
+  async modelShadow(programId: string, targetTradeDate: string): Promise<AdvisoryModelShadowResponse> {
+    return apiFetch<AdvisoryModelShadowResponse>(
+      `/advisory/programs/${encodeURIComponent(programId)}/model-shadow?target_trade_date=${encodeURIComponent(targetTradeDate)}`,
+    );
   },
   async previewReview(programId: string, payload: AdvisoryReviewPayload): Promise<AdvisoryReviewResult> {
     const data = await apiFetch<{ review: AdvisoryReviewResult }>(`/advisory/programs/${encodeURIComponent(programId)}/reviews/preview`, body(payload));

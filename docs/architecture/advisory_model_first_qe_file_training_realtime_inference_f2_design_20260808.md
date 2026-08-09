@@ -695,6 +695,8 @@ ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE
 
 完成判定：目标多 Alpha Program 从真实双日期 Selection 输入返回真实模型响应；单 Alpha Program 在没有匹配 bundle 时返回精确 `ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE`，且不会误用多 Alpha 模型；两个 Program 的规则荐股均不受影响；Selection/Paper/模拟盘零写入。
 
+实际验收：`2026-08-09` 使用生产 PostgreSQL 的只读连接、持久化 Program/Selection 和真实 bundle `9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629` 完成影子推理。目标父包 Program 在 `decision=2026-07-15 / target=2026-07-16` 对真实 Top20 返回非空模型排序和 Top5，11 个行业 HMM 数据缺口按行业显式列入 `hmm_unavailable`，未回退旧 HMM。另一个现有独立 Program 返回 `ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE`，且在 bundle/FeatureSource 读取前停止。模型绑定仅发布到验收临时目录并已删除；正式 `AISTOCK_ADVISORY_MODEL_ROOT` 配置、shadow binding 激活、服务重启和部署后页面 readback 尚未执行，不在源码完成状态中冒充已生效。
+
 Batch 1 完成后立即进入 Batch 2，不插入历史证据、归档或通用治理任务。
 
 ## 14. Design Acceptance Index
@@ -789,7 +791,7 @@ Batch 1 完成后立即进入 Batch 2，不插入历史证据、归档或通用�
 | F-302 | `prediction_source.py`; `candidate_group.py`; `diagnostics.py` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; `test_review_regressions.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/runs/advmreq_ac5959aa8dc14a25e3b8c139/parent_diagnostics.json` | verified | none |
 | F-303 | `qe_file_source.py`; `training_pipeline.py` | `backend/tests/advisory_model_first/test_qe_file_source.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/training_request.json` | verified | none |
 | F-304 | `candidate_group.py` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/runs/advmreq_ac5959aa8dc14a25e3b8c139/candidate_coverage.json` | verified | none |
-| F-305 | `shared_feature_builder.py`; `feature_schema_v1.py` | `backend/tests/advisory_model_first/test_shared_feature_builder.py` | design_ready | none |
+| F-305 | `shared_feature_builder.py`; `feature_schema_v1.py`; `realtime_feature_source.py` | `backend/tests/advisory_model_first/test_shared_feature_builder.py`; `test_realtime_feature_source.py`; 2026-07-16 real read-only inference | verified | none |
 | F-306 | `feature_schema_v1.py`; `reranker_training.py` | `backend/tests/advisory_model_first/test_shared_feature_builder.py`; `test_review_regressions.py` | verified | none |
 | F-307 | `fresh_hmm.py` | `backend/tests/advisory_model_first/test_fresh_hmm.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/fresh_hmm_models.json` | verified | none |
 | F-308 | `labels.py` | `backend/tests/advisory_model_first/test_labels.py`; `test_review_regressions.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/runs/advmreq_ac5959aa8dc14a25e3b8c139/label_coverage.json` | verified | none |
@@ -797,16 +799,16 @@ Batch 1 完成后立即进入 Batch 2，不插入历史证据、归档或通用�
 | F-310 | `reranker_training.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/baseline_comparison.json`; `backend/tests/advisory_model_first/test_review_regressions.py` | verified | none |
 | F-311 | `scripts/advisory_model_train_wsl.py`; `scripts/wsl/advisory_model_train.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/manifest.json`; `backend/tests/advisory_model_first/test_candidate_and_contracts.py` | verified | none |
 | F-312 | projected reader；`training_pipeline.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/runs/advmreq_ac5959aa8dc14a25e3b8c139/training_receipt.json`; `backend/tests/advisory_model_first/test_qe_file_source.py` | verified | none |
-| F-313 | `model_bundle.py` | `backend/tests/advisory_model_first/test_review_regressions.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/manifest.json` | design_ready | none |
-| F-314 | planned `backend/services/advisory_model_first/model_inference.py` + router | `backend/tests/advisory_modeling/test_model_first_api_decision_clock.py` | design_ready | none |
-| F-315 | planned Advisory page | `frontend/tests/advisory-model-first-shadow.spec.ts` | design_ready | none |
-| F-316 | planned Program composition | `backend/tests/advisory_modeling/test_model_first_program_isolation.py` | design_ready | none |
-| F-317 | planned inference error envelope | `backend/tests/advisory_modeling/test_model_first_baseline_continuity.py` | design_ready | none |
+| F-313 | `model_bundle.py` | `backend/tests/advisory_model_first/test_review_regressions.py`; exact binding hash/tamper test; real bundle temporary-binding readback | verified | none |
+| F-314 | `model_inference.py`; `realtime_feature_source.py`; `backend/routers/advisory.py` | `backend/tests/advisory_model_first/test_model_inference.py`; `backend/tests/advisory_model_first/test_model_shadow_api.py`; real read-only Program/Selection/DB inference for 2026-07-16 | verified | none |
+| F-315 | `frontend/src/app/paper-v2/advisory/page.tsx`; `frontend/src/lib/api/advisory.ts` | `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts`; targeted Playwright 1 passed; TypeScript passed | verified | none |
+| F-316 | exact Program/package/manifest/style/binding checks in `model_inference.py` | `backend/tests/advisory_model_first/test_model_inference.py::test_model_shadow_never_applies_parent_bundle_to_another_program`; existing independent Program read-only smoke | verified | none |
+| F-317 | isolated `MODEL_UNAVAILABLE` envelope and UI state | `backend/tests/advisory_model_first/test_model_inference.py::test_model_shadow_keeps_rule_path_available_when_model_root_is_missing`; `backend/tests/advisory_model_first/test_model_shadow_api.py`; page mock unavailable path | verified | none |
 | F-318 | `backend/services/advisory_model_first/**` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; changed-file review | verified | none |
 | F-319 | dependency scan | `backend/tests/advisory_model_first/test_review_regressions.py`; no Historical Range/SEALED/source revision import | verified | none |
 | F-320 | design/code review | `backend/tests/advisory_model_first/test_review_regressions.py`; no role/approval/package admission implementation | verified | none |
 | F-321 | `qe_file_source.py`; frozen request | `backend/tests/advisory_model_first/test_qe_file_source.py`; minute Bin absent from request | verified | none |
-| F-322 | `errors.py`; WSL driver；trainer typed errors | `backend/tests/advisory_model_first/test_review_regressions.py` | design_ready | none |
+| F-322 | `errors.py`; WSL driver；trainer typed errors; inference structured logs | `backend/tests/advisory_model_first/test_review_regressions.py`; `test_model_inference.py`; real dtype failure diagnosis and regression | verified | none |
 
 ## 18. Rollout / Rollback
 
@@ -838,4 +840,4 @@ Batch 1 完成后立即进入 Batch 2，不插入历史证据、归档或通用�
 
 ## 20. 开工条件与下一步
 
-M0/M1 源码、正式 WSL 训练和 bundle 读回已经完成。下一任务直接进入 Batch 3/M2：实现数据库 decision-cutoff FeatureSource、exact bundle loader、只读影子推理 API 和 Advisory 页面 readback；不得在此之前插入历史证据、归档、通用 ModelOps 或遗留任务处理。当前 bundle 质量低于对照，页面必须如实展示实验状态和 baseline，禁止描述为已校准或已优化。
+M0/M1 源码、正式 WSL 训练、bundle 读回以及 Batch 3/M2 源码均已完成本地验收。当前工作只进入源码 PR：合入后由用户决定服务重启，并单独决定 `AISTOCK_ADVISORY_MODEL_ROOT` 与 exact shadow binding 激活；激活后执行目标父包 API/页面只读 readback。不得在部署验收前插入历史证据、归档、通用 ModelOps 或遗留任务处理。当前 bundle 质量低于对照，页面必须继续如实展示实验状态和 baseline，禁止描述为已校准或已优化。
