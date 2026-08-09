@@ -569,71 +569,27 @@ def _hard_sequence_metrics(posteriors: np.ndarray, dates: tuple[date, ...]) -> t
     }
 
 
-def evaluate_train_occupancy(
-    posteriors: Any,
-    dates: Sequence[date] | None,
+def _train_occupancy_receipt_from_metrics(
+    metrics: Mapping[str, Any],
     *,
-    frozen_input_manifest: Mapping[str, Any] | None,
+    evidence_identity: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Apply D4-03-PERSISTENT-A to causal train hard assignments only."""
+    """Apply the single D4-03 authority to normalized hard-sequence metrics."""
 
-    if dates is None or not isinstance(frozen_input_manifest, Mapping):
-        return _named_status_receipt(
-            "train_occupancy",
-            contract_version=D4_OCCUPANCY_VERSION,
-            blockers=("hmm_risk_model_train_occupancy_evidence_missing",),
-            evidence={},
-        )
-    try:
-        ordered_dates = _ordered_unique_dates(dates)
-    except (TypeError, ValueError):
-        return _named_status_receipt(
-            "train_occupancy",
-            contract_version=D4_OCCUPANCY_VERSION,
-            failures=("hmm_risk_model_train_date_sequence_invalid",),
-            evidence={},
-        )
-    ordered_date_strings = [value.isoformat() for value in ordered_dates]
-    required_hashes = (
-        "dataset_manifest_hash",
-        "mapping_manifest_hash",
-        "calendar_manifest_hash",
-        "feature_domain_policy_sha256",
-    )
-    if (
-        frozen_input_manifest.get("schema_version") != "hmm_risk_d4_train_frozen_input_manifest_v1"
-        or frozen_input_manifest.get("direct_sector_level") not in {"L1", "L2"}
-        or not str(frozen_input_manifest.get("sector_code") or "").strip()
-        or not _valid_sha256(frozen_input_manifest.get("train_observation_sha256"))
-        or frozen_input_manifest.get("train_dates") != ordered_date_strings
-        or frozen_input_manifest.get("train_dates_sha256") != canonical_sha256(ordered_date_strings)
-        or any(not _valid_sha256(frozen_input_manifest.get(field)) for field in required_hashes)
-    ):
-        return _named_status_receipt(
-            "train_occupancy",
-            contract_version=D4_OCCUPANCY_VERSION,
-            blockers=("hmm_risk_model_train_occupancy_evidence_missing",),
-            evidence={"frozen_input_manifest_sha256": canonical_sha256(dict(frozen_input_manifest))},
-        )
-    try:
-        probabilities = _finite_array(posteriors, shape=(len(ordered_dates), 3))
-        hard, metrics = _hard_sequence_metrics(probabilities, ordered_dates)
-    except (TypeError, ValueError):
-        return _named_status_receipt(
-            "train_occupancy",
-            contract_version=D4_OCCUPANCY_VERSION,
-            failures=("hmm_risk_model_posterior_invalid",),
-            evidence={},
-        )
+    normalized_metrics = {key: value for key, value in metrics.items() if key != "states"}
+    normalized_metrics["states"] = {str(key): dict(value) for key, value in metrics["states"].items()}
+    train_rows = int(evidence_identity["train_rows"])
     failures: list[str] = []
-    if metrics["row_sum_max_abs_error"] > 1e-12:
+    if normalized_metrics["row_sum_max_abs_error"] > 1e-12:
         failures.append("hmm_risk_model_posterior_normalization_failed")
-    if metrics["top1_top2_min_margin"] <= 1e-12:
+    if normalized_metrics["top1_top2_min_margin"] <= 1e-12:
         failures.append("hmm_risk_model_posterior_tie")
-    posterior_common_valid = metrics["row_sum_max_abs_error"] <= 1e-12 and metrics["top1_top2_min_margin"] > 1e-12
-    count_threshold = max(5, math.ceil(0.01 * len(ordered_dates)))
-    persistent_count_threshold = max(30, math.ceil(0.10 * len(ordered_dates)))
-    for state in metrics["states"].values():
+    posterior_common_valid = (
+        normalized_metrics["row_sum_max_abs_error"] <= 1e-12 and normalized_metrics["top1_top2_min_margin"] > 1e-12
+    )
+    count_threshold = max(5, math.ceil(0.01 * train_rows))
+    persistent_count_threshold = max(30, math.ceil(0.10 * train_rows))
+    for state in normalized_metrics["states"].values():
         common_valid = posterior_common_valid
         if state["hard_count"] < count_threshold:
             failures.append("hmm_risk_model_train_state_count_insufficient")
@@ -691,14 +647,7 @@ def evaluate_train_occupancy(
             }
         )
     evidence = {
-        "direct_sector_level": frozen_input_manifest.get("direct_sector_level"),
-        "sector_code": frozen_input_manifest.get("sector_code"),
-        "train_observation_sha256": frozen_input_manifest.get("train_observation_sha256"),
-        **{field: frozen_input_manifest.get(field) for field in required_hashes},
-        "train_rows": len(ordered_dates),
-        "ordered_date_sha256": canonical_sha256(ordered_date_strings),
-        "posterior_sha256": canonical_sha256(probabilities.tolist()),
-        "frozen_input_manifest_sha256": canonical_sha256(dict(frozen_input_manifest)),
+        **dict(evidence_identity),
         "count_threshold": count_threshold,
         "occupancy_threshold": 0.01,
         "month_threshold": 3,
@@ -710,9 +659,7 @@ def evaluate_train_occupancy(
         "persistent_month_threshold": 6,
         "persistent_run_threshold": 2,
         "path_partition": {"recurrent_max_run_share": "<=0.8", "persistent_min_run_share": ">0.8"},
-        "validation_accessed": False,
-        "future_utility_accessed": False,
-        **metrics,
+        **normalized_metrics,
     }
     return _named_status_receipt(
         "train_occupancy",
@@ -720,6 +667,279 @@ def evaluate_train_occupancy(
         failures=failures,
         evidence=evidence,
     )
+
+
+def evaluate_train_occupancy(
+    posteriors: Any,
+    dates: Sequence[date] | None,
+    *,
+    frozen_input_manifest: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Apply D4-03-PERSISTENT-A to causal train hard assignments only."""
+
+    if dates is None or not isinstance(frozen_input_manifest, Mapping):
+        return _named_status_receipt(
+            "train_occupancy",
+            contract_version=D4_OCCUPANCY_VERSION,
+            blockers=("hmm_risk_model_train_occupancy_evidence_missing",),
+            evidence={},
+        )
+    try:
+        ordered_dates = _ordered_unique_dates(dates)
+    except (TypeError, ValueError):
+        return _named_status_receipt(
+            "train_occupancy",
+            contract_version=D4_OCCUPANCY_VERSION,
+            failures=("hmm_risk_model_train_date_sequence_invalid",),
+            evidence={},
+        )
+    ordered_date_strings = [value.isoformat() for value in ordered_dates]
+    required_hashes = (
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "calendar_manifest_hash",
+        "feature_domain_policy_sha256",
+    )
+    if (
+        frozen_input_manifest.get("schema_version") != "hmm_risk_d4_train_frozen_input_manifest_v1"
+        or frozen_input_manifest.get("direct_sector_level") not in {"L1", "L2"}
+        or not str(frozen_input_manifest.get("sector_code") or "").strip()
+        or not _valid_sha256(frozen_input_manifest.get("train_observation_sha256"))
+        or frozen_input_manifest.get("train_dates") != ordered_date_strings
+        or frozen_input_manifest.get("train_dates_sha256") != canonical_sha256(ordered_date_strings)
+        or any(not _valid_sha256(frozen_input_manifest.get(field)) for field in required_hashes)
+    ):
+        return _named_status_receipt(
+            "train_occupancy",
+            contract_version=D4_OCCUPANCY_VERSION,
+            blockers=("hmm_risk_model_train_occupancy_evidence_missing",),
+            evidence={"frozen_input_manifest_sha256": canonical_sha256(dict(frozen_input_manifest))},
+        )
+    try:
+        probabilities = _finite_array(posteriors, shape=(len(ordered_dates), 3))
+        hard, metrics = _hard_sequence_metrics(probabilities, ordered_dates)
+    except (TypeError, ValueError):
+        return _named_status_receipt(
+            "train_occupancy",
+            contract_version=D4_OCCUPANCY_VERSION,
+            failures=("hmm_risk_model_posterior_invalid",),
+            evidence={},
+        )
+    evidence_identity = {
+        "direct_sector_level": frozen_input_manifest.get("direct_sector_level"),
+        "sector_code": frozen_input_manifest.get("sector_code"),
+        "train_observation_sha256": frozen_input_manifest.get("train_observation_sha256"),
+        **{field: frozen_input_manifest.get(field) for field in required_hashes},
+        "train_rows": len(ordered_dates),
+        "ordered_date_sha256": canonical_sha256(ordered_date_strings),
+        "posterior_sha256": canonical_sha256(probabilities.tolist()),
+        "frozen_input_manifest_sha256": canonical_sha256(dict(frozen_input_manifest)),
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+    }
+    return _train_occupancy_receipt_from_metrics(metrics, evidence_identity=evidence_identity)
+
+
+def _strict_nonnegative_integer(value: Any, *, field: str) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+        raise TypeError(f"{field} must be an integer")
+    normalized = int(value)
+    if normalized < 0:
+        raise ValueError(f"{field} must be nonnegative")
+    return normalized
+
+
+def _train_occupancy_receipt_semantics_valid(receipt: Mapping[str, Any]) -> bool:
+    """Recompute D4-03 status/path comparisons from durable normalized evidence."""
+
+    try:
+        hash_valid = _canonical_receipt_hash_valid(receipt)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (
+        receipt.get("contract_version") != D4_OCCUPANCY_VERSION
+        or not isinstance(receipt.get("receipt_sha256"), str)
+        or not hash_valid
+    ):
+        return False
+    evidence = receipt.get("evidence")
+    if not isinstance(evidence, Mapping):
+        return False
+    try:
+        train_rows = _strict_nonnegative_integer(evidence["train_rows"], field="train_rows")
+        if train_rows <= 0:
+            return False
+        if (
+            evidence.get("validation_accessed") is not False
+            or evidence.get("future_utility_accessed") is not False
+            or not all(
+                isinstance(evidence.get(field), str) and _valid_sha256(evidence.get(field))
+                for field in (
+                    "ordered_date_sha256",
+                    "posterior_sha256",
+                    "hard_assignment_sha256",
+                    "frozen_input_manifest_sha256",
+                )
+            )
+        ):
+            return False
+        for field in (
+            "train_observation_sha256",
+            "dataset_manifest_hash",
+            "mapping_manifest_hash",
+            "calendar_manifest_hash",
+            "feature_domain_policy_sha256",
+        ):
+            if not isinstance(evidence.get(field), str) or not _valid_sha256(evidence.get(field)):
+                return False
+
+        row_error = _strict_real(evidence["row_sum_max_abs_error"])
+        margin = _strict_real(evidence["top1_top2_min_margin"])
+        if not math.isfinite(row_error) or row_error < 0.0 or not math.isfinite(margin):
+            return False
+        transition_rows = evidence.get("transition_counts")
+        if (
+            not isinstance(transition_rows, Sequence)
+            or isinstance(transition_rows, (str, bytes))
+            or len(transition_rows) != 3
+        ):
+            return False
+        transitions = np.asarray(
+            [
+                [_strict_nonnegative_integer(value, field="transition_count") for value in row]
+                for row in transition_rows
+                if isinstance(row, Sequence) and not isinstance(row, (str, bytes)) and len(row) == 3
+            ],
+            dtype=np.int64,
+        )
+        if transitions.shape != (3, 3) or int(transitions.sum()) != train_rows - 1:
+            return False
+
+        states = evidence.get("states")
+        if not isinstance(states, Mapping) or set(states) != {"0", "1", "2"}:
+            return False
+        total_count = 0
+        base_states: dict[str, dict[str, Any]] = {}
+        for state_index in range(3):
+            state = states[str(state_index)]
+            if not isinstance(state, Mapping):
+                return False
+            count = _strict_nonnegative_integer(state["hard_count"], field="hard_count")
+            total_count += count
+            occupancy = _strict_real(state["normalized_occupancy"])
+            month_count = _strict_nonnegative_integer(state["calendar_month_count"], field="calendar_month_count")
+            months = state.get("calendar_months")
+            run_count = _strict_nonnegative_integer(state["contiguous_run_count"], field="contiguous_run_count")
+            incoming = _strict_nonnegative_integer(
+                state["incoming_transition_count"], field="incoming_transition_count"
+            )
+            outgoing = _strict_nonnegative_integer(
+                state["outgoing_transition_count"], field="outgoing_transition_count"
+            )
+            share_value = state.get("maximum_single_run_share")
+            share = None if share_value is None else _strict_real(share_value)
+            if (
+                not math.isfinite(occupancy)
+                or occupancy != count / train_rows
+                or not isinstance(months, Sequence)
+                or isinstance(months, (str, bytes))
+                or any(not isinstance(value, str) for value in months)
+                or list(months) != sorted(set(months))
+                or month_count != len(months)
+                or incoming != int(transitions[:, state_index].sum() - transitions[state_index, state_index])
+                or outgoing != int(transitions[state_index, :].sum() - transitions[state_index, state_index])
+                or (count == 0 and share is not None)
+                or (count > 0 and (share is None or not math.isfinite(share) or not 0.0 < share <= 1.0))
+            ):
+                return False
+            base_states[str(state_index)] = {
+                "hard_count": count,
+                "normalized_occupancy": occupancy,
+                "calendar_month_count": month_count,
+                "calendar_months": list(months),
+                "contiguous_run_count": run_count,
+                "incoming_transition_count": incoming,
+                "outgoing_transition_count": outgoing,
+                "maximum_single_run_share": share,
+            }
+        if total_count != train_rows:
+            return False
+        base_metrics = {
+            "row_sum_max_abs_error": row_error,
+            "top1_top2_min_margin": margin,
+            "hard_assignment_sha256": evidence["hard_assignment_sha256"],
+            "transition_counts": transitions.tolist(),
+            "states": base_states,
+        }
+        evidence_identity = {
+            field: evidence[field]
+            for field in (
+                "direct_sector_level",
+                "sector_code",
+                "train_observation_sha256",
+                "dataset_manifest_hash",
+                "mapping_manifest_hash",
+                "calendar_manifest_hash",
+                "feature_domain_policy_sha256",
+                "train_rows",
+                "ordered_date_sha256",
+                "posterior_sha256",
+                "frozen_input_manifest_sha256",
+                "validation_accessed",
+                "future_utility_accessed",
+            )
+        }
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+    expected = _train_occupancy_receipt_from_metrics(base_metrics, evidence_identity=evidence_identity)
+    return dict(receipt) == expected
+
+
+def d4_training_receipt_readback_failures(entry: Mapping[str, Any]) -> list[str]:
+    """Return typed failures after replaying durable D4 receipt authorities."""
+
+    failures: list[str] = []
+    likelihood = entry.get("likelihood")
+    covariance = entry.get("covariance")
+    occupancy = entry.get("train_occupancy")
+    if not all(isinstance(receipt, Mapping) for receipt in (likelihood, covariance, occupancy)):
+        return ["hmm_risk_model_selection_contract_unsatisfied"]
+    likelihood_evidence = likelihood.get("evidence")
+    covariance_evidence = covariance.get("evidence")
+    if not isinstance(likelihood_evidence, Mapping) or not isinstance(covariance_evidence, Mapping):
+        return ["hmm_risk_model_selection_contract_unsatisfied"]
+    try:
+        recomputed_likelihood = evaluate_likelihood_acceptance(likelihood_evidence)
+        recomputed_covariance = evaluate_covariance_acceptance(covariance_evidence)
+    except (TypeError, ValueError, OverflowError, FloatingPointError):
+        return ["hmm_risk_model_selection_contract_unsatisfied"]
+    covariance_hashes = recomputed_likelihood.get("evidence", {}).get("covariance_receipt_sha256_history", ())
+    if dict(likelihood) != recomputed_likelihood:
+        failures.extend(recomputed_likelihood.get("failure_reason_codes") or ())
+        failures.extend(recomputed_likelihood.get("blocking_reason_codes") or ())
+        if not failures:
+            failures.append("hmm_risk_model_selection_contract_unsatisfied")
+    if dict(covariance) != recomputed_covariance:
+        covariance_failures = list(recomputed_covariance.get("failure_reason_codes") or ())
+        covariance_failures.extend(recomputed_covariance.get("blocking_reason_codes") or ())
+        failures.extend(covariance_failures or ["hmm_risk_model_selection_contract_unsatisfied"])
+    if not _train_occupancy_receipt_semantics_valid(occupancy):
+        failures.append("hmm_risk_model_selection_contract_unsatisfied")
+    if (
+        not isinstance(covariance_hashes, Sequence)
+        or isinstance(covariance_hashes, (str, bytes))
+        or not covariance_hashes
+        or covariance_hashes[-1] != recomputed_covariance.get("receipt_sha256")
+    ):
+        failures.append("hmm_risk_model_selection_contract_unsatisfied")
+    return list(dict.fromkeys(str(value) for value in failures))
+
+
+def validate_d4_training_receipts(entry: Mapping[str, Any]) -> bool:
+    """Validate durable D4 receipts with the same authorities used by their writers."""
+
+    return not d4_training_receipt_readback_failures(entry)
 
 
 def _candidate_status(entry: Mapping[str, Any]) -> bool:
@@ -739,6 +959,7 @@ def _candidate_status(entry: Mapping[str, Any]) -> bool:
         and bool(covariance_hashes)
         and covariance_hashes[-1] == covariance.get("receipt_sha256")
         and entry.get("train_occupancy", {}).get("train_occupancy_valid") is True
+        and validate_d4_training_receipts(entry)
     )
 
 
@@ -825,6 +1046,18 @@ def _candidate_rejection_summary(entries: Sequence[Mapping[str, Any]]) -> list[d
                         "failure_reason_codes": ["hmm_risk_model_selection_contract_unsatisfied"],
                         "blocking_reason_codes": [],
                         "primary_reason_code": "hmm_risk_model_selection_contract_unsatisfied",
+                    }
+                )
+            readback_failures = d4_training_receipt_readback_failures(entry)
+            if readback_failures and not stages:
+                stages.append(
+                    {
+                        "stage": "d4_receipt_readback",
+                        "status": "failed",
+                        "valid": False,
+                        "failure_reason_codes": readback_failures,
+                        "blocking_reason_codes": [],
+                        "primary_reason_code": readback_failures[0],
                     }
                 )
         if stages:

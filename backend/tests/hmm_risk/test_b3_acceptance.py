@@ -349,6 +349,113 @@ def test_candidate_rejects_rehashed_map_joint_covariance_lineage_drift() -> None
     assert subject._candidate_status(entry) is False
 
 
+def _rehash_selection_repeat(repeat: dict) -> None:
+    candidate_fields = (
+        "family",
+        "level",
+        "schedule",
+        "canonical_sector_codes",
+        "feature_names",
+        "preprocess",
+        "numeric_environment",
+        "entries",
+        "models",
+    )
+    payload = {field: repeat[field] for field in candidate_fields}
+    if "dimension_contract_version" in repeat:
+        payload["dimension_contract_version"] = repeat["dimension_contract_version"]
+    repeat["candidate_payload_sha256"] = subject.canonical_sha256(payload)
+
+
+def test_d5_recomputes_fully_rehashed_map_receipt_before_candidate_acceptance() -> None:
+    repeat = _selection_repeat(level="L1", preferred_seed=46)
+    for entry in (value for value in repeat["entries"] if value["sector_code"] == "S000"):
+        likelihood = deepcopy(entry["likelihood"])
+        evidence = likelihood["evidence"]
+        evidence["map_objective_history"] = [-100.0, -101.0]
+        evidence["map_prior_adjustment_history"] = [-98.0, -99.005]
+        evidence["objective_component_history"] = [
+            {
+                "iteration": 1,
+                "raw_log_likelihood": -2.0,
+                "prior_log_covariance_component": 195.0,
+                "prior_inverse_covariance_component": 1.0,
+                "prior_adjustment": -98.0,
+                "map_objective": -100.0,
+            },
+            {
+                "iteration": 2,
+                "raw_log_likelihood": -1.995,
+                "prior_log_covariance_component": 197.01,
+                "prior_inverse_covariance_component": 1.0,
+                "prior_adjustment": -99.005,
+                "map_objective": -101.0,
+            },
+        ]
+        recomputed = subject.evaluate_likelihood_acceptance(evidence)
+        assert recomputed["convergence_valid"] is False
+        likelihood_body = {key: value for key, value in likelihood.items() if key != "receipt_sha256"}
+        entry["likelihood"] = {
+            **likelihood_body,
+            "receipt_sha256": subject.canonical_sha256(likelihood_body),
+        }
+        entry_body = {key: value for key, value in entry.items() if key != "entry_receipt_sha256"}
+        entry["entry_receipt_sha256"] = subject.canonical_sha256(entry_body)
+    _rehash_selection_repeat(repeat)
+
+    selection = subject.select_level_restart(
+        deepcopy(repeat),
+        deepcopy(repeat),
+        family="legacy_covfix",
+        level="L1",
+        expected_sector_codes=repeat["canonical_sector_codes"],
+        feature_count=7,
+        feature_domain_policy_sha256="e" * 64,
+    )
+
+    assert selection["level_selection_status"] == "failed"
+    assert selection["level_selection_valid"] is False
+    assert selection["failure_reason_codes"] == ["hmm_risk_model_selection_unavailable"]
+    assert all(
+        "hmm_risk_model_map_objective_decrease" in candidate["failure_reason_codes"]
+        for candidate in selection["evidence"]["candidates"]
+    )
+
+
+def test_candidate_recomputes_rehashed_covariance_and_occupancy_receipts() -> None:
+    covariance_entry = deepcopy(_selection_repeat(level="L1", preferred_seed=46)["entries"][0])
+    covariance = deepcopy(covariance_entry["covariance"])
+    covariance["evidence"]["raw_covars"][0][0] = 3.0
+    covariance_body = {key: value for key, value in covariance.items() if key != "receipt_sha256"}
+    covariance_entry["covariance"] = {
+        **covariance_body,
+        "receipt_sha256": subject.canonical_sha256(covariance_body),
+    }
+    likelihood = deepcopy(covariance_entry["likelihood"])
+    likelihood["evidence"]["covariance_receipt_sha256_history"][-1] = covariance_entry["covariance"]["receipt_sha256"]
+    likelihood_body = {key: value for key, value in likelihood.items() if key != "receipt_sha256"}
+    covariance_entry["likelihood"] = {
+        **likelihood_body,
+        "receipt_sha256": subject.canonical_sha256(likelihood_body),
+    }
+    assert subject._candidate_status(covariance_entry) is False
+
+    occupancy_entry = deepcopy(_selection_repeat(level="L1", preferred_seed=46)["entries"][0])
+    occupancy = deepcopy(occupancy_entry["train_occupancy"])
+    occupancy["evidence"]["states"]["0"]["hard_count"] = 1
+    occupancy["evidence"]["states"]["0"]["normalized_occupancy"] = 1 / occupancy["evidence"]["train_rows"]
+    occupancy_body = {key: value for key, value in occupancy.items() if key != "receipt_sha256"}
+    occupancy_entry["train_occupancy"] = {
+        **occupancy_body,
+        "receipt_sha256": subject.canonical_sha256(occupancy_body),
+    }
+    assert subject._candidate_status(occupancy_entry) is False
+
+    nonfinite_entry = deepcopy(_selection_repeat(level="L1", preferred_seed=46)["entries"][0])
+    nonfinite_entry["train_occupancy"]["evidence"]["row_sum_max_abs_error"] = float("nan")
+    assert subject._candidate_status(nonfinite_entry) is False
+
+
 def _mixed_dimension_selection_repeat(*, preferred_seed: int) -> dict:
     codes = sorted([f"S{index:03d}" for index in range(130)] + [TARGET_SECTOR])
     entries = []

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 from collections import deque
+from copy import deepcopy
 from datetime import date, timedelta
 
 import numpy as np
@@ -2137,6 +2138,65 @@ def test_ready_layer_rejects_rehashed_but_empty_semantic_evidence() -> None:
     artifact["artifact_sha256"] = canonical_sha256(artifact_body)
 
     with pytest.raises(StateModelSetError, match="semantic evidence is not accepted"):
+        training_subject._validate_ready_layer(
+            artifact,
+            selection,
+            family="legacy_covfix",
+            level="L1",
+            expected_count=31,
+            dataset_manifest_hash="a" * 64,
+            mapping_manifest_hash="b" * 64,
+            calendar_manifest_hash="c" * 64,
+            l2_stock_fact_manifest_hash="d" * 64,
+            semantic_dataset_manifest_hash="e" * 64,
+            semantic_mapping_manifest_hash="f" * 64,
+            semantic_calendar_manifest_hash="1" * 64,
+            semantic_l2_stock_fact_manifest_hash="2" * 64,
+            feature_domain_policy_sha256=TEST_POLICY_SHA256,
+        )
+
+
+def test_ready_layer_recomputes_fully_rehashed_map_receipt() -> None:
+    artifact, selection = _selected_artifact("legacy_covfix", "L1")
+    entry = deepcopy(artifact["entries"][0])
+    training_receipt = deepcopy(entry["training_receipt"])
+    likelihood = deepcopy(training_receipt["likelihood"])
+    likelihood["evidence"]["map_objective_history"] = [-100.0, -101.0]
+    likelihood["evidence"]["map_prior_adjustment_history"] = [-99.0, -100.005]
+    likelihood["evidence"]["objective_component_history"] = [
+        {
+            "iteration": 1,
+            "raw_log_likelihood": -1.0,
+            "prior_log_covariance_component": 197.0,
+            "prior_inverse_covariance_component": 1.0,
+            "prior_adjustment": -99.0,
+            "map_objective": -100.0,
+        },
+        {
+            "iteration": 2,
+            "raw_log_likelihood": -0.995,
+            "prior_log_covariance_component": 199.01,
+            "prior_inverse_covariance_component": 1.0,
+            "prior_adjustment": -100.005,
+            "map_objective": -101.0,
+        },
+    ]
+    likelihood_body = {key: value for key, value in likelihood.items() if key != "receipt_sha256"}
+    training_receipt["likelihood"] = {
+        **likelihood_body,
+        "receipt_sha256": canonical_sha256(likelihood_body),
+    }
+    training_body = {key: value for key, value in training_receipt.items() if key != "entry_receipt_sha256"}
+    entry["training_receipt"] = {
+        **training_body,
+        "entry_receipt_sha256": canonical_sha256(training_body),
+    }
+    entry_body = {key: value for key, value in entry.items() if key != "selected_entry_sha256"}
+    artifact["entries"][0] = {**entry_body, "selected_entry_sha256": canonical_sha256(entry_body)}
+    artifact_body = {key: value for key, value in artifact.items() if key != "artifact_sha256"}
+    artifact["artifact_sha256"] = canonical_sha256(artifact_body)
+
+    with pytest.raises(StateModelSetError, match="training evidence is not accepted"):
         training_subject._validate_ready_layer(
             artifact,
             selection,

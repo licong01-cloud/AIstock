@@ -25,6 +25,7 @@ from backend.services.hmm_risk.b3_acceptance import (
     evaluate_train_occupancy,
     map_covariance_prior_objective,
     map_numeric_envelope,
+    validate_d4_training_receipts,
 )
 from backend.services.hmm_risk.b3_mixed_dimension import (
     INACTIVE_DIMENSION_REASON_CODE,
@@ -2062,6 +2063,7 @@ def _validate_ready_layer(
             or covariance.get("covariance_valid") is not True
             or occupancy.get("train_occupancy_status") != "accepted"
             or occupancy.get("train_occupancy_valid") is not True
+            or not validate_d4_training_receipts(training_receipt)
         ):
             raise StateModelSetError(f"B3 READY training evidence is not accepted for {family}/{level}/{code}")
         occupancy_evidence = occupancy["evidence"]
