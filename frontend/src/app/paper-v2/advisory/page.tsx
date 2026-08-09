@@ -8,6 +8,7 @@ import {
   type AdvisoryEpisode,
   type AdvisoryListVersionDetail,
   type AdvisoryLeaderboardRow,
+  type AdvisoryModelShadowResponse,
   type AdvisoryPackageMode,
   type AdvisoryProgram,
   type AdvisoryQualityReport,
@@ -119,6 +120,17 @@ function metricStatusText(row: AdvisoryLeaderboardRow): string {
 
 function fmtNumber(value: number | null | undefined, digits = 0): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
+}
+
+function shadowBaselineMetric(
+  shadow: AdvisoryModelShadowResponse | null,
+  baseline: string,
+  metric = "mean_excess_return_5",
+): number | null {
+  const row = shadow?.baselines?.[baseline];
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const value = (row as JsonObject)[metric];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function fmtPrice(value: number | null | undefined): string {
@@ -632,6 +644,9 @@ function AdvisoryPageContent() {
   const [bindings, setBindings] = useState<AdvisoryStrategyBindingVersion[]>([]);
   const [listVersions, setListVersions] = useState<AdvisoryRecommendationListVersion[]>([]);
   const [listVersionDetail, setListVersionDetail] = useState<AdvisoryListVersionDetail | null>(null);
+  const [modelShadow, setModelShadow] = useState<AdvisoryModelShadowResponse | null>(null);
+  const [modelShadowLoading, setModelShadowLoading] = useState(false);
+  const [modelShadowError, setModelShadowError] = useState<string | null>(null);
   const [selectedListVersionId, setSelectedListVersionId] = useState("");
   const [listVersionLoadingId, setListVersionLoadingId] = useState("");
   const [listDetailSource, setListDetailSource] = useState<ListDetailSource>("latest");
@@ -660,6 +675,7 @@ function AdvisoryPageContent() {
   const listDetailRef = useRef<HTMLDivElement | null>(null);
   const refreshSeqRef = useRef(0);
   const detailsSeqRef = useRef(0);
+  const modelShadowSeqRef = useRef(0);
 
   const selectedProgram = useMemo(
     () => programs.find((item) => item.program_id === selectedProgramId) || programs[0],
@@ -726,6 +742,24 @@ function AdvisoryPageContent() {
     setReviewTotalCount(pageData.total_count);
   }
 
+  async function loadModelShadow(programId: string, version: AdvisoryRecommendationListVersion) {
+    const requestSeq = ++modelShadowSeqRef.current;
+    const targetDate = dateContextFromListVersion(version).targetTradeDate || version.trade_date;
+    setModelShadow(null);
+    setModelShadowError(null);
+    setModelShadowLoading(true);
+    try {
+      const shadow = await advisoryApi.modelShadow(programId, targetDate);
+      if (requestSeq !== modelShadowSeqRef.current) return;
+      setModelShadow(shadow);
+    } catch (exc) {
+      if (requestSeq !== modelShadowSeqRef.current) return;
+      setModelShadowError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (requestSeq === modelShadowSeqRef.current) setModelShadowLoading(false);
+    }
+  }
+
   function applyPackageOptions(packageOptions: SelectablePackage[]) {
     setSelectablePackages(packageOptions);
     setPackageRows((rows) => {
@@ -746,6 +780,10 @@ function AdvisoryPageContent() {
     const requestSeq = ++detailsSeqRef.current;
     const stillCurrent = () => requestSeq === detailsSeqRef.current;
     const offset = (Math.max(page, 1) - 1) * pageSize;
+    modelShadowSeqRef.current += 1;
+    setModelShadow(null);
+    setModelShadowError(null);
+    setModelShadowLoading(false);
     const [poolRows, reviewPageData, bindingRows, versionRows] = await Promise.all([
       advisoryApi.activePool(programId),
       advisoryApi.reviews(programId, pageSize, offset),
@@ -765,6 +803,7 @@ function AdvisoryPageContent() {
       setSelectedListVersionId(latestVersion.list_version_id);
       setListDetailSource("latest");
       setListVersionLoadingId(latestVersion.list_version_id);
+      void loadModelShadow(programId, latestVersion);
       advisoryApi.listVersionDetail(latestVersion.list_version_id)
         .then((detail) => {
           if (!stillCurrent()) return;
@@ -782,6 +821,9 @@ function AdvisoryPageContent() {
       setListVersionDetail(null);
       setSelectedListVersionId("");
       setListDetailSource("latest");
+      setModelShadow(null);
+      setModelShadowError(null);
+      setModelShadowLoading(false);
     }
     setReturns([]);
     advisoryApi.returns(programId)
@@ -1186,6 +1228,7 @@ function AdvisoryPageContent() {
       setSelectedListVersionId(detail.list_version.list_version_id);
       setListDetailSource("timeline");
       setReviewResult(null);
+      void loadModelShadow(detail.list_version.program_id, detail.list_version);
       window.setTimeout(() => listDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -1794,6 +1837,61 @@ function AdvisoryPageContent() {
             <span className="pv2-muted"> 点击“预览初始列表”可先检查候选，点击“生成初始列表”会发布第一版推荐列表；全程自动生成候选，无需填写内部编号。</span>
           </div>
         )}
+        <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-model-shadow">
+          <div className="pv2-card-head">
+            <div>
+              <div className="pv2-kicker">模型影子排序</div>
+              <h3>实验 Top5</h3>
+            </div>
+            <div className="pv2-row-actions">
+              <span className={`pv2-badge ${modelShadow?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                {modelShadowLoading ? "LOADING" : modelShadow?.status || "MODEL_UNAVAILABLE"}
+              </span>
+              <span className="pv2-badge pv2-badge-neutral">{modelShadow?.calibration_state || "UNCALIBRATED"}</span>
+            </div>
+          </div>
+          {modelShadowLoading ? <div className="pv2-muted" data-testid="advisory-model-shadow-loading">正在读取实时特征并执行影子推理...</div> : null}
+          {modelShadowError ? (
+            <div className="pv2-error" data-testid="advisory-model-shadow-request-error">{modelShadowError}</div>
+          ) : null}
+          {!modelShadowLoading && modelShadow?.status === "MODEL_UNAVAILABLE" ? (
+            <div data-testid="advisory-model-shadow-unavailable">
+              <strong>{modelShadow.reason_code || "MODEL_UNAVAILABLE"}</strong>
+              <span className="pv2-muted"> {modelShadow.message || "模型影子结果不可用"}</span>
+            </div>
+          ) : null}
+          {modelShadow?.status === "EXPERIMENTAL_SHADOW" ? (
+            <>
+              <div className="pv2-muted" data-testid="advisory-model-shadow-context">
+                数据截止 {modelShadow.decision_as_of_trade_date || "-"}；目标日 {modelShadow.target_trade_date}；候选 {modelShadow.candidate_count}；Top5 {modelShadow.shortlist_count}；HMM 行业不可用 {modelShadow.hmm_unavailable.length}
+              </div>
+              <div className="pv2-row-actions" style={{ marginTop: 8 }} data-testid="advisory-model-shadow-baselines">
+                <span>模型 5日超额 {fmtPct(shadowBaselineMetric(modelShadow, "model_top5"))}</span>
+                <span>原 Top5 {fmtPct(shadowBaselineMetric(modelShadow, "selection_rank_top5"))}</span>
+                <span>随机 Top5 {fmtPct(shadowBaselineMetric(modelShadow, "random_top5"))}</span>
+              </div>
+              <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+                <table className="pv2-table" data-testid="advisory-model-shadow-table">
+                  <thead><tr><th>股票</th><th>原排名</th><th>模型排名</th><th>模型分</th><th>Top5</th><th>主要贡献</th></tr></thead>
+                  <tbody>
+                    {modelShadow.candidates.map((candidate) => (
+                      <tr key={candidate.symbol} data-testid="advisory-model-shadow-row">
+                        <td>{candidate.symbol}</td>
+                        <td>{candidate.selection_effective_rank} / {fmtNumber(candidate.selection_score, 4)}</td>
+                        <td>{candidate.advisory_model_rank}</td>
+                        <td>{fmtNumber(candidate.advisory_model_score, 6)}</td>
+                        <td>{candidate.is_top5 ? "Y" : "-"}</td>
+                        <td className="pv2-mono">
+                          {candidate.top_feature_contributions.map((item) => `${item.feature} ${item.contribution >= 0 ? "+" : ""}${item.contribution.toFixed(4)}`).join("; ")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : null}
+        </div>
         <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
           <table className="pv2-table" data-testid="advisory-list-items-table">
             <thead><tr><th>股票</th><th>状态</th><th>动作</th><th>排名/评分</th><th>变化</th><th>操作建议</th><th>生效日</th><th>原因</th></tr></thead>

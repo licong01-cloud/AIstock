@@ -5,8 +5,10 @@ import json
 import os
 import shutil
 import tempfile
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from backend.services.advisory_model_first.contracts import FrozenAdvisoryTrainingRequestV1
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
@@ -14,6 +16,211 @@ from backend.services.advisory_model_first.feature_schema_v1 import FEATURE_SCHE
 from backend.services.advisory_model_first.reranker_training import RerankerTrainingResult
 from backend.services.advisory_model_first.time_split import PurgedDateSplit
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
+
+
+_RUNTIME_REQUIRED_BUNDLE_FILES = {
+    "model.txt",
+    "feature_schema.json",
+    "fresh_hmm_models.json",
+    "baseline_comparison.json",
+}
+
+
+@dataclass(frozen=True)
+class LoadedAdvisoryModelBundle:
+    bundle_id: str
+    bundle_path: Path
+    manifest: dict[str, Any]
+    feature_schema: dict[str, Any]
+    hmm_models: dict[str, Any]
+    baselines: dict[str, Any]
+    booster: Any
+
+
+def shadow_binding_path(
+    model_root: str | Path,
+    *,
+    package_id: str,
+    manifest_sha256: str,
+    style_profile_hash: str,
+) -> Path:
+    return (
+        Path(model_root).resolve()
+        / "shadow_bindings"
+        / package_id
+        / manifest_sha256
+        / f"{style_profile_hash}.json"
+    )
+
+
+def load_exact_shadow_bundle(
+    *,
+    model_root: str | Path,
+    package_id: str,
+    manifest_sha256: str,
+    style_profile_hash: str,
+    booster_factory: Callable[[Path], Any] | None = None,
+) -> LoadedAdvisoryModelBundle:
+    root = Path(model_root).resolve()
+    binding_path = shadow_binding_path(
+        root,
+        package_id=package_id,
+        manifest_sha256=manifest_sha256,
+        style_profile_hash=style_profile_hash,
+    )
+    binding = _read_json(binding_path, reason="exact shadow binding is not available")
+    required_binding = {
+        "schema_version",
+        "package_id",
+        "manifest_sha256",
+        "style_profile_id",
+        "style_profile_hash",
+        "selection_runtime_semantics_hash",
+        "feature_schema_version",
+        "feature_schema_hash",
+        "bundle_id",
+        "bundle_manifest_sha256",
+        "activated_at",
+        "binding_sha256",
+    }
+    missing_binding = sorted(required_binding - set(binding))
+    if missing_binding:
+        raise AdvisoryModelFirstError(
+            "exact shadow binding is incomplete",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"missing_fields": missing_binding},
+        )
+    binding_without_hash = dict(binding)
+    actual_binding_sha256 = str(binding_without_hash.pop("binding_sha256"))
+    expected_binding_sha256 = canonical_json_sha256(binding_without_hash)
+    if actual_binding_sha256 != expected_binding_sha256:
+        raise AdvisoryModelFirstError(
+            "exact shadow binding content hash is invalid",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+    if (
+        binding["schema_version"] != "advisory_shadow_binding_v1"
+        or binding["package_id"] != package_id
+        or binding["manifest_sha256"] != manifest_sha256
+        or binding["style_profile_hash"] != style_profile_hash
+    ):
+        raise AdvisoryModelFirstError(
+            "exact shadow binding identity differs from the requested package",
+            reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+        )
+    bundle_id = str(binding["bundle_id"])
+    if not _is_sha256(bundle_id) or not _is_sha256(str(binding["bundle_manifest_sha256"])):
+        raise AdvisoryModelFirstError(
+            "exact shadow binding contains an invalid bundle identity",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+    bundle_path = root / "bundles" / bundle_id
+    manifest, feature_schema, hmm_models, baselines = _read_and_validate_bundle(
+        bundle_path,
+        expected_bundle_id=bundle_id,
+        expected_manifest_file_sha256=str(binding["bundle_manifest_sha256"]),
+    )
+    expected_identity = {
+        "package_id": package_id,
+        "manifest_sha256": manifest_sha256,
+        "style_profile_hash": style_profile_hash,
+    }
+    actual_identity = {key: manifest.get(key) for key in expected_identity}
+    if actual_identity != expected_identity:
+        raise AdvisoryModelFirstError(
+            "shadow bundle identity differs from the exact binding path",
+            reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            context={"actual_identity": actual_identity},
+        )
+    binding_manifest_fields = {
+        key: binding.get(key)
+        for key in (
+            "style_profile_id",
+            "selection_runtime_semantics_hash",
+            "feature_schema_version",
+            "feature_schema_hash",
+        )
+    }
+    manifest_fields = {key: manifest.get(key) for key in binding_manifest_fields}
+    if binding_manifest_fields != manifest_fields:
+        raise AdvisoryModelFirstError(
+            "exact shadow binding declarations differ from the bundle manifest",
+            reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            context={"binding_fields": binding_manifest_fields, "manifest_fields": manifest_fields},
+        )
+    factory = booster_factory or _load_lightgbm_booster
+    try:
+        booster = factory(bundle_path / "model.txt")
+    except AdvisoryModelFirstError:
+        raise
+    except Exception as exc:
+        raise AdvisoryModelFirstError(
+            "LightGBM model cannot be loaded from the exact shadow bundle",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"bundle_id": bundle_id, "error_type": type(exc).__name__},
+        ) from exc
+    return LoadedAdvisoryModelBundle(
+        bundle_id=bundle_id,
+        bundle_path=bundle_path,
+        manifest=manifest,
+        feature_schema=feature_schema,
+        hmm_models=hmm_models,
+        baselines=baselines,
+        booster=booster,
+    )
+
+
+def publish_shadow_binding(
+    *,
+    model_root: str | Path,
+    bundle_id: str,
+    activated_at: str | None = None,
+) -> Path:
+    """Atomically publish one explicit bundle; callers must opt into this action."""
+
+    root = Path(model_root).resolve()
+    bundle_path = root / "bundles" / bundle_id
+    manifest_path = bundle_path / "manifest.json"
+    manifest, _feature_schema, _hmm_models, _baselines = _read_and_validate_bundle(
+        bundle_path,
+        expected_bundle_id=bundle_id,
+        expected_manifest_file_sha256=_sha256_file(manifest_path) if manifest_path.is_file() else None,
+    )
+    payload = {
+        "schema_version": "advisory_shadow_binding_v1",
+        "package_id": manifest["package_id"],
+        "manifest_sha256": manifest["manifest_sha256"],
+        "style_profile_id": manifest["style_profile_id"],
+        "style_profile_hash": manifest["style_profile_hash"],
+        "selection_runtime_semantics_hash": manifest["selection_runtime_semantics_hash"],
+        "feature_schema_version": manifest["feature_schema_version"],
+        "feature_schema_hash": manifest["feature_schema_hash"],
+        "bundle_id": bundle_id,
+        "bundle_manifest_sha256": _sha256_file(manifest_path),
+        "activated_at": activated_at or datetime.now(UTC).isoformat(),
+    }
+    payload["binding_sha256"] = canonical_json_sha256(payload)
+    target = shadow_binding_path(
+        root,
+        package_id=manifest["package_id"],
+        manifest_sha256=manifest["manifest_sha256"],
+        style_profile_hash=manifest["style_profile_hash"],
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        _write_json(temporary, payload)
+        if _read_json(temporary, reason="shadow binding readback failed") != payload:
+            raise AdvisoryModelFirstError(
+                "shadow binding readback differs from the published payload",
+                reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            )
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
 
 
 def publish_model_bundle(
@@ -172,9 +379,163 @@ def _write_json(path: Path, payload: Any) -> None:
     )
 
 
+def _read_and_validate_bundle(
+    bundle_path: Path,
+    *,
+    expected_bundle_id: str,
+    expected_manifest_file_sha256: str | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    manifest_path = bundle_path / "manifest.json"
+    if expected_manifest_file_sha256 is None or not manifest_path.is_file():
+        raise AdvisoryModelFirstError(
+            "exact model bundle manifest is missing",
+            reason_code="ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+            context={"bundle_id": expected_bundle_id},
+        )
+    if _sha256_file(manifest_path) != expected_manifest_file_sha256:
+        raise AdvisoryModelFirstError(
+            "exact model bundle manifest hash differs from its binding",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"bundle_id": expected_bundle_id},
+        )
+    manifest = _read_json(manifest_path, reason="model bundle manifest cannot be read")
+    if manifest.get("schema_version") != "advisory_model_bundle_v1":
+        raise AdvisoryModelFirstError(
+            "model bundle manifest schema is invalid",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"schema_version": manifest.get("schema_version")},
+        )
+    actual_bundle_id = canonical_json_sha256(
+        {key: value for key, value in manifest.items() if key != "bundle_id"}
+    )
+    if manifest.get("bundle_id") != expected_bundle_id or actual_bundle_id != expected_bundle_id:
+        raise AdvisoryModelFirstError(
+            "model bundle content identity is invalid",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"expected_bundle_id": expected_bundle_id, "actual_bundle_id": actual_bundle_id},
+        )
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files:
+        raise AdvisoryModelFirstError(
+            "model bundle file manifest is empty",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+    missing_runtime_files = sorted(_RUNTIME_REQUIRED_BUNDLE_FILES - set(files))
+    if missing_runtime_files:
+        raise AdvisoryModelFirstError(
+            "model bundle manifest omits a runtime-consumed file",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"missing_files": missing_runtime_files},
+        )
+    for filename, descriptor in files.items():
+        if not isinstance(descriptor, dict) or not {"sha256", "size_bytes"}.issubset(descriptor):
+            raise AdvisoryModelFirstError(
+                "model bundle file descriptor is invalid",
+                reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+                context={"filename": filename},
+            )
+        path = _bundle_member_path(bundle_path, str(filename))
+        if (
+            not path.is_file()
+            or path.stat().st_size != int(descriptor["size_bytes"])
+            or _sha256_file(path) != str(descriptor["sha256"])
+        ):
+            raise AdvisoryModelFirstError(
+                "model bundle file is missing or corrupt",
+                reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+                context={"filename": filename},
+            )
+    feature_schema = _read_json(bundle_path / "feature_schema.json", reason="feature schema cannot be read")
+    schema_identity = {key: feature_schema.get(key) for key in FEATURE_SCHEMA_PAYLOAD}
+    if (
+        manifest.get("feature_schema_hash") != FEATURE_SCHEMA_HASH
+        or feature_schema.get("feature_schema_hash") != FEATURE_SCHEMA_HASH
+        or canonical_json_sha256(schema_identity) != FEATURE_SCHEMA_HASH
+    ):
+        raise AdvisoryModelFirstError(
+            "model bundle feature schema differs from the runtime schema",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+    trained_features = tuple(feature_schema.get("trained_feature_names") or ())
+    if trained_features != tuple(FEATURE_SCHEMA_PAYLOAD["model_feature_columns"]):
+        raise AdvisoryModelFirstError(
+            "model bundle trained feature order is invalid",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+        )
+    hmm_models = _read_json(bundle_path / "fresh_hmm_models.json", reason="fresh HMM bundle cannot be read")
+    baselines = _read_json(bundle_path / "baseline_comparison.json", reason="baseline report cannot be read")
+    return manifest, feature_schema, hmm_models, baselines
+
+
+def _read_json(path: Path, *, reason: str) -> dict[str, Any]:
+    if not path.is_file():
+        reason_code = (
+            "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE"
+            if "binding" in reason or "available" in reason
+            else "ADVISORY_MODEL_BUNDLE_INVALID"
+        )
+        raise AdvisoryModelFirstError(
+            reason,
+            reason_code=reason_code,
+            context={"path": str(path)},
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AdvisoryModelFirstError(
+            reason,
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"path": str(path), "error_type": type(exc).__name__},
+        ) from exc
+    if not isinstance(payload, dict):
+        raise AdvisoryModelFirstError(
+            reason,
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"path": str(path), "payload_type": type(payload).__name__},
+        )
+    return payload
+
+
+def _load_lightgbm_booster(path: Path) -> Any:
+    try:
+        import lightgbm as lgb
+    except Exception as exc:
+        raise AdvisoryModelFirstError(
+            "LightGBM is unavailable in the inference environment",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    return lgb.Booster(model_file=str(path))
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _bundle_member_path(bundle_path: Path, filename: str) -> Path:
+    root = bundle_path.resolve()
+    relative = Path(filename)
+    if relative.is_absolute() or not filename or relative.name != filename:
+        raise AdvisoryModelFirstError(
+            "model bundle file name escapes the bundle root",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"filename": filename},
+        )
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise AdvisoryModelFirstError(
+            "model bundle file path escapes the bundle root",
+            reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
+            context={"filename": filename},
+        ) from exc
+    return path

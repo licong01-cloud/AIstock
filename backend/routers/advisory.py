@@ -29,6 +29,7 @@ from backend.services.advisory_program import (
     program_to_dict,
     review_result_to_dict,
 )
+from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
 from backend.services.advisory_historical_range.api_models import (
     HistoricalRangeBuildBridgeRequest,
@@ -151,6 +152,10 @@ class AdvisoryQualityReportRequest(BaseModel):
 
 def get_advisory_program_service() -> AdvisoryProgramService:
     return AdvisoryProgramService()
+
+
+def get_advisory_model_shadow_service() -> AdvisoryModelShadowService:
+    return AdvisoryModelShadowService()
 
 
 def get_historical_research_runner() -> HistoricalAdvisoryResearchRunner:
@@ -789,6 +794,15 @@ def list_versions(
         return {"ok": True, "list_versions": service.recommendation_list_versions(program_id, limit=limit, offset=offset)}
     except TradingCoreError as exc:
         _raise_http(exc)
+
+
+@router.get("/programs/{program_id}/model-shadow")
+def model_shadow(
+    program_id: str,
+    target_trade_date: date = Query(...),
+    service: AdvisoryModelShadowService = Depends(get_advisory_model_shadow_service),
+) -> dict[str, Any]:
+    return {"ok": True, **service.model_shadow(program_id=program_id, target_trade_date=target_trade_date)}
 
 
 @router.get("/list-versions/{list_version_id}")
