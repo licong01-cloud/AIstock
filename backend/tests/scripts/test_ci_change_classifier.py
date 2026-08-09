@@ -417,6 +417,19 @@ def test_validation_ui_target_contract_uses_catalog_gate_only(tmp_path: Path) ->
     assert payload["unmapped_code_files"] == []
 
 
+def test_pg_pool_source_and_regression_select_shared_platform_backend_session(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/db/pg_pool.py", "backend/tests/test_pg_pool_audit.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["platform_api_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_path: Path) -> None:
     source = Path("scripts/ci_change_classifier.py").read_text(encoding="utf-8")
     payload = classifier.classify_changed_files(

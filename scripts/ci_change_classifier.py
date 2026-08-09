@@ -191,6 +191,8 @@ PROMPT_EVALUATION_FILES = {
     "scripts/llm_provider_adapter.py",
 }
 DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
+    "backend/db/pg_pool.py": ("platform_api_backend",),
+    "backend/tests/test_pg_pool_audit.py": ("platform_api_backend",),
     "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
 }
 FRONTEND_PATH_PREFIXES = ("frontend/src/", "frontend/tests/", "frontend/e2e/")
