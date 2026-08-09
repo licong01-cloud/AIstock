@@ -2,17 +2,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
 
-from backend.services.advisory_model_first.contracts import FrozenAdvisoryTrainingRequestV1
-from backend.services.advisory_model_first.outcome_contracts import (
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from backend.services.advisory_model_first.contracts import (  # noqa: E402
+    FrozenAdvisoryTrainingRequestV1,
+)
+from backend.services.advisory_model_first.outcome_contracts import (  # noqa: E402
     OutcomeInputArtifactV1,
     build_frozen_outcome_training_request,
 )
-from backend.services.advisory_model_first.prediction_source import sha256_file
+from backend.services.advisory_model_first.prediction_source import sha256_file  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,7 +103,7 @@ def _artifact(path: Path) -> OutcomeInputArtifactV1:
 
 def _wsl_path(path: Path) -> str:
     return subprocess.run(
-        ["wsl", "wslpath", "-u", str(path)],
+        ["wsl", "bash", "-lc", f"wslpath -u {shlex.quote(str(path))}"],
         check=True,
         capture_output=True,
         text=True,

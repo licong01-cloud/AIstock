@@ -62,6 +62,8 @@ def train_outcome_models(
     metrics: dict[str, Any] = {"heads": {}}
     histories: dict[str, Any] = {}
     test_rows = merged[merged["split"] == "test"].copy()
+    all_test_mask = merged["split"] == "test"
+    all_test_positions = all_test_mask[all_test_mask].index
 
     for horizon in OUTCOME_HORIZONS:
         eligible = merged[f"modelable_{horizon}"].astype(bool)
@@ -83,9 +85,11 @@ def train_outcome_models(
                 alpha=quantile,
                 head=name,
             )
-            predictions = _predict_finite(model, matrix.loc[test_mask], head=name)
-            _require_probabilities(predictions, head=name)
-            raw_quantile_predictions[quantile] = predictions
+            all_predictions = _predict_finite(model, matrix.loc[all_test_mask], head=name)
+            predictions = pd.Series(all_predictions, index=all_test_positions).loc[
+                test_mask[test_mask].index
+            ].to_numpy()
+            raw_quantile_predictions[quantile] = all_predictions
             models[name] = model
             histories[name] = history
             metrics["heads"][name] = {
@@ -102,13 +106,19 @@ def train_outcome_models(
         quantile_stack = np.column_stack([raw_quantile_predictions[value] for value in OUTCOME_QUANTILES])
         crossing_count = int(((quantile_stack[:, 0] > quantile_stack[:, 1]) | (quantile_stack[:, 1] > quantile_stack[:, 2])).sum())
         monotonic = np.sort(quantile_stack, axis=1)
-        test_positions = test_mask[test_mask].index
+        test_positions = all_test_positions
         for position, quantile in enumerate(OUTCOME_QUANTILES):
             test_rows.loc[test_positions, f"excess_return_q{int(quantile * 100):02d}_{horizon}"] = monotonic[:, position]
         actual = pd.to_numeric(merged.loc[test_mask, f"excess_return_{horizon}"], errors="raise").to_numpy()
+        eligible_locations = np.flatnonzero(test_mask.loc[all_test_positions].to_numpy())
         metrics[f"excess_return_h{horizon}"] = {
             "quantile_crossing_count": crossing_count,
-            "q10_q90_empirical_coverage": float(((actual >= monotonic[:, 0]) & (actual <= monotonic[:, 2])).mean()),
+            "q10_q90_empirical_coverage": float(
+                (
+                    (actual >= monotonic[eligible_locations, 0])
+                    & (actual <= monotonic[eligible_locations, 2])
+                ).mean()
+            ),
         }
 
         for target_prefix, output_prefix in (
@@ -127,9 +137,13 @@ def train_outcome_models(
                 seed=seed,
                 head=name,
             )
-            predictions = _predict_finite(model, matrix.loc[test_mask], head=name)
+            all_predictions = _predict_finite(model, matrix.loc[all_test_mask], head=name)
+            _require_probabilities(all_predictions, head=name)
+            predictions = pd.Series(all_predictions, index=all_test_positions).loc[
+                test_mask[test_mask].index
+            ].to_numpy()
             actual_binary = target.loc[test_mask].astype(int).to_numpy()
-            test_rows.loc[test_positions, f"{output_prefix}_{horizon}"] = predictions
+            test_rows.loc[test_positions, f"{output_prefix}_{horizon}"] = all_predictions
             models[name] = model
             histories[name] = history
             metrics["heads"][name] = {
@@ -156,14 +170,18 @@ def train_outcome_models(
                     alpha=quantile,
                     head=name,
                 )
-                raw = _predict_finite(model, matrix.loc[test_mask], head=name)
+                raw = _predict_finite(model, matrix.loc[all_test_mask], head=name)
                 clipped = np.clip(raw, 0.0, None)
                 raw_path_predictions[quantile] = clipped
                 models[name] = model
                 histories[name] = history
                 metrics["heads"][name] = {
                     "pinball_loss": float(
-                        mean_pinball_loss(target.loc[test_mask], clipped, alpha=quantile)
+                        mean_pinball_loss(
+                            target.loc[test_mask],
+                            clipped[eligible_locations],
+                            alpha=quantile,
+                        )
                     ),
                     "negative_prediction_count_before_clip": int((raw < 0).sum()),
                     "row_count": int(test_mask.sum()),
@@ -205,9 +223,9 @@ def train_outcome_models(
         seed=seed,
         head="holding_bucket",
     )
-    probabilities = np.asarray(holding_model.predict(matrix.loc[holding_test]), dtype=float)
+    probabilities = np.asarray(holding_model.predict(matrix.loc[all_test_mask]), dtype=float)
     if (
-        probabilities.shape != (int(holding_test.sum()), len(OUTCOME_HORIZONS))
+        probabilities.shape != (int(all_test_mask.sum()), len(OUTCOME_HORIZONS))
         or not np.isfinite(probabilities).all()
         or (probabilities < 0.0).any()
         or (probabilities > 1.0).any()
@@ -218,7 +236,7 @@ def train_outcome_models(
             reason_code="ADVISORY_OUTCOME_TRAINING_FAILED",
             context={"shape": list(probabilities.shape)},
         )
-    holding_positions = holding_test[holding_test].index
+    holding_positions = all_test_positions
     for class_index, horizon in enumerate(OUTCOME_HORIZONS):
         test_rows.loc[holding_positions, f"holding_probability_{horizon}"] = probabilities[:, class_index]
     modes = np.asarray(OUTCOME_HORIZONS)[probabilities.argmax(axis=1)]
@@ -226,15 +244,26 @@ def train_outcome_models(
     test_rows.loc[holding_positions, "holding_mode_days"] = modes
     test_rows.loc[holding_positions, "holding_range_low_days"] = lows
     test_rows.loc[holding_positions, "holding_range_high_days"] = highs
+    holding_locations = np.flatnonzero(holding_test.loc[all_test_positions].to_numpy())
+    eligible_probabilities = probabilities[holding_locations]
+    eligible_modes = modes[holding_locations]
+    eligible_lows = lows[holding_locations]
+    eligible_highs = highs[holding_locations]
     actual_classes = holding_target.loc[holding_test].astype(int).to_numpy()
     actual_days = np.asarray(OUTCOME_HORIZONS)[actual_classes]
     models["holding_bucket"] = holding_model
     histories["holding_bucket"] = holding_history
     metrics["heads"]["holding_bucket"] = {
-        "multiclass_logloss": float(log_loss(actual_classes, probabilities, labels=list(range(5)))),
-        "accuracy": float(accuracy_score(actual_classes, probabilities.argmax(axis=1))),
-        "bucket_day_mae": float(np.mean(np.abs(actual_days - modes))),
-        "range_coverage": float(((actual_days >= lows) & (actual_days <= highs)).mean()),
+        "multiclass_logloss": float(
+            log_loss(actual_classes, eligible_probabilities, labels=list(range(5)))
+        ),
+        "accuracy": float(
+            accuracy_score(actual_classes, eligible_probabilities.argmax(axis=1))
+        ),
+        "bucket_day_mae": float(np.mean(np.abs(actual_days - eligible_modes))),
+        "range_coverage": float(
+            ((actual_days >= eligible_lows) & (actual_days <= eligible_highs)).mean()
+        ),
         "row_count": int(holding_test.sum()),
         "best_iteration": int(holding_model.best_iteration),
     }
@@ -513,9 +542,7 @@ def _group_summaries(
             reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
             context={"error_type": type(exc).__name__},
         ) from exc
-    if summary_rows["advisory_model_rank"].isna().any() or summary_rows[
-        [f"excess_return_{horizon}" for horizon in OUTCOME_HORIZONS]
-    ].isna().any().any():
+    if summary_rows["advisory_model_rank"].isna().any():
         raise AdvisoryModelFirstError(
             "outcome summary inputs do not cover the complete test candidate set",
             reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
@@ -539,8 +566,10 @@ def _group_summaries(
             )
         by_horizon: dict[str, Any] = {}
         for horizon in OUTCOME_HORIZONS:
+            actual = pd.to_numeric(group[f"excess_return_{horizon}"], errors="coerce").dropna()
             by_horizon[str(horizon)] = {
-                "actual_mean_excess_return": float(group[f"excess_return_{horizon}"].mean()),
+                "actual_modelable_row_count": len(actual),
+                "actual_mean_excess_return": float(actual.mean()) if len(actual) else None,
                 "predicted_mean_excess_q50": float(group[f"excess_return_q50_{horizon}"].mean()),
                 "predicted_mean_positive_probability": float(
                     group[f"positive_probability_{horizon}"].mean()

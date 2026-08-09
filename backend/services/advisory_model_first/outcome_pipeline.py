@@ -7,17 +7,25 @@ import os
 import platform
 import subprocess
 import time
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import numpy as np
 
 from backend.services.advisory_model_first.contracts import FrozenAdvisoryTrainingRequestV1
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
-from backend.services.advisory_model_first.feature_schema_v1 import FEATURE_SCHEMA_HASH, MODEL_FEATURE_COLUMNS
-from backend.services.advisory_model_first.model_bundle import _read_and_validate_bundle
+from backend.services.advisory_model_first.feature_schema_v1 import (
+    CATEGORICAL_FEATURE_COLUMNS,
+    FEATURE_SCHEMA_HASH,
+    MODEL_FEATURE_COLUMNS,
+)
 from backend.services.advisory_model_first.outcome_bundle import publish_outcome_bundle
-from backend.services.advisory_model_first.outcome_contracts import FrozenAdvisoryOutcomeTrainingRequestV1
+from backend.services.advisory_model_first.outcome_contracts import (
+    FrozenAdvisoryOutcomeTrainingRequestV1,
+    canonical_json_sha256,
+)
 from backend.services.advisory_model_first.outcome_labels import (
     apply_outcome_split,
     build_multi_horizon_outcome_labels,
@@ -92,18 +100,11 @@ def run_outcome_training_pipeline(request_path: str | Path) -> dict[str, Any]:
             reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
             context={"parent_bundle_path": str(parent_bundle_path)},
         )
-    try:
-        parent_manifest, feature_schema, _hmm_models, _baselines = _read_and_validate_bundle(
-            parent_bundle_path,
-            expected_bundle_id=request.parent_bundle_id,
-            expected_manifest_file_sha256=request.parent_bundle_manifest_file_sha256,
-        )
-    except AdvisoryModelFirstError as exc:
-        raise AdvisoryModelFirstError(
-            "outcome parent model bundle failed exact readback",
-            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
-            context={"parent_reason_code": exc.reason_code},
-        ) from exc
+    parent_manifest, feature_schema = _read_and_validate_parent_bundle(
+        parent_bundle_path,
+        expected_bundle_id=request.parent_bundle_id,
+        expected_manifest_file_sha256=request.parent_bundle_manifest_file_sha256,
+    )
     parent_files = parent_manifest.get("files") or {}
     parent_test_descriptor = parent_files.get("test_predictions.parquet") or {}
     if (
@@ -153,6 +154,13 @@ def run_outcome_training_pipeline(request_path: str | Path) -> dict[str, Any]:
             "outcome candidate decision range differs from its request",
             reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
         )
+    parent_model_rankings = _complete_parent_model_test_rankings(
+        features=features,
+        test_dates=split.test,
+        parent_bundle_path=parent_bundle_path,
+        parent_feature_schema=feature_schema,
+        frozen_parent_test_predictions=parent_test_predictions,
+    )
     progress.stage(
         "outcome_input_identity",
         started,
@@ -211,7 +219,7 @@ def run_outcome_training_pipeline(request_path: str | Path) -> dict[str, Any]:
     training = train_outcome_models(
         features=features,
         labels=labels,
-        parent_test_predictions=parent_test_predictions,
+        parent_test_predictions=parent_model_rankings,
         seed=request.trainer_seed,
     )
     progress.stage(
@@ -268,6 +276,215 @@ def _read_bound_parquet(descriptor: Any) -> pd.DataFrame:
             context={"path": str(path)},
         )
     return frame
+
+
+def _complete_parent_model_test_rankings(
+    *,
+    features: pd.DataFrame,
+    test_dates: tuple[pd.Timestamp, ...],
+    parent_bundle_path: Path,
+    parent_feature_schema: dict[str, Any],
+    frozen_parent_test_predictions: pd.DataFrame,
+    booster_factory: Any | None = None,
+) -> pd.DataFrame:
+    keys = ["decision_as_of_trade_date", "target_trade_date", "instrument"]
+    test = features.loc[
+        pd.to_datetime(features["decision_as_of_trade_date"]).dt.normalize().isin(test_dates)
+    ].copy()
+    if test.empty or test.duplicated(keys).any():
+        raise AdvisoryModelFirstError(
+            "outcome parent model test feature identity is empty or duplicated",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+        )
+    matrix = test.loc[:, MODEL_FEATURE_COLUMNS].copy()
+    for column in matrix.columns:
+        if column not in CATEGORICAL_FEATURE_COLUMNS:
+            try:
+                matrix[column] = pd.to_numeric(matrix[column], errors="raise")
+            except (TypeError, ValueError) as exc:
+                raise AdvisoryModelFirstError(
+                    "outcome parent model feature contains a non-numeric value",
+                    reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+                    context={"feature": column, "error_type": type(exc).__name__},
+                ) from exc
+    vocabulary = parent_feature_schema.get("categorical_vocabulary") or {}
+    for column in CATEGORICAL_FEATURE_COLUMNS:
+        categories = tuple(int(value) for value in vocabulary.get(column) or ())
+        if not categories:
+            raise AdvisoryModelFirstError(
+                "outcome parent model categorical vocabulary is empty",
+                reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+                context={"feature": column},
+            )
+        numeric = pd.to_numeric(matrix[column], errors="coerce")
+        unseen = numeric.notna() & ~numeric.isin(categories)
+        if unseen.any():
+            matrix.loc[unseen, f"{column}__missing"] = 1
+            numeric = numeric.mask(unseen)
+        matrix[column] = pd.Categorical(numeric, categories=categories)
+    if booster_factory is None:
+        try:
+            import lightgbm as lgb
+        except Exception as exc:
+            raise AdvisoryModelFirstError(
+                "LightGBM is unavailable for exact parent model test scoring",
+                reason_code="ADVISORY_MODEL_TRAINING_REQUIRES_WSL",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+        booster = lgb.Booster(model_file=str(parent_bundle_path / "model.txt"))
+    else:
+        booster = booster_factory(parent_bundle_path / "model.txt")
+    if tuple(booster.feature_name()) != tuple(MODEL_FEATURE_COLUMNS):
+        raise AdvisoryModelFirstError(
+            "outcome parent model feature order differs from the frozen schema",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+        )
+    try:
+        scores = np.asarray(booster.predict(matrix), dtype=float)
+    except Exception as exc:
+        raise AdvisoryModelFirstError(
+            "outcome parent model test scoring failed",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    if scores.shape != (len(test),) or not np.isfinite(scores).all():
+        raise AdvisoryModelFirstError(
+            "outcome parent model returned invalid test scores",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+            context={"shape": list(scores.shape)},
+        )
+    scored = test.loc[:, keys].copy()
+    scored["advisory_model_score"] = scores
+    required_frozen = {*keys, "advisory_model_score"}
+    missing_frozen = sorted(required_frozen - set(frozen_parent_test_predictions.columns))
+    if missing_frozen:
+        raise AdvisoryModelFirstError(
+            "frozen parent test predictions omit model score identity",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+            context={"missing_columns": missing_frozen},
+        )
+    try:
+        comparison = frozen_parent_test_predictions.loc[:, [*keys, "advisory_model_score"]].merge(
+            scored,
+            on=keys,
+            how="left",
+            suffixes=("_frozen", "_replayed"),
+            validate="one_to_one",
+        )
+    except pd.errors.MergeError as exc:
+        raise AdvisoryModelFirstError(
+            "frozen parent model predictions have duplicate candidate identity",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+        ) from exc
+    if (
+        comparison["advisory_model_score_replayed"].isna().any()
+        or not np.allclose(
+            comparison["advisory_model_score_frozen"],
+            comparison["advisory_model_score_replayed"],
+            rtol=0.0,
+            atol=1e-12,
+        )
+    ):
+        raise AdvisoryModelFirstError(
+            "replayed parent model scores differ from the frozen test artifact",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+            context={"frozen_row_count": len(comparison), "replayed_row_count": len(scored)},
+        )
+    scored = scored.sort_values(
+        ["decision_as_of_trade_date", "advisory_model_score", "instrument"],
+        ascending=[True, False, True],
+    )
+    scored["advisory_model_rank"] = (
+        scored.groupby("decision_as_of_trade_date").cumcount().add(1)
+    )
+    return scored.loc[:, [*keys, "advisory_model_rank"]].reset_index(drop=True)
+
+
+def _read_and_validate_parent_bundle(
+    bundle_path: Path,
+    *,
+    expected_bundle_id: str,
+    expected_manifest_file_sha256: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = bundle_path.resolve()
+    manifest_path = root / "manifest.json"
+    if (
+        not manifest_path.is_file()
+        or sha256_file(manifest_path) != expected_manifest_file_sha256
+    ):
+        raise AdvisoryModelFirstError(
+            "outcome parent bundle manifest differs from its frozen identity",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+            context={"parent_bundle_id": expected_bundle_id},
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AdvisoryModelFirstError(
+            "outcome parent bundle manifest cannot be read",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != "advisory_model_bundle_v1"
+        or manifest.get("bundle_id") != expected_bundle_id
+        or canonical_json_sha256(
+            {key: value for key, value in manifest.items() if key != "bundle_id"}
+        )
+        != expected_bundle_id
+    ):
+        raise AdvisoryModelFirstError(
+            "outcome parent bundle canonical identity is invalid",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+            context={"parent_bundle_id": expected_bundle_id},
+        )
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files:
+        raise AdvisoryModelFirstError(
+            "outcome parent bundle file manifest is empty",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+        )
+    for name, descriptor in files.items():
+        relative = Path(str(name))
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise AdvisoryModelFirstError(
+                "outcome parent bundle member escapes its root",
+                reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+                context={"filename": name},
+            ) from exc
+        if (
+            relative.is_absolute()
+            or relative.name != str(name)
+            or not isinstance(descriptor, dict)
+            or not isinstance(descriptor.get("size_bytes"), int)
+            or not isinstance(descriptor.get("sha256"), str)
+            or not path.is_file()
+            or path.stat().st_size != descriptor.get("size_bytes")
+            or sha256_file(path) != descriptor.get("sha256")
+        ):
+            raise AdvisoryModelFirstError(
+                "outcome parent bundle member is missing or corrupt",
+                reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+                context={"filename": name},
+            )
+    try:
+        feature_schema = json.loads((root / "feature_schema.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AdvisoryModelFirstError(
+            "outcome parent feature schema cannot be read",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    if not isinstance(feature_schema, dict):
+        raise AdvisoryModelFirstError(
+            "outcome parent feature schema is not an object",
+            reason_code="ADVISORY_OUTCOME_PARENT_ARTIFACT_MISMATCH",
+        )
+    return manifest, feature_schema
 
 
 def _verify_outcome_training_environment(
@@ -378,7 +595,23 @@ def _peak_rss_bytes() -> int:
 def _write_json(path: Path, value: Any) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
-        json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+        json.dumps(
+            value,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=_json_default,
+        ),
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _json_default(value: Any) -> Any:
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"unsupported outcome JSON value: {type(value).__name__}")

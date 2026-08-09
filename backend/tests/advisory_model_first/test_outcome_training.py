@@ -28,7 +28,7 @@ class _FakeModel:
         if self.head.startswith(("positive_excess", "signal_survival")):
             return np.where(np.arange(len(matrix)) % 2 == 0, 0.65, 0.35)
         if "q10" in self.head:
-            return np.full(len(matrix), 0.03)
+            return np.full(len(matrix), -0.03)
         if "q50" in self.head:
             return np.full(len(matrix), 0.01)
         if "q90" in self.head:
@@ -144,6 +144,34 @@ def test_binary_head_rejects_constant_train_label(monkeypatch) -> None:
             seed=7,
         )
     assert error.value.reason_code == "ADVISORY_OUTCOME_CLASS_VARIATION_MISSING"
+
+
+def test_outcome_training_predicts_unlabeled_test_candidate_but_excludes_it_from_metrics(
+    monkeypatch,
+) -> None:
+    features, labels = _matrix()
+    test_index = labels.index[labels["split"] == "test"][0]
+    labels.loc[test_index, "modelable_5"] = False
+    labels.loc[test_index, "excess_return_5"] = np.nan
+    labels.loc[test_index, "holding_modelable"] = False
+
+    monkeypatch.setattr(
+        outcome_training,
+        "_train_booster",
+        lambda **kwargs: (_FakeModel(str(kwargs["head"])), {}),
+    )
+    result = train_outcome_models(
+        features=features,
+        labels=labels,
+        parent_test_predictions=_parent_test_predictions(features, labels),
+        seed=7,
+    )
+
+    assert len(result.test_predictions) == 160
+    assert result.test_predictions["excess_return_q50_5"].notna().all()
+    assert result.test_predictions["positive_probability_5"].notna().all()
+    assert result.test_predictions["holding_mode_days"].notna().all()
+    assert result.metrics["heads"]["excess_return_h5_q50"]["row_count"] == 159
 
 
 def test_holding_range_uses_20_and_80_percent_distribution_buckets() -> None:
