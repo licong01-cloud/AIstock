@@ -350,6 +350,8 @@ class PostgresRealtimeFeatureSource:
                    limits.up_limit, limits.down_limit
             FROM market.kline_daily_raw AS price
             JOIN market.stock_basic AS stock ON stock.ts_code = price.ts_code
+            JOIN market.sector_data AS eligible
+              ON eligible.trade_date = price.trade_date AND eligible.ts_code = price.ts_code
             LEFT JOIN market.adj_factor AS adj
               ON adj.ts_code = price.ts_code AND adj.trade_date = price.trade_date
             LEFT JOIN market.stk_limit AS limits

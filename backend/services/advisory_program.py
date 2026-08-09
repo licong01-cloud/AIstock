@@ -403,6 +403,7 @@ class AdvisoryProgramRepository(Protocol):
     def get_active_binding_version(self, program_id: str) -> AdvisoryStrategyBindingVersion | None: ...
     def list_binding_versions(self, program_id: str) -> list[AdvisoryStrategyBindingVersion]: ...
     def create_review_run(self, review_run: AdvisoryReviewRun) -> AdvisoryReviewRun: ...
+    def get_review_run(self, review_run_id: str) -> AdvisoryReviewRun: ...
     def latest_acquired_decision_date(self, program_id: str) -> date | None: ...
     def latest_list_version(self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None: ...
     def list_version_for_date(self, program_id: str, trade_date: date, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None: ...
@@ -647,6 +648,15 @@ class InMemoryAdvisoryProgramRepository:
     def create_review_run(self, review_run: AdvisoryReviewRun) -> AdvisoryReviewRun:
         self.review_runs.append(review_run)
         return review_run
+
+    def get_review_run(self, review_run_id: str) -> AdvisoryReviewRun:
+        for row in self.review_runs:
+            if row.review_run_id == review_run_id:
+                return row
+        raise DataUnavailableError(
+            "advisory review run does not exist",
+            context={"review_run_id": review_run_id},
+        )
 
     def latest_acquired_decision_date(self, program_id: str) -> date | None:
         review_dates = [
@@ -1055,6 +1065,21 @@ class AdvisoryProgramPGRepository:
                     _review_run_sql_params(review_run),
                 )
         return review_run
+
+    def get_review_run(self, review_run_id: str) -> AdvisoryReviewRun:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM app.advisory_review_run WHERE review_run_id = %s",
+                    (review_run_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise DataUnavailableError(
+                "advisory review run does not exist",
+                context={"review_run_id": review_run_id},
+            )
+        return _review_run_from_row(row)
 
     def latest_acquired_decision_date(self, program_id: str) -> date | None:
         with self._conn_factory() as conn:
@@ -1797,6 +1822,9 @@ class AdvisoryProgramService:
             "list_version": list_version_to_dict(list_version),
             "items": self._enrich_display_names([list_item_to_dict(row) for row in items]),
         }
+
+    def recommendation_review_run(self, review_run_id: str) -> AdvisoryReviewRun:
+        return self.repository.get_review_run(review_run_id)
 
     def return_history(self, program_id: str) -> list[dict[str, Any]]:
         program = self.repository.get_program(program_id)
@@ -3948,6 +3976,28 @@ def _insert_binding_row(cur: Any, binding: AdvisoryStrategyBindingVersion) -> No
 
 def _review_run_payload(review_run: AdvisoryReviewRun) -> dict[str, Any]:
     return _json_ready(asdict(review_run))
+
+
+def _review_run_from_row(row: Mapping[str, Any]) -> AdvisoryReviewRun:
+    payload = dict(row.get("run_payload_json") or {})
+    source = payload or row
+    selection_run_ids = source.get("selection_run_ids") or []
+    return AdvisoryReviewRun(
+        review_run_id=str(source["review_run_id"]),
+        program_id=str(source["program_id"]),
+        binding_version_id=str(source["binding_version_id"]),
+        trade_date=_parse_date(source["trade_date"]) or row["trade_date"],
+        run_type=str(source["run_type"]),
+        status=str(source["status"]),
+        data_source=str(source["data_source"]),
+        selection_run_id=source.get("selection_run_id"),
+        selection_run_ids=[str(value) for value in selection_run_ids],
+        runtime_config_json=dict(source.get("runtime_config_json") or {}),
+        started_at=_parse_datetime(source.get("started_at")) or row["started_at"],
+        finished_at=_parse_datetime(source.get("finished_at")),
+        error_json=dict(source.get("error_json") or {}) or None,
+        created_by=source.get("created_by"),
+    )
 
 
 def _review_run_sql_params(review_run: AdvisoryReviewRun) -> tuple[Any, ...]:

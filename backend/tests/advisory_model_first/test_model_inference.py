@@ -20,8 +20,11 @@ from backend.services.advisory_model_first.target_binding import (
     PACKAGE_ID,
     PROGRAM_ID,
     RUNTIME_SEMANTICS_HASH,
+    RUNTIME_SEMANTICS_PAYLOAD,
+    STYLE_PROFILE_ID,
 )
 from backend.services.selection_center.models import SelectionRunStatus
+from backend.services.trading_core.errors import DataUnavailableError
 
 
 class _ProgramService:
@@ -49,6 +52,7 @@ class _ProgramService:
         return [
             {
                 "list_version_id": "list-1",
+                "review_run_id": "review-1",
                 "binding_version_id": BINDING_VERSION_ID,
                 "trade_date": "2026-07-21",
                 "target_trade_date": "2026-07-21",
@@ -63,12 +67,29 @@ class _ProgramService:
             "items": [
                 {
                     "evidence_json": {
+                        "source_run_id": "old-selection-run",
+                        "reference_price_trade_date": "2026-07-20",
+                    }
+                },
+                {
+                    "evidence_json": {
                         "source_run_id": "selection-1",
                         "reference_price_trade_date": "2026-07-20",
                     }
-                }
+                },
             ],
         }
+
+    def recommendation_review_run(self, review_run_id: str):
+        assert review_run_id == "review-1"
+        return SimpleNamespace(
+            review_run_id=review_run_id,
+            program_id=PROGRAM_ID,
+            binding_version_id=BINDING_VERSION_ID,
+            trade_date=pd.Timestamp("2026-07-21").date(),
+            selection_run_id="selection-1",
+            selection_run_ids=["selection-1"],
+        )
 
 
 class _SelectionService:
@@ -142,8 +163,8 @@ def _candidate(symbol: str, *, rank: int, score: float):
             "weight": 0.6966591521,
         },
         FUND_LEG_ID: {
-            "raw_score": score / 2,
-            "normalized_score": score / 2,
+            "raw_score": score,
+            "normalized_score": score,
             "leg_rank": rank,
             "weight": 0.3033408479,
         },
@@ -165,6 +186,8 @@ def _bundle() -> LoadedAdvisoryModelBundle:
             "status": "EXPERIMENTAL_SHADOW",
             "calibration_state": "UNCALIBRATED",
             "selection_runtime_semantics_hash": RUNTIME_SEMANTICS_HASH,
+            "selection_runtime_semantics": RUNTIME_SEMANTICS_PAYLOAD,
+            "style_profile_id": STYLE_PROFILE_ID,
             "terminal_weights": {LSTM_LEG_ID: 0.6966591521, FUND_LEG_ID: 0.3033408479},
             "continuation_cutoff": "2026-03-10",
             "request_id": "request-1",
@@ -302,6 +325,97 @@ def test_model_shadow_scores_complete_persisted_candidate_group() -> None:
     assert [item["advisory_model_rank"] for item in result["candidates"]] == [1, 2]
     assert all(item["is_top5"] for item in result["candidates"])
     assert feature_source.calls == 1
+
+
+def test_model_shadow_accepts_legal_shallow_candidate_group() -> None:
+    feature_source = _FeatureSource(_feature_inputs())
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(target_count=20),
+        selection_service=_SelectionService(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "EXPERIMENTAL_SHADOW"
+    assert result["candidate_count"] == 2
+    assert result["shortlist_count"] == 2
+
+
+def test_model_shadow_rejects_parent_score_that_differs_from_frozen_leg_sum() -> None:
+    selection_service = _SelectionService()
+    selection_service.run.aggregate_results[0].score = 0.7
+    feature_source = _FeatureSource(_feature_inputs())
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(),
+        selection_service=selection_service,
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "MODEL_UNAVAILABLE"
+    assert result["reason_code"] == "ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH"
+    assert feature_source.calls == 0
+
+
+def test_model_shadow_exposes_missing_review_run_as_typed_unavailable() -> None:
+    program_service = _ProgramService()
+
+    def missing_review_run(_: str):
+        raise DataUnavailableError("advisory review run does not exist", context={"review_run_id": "review-1"})
+
+    program_service.recommendation_review_run = missing_review_run  # type: ignore[method-assign]
+    feature_source = _FeatureSource(_feature_inputs())
+    service = AdvisoryModelShadowService(
+        program_service=program_service,
+        selection_service=_SelectionService(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "MODEL_UNAVAILABLE"
+    assert result["reason_code"] == "ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE"
+    assert result["message"] == "persisted Advisory or Selection input is unavailable"
+    assert feature_source.calls == 0
+
+
+def test_model_shadow_rejects_non_numeric_terminal_weight_as_typed_mismatch() -> None:
+    bundle = _bundle()
+    bundle.manifest["terminal_weights"] = {LSTM_LEG_ID: "invalid", FUND_LEG_ID: 0.3033408479}
+    feature_source = _FeatureSource(_feature_inputs())
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(),
+        selection_service=_SelectionService(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: bundle,
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "MODEL_UNAVAILABLE"
+    assert result["reason_code"] == "ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH"
+    assert feature_source.calls == 0
 
 
 def test_score_reuses_strict_numeric_contract_and_marks_unseen_sector_missing() -> None:

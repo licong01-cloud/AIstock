@@ -29,11 +29,15 @@ from backend.services.advisory_model_first.target_binding import (
     PACKAGE_ID,
     PROGRAM_ID,
     RUNTIME_SEMANTICS_HASH,
+    RUNTIME_SEMANTICS_PAYLOAD,
+    STYLE_PROFILE_ID,
     STYLE_PROFILE_HASH,
+    TERMINAL_WEIGHTS,
 )
 from backend.services.advisory_program import AdvisoryProgramService
 from backend.services.selection_center.models import SelectionRunStatus
 from backend.services.selection_center.service import SelectionCenterService
+from backend.services.trading_core.errors import DataUnavailableError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -75,6 +79,22 @@ class AdvisoryModelShadowService:
                 target_trade_date=target_trade_date,
                 reason_code=exc.reason_code,
                 message=str(exc),
+            )
+        except DataUnavailableError as exc:
+            LOGGER.warning(
+                "advisory model persisted input unavailable program_id=%s target_trade_date=%s "
+                "source_error_code=%s context=%s elapsed_ms=%d",
+                program_id,
+                target_trade_date.isoformat(),
+                exc.error_code,
+                exc.context,
+                round((time.monotonic() - started) * 1000),
+            )
+            return _unavailable_response(
+                program_id=program_id,
+                target_trade_date=target_trade_date,
+                reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
+                message="persisted Advisory or Selection input is unavailable",
             )
         except Exception:
             LOGGER.exception(
@@ -130,18 +150,33 @@ class AdvisoryModelShadowService:
                 "recommendation list binding differs from the active model binding",
                 reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
             )
-        source_run_ids = {
-            str((item.get("evidence_json") or {}).get("source_run_id") or "").strip()
-            for item in list_items
-        }
-        source_run_ids.discard("")
-        if len(source_run_ids) != 1:
+        review_run_id = str(list_version.get("review_run_id") or "").strip()
+        if not review_run_id:
             raise AdvisoryModelFirstError(
-                "recommendation list does not identify exactly one persisted Selection run",
+                "recommendation list does not identify its persisted Advisory review run",
                 reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
-                context={"source_run_count": len(source_run_ids)},
             )
-        selection_run = self._selection_service.get_run(next(iter(source_run_ids)))
+        review_run = self._program_service.recommendation_review_run(review_run_id)
+        review_selection_run_ids = tuple(
+            str(value).strip() for value in review_run.selection_run_ids if str(value).strip()
+        )
+        if (
+            review_run.program_id != program_id
+            or review_run.binding_version_id != binding["binding_version_id"]
+            or review_run.trade_date != target_trade_date
+        ):
+            raise AdvisoryModelFirstError(
+                "persisted Advisory review run identity differs from the recommendation list",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            )
+        selection_run_id = str(review_run.selection_run_id or "").strip()
+        if not selection_run_id or review_selection_run_ids != (selection_run_id,):
+            raise AdvisoryModelFirstError(
+                "persisted Advisory review does not identify exactly one Selection run",
+                reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
+                context={"selection_run_count": len(review_selection_run_ids)},
+            )
+        selection_run = self._selection_service.get_run(selection_run_id)
         if (
             selection_run.status != SelectionRunStatus.SUCCEEDED
             or selection_run.trade_date != target_trade_date
@@ -152,7 +187,7 @@ class AdvisoryModelShadowService:
                 "persisted Selection run identity differs from the model target",
                 reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
             )
-        decision_date = _resolve_decision_date(list_version=list_version, list_items=list_items, selection_run=selection_run)
+        decision_date = _resolve_decision_date(list_version=list_version, selection_run=selection_run)
         if decision_date >= target_trade_date:
             raise AdvisoryModelFirstError(
                 "persisted Selection decision clock is invalid",
@@ -254,10 +289,14 @@ class AdvisoryModelShadowService:
 
 def _validate_bundle_runtime(bundle: LoadedAdvisoryModelBundle) -> None:
     manifest = bundle.manifest
+    terminal_weights = manifest.get("terminal_weights") or {}
     if (
         manifest.get("status") != "EXPERIMENTAL_SHADOW"
         or manifest.get("calibration_state") != "UNCALIBRATED"
         or manifest.get("selection_runtime_semantics_hash") != RUNTIME_SEMANTICS_HASH
+        or manifest.get("selection_runtime_semantics") != RUNTIME_SEMANTICS_PAYLOAD
+        or manifest.get("style_profile_id") != STYLE_PROFILE_ID
+        or not _matches_terminal_weights(terminal_weights)
         or tuple(bundle.feature_schema.get("trained_feature_names") or ()) != tuple(MODEL_FEATURE_COLUMNS)
     ):
         raise AdvisoryModelFirstError(
@@ -266,21 +305,32 @@ def _validate_bundle_runtime(bundle: LoadedAdvisoryModelBundle) -> None:
         )
 
 
+def _matches_terminal_weights(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != set(TERMINAL_WEIGHTS):
+        return False
+    try:
+        return all(
+            np.isclose(
+                float(value[leg_id]),
+                float(expected_weight),
+                rtol=0.0,
+                atol=1e-10,
+            )
+            for leg_id, expected_weight in TERMINAL_WEIGHTS.items()
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def _resolve_decision_date(
     *,
     list_version: Mapping[str, Any],
-    list_items: list[dict[str, Any]],
     selection_run: Any,
 ) -> date:
     values: set[date] = set()
     explicit = list_version.get("selection_as_of_trade_date")
     if explicit:
         values.add(date.fromisoformat(str(explicit)[:10]))
-    for item in list_items:
-        evidence = item.get("evidence_json") or {}
-        raw = evidence.get("reference_price_trade_date") or evidence.get("selection_entry_price_time")
-        if raw:
-            values.add(date.fromisoformat(str(raw)[:10]))
     for candidate in selection_run.aggregate_results:
         raw = candidate.selection_entry_price_time
         if raw:
@@ -314,13 +364,14 @@ def _candidate_frame(
     expected_ranks = list(range(1, len(selected) + 1))
     actual_ranks = [int(row.rank) for row in selected]
     symbols = [str(row.symbol).upper() for row in selected]
-    if len(selected) != target_count or actual_ranks != expected_ranks or len(set(symbols)) != len(symbols):
+    if not selected or len(selected) > target_count or actual_ranks != expected_ranks or len(set(symbols)) != len(symbols):
         raise AdvisoryModelFirstError(
             "persisted Selection candidate group is incomplete or non-contiguous",
             reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
             context={"expected_count": target_count, "actual_count": len(selected), "actual_ranks": actual_ranks},
         )
     terminal_weights = bundle.manifest.get("terminal_weights") or {}
+    candidate_group_size = len(selected)
     payloads: list[dict[str, Any]] = []
     for row in selected:
         scores = row.component_scores or {}
@@ -347,6 +398,18 @@ def _candidate_frame(
                     context={"symbol": row.symbol, "leg_id": leg_id},
                 )
             legs[leg_id] = leg
+        weighted_score = sum(
+            float(legs[leg_id]["normalized_score"]) * float(terminal_weights[leg_id])
+            for leg_id in (LSTM_LEG_ID, FUND_LEG_ID)
+        )
+        if not np.isfinite(weighted_score) or not np.isclose(
+            float(row.score), weighted_score, rtol=0.0, atol=1e-8
+        ):
+            raise AdvisoryModelFirstError(
+                "persisted Selection score differs from the frozen Alpha-leg combination",
+                reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
+                context={"symbol": row.symbol},
+            )
         payloads.append(
             {
                 "trade_date": pd.Timestamp(decision_date),
@@ -360,7 +423,7 @@ def _candidate_frame(
                 "selection_runtime_semantics_hash": RUNTIME_SEMANTICS_HASH,
                 "selection_source_rank": int(scores.get("raw_rank") or row.rank),
                 "selection_effective_rank": int(row.rank),
-                "candidate_group_size": target_count,
+                "candidate_group_size": candidate_group_size,
                 "combined_score": float(row.score),
                 f"raw__{LSTM_LEG_ID}": float(legs[LSTM_LEG_ID]["raw_score"]),
                 f"norm__{LSTM_LEG_ID}": float(legs[LSTM_LEG_ID]["normalized_score"]),

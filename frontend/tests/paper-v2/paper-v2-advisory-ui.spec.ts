@@ -966,6 +966,75 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   expect(badResponses).toEqual([]);
 });
 
+test("Advisory model unavailability remains isolated from the persisted rule list", async ({ page }) => {
+  const badResponses: string[] = [];
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "MODEL_UNAVAILABLE",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 0,
+        shortlist_count: 0,
+        candidates: [],
+        baselines: {},
+        hmm_unavailable: [],
+        reason_code: "ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
+        message: "model root is not configured",
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+
+  await expect(page.getByTestId("advisory-model-shadow-unavailable")).toContainText(
+    "ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
+  );
+  await expect(page.getByTestId("advisory-list-items-table")).toContainText("000001.SZ");
+  await expect(page.getByTestId("advisory-model-shadow-table")).toHaveCount(0);
+  expect(badResponses).toEqual([]);
+});
+
+test("Advisory model shadow does not create page overflow across approved viewports", async ({ page }) => {
+  const pageErrors: string[] = [];
+  const badResponses: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
+      badResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
+  await mockShellApis(page);
+  await mockAdvisoryApis(page);
+
+  for (const viewport of [
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+    { width: 1440, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/paper-v2/advisory");
+    await expect(page.getByTestId("advisory-model-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+    const pageOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    );
+    expect(pageOverflow, `${viewport.width}x${viewport.height} page overflow`).toBe(false);
+    const bounds = await page.getByTestId("advisory-model-shadow").boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width + 1);
+  }
+  expect(pageErrors).toEqual([]);
+  expect(badResponses).toEqual([]);
+});
+
 test("Advisory review defaults to next target date after current target was published", async ({ page }) => {
   const pageErrors: string[] = [];
   const badResponses: string[] = [];
