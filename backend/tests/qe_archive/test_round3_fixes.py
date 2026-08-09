@@ -11,8 +11,6 @@ FactorValueArchiveHandler and its _apply_data_bounds helper were retired.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
-
 import pytest
 
 from backend.services.qe_archive.handlers.contract import HandlerStatus
@@ -271,7 +269,7 @@ class TestDailySnapshotBenchmarkAndRegimeJoin:
                 )
                 bench, regime = cur.fetchone()
         assert bench is not None, \
-            f"benchmark_csi300 must be populated when market.index_daily has the row"
+            "benchmark_csi300 must be populated when market.index_daily has the row"
         # regime is allowed to be NULL (regime_label table is currently empty)
 
     def test_regime_null_when_regime_label_missing(
