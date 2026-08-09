@@ -3,9 +3,9 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-08-09
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M3A_TRAINED_M3B_NEXT`
+> 当前状态：`MODEL_FIRST_M3B_SOURCE_COMPLETE_RUNTIME_PENDING`
 > 当前用户可见功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`；离线模型里程碑 M0/M1 `2/2`，尚未计入用户可见功能
-> 规划进度：M0/M1 真实训练与 M2 数据库影子推理已完成；M3A 已在 WSL `rdagent-gpu` 基于既有 QE 文件训练 46 个预期收益、概率、MFE/MAE 和持股周期模型，形成 1600 行/80 日零 NaN 的实验 bundle；下一项直接进入 M3B 数据库实时推理、API 和页面接入
+> 规划进度：M0/M1 真实训练、M2 数据库影子推理和 M3A 46-head outcome bundle 已完成；M3B exact loader、同一实时 103 特征矩阵推理、API 子信封和五期限页面已完成源码与本地真实 bundle 验证，待用户确认后执行源码合入、outcome binding 激活、用户重启和 deployed readback
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -64,9 +64,9 @@
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
 | SHORT_REBOUND Top20→Top5 | `EXPERIMENTAL_SHADOW_RUNTIME_VERIFIED` | WSL 真实训练、数据库影子推理、API 和页面源码已贯通；真实 test 质量仍低于主要对照 |
-| 预期收益与持股周期 | `M3A_TRAINED_NOT_USER_VISIBLE` | 真实分位数、概率、MFE/MAE 和周期模型已训练并完成留出集读回；M3B 接入后才形成用户可见功能 |
+| 预期收益与持股周期 | `M3B_SOURCE_COMPLETE_RUNTIME_PENDING` | 真实模型、loader、数据库实时特征复用、API/UI 源码和本地真实 bundle 推理已完成；生产 binding 与重启后 readback 未执行 |
 | 买入/止盈/止损区间 | `NOT_IMPLEMENTED` | 真实模型和价格转换层输出范围 |
-| 荐股页面模型展示 | `NOT_IMPLEMENTED` | 页面读取真实预测，不是 mock、规则冒充或静态示例 |
+| 荐股页面模型展示 | `SOURCE_COMPLETE_RUNTIME_PENDING` | 五期限收益、概率、MFE/MAE 和持股范围页面已通过三视口 Playwright；待合入和用户重启后验证真实 API 数据 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
@@ -384,7 +384,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P1`。
 
-状态：`COMPLETED_M3A_REAL_TRAINING_M3B_NEXT`。详细设计为 `docs/architecture/advisory_model_first_m3_outcome_holding_period_f2_design_20260809.md`；M3A bundle `17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0` 含 46 个真实 LightGBM 模型、1600 行/80 日零 NaN test 预测，训练 108 秒、峰值 RSS 655,581,184 bytes，未激活 binding。下一项直接实施 M3B 数据库推理/API/UI，不插入历史证据或治理任务。
+状态：`M3B_SOURCE_COMPLETE_RUNTIME_PENDING`。详细设计为 `docs/architecture/advisory_model_first_m3_outcome_holding_period_f2_design_20260809.md`；M3A bundle `17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0` 含 46 个真实 LightGBM 模型、1600 行/80 日零 NaN test 预测，训练 108 秒、峰值 RSS 655,581,184 bytes。M3B 已实现 exact outcome binding/loader、复用 M2 同一数据库实时特征矩阵的五期限推理、typed unavailable 隔离、API 子信封和页面；本地真实 bundle 对 20 个候选完成 46-head 推理。未写正式 binding，未合入、未重启、未做 deployed readback。
 
 - 在现有QE文件上训练收益分位数、正收益概率和周期模型。
 - 接入同一Advisory预测和页面。

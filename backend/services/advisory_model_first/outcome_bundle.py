@@ -6,7 +6,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from backend.services.advisory_model_first.feature_schema_v1 import (
     FEATURE_SCHEMA_HASH,
@@ -19,8 +19,10 @@ from backend.services.advisory_model_first.outcome_contracts import (
     canonical_json_sha256,
 )
 from backend.services.advisory_model_first.outcome_split import OutcomeDateSplit
-from backend.services.advisory_model_first.outcome_training import OutcomeTrainingResult
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
+
+if TYPE_CHECKING:
+    from backend.services.advisory_model_first.outcome_training import OutcomeTrainingResult
 
 
 def publish_outcome_bundle(
@@ -185,8 +187,10 @@ def _validate_outcome_bundle(bundle_path: Path, *, expected_bundle_id: str) -> d
         path = _member_path(bundle_path, str(name))
         if (
             not isinstance(descriptor, dict)
+            or not isinstance(descriptor.get("size_bytes"), int)
+            or not isinstance(descriptor.get("sha256"), str)
             or not path.is_file()
-            or path.stat().st_size != int(descriptor.get("size_bytes", -1))
+            or path.stat().st_size != descriptor.get("size_bytes")
             or _sha256_file(path) != descriptor.get("sha256")
         ):
             raise AdvisoryModelFirstError(

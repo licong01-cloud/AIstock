@@ -26,6 +26,17 @@ class _ShadowService:
             "candidates": [],
             "baselines": {},
             "hmm_unavailable": [],
+            "outcome": {
+                "status": "OUTCOME_UNAVAILABLE",
+                "calibration_state": "UNCALIBRATED",
+                "outcome_bundle_id": None,
+                "parent_bundle_id": None,
+                "model_version": None,
+                "horizons": [1, 3, 5, 10, 20],
+                "candidates": [],
+                "reason_code": "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+                "message": "parent model shadow is unavailable",
+            },
             "reason_code": "ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
             "message": "model root is not configured",
         }
@@ -46,3 +57,4 @@ def test_model_shadow_endpoint_returns_typed_readonly_envelope() -> None:
     assert payload["status"] == "MODEL_UNAVAILABLE"
     assert payload["reason_code"] == "ADVISORY_MODEL_ROOT_NOT_CONFIGURED"
     assert payload["target_trade_date"] == "2026-07-21"
+    assert payload["outcome"]["status"] == "OUTCOME_UNAVAILABLE"

@@ -11,6 +11,7 @@ import pandas as pd
 from backend.services.advisory_model_first.feature_schema_v1 import MODEL_FEATURE_COLUMNS
 from backend.services.advisory_model_first.model_bundle import LoadedAdvisoryModelBundle
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService, _score
+from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.realtime_feature_source import (
     PersistedAdvisoryReviewIdentity,
     RealtimeFeatureInputs,
@@ -332,6 +333,138 @@ def test_model_shadow_scores_complete_persisted_candidate_group() -> None:
     assert [item["advisory_model_rank"] for item in result["candidates"]] == [1, 2]
     assert all(item["is_top5"] for item in result["candidates"])
     assert feature_source.calls == 1
+
+
+def test_model_shadow_attaches_outcome_predictions_from_same_feature_matrix() -> None:
+    feature_source = _FeatureSource(_feature_inputs())
+    outcome_loads: list[dict[str, object]] = []
+
+    def outcome_loader(**kwargs):
+        outcome_loads.append(kwargs)
+        return SimpleNamespace(
+            outcome_bundle_id="outcome-1",
+            manifest={"request_id": "advoutreq_runtime", "horizons": [1, 3, 5, 10, 20]},
+        )
+
+    def outcome_scorer(_bundle, features):
+        return [
+            {"symbol": str(symbol), "horizons": [], "holding_period": {}}
+            for symbol in features["instrument"]
+        ]
+
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(),
+        selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+        outcome_bundle_loader=outcome_loader,
+        outcome_scorer=outcome_scorer,
+    )
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "EXPERIMENTAL_SHADOW"
+    assert result["outcome"]["status"] == "EXPERIMENTAL_SHADOW"
+    assert [item["symbol"] for item in result["outcome"]["candidates"]] == [
+        "000002.SZ",
+        "000001.SZ",
+    ]
+    assert outcome_loads[0]["parent_bundle_id"] == "bundle-1"
+    assert feature_source.calls == 1
+
+
+def test_outcome_unavailable_does_not_remove_m2_ranking() -> None:
+    feature_source = _FeatureSource(_feature_inputs())
+
+    def unavailable_loader(**_kwargs):
+        raise AdvisoryModelFirstError(
+            "no outcome binding",
+            reason_code="ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+        )
+
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(),
+        selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+        outcome_bundle_loader=unavailable_loader,
+    )
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["status"] == "EXPERIMENTAL_SHADOW"
+    assert len(result["candidates"]) == 2
+    assert result["outcome"]["status"] == "OUTCOME_UNAVAILABLE"
+    assert result["outcome"]["reason_code"] == "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE"
+
+
+def test_duplicate_outcome_symbol_is_typed_unavailable_without_changing_m2() -> None:
+    feature_source = _FeatureSource(_feature_inputs())
+    outcome_bundle = SimpleNamespace(
+        outcome_bundle_id="outcome-1",
+        manifest={"request_id": "advoutreq_runtime", "horizons": [1, 3, 5, 10, 20]},
+    )
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(),
+        selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+        outcome_bundle_loader=lambda **_: outcome_bundle,
+        outcome_scorer=lambda _bundle, _features: [
+            {"symbol": "000001.SZ"},
+            {"symbol": "000001.SZ"},
+        ],
+    )
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert len(result["candidates"]) == 2
+    assert result["outcome"]["status"] == "OUTCOME_UNAVAILABLE"
+    assert result["outcome"]["reason_code"] == "ADVISORY_OUTCOME_INFERENCE_FAILED"
+
+
+def test_unexpected_outcome_error_is_logged_and_visible_without_changing_m2(caplog) -> None:
+    feature_source = _FeatureSource(_feature_inputs())
+    outcome_bundle = SimpleNamespace(
+        outcome_bundle_id="outcome-1",
+        manifest={"request_id": "advoutreq_runtime", "horizons": [1, 3, 5, 10, 20]},
+    )
+
+    def broken_scorer(_bundle, _features):
+        raise RuntimeError("broken outcome scorer")
+
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(),
+        selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+        outcome_bundle_loader=lambda **_: outcome_bundle,
+        outcome_scorer=broken_scorer,
+    )
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert len(result["candidates"]) == 2
+    assert result["outcome"]["status"] == "OUTCOME_UNAVAILABLE"
+    assert result["outcome"]["reason_code"] == "ADVISORY_OUTCOME_INFERENCE_FAILED"
+    assert result["outcome"]["message"] == "unexpected outcome inference failure: RuntimeError"
+    assert "advisory outcome shadow failed unexpectedly" in caplog.text
 
 
 def test_model_shadow_accepts_legal_shallow_candidate_group() -> None:

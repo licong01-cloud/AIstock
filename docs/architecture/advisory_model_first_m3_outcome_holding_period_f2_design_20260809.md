@@ -3,7 +3,7 @@
 > 日期：2026-08-09
 > Feature tier：F2
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
-> 当前阶段：`M3A_REAL_TRAINING_COMPLETE_M3B_NEXT`
+> 当前阶段：`M3B_SOURCE_COMPLETE_RUNTIME_PENDING`
 > 适用范围：学术研究与历史回测参考，不构成实时投资建议或交易执行
 
 ## 1. Background / 背景
@@ -301,12 +301,12 @@ ADVISORY_OUTCOME_INFERENCE_FAILED
 | F-332 | full test metrics and honest `UNCALIBRATED` status | `backend/tests/advisory_model_first/test_outcome_training.py`; external `metrics.json` in bundle `17ce7ceb...` | verified | none |
 | F-333 | atomic outcome bundle and semantic/hash readback | `backend/tests/advisory_model_first/test_outcome_bundle.py`; bundle `17ce7ceb...` | verified | none |
 | F-334 | WSL `rdagent-gpu`, 108 seconds, peak RSS 655581184 bytes | `backend/tests/advisory_model_first/test_outcome_pipeline.py`; external `outcome_training_receipt.json` for `advoutreq_d16081c54d47b3602c89e3b2` | verified | none |
-| F-335 | M3B planned model inference/API/UI | `backend/tests/advisory_model_first/test_outcome_inference.py`; `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | design_ready | none |
-| F-336 | M3B isolated outcome envelope | `backend/tests/advisory_model_first/test_outcome_inference.py` | design_ready | none |
-| F-337 | Advisory-only changed-file review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `scripts/aistock_module_ownership_scan.py --staged-only` | verified_m3a | none |
-| F-338 | DESIGN-COMPLIANCE-001 review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `nox -s advisory_modeling_backend` | verified_m3a | none |
-| F-339 | no role/approval/admission gate review | `backend/tests/advisory_model_first/test_outcome_boundaries.py` | verified_m3a | none |
-| F-340 | no DDL/DML/dependency/restart/binding activation | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; external receipt `outcome_binding_activated=false` | verified_m3a | none |
+| F-335 | exact outcome loader, same realtime feature matrix, API/UI five-horizon projection | `backend/tests/advisory_model_first/test_outcome_runtime_bundle.py`; `backend/tests/advisory_model_first/test_outcome_inference.py`; `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | verified | none |
+| F-336 | outcome typed unavailable preserves M2 ranking and persisted rule list | `backend/tests/advisory_model_first/test_model_inference.py`; Playwright outcome isolation case | verified | none |
+| F-337 | Advisory-only changed-file review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; ownership scan | verified | none |
+| F-338 | DESIGN-COMPLIANCE-001 review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `nox -s advisory_modeling_backend`; real 46-head smoke | verified | none |
+| F-339 | no role/approval/admission gate review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; source scan | verified | none |
+| F-340 | no DDL/DML/dependency/restart/formal binding activation | `backend/tests/advisory_model_first/test_outcome_runtime_bundle.py`; temporary binding smoke cleaned | verified | none |
 
 ## 18. Rollout / Rollback
 
