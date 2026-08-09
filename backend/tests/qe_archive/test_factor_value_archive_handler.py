@@ -22,8 +22,12 @@ from __future__ import annotations
 
 import importlib
 import sys
+import uuid
+from contextlib import contextmanager
 
+import psycopg2
 import pytest
+from psycopg2 import sql
 
 
 # ---------------------------------------------------------------------------
@@ -128,3 +132,175 @@ def test_generic_archive_handler_contract_still_importable():
     assert ArchiveResult is not None
     assert HandlerStatus is not None
     assert MultiAlphaCombineArchiveHandler is not None
+
+
+def test_dev_postgres_metric_transaction_is_archive_independent_and_snapshot_stable(
+    dev_db_creds,
+    dev_db_available,
+    monkeypatch,
+):
+    """Exercise the real DEV PostgreSQL seam without touching shared DEV facts.
+
+    The metric writer is redirected with ``search_path`` to a disposable schema
+    that clones the authoritative metric table. The qualified archive tables
+    remain the real DEV readback authority, so this proves that a successful
+    metric transaction does not enqueue an archive event or mutate a frozen run
+    snapshot. A NOT NULL failure after the writer's DELETE also proves rollback
+    restores the preceding committed metric generation.
+    """
+    from backend.services.quantevolver import factor_official_evaluation_service as service_module
+    from backend.services.quantevolver.factor_official_evaluation_service import (
+        FactorOfficialEvaluationService,
+    )
+
+    assert dev_db_available is True
+    schema_name = f"bug1001_{uuid.uuid4().hex[:12]}"
+    factor_name = f"BUG1001_DEV_{uuid.uuid4().hex[:12]}"
+
+    def _archive_readback():
+        with psycopg2.connect(**dev_db_creds) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM qe_archive.outbox_event
+                    WHERE event_type = 'factor.recompute.completed'
+                      AND source_system = 'qe_factor_official_evaluation'
+                    """
+                )
+                outbox_count = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT id, run_id, factor_name,
+                           independent_metrics_snapshot::text
+                    FROM qe_archive.run_factor
+                    ORDER BY id DESC
+                    LIMIT 50
+                    """
+                )
+                snapshots = tuple(cur.fetchall())
+        return outbox_count, snapshots
+
+    with psycopg2.connect(**dev_db_creds) as setup_conn:
+        with setup_conn.cursor() as cur:
+            cur.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
+            cur.execute(
+                sql.SQL(
+                    "CREATE TABLE {}.aistock_factor_metrics "
+                    "(LIKE public.aistock_factor_metrics INCLUDING ALL)"
+                ).format(sql.Identifier(schema_name))
+            )
+            # The DEV base table can legitimately lag an unapplied additive
+            # H20 migration.  The disposable schema must nevertheless expose
+            # the exact current production-writer contract; adding these
+            # nullable columns here exercises the real PostgreSQL statement
+            # without mutating shared DEV authority.
+            cur.execute(
+                sql.SQL(
+                    "ALTER TABLE {}.aistock_factor_metrics "
+                    "ADD COLUMN IF NOT EXISTS h20_return_horizon TEXT, "
+                    "ADD COLUMN IF NOT EXISTS h20_ic_mean DOUBLE PRECISION, "
+                    "ADD COLUMN IF NOT EXISTS h20_ic_std DOUBLE PRECISION, "
+                    "ADD COLUMN IF NOT EXISTS h20_rank_ic_mean DOUBLE PRECISION, "
+                    "ADD COLUMN IF NOT EXISTS h20_rank_ic_std DOUBLE PRECISION, "
+                    "ADD COLUMN IF NOT EXISTS h20_icir DOUBLE PRECISION, "
+                    "ADD COLUMN IF NOT EXISTS h20_rank_icir DOUBLE PRECISION, "
+                    "ADD COLUMN IF NOT EXISTS h20_icir_hac DOUBLE PRECISION, "
+                    "ADD COLUMN IF NOT EXISTS h20_rank_icir_hac DOUBLE PRECISION, "
+                    "ADD COLUMN IF NOT EXISTS h20_ic_positive_ratio DOUBLE PRECISION, "
+                    "ADD COLUMN IF NOT EXISTS h20_n_obs INTEGER, "
+                    "ADD COLUMN IF NOT EXISTS h20_hac_lag INTEGER"
+                ).format(sql.Identifier(schema_name))
+            )
+            cur.execute(
+                sql.SQL("CREATE SEQUENCE {}.aistock_factor_metrics_id_seq").format(
+                    sql.Identifier(schema_name)
+                )
+            )
+            cur.execute(
+                sql.SQL(
+                    "ALTER TABLE {}.aistock_factor_metrics ALTER COLUMN id "
+                    "SET DEFAULT nextval(%s::regclass)"
+                ).format(sql.Identifier(schema_name)),
+                (f"{schema_name}.aistock_factor_metrics_id_seq",),
+            )
+
+    @contextmanager
+    def _metric_connection():
+        conn = psycopg2.connect(**dev_db_creds)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("SET search_path TO {}, public").format(
+                        sql.Identifier(schema_name)
+                    )
+                )
+            yield conn
+        finally:
+            conn.close()
+
+    monkeypatch.setattr(service_module, "get_conn", _metric_connection)
+    service = object.__new__(FactorOfficialEvaluationService)
+    metric = {
+        "factor_name": factor_name,
+        "eval_window": "full",
+        "data_start": "2024-01-02",
+        "data_end": "2026-08-07",
+        "ic_mean": 0.01,
+        "rank_ic_mean": 0.02,
+        "icir": 0.3,
+        "rank_icir": 0.4,
+    }
+
+    before_outbox, before_snapshots = _archive_readback()
+    try:
+        result = service._save_metrics(
+            {"calc_batch_id": "bug1001_dev_success", "metrics": [metric]},
+            snapshot_date="2026-08-07",
+            factor_ids={factor_name: 1},
+        )
+        assert result["inserted"] == 1
+
+        with psycopg2.connect(**dev_db_creds) as readback_conn:
+            with readback_conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL(
+                        "SELECT factor_name, calc_engine, data_start::text, data_end::text "
+                        "FROM {}.aistock_factor_metrics"
+                    ).format(sql.Identifier(schema_name))
+                )
+                assert cur.fetchall() == [
+                    (factor_name, "qe_eval_v2", metric["data_start"], metric["data_end"])
+                ]
+
+        invalid_metric = dict(metric)
+        invalid_metric["data_start"] = None
+        with pytest.raises(psycopg2.errors.NotNullViolation):
+            service._save_metrics(
+                {"calc_batch_id": "bug1001_dev_rollback", "metrics": [invalid_metric]},
+                snapshot_date="2026-08-07",
+                factor_ids={factor_name: 1},
+            )
+
+        with psycopg2.connect(**dev_db_creds) as rollback_readback_conn:
+            with rollback_readback_conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("SELECT COUNT(*) FROM {}.aistock_factor_metrics").format(
+                        sql.Identifier(schema_name)
+                    )
+                )
+                assert int(cur.fetchone()[0]) == 1
+
+        after_outbox, after_snapshots = _archive_readback()
+        assert after_outbox == before_outbox
+        assert after_snapshots == before_snapshots
+    finally:
+        with psycopg2.connect(**dev_db_creds) as cleanup_conn:
+            with cleanup_conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema_name))
+                )
+        with psycopg2.connect(**dev_db_creds) as cleanup_readback_conn:
+            with cleanup_readback_conn.cursor() as cur:
+                cur.execute("SELECT to_regnamespace(%s)", (schema_name,))
+                assert cur.fetchone()[0] is None

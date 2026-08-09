@@ -25,6 +25,7 @@ from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
 from ...infra.wsl_qlib_runner import win_to_wsl_path
 from .backtest_base_data_memory_cache import BacktestBaseDataMemoryCache
 from .factor_eligibility_service import FactorEligibilityService
+from .factor_official_evaluation_service import CALC_ENGINE
 from .factor_universe_mask_service import OFFICIAL_FACTOR_UNIVERSE_KEY, FactorUniverseMaskService
 from .factor_value_loader import FactorValueLoader
 from .offline_code_text_factor_executor import FactorExecutionResult
@@ -1283,8 +1284,8 @@ class OfficialFactorBatchComputeService:
                     result_queue.cancel_join_thread()
                 result_queue.close()
                 result_queue.join_thread()
-            except Exception:
-                pass
+            except (OSError, ValueError, AssertionError) as exc:
+                logger.error("factor result queue cleanup failed: error=%s", exc, exc_info=True)
             if worker_frame_dir is not None:
                 shutil.rmtree(worker_frame_dir, ignore_errors=True)
         return results
@@ -1349,7 +1350,13 @@ class OfficialFactorBatchComputeService:
                 if proc.is_alive():
                     proc.kill()
                     proc.join(timeout=5)
-            except Exception:
+            except (OSError, ValueError, AssertionError) as exc:
+                logger.error(
+                    "factor process cleanup failed: pid=%s error=%s",
+                    getattr(proc, "pid", None),
+                    exc,
+                    exc_info=True,
+                )
                 continue
 
     def _terminate_factor_process(self, proc: multiprocessing.Process) -> None:
@@ -1357,11 +1364,17 @@ class OfficialFactorBatchComputeService:
             import signal
 
             os.kill(int(proc.pid), signal.SIGKILL)
-        except Exception:
+        except (OSError, ValueError, AssertionError) as kill_exc:
             try:
                 proc.terminate()
-            except Exception:
-                pass
+            except (OSError, ValueError, AssertionError) as terminate_exc:
+                logger.error(
+                    "factor process termination failed: pid=%s kill_error=%s terminate_error=%s",
+                    getattr(proc, "pid", None),
+                    kill_exc,
+                    terminate_exc,
+                    exc_info=True,
+                )
 
     def _resource_failure_result(
         self,
@@ -1629,10 +1642,12 @@ class OfficialFactorBatchComputeService:
                     """
                     SELECT factor_name, COUNT(DISTINCT eval_window)
                     FROM aistock_factor_metrics
-                    WHERE snapshot_date = %s AND factor_name = ANY(%s)
+                    WHERE snapshot_date = %s
+                      AND factor_name = ANY(%s)
+                      AND calc_engine = %s
                     GROUP BY factor_name
                     """,
-                    (end_date, names),
+                    (end_date, names, CALC_ENGINE),
                 )
                 metric_counts = {str(name): int(count) for name, count in cur.fetchall()}
         missing_metrics = [name for name in names if metric_counts.get(name, 0) < 5]
@@ -2097,8 +2112,15 @@ def _proc_status_mb(pid: int, field: str) -> float:
             parts = line.split()
             if len(parts) >= 2:
                 return round(float(parts[1]) / 1024, 2)
-    except Exception:
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "process status memory readback unavailable: pid=%s field=%s error=%s",
+            pid,
+            field,
+            exc,
+        )
         return 0.0
+    logger.warning("process status memory field missing: pid=%s field=%s", pid, field)
     return 0.0
 
 
@@ -2110,8 +2132,15 @@ def _proc_smaps_rollup_mb(pid: int, field: str) -> float | None:
             parts = line.split()
             if len(parts) >= 2:
                 return round(float(parts[1]) / 1024, 2)
-    except Exception:
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "process smaps memory readback unavailable: pid=%s field=%s error=%s",
+            pid,
+            field,
+            exc,
+        )
         return None
+    logger.warning("process smaps memory field missing: pid=%s field=%s", pid, field)
     return None
 
 
@@ -2120,14 +2149,16 @@ def _available_memory_mb() -> float | None:
         import psutil
 
         return round(psutil.virtual_memory().available / 1024 / 1024, 2)
-    except Exception:
-        pass
+    except (ImportError, OSError) as exc:
+        logger.warning("psutil available-memory readback unavailable: error=%s", exc)
     try:
         for line in Path("/proc/meminfo").read_text(encoding="utf-8", errors="ignore").splitlines():
             if line.startswith("MemAvailable:"):
                 return round(float(line.split()[1]) / 1024, 2)
-    except Exception:
+    except (OSError, ValueError) as exc:
+        logger.warning("procfs available-memory readback unavailable: error=%s", exc)
         return None
+    logger.warning("procfs MemAvailable field missing")
     return None
 
 

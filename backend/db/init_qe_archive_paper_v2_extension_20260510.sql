@@ -1,4 +1,4 @@
--- T12: qe_archive paper_v2_* extension + factor_value DDL
+-- T12: qe_archive paper_v2_* extension + retained legacy factor_value DDL
 -- Per data_warehouse_extension_design_20260510.md §5 + §3.2.3 (commit de26e5a)
 -- Status: DRAFT — awaiting Codex review per D5 Q1.d (drawer 9cd6d6bb...)
 --
@@ -24,13 +24,13 @@
 --                            paper_v2_run_event                       (§5.14)
 --                            paper_v2_config_change_audit             (§5.18)
 --   1 error table         : paper_v2_error                            (§5.12, includes BrokerBackendError per §3.2.2)
---   1 factor value        : factor_value                              (§7.2, partitioned)
+--   1 retained legacy table: factor_value                             (§7.2; BUG-1001 retired runtime capture)
 --
--- Total new tables: 22 (1 + 3 + 9 + 3 + 4 + 1 + 1 = 22)
--- Note on count vs §3.2.1 "20 paper_v2_* + 1 factor_value": this file emits the union of
--- every table enumerated in design §5 plus factor_value. The design §3.2.1 tally appears to
--- omit paper_v2_error from its sub-totals while still requiring its DDL in §5.12. Codex review
--- should reconcile: keep paper_v2_error as fact-style append (current) vs. classify as event.
+-- Physical bootstrap total: 22 (21 active paper_v2 tables + 1 retained legacy table).
+-- The active count matches design section 3.2.1: 21 paper_v2 tables. The
+-- additional factor_value object is retained only for installed-schema
+-- compatibility and historical audit; it is not part of the active runtime
+-- archive surface.
 -- paper_v2_broker_error is NOT created (per §3.2.2 — merged into paper_v2_error.error_class).
 --
 -- Boundaries:
@@ -839,7 +839,10 @@ CREATE INDEX IF NOT EXISTS ix_paper_v2_reset_audit_type
 
 
 -- ============================================================================
--- §7.2  factor_value (PARTITIONED BY RANGE trade_date)
+-- §7.2  factor_value (retained legacy table; runtime capture retired by BUG-1001)
+--
+-- This table remains additive for existing-install compatibility and historical
+-- audit only. No producer, worker handler, or production reader is active.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS qe_archive.factor_value (
@@ -857,12 +860,11 @@ CREATE TABLE IF NOT EXISTS qe_archive.factor_value (
 ) PARTITION BY RANGE (trade_date);
 
 COMMENT ON TABLE qe_archive.factor_value IS
-    '因子值仓库，按 trade_date 月分区。'
-    '自然键 = (factor_name, code_text_hash, trade_date, code)：因子代码不变重复入库无影响；'
-    '因子代码变（hash 变）→ 自动新增一行（不覆盖旧版，保留多版本对比能力）。'
-    '体量预估：500 因子 × 5000 股票 × 8 年 ≈ 50 亿行，~400 GB。'
-    '生产部署用 pg_partman 自动管理分区 + 老分区压缩归档。'
-    '由 factor.recompute.completed 事件触发（factor_pipeline_v2._save_metrics() 完成后 emit）。';
+    'BUG-1001 retained legacy table. Automated factor-value capture, '
+    'factor.recompute.completed producer, and FactorValueArchiveHandler are retired. '
+    'Current metrics are authoritative in aistock_factor_metrics/monthly IC; '
+    'historical run semantics use qe_archive.run_factor.independent_metrics_snapshot. '
+    'No new runtime writer or production reader is active.';
 
 COMMENT ON COLUMN qe_archive.factor_value.factor_name IS
     '因子标识（业务名）。';
@@ -875,15 +877,13 @@ COMMENT ON COLUMN qe_archive.factor_value.code IS
 COMMENT ON COLUMN qe_archive.factor_value.snapshot_date IS
     '因子计算所用的快照基准日（PIT cutoff）。可能与 trade_date 不同（如 PIT 基本面因子）。';
 
--- 月分区示例（2026-05）。生产由 pg_partman 自动管理。
+-- Historical partition layout retained for compatible bootstrap/readback only.
 CREATE TABLE IF NOT EXISTS qe_archive.factor_value_y2026m05
     PARTITION OF qe_archive.factor_value
     FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
 
--- DEFAULT 兜底分区 per Codex review fix round 2 (P1.5):
---   factor_value source data spans 2018+ (per design §7.4 ~50B rows over 8 years);
---   without a DEFAULT partition, any INSERT outside the example month fails.
---   Production rollout will use pg_partman-managed monthly partitions over the full range.
+-- DEFAULT partition retained with the historical physical schema. BUG-1001 does
+-- not authorize new writes, partition management, backfill, or cleanup DML.
 CREATE TABLE IF NOT EXISTS qe_archive.factor_value_default
     PARTITION OF qe_archive.factor_value DEFAULT;
 

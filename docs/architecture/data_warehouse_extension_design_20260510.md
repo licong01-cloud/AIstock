@@ -146,9 +146,9 @@ ETL scope 全 21 张：
 | 20 | config_change_audit | paper_v2_config_change_audit | append | config.changed |
 | 21 | reset_audit | paper_v2_reset_audit | append | run.completed |
 
-### §3.2.1 表数对账（T12 二次修正，21 → 22；per dw-schema T12 实施 commit a86b337 + §5.12 paper_v2_error 独立 DDL）
+### §3.2.1 表数对账（21 张 active paper_v2 表 + 1 张退役遗留表）
 
-**Codex 发现 D5 文中存在 3 个表数描述不一致**："21 runtime tables in scope" / "18 + 1" / 列举 1+3+13+5=22。T11（commit de26e5a）首次修正为 21；T12 实施时发现 §5.12 paper_v2_error 在 §3.2.1 旧表中被遗漏，本节修正为 **22**（21 paper_v2_* + 1 factor_value）。
+T12 物理 bootstrap 历史上创建了 22 张表：21 张 active `paper_v2_*` 表和 1 张 `factor_value`。BUG-1001 后，`factor_value` 只作为已有安装兼容和历史审计的退役遗留表保留，不属于 active runtime archive surface，不得拥有 producer、handler、reader 或新数据写入。
 
 | 类别 | 数量 | 表 |
 |---|---|---|
@@ -159,10 +159,10 @@ ETL scope 全 21 张：
 | 事件表（append-only）| 4 | paper_v2_session_event / paper_v2_run_event / paper_v2_order_event / paper_v2_config_change_audit |
 | 错误表（append-only）| 1 | paper_v2_error（含 broker 异常，per §3.2.2 + §5.12）|
 | **paper_v2_* 总计** | **21** | |
-| factor_value | 1 | factor_value（单独，按月分区）|
-| **qe_archive 新增总计** | **22** | |
+| 退役遗留表 | 1 | factor_value（保留物理 schema；无 producer/handler/reader/new writes）|
+| **物理 bootstrap 总计** | **22** | **active runtime surface = 21** |
 
-注：之前 v1/v2 文中"18+1"是漏算的旧表，T11 修正的 21 漏算了 paper_v2_error（独立类别，非事件、非事实），T12 修正为 22。paper_v2_error standalone 实施依据是 §3.2.2 broker_error 合并政策 + §5.12 完整 DDL + §3.2.3 source-to-archive mapping (errors → paper_v2_error)。本节为权威。
+注：之前 v1/v2 文中"18+1"是漏算的旧表，T11 修正的 21 漏算了 `paper_v2_error`。本节的 22 仅为物理兼容口径，不能再解释为 22 条 active archive 路线；active runtime 只有 21 张 `paper_v2_*` 表。
 
 ### §3.2.2 paper_v2_error 与 broker_error 合并政策（T11 决定）
 
@@ -201,7 +201,7 @@ error_class TEXT  -- 'BrokerBackendError' 子类 / 'StrategyPackageError' / 'Gen
 | config_change_audit | paper_v2_config_change_audit | audit_id append | config.changed | |
 | reset_audit | paper_v2_reset_audit | audit_id append | run.completed | |
 
-**总计**：21 source tables → **20 paper_v2_* archive tables**（errors 合并到 paper_v2_error，dim_paper_v2_portfolio SCD2 一对多）+ **1 factor_value**（来源 single/parquet）= **21 archive tables 新增**。
+**当前 active 映射总计**：21 source tables → 21 张 `paper_v2_*` archive tables。`factor_value` 不属于 source-to-archive 映射；其历史物理表仅兼容保留，不读取 `single/parquet`，不产生新归档事实。
 
 ### §3.3 增量去重策略
 
@@ -1092,7 +1092,7 @@ M2（明天 → 后天）：Codex 协商完成
    - 文档 v2.0 进 main
 
 M3（M2 完成 → 1 周）：双方并行开发
-   - 新开 dw-foundation worktree（含 regime_label + factor_value handler）
+   - 新开 dw-foundation worktree（仅 active paper_v2/regime 工作面；不含 factor_value handler）
    - paper_v2 团队：daemon 直连 PG outbox（路径 A）+ source 端 emit_paper_event 调用
    - Codex 工作面（如承接）：qe_archive 17 张表 DDL + handler 注册
    - 我（战略）：监督 + 集成 review
@@ -1140,7 +1140,7 @@ M5（M4 完成 → 1 周）：联调点 2 + 上线
 
 1. **handler 注册位置**（D5.Q3.a）：(a) qe_archive/handlers/ vs (b) 独立 paper_v2_archive/——等 Codex 表态
 2. **DDL 起草分工**（D5.Q1.d）：Claude Code 战略起草 vs Codex 接手——等 Codex 表态
-3. **因子库 hook 工作面**（D5.Q4.a）：Codex Phase 0-7 vs RDAgent 主线——等 Codex 确认
+3. ~~**因子库 hook 工作面**（D5.Q4.a）~~：**BUG-1001 已关闭该议题**；hook 与 handler 均已退役，不再分配开发工作面
 4. **dw-foundation worktree 启动时机**：D5 Codex 答复后立即建（推荐）vs 等 paper_v2 D2.b 合 main 后建
 
 ---
