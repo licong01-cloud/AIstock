@@ -3,7 +3,7 @@
 > 日期：2026-08-09
 > Feature tier：F2
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
-> 当前阶段：`M3A_REAL_TRAINING_IN_PROGRESS`
+> 当前阶段：`M3A_REAL_TRAINING_COMPLETE_M3B_NEXT`
 > 适用范围：学术研究与历史回测参考，不构成实时投资建议或交易执行
 
 ## 1. Background / 背景
@@ -290,23 +290,23 @@ ADVISORY_OUTCOME_INFERENCE_FAILED
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-323 | blueprint M2 ledger | `backend/tests/advisory_model_first/test_model_inference.py`; deployed `/api/v1/runtime-identity` and model-shadow receipts | verified | none |
-| F-324 | planned M3 request/pipeline | `backend/tests/advisory_model_first/test_outcome_training.py` | design_ready | none |
-| F-325 | planned outcome request contract | `backend/tests/advisory_model_first/test_outcome_contracts.py` | design_ready | none |
-| F-326 | planned `outcome_labels.py` | `backend/tests/advisory_model_first/test_outcome_labels.py` | design_ready | none |
-| F-327 | planned `outcome_split.py` | `backend/tests/advisory_model_first/test_outcome_split.py` | design_ready | none |
-| F-328 | planned `outcome_training.py` | `backend/tests/advisory_model_first/test_outcome_training.py`; WSL training receipt | design_ready | none |
-| F-329 | planned `outcome_training.py` | `backend/tests/advisory_model_first/test_outcome_training.py` | design_ready | none |
-| F-330 | planned `outcome_training.py` | `backend/tests/advisory_model_first/test_outcome_training.py` | design_ready | none |
-| F-331 | planned holding classifier | `backend/tests/advisory_model_first/test_outcome_training.py` | design_ready | none |
-| F-332 | planned outcome metrics | `backend/tests/advisory_model_first/test_outcome_training.py`; non-empty test report | design_ready | none |
-| F-333 | planned `outcome_bundle.py` | `backend/tests/advisory_model_first/test_outcome_bundle.py` | design_ready | none |
-| F-334 | planned WSL launcher/pipeline | `backend/tests/advisory_model_first/test_outcome_pipeline.py`; WSL resource receipt | design_ready | none |
+| F-324 | M3 request/pipeline uses only frozen M1 artifacts and QE files | `backend/tests/advisory_model_first/test_outcome_pipeline.py`; request `advoutreq_d16081c54d47b3602c89e3b2` | verified | none |
+| F-325 | exact parent bundle/request/schema/artifact/commit binding | `backend/tests/advisory_model_first/test_outcome_contracts.py`; parent bundle full readback | verified | none |
+| F-326 | `outcome_labels.py` five-horizon executable labels | `backend/tests/advisory_model_first/test_outcome_labels.py`; 8120 real labels | verified | none |
+| F-327 | `outcome_split.py` 226/25/50/25/80 and exit boundaries | `backend/tests/advisory_model_first/test_outcome_split.py`; 80-day test receipt | verified | none |
+| F-328 | 15 real excess-return quantile models | `backend/tests/advisory_model_first/test_outcome_training.py`; `F:/Dev/AIstock_model_artifacts/advisory_model_first/outcome_bundles/17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0/models` | verified | none |
+| F-329 | 10 real positive/survival binary models | `backend/tests/advisory_model_first/test_outcome_training.py`; bundle `models` artifact above | verified | none |
+| F-330 | 20 real MFE/MAE quantile models | `backend/tests/advisory_model_first/test_outcome_training.py`; `outcome_bundles/17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0/test_predictions.parquet` | verified | none |
+| F-331 | real five-class holding model and probability range | `backend/tests/advisory_model_first/test_outcome_training.py`; `outcome_bundles/17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0/test_predictions.parquet` | verified | none |
+| F-332 | full test metrics and honest `UNCALIBRATED` status | `backend/tests/advisory_model_first/test_outcome_training.py`; external `metrics.json` in bundle `17ce7ceb...` | verified | none |
+| F-333 | atomic outcome bundle and semantic/hash readback | `backend/tests/advisory_model_first/test_outcome_bundle.py`; bundle `17ce7ceb...` | verified | none |
+| F-334 | WSL `rdagent-gpu`, 108 seconds, peak RSS 655581184 bytes | `backend/tests/advisory_model_first/test_outcome_pipeline.py`; external `outcome_training_receipt.json` for `advoutreq_d16081c54d47b3602c89e3b2` | verified | none |
 | F-335 | M3B planned model inference/API/UI | `backend/tests/advisory_model_first/test_outcome_inference.py`; `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | design_ready | none |
 | F-336 | M3B isolated outcome envelope | `backend/tests/advisory_model_first/test_outcome_inference.py` | design_ready | none |
-| F-337 | Advisory-only changed-file review | `backend/tests/advisory_model_first/test_outcome_boundaries.py` | design_ready | none |
-| F-338 | DESIGN-COMPLIANCE-001 review | `backend/tests/advisory_model_first/test_outcome_boundaries.py` | design_ready | none |
-| F-339 | DESIGN-COMPLIANCE-001 review | `backend/tests/advisory_model_first/test_outcome_boundaries.py` | design_ready | none |
-| F-340 | production gate report | `backend/tests/advisory_model_first/test_outcome_boundaries.py` | design_ready | none |
+| F-337 | Advisory-only changed-file review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `scripts/aistock_module_ownership_scan.py --staged-only` | verified_m3a | none |
+| F-338 | DESIGN-COMPLIANCE-001 review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `nox -s advisory_modeling_backend` | verified_m3a | none |
+| F-339 | no role/approval/admission gate review | `backend/tests/advisory_model_first/test_outcome_boundaries.py` | verified_m3a | none |
+| F-340 | no DDL/DML/dependency/restart/binding activation | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; external receipt `outcome_binding_activated=false` | verified_m3a | none |
 
 ## 18. Rollout / Rollback
 
