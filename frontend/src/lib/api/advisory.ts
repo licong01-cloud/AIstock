@@ -293,6 +293,42 @@ export type AdvisoryModelShadowCandidate = {
   top_feature_contributions: AdvisoryModelFeatureContribution[];
 };
 
+export type AdvisoryOutcomeHorizonPrediction = {
+  horizon_days: 1 | 3 | 5 | 10 | 20;
+  excess_return_q10: number;
+  excess_return_q50: number;
+  excess_return_q90: number;
+  positive_probability: number;
+  signal_survival_probability: number;
+  path_mfe_q50: number;
+  path_mfe_q90: number;
+  path_mae_loss_q50: number;
+  path_mae_loss_q90: number;
+};
+
+export type AdvisoryOutcomeCandidate = {
+  symbol: string;
+  horizons: AdvisoryOutcomeHorizonPrediction[];
+  holding_period: {
+    probabilities: Record<string, number>;
+    mode_days: number;
+    range_low_days: number;
+    range_high_days: number;
+  };
+};
+
+export type AdvisoryOutcomeShadow = {
+  status: "EXPERIMENTAL_SHADOW" | "OUTCOME_UNAVAILABLE";
+  calibration_state: "UNCALIBRATED";
+  outcome_bundle_id: string | null;
+  parent_bundle_id: string | null;
+  model_version: string | null;
+  horizons: Array<1 | 3 | 5 | 10 | 20>;
+  candidates: AdvisoryOutcomeCandidate[];
+  reason_code: string | null;
+  message: string | null;
+};
+
 export type AdvisoryModelShadowResponse = {
   status: "EXPERIMENTAL_SHADOW" | "MODEL_UNAVAILABLE";
   calibration_state: "UNCALIBRATED";
@@ -311,6 +347,7 @@ export type AdvisoryModelShadowResponse = {
   candidates: AdvisoryModelShadowCandidate[];
   baselines: JsonObject;
   hmm_unavailable: JsonObject[];
+  outcome: AdvisoryOutcomeShadow;
   reason_code: string | null;
   message: string | null;
 };

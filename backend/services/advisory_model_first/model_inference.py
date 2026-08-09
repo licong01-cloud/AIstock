@@ -18,6 +18,13 @@ from backend.services.advisory_model_first.model_bundle import (
     LoadedAdvisoryModelBundle,
     load_exact_shadow_bundle,
 )
+from backend.services.advisory_model_first.outcome_inference import (
+    score_outcome_bundle,
+    unavailable_outcome_envelope,
+)
+from backend.services.advisory_model_first.outcome_runtime_bundle import (
+    load_exact_outcome_bundle,
+)
 from backend.services.advisory_model_first.realtime_feature_source import (
     PostgresAdvisoryReviewSource,
     PostgresRealtimeFeatureSource,
@@ -56,6 +63,8 @@ class AdvisoryModelShadowService:
         feature_source: PostgresRealtimeFeatureSource | None = None,
         model_root_provider: Any | None = None,
         bundle_loader: Any = load_exact_shadow_bundle,
+        outcome_bundle_loader: Any = load_exact_outcome_bundle,
+        outcome_scorer: Any = score_outcome_bundle,
     ) -> None:
         self._program_service = program_service or AdvisoryProgramService()
         self._selection_service = selection_service or SelectionCenterService()
@@ -65,6 +74,8 @@ class AdvisoryModelShadowService:
             lambda: os.getenv("AISTOCK_ADVISORY_MODEL_ROOT", "").strip()
         )
         self._bundle_loader = bundle_loader
+        self._outcome_bundle_loader = outcome_bundle_loader
+        self._outcome_scorer = outcome_scorer
 
     def model_shadow(self, *, program_id: str, target_trade_date: date) -> dict[str, Any]:
         started = time.monotonic()
@@ -241,6 +252,14 @@ class AdvisoryModelShadowService:
                 context={"candidate_count": len(candidates), "feature_count": len(built.features)},
             )
         scored = _score(bundle, built.features)
+        outcome = self._outcome_shadow(
+            model_root=model_root,
+            parent_bundle=bundle,
+            features=built.features,
+            scored_candidates=scored,
+            program_id=program_id,
+            target_trade_date=target_trade_date,
+        )
         shortlist_count = min(5, len(scored))
         return {
             "status": "EXPERIMENTAL_SHADOW",
@@ -260,6 +279,87 @@ class AdvisoryModelShadowService:
             "candidates": scored,
             "baselines": bundle.baselines,
             "hmm_unavailable": list(realtime.hmm_unavailable),
+            "outcome": outcome,
+            "reason_code": None,
+            "message": None,
+        }
+
+    def _outcome_shadow(
+        self,
+        *,
+        model_root: str,
+        parent_bundle: LoadedAdvisoryModelBundle,
+        features: pd.DataFrame,
+        scored_candidates: list[dict[str, Any]],
+        program_id: str,
+        target_trade_date: date,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            outcome_bundle = self._outcome_bundle_loader(
+                model_root=model_root,
+                package_id=PACKAGE_ID,
+                manifest_sha256=MANIFEST_SHA256,
+                style_profile_hash=STYLE_PROFILE_HASH,
+                parent_bundle_id=parent_bundle.bundle_id,
+            )
+            predictions = self._outcome_scorer(outcome_bundle, features)
+            prediction_by_symbol = {str(item["symbol"]): item for item in predictions}
+            expected_symbols = [str(item["symbol"]) for item in scored_candidates]
+            if (
+                len(prediction_by_symbol) != len(predictions)
+                or len(set(expected_symbols)) != len(expected_symbols)
+                or set(prediction_by_symbol) != set(expected_symbols)
+                or len(predictions) != len(expected_symbols)
+            ):
+                raise AdvisoryModelFirstError(
+                    "outcome inference does not preserve the M2 candidate group",
+                    reason_code="ADVISORY_OUTCOME_INFERENCE_FAILED",
+                    context={
+                        "m2_candidate_count": len(expected_symbols),
+                        "outcome_candidate_count": len(predictions),
+                    },
+                )
+            ordered = [prediction_by_symbol[symbol] for symbol in expected_symbols]
+        except AdvisoryModelFirstError as exc:
+            LOGGER.warning(
+                "advisory outcome shadow unavailable program_id=%s target_trade_date=%s "
+                "reason_code=%s context=%s elapsed_ms=%d",
+                program_id,
+                target_trade_date.isoformat(),
+                exc.reason_code,
+                exc.context,
+                round((time.monotonic() - started) * 1000),
+            )
+            return unavailable_outcome_envelope(reason_code=exc.reason_code, message=str(exc))
+        except Exception as exc:
+            LOGGER.exception(
+                "advisory outcome shadow failed unexpectedly program_id=%s target_trade_date=%s "
+                "elapsed_ms=%d",
+                program_id,
+                target_trade_date.isoformat(),
+                round((time.monotonic() - started) * 1000),
+            )
+            return unavailable_outcome_envelope(
+                reason_code="ADVISORY_OUTCOME_INFERENCE_FAILED",
+                message=f"unexpected outcome inference failure: {type(exc).__name__}",
+            )
+        LOGGER.info(
+            "advisory outcome shadow completed program_id=%s target_trade_date=%s "
+            "candidate_count=%d elapsed_ms=%d",
+            program_id,
+            target_trade_date.isoformat(),
+            len(ordered),
+            round((time.monotonic() - started) * 1000),
+        )
+        return {
+            "status": "EXPERIMENTAL_SHADOW",
+            "calibration_state": "UNCALIBRATED",
+            "outcome_bundle_id": outcome_bundle.outcome_bundle_id,
+            "parent_bundle_id": parent_bundle.bundle_id,
+            "model_version": outcome_bundle.manifest["request_id"],
+            "horizons": list(outcome_bundle.manifest["horizons"]),
+            "candidates": ordered,
             "reason_code": None,
             "message": None,
         }
@@ -541,6 +641,10 @@ def _unavailable_response(
         "candidates": [],
         "baselines": {},
         "hmm_unavailable": [],
+        "outcome": unavailable_outcome_envelope(
+            reason_code="ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+            message="parent model shadow is unavailable",
+        ),
         "reason_code": reason_code,
         "message": message,
     }

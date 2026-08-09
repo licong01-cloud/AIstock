@@ -174,7 +174,9 @@ def recording_conn_factory(conn: RecordingConnection):
     return factory
 
 
-def test_pg_pool_get_conn_defaults_keep_legacy_autocommit_true(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pg_pool_get_conn_defaults_keep_autocommit_and_sanitize_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     signature = inspect.signature(pg_pool.get_conn)
 
     assert signature.parameters["autocommit"].default is True
@@ -183,13 +185,35 @@ def test_pg_pool_get_conn_defaults_keep_legacy_autocommit_true(monkeypatch: pyte
     class FakePoolConnection:
         def __init__(self) -> None:
             self.autocommit = False
+            self.readonly = True
+            self.isolation_level = "REPEATABLE READ"
+            self.deferrable = True
             self.commits = 0
             self.rollbacks = 0
             self.transaction_status_checks = 0
+            self.set_session_calls: list[dict[str, object]] = []
 
         def get_transaction_status(self):
             self.transaction_status_checks += 1
-            raise AssertionError("default get_conn must not use explicit transaction preparation")
+            return pg_pool.psycopg2.extensions.TRANSACTION_STATUS_IDLE
+
+        def set_session(
+            self,
+            *,
+            isolation_level: str,
+            readonly: bool,
+            deferrable: bool,
+        ) -> None:
+            self.set_session_calls.append(
+                {
+                    "isolation_level": isolation_level,
+                    "readonly": readonly,
+                    "deferrable": deferrable,
+                }
+            )
+            self.isolation_level = isolation_level
+            self.readonly = readonly
+            self.deferrable = deferrable
 
         def commit(self) -> None:
             self.commits += 1
@@ -225,7 +249,17 @@ def test_pg_pool_get_conn_defaults_keep_legacy_autocommit_true(monkeypatch: pyte
     assert pool.returned is True
     assert conn.commits == 0
     assert conn.rollbacks == 0
-    assert conn.transaction_status_checks == 0
+    assert conn.transaction_status_checks == 1
+    assert conn.set_session_calls == [
+        {
+            "isolation_level": "READ COMMITTED",
+            "readonly": False,
+            "deferrable": False,
+        }
+    ]
+    assert conn.readonly is False
+    assert conn.isolation_level == "READ COMMITTED"
+    assert conn.deferrable is False
 
 
 class FakeSuspendProvider:

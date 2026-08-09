@@ -7,7 +7,10 @@ rules:
       - backend/tests/advisory_model_first/**
       - scripts/advisory_model_prepare_request.py
       - scripts/advisory_model_train_wsl.py
+      - scripts/advisory_outcome_prepare_request.py
+      - scripts/advisory_outcome_train_wsl.py
       - scripts/wsl/advisory_model_train.py
+      - scripts/wsl/advisory_outcome_train.py
       - docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_*.md
     primary_module: advisory.model_first
     impact_modules: []
@@ -441,6 +444,8 @@ rules:
     include:
       - backend/services/quantevolver/**
       - backend/routers/quantevolver*.py
+      - backend/tests/quantevolver/test_factor_emit_hook.py
+      - backend/tests/test_factor_metrics_h20_contract.py
       - backend/tests/test_qe_evolution_scheduler.py
       - backend/tests/test_qe_experiment_status_scanner.py
       - backend/tests/unified_engine/test_backtest_executor.py
@@ -449,7 +454,7 @@ rules:
     impact_modules: [qe.single_experiment, qe.custom_evolution, qe.auto_evolution, qe.enhanced_metrics, qe.data_completeness]
     layer: backend_service
     risk_level: high
-    ownership_reason: QE service code is shared by single experiments and evolution flows.
+    ownership_reason: QE service code is shared by single experiments and evolution flows. The factor emit and H20 tests exercise the QE factor official-evaluation metrics save contract (BUG-1001).
   - rule_id: qe_mcp_data_contract
     priority: 100
     include:

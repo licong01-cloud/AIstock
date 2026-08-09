@@ -1,11 +1,11 @@
 # AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.5
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-08
+> 修订日期：2026-08-09
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M1_TRAINED_M2_NEXT`
+> 当前状态：`MODEL_FIRST_M3B_SOURCE_COMPLETE_RUNTIME_PENDING`
 > 当前用户可见功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`；离线模型里程碑 M0/M1 `2/2`，尚未计入用户可见功能
-> 规划进度：M0/M1 源码与正式 WSL 训练已完成；406 日 runtime-equivalent Top20、110 个 fresh HMM、80 日 test Top5 和原子 bundle 已验收；模型 test 质量低于原始排名与随机对照，保持未激活实验影子状态；下一项直接进入 M2 数据库实时特征、API 和页面 readback
+> 规划进度：M0/M1 真实训练、M2 数据库影子推理和 M3A 46-head outcome bundle 已完成；M3B exact loader、同一实时 103 特征矩阵推理、API 子信封和五期限页面已完成源码与本地真实 bundle 验证，待用户确认后执行源码合入、outcome binding 激活、用户重启和 deployed readback
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -63,10 +63,10 @@
 
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
-| SHORT_REBOUND Top20→Top5 | `MODEL_TRAINED_NOT_USER_VISIBLE` | WSL 真实训练与留出集预测已存在；Advisory 推理和页面 readback 待 M2 |
-| 预期收益与持股周期 | `NOT_IMPLEMENTED` | 真实模型输出分位数、概率和周期范围 |
+| SHORT_REBOUND Top20→Top5 | `EXPERIMENTAL_SHADOW_RUNTIME_VERIFIED` | WSL 真实训练、数据库影子推理、API 和页面源码已贯通；真实 test 质量仍低于主要对照 |
+| 预期收益与持股周期 | `M3B_SOURCE_COMPLETE_RUNTIME_PENDING` | 真实模型、loader、数据库实时特征复用、API/UI 源码和本地真实 bundle 推理已完成；生产 binding 与重启后 readback 未执行 |
 | 买入/止盈/止损区间 | `NOT_IMPLEMENTED` | 真实模型和价格转换层输出范围 |
-| 荐股页面模型展示 | `NOT_IMPLEMENTED` | 页面读取真实预测，不是 mock、规则冒充或静态示例 |
+| 荐股页面模型展示 | `SOURCE_COMPLETE_RUNTIME_PENDING` | 五期限收益、概率、MFE/MAE 和持股范围页面已通过三视口 Playwright；待合入和用户重启后验证真实 API 数据 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
@@ -371,6 +371,8 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NEXT`。
 
+状态：`COMPLETED_RUNTIME_VERIFIED`。PR #3225 已合入；重启后运行时 commit 为 `41504a205b9372a4e709587dc2310fd8143c6c6d`。目标多 Alpha Program 在 `decision=2026-07-15 / target=2026-07-16` 返回 20 个真实候选、5 个模型 shortlist、exact bundle 和 11 个显式 HMM unavailable；单 Alpha Program 返回 `ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE`。前端生产路由 HTTP 200；当前验证窗口无可用交互浏览器，既有三视口 Playwright 继续作为视觉证据，该外部条件不阻断 M3。
+
 - 实现数据库 decision-cutoff 特征source；目标交易日数据不得进入特征。
 - 对当前单 Alpha或原生多 Alpha候选执行模型推理。
 - API返回真实model score/rank/Top5。
@@ -381,6 +383,8 @@ calibration_state = UNCALIBRATED or PARTIAL
 ### M3：预期收益与持股周期
 
 优先级：`P1`。
+
+状态：`M3B_SOURCE_COMPLETE_RUNTIME_PENDING`。详细设计为 `docs/architecture/advisory_model_first_m3_outcome_holding_period_f2_design_20260809.md`；M3A bundle `17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0` 含 46 个真实 LightGBM 模型、1600 行/80 日零 NaN test 预测，训练 108 秒、峰值 RSS 655,581,184 bytes。M3B 已实现 exact outcome binding/loader、复用 M2 同一数据库实时特征矩阵的五期限推理、typed unavailable 隔离、API 子信封和页面；本地真实 bundle 对 20 个候选完成 46-head 推理。未写正式 binding，未合入、未重启、未做 deployed readback。
 
 - 在现有QE文件上训练收益分位数、正收益概率和周期模型。
 - 接入同一Advisory预测和页面。
