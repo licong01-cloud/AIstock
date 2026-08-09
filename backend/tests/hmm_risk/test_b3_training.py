@@ -978,7 +978,7 @@ def test_train_only_coverage_audit_collects_all_sectors_without_fit_or_validatio
     assert report["selection_performed"] is False
 
 
-def test_formal_fit_uses_monitor_terminal_likelihood_and_never_validation(monkeypatch) -> None:
+def test_formal_fit_uses_map_joint_stop_raw_likelihood_and_never_validation(monkeypatch) -> None:
     class _Monitor:
         converged = True
         iter = 2
@@ -1002,7 +1002,7 @@ def test_formal_fit_uses_monitor_terminal_likelihood_and_never_validation(monkey
             self._covars_ = np.asarray(value, dtype=np.float64)
 
         def fit(self, train):
-            return self
+            raise AssertionError("GaussianHMM.fit raw-likelihood monitor must not be used")
 
     monkeypatch.setattr("hmmlearn.hmm.GaussianHMM", _GaussianHMM)
     monkeypatch.setattr(
@@ -1037,6 +1037,54 @@ def test_formal_fit_uses_monitor_terminal_likelihood_and_never_validation(monkey
         )
 
     monkeypatch.setattr(training_subject, "_b3_diag04_covariance_evidence", covariance_audit)
+    covariance_acceptance_input = {**covariance_evidence, "train_rows": 180}
+    covariance = evaluate_covariance_acceptance(covariance_acceptance_input)
+    map_evidence = {
+        "authority": "covariance_prior_map_objective",
+        "maximum_iterations": 300,
+        "raw_likelihood_history": [-1.0, -0.995],
+        "map_objective_history": [-100.0, -100.0 + 1e-7],
+        "map_prior_adjustment_history": [-99.0, -99.005 + 1e-7],
+        "objective_component_history": [
+            {
+                "iteration": 1,
+                "raw_log_likelihood": -1.0,
+                "prior_log_covariance_component": 197.0,
+                "prior_inverse_covariance_component": 1.0,
+                "prior_adjustment": -99.0,
+                "map_objective": -100.0,
+            },
+            {
+                "iteration": 2,
+                "raw_log_likelihood": -0.995,
+                "prior_log_covariance_component": 197.01 - 2e-7,
+                "prior_inverse_covariance_component": 1.0,
+                "prior_adjustment": -99.005 + 1e-7,
+                "map_objective": -100.0 + 1e-7,
+            },
+        ],
+        "covariance_valid_history": [True, True],
+        "covariance_receipt_sha256_history": [covariance["receipt_sha256"]] * 2,
+        "joint_stop_iteration": 2,
+        "raw_likelihood_is_diagnostic_only": True,
+        "postfit_projection_performed": False,
+    }
+    likelihood = evaluate_likelihood_acceptance(map_evidence)
+
+    def map_joint_fit(model, prepared, reference):
+        del model, prepared, reference
+        raw = np.ones((3, 7), dtype=np.float64)
+        observed_raw_covariance["value"] = raw.copy()
+        return training_subject._MapJointFitResult(
+            likelihood=likelihood,
+            covariance=covariance,
+            covariance_evidence=covariance_acceptance_input,
+            raw_covariance_evidence=training_subject.capture_raw_diag_covariance_evidence(raw, expected_shape=(3, 7)),
+            raw_covars=raw,
+            terminal_raw_likelihood=-0.995,
+        )
+
+    monkeypatch.setattr(training_subject, "_run_b3_map_joint_em", map_joint_fit)
     states = np.asarray([index % 3 for index in range(180)])
     train_posteriors = np.zeros((180, 3))
     train_posteriors[np.arange(180), states] = 1.0
@@ -1065,11 +1113,216 @@ def test_formal_fit_uses_monitor_terminal_likelihood_and_never_validation(monkey
     )
 
     assert entry["final_train_log_likelihood"] == -0.995
-    assert entry["final_train_log_likelihood_source"] == "monitor_history_terminal_value"
+    assert entry["final_train_log_likelihood_source"] == "map_joint_stop_raw_observed_log_likelihood"
     assert entry["validation_accessed"] is False
     assert entry["future_utility_accessed"] is False
     assert entry["parameter_profile"]["numeric_contract_status"] == "USER_APPROVED_FORMAL_CONTRACT"
+    assert entry["parameter_profile"]["d4_likelihood_contract"] == training_subject.D4_LIKELIHOOD_VERSION
+    assert entry["parameter_profile"]["d4_occupancy_contract"] == training_subject.D4_OCCUPANCY_VERSION
+    assert entry["parameter_profile"]["convergence_authority"] == (
+        "covariance_prior_map_objective_with_d4_02_joint_stop"
+    )
     assert np.array_equal(observed_raw_covariance["value"], np.ones((3, 7)))
+
+
+def test_map_joint_loop_continues_until_covariance_is_accepted_and_stops_before_extra_mstep(monkeypatch) -> None:
+    class _Model:
+        covars_prior = np.ones((3, 2), dtype=np.float64)
+        covars_weight = 2.0
+
+        def __init__(self) -> None:
+            self._covars_ = np.ones((3, 2), dtype=np.float64)
+            self.estep_count = 0
+            self.mstep_count = 0
+
+        def _init(self, train, lengths):
+            del train, lengths
+
+        def _check(self):
+            return None
+
+        def _do_estep(self, train, lengths):
+            del train, lengths
+            self.estep_count += 1
+            return {}, -10.0 + self.estep_count * 1e-8
+
+        def _do_mstep(self, stats):
+            del stats
+            self.mstep_count += 1
+
+    model = _Model()
+    covariance_calls = 0
+
+    def covariance_audit(model, train, raw_covars, sector_reference_variance):
+        del model, sector_reference_variance
+        return (
+            {
+                "raw_covars": raw_covars.tolist(),
+                "sector_local_reference_variance_R_sj": [1.0, 1.0],
+                "state_posterior_mass": [train.shape[0] / 3] * 3,
+                "posterior_second_moment_about_fitted_mean": raw_covars.tolist(),
+                "nu": 1.0,
+                "postfit_projection_performed": False,
+            },
+            np.full((train.shape[0], 3), 1 / 3),
+            -10.0,
+        )
+
+    def covariance_acceptance(evidence):
+        nonlocal covariance_calls
+        covariance_calls += 1
+        valid = covariance_calls >= 3
+        body = {
+            "contract_version": training_subject.D4_COVARIANCE_VERSION,
+            "covariance_status": "accepted" if valid else "failed",
+            "covariance_valid": valid,
+            "failure_reason_codes": [] if valid else ["hmm_risk_model_covariance_acceptance_failed"],
+            "blocking_reason_codes": [],
+            "warning_reason_codes": [],
+            "primary_reason_code": None if valid else "hmm_risk_model_covariance_acceptance_failed",
+            "evidence": dict(evidence),
+        }
+        return {**body, "receipt_sha256": canonical_sha256(body)}
+
+    monkeypatch.setattr(training_subject, "_b3_diag04_covariance_evidence", covariance_audit)
+    monkeypatch.setattr(training_subject, "evaluate_covariance_acceptance", covariance_acceptance)
+    result = training_subject._run_b3_map_joint_em(model, np.ones((30, 2)), np.ones(2))
+
+    assert result.likelihood["evidence"]["joint_stop_iteration"] == 3
+    assert result.covariance["covariance_valid"] is True
+    assert model.estep_count == 3
+    assert model.mstep_count == 2
+
+
+def test_map_joint_loop_fails_on_substantive_map_decrease_before_another_mstep(monkeypatch) -> None:
+    class _Model:
+        covars_prior = np.ones((3, 2), dtype=np.float64)
+        covars_weight = 2.0
+
+        def __init__(self) -> None:
+            self._covars_ = np.ones((3, 2), dtype=np.float64)
+            self.estep_count = 0
+            self.mstep_count = 0
+
+        def _init(self, train, lengths):
+            del train, lengths
+
+        def _check(self):
+            return None
+
+        def _do_estep(self, train, lengths):
+            del train, lengths
+            self.estep_count += 1
+            return {}, -10.0 if self.estep_count == 1 else -10.1
+
+        def _do_mstep(self, stats):
+            del stats
+            self.mstep_count += 1
+
+    def covariance_audit(model, train, raw_covars, sector_reference_variance):
+        del model, sector_reference_variance
+        return (
+            {
+                "raw_covars": raw_covars.tolist(),
+                "sector_local_reference_variance_R_sj": [1.0, 1.0],
+                "state_posterior_mass": [train.shape[0] / 3] * 3,
+                "posterior_second_moment_about_fitted_mean": raw_covars.tolist(),
+                "nu": 1.0,
+                "postfit_projection_performed": False,
+            },
+            np.full((train.shape[0], 3), 1 / 3),
+            -10.0,
+        )
+
+    monkeypatch.setattr(training_subject, "_b3_diag04_covariance_evidence", covariance_audit)
+    model = _Model()
+    with pytest.raises(training_subject._MapJointFitFailure) as exc_info:
+        training_subject._run_b3_map_joint_em(model, np.ones((30, 2)), np.ones(2))
+
+    assert exc_info.value.stage == "likelihood"
+    assert exc_info.value.reason_code == "hmm_risk_model_map_objective_decrease"
+    assert model.estep_count == 2
+    assert model.mstep_count == 1
+
+
+def test_map_joint_executor_runs_pinned_hmmlearn_private_estep_mstep(monkeypatch) -> None:
+    from hmmlearn.hmm import GaussianHMM
+
+    rng = np.random.default_rng(42)
+    train = np.vstack(
+        [
+            rng.normal(-3.0, 0.25, size=(80, 2)),
+            rng.normal(0.0, 0.25, size=(80, 2)),
+            rng.normal(3.0, 0.25, size=(80, 2)),
+        ]
+    ).astype(np.float64)
+    reference = training_subject._sector_local_reference_variance(train)
+    startprob, transmat, means, covars, _ = training_subject._manual_b3_diag04_initialization(
+        train,
+        sector_reference_variance=reference,
+        random_seed=42,
+    )
+    prior = np.broadcast_to(reference, covars.shape).copy()
+    model = GaussianHMM(
+        n_components=3,
+        covariance_type="diag",
+        min_covar=0.0,
+        startprob_prior=1.0,
+        transmat_prior=1.0,
+        means_prior=0.0,
+        means_weight=0.0,
+        covars_prior=prior,
+        covars_weight=2.0,
+        algorithm="viterbi",
+        random_state=42,
+        n_iter=300,
+        tol=0.01,
+        verbose=False,
+        params="stmc",
+        init_params="",
+        implementation="log",
+    )
+    model.startprob_ = startprob
+    model.transmat_ = transmat
+    model.means_ = means
+    model.covars_ = covars
+
+    def covariance_audit(model, train, raw_covars, sector_reference_variance):
+        del model, sector_reference_variance
+        return (
+            {
+                "raw_covars": raw_covars.tolist(),
+                "sector_local_reference_variance_R_sj": reference.tolist(),
+                "state_posterior_mass": [train.shape[0] / 3] * 3,
+                "posterior_second_moment_about_fitted_mean": raw_covars.tolist(),
+                "nu": 1.0,
+                "postfit_projection_performed": False,
+            },
+            np.full((train.shape[0], 3), 1 / 3),
+            -1.0,
+        )
+
+    def covariance_acceptance(evidence):
+        body = {
+            "contract_version": training_subject.D4_COVARIANCE_VERSION,
+            "covariance_status": "accepted",
+            "covariance_valid": True,
+            "failure_reason_codes": [],
+            "blocking_reason_codes": [],
+            "warning_reason_codes": [],
+            "primary_reason_code": None,
+            "evidence": dict(evidence),
+        }
+        return {**body, "receipt_sha256": canonical_sha256(body)}
+
+    monkeypatch.setattr(training_subject, "_b3_diag04_covariance_evidence", covariance_audit)
+    monkeypatch.setattr(training_subject, "evaluate_covariance_acceptance", covariance_acceptance)
+    result = training_subject._run_b3_map_joint_em(model, train, reference)
+
+    assert 2 <= result.likelihood["evidence"]["joint_stop_iteration"] < 300
+    assert result.likelihood["convergence_valid"] is True
+    assert result.likelihood["evidence"]["postfit_projection_performed"] is False
+    assert np.isfinite(result.raw_covars).all()
 
 
 def _refit03_training_item(feature_count: int = 2) -> B3TrainOnlySeries:
@@ -1097,7 +1350,9 @@ def _install_refit03_training_model(monkeypatch, *, feature_count: int, raw_afte
 
     class _GaussianHMM:
         def __init__(self, **kwargs) -> None:
-            del kwargs
+            self.covars_prior = kwargs["covars_prior"]
+            self.covars_weight = kwargs["covars_weight"]
+            self._iteration = 0
             self.monitor_ = _Monitor()
 
         @property
@@ -1108,14 +1363,45 @@ def _install_refit03_training_model(monkeypatch, *, feature_count: int, raw_afte
         def covars_(self, value):
             self.initial_covars = np.asarray(value, dtype=np.float64)
 
-        def fit(self, train):
-            del train
+        def _init(self, train, lengths):
+            del train, lengths
+
+        def _check(self):
+            return None
+
+        def _do_estep(self, train, lengths):
+            del train, lengths
+            self._iteration += 1
             if raw_after_fit is not None:
                 self._covars_ = np.asarray(raw_after_fit, dtype=np.float64)
-            return self
+            elif hasattr(self, "_covars_"):
+                del self._covars_
+            return {}, -1.0 + min(self._iteration, 2) * 1e-7
+
+        def _do_mstep(self, stats):
+            del stats
+
+        def fit(self, train):
+            del train
+            raise AssertionError("GaussianHMM.fit must not be called by MAP authority")
 
     monkeypatch.setattr("hmmlearn.hmm.GaussianHMM", _GaussianHMM)
     monkeypatch.setattr(training_subject, "_sector_local_reference_variance", lambda train: np.ones(feature_count))
+
+    def covariance_audit(model, train, raw_covars, sector_reference_variance):
+        del model, sector_reference_variance
+        raw = np.asarray(raw_covars, dtype=np.float64)
+        evidence = {
+            "raw_covars": raw.tolist(),
+            "sector_local_reference_variance_R_sj": [1.0] * feature_count,
+            "state_posterior_mass": [train.shape[0] / 3.0] * 3,
+            "posterior_second_moment_about_fitted_mean": raw.tolist(),
+            "nu": 1.0,
+            "postfit_projection_performed": False,
+        }
+        return evidence, np.full((train.shape[0], 3), 1 / 3), -1.0
+
+    monkeypatch.setattr(training_subject, "_b3_diag04_covariance_evidence", covariance_audit)
     monkeypatch.setattr(
         training_subject,
         "_manual_b3_diag04_initialization",
@@ -1176,7 +1462,13 @@ def test_refit03_likelihood_failure_preserves_raw_covariance_and_marks_d4_unavai
 
     evidence = exc_info.value.stage_evidence
     assert exc_info.value.stage == "likelihood"
-    assert evidence["completed_stages"] == ["initialization", "fit", "raw_covariance_capture", "monitor"]
+    assert evidence["completed_stages"] == [
+        "initialization",
+        "fit",
+        "raw_covariance_capture",
+        "map_objective",
+        "covariance",
+    ]
     assert evidence["raw_covariance_evidence"]["raw_validity"] is True
     cause = evidence["stage_specific_cause_evidence"]
     assert cause["d4_derived_evidence_status"] == "not_computable_posterior_audit_unavailable"
@@ -1239,13 +1531,10 @@ def test_refit03_actual_covariance_failure_mapping_is_typed_and_never_fabricates
 
     evidence = exc_info.value.stage_evidence
     assert exc_info.value.stage == "covariance"
-    assert evidence["completed_stages"] == [
-        "initialization",
-        "fit",
-        "raw_covariance_capture",
-        "monitor",
-        "likelihood",
-    ]
+    expected_stages = ["initialization", "fit", "raw_covariance_capture"]
+    if posterior_failure_kind is not None:
+        expected_stages.append("map_objective")
+    assert evidence["completed_stages"] == expected_stages
     cause = evidence["stage_specific_cause_evidence"]
     assert cause["d4_derived_evidence_status"] == derived_status
     assert cause["covariance_status"] == covariance_status
@@ -1413,9 +1702,6 @@ def _training_receipt(model: B3FittedModel) -> dict:
     states = [index % 3 for index in range(180)]
     posterior = np.zeros((180, 3), dtype=np.float64)
     posterior[np.arange(180), states] = 1.0
-    likelihood = evaluate_likelihood_acceptance(
-        {"converged": True, "iterations": 2, "maximum_iterations": 300, "history": [-1.0, -0.995]}
-    )
     effective_count = int(model.means.shape[1])
     covariance = evaluate_covariance_acceptance(
         {
@@ -1425,6 +1711,38 @@ def _training_receipt(model: B3FittedModel) -> dict:
             "posterior_second_moment_about_fitted_mean": np.ones((3, effective_count)).tolist(),
             "train_rows": 180,
             "nu": 1.0,
+            "postfit_projection_performed": False,
+        }
+    )
+    likelihood = evaluate_likelihood_acceptance(
+        {
+            "authority": "covariance_prior_map_objective",
+            "maximum_iterations": 300,
+            "raw_likelihood_history": [-1.0, -0.995],
+            "map_objective_history": [-100.0, -100.0 + 1e-7],
+            "map_prior_adjustment_history": [-99.0, -99.005 + 1e-7],
+            "objective_component_history": [
+                {
+                    "iteration": 1,
+                    "raw_log_likelihood": -1.0,
+                    "prior_log_covariance_component": 197.0,
+                    "prior_inverse_covariance_component": 1.0,
+                    "prior_adjustment": -99.0,
+                    "map_objective": -100.0,
+                },
+                {
+                    "iteration": 2,
+                    "raw_log_likelihood": -0.995,
+                    "prior_log_covariance_component": 197.01 - 2e-7,
+                    "prior_inverse_covariance_component": 1.0,
+                    "prior_adjustment": -99.005 + 1e-7,
+                    "map_objective": -100.0 + 1e-7,
+                },
+            ],
+            "covariance_valid_history": [True, True],
+            "covariance_receipt_sha256_history": [covariance["receipt_sha256"]] * 2,
+            "joint_stop_iteration": 2,
+            "raw_likelihood_is_diagnostic_only": True,
             "postfit_projection_performed": False,
         }
     )

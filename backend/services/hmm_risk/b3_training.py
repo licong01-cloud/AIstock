@@ -23,6 +23,8 @@ from backend.services.hmm_risk.b3_acceptance import (
     evaluate_likelihood_acceptance,
     evaluate_semantic_validation,
     evaluate_train_occupancy,
+    map_covariance_prior_objective,
+    map_numeric_envelope,
 )
 from backend.services.hmm_risk.b3_mixed_dimension import (
     INACTIVE_DIMENSION_REASON_CODE,
@@ -49,7 +51,6 @@ from backend.services.hmm_risk.state_model_set import (
     _finite_array,
     _fit_preprocess,
     _manual_b3_diag04_initialization,
-    _monitor_diagnostic,
     _probability_vector,
     _sector_local_reference_variance,
     _transition_matrix,
@@ -86,6 +87,24 @@ class B3TrainingStageError(StateModelSetError):
         self.cause_evidence = dict(getattr(cause, "evidence", {}) or {})
         self.cause_stage = str(getattr(cause, "stage", "") or "") or None
         self.stage_evidence = dict(stage_evidence or {})
+
+
+class _MapJointFitFailure(StateModelSetError):
+    def __init__(self, stage: str, reason_code: str, message: str, *, evidence: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.reason_code = reason_code
+        self.evidence = dict(evidence)
+
+
+@dataclass(frozen=True)
+class _MapJointFitResult:
+    likelihood: Mapping[str, Any]
+    covariance: Mapping[str, Any]
+    covariance_evidence: Mapping[str, Any]
+    raw_covariance_evidence: Mapping[str, Any]
+    raw_covars: np.ndarray
+    terminal_raw_likelihood: float
 
 
 @dataclass(frozen=True)
@@ -408,6 +427,12 @@ def formal_b3_parameter_profile() -> dict[str, Any]:
         **diagnostic_profile,
         "schema_version": "hmm_risk_b3_parameter_profile_v1",
         "contract": D3_CONTRACT_VERSION,
+        "d4_likelihood_contract": D4_LIKELIHOOD_VERSION,
+        "d4_covariance_contract": D4_COVARIANCE_VERSION,
+        "d4_occupancy_contract": D4_OCCUPANCY_VERSION,
+        "convergence_authority": "covariance_prior_map_objective_with_d4_02_joint_stop",
+        "em_executor": "hmmlearn_0_3_3_private_estep_mstep_v1",
+        "raw_likelihood_role": "diagnostic_and_d5_joint_stop_score_only",
         "numeric_contract_status": "USER_APPROVED_FORMAL_CONTRACT",
         "formal_acceptance_thresholds_applied_by_independent_d4_receipts": True,
         "selection_performed_by_profile": False,
@@ -611,6 +636,338 @@ def _training_stage_evidence(
     return {**body, "stage_evidence_sha256": canonical_sha256(body)}
 
 
+def _map_joint_loop_evidence(
+    *,
+    raw_likelihood_history: Sequence[float],
+    map_objective_history: Sequence[float],
+    map_prior_adjustment_history: Sequence[float],
+    objective_component_history: Sequence[Mapping[str, Any]],
+    covariance_valid_history: Sequence[bool],
+    covariance_receipt_sha256_history: Sequence[str],
+    joint_stop_iteration: int | None,
+) -> dict[str, Any]:
+    return {
+        "authority": "covariance_prior_map_objective",
+        "maximum_iterations": HMM_N_ITER,
+        "raw_likelihood_history": list(raw_likelihood_history),
+        "map_objective_history": list(map_objective_history),
+        "map_prior_adjustment_history": list(map_prior_adjustment_history),
+        "objective_component_history": [dict(value) for value in objective_component_history],
+        "covariance_valid_history": list(covariance_valid_history),
+        "covariance_receipt_sha256_history": list(covariance_receipt_sha256_history),
+        "joint_stop_iteration": joint_stop_iteration,
+        "raw_likelihood_is_diagnostic_only": True,
+        "postfit_projection_performed": False,
+    }
+
+
+def _evaluate_map_loop_or_fail(
+    loop_evidence: Mapping[str, Any],
+    *,
+    iteration: int,
+    raw_covariance_evidence: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
+    try:
+        return evaluate_likelihood_acceptance(loop_evidence)
+    except (ValueError, FloatingPointError) as exc:
+        raise _MapJointFitFailure(
+            "likelihood",
+            "hmm_risk_model_likelihood_evidence_invalid",
+            str(exc),
+            evidence={
+                "iteration": iteration,
+                "completed_stages": ["initialization", "fit", "raw_covariance_capture", "map_objective", "covariance"],
+                "raw_covariance_evidence": (None if raw_covariance_evidence is None else dict(raw_covariance_evidence)),
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "d4_derived_evidence_status": "not_computable_posterior_audit_unavailable",
+                "covariance_status": "insufficient_evidence",
+                "covariance_valid": False,
+                "state_posterior_mass": None,
+                "posterior_weighted_variance_about_weighted_mean": None,
+                "posterior_second_moment_about_fitted_mean": None,
+                "mstep_expected_covariance": None,
+                "dynamic_lower_reference": None,
+                "dynamic_upper_reference": None,
+                "mstep_relative_residual": None,
+            },
+        ) from exc
+
+
+def _run_b3_map_joint_em(model: Any, prepared: np.ndarray, reference: np.ndarray) -> _MapJointFitResult:
+    """Run the approved MAP/D4-02 joint-stop loop without hmmlearn's raw-likelihood monitor."""
+
+    lengths = np.asarray([prepared.shape[0]], dtype=np.int64)
+    raw_history: list[float] = []
+    map_history: list[float] = []
+    prior_history: list[float] = []
+    component_history: list[Mapping[str, Any]] = []
+    covariance_valid_history: list[bool] = []
+    covariance_hash_history: list[str] = []
+    latest_covariance: Mapping[str, Any] | None = None
+    latest_covariance_evidence: Mapping[str, Any] | None = None
+    latest_raw_capture: Mapping[str, Any] | None = None
+    latest_raw_covars: np.ndarray | None = None
+    try:
+        model._init(prepared, lengths)
+        model._check()
+    except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+        raise _MapJointFitFailure(
+            "fit",
+            "hmm_risk_model_fit_failed",
+            str(exc),
+            evidence={"error_type": type(exc).__name__, "error": str(exc), "fit_phase": "model_check"},
+        ) from exc
+
+    for iteration in range(1, HMM_N_ITER + 1):
+        try:
+            stats, raw_log_likelihood = model._do_estep(prepared, lengths)
+        except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+            raise _MapJointFitFailure(
+                "fit",
+                "hmm_risk_model_fit_failed",
+                str(exc),
+                evidence={"error_type": type(exc).__name__, "error": str(exc), "iteration": iteration},
+            ) from exc
+        try:
+            raw_source = model._covars_
+        except AttributeError as exc:
+            raw_capture = capture_raw_diag_covariance_evidence(
+                None,
+                expected_shape=(3, prepared.shape[1]),
+                evidence_unavailable_reason="gaussian_hmm_internal_diag_covars_missing",
+            )
+            raise _MapJointFitFailure(
+                "covariance",
+                "hmm_risk_model_covariance_raw_type_invalid",
+                str(exc),
+                evidence={
+                    "iteration": iteration,
+                    "completed_stages": ["initialization", "fit", "raw_covariance_capture"],
+                    "raw_covariance_evidence": raw_capture,
+                    "d4_derived_evidence_status": "not_computable_raw_covariance_invalid",
+                    "covariance_status": "failed",
+                    "covariance_valid": False,
+                    "evidence_unavailable_reason": "gaussian_hmm_internal_diag_covars_missing",
+                },
+            ) from exc
+
+        raw_capture = capture_raw_diag_covariance_evidence(
+            raw_source,
+            expected_shape=(3, prepared.shape[1]),
+        )
+        if raw_capture.get("raw_validity") is not True:
+            raise _MapJointFitFailure(
+                "covariance",
+                str((raw_capture.get("reason_codes") or ["hmm_risk_model_covariance_invalid"])[0]),
+                "raw covariance is invalid during MAP iteration",
+                evidence={
+                    "iteration": iteration,
+                    "completed_stages": ["initialization", "fit", "raw_covariance_capture"],
+                    "raw_covariance_evidence": raw_capture,
+                    "d4_derived_evidence_status": "not_computable_raw_covariance_invalid",
+                    "covariance_status": "failed",
+                    "covariance_valid": False,
+                    "state_posterior_mass": None,
+                    "posterior_weighted_variance_about_weighted_mean": None,
+                    "posterior_second_moment_about_fitted_mean": None,
+                    "mstep_expected_covariance": None,
+                    "dynamic_lower_reference": None,
+                    "dynamic_upper_reference": None,
+                    "mstep_relative_residual": None,
+                },
+            )
+        raw_covars = np.asarray(raw_source, dtype=np.float64)
+        try:
+            objective = map_covariance_prior_objective(
+                raw_log_likelihood,
+                raw_covars,
+                model.covars_prior,
+                model.covars_weight,
+            )
+        except (TypeError, ValueError, FloatingPointError) as exc:
+            raise _MapJointFitFailure(
+                "likelihood",
+                "hmm_risk_model_map_objective_non_finite",
+                str(exc),
+                evidence={"iteration": iteration, "raw_covariance_evidence": raw_capture},
+            ) from exc
+
+        try:
+            covariance_evidence, _, smoothed_audit_log_likelihood = _b3_diag04_covariance_evidence(
+                model,
+                prepared,
+                raw_covars=raw_covars,
+                sector_reference_variance=reference,
+            )
+            covariance_evidence = {
+                **covariance_evidence,
+                "train_rows": int(prepared.shape[0]),
+                "postfit_projection_performed": False,
+                "smoothed_audit_log_likelihood": smoothed_audit_log_likelihood,
+                "map_iteration": iteration,
+            }
+            covariance = evaluate_covariance_acceptance(covariance_evidence)
+        except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+            audit_unavailable = getattr(exc, "stage", None) == "smoothed_posterior_audit" and bool(
+                (getattr(exc, "evidence", {}) or {}).get("error_type")
+            )
+            raise _MapJointFitFailure(
+                "covariance",
+                "hmm_risk_model_covariance_invalid",
+                str(exc),
+                evidence={
+                    "iteration": iteration,
+                    "completed_stages": ["initialization", "fit", "raw_covariance_capture", "map_objective"],
+                    "raw_covariance_evidence": raw_capture,
+                    **dict(getattr(exc, "evidence", {}) or {}),
+                    "d4_derived_evidence_status": (
+                        "not_computable_posterior_audit_unavailable"
+                        if audit_unavailable
+                        else "not_computable_posterior_audit_invalid"
+                    ),
+                    "covariance_status": "insufficient_evidence" if audit_unavailable else "failed",
+                    "covariance_valid": False,
+                    "state_posterior_mass": None,
+                    "posterior_weighted_variance_about_weighted_mean": None,
+                    "posterior_second_moment_about_fitted_mean": None,
+                    "mstep_expected_covariance": None,
+                    "dynamic_lower_reference": None,
+                    "dynamic_upper_reference": None,
+                    "mstep_relative_residual": None,
+                },
+            ) from exc
+
+        raw_history.append(float(objective["raw_log_likelihood"]))
+        map_history.append(float(objective["map_objective"]))
+        prior_history.append(float(objective["prior_adjustment"]))
+        component_history.append({"iteration": iteration, **objective})
+        covariance_valid_history.append(covariance.get("covariance_valid") is True)
+        covariance_hash_history.append(str(covariance["receipt_sha256"]))
+        latest_covariance = covariance
+        latest_covariance_evidence = covariance_evidence
+        latest_raw_capture = raw_capture
+        latest_raw_covars = raw_covars
+
+        joint_stop = False
+        if len(map_history) >= 2:
+            map_delta = map_history[-1] - map_history[-2]
+            envelope = map_numeric_envelope(map_history[-2])
+            if map_delta < -envelope:
+                loop_evidence = _map_joint_loop_evidence(
+                    raw_likelihood_history=raw_history,
+                    map_objective_history=map_history,
+                    map_prior_adjustment_history=prior_history,
+                    objective_component_history=component_history,
+                    covariance_valid_history=covariance_valid_history,
+                    covariance_receipt_sha256_history=covariance_hash_history,
+                    joint_stop_iteration=None,
+                )
+                likelihood = _evaluate_map_loop_or_fail(
+                    loop_evidence, iteration=iteration, raw_covariance_evidence=raw_capture
+                )
+                raise _MapJointFitFailure(
+                    "likelihood",
+                    "hmm_risk_model_map_objective_decrease",
+                    "MAP objective decreased beyond the approved numeric envelope",
+                    evidence={
+                        "iteration": iteration,
+                        "completed_stages": [
+                            "initialization",
+                            "fit",
+                            "raw_covariance_capture",
+                            "map_objective",
+                            "covariance",
+                        ],
+                        "likelihood": likelihood,
+                        "raw_covariance_evidence": raw_capture,
+                        "covariance_stage_evidence": {**covariance_evidence, "acceptance": dict(covariance)},
+                    },
+                )
+            joint_stop = abs(map_delta) <= envelope and covariance.get("covariance_valid") is True
+
+        if joint_stop:
+            loop_evidence = _map_joint_loop_evidence(
+                raw_likelihood_history=raw_history,
+                map_objective_history=map_history,
+                map_prior_adjustment_history=prior_history,
+                objective_component_history=component_history,
+                covariance_valid_history=covariance_valid_history,
+                covariance_receipt_sha256_history=covariance_hash_history,
+                joint_stop_iteration=iteration,
+            )
+            likelihood = _evaluate_map_loop_or_fail(
+                loop_evidence, iteration=iteration, raw_covariance_evidence=raw_capture
+            )
+            if likelihood.get("convergence_valid") is not True or likelihood.get("likelihood_valid") is not True:
+                raise _MapJointFitFailure(
+                    "likelihood",
+                    str(likelihood.get("primary_reason_code") or "hmm_risk_model_map_joint_convergence_unavailable"),
+                    "MAP joint-stop receipt is not accepted",
+                    evidence={
+                        "iteration": iteration,
+                        "completed_stages": [
+                            "initialization",
+                            "fit",
+                            "raw_covariance_capture",
+                            "map_objective",
+                            "covariance",
+                        ],
+                        "likelihood": likelihood,
+                        "raw_covariance_evidence": raw_capture,
+                        "covariance_stage_evidence": {**covariance_evidence, "acceptance": dict(covariance)},
+                    },
+                )
+            assert latest_covariance is not None
+            assert latest_covariance_evidence is not None
+            assert latest_raw_capture is not None
+            assert latest_raw_covars is not None
+            return _MapJointFitResult(
+                likelihood=likelihood,
+                covariance=latest_covariance,
+                covariance_evidence=latest_covariance_evidence,
+                raw_covariance_evidence=latest_raw_capture,
+                raw_covars=latest_raw_covars,
+                terminal_raw_likelihood=raw_history[-1],
+            )
+
+        if iteration < HMM_N_ITER:
+            try:
+                model._do_mstep(stats)
+            except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
+                raise _MapJointFitFailure(
+                    "fit",
+                    "hmm_risk_model_fit_failed",
+                    str(exc),
+                    evidence={"error_type": type(exc).__name__, "error": str(exc), "iteration": iteration},
+                ) from exc
+
+    loop_evidence = _map_joint_loop_evidence(
+        raw_likelihood_history=raw_history,
+        map_objective_history=map_history,
+        map_prior_adjustment_history=prior_history,
+        objective_component_history=component_history,
+        covariance_valid_history=covariance_valid_history,
+        covariance_receipt_sha256_history=covariance_hash_history,
+        joint_stop_iteration=None,
+    )
+    likelihood = _evaluate_map_loop_or_fail(
+        loop_evidence,
+        iteration=HMM_N_ITER,
+        raw_covariance_evidence=latest_raw_capture,
+    )
+    raise _MapJointFitFailure(
+        "likelihood",
+        "hmm_risk_model_map_joint_convergence_unavailable",
+        "MAP objective and D4-02-A did not jointly converge within 300 iterations",
+        evidence={
+            "completed_stages": ["initialization", "fit", "raw_covariance_capture", "map_objective", "covariance"],
+            "likelihood": likelihood,
+            "covariance": latest_covariance,
+        },
+    )
+
+
 def fit_b3_preprocessed_train_only(
     item: B3TrainOnlySeries,
     *,
@@ -676,7 +1033,34 @@ def fit_b3_preprocessed_train_only(
         model.means_ = means.copy()
         model.covars_ = initialized_covars.copy()
         fit_invoked = True
-        model.fit(prepared)
+        map_fit = _run_b3_map_joint_em(model, prepared, reference)
+    except _MapJointFitFailure as exc:
+        stage_evidence = _training_stage_evidence(
+            fit_invoked=fit_invoked,
+            fit_returned=False,
+            completed_stages=list(exc.evidence.get("completed_stages") or ["initialization"]),
+            initialization=initialization,
+            likelihood=(
+                exc.evidence.get("likelihood") if isinstance(exc.evidence.get("likelihood"), Mapping) else None
+            ),
+            raw_covariance_evidence=(
+                exc.evidence.get("raw_covariance_evidence")
+                if isinstance(exc.evidence.get("raw_covariance_evidence"), Mapping)
+                else None
+            ),
+            covariance_evidence=(
+                exc.evidence.get("covariance_stage_evidence")
+                if isinstance(exc.evidence.get("covariance_stage_evidence"), Mapping)
+                else None
+            ),
+            stage_specific_cause_evidence=exc.evidence,
+        )
+        raise B3TrainingStageError(
+            exc.stage,
+            exc.reason_code,
+            exc,
+            stage_evidence=stage_evidence,
+        ) from exc
     except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
         stage_evidence = _training_stage_evidence(
             fit_invoked=fit_invoked,
@@ -695,7 +1079,7 @@ def fit_b3_preprocessed_train_only(
             stage_evidence=stage_evidence,
         ) from exc
     try:
-        raw_covariance_source = model._covars_
+        raw_covariance_source = map_fit.raw_covars
     except AttributeError as exc:
         raw_covariance_evidence = capture_raw_diag_covariance_evidence(
             None,
@@ -726,105 +1110,11 @@ def fit_b3_preprocessed_train_only(
         raw_covariance_source,
         expected_shape=(3, prepared.shape[1]),
     )
-    monitor_evidence: Mapping[str, Any] | None = None
-    try:
-        monitor_evidence = _monitor_diagnostic(model)
-        likelihood = evaluate_likelihood_acceptance(monitor_evidence)
-    except (StateModelSetError, ValueError, FloatingPointError) as exc:
-        cause_evidence = {
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-            "d4_derived_evidence_status": "not_computable_posterior_audit_unavailable",
-            "covariance_status": "insufficient_evidence",
-            "covariance_valid": False,
-            "state_posterior_mass": None,
-            "posterior_weighted_variance_about_weighted_mean": None,
-            "posterior_second_moment_about_fitted_mean": None,
-            "mstep_expected_covariance": None,
-            "dynamic_lower_reference": None,
-            "dynamic_upper_reference": None,
-            "mstep_relative_residual": None,
-        }
-        completed_stages = ["initialization", "fit", "raw_covariance_capture"]
-        if monitor_evidence is not None:
-            completed_stages.append("monitor")
-        stage_evidence = _training_stage_evidence(
-            fit_invoked=True,
-            fit_returned=True,
-            completed_stages=completed_stages,
-            initialization=initialization,
-            monitor_evidence=monitor_evidence,
-            raw_covariance_evidence=raw_covariance_evidence,
-            stage_specific_cause_evidence=cause_evidence,
-        )
-        raise B3TrainingStageError(
-            "likelihood",
-            "hmm_risk_model_likelihood_evidence_invalid",
-            exc,
-            stage_evidence=stage_evidence,
-        ) from exc
-    try:
-        raw_covars = np.asarray(raw_covariance_source, dtype=np.float64)
-        covariance_evidence, _, smoothed_audit_log_likelihood = _b3_diag04_covariance_evidence(
-            model,
-            prepared,
-            raw_covars=raw_covars,
-            sector_reference_variance=reference,
-        )
-    except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
-        if raw_covariance_evidence.get("raw_validity") is not True:
-            derived_status = "not_computable_raw_covariance_invalid"
-            covariance_status = "failed"
-        elif getattr(exc, "stage", None) == "smoothed_posterior_audit" and (
-            (getattr(exc, "evidence", {}) or {}).get("error_type")
-        ):
-            derived_status = "not_computable_posterior_audit_unavailable"
-            covariance_status = "insufficient_evidence"
-        else:
-            derived_status = "not_computable_posterior_audit_invalid"
-            covariance_status = "failed"
-        cause_evidence = {
-            **dict(getattr(exc, "evidence", {}) or {}),
-            "d4_derived_evidence_status": derived_status,
-            "covariance_status": covariance_status,
-            "covariance_valid": False,
-            "state_posterior_mass": None,
-            "posterior_weighted_variance_about_weighted_mean": None,
-            "posterior_second_moment_about_fitted_mean": None,
-            "mstep_expected_covariance": None,
-            "dynamic_lower_reference": None,
-            "dynamic_upper_reference": None,
-            "mstep_relative_residual": None,
-        }
-        stage_evidence = _training_stage_evidence(
-            fit_invoked=True,
-            fit_returned=True,
-            completed_stages=[
-                "initialization",
-                "fit",
-                "raw_covariance_capture",
-                "monitor",
-                "likelihood",
-            ],
-            initialization=initialization,
-            monitor_evidence=monitor_evidence,
-            likelihood=likelihood,
-            raw_covariance_evidence=raw_covariance_evidence,
-            stage_specific_cause_evidence=cause_evidence,
-        )
-        raise B3TrainingStageError(
-            "covariance",
-            "hmm_risk_model_covariance_invalid",
-            exc,
-            stage_evidence=stage_evidence,
-        ) from exc
-    covariance_evidence = {
-        **covariance_evidence,
-        "train_rows": int(prepared.shape[0]),
-        "postfit_projection_performed": False,
-        "smoothed_audit_log_likelihood": smoothed_audit_log_likelihood,
-    }
-    covariance = evaluate_covariance_acceptance(covariance_evidence)
+    monitor_evidence: Mapping[str, Any] = dict(map_fit.likelihood["evidence"])
+    likelihood = dict(map_fit.likelihood)
+    raw_covars = np.asarray(raw_covariance_source, dtype=np.float64)
+    covariance_evidence = dict(map_fit.covariance_evidence)
+    covariance = dict(map_fit.covariance)
     covariance_stage_evidence = {
         **covariance_evidence,
         "acceptance": dict(covariance),
@@ -873,8 +1163,7 @@ def fit_b3_preprocessed_train_only(
             exc,
             stage_evidence=stage_evidence,
         ) from exc
-    monitor_history = list(monitor_evidence.get("history") or ())
-    terminal_likelihood = monitor_history[-1] if monitor_history else None
+    terminal_likelihood = map_fit.terminal_raw_likelihood
     independent_valid = (
         likelihood.get("convergence_valid") is True
         and likelihood.get("likelihood_valid") is True
@@ -1060,7 +1349,7 @@ def _fit_b3_train_only(
         "covariance": dict(core.covariance),
         "train_occupancy": dict(core.train_occupancy),
         "final_train_log_likelihood": core.terminal_likelihood,
-        "final_train_log_likelihood_source": "monitor_history_terminal_value",
+        "final_train_log_likelihood_source": "map_joint_stop_raw_observed_log_likelihood",
         "model_payload_sha256": model_hash,
         "validation_accessed": False,
         "future_utility_accessed": False,
@@ -1742,6 +2031,9 @@ def _validate_ready_layer(
             )
             if receipt.get("contract_version") != contract or not receipt.get("evidence"):
                 raise StateModelSetError(f"B3 READY {label} evidence is incomplete for {family}/{level}/{code}")
+        likelihood_evidence = likelihood.get("evidence")
+        if not isinstance(likelihood_evidence, Mapping):
+            raise StateModelSetError(f"B3 READY likelihood evidence is incomplete for {family}/{level}/{code}")
         if (
             training_receipt.get("fit_status") != "accepted"
             or training_receipt.get("schema_version")
@@ -1764,6 +2056,8 @@ def _validate_ready_layer(
             or likelihood.get("convergence_valid") is not True
             or likelihood.get("likelihood_status") not in {"accepted", "accepted_with_warning"}
             or likelihood.get("likelihood_valid") is not True
+            or not likelihood_evidence.get("covariance_receipt_sha256_history")
+            or likelihood_evidence.get("covariance_receipt_sha256_history", [])[-1] != covariance.get("receipt_sha256")
             or covariance.get("covariance_status") != "accepted"
             or covariance.get("covariance_valid") is not True
             or occupancy.get("train_occupancy_status") != "accepted"

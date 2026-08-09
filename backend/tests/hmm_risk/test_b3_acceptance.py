@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from datetime import date, timedelta
 
 import numpy as np
@@ -19,45 +20,90 @@ from backend.services.hmm_risk.b3_mixed_dimension import (
 from backend.services.hmm_risk.state_model_set import ALL_CORE_FEATURES
 
 
-def _monitor(history: list[float], *, converged: bool = True) -> dict:
+def _monitor(
+    history: list[float],
+    *,
+    converged: bool = True,
+    map_history: list[float] | None = None,
+    covariance_valid: list[bool] | None = None,
+    covariance_receipt_sha256: str = "a" * 64,
+) -> dict:
+    if map_history is None:
+        map_history = [-100.0 + index for index in range(len(history))]
+        if len(map_history) >= 2:
+            map_history[-1] = map_history[-2] + 1e-7
+    if covariance_valid is None:
+        covariance_valid = [True] * len(history)
+    prior_history = [map_value - raw for map_value, raw in zip(map_history, history, strict=True)]
+    map_history = [raw + prior for raw, prior in zip(history, prior_history, strict=True)]
     return {
-        "converged": converged,
-        "iterations": len(history),
+        "authority": "covariance_prior_map_objective",
         "maximum_iterations": 300,
-        "history": history,
+        "raw_likelihood_history": history,
+        "map_objective_history": map_history,
+        "map_prior_adjustment_history": prior_history,
+        "objective_component_history": [
+            {
+                "iteration": index + 1,
+                "raw_log_likelihood": raw,
+                "prior_log_covariance_component": -2.0 * prior - 1.0,
+                "prior_inverse_covariance_component": 1.0,
+                "prior_adjustment": prior,
+                "map_objective": map_value,
+            }
+            for index, (raw, prior, map_value) in enumerate(zip(history, prior_history, map_history, strict=True))
+        ],
+        "covariance_valid_history": covariance_valid,
+        "covariance_receipt_sha256_history": [covariance_receipt_sha256] * len(history),
+        "joint_stop_iteration": len(history) if converged else None,
+        "raw_likelihood_is_diagnostic_only": True,
+        "postfit_projection_performed": False,
     }
 
 
-def test_d4_01_keeps_terminal_warning_distinct_and_rejects_nonterminal_decrease() -> None:
+def test_d4_01_keeps_raw_likelihood_warning_distinct_and_rejects_map_decrease() -> None:
     warning = subject.evaluate_likelihood_acceptance(_monitor([-100.0, -90.0, -90.001]))
     assert warning["monitor_status"] == "accepted"
     assert warning["convergence_valid"] is True
     assert warning["likelihood_status"] == "accepted_with_warning"
     assert warning["likelihood_valid"] is True
-    assert warning["warning_reason_codes"] == ["hmm_risk_model_likelihood_terminal_decrease_warning"]
+    assert warning["warning_reason_codes"] == ["hmm_risk_model_raw_likelihood_decrease_diagnostic"]
 
-    failure = subject.evaluate_likelihood_acceptance(_monitor([-100.0, -100.0001, -99.0]))
-    assert failure["likelihood_status"] == "failed"
-    assert failure["likelihood_valid"] is False
-    assert "hmm_risk_model_likelihood_nonterminal_decrease" in failure["failure_reason_codes"]
+    failure = subject.evaluate_likelihood_acceptance(
+        _monitor([-100.0, -99.0], converged=False, map_history=[-100.0, -100.001])
+    )
+    assert failure["monitor_status"] == "failed"
+    assert failure["convergence_valid"] is False
+    assert "hmm_risk_model_map_objective_decrease" in failure["failure_reason_codes"]
 
 
-def test_d4_01_exact_terminal_boundaries_and_missing_evidence_fail_closed() -> None:
-    accepted = subject.evaluate_likelihood_acceptance(_monitor([0.0, float(np.nextafter(0.01, 0.0))]))
-    rejected = subject.evaluate_likelihood_acceptance(_monitor([0.0, 0.01]))
-    boundary_warning = subject.evaluate_likelihood_acceptance(_monitor([0.0, -2e-5]))
-    below_warning = subject.evaluate_likelihood_acceptance(_monitor([0.0, float(np.nextafter(-2e-5, -1.0))]))
+def test_d4_01_exact_map_envelope_and_missing_evidence_fail_closed() -> None:
+    previous = -100.0
+    envelope = subject.map_numeric_envelope(previous)
+    accepted = subject.evaluate_likelihood_acceptance(
+        _monitor([-2.0, -1.0], map_history=[previous, previous + envelope])
+    )
+    boundary_warning = subject.evaluate_likelihood_acceptance(
+        _monitor([-2.0, -1.0], map_history=[previous, previous - envelope])
+    )
+    rejected = subject.evaluate_likelihood_acceptance(
+        _monitor(
+            [-2.0, -1.0],
+            converged=False,
+            map_history=[previous, previous - 2.0 * envelope],
+        )
+    )
     missing = subject.evaluate_likelihood_acceptance(None)
 
     assert accepted["likelihood_status"] == "accepted"
-    assert "hmm_risk_model_likelihood_tolerance_failed" in rejected["failure_reason_codes"]
     assert boundary_warning["likelihood_status"] == "accepted_with_warning"
-    assert "hmm_risk_model_likelihood_tolerance_failed" in below_warning["failure_reason_codes"]
+    assert "hmm_risk_model_map_numeric_envelope_warning" in boundary_warning["warning_reason_codes"]
+    assert "hmm_risk_model_map_objective_decrease" in rejected["failure_reason_codes"]
     assert missing["likelihood_status"] == "insufficient_evidence"
 
 
-def test_d4_01_rejects_string_false_instead_of_coercing_it_to_true() -> None:
-    receipt = subject.evaluate_likelihood_acceptance(_monitor([-2.0, -1.5]) | {"converged": "false"})
+def test_d4_01_rejects_unknown_authority_instead_of_coercing_it() -> None:
+    receipt = subject.evaluate_likelihood_acceptance(_monitor([-2.0, -1.5]) | {"authority": "raw_likelihood_monitor"})
     assert receipt["monitor_status"] == "failed"
     assert receipt["convergence_valid"] is False
     assert "hmm_risk_model_monitor_history_invalid" in receipt["failure_reason_codes"]
@@ -73,6 +119,52 @@ def test_d4_numeric_evidence_non_finite_is_failed_not_missing_or_serialized_as_n
     assert "hmm_risk_model_likelihood_non_finite" in likelihood["failure_reason_codes"]
     assert covariance["covariance_status"] == "failed"
     assert "hmm_risk_model_covariance_invalid" in covariance["failure_reason_codes"]
+
+
+def test_d4_01_map_objective_matches_covariance_prior_formula_exactly() -> None:
+    raw_covars = np.asarray([[0.5, 2.0], [1.0, 4.0], [0.25, 8.0]], dtype=np.float64)
+    prior = np.asarray([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float64)
+    receipt = subject.map_covariance_prior_objective(-123.0, raw_covars, prior, 2.0)
+    expected_adjustment = -0.5 * float(np.sum(np.log(raw_covars) + prior / raw_covars))
+
+    assert receipt["prior_adjustment"] == expected_adjustment
+    assert receipt["map_objective"] == -123.0 + expected_adjustment
+
+
+@pytest.mark.parametrize("invalid", [0.0, -1.0, float("nan"), float("inf")])
+def test_d4_01_map_objective_rejects_invalid_raw_covariance(invalid: float) -> None:
+    raw_covars = np.ones((3, 2), dtype=np.float64)
+    raw_covars[0, 0] = invalid
+    with pytest.raises(ValueError):
+        subject.map_covariance_prior_objective(-1.0, raw_covars, np.ones((3, 2)), 2.0)
+
+
+def test_d4_01_map_receipt_rejects_component_drift_projection_and_steps_after_joint_stop() -> None:
+    component_drift = _monitor([-2.0, -1.0])
+    component_drift["objective_component_history"][1]["prior_inverse_covariance_component"] += 1.0
+    projected = _monitor([-2.0, -1.0]) | {"postfit_projection_performed": True}
+    trailing = _monitor(
+        [-3.0, -2.0, -1.0],
+        map_history=[-100.0, -100.0 + 1e-7, -100.0 + 2e-7],
+    )
+    trailing["joint_stop_iteration"] = 2
+
+    drift_receipt = subject.evaluate_likelihood_acceptance(component_drift)
+    projected_receipt = subject.evaluate_likelihood_acceptance(projected)
+    trailing_receipt = subject.evaluate_likelihood_acceptance(trailing)
+
+    assert "hmm_risk_model_map_objective_non_finite" in drift_receipt["failure_reason_codes"]
+    assert "hmm_risk_model_contract_unsupported" in projected_receipt["failure_reason_codes"]
+    assert "hmm_risk_model_map_joint_convergence_unavailable" in trailing_receipt["failure_reason_codes"]
+
+
+def test_d4_01_map_receipt_rejects_string_numeric_coercion() -> None:
+    receipt = _monitor([-2.0, -1.0])
+    receipt["joint_stop_iteration"] = "2"
+    result = subject.evaluate_likelihood_acceptance(receipt)
+
+    assert result["convergence_valid"] is False
+    assert "hmm_risk_model_monitor_history_invalid" in result["failure_reason_codes"]
 
 
 def _covariance_evidence(*, raw: float = 1.0, residual_reference: float = 1.0) -> dict:
@@ -145,13 +237,39 @@ def test_d4_03_anti_singleton_train_contract() -> None:
     assert "hmm_risk_model_train_month_coverage_insufficient" in rejected["failure_reason_codes"]
 
 
+def test_d4_03_persistent_path_accepts_exact_count_threshold_without_weakening_common_gate() -> None:
+    states = [1, 2] * 30 + [0] * 29 + [1, 2] * 30 + [0] + [1, 2] * 75
+    dates = _train_dates(len(states))
+    receipt = subject.evaluate_train_occupancy(_posterior(states), dates, frozen_input_manifest=_train_manifest(dates))
+
+    state_zero = receipt["evidence"]["states"]["0"]
+    assert receipt["train_occupancy_status"] == "accepted"
+    assert state_zero["hard_count"] == 30
+    assert state_zero["maximum_single_run_share"] > 0.8
+    assert state_zero["evidence_path"] == "persistent"
+    assert state_zero["persistent_path"]["valid"] is True
+
+
+def test_d4_03_two_run_low_share_cannot_use_persistent_path() -> None:
+    states = [1, 2] * 25 + [0] * 15 + [1, 2] * 25 + [0] * 15 + [1, 2] * 85
+    dates = _train_dates(len(states))
+    receipt = subject.evaluate_train_occupancy(_posterior(states), dates, frozen_input_manifest=_train_manifest(dates))
+
+    state_zero = receipt["evidence"]["states"]["0"]
+    assert state_zero["maximum_single_run_share"] <= 0.8
+    assert state_zero["evidence_path"] == "none"
+    assert "hmm_risk_model_train_regime_path_unsatisfied" in receipt["failure_reason_codes"]
+
+
 def _selection_repeat(*, level: str, preferred_seed: int) -> dict:
     count = 31 if level == "L1" else 131
     codes = [f"S{index:03d}" for index in range(count)]
     entries = []
     models = []
-    likelihood = subject.evaluate_likelihood_acceptance(_monitor([-2.0, -1.995]))
     covariance = subject.evaluate_covariance_acceptance(_covariance_evidence())
+    likelihood = subject.evaluate_likelihood_acceptance(
+        _monitor([-2.0, -1.995], covariance_receipt_sha256=covariance["receipt_sha256"])
+    )
     train_dates = _train_dates(30)
     train_occupancy = subject.evaluate_train_occupancy(
         _posterior([index % 3 for index in range(30)]),
@@ -220,12 +338,25 @@ def _selection_repeat(*, level: str, preferred_seed: int) -> dict:
     return repeat
 
 
+def test_candidate_rejects_rehashed_map_joint_covariance_lineage_drift() -> None:
+    entry = deepcopy(_selection_repeat(level="L1", preferred_seed=46)["entries"][0])
+    assert subject._candidate_status(entry) is True
+
+    entry["likelihood"]["evidence"]["covariance_receipt_sha256_history"][-1] = "0" * 64
+    likelihood_body = {key: value for key, value in entry["likelihood"].items() if key != "receipt_sha256"}
+    entry["likelihood"] = {**likelihood_body, "receipt_sha256": subject.canonical_sha256(likelihood_body)}
+
+    assert subject._candidate_status(entry) is False
+
+
 def _mixed_dimension_selection_repeat(*, preferred_seed: int) -> dict:
     codes = sorted([f"S{index:03d}" for index in range(130)] + [TARGET_SECTOR])
     entries = []
     models = []
-    likelihood = subject.evaluate_likelihood_acceptance(_monitor([-2.0, -1.995]))
     covariance = subject.evaluate_covariance_acceptance(_covariance_evidence())
+    likelihood = subject.evaluate_likelihood_acceptance(
+        _monitor([-2.0, -1.995], covariance_receipt_sha256=covariance["receipt_sha256"])
+    )
     train_dates = _train_dates(30)
     train_occupancy = subject.evaluate_train_occupancy(
         _posterior([index % 3 for index in range(30)]),
@@ -780,5 +911,5 @@ def test_d6_preserves_valid_assignment_when_utility_evidence_is_missing() -> Non
 
 def test_d5_score_uses_actual_terminal_likelihood_not_history_maximum() -> None:
     receipt = subject.evaluate_likelihood_acceptance(_monitor([-10.0, -9.0, -9.00001]))
-    assert receipt["evidence"]["history"][-1] == -9.00001
-    assert math.isfinite(receipt["evidence"]["deltas"][-1]["relative"])
+    assert receipt["evidence"]["raw_likelihood_history"][-1] == -9.00001
+    assert math.isfinite(receipt["evidence"]["raw_likelihood_deltas"][-1]["relative"])

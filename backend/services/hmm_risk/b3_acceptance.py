@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from datetime import date
+from numbers import Real
 from typing import Any
 
 import numpy as np
@@ -19,9 +20,9 @@ from backend.services.hmm_risk.state_model_set import StateModelSetError, canoni
 
 
 D3_CONTRACT_VERSION = "hmm_risk_c008_b3_d3_03_a_v1"
-D4_LIKELIHOOD_VERSION = "hmm_risk_c008_b3_d4_01_a_v1"
+D4_LIKELIHOOD_VERSION = "hmm_risk_c008_b3_d4_01_map_a_v1"
 D4_COVARIANCE_VERSION = "hmm_risk_c008_b3_d4_02_a_v1"
-D4_OCCUPANCY_VERSION = "hmm_risk_c008_b3_d4_03_b_v1"
+D4_OCCUPANCY_VERSION = "hmm_risk_c008_b3_d4_03_persistent_a_v1"
 D5_SELECTION_VERSION = "hmm_risk_c008_b3_d5_01_b_v1"
 D6_SEMANTIC_VERSION = "hmm_risk_c008_b3_d6_01_b_v1"
 L2_RETRAIN_VERSION = "hmm_risk_c008_b3_l2_retrain_a_v1"
@@ -40,6 +41,18 @@ def _finite_array(value: Any, *, shape: tuple[int, ...] | None = None) -> np.nda
     if not np.isfinite(result).all():
         raise ValueError("array contains non-finite values")
     return result
+
+
+def _strict_real(value: Any) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise TypeError("numeric evidence must be a real number")
+    return float(value)
+
+
+def _strict_real_vector(value: Any) -> np.ndarray:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise TypeError("numeric history must be a sequence")
+    return np.asarray([_strict_real(item) for item in value], dtype=np.float64)
 
 
 def _ordered_unique_dates(values: Sequence[date]) -> tuple[date, ...]:
@@ -128,10 +141,48 @@ def _named_status_receipt(
     return {**receipt, "receipt_sha256": canonical_sha256(receipt)}
 
 
-def evaluate_likelihood_acceptance(monitor: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Apply D4-01-A without treating hmmlearn monitor convergence as likelihood acceptance."""
+def map_covariance_prior_objective(
+    raw_log_likelihood: Any,
+    raw_covars: Any,
+    covars_prior: Any,
+    covars_weight: Any,
+) -> dict[str, Any]:
+    """Return the exact D4-01-MAP-A objective components for one parameter state."""
 
-    if monitor is None:
+    likelihood = float(raw_log_likelihood)
+    covars = np.asarray(raw_covars, dtype=np.float64)
+    prior = np.asarray(covars_prior, dtype=np.float64)
+    weight = float(covars_weight)
+    if covars.ndim != 2 or prior.shape != covars.shape:
+        raise ValueError("MAP covariance/prior shape is invalid")
+    if not np.isfinite(likelihood) or not np.isfinite(covars).all() or not np.isfinite(prior).all():
+        raise ValueError("MAP objective input contains non-finite value")
+    if not np.isfinite(weight) or weight <= 1.0 or np.any(covars <= 0.0) or np.any(prior <= 0.0):
+        raise ValueError("MAP covariance/prior/weight domain is invalid")
+    log_component = float(np.sum((weight - 1.0) * np.log(covars), dtype=np.float64))
+    inverse_component = float(np.sum(prior / covars, dtype=np.float64))
+    prior_adjustment = -0.5 * (log_component + inverse_component)
+    objective = likelihood + prior_adjustment
+    if not all(np.isfinite(value) for value in (log_component, inverse_component, prior_adjustment, objective)):
+        raise ValueError("MAP objective is non-finite")
+    return {
+        "raw_log_likelihood": likelihood,
+        "prior_log_covariance_component": log_component,
+        "prior_inverse_covariance_component": inverse_component,
+        "prior_adjustment": prior_adjustment,
+        "map_objective": objective,
+    }
+
+
+def map_numeric_envelope(previous: float) -> float:
+    return max(1e-8, math.sqrt(np.finfo(np.float64).eps) * max(1.0, abs(previous)))
+
+
+def evaluate_likelihood_acceptance(evidence: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Apply D4-01-MAP-A and recompute all convergence comparisons fail-closed."""
+
+    missing = "hmm_risk_model_likelihood_evidence_missing"
+    if evidence is None:
         body = {
             "contract_version": D4_LIKELIHOOD_VERSION,
             "monitor_status": "insufficient_evidence",
@@ -139,20 +190,25 @@ def evaluate_likelihood_acceptance(monitor: Mapping[str, Any] | None) -> dict[st
             "likelihood_status": "insufficient_evidence",
             "likelihood_valid": False,
             "failure_reason_codes": [],
-            "blocking_reason_codes": ["hmm_risk_model_likelihood_evidence_missing"],
+            "blocking_reason_codes": [missing],
             "warning_reason_codes": [],
-            "primary_reason_code": "hmm_risk_model_likelihood_evidence_missing",
+            "primary_reason_code": missing,
             "evidence": {},
         }
         return {**body, "receipt_sha256": canonical_sha256(body)}
 
-    monitor_failures: list[str] = []
-    monitor_blockers: list[str] = []
-    likelihood_failures: list[str] = []
-    likelihood_blockers: list[str] = []
-    warnings: list[str] = []
-    required_fields = {"converged", "iterations", "maximum_iterations", "history"}
-    if not required_fields.issubset(monitor):
+    required = {
+        "authority",
+        "maximum_iterations",
+        "raw_likelihood_history",
+        "map_objective_history",
+        "map_prior_adjustment_history",
+        "objective_component_history",
+        "covariance_valid_history",
+        "covariance_receipt_sha256_history",
+        "joint_stop_iteration",
+    }
+    if not required.issubset(evidence):
         body = {
             "contract_version": D4_LIKELIHOOD_VERSION,
             "monitor_status": "insufficient_evidence",
@@ -160,105 +216,186 @@ def evaluate_likelihood_acceptance(monitor: Mapping[str, Any] | None) -> dict[st
             "likelihood_status": "insufficient_evidence",
             "likelihood_valid": False,
             "failure_reason_codes": [],
-            "blocking_reason_codes": ["hmm_risk_model_likelihood_evidence_missing"],
+            "blocking_reason_codes": [missing],
             "warning_reason_codes": [],
-            "primary_reason_code": "hmm_risk_model_likelihood_evidence_missing",
-            "evidence": {"monitor_fields_present": sorted(str(key) for key in monitor)},
+            "primary_reason_code": missing,
+            "evidence": {"evidence_fields_present": sorted(str(key) for key in evidence)},
         }
         return {**body, "receipt_sha256": canonical_sha256(body)}
 
+    failures: list[str] = []
+    blockers: list[str] = []
+    warnings: list[str] = []
     try:
-        if not isinstance(monitor["converged"], bool):
-            raise TypeError("converged must be a bool")
-        converged = monitor["converged"]
-        if isinstance(monitor["iterations"], bool) or isinstance(monitor["maximum_iterations"], bool):
-            raise TypeError("iteration values must be integers")
-        iterations = int(monitor["iterations"])
-        maximum_iterations = int(monitor["maximum_iterations"])
-        history = np.asarray(monitor["history"], dtype=np.float64)
+        if evidence["authority"] != "covariance_prior_map_objective":
+            raise ValueError("MAP authority is invalid")
+        if isinstance(evidence["maximum_iterations"], (bool, np.bool_)) or not isinstance(
+            evidence["maximum_iterations"], (int, np.integer)
+        ):
+            raise TypeError("maximum_iterations must be an integer")
+        maximum_iterations = int(evidence["maximum_iterations"])
+        raw_history = _strict_real_vector(evidence["raw_likelihood_history"])
+        map_history = _strict_real_vector(evidence["map_objective_history"])
+        prior_history = _strict_real_vector(evidence["map_prior_adjustment_history"])
+        component_history = tuple(evidence["objective_component_history"])
+        covariance_valid_history = tuple(evidence["covariance_valid_history"])
+        covariance_hashes = tuple(str(value) for value in evidence["covariance_receipt_sha256_history"])
+        joint_stop = evidence["joint_stop_iteration"]
+        if joint_stop is not None and (
+            isinstance(joint_stop, (bool, np.bool_)) or not isinstance(joint_stop, (int, np.integer))
+        ):
+            raise TypeError("joint stop iteration is invalid")
+        joint_stop = None if joint_stop is None else int(joint_stop)
     except (TypeError, ValueError):
-        body = {
-            "contract_version": D4_LIKELIHOOD_VERSION,
-            "monitor_status": "failed",
-            "convergence_valid": False,
-            "likelihood_status": "insufficient_evidence",
-            "likelihood_valid": False,
-            "failure_reason_codes": ["hmm_risk_model_monitor_history_invalid"],
-            "blocking_reason_codes": ["hmm_risk_model_likelihood_evidence_missing"],
-            "warning_reason_codes": [],
-            "primary_reason_code": "hmm_risk_model_monitor_history_invalid",
-            "evidence": {"history_parseable": False},
-        }
-        return {**body, "receipt_sha256": canonical_sha256(body)}
+        failures.append("hmm_risk_model_monitor_history_invalid")
+        raw_history = map_history = prior_history = np.asarray([], dtype=np.float64)
+        component_history = ()
+        covariance_valid_history = ()
+        covariance_hashes = ()
+        maximum_iterations = 0
+        joint_stop = None
 
-    history_is_finite = bool(np.isfinite(history).all())
-    if not history_is_finite:
-        monitor_failures.append("hmm_risk_model_monitor_history_invalid")
-        likelihood_failures.append("hmm_risk_model_likelihood_non_finite")
-    if history.ndim != 1 or history.size < 2 or history.size != iterations:
-        monitor_failures.append("hmm_risk_model_monitor_history_invalid")
-        likelihood_blockers.append("hmm_risk_model_likelihood_evidence_missing")
-    if not converged:
-        monitor_failures.append("hmm_risk_model_monitor_not_converged")
-    if maximum_iterations != 300 or iterations >= maximum_iterations:
-        monitor_failures.append("hmm_risk_model_max_iterations_reached")
-    elif iterations < 2:
-        monitor_failures.append("hmm_risk_model_monitor_history_invalid")
+    lengths = {
+        int(raw_history.size),
+        int(map_history.size),
+        int(prior_history.size),
+        len(covariance_valid_history),
+        len(covariance_hashes),
+        len(component_history),
+    }
+    history_shape_valid = (
+        raw_history.ndim == map_history.ndim == prior_history.ndim == 1
+        and len(lengths) == 1
+        and 2 <= raw_history.size <= maximum_iterations
+        and maximum_iterations == 300
+        and all(isinstance(value, bool) for value in covariance_valid_history)
+        and all(_valid_sha256(value) for value in covariance_hashes)
+        and all(isinstance(value, Mapping) for value in component_history)
+    )
+    histories_finite = bool(
+        np.isfinite(raw_history).all() and np.isfinite(map_history).all() and np.isfinite(prior_history).all()
+    )
+    if not history_shape_valid:
+        failures.append("hmm_risk_model_monitor_history_invalid")
+    if not histories_finite:
+        failures.extend(("hmm_risk_model_likelihood_non_finite", "hmm_risk_model_map_objective_non_finite"))
+    if (
+        evidence.get("raw_likelihood_is_diagnostic_only") is not True
+        or evidence.get("postfit_projection_performed") is not False
+    ):
+        failures.append("hmm_risk_model_contract_unsupported")
 
-    deltas: list[dict[str, Any]] = []
-    if history.ndim == 1 and history.size >= 2 and history_is_finite:
-        for index in range(1, int(history.size)):
-            previous = float(history[index - 1])
-            current = float(history[index])
-            absolute = current - previous
-            relative = absolute / max(1.0, abs(previous))
-            terminal = index == history.size - 1
-            deltas.append(
+    map_deltas: list[dict[str, Any]] = []
+    raw_deltas: list[dict[str, Any]] = []
+    expected_joint_stop: int | None = None
+    if history_shape_valid and histories_finite:
+        if not np.array_equal(map_history, raw_history + prior_history):
+            failures.append("hmm_risk_model_map_objective_non_finite")
+        for index, component in enumerate(component_history):
+            try:
+                if isinstance(component["iteration"], (bool, np.bool_)) or not isinstance(
+                    component["iteration"], (int, np.integer)
+                ):
+                    raise TypeError("component iteration must be an integer")
+                component_iteration = int(component["iteration"])
+                component_raw = _strict_real(component["raw_log_likelihood"])
+                component_prior = _strict_real(component["prior_adjustment"])
+                component_map = _strict_real(component["map_objective"])
+                component_log = _strict_real(component["prior_log_covariance_component"])
+                component_inverse = _strict_real(component["prior_inverse_covariance_component"])
+            except (KeyError, TypeError, ValueError):
+                failures.append("hmm_risk_model_map_objective_non_finite")
+                break
+            if (
+                component_iteration != index + 1
+                or not all(
+                    np.isfinite(value)
+                    for value in (component_raw, component_prior, component_map, component_log, component_inverse)
+                )
+                or component_raw != float(raw_history[index])
+                or component_prior != float(prior_history[index])
+                or component_map != float(map_history[index])
+                or component_map != component_raw + component_prior
+                or component_prior != -0.5 * (component_log + component_inverse)
+            ):
+                failures.append("hmm_risk_model_map_objective_non_finite")
+                break
+        for index in range(1, int(map_history.size)):
+            previous_map = float(map_history[index - 1])
+            current_map = float(map_history[index])
+            map_delta = current_map - previous_map
+            envelope = map_numeric_envelope(previous_map)
+            covariance_valid = covariance_valid_history[index]
+            within_envelope = abs(map_delta) <= envelope
+            map_deltas.append(
                 {
                     "index": index,
-                    "terminal": terminal,
-                    "previous": previous,
-                    "current": current,
-                    "absolute": absolute,
-                    "relative": relative,
+                    "iteration": index + 1,
+                    "previous": previous_map,
+                    "current": current_map,
+                    "absolute": map_delta,
+                    "numeric_envelope": envelope,
+                    "covariance_valid": covariance_valid,
+                    "joint_stop_eligible": within_envelope and covariance_valid,
                 }
             )
-            if not terminal and absolute < 0.0:
-                likelihood_failures.append("hmm_risk_model_likelihood_nonterminal_decrease")
-            if terminal and absolute >= 0.0 and not absolute < 0.01:
-                likelihood_failures.append("hmm_risk_model_likelihood_tolerance_failed")
-            if terminal and absolute < 0.0:
-                if relative < -2e-5:
-                    likelihood_failures.append("hmm_risk_model_likelihood_tolerance_failed")
-                else:
-                    warnings.append("hmm_risk_model_likelihood_terminal_decrease_warning")
+            raw_previous = float(raw_history[index - 1])
+            raw_current = float(raw_history[index])
+            raw_delta = raw_current - raw_previous
+            raw_deltas.append(
+                {
+                    "index": index,
+                    "iteration": index + 1,
+                    "previous": raw_previous,
+                    "current": raw_current,
+                    "absolute": raw_delta,
+                    "relative": raw_delta / max(1.0, abs(raw_previous)),
+                }
+            )
+            if map_delta < -envelope:
+                failures.append("hmm_risk_model_map_objective_decrease")
+            elif map_delta < 0.0:
+                warnings.append("hmm_risk_model_map_numeric_envelope_warning")
+            if raw_delta < 0.0:
+                warnings.append("hmm_risk_model_raw_likelihood_decrease_diagnostic")
+            if expected_joint_stop is None and within_envelope and covariance_valid:
+                expected_joint_stop = index + 1
+        if joint_stop != expected_joint_stop:
+            failures.append("hmm_risk_model_map_joint_convergence_unavailable")
+        if joint_stop is None:
+            failures.append("hmm_risk_model_map_joint_convergence_unavailable")
+        elif joint_stop != int(raw_history.size):
+            failures.append("hmm_risk_model_map_joint_convergence_unavailable")
 
-    monitor_failures = list(dict.fromkeys(monitor_failures))
-    monitor_blockers = list(dict.fromkeys(monitor_blockers))
-    likelihood_failures = list(dict.fromkeys(likelihood_failures))
-    likelihood_blockers = list(dict.fromkeys(likelihood_blockers))
+    failures = list(dict.fromkeys(failures))
+    blockers = list(dict.fromkeys(blockers))
     warnings = list(dict.fromkeys(warnings))
-    monitor_status, convergence_valid = _status_value(
-        failures=monitor_failures,
-        blockers=monitor_blockers,
-    )
+    convergence_failures = [code for code in failures if code != "hmm_risk_model_likelihood_non_finite"]
+    monitor_status, convergence_valid = _status_value(failures=convergence_failures, blockers=blockers)
+    likelihood_failures = [code for code in failures if code == "hmm_risk_model_likelihood_non_finite"]
     likelihood_status, likelihood_valid = _status_value(
         failures=likelihood_failures,
-        blockers=likelihood_blockers,
+        blockers=blockers,
         warnings=warnings,
     )
-    failures = [*monitor_failures, *likelihood_failures]
-    blockers = [*monitor_blockers, *likelihood_blockers]
-    evidence = {
-        "monitor_converged": converged,
-        "iterations": iterations,
+    normalized_evidence = {
+        "authority": evidence.get("authority"),
         "maximum_iterations": maximum_iterations,
-        "history": history.tolist() if history_is_finite else None,
-        "history_sha256": canonical_sha256(history.tolist()) if history_is_finite else None,
-        "history_non_finite_count": int((~np.isfinite(history)).sum()),
-        "deltas": deltas,
-        "fit_tolerance": 0.01,
-        "terminal_relative_tolerance": -2e-5,
+        "raw_likelihood_history": raw_history.tolist() if histories_finite else None,
+        "map_objective_history": map_history.tolist() if histories_finite else None,
+        "map_prior_adjustment_history": prior_history.tolist() if histories_finite else None,
+        "objective_component_history": [dict(value) for value in component_history] if histories_finite else None,
+        "covariance_valid_history": list(covariance_valid_history),
+        "covariance_receipt_sha256_history": list(covariance_hashes),
+        "joint_stop_iteration": joint_stop,
+        "raw_likelihood_is_diagnostic_only": evidence.get("raw_likelihood_is_diagnostic_only") is True,
+        "postfit_projection_performed": evidence.get("postfit_projection_performed") is True,
+        "iterations": int(raw_history.size),
+        "raw_likelihood_history_sha256": canonical_sha256(raw_history.tolist()) if histories_finite else None,
+        "map_objective_history_sha256": canonical_sha256(map_history.tolist()) if histories_finite else None,
+        "map_deltas": map_deltas,
+        "raw_likelihood_deltas": raw_deltas,
+        "numeric_envelope_formula": "max(1e-8,sqrt(eps_float64)*max(1,abs(previous_map_objective)))",
     }
     primary = failures[0] if failures else blockers[0] if blockers else warnings[0] if warnings else None
     body = {
@@ -271,7 +408,7 @@ def evaluate_likelihood_acceptance(monitor: Mapping[str, Any] | None) -> dict[st
         "blocking_reason_codes": blockers,
         "warning_reason_codes": warnings,
         "primary_reason_code": primary,
-        "evidence": evidence,
+        "evidence": normalized_evidence,
     }
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
@@ -438,7 +575,7 @@ def evaluate_train_occupancy(
     *,
     frozen_input_manifest: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Apply D4-03-B to causal train hard assignments only."""
+    """Apply D4-03-PERSISTENT-A to causal train hard assignments only."""
 
     if dates is None or not isinstance(frozen_input_manifest, Mapping):
         return _named_status_receipt(
@@ -493,20 +630,66 @@ def evaluate_train_occupancy(
         failures.append("hmm_risk_model_posterior_normalization_failed")
     if metrics["top1_top2_min_margin"] <= 1e-12:
         failures.append("hmm_risk_model_posterior_tie")
+    posterior_common_valid = metrics["row_sum_max_abs_error"] <= 1e-12 and metrics["top1_top2_min_margin"] > 1e-12
     count_threshold = max(5, math.ceil(0.01 * len(ordered_dates)))
+    persistent_count_threshold = max(30, math.ceil(0.10 * len(ordered_dates)))
     for state in metrics["states"].values():
+        common_valid = posterior_common_valid
         if state["hard_count"] < count_threshold:
             failures.append("hmm_risk_model_train_state_count_insufficient")
+            common_valid = False
         if state["normalized_occupancy"] < 0.01:
             failures.append("hmm_risk_model_train_occupancy_insufficient")
+            common_valid = False
         if state["calendar_month_count"] < 3:
             failures.append("hmm_risk_model_train_month_coverage_insufficient")
-        if state["contiguous_run_count"] < 3:
-            failures.append("hmm_risk_model_train_run_coverage_insufficient")
+            common_valid = False
         if state["incoming_transition_count"] < 2 or state["outgoing_transition_count"] < 2:
             failures.append("hmm_risk_model_train_transition_coverage_insufficient")
-        if state["maximum_single_run_share"] is None or state["maximum_single_run_share"] > 0.8:
-            failures.append("hmm_risk_model_train_run_concentration_exceeded")
+            common_valid = False
+        share = state["maximum_single_run_share"]
+        recurrent_valid = bool(
+            common_valid and share is not None and share <= 0.8 and state["contiguous_run_count"] >= 3
+        )
+        persistent_valid = bool(
+            common_valid
+            and share is not None
+            and share > 0.8
+            and state["hard_count"] >= persistent_count_threshold
+            and state["normalized_occupancy"] >= 0.10
+            and state["calendar_month_count"] >= 6
+            and state["contiguous_run_count"] >= 2
+            and state["incoming_transition_count"] >= 2
+            and state["outgoing_transition_count"] >= 2
+        )
+        if common_valid and not (recurrent_valid or persistent_valid):
+            failures.append("hmm_risk_model_train_regime_path_unsatisfied")
+        state.update(
+            {
+                "common_gate_valid": common_valid,
+                "evidence_path": "recurrent" if recurrent_valid else "persistent" if persistent_valid else "none",
+                "recurrent_path": {
+                    "eligible_by_run_share": share is not None and share <= 0.8,
+                    "run_count_valid": state["contiguous_run_count"] >= 3,
+                    "valid": recurrent_valid,
+                },
+                "persistent_path": {
+                    "eligible_by_run_share": share is not None and share > 0.8,
+                    "count_threshold": persistent_count_threshold,
+                    "count_valid": state["hard_count"] >= persistent_count_threshold,
+                    "occupancy_threshold": 0.10,
+                    "occupancy_valid": state["normalized_occupancy"] >= 0.10,
+                    "month_threshold": 6,
+                    "month_valid": state["calendar_month_count"] >= 6,
+                    "run_threshold": 2,
+                    "run_valid": state["contiguous_run_count"] >= 2,
+                    "transition_threshold": 2,
+                    "incoming_transition_valid": state["incoming_transition_count"] >= 2,
+                    "outgoing_transition_valid": state["outgoing_transition_count"] >= 2,
+                    "valid": persistent_valid,
+                },
+            }
+        )
     evidence = {
         "direct_sector_level": frozen_input_manifest.get("direct_sector_level"),
         "sector_code": frozen_input_manifest.get("sector_code"),
@@ -522,6 +705,11 @@ def evaluate_train_occupancy(
         "run_threshold": 3,
         "transition_threshold": 2,
         "maximum_run_share_threshold": 0.8,
+        "persistent_count_threshold": persistent_count_threshold,
+        "persistent_occupancy_threshold": 0.10,
+        "persistent_month_threshold": 6,
+        "persistent_run_threshold": 2,
+        "path_partition": {"recurrent_max_run_share": "<=0.8", "persistent_min_run_share": ">0.8"},
         "validation_accessed": False,
         "future_utility_accessed": False,
         **metrics,
@@ -535,13 +723,21 @@ def evaluate_train_occupancy(
 
 
 def _candidate_status(entry: Mapping[str, Any]) -> bool:
+    likelihood = entry.get("likelihood", {})
+    covariance = entry.get("covariance", {})
+    likelihood_evidence = likelihood.get("evidence", {}) if isinstance(likelihood, Mapping) else {}
+    covariance_hashes = likelihood_evidence.get("covariance_receipt_sha256_history", ())
     return (
         entry.get("fit_status") == "accepted"
         and entry.get("model_entry_status") == "accepted"
         and entry.get("model_entry_valid") is True
-        and entry.get("likelihood", {}).get("convergence_valid") is True
-        and entry.get("likelihood", {}).get("likelihood_valid") is True
-        and entry.get("covariance", {}).get("covariance_valid") is True
+        and likelihood.get("convergence_valid") is True
+        and likelihood.get("likelihood_valid") is True
+        and covariance.get("covariance_valid") is True
+        and isinstance(covariance_hashes, Sequence)
+        and not isinstance(covariance_hashes, (str, bytes))
+        and bool(covariance_hashes)
+        and covariance_hashes[-1] == covariance.get("receipt_sha256")
         and entry.get("train_occupancy", {}).get("train_occupancy_valid") is True
     )
 
