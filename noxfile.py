@@ -1128,12 +1128,15 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def qe_read_backend(session: nox.Session) -> None:
-    """Run QE read-path backend regression tests only."""
+    """Run QE read-path and authoritative factor-metric contract regressions."""
     _run_pytest(
         session,
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
+        "backend/tests/quantevolver/test_factor_emit_hook.py",
+        "backend/tests/test_factor_metrics_h20_contract.py",
+        "backend/tests/test_factor_metrics_authority_static.py::test_production_factor_metrics_reads_are_calc_engine_scoped",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1343,6 +1346,12 @@ def qe_archive_backend(session: nox.Session) -> None:
     handler_contract_test = ROOT / "backend" / "tests" / "qe_archive" / "test_handler_contract.py"
     if handler_contract_test.exists():
         pytest_targets.append("backend/tests/qe_archive/test_handler_contract.py")
+    factor_retirement_test = ROOT / "backend" / "tests" / "qe_archive" / "test_factor_value_archive_handler.py"
+    if factor_retirement_test.exists():
+        pytest_targets.append("backend/tests/qe_archive/test_factor_value_archive_handler.py")
+    round3_regression_test = ROOT / "backend" / "tests" / "qe_archive" / "test_round3_fixes.py"
+    if round3_regression_test.exists():
+        pytest_targets.append("backend/tests/qe_archive/test_round3_fixes.py")
     _run_pytest(
         session,
         *pytest_targets,
