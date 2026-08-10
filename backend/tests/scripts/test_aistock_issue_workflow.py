@@ -3763,20 +3763,18 @@ def test_run_cli_missing_local_bug_json_emits_compact_recovery_payload(
 ) -> None:
     monkeypatch.setattr(
         workflow,
-        "_scan_github_bug_ids",
-        lambda **_kwargs: (
-            [
-                {
-                    "bug_id": "BUG-302",
-                    "number": 302,
-                    "kind": "github_issue",
-                    "source": "https://github.com/licong01-cloud/AIstock/issues/897",
-                    "github_issue_number": 897,
-                    "github_state": "OPEN",
-                    "title": "BUG-302 P1: missing registry record",
-                    "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
-                }
-            ],
+        "_github_bug_issue_for_id",
+        lambda _bug_id: (
+            {
+                "bug_id": "BUG-302",
+                "number": 302,
+                "kind": "github_issue",
+                "source": "https://github.com/licong01-cloud/AIstock/issues/897",
+                "github_issue_number": 897,
+                "github_state": "OPEN",
+                "title": "BUG-302 P1: missing registry record",
+                "labels": [{"name": "module:paper_v2"}, {"name": "severity:p1"}],
+            },
             [],
         ),
     )
