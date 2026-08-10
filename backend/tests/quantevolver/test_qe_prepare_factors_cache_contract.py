@@ -80,6 +80,25 @@ def _panel_script(
     return script
 
 
+def _legacy_multi_factor_script(monkeypatch) -> str:
+    _patch_universe(monkeypatch)
+    factors_info = [
+        {
+            "factor_name": name,
+            "code_text": f"def calculate_{name}(instruments, start_date, end_date):\n    return None\n",
+        }
+        for name in ["BaseA", "BaseB"]
+    ]
+    script = ConfigComposer()._compose_prepare_factors(
+        factors_info,
+        factor_data_dir="/tmp/factor_data",
+        data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT),
+    )
+    assert script is not None
+    compile(script, "prepare_factors.py", "exec")
+    return script
+
+
 def test_prepare_factors_generates_official_cache_hit_contract(monkeypatch) -> None:
     script = _script(monkeypatch)
 
@@ -359,18 +378,92 @@ def test_observation_panel_keeps_identical_reference_index_for_sparse_candidate(
     assert pd.isna(filtered.loc[base_index[1], "Candidate"])
 
 
-def test_observation_panel_legacy_mode_preserves_outer_union(monkeypatch) -> None:
-    script = _script(monkeypatch)
-    ns: dict[str, object] = {}
-    exec(script, ns)
-    index = pd.MultiIndex.from_tuples(
-        [(pd.Timestamp("2026-01-05"), "000001.SZ")],
+def test_observation_panel_contract_is_identical_for_matched_ce3_and_ce4(monkeypatch) -> None:
+    ce3_script = _panel_script(
+        monkeypatch,
+        factor_names=["BaseA", "BaseB"],
+        reference_factor_names=["BaseA", "BaseB"],
+    )
+    ce4_script = _panel_script(
+        monkeypatch,
+        factor_names=["BaseA", "BaseB", "Candidate"],
+        reference_factor_names=["BaseA", "BaseB"],
+    )
+    ce3_ns: dict[str, object] = {}
+    ce4_ns: dict[str, object] = {}
+    exec(ce3_script, ce3_ns)
+    exec(ce4_script, ce4_ns)
+    assert ce3_ns["QE_OBSERVATION_PANEL_CONTRACT"] == ce4_ns["QE_OBSERVATION_PANEL_CONTRACT"]
+
+    reference_index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2026-01-05"), "000001.SZ"),
+            (pd.Timestamp("2026-01-05"), "000002.SZ"),
+        ],
         names=["datetime", "instrument"],
     )
-    combined = pd.DataFrame({"DemoFactor": [1.0]}, index=index)
+    expanded_index = reference_index.append(
+        pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2026-01-05"), "920001.BJ")],
+            names=["datetime", "instrument"],
+        )
+    )
+    ce3_frame = pd.DataFrame(
+        {"BaseA": [1.0, 2.0], "BaseB": [3.0, 4.0]},
+        index=reference_index,
+    )
+    ce4_frame = ce3_frame.join(
+        pd.DataFrame({"Candidate": [5.0, 6.0, 7.0]}, index=expanded_index),
+        how="outer",
+    )
+
+    ce3_filtered = ce3_ns["_apply_observation_panel"](ce3_frame)
+    ce4_filtered = ce4_ns["_apply_observation_panel"](ce4_frame)
+    pd.testing.assert_index_equal(ce3_filtered.index, ce4_filtered.index)
+    pd.testing.assert_index_equal(ce3_filtered.index, reference_index)
+
+
+def test_observation_panel_legacy_mode_preserves_outer_union(monkeypatch) -> None:
+    script = _legacy_multi_factor_script(monkeypatch)
+    ns: dict[str, object] = {}
+    exec(script, ns)
+    base_a = pd.DataFrame(
+        {"BaseA": [1.0]},
+        index=pd.Index(["000001.SZ"], name="instrument"),
+    )
+    base_b = pd.DataFrame(
+        {"BaseB": [2.0]},
+        index=pd.Index(["000002.SZ"], name="instrument"),
+    )
+    selected = ns["_select_factor_results"](
+        ["BaseA", "BaseB"],
+        {"BaseA": base_a, "BaseB": base_b},
+    )
+    combined = pd.concat(selected, axis=1)
 
     assert ns["QE_OBSERVATION_PANEL_CONTRACT"] == {}
+    assert len(selected) == 2
+    assert selected[0] is base_a
+    assert selected[1] is base_b
     assert ns["_apply_observation_panel"](combined) is combined
+    assert list(combined.index) == ["000001.SZ", "000002.SZ"]
+
+
+def test_observation_panel_legacy_mode_omits_failed_factor_without_aborting(
+    monkeypatch,
+) -> None:
+    script = _legacy_multi_factor_script(monkeypatch)
+    ns: dict[str, object] = {}
+    exec(script, ns)
+    base_a = pd.DataFrame({"BaseA": [1.0]})
+
+    selected = ns["_select_factor_results"](
+        ["BaseA", "BaseB"],
+        {"BaseA": base_a, "BaseB": None},
+    )
+
+    assert len(selected) == 1
+    assert selected[0] is base_a
 
 
 def test_observation_panel_missing_reference_column_fails_closed(monkeypatch) -> None:
@@ -425,4 +518,86 @@ def test_prepare_factors_missing_configured_output_fails_closed(
     exec(script, ns)
 
     with pytest.raises(RuntimeError, match=reason_code):
-        ns["_require_factor_results"](["BaseA", "BaseB"], factor_results)
+        ns["_select_factor_results"](["BaseA", "BaseB"], factor_results)
+
+
+def test_ma_e16_in_memory_compose_keeps_observation_panel_out_of_strategy_kwargs(
+    monkeypatch,
+) -> None:
+    composer = ConfigComposer()
+    factor_names = ["BaseA", "BaseB", "Candidate"]
+    monkeypatch.setattr(
+        composer,
+        "_get_factors_info",
+        lambda *_args, **_kwargs: [
+            {
+                "factor_name": name,
+                "source": "manual",
+                "code_text": (
+                    f"def calculate_{name}(instruments, start_date, end_date):\n"
+                    "    return None\n"
+                ),
+            }
+            for name in factor_names
+        ],
+    )
+    monkeypatch.setattr(composer, "_get_model_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        composer,
+        "_get_strategy_info",
+        lambda *_args, **_kwargs: {
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2(object):\n    pass\n",
+            "portfolio_config": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {"topk": 50, "n_drop": 1},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        composer,
+        "_fetch_workspace_config",
+        lambda *_args, **_kwargs: {
+            "workspace_base": "/tmp/qe_workspace",
+            "qlib_data_path": "/tmp/qlib_day",
+            "qlib_minute_path": "/tmp/qlib_minute",
+            "factor_data_dir": "/tmp/factor_data",
+        },
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_risk_policy_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read_exp_res")
+    _patch_universe(monkeypatch)
+
+    result = composer.compose_experiment_in_memory(
+        factor_names=factor_names,
+        model_id=None,
+        strategy_id="score_weighted_topk_v2",
+        data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT),
+        custom_params={
+            "disable_alpha158": True,
+            "topk": 50,
+            "n_drop": 1,
+            "observation_panel": _observation_panel(["BaseA", "BaseB"]),
+        },
+        skip_db_save=True,
+        execution_algo="CLOSE_PRICE",
+        execution_algo_params={},
+        task_id="qe_ma_e16_contract",
+        loop_index=1,
+    )
+
+    conf_yaml = result["experiment_files"]["conf.yaml"]
+    prepare_factors = result["experiment_files"]["prepare_factors.py"]
+    assert "observation_panel" not in conf_yaml
+    assert "class: ScoreWeightedTopkStrategyV2" in conf_yaml
+    assert "qe_observation_panel_v1" in prepare_factors
+    compile(prepare_factors, "prepare_factors.py", "exec")

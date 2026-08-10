@@ -3485,6 +3485,7 @@ class ConfigComposer:
             "archive_policy",        # QE Archive policy metadata, not a strategy kwarg
             "archive_reason",
             "archive_allow_override",
+            "observation_panel",     # Matched-factor data-loader contract, not a strategy kwarg
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
             "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）
@@ -4891,6 +4892,19 @@ class ConfigComposer:
         lines.append("        )")
         lines.append("")
         lines.append("")
+        lines.append("def _select_factor_results(factor_names, factor_results):")
+        lines.append("    if QE_OBSERVATION_PANEL_CONTRACT:")
+        lines.append("        _require_factor_results(factor_names, factor_results)")
+        lines.append("        return [factor_results[name] for name in factor_names]")
+        lines.append("    # Preserve the historical no-contract behavior: a failed custom factor is")
+        lines.append("    # omitted while the remaining successful factors still form the outer union.")
+        lines.append("    return [")
+        lines.append("        factor_results[name]")
+        lines.append("        for name in factor_names")
+        lines.append("        if factor_results.get(name) is not None")
+        lines.append("    ]")
+        lines.append("")
+        lines.append("")
         lines.append("def _apply_observation_panel(combined):")
         lines.append("    contract = QE_OBSERVATION_PANEL_CONTRACT")
         lines.append("    if not contract:")
@@ -4953,11 +4967,15 @@ class ConfigComposer:
         lines.append("        factor_results[factor_name] = result")
         lines.append("")
         lines.append("    # 合并为 combined_factors_df.parquet")
-        lines.append("    _require_factor_results(list(factor_codes), factor_results)")
-        lines.append("")
-        lines.append("    logger.info(f'Combining {len(factor_results)} factor results...')")
+        lines.append("    selected_factor_results = _select_factor_results(")
+        lines.append("        list(factor_codes), factor_results")
+        lines.append("    )")
+        lines.append("    if not selected_factor_results:")
+        lines.append("        logger.error('No factors computed successfully!')")
+        lines.append("        sys.exit(1)")
+        lines.append("    logger.info(f'Combining {len(selected_factor_results)} factor results...')")
         lines.append("    combined = pd.concat(")
-        lines.append("        [factor_results[name] for name in factor_codes], axis=1")
+        lines.append("        selected_factor_results, axis=1")
         lines.append("    )")
         lines.append("    combined = combined.sort_index()")
         lines.append("    combined = combined.loc[:, ~combined.columns.duplicated(keep='last')]")

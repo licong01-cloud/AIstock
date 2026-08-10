@@ -4,6 +4,7 @@
     "backend/services/quantevolver/config_composer.py",
     "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
     "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+    "docs/codex_project_memory.md",
     "noxfile.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260810_BUG-1006-qe-factor-outer-union-changes-matched-experiment-observation-panel-and-c.json",
@@ -31,6 +32,18 @@
       "actor": "codex",
       "note": "PR #3243 CI classified the focused QE test as unmapped_code_blocked; scope expands only to map that exact test to the existing qe_sector_risk_overlay plan and include it in the existing nox session.",
       "timestamp": "2026-08-10T04:46:14.716666Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Post-PR code and blueprint audit found the project startup memory still routing strategy evolution through v6.0/MA-E13. Scope expands only to synchronize the controlled compact snapshot with the cited v6.1 blueprint, BUG-1006 repair, MA-E15 execution limitation, and MA-E16 order.",
+      "timestamp": "2026-08-10T07:09:35.414858Z"
+    },
+    {
+      "action": "formal_review_repair",
+      "actor": "codex",
+      "note": "Formal source/design review found observation_panel leaking through public compose into strategy kwargs and the first strict implementation changing no-contract legacy partial-factor behavior. The repair classifies observation_panel as a loader-only parameter, limits all-factor strictness to matched contracts, preserves legacy outer-union/partial concat, adds public ScoreWeighted/CLOSE_PRICE compose coverage, and revises v6.1 to separate MA-E15 signal evidence from BUG-852-limited execution metrics before the daily MA-E16 rerun.",
+      "timestamp": "2026-08-10T07:55:25.703689Z"
     }
   ],
   "evidence_uris": [
@@ -177,7 +190,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_020755_38d2",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "fresh Python process imported ConfigComposer, generated prepare_factors.py with qe_observation_panel_v1, compiled the generated source, and printed BUG-1006 fresh-process composer load PASS"
+      "fresh pytest process imported ConfigComposer and exercised compose_experiment_in_memory with ScoreWeightedTopkStrategyV2, CLOSE_PRICE and qe_observation_panel_v1; generated conf.yaml excluded observation_panel, generated prepare_factors.py compiled, matched CE3/CE4 indexes were identical, matched missing outputs failed closed, and no-contract outer-union/partial concat remained compatible"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
