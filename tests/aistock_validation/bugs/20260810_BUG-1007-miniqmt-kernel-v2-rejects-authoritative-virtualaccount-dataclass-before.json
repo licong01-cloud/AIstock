@@ -152,9 +152,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the persisted BUG-1007 projector and public K6 plan-authority reader; exact VirtualAccount, plan/evidence parity, malformed carrier, parallel model_dump carrier and owner-drift matrix passed 3 tests without backend process control",
+      "python -m nox -s miniqmt_execution_runtime_l2 launched a fresh pytest process from the persisted worktree and passed 1347 tests with 69 explicit DEV-gated skips; no backend process control",
+      "python -m pytest exact BUG-1007 three-node matrix -> 3 passed in 1.89s"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -164,7 +173,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "simulation_runtime"
   ],

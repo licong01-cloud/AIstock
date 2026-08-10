@@ -35,7 +35,11 @@ from backend.services.miniqmt_execution_runtime.kernel_product_callbacks import 
     KernelProductCallbackIngressV1,
     KernelProductSnapshotIngressV1,
 )
-from backend.services.miniqmt_execution_runtime.kernel_product_evidence import KernelProductEvidenceProviderV3
+from backend.services.miniqmt_execution_runtime.kernel_product_evidence import (
+    KernelProductEvidenceProviderV3,
+    VirtualAccountProjectionError,
+    virtual_account_projection_v1,
+)
 from backend.services.miniqmt_execution_runtime.kernel_product_runtime import (
     K6DCommittedSourceEventReaderV1,
     K6DCommittedSourceEventReadbackV1,
@@ -259,12 +263,28 @@ class SimulationK6DPlanAuthorityReader:
             )
         algo_code, policy_id, policy_sha256, plugin_config = _policy(plan)
         account = self._accounts.get_virtual_account(binding.strategy_id)
-        account_dump = getattr(account, "model_dump", None)
-        if not callable(account_dump) or not isinstance((account_payload := account_dump(mode="json")), dict):
+        try:
+            account_payload = virtual_account_projection_v1(account)
+        except VirtualAccountProjectionError as exc:
             raise MiniQMTKernelProductCompositionError(
                 "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID",
-                "virtual account authority does not expose an exact JSON object",
-                context={"runtime_id": runtime_id, "strategy_id": binding.strategy_id},
+                "virtual account authority failed strict projection",
+                context={
+                    "runtime_id": runtime_id,
+                    "strategy_id": binding.strategy_id,
+                    "account_type": type(account).__name__,
+                    "error": str(exc),
+                },
+            ) from exc
+        if account_payload["strategy_id"] != binding.strategy_id:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID",
+                "virtual account owner differs from the product binding",
+                context={
+                    "runtime_id": runtime_id,
+                    "expected_strategy_id": binding.strategy_id,
+                    "actual_strategy_id": account_payload["strategy_id"],
+                },
             )
         capability_payload = self._gateway.model_dump(mode="json")
         if not plan.intents:
