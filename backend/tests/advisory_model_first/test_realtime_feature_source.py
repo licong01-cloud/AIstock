@@ -8,10 +8,88 @@ import pandas as pd
 
 from backend.services.advisory_model_first import realtime_feature_source
 from backend.services.advisory_model_first.realtime_feature_source import (
-    PostgresRealtimeFeatureSource,
     PostgresAdvisoryReviewSource,
+    PostgresRealtimeFeatureSource,
     _market_frame,
 )
+
+
+class _PriceContextCursor:
+    def __init__(self, *, audit=("success", "ok")) -> None:
+        self.audit = audit
+        self.sql = ""
+        self.params = None
+        self.calls = []
+
+    def execute(self, sql, params=None):
+        self.sql = " ".join(sql.split())
+        self.params = params
+        self.calls.append((self.sql, params))
+
+    def fetchone(self):
+        if "stock_universe_pit_state" in self.sql:
+            return ("ready", False, date(2018, 8, 1), date(2026, 7, 20))
+        if "dataset_date_refresh_audit" in self.sql:
+            return self.audit
+        raise AssertionError(self.sql)
+
+    def fetchall(self):
+        if "FROM market.kline_daily_raw price" in self.sql:
+            return [
+                ("000001.SZ", 10000, date(2020, 1, 1), 99),
+                ("000002.SZ", 20000, date(2020, 1, 1), 99),
+            ]
+        if "stock_universe_pit_events" in self.sql:
+            return [("000002.SZ", "st_negative", date(2026, 7, 21), date(2026, 7, 20), None, None)]
+        if "FROM market.dividend" in self.sql:
+            return [
+                (
+                    "000001.SZ",
+                    date(2025, 12, 31),
+                    date(2026, 7, 1),
+                    "实施",
+                    0.1,
+                    0.04,
+                    0.06,
+                    0.16,
+                    0.2,
+                    date(2026, 7, 15),
+                )
+            ]
+        raise AssertionError(self.sql)
+
+
+def test_price_context_reads_decision_raw_price_and_visible_target_actions_only() -> None:
+    cursor = _PriceContextCursor()
+    contexts, unavailable = PostgresRealtimeFeatureSource._price_range_contexts(
+        cursor,
+        symbols=("000001.SZ", "000002.SZ"),
+        decision_as_of_trade_date=date(2026, 7, 20),
+        target_trade_date=date(2026, 7, 21),
+    )
+    assert unavailable == ()
+    assert contexts["000001.SZ"].decision_raw_close == 10.0
+    assert np.isclose(contexts["000001.SZ"].target_raw_price_multiplier, 9.8 / 11.0)
+    assert contexts["000002.SZ"].target_is_st is True
+    price_query = next(call for call in cursor.calls if "FROM market.kline_daily_raw price" in call[0])
+    assert price_query[1][2] == date(2026, 7, 20)
+    dividend_query = next(call for call in cursor.calls if "FROM market.dividend" in call[0])
+    assert dividend_query[1] == (date(2026, 7, 21), ["000001.SZ", "000002.SZ"])
+
+
+def test_missing_dividend_refresh_is_candidate_visible_not_multiplier_one() -> None:
+    cursor = _PriceContextCursor(audit=None)
+    contexts, unavailable = PostgresRealtimeFeatureSource._price_range_contexts(
+        cursor,
+        symbols=("000001.SZ", "000002.SZ"),
+        decision_as_of_trade_date=date(2026, 7, 20),
+        target_trade_date=date(2026, 7, 21),
+    )
+    assert contexts == {}
+    assert {item["reason_code"] for item in unavailable} == {
+        "ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE"
+    }
+    assert all("FROM market.dividend" not in sql for sql, _ in cursor.calls)
 
 
 def test_realtime_market_frame_matches_qlib_daily_units_and_true_limit_flags() -> None:

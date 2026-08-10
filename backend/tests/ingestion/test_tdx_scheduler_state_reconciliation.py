@@ -51,6 +51,38 @@ def test_default_schedule_catalog_rejects_mode_insensitive_duplicate(monkeypatch
     assert "mode-insensitive default dataset has multiple schedules: stock_basic" in catalog["errors"]
 
 
+def test_targeted_dividend_refresh_uses_current_and_next_window(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    updates = []
+    scheduler._resolve_suspend_d_refresh_range = lambda strategy: (
+        dt.date(2026, 8, 10),
+        dt.date(2026, 8, 11),
+    )
+    scheduler._update_ingestion_schedule = lambda schedule_id, **kwargs: updates.append(
+        (schedule_id, kwargs)
+    )
+
+    class _Engine:
+        def sync(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr(scheduler_module, "TushareSyncEngine", _Engine)
+    scheduler._run_targeted_tushare_refresh(
+        uuid.uuid4(),
+        "schedule-dividend",
+        "dividend",
+        "incremental",
+        "schedule",
+        {"date_strategy": "current_and_next_trading_day"},
+    )
+    assert calls[0]["spec"].name == "dividend"
+    assert calls[0]["start_date"] == dt.date(2026, 8, 10)
+    assert calls[0]["end_date"] == dt.date(2026, 8, 11)
+    assert updates[0][1]["last_status"] == "success"
+
+
 def test_schedule_hygiene_reports_without_automatic_cleanup():
     findings = TDXScheduler._schedule_hygiene_findings(
         [

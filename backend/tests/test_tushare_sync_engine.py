@@ -11,6 +11,7 @@ import backend.services.stock_universe_pit_service as pit_service
 from backend.services.tushare_dataset_specs import (
     CYQ_PERF,
     DATASET_REGISTRY,
+    DIVIDEND,
     QueryMode,
     STOCK_ST_EVENTS,
     SUSPEND_D,
@@ -180,6 +181,19 @@ def test_financial_event_raw_dataset_specs_use_period_vip_sync_mode():
         assert spec.tushare_api == api
         assert spec.date_column == "ann_date"
         assert spec.incremental_cursor_from_audit is True
+
+
+def test_dividend_dataset_is_target_ex_date_refreshable() -> None:
+    assert DATASET_REGISTRY["dividend"] is DIVIDEND
+    assert DIVIDEND.query_mode == QueryMode.BY_DATE
+    assert DIVIDEND.tushare_api == "dividend"
+    assert DIVIDEND.date_column == "ex_date"
+    assert DIVIDEND.date_param_name == "ex_date"
+    assert DIVIDEND.replace_existing_dates is True
+    assert DIVIDEND.incremental_cursor_from_audit is True
+    assert DIVIDEND.create_table_script.endswith(
+        "add_advisory_price_range_dividend_20260810.sql"
+    )
 
 
 def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monkeypatch):

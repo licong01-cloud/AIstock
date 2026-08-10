@@ -30,6 +30,14 @@ from backend.services.advisory_model_first.target_binding import (
 from backend.services.selection_center.models import SelectionRunStatus
 from backend.services.trading_core.errors import DataUnavailableError
 
+REVIEW_POLICY_HASH = "a" * 64
+REVIEW_POLICY = {
+    "stop_loss_bps": 800,
+    "take_profit_bps": 1800,
+    "trailing_stop_bps": 700,
+    "take_profit_mode": "trailing",
+}
+
 
 class _ProgramService:
     def __init__(self, *, target_count: int = 2) -> None:
@@ -37,6 +45,8 @@ class _ProgramService:
             program_id=PROGRAM_ID,
             package_ids=[PACKAGE_ID],
             target_count=target_count,
+            review_policy=REVIEW_POLICY,
+            review_policy_sha256=REVIEW_POLICY_HASH,
         )
         self.binding = {
             "binding_version_id": BINDING_VERSION_ID,
@@ -70,15 +80,19 @@ class _ProgramService:
             "list_version": self.recommendation_list_versions(PROGRAM_ID, limit=500, offset=0)[0],
             "items": [
                 {
+                    "symbol": "000001.SZ",
                     "evidence_json": {
                         "source_run_id": "old-selection-run",
                         "reference_price_trade_date": "2026-07-20",
+                        "review_policy_sha256": REVIEW_POLICY_HASH,
                     }
                 },
                 {
+                    "symbol": "000002.SZ",
                     "evidence_json": {
                         "source_run_id": "selection-1",
                         "reference_price_trade_date": "2026-07-20",
+                        "review_policy_sha256": REVIEW_POLICY_HASH,
                     }
                 },
             ],
@@ -374,6 +388,66 @@ def test_model_shadow_attaches_outcome_predictions_from_same_feature_matrix() ->
         "000001.SZ",
     ]
     assert outcome_loads[0]["parent_bundle_id"] == "bundle-1"
+    assert feature_source.calls == 1
+
+
+def test_model_shadow_attaches_exact_price_range_without_changing_m2_order() -> None:
+    price_loads: list[dict[str, object]] = []
+    feature_source = _FeatureSource(_feature_inputs())
+
+    def outcome_scorer(_bundle, features):
+        return [
+            {
+                "symbol": str(symbol),
+                "horizons": [],
+                "holding_period": {},
+            }
+            for symbol in features["instrument"]
+        ]
+
+    def price_loader(**kwargs):
+        price_loads.append(kwargs)
+        return SimpleNamespace(
+            price_range_bundle_id="price-1",
+            manifest={"request_id": "advprreq-runtime"},
+        )
+
+    def price_scorer(_bundle, features, **_kwargs):
+        return [
+            {
+                "symbol": str(symbol),
+                "status": "EXPERIMENTAL_SHADOW",
+                "reason_code": None,
+                "message": None,
+            }
+            for symbol in features["instrument"]
+        ]
+
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(),
+        selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+        outcome_bundle_loader=lambda **_: SimpleNamespace(
+            outcome_bundle_id="e" * 64,
+            manifest={"request_id": "advoutreq-runtime", "horizons": [1, 3, 5, 10, 20]},
+        ),
+        outcome_scorer=outcome_scorer,
+        price_range_bundle_loader=price_loader,
+        price_range_scorer=price_scorer,
+    )
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+    assert result["price_range"]["status"] == "EXPERIMENTAL_SHADOW"
+    assert [item["symbol"] for item in result["price_range"]["candidates"]] == [
+        item["symbol"] for item in result["candidates"]
+    ]
+    assert price_loads[0]["parent_bundle_id"] == "bundle-1"
+    assert price_loads[0]["outcome_bundle_id"] == "e" * 64
     assert feature_source.calls == 1
 
 

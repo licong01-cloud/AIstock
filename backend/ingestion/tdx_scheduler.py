@@ -1797,6 +1797,11 @@ class TDXScheduler:
                 self._run_suspend_d_refresh,
                 run_id, schedule_id, ds_lower, mode, triggered_by, options,
             )
+        elif ds_lower == "dividend" and options.get("date_strategy"):
+            future = self._executor.submit(
+                self._run_targeted_tushare_refresh,
+                run_id, schedule_id, ds_lower, mode, triggered_by, options,
+            )
         # Route engine-supported datasets through TushareSyncEngine
         elif ds_lower in _ENGINE_DATASETS and not options.get("script"):
             future = self._executor.submit(
@@ -4233,6 +4238,78 @@ class TDXScheduler:
         if schedule_id:
             self._update_ingestion_schedule(
                 schedule_id, last_run=start_ts, last_status=status, last_error=error_msg,
+            )
+
+    def _run_targeted_tushare_refresh(
+        self,
+        run_id: uuid.UUID,
+        schedule_id: Optional[str],
+        dataset: str,
+        mode: str,
+        triggered_by: str,
+        options: Dict[str, Any],
+    ) -> None:
+        """Refresh one engine dataset for a calendar-derived current/next window."""
+        start_ts = _now()
+        job_id_str = options.get("job_id")
+        job_id = uuid.UUID(job_id_str) if job_id_str else None
+        strategy = str(options.get("date_strategy") or "current_or_next_trading_day")
+        status = "success"
+        error_msg = None
+        try:
+            if options.get("start_date") and options.get("end_date"):
+                start_date = dt.date.fromisoformat(str(options["start_date"]))
+                end_date = dt.date.fromisoformat(str(options["end_date"]))
+            else:
+                start_date, end_date = self._resolve_suspend_d_refresh_range(strategy)
+            spec = DATASET_REGISTRY[dataset]
+            result = TushareSyncEngine().sync(
+                spec=spec,
+                mode=mode,
+                start_date=start_date,
+                end_date=end_date,
+                job_id=job_id,
+            )
+            status = "success" if result.ok else "failed"
+            if not result.ok:
+                error_msg = str(result.error or "targeted Tushare refresh failed")
+        except Exception as exc:
+            status = "failed"
+            error_msg = str(exc)
+            _logger.exception("targeted Tushare refresh failed for %s: %s", dataset, exc)
+            if job_id is not None:
+                try:
+                    self._execute(
+                        """
+                        UPDATE market.ingestion_jobs
+                        SET status = 'failed', finished_at = NOW(),
+                            summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
+                        WHERE job_id = %s
+                        """,
+                        (
+                            json.dumps(
+                                {
+                                    "dataset": dataset,
+                                    "date_strategy": strategy,
+                                    "error": error_msg,
+                                },
+                                ensure_ascii=False,
+                            ),
+                            job_id,
+                        ),
+                    )
+                except Exception as record_exc:
+                    _logger.error(
+                        "failed to record targeted Tushare refresh error for %s: %s",
+                        dataset,
+                        record_exc,
+                    )
+        if schedule_id:
+            self._update_ingestion_schedule(
+                schedule_id,
+                last_run=start_ts,
+                last_status=status,
+                last_error=error_msg,
             )
 
     def _run_ingestion_process(

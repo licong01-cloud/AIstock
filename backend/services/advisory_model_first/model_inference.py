@@ -25,6 +25,13 @@ from backend.services.advisory_model_first.outcome_inference import (
 from backend.services.advisory_model_first.outcome_runtime_bundle import (
     load_exact_outcome_bundle,
 )
+from backend.services.advisory_model_first.price_range_inference import (
+    score_price_range_bundle,
+    unavailable_price_range_envelope,
+)
+from backend.services.advisory_model_first.price_range_runtime_bundle import (
+    load_exact_price_range_bundle,
+)
 from backend.services.advisory_model_first.realtime_feature_source import (
     PostgresAdvisoryReviewSource,
     PostgresRealtimeFeatureSource,
@@ -65,6 +72,8 @@ class AdvisoryModelShadowService:
         bundle_loader: Any = load_exact_shadow_bundle,
         outcome_bundle_loader: Any = load_exact_outcome_bundle,
         outcome_scorer: Any = score_outcome_bundle,
+        price_range_bundle_loader: Any = load_exact_price_range_bundle,
+        price_range_scorer: Any = score_price_range_bundle,
     ) -> None:
         self._program_service = program_service or AdvisoryProgramService()
         self._selection_service = selection_service or SelectionCenterService()
@@ -76,6 +85,8 @@ class AdvisoryModelShadowService:
         self._bundle_loader = bundle_loader
         self._outcome_bundle_loader = outcome_bundle_loader
         self._outcome_scorer = outcome_scorer
+        self._price_range_bundle_loader = price_range_bundle_loader
+        self._price_range_scorer = price_range_scorer
 
     def model_shadow(self, *, program_id: str, target_trade_date: date) -> dict[str, Any]:
         started = time.monotonic()
@@ -260,6 +271,19 @@ class AdvisoryModelShadowService:
             program_id=program_id,
             target_trade_date=target_trade_date,
         )
+        price_range = self._price_range_shadow(
+            model_root=model_root,
+            parent_bundle=bundle,
+            features=built.features,
+            scored_candidates=scored,
+            outcome=outcome,
+            realtime=realtime,
+            list_items=list_items,
+            review_policy=program.review_policy,
+            review_policy_sha256=program.review_policy_sha256,
+            program_id=program_id,
+            target_trade_date=target_trade_date,
+        )
         shortlist_count = min(5, len(scored))
         return {
             "status": "EXPERIMENTAL_SHADOW",
@@ -280,6 +304,109 @@ class AdvisoryModelShadowService:
             "baselines": bundle.baselines,
             "hmm_unavailable": list(realtime.hmm_unavailable),
             "outcome": outcome,
+            "price_range": price_range,
+            "reason_code": None,
+            "message": None,
+        }
+
+    def _price_range_shadow(
+        self,
+        *,
+        model_root: str,
+        parent_bundle: LoadedAdvisoryModelBundle,
+        features: pd.DataFrame,
+        scored_candidates: list[dict[str, Any]],
+        outcome: Mapping[str, Any],
+        realtime: Any,
+        list_items: list[dict[str, Any]],
+        review_policy: Mapping[str, Any],
+        review_policy_sha256: str,
+        program_id: str,
+        target_trade_date: date,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            if outcome.get("status") != "EXPERIMENTAL_SHADOW":
+                raise AdvisoryModelFirstError(
+                    "M3 outcome prediction is unavailable for price projection",
+                    reason_code="ADVISORY_PRICE_RANGE_OUTCOME_IDENTITY_MISMATCH",
+                )
+            expected_symbols = [str(item["symbol"]) for item in scored_candidates]
+            _validate_review_policy_identity(
+                list_items=list_items,
+                expected_symbols=expected_symbols,
+                review_policy_sha256=review_policy_sha256,
+            )
+            outcome_bundle_id = str(outcome.get("outcome_bundle_id") or "")
+            price_bundle = self._price_range_bundle_loader(
+                model_root=model_root,
+                package_id=PACKAGE_ID,
+                manifest_sha256=MANIFEST_SHA256,
+                style_profile_hash=STYLE_PROFILE_HASH,
+                parent_bundle_id=parent_bundle.bundle_id,
+                outcome_bundle_id=outcome_bundle_id,
+            )
+            candidates = self._price_range_scorer(
+                price_bundle,
+                features,
+                contexts=realtime.price_range_contexts,
+                context_unavailable=realtime.price_range_unavailable,
+                outcome_candidates=outcome.get("candidates") or [],
+                review_policy=review_policy,
+                review_policy_sha256=review_policy_sha256,
+                target_trade_date=target_trade_date,
+            )
+            candidate_by_symbol = {str(item.get("symbol")): item for item in candidates}
+            if len(candidate_by_symbol) != len(candidates) or set(candidate_by_symbol) != set(expected_symbols):
+                raise AdvisoryModelFirstError(
+                    "price-range inference does not preserve the M2 candidate group",
+                    reason_code="ADVISORY_PRICE_RANGE_INFERENCE_FAILED",
+                )
+            candidates = [candidate_by_symbol[symbol] for symbol in expected_symbols]
+        except AdvisoryModelFirstError as exc:
+            LOGGER.warning(
+                "advisory price-range shadow unavailable program_id=%s target_trade_date=%s "
+                "reason_code=%s context=%s elapsed_ms=%d",
+                program_id,
+                target_trade_date.isoformat(),
+                exc.reason_code,
+                exc.context,
+                round((time.monotonic() - started) * 1000),
+            )
+            return unavailable_price_range_envelope(
+                reason_code=exc.reason_code,
+                message=str(exc),
+            )
+        except Exception as exc:
+            LOGGER.exception(
+                "advisory price-range shadow failed unexpectedly program_id=%s "
+                "target_trade_date=%s elapsed_ms=%d",
+                program_id,
+                target_trade_date.isoformat(),
+                round((time.monotonic() - started) * 1000),
+            )
+            return unavailable_price_range_envelope(
+                reason_code="ADVISORY_PRICE_RANGE_INFERENCE_FAILED",
+                message=f"unexpected price-range inference failure: {type(exc).__name__}",
+            )
+        LOGGER.info(
+            "advisory price-range shadow completed program_id=%s target_trade_date=%s "
+            "candidate_count=%d unavailable_count=%d elapsed_ms=%d",
+            program_id,
+            target_trade_date.isoformat(),
+            len(candidates),
+            sum(item.get("status") != "EXPERIMENTAL_SHADOW" for item in candidates),
+            round((time.monotonic() - started) * 1000),
+        )
+        return {
+            "status": "EXPERIMENTAL_SHADOW",
+            "calibration_state": "UNCALIBRATED",
+            "price_range_bundle_id": price_bundle.price_range_bundle_id,
+            "parent_bundle_id": parent_bundle.bundle_id,
+            "outcome_bundle_id": outcome_bundle_id,
+            "model_version": price_bundle.manifest["request_id"],
+            "price_basis": "UNADJUSTED_CNY_DECISION_CLOSE",
+            "candidates": candidates,
             "reason_code": None,
             "message": None,
         }
@@ -407,6 +534,34 @@ def _validate_bundle_runtime(bundle: LoadedAdvisoryModelBundle) -> None:
         raise AdvisoryModelFirstError(
             "model bundle runtime semantics are incompatible with the Advisory shadow path",
             reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
+        )
+
+
+def _validate_review_policy_identity(
+    *,
+    list_items: list[dict[str, Any]],
+    expected_symbols: list[str],
+    review_policy_sha256: str,
+) -> None:
+    expected = set(expected_symbols)
+    hashes_by_symbol: dict[str, set[str]] = {}
+    for item in list_items:
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if symbol not in expected:
+            continue
+        evidence = item.get("evidence_json")
+        value = evidence.get("review_policy_sha256") if isinstance(evidence, Mapping) else None
+        hashes_by_symbol.setdefault(symbol, set()).add(str(value or "").strip())
+    if set(hashes_by_symbol) != expected or any(
+        values != {review_policy_sha256} for values in hashes_by_symbol.values()
+    ):
+        raise AdvisoryModelFirstError(
+            "recommendation list review policy identity differs from the active Program",
+            reason_code="ADVISORY_PRICE_RANGE_POLICY_IDENTITY_MISMATCH",
+            context={
+                "expected_symbol_count": len(expected),
+                "observed_symbol_count": len(hashes_by_symbol),
+            },
         )
 
 
@@ -643,6 +798,10 @@ def _unavailable_response(
         "hmm_unavailable": [],
         "outcome": unavailable_outcome_envelope(
             reason_code="ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+            message="parent model shadow is unavailable",
+        ),
+        "price_range": unavailable_price_range_envelope(
+            reason_code="ADVISORY_PRICE_RANGE_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
             message="parent model shadow is unavailable",
         ),
         "reason_code": reason_code,

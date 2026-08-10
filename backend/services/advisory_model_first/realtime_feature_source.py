@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -12,12 +13,33 @@ from backend.db.pg_pool import get_conn
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.fresh_hmm import continue_sector_hmm
 from backend.services.industry_code_map import encode_l2_codes, load_sw_l2_code_map
+from backend.services.stock_universe_pit_service import (
+    DEFAULT_ST_PIT_UNIVERSE_KEY,
+    require_live_st_pit_universe_key,
+)
 
 
 ConnectionContextFactory = Callable[[], AbstractContextManager[Any]]
 _PRICE_UNIT_DIVISOR = 1000.0
 _CANDIDATE_HISTORY_TRADING_DAYS = 90
 _HMM_WARMUP_TRADING_DAYS = 25
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PriceRangeRealtimeContext:
+    symbol: str
+    decision_raw_close: float
+    decision_price_trade_date: date
+    decision_price_source: str
+    price_unit_divisor: float
+    target_raw_price_multiplier: float
+    corporate_action_source: str
+    board_type: str
+    list_date: date
+    listed_trading_days: int
+    target_is_st: bool
+    tick_size: float
 
 
 @dataclass(frozen=True)
@@ -30,6 +52,8 @@ class RealtimeFeatureInputs:
     hmm_states: pd.DataFrame
     hmm_unavailable: tuple[dict[str, Any], ...]
     trading_calendar: pd.DatetimeIndex
+    price_range_contexts: Mapping[str, PriceRangeRealtimeContext] = field(default_factory=dict)
+    price_range_unavailable: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -250,6 +274,45 @@ class PostgresRealtimeFeatureSource:
                     required_l2_code_ids=candidate_l2_codes,
                     precomputed_observations=hmm_observations,
                 )
+                try:
+                    price_range_contexts, price_range_unavailable = self._price_range_contexts(
+                        cursor,
+                        symbols=normalized_symbols,
+                        decision_as_of_trade_date=decision_as_of_trade_date,
+                        target_trade_date=target_trade_date,
+                    )
+                except AdvisoryModelFirstError as exc:
+                    LOGGER.warning(
+                        "advisory price-range realtime context unavailable "
+                        "decision_as_of_trade_date=%s target_trade_date=%s "
+                        "reason_code=%s context=%s",
+                        decision_as_of_trade_date.isoformat(),
+                        target_trade_date.isoformat(),
+                        exc.reason_code,
+                        exc.context,
+                    )
+                    price_range_contexts = {}
+                    price_range_unavailable = tuple(
+                        _price_context_failure(symbol, exc.reason_code, str(exc))
+                        for symbol in normalized_symbols
+                    )
+                except Exception as exc:
+                    LOGGER.exception(
+                        "advisory price-range realtime context query failed "
+                        "decision_as_of_trade_date=%s target_trade_date=%s",
+                        decision_as_of_trade_date.isoformat(),
+                        target_trade_date.isoformat(),
+                    )
+                    conn.rollback()
+                    price_range_contexts = {}
+                    price_range_unavailable = tuple(
+                        _price_context_failure(
+                            symbol,
+                            "ADVISORY_PRICE_RANGE_PIT_ATTRIBUTE_UNAVAILABLE",
+                            f"unexpected price-range context failure: {type(exc).__name__}",
+                        )
+                        for symbol in normalized_symbols
+                    )
                 conn.rollback()
             except Exception:
                 conn.rollback()
@@ -266,7 +329,208 @@ class PostgresRealtimeFeatureSource:
             hmm_states=hmm_continuation.states,
             hmm_unavailable=hmm_continuation.unavailable,
             trading_calendar=trading_calendar,
+            price_range_contexts=price_range_contexts,
+            price_range_unavailable=price_range_unavailable,
         )
+
+    @staticmethod
+    def _price_range_contexts(
+        cursor: Any,
+        *,
+        symbols: Sequence[str],
+        decision_as_of_trade_date: date,
+        target_trade_date: date,
+    ) -> tuple[dict[str, PriceRangeRealtimeContext], tuple[dict[str, Any], ...]]:
+        universe_key = require_live_st_pit_universe_key(DEFAULT_ST_PIT_UNIVERSE_KEY)
+        cursor.execute(
+            """
+            SELECT status, dirty, start_date, end_date
+              FROM market.stock_universe_pit_state
+             WHERE universe_key = %s
+            """,
+            (universe_key,),
+        )
+        state = cursor.fetchone()
+        if (
+            state is None
+            or str(state[0] or "").lower() != "ready"
+            or bool(state[1])
+            or state[2] is None
+            or state[3] is None
+            or state[2] > decision_as_of_trade_date
+            or state[3] < decision_as_of_trade_date
+        ):
+            raise AdvisoryModelFirstError(
+                "live ST PIT authority is not ready for the decision cutoff",
+                reason_code="ADVISORY_PRICE_RANGE_PIT_ATTRIBUTE_UNAVAILABLE",
+                context={
+                    "decision_as_of_trade_date": decision_as_of_trade_date.isoformat(),
+                    "universe_key": universe_key,
+                },
+            )
+
+        cursor.execute(
+            """
+            SELECT status, quality_status
+              FROM market.dataset_date_refresh_audit
+             WHERE dataset = 'dividend' AND trade_date = %s
+             ORDER BY refreshed_at DESC
+             LIMIT 1
+            """,
+            (target_trade_date,),
+        )
+        dividend_audit = cursor.fetchone()
+        dividend_ready = bool(
+            dividend_audit
+            and str(dividend_audit[0] or "").lower() == "success"
+            and str(dividend_audit[1] or "").lower() in {"ok", "empty_valid"}
+        )
+
+        cursor.execute(
+            """
+            SELECT price.ts_code, price.close_li, basic.list_date,
+                   CASE
+                     WHEN basic.list_date IS NULL THEN NULL
+                     WHEN basic.list_date < %s - INTERVAL '14 days' THEN 99
+                     ELSE (
+                       SELECT COUNT(*)
+                         FROM market.trading_calendar cal
+                        WHERE cal.is_trading = TRUE
+                          AND cal.cal_date BETWEEN basic.list_date AND %s
+                     )
+                   END AS listed_trading_days
+              FROM market.kline_daily_raw price
+              LEFT JOIN market.stock_basic basic ON basic.ts_code = price.ts_code
+             WHERE price.trade_date = %s
+               AND price.ts_code = ANY(%s)
+             ORDER BY price.ts_code
+            """,
+            (
+                target_trade_date,
+                target_trade_date,
+                decision_as_of_trade_date,
+                list(symbols),
+            ),
+        )
+        decision_rows = {
+            str(row[0]).upper(): row for row in cursor.fetchall()
+        }
+
+        cursor.execute(
+            """
+            SELECT DISTINCT ON (ts_code)
+                   ts_code, event_kind, action_date, source_pub_date,
+                   source_imp_date, source_effective_date
+              FROM market.stock_universe_pit_events
+             WHERE universe_key = %s
+               AND ts_code = ANY(%s)
+               AND action_date <= %s
+               AND COALESCE(source_pub_date, source_imp_date,
+                            source_effective_date, action_date) <= %s
+             ORDER BY ts_code, action_date DESC, event_id DESC
+            """,
+            (
+                universe_key,
+                list(symbols),
+                target_trade_date,
+                decision_as_of_trade_date,
+            ),
+        )
+        st_events = {str(row[0]).upper(): row for row in cursor.fetchall()}
+
+        dividend_rows: dict[str, list[tuple[Any, ...]]] = {}
+        if dividend_ready:
+            cursor.execute(
+                """
+                SELECT ts_code, end_date, ann_date, div_proc, stk_div,
+                       stk_bo_rate, stk_co_rate, cash_div, cash_div_tax,
+                       imp_ann_date
+                  FROM market.dividend
+                 WHERE ex_date = %s
+                   AND ts_code = ANY(%s)
+                   AND div_proc = '实施'
+                 ORDER BY ts_code, imp_ann_date DESC NULLS LAST,
+                          end_date DESC, ann_date DESC
+                """,
+                (target_trade_date, list(symbols)),
+            )
+            for row in cursor.fetchall():
+                dividend_rows.setdefault(str(row[0]).upper(), []).append(row)
+
+        contexts: dict[str, PriceRangeRealtimeContext] = {}
+        unavailable: list[dict[str, Any]] = []
+        for symbol in symbols:
+            normalized = str(symbol).upper()
+            row = decision_rows.get(normalized)
+            if row is None or row[1] is None:
+                unavailable.append(
+                    _price_context_failure(
+                        normalized,
+                        "ADVISORY_PRICE_RANGE_DECISION_PRICE_UNAVAILABLE",
+                        "decision raw close is unavailable",
+                    )
+                )
+                continue
+            try:
+                decision_raw_close = float(row[1]) / _PRICE_UNIT_DIVISOR
+            except (TypeError, ValueError, OverflowError):
+                decision_raw_close = float("nan")
+            if not np.isfinite(decision_raw_close) or decision_raw_close <= 0:
+                unavailable.append(
+                    _price_context_failure(
+                        normalized,
+                        "ADVISORY_PRICE_RANGE_DECISION_PRICE_UNAVAILABLE",
+                        "decision raw close is invalid",
+                    )
+                )
+                continue
+            if row[2] is None or row[3] is None:
+                unavailable.append(
+                    _price_context_failure(
+                        normalized,
+                        "ADVISORY_PRICE_RANGE_PIT_ATTRIBUTE_UNAVAILABLE",
+                        "listing attributes are unavailable",
+                    )
+                )
+                continue
+            if not dividend_ready:
+                unavailable.append(
+                    _price_context_failure(
+                        normalized,
+                        "ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+                        "target ex-date dividend refresh receipt is unavailable",
+                    )
+                )
+                continue
+            try:
+                multiplier, corporate_action_source = _target_raw_price_multiplier(
+                    symbol=normalized,
+                    decision_raw_close=decision_raw_close,
+                    rows=dividend_rows.get(normalized, []),
+                    decision_as_of_trade_date=decision_as_of_trade_date,
+                )
+                target_is_st = _project_target_st(st_events.get(normalized))
+                board_type = _board_type(normalized)
+            except AdvisoryModelFirstError as exc:
+                unavailable.append(
+                    _price_context_failure(normalized, exc.reason_code, str(exc))
+                )
+                continue
+            contexts[normalized] = PriceRangeRealtimeContext(
+                symbol=normalized,
+                decision_raw_close=decision_raw_close,
+                decision_price_trade_date=decision_as_of_trade_date,
+                decision_price_source="market.kline_daily_raw.close_li",
+                price_unit_divisor=_PRICE_UNIT_DIVISOR,
+                target_raw_price_multiplier=multiplier,
+                corporate_action_source=corporate_action_source,
+                board_type=board_type,
+                list_date=pd.Timestamp(row[2]).date(),
+                listed_trading_days=int(row[3]),
+                target_is_st=target_is_st,
+                tick_size=0.01,
+            )
+        return contexts, tuple(unavailable)
 
     @staticmethod
     def _recent_trading_dates(cursor: Any, *, end_date: date, limit: int) -> pd.DatetimeIndex:
@@ -721,6 +985,132 @@ def _read_frame(cursor: Any, sql: str, parameters: Any) -> pd.DataFrame:
     cursor.execute(sql, parameters)
     columns = [str(column.name) for column in cursor.description]
     return pd.DataFrame(cursor.fetchall(), columns=columns)
+
+
+def _price_context_failure(symbol: str, reason_code: str, message: str) -> dict[str, Any]:
+    return {"symbol": symbol, "reason_code": reason_code, "message": message}
+
+
+def _target_raw_price_multiplier(
+    *,
+    symbol: str,
+    decision_raw_close: float,
+    rows: Sequence[tuple[Any, ...]],
+    decision_as_of_trade_date: date,
+) -> tuple[float, str]:
+    if not rows:
+        return 1.0, "market.dividend:target_ex_date:no_visible_action"
+    economic_actions: set[tuple[float, float]] = set()
+    for row in rows:
+        if row[9] is None:
+            raise AdvisoryModelFirstError(
+                "implemented corporate action lacks its implementation announcement date",
+                reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+                context={"symbol": symbol},
+            )
+        try:
+            implementation_announcement_date = pd.Timestamp(row[9]).date()
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise AdvisoryModelFirstError(
+                "corporate-action implementation announcement date is invalid",
+                reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+                context={"symbol": symbol},
+            ) from exc
+        if implementation_announcement_date > decision_as_of_trade_date:
+            continue
+        try:
+            stock_dividend = _optional_nonnegative_component(row[4])
+            stock_bonus = _optional_nonnegative_component(row[5])
+            stock_capitalization = _optional_nonnegative_component(row[6])
+            cash_dividend = _optional_nonnegative_component(row[7])
+            if row[8] is None and cash_dividend > 0:
+                raise ValueError("pre-tax cash dividend is missing")
+            cash_dividend_tax = _optional_nonnegative_component(row[8])
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise AdvisoryModelFirstError(
+                "corporate-action implementation values are incomplete",
+                reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+                context={"symbol": symbol},
+            ) from exc
+        values = (stock_dividend, stock_bonus, stock_capitalization, cash_dividend_tax)
+        if not all(np.isfinite(value) and value >= 0 for value in values):
+            raise AdvisoryModelFirstError(
+                "corporate-action implementation values are invalid",
+                reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+                context={"symbol": symbol},
+            )
+        if not np.isclose(
+            stock_dividend,
+            stock_bonus + stock_capitalization,
+            rtol=0.0,
+            atol=1e-8,
+        ):
+            raise AdvisoryModelFirstError(
+                "corporate-action stock distribution components are inconsistent",
+                reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+                context={"symbol": symbol},
+            )
+        economic_actions.add((round(stock_dividend, 12), round(cash_dividend_tax, 12)))
+    if not economic_actions:
+        return 1.0, "market.dividend:target_ex_date:no_visible_action"
+    if len(economic_actions) != 1:
+        raise AdvisoryModelFirstError(
+            "multiple visible corporate-action rows have different economics",
+            reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+            context={"symbol": symbol, "economic_action_count": len(economic_actions)},
+        )
+    stock_dividend, cash_dividend_tax = next(iter(economic_actions))
+    multiplier = (decision_raw_close - cash_dividend_tax) / (
+        decision_raw_close * (1.0 + stock_dividend)
+    )
+    if not np.isfinite(multiplier) or multiplier <= 0:
+        raise AdvisoryModelFirstError(
+            "corporate-action target price multiplier is invalid",
+            reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+            context={"symbol": symbol},
+        )
+    return float(multiplier), "market.dividend:decision_visible_implemented_action"
+
+
+def _optional_nonnegative_component(value: Any) -> float:
+    if value is None or str(value).strip() == "":
+        return 0.0
+    parsed = float(value)
+    if not np.isfinite(parsed) or parsed < 0:
+        raise ValueError("corporate-action component is invalid")
+    return parsed
+
+
+def _project_target_st(event_row: tuple[Any, ...] | None) -> bool:
+    if event_row is None:
+        return False
+    event_kind = str(event_row[1] or "").strip().lower()
+    if event_kind == "st_negative":
+        return True
+    if event_kind == "st_restore":
+        return False
+    raise AdvisoryModelFirstError(
+        "latest target-effective PIT event does not define an ST state",
+        reason_code="ADVISORY_PRICE_RANGE_PIT_ATTRIBUTE_UNAVAILABLE",
+        context={"event_kind": event_kind},
+    )
+
+
+def _board_type(symbol: str) -> str:
+    code, _, exchange = symbol.partition(".")
+    if exchange == "BJ":
+        return "BSE"
+    if exchange == "SH" and code.startswith(("688", "689")):
+        return "STAR"
+    if exchange == "SZ" and code.startswith(("300", "301")):
+        return "CHINEXT"
+    if exchange in {"SH", "SZ"}:
+        return "MAIN"
+    raise AdvisoryModelFirstError(
+        "candidate exchange does not have a supported A-share price-limit rule",
+        reason_code="ADVISORY_PRICE_RANGE_PIT_ATTRIBUTE_UNAVAILABLE",
+        context={"symbol": symbol},
+    )
 
 
 def _market_frame(frame: pd.DataFrame, *, context: str) -> pd.DataFrame:

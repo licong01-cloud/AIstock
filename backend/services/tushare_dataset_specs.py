@@ -327,6 +327,41 @@ SUSPEND_D = DatasetSpec(
     replace_existing_dates=True,
 )
 
+DIVIDEND = DatasetSpec(
+    name="dividend",
+    tushare_api="dividend",
+    target_table="market.dividend",
+    primary_keys=["ts_code", "end_date", "ann_date", "div_proc"],
+    query_mode=QueryMode.BY_DATE,
+    columns={
+        "ts_code": "text",
+        "end_date": "date",
+        "ann_date": "date",
+        "div_proc": "text",
+        "stk_div": "numeric",
+        "stk_bo_rate": "numeric",
+        "stk_co_rate": "numeric",
+        "cash_div": "numeric",
+        "cash_div_tax": "numeric",
+        "record_date": "date",
+        "ex_date": "date",
+        "pay_date": "date",
+        "div_listdate": "date",
+        "imp_ann_date": "date",
+        "base_date": "date",
+        "base_share": "numeric",
+    },
+    date_column="ex_date",
+    date_param_name="ex_date",
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    replace_existing_dates=True,
+    incremental_cursor_from_audit=True,
+    create_table_script=(
+        "backend/db/migrations/add_advisory_price_range_dividend_20260810.sql"
+    ),
+)
+
 
 TUSHARE_FORECAST_RAW = DatasetSpec(
     name="tushare_forecast_raw",
@@ -508,6 +543,7 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         BAK_BASIC,
         STK_LIMIT,
         SUSPEND_D,
+        DIVIDEND,
         TUSHARE_FORECAST_RAW,
         TUSHARE_EXPRESS_RAW,
         TUSHARE_FINA_INDICATOR_RAW,
