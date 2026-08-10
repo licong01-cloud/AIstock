@@ -80,6 +80,7 @@ plans:
     nox_session: advisory_dev_input_onboarding_backend
     ci_lane: backend
     enabled: true
+    execution_mode: ci
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -405,6 +406,7 @@ plans:
     command_key: nox_validation_center_ui
     nox_session: validation_center_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: [8011, 8012]
@@ -423,6 +425,7 @@ plans:
     command_key: nox_validation_center_live_readonly
     nox_session: validation_center_live_readonly
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: false
     allowed_backend_ports: [8011, 8012]
@@ -440,6 +443,7 @@ plans:
     command_key: nox_validation_center_real_port_ui
     nox_session: validation_center_real_port_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: true
     allowed_backend_ports: [8011, 8012]
@@ -477,6 +481,7 @@ plans:
     command_key: nox_qe_archive_data_quality
     nox_session: qe_archive_data_quality
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -551,6 +556,7 @@ plans:
     command_key: nox_qe_archive_l3
     nox_session: qe_archive_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: true
     allowed_backend_ports: [8011]
@@ -604,6 +610,7 @@ plans:
     ci_lane: frontend
     frontend_test_path: tests/market-regime
     enabled: true
+    execution_mode: ci
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: [8012]
@@ -659,6 +666,7 @@ plans:
     command_key: nox_rl_execution_ui
     nox_session: rl_execution_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: [8012]
@@ -676,6 +684,7 @@ plans:
     command_key: nox_qe_read_l3
     nox_session: qe_read_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: true
     allowed_backend_ports: [8011]
@@ -1052,6 +1061,7 @@ plans:
     command_key: nox_research_assistant_ui
     nox_session: research_assistant_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: []
@@ -1071,6 +1081,7 @@ plans:
     nox_session: paper_v2_backend
     ci_lane: backend
     enabled: true
+    execution_mode: ci
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -1087,6 +1098,7 @@ plans:
     command_key: nox_paper_v2_l3
     nox_session: paper_v2_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: true
     requires_frontend: true
     allowed_backend_ports: [8012]
@@ -1157,6 +1169,7 @@ plans:
     command_key: nox_localsim_unattended_l3
     nox_session: localsim_unattended_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -1182,6 +1195,7 @@ plans:
     command_key: nox_miniqmt_sim_stub_l3
     nox_session: miniqmt_sim_stub_l3
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -1207,6 +1221,7 @@ plans:
     command_key: nox_simulation_runtime_ops_ui
     nox_session: simulation_runtime_ops_ui
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: []
@@ -1232,6 +1247,7 @@ plans:
     command_key: nox_simulation_dual_backend_l4
     nox_session: simulation_dual_backend_l4
     enabled: true
+    execution_mode: delegated
     requires_backend: false
     requires_frontend: false
     allowed_backend_ports: []
@@ -1262,6 +1278,7 @@ plans:
     command_key: nox_miniqmt_sim_trading_hours_l5
     nox_session: miniqmt_sim_trading_hours_l5
     enabled: true
+    execution_mode: operator
     requires_backend: true
     requires_frontend: false
     allowed_backend_ports: [8012]

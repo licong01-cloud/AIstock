@@ -40,6 +40,17 @@
 3. 失败返回结构化错误或 `partial/failed`，日志包含输入摘要、失败阶段和复现线索。
 4. PR 证据记录 changed files、直接测试、scope check、生产依赖门禁和剩余风险。
 
+#### 2.3.1 控制效果、阶段与计数
+
+1. 每个稳定控制 ID 在机器目录中只出现一次。`rules` 保存可自动扫描或已有机器入口的控制；`manual_review_controls` 只保存没有对应 machine rule 的人工控制，禁止为同一 ID 建立第二份记录。
+2. 每个控制明确记录 `effect` 和 `enforcement_phase`：
+   - `block` 只阻断该控制适用的任务类型、文件范围和阶段，不升级为全任务或全仓门禁；
+   - `warn` 产生可见警告和修复建议，但不阻断当前阶段；
+   - `advisory` 只提供效率或执行建议，不进入完成、PR、合入或运行时判定。
+3. `enforcement_phase` 使用 `changed_file_scan`、`task_planning`、`interactive_execution`、`pr_readiness`、`issue_lifecycle`、`design_delivery`、`standard_change`、`production_activation` 或 `release_deployment`。条件控制在不适用时记为 `noop`，不得伪装成 pending gate。
+4. CI job、页面 check、测试计划和门禁分别计数。skipped job、warning、advisory、delegated plan、诊断 evidence publisher 和 telemetry collector 都不是合并硬门禁。
+5. 失败证据发布器保持 best-effort、可见和可审计，但不得成为 `CI verdict` 的依赖或用自身故障覆盖真实测试结论。分支保护只消费聚合后的确定性质量判定。
+
 ### 2.4 PR、合入和 aftercare
 
 1. PR 前运行本任务的最小本地 gate，并执行 BUG `finish --plan-only` 或 feature design validation。
