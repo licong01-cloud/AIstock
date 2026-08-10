@@ -35,7 +35,13 @@ FINANCIAL_EVENT_RAW_DATASETS = {
     "tushare_express_raw": "express",
     "tushare_fina_indicator_raw": "fina_indicator",
 }
-ZERO_ROW_VALID_DATASETS = {"suspend_d", "stock_st", "stock_st_events", *FINANCIAL_EVENT_RAW_DATASETS}
+ZERO_ROW_VALID_DATASETS = {
+    "dividend",
+    "suspend_d",
+    "stock_st",
+    "stock_st_events",
+    *FINANCIAL_EVENT_RAW_DATASETS,
+}
 _logger = logging.getLogger(__name__)
 
 
@@ -461,7 +467,14 @@ class TushareSyncEngine:
         """Fail fast on provider contract drift before writing audit success."""
         if not rows:
             return
-        required = set(spec.primary_keys)
+        nullable_identity_columns = set(spec.nullable_identity_columns)
+        invalid_nullable_identity_columns = nullable_identity_columns.difference(spec.primary_keys)
+        if invalid_nullable_identity_columns:
+            raise RuntimeError(
+                f"{spec.name} contract_error nullable identity columns are not primary keys: "
+                f"{sorted(invalid_nullable_identity_columns)}"
+            )
+        required = set(spec.primary_keys).difference(nullable_identity_columns)
         required.add(spec.date_column)
         missing = sorted(
             column
