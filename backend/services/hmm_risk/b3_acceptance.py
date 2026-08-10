@@ -16,7 +16,12 @@ from backend.services.hmm_risk.b3_mixed_dimension import (
     uses_mixed_dimension_level,
     validate_projection_receipt,
 )
-from backend.services.hmm_risk.state_model_set import StateModelSetError, canonical_sha256
+from backend.services.hmm_risk.state_model_set import (
+    D6ValidationCalendarSeries,
+    StateModelSetError,
+    canonical_sha256,
+    validate_d6_frozen_input_manifest,
+)
 
 
 D3_CONTRACT_VERSION = "hmm_risk_c008_b3_d3_03_a_v1"
@@ -25,6 +30,8 @@ D4_COVARIANCE_VERSION = "hmm_risk_c008_b3_d4_02_a_v1"
 D4_OCCUPANCY_VERSION = "hmm_risk_c008_b3_d4_03_persistent_a_v1"
 D5_SELECTION_VERSION = "hmm_risk_c008_b3_d5_01_b_v1"
 D6_SEMANTIC_VERSION = "hmm_risk_c008_b3_d6_01_b_v1"
+D6_AVAILABILITY_VERSION = "hmm_risk_c008_b3_d6_na_a_v1"
+D6_NA_SEMANTIC_VERSION = "hmm_risk_c008_b3_d6_01_b_na_a_v1"
 L2_RETRAIN_VERSION = "hmm_risk_c008_b3_l2_retrain_a_v1"
 RESTART_SCHEDULE = tuple(range(42, 50))
 
@@ -1662,6 +1669,304 @@ def evaluate_semantic_validation(
     evidence_receipt["receipt_sha256"] = canonical_sha256(evidence_receipt)
     return {
         "contract_version": D6_SEMANTIC_VERSION,
+        "assignment": assignment,
+        "semantic_evidence": evidence_receipt,
+        "semantic_mapping": semantic_mapping if evidence_receipt["semantic_evidence_valid"] else None,
+    }
+
+
+def _calendar_evidence_metrics(
+    posteriors: np.ndarray,
+    dates: tuple[date, ...],
+    evidence_positions: tuple[int, ...],
+) -> tuple[np.ndarray, dict[str, Any]]:
+    if posteriors.shape != (len(dates), 3) or not evidence_positions:
+        raise ValueError("calendar posterior/evidence positions are invalid")
+    if any(
+        isinstance(position, bool)
+        or not isinstance(position, (int, np.integer))
+        or position < 0
+        or position >= len(dates)
+        for position in evidence_positions
+    ):
+        raise ValueError("calendar evidence position is invalid")
+    if tuple(sorted(set(int(value) for value in evidence_positions))) != evidence_positions:
+        raise ValueError("calendar evidence positions must be strictly increasing")
+    evidence = posteriors[np.asarray(evidence_positions, dtype=np.int64)]
+    if np.any(evidence < 0.0):
+        raise ValueError("evidence posterior contains negative probability")
+    row_error = float(np.max(np.abs(evidence.sum(axis=1) - 1.0)))
+    ordered = np.sort(evidence, axis=1)
+    margin = ordered[:, -1] - ordered[:, -2]
+    hard = np.argmax(evidence, axis=1).astype(np.int64)
+    transitions = np.zeros((3, 3), dtype=np.int64)
+    runs: dict[int, list[int]] = {state: [] for state in range(3)}
+    current_state = int(hard[0])
+    current_length = 1
+    for index in range(1, hard.size):
+        state = int(hard[index])
+        adjacent = evidence_positions[index] == evidence_positions[index - 1] + 1
+        if adjacent:
+            transitions[int(hard[index - 1]), state] += 1
+        if adjacent and state == current_state:
+            current_length += 1
+        else:
+            runs[current_state].append(current_length)
+            current_state = state
+            current_length = 1
+    runs[current_state].append(current_length)
+    states: dict[str, Any] = {}
+    evidence_count = len(evidence_positions)
+    for state in range(3):
+        state_indexes = np.flatnonzero(hard == state)
+        count = int(state_indexes.size)
+        lengths = runs[state]
+        months = sorted({dates[evidence_positions[index]].strftime("%Y-%m") for index in state_indexes})
+        states[str(state)] = {
+            "hard_count": count,
+            "normalized_occupancy": count / evidence_count,
+            "calendar_month_count": len(months),
+            "calendar_months": months,
+            "contiguous_run_count": len(lengths),
+            "incoming_transition_count": int(transitions[:, state].sum() - transitions[state, state]),
+            "outgoing_transition_count": int(transitions[state, :].sum() - transitions[state, state]),
+            "maximum_single_run_share": max(lengths) / count if count and lengths else None,
+        }
+    return hard, {
+        "evidence_rows": evidence_count,
+        "evidence_positions": list(evidence_positions),
+        "evidence_positions_sha256": canonical_sha256(list(evidence_positions)),
+        "row_sum_max_abs_error": row_error,
+        "top1_top2_min_margin": float(margin.min()),
+        "hard_assignment_sha256": canonical_sha256(hard.tolist()),
+        "transition_counts": transitions.tolist(),
+        "states": states,
+    }
+
+
+def evaluate_semantic_validation_calendar(
+    posteriors: Any,
+    carrier: D6ValidationCalendarSeries,
+    *,
+    frozen_input_manifest: Mapping[str, Any] | None,
+    selected_model_payload_sha256: str,
+) -> dict[str, Any]:
+    """Apply D6-01-B plus D6-NA-A without compressing calendar time or imputing values."""
+
+    assignment_failures: list[str] = []
+    assignment_blockers: list[str] = []
+    evidence_failures: list[str] = []
+    evidence_blockers: list[str] = []
+    manifest = dict(frozen_input_manifest) if isinstance(frozen_input_manifest, Mapping) else {}
+    carrier_valid = False
+    try:
+        carrier.validate(len(carrier.feature_names))
+        dates = _ordered_unique_dates(carrier.calendar_dates)
+        carrier_valid = True
+    except (StateModelSetError, TypeError, ValueError):
+        dates = ()
+        assignment_blockers.append("hmm_risk_semantic_validation_calendar_ledger_invalid")
+        evidence_blockers.append("hmm_risk_semantic_validation_calendar_ledger_invalid")
+    required_manifest_hashes = (
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "calendar_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+        "feature_domain_policy_sha256",
+    )
+    manifest_valid = False
+    if carrier_valid:
+        try:
+            direct_sector_level = str(manifest.get("direct_sector_level") or "")
+            sector_code = str(manifest.get("sector_code") or "")
+            validate_d6_frozen_input_manifest(
+                manifest,
+                carrier,
+                sector_code=sector_code,
+                direct_sector_level=direct_sector_level,
+            )
+            manifest_valid = _valid_sha256(selected_model_payload_sha256)
+        except StateModelSetError:
+            manifest_valid = False
+    if carrier_valid and not manifest_valid:
+        assignment_failures.append("hmm_risk_semantic_validation_availability_receipt_mismatch")
+        evidence_blockers.append("hmm_risk_semantic_validation_evidence_missing")
+    if dates and (len(dates) != 182 or dates[0] != date(2024, 7, 1) or dates[-1] != date(2025, 3, 31)):
+        assignment_blockers.append("hmm_risk_semantic_validation_calendar_ledger_invalid")
+        evidence_blockers.append("hmm_risk_semantic_validation_calendar_ledger_invalid")
+    if carrier_valid:
+        try:
+            probabilities = _finite_array(posteriors, shape=(len(dates), 3))
+            if np.any(probabilities < 0.0):
+                raise ValueError("posterior contains negative probability")
+            full_row_error = float(np.max(np.abs(probabilities.sum(axis=1) - 1.0)))
+            if full_row_error > 1e-12:
+                assignment_failures.append("hmm_risk_semantic_validation_posterior_normalization_failed")
+        except (TypeError, ValueError):
+            probabilities = np.empty((0, 3), dtype=np.float64)
+            full_row_error = None
+            assignment_failures.append("hmm_risk_semantic_validation_posterior_invalid")
+    else:
+        probabilities = np.empty((0, 3), dtype=np.float64)
+        full_row_error = None
+    observation_positions = tuple(carrier.observation_available_positions) if dates else ()
+    utility_positions = tuple(carrier.utility_available_positions) if dates else ()
+    utility_position_set = set(utility_positions)
+    evidence_positions = tuple(position for position in observation_positions if position in utility_position_set)
+    diagnostic_positions: tuple[int, ...] = ()
+    diagnostic_values: tuple[int, ...] = ()
+    diagnostic_ties: tuple[int, ...] = ()
+    if probabilities.shape == (len(dates), 3):
+        ordered_full = np.sort(probabilities, axis=1)
+        full_margin = ordered_full[:, -1] - ordered_full[:, -2]
+        diagnostic_positions = tuple(int(index) for index in np.flatnonzero(full_margin > 1e-12))
+        diagnostic_values = tuple(int(np.argmax(probabilities[index])) for index in diagnostic_positions)
+        diagnostic_ties = tuple(int(index) for index in np.flatnonzero(full_margin <= 1e-12))
+    hard = np.empty((0,), dtype=np.int64)
+    metrics: dict[str, Any] = {}
+    if probabilities.shape == (len(dates), 3) and evidence_positions:
+        try:
+            hard, metrics = _calendar_evidence_metrics(probabilities, dates, evidence_positions)
+            if metrics["row_sum_max_abs_error"] > 1e-12:
+                assignment_failures.append("hmm_risk_semantic_validation_posterior_normalization_failed")
+            if metrics["top1_top2_min_margin"] <= 1e-12:
+                assignment_failures.append("hmm_risk_semantic_validation_posterior_tie")
+        except (TypeError, ValueError):
+            assignment_failures.append("hmm_risk_semantic_validation_posterior_invalid")
+    elif dates:
+        evidence_failures.append("hmm_risk_semantic_validation_evidence_rows_insufficient")
+    availability_events = [
+        dict(entry)
+        for entry in carrier.availability_ledger
+        if entry.get("observation_unavailable_reason_codes") or entry.get("utility_unavailable_reason_codes")
+    ]
+    assignment_evidence = {
+        "direct_sector_level": manifest.get("direct_sector_level"),
+        "sector_code": manifest.get("sector_code"),
+        **{field: manifest.get(field) for field in required_manifest_hashes},
+        "calendar_rows": len(dates),
+        "calendar_carrier_sha256": carrier.carrier_sha256,
+        "frozen_input_manifest_sha256": canonical_sha256(manifest),
+        "selected_model_payload_sha256": selected_model_payload_sha256,
+        "observation_available_positions": list(observation_positions),
+        "utility_available_positions": list(utility_positions),
+        "evidence_positions": list(evidence_positions),
+        "posterior_sha256": canonical_sha256(probabilities.tolist()),
+        "posterior_row_sum_max_abs_error": full_row_error,
+        "diagnostic_hard_assignment_positions": list(diagnostic_positions),
+        "diagnostic_hard_assignment_values": list(diagnostic_values),
+        "diagnostic_tie_positions": list(diagnostic_ties),
+        "semantic_hard_assignment_E": hard.tolist(),
+        "availability_events": availability_events,
+        "availability_event_count": len(availability_events),
+        **metrics,
+    }
+    assignment = _status_receipt(
+        contract_version=D6_NA_SEMANTIC_VERSION,
+        failures=assignment_failures,
+        blockers=assignment_blockers,
+        evidence=assignment_evidence,
+    )
+    assignment.pop("receipt_sha256")
+    assignment["semantic_assignment_status"] = assignment.pop("status")
+    assignment["semantic_assignment_valid"] = assignment.pop("valid")
+    assignment["receipt_sha256"] = canonical_sha256(assignment)
+
+    combined_by_position = {
+        position: float(value)
+        for position, value in zip(
+            carrier.utility_available_positions,
+            np.asarray(carrier.combined_utility_values_f64, dtype=np.float64),
+            strict=True,
+        )
+    }
+    evidence_utility = np.asarray([combined_by_position[position] for position in evidence_positions], dtype=np.float64)
+    semantic_mapping: dict[str, str] | None = None
+    state_utility: dict[str, Any] = {}
+    if len(evidence_positions) < 30:
+        evidence_failures.append("hmm_risk_semantic_validation_evidence_rows_insufficient")
+    if assignment["semantic_assignment_valid"] and len(evidence_positions) >= 30 and hard.size:
+        count_threshold = max(5, math.ceil(0.02 * len(evidence_positions)))
+        means: dict[int, float] = {}
+        for state in range(3):
+            state_metrics = metrics["states"][str(state)]
+            values = evidence_utility[hard == state]
+            variance = float(np.var(values, ddof=1)) if values.size >= 2 else float("nan")
+            mean = float(math.fsum(float(value) for value in values) / values.size) if values.size else float("nan")
+            state_utility[str(state)] = {
+                "count": int(values.size),
+                "mean": mean if math.isfinite(mean) else None,
+                "sample_variance_ddof_1": variance if math.isfinite(variance) else None,
+            }
+            if state_metrics["hard_count"] == 0:
+                evidence_failures.append("hmm_risk_semantic_hard_state_missing")
+            if state_metrics["hard_count"] < count_threshold:
+                evidence_failures.append("hmm_risk_semantic_validation_state_count_insufficient")
+            if state_metrics["normalized_occupancy"] < 0.02:
+                evidence_failures.append("hmm_risk_semantic_validation_occupancy_insufficient")
+            if state_metrics["calendar_month_count"] < 2:
+                evidence_failures.append("hmm_risk_semantic_validation_month_coverage_insufficient")
+            if state_metrics["contiguous_run_count"] < 2:
+                evidence_failures.append("hmm_risk_semantic_validation_run_coverage_insufficient")
+            if state_metrics["incoming_transition_count"] < 2 or state_metrics["outgoing_transition_count"] < 2:
+                evidence_failures.append("hmm_risk_semantic_validation_transition_coverage_insufficient")
+            if state_metrics["maximum_single_run_share"] is None or state_metrics["maximum_single_run_share"] > 0.9:
+                evidence_failures.append("hmm_risk_semantic_validation_run_concentration_exceeded")
+            if not math.isfinite(mean):
+                evidence_failures.append("hmm_risk_semantic_utility_non_finite")
+            elif not math.isfinite(variance):
+                evidence_failures.append("hmm_risk_semantic_utility_variance_non_finite")
+            else:
+                means[state] = mean
+        if len(means) == 3:
+            ordered_states = sorted(means, key=means.get)
+            for left, right in zip(ordered_states, ordered_states[1:]):
+                gap = means[right] - means[left]
+                tolerance = max(
+                    1e-12,
+                    32 * np.finfo(np.float64).eps * max(1.0, abs(means[left]), abs(means[right])),
+                )
+                if not gap > tolerance:
+                    evidence_failures.append("hmm_risk_semantic_validation_utility_gap_insufficient")
+            if not evidence_failures and not evidence_blockers:
+                semantic_mapping = {
+                    str(ordered_states[0]): "fading",
+                    str(ordered_states[1]): "neutral",
+                    str(ordered_states[2]): "trending",
+                }
+    elif not assignment["semantic_assignment_valid"]:
+        evidence_blockers.append("hmm_risk_semantic_evidence_insufficient")
+    semantic_evidence = {
+        "direct_sector_level": manifest.get("direct_sector_level"),
+        "sector_code": manifest.get("sector_code"),
+        **{field: manifest.get(field) for field in required_manifest_hashes},
+        "calendar_carrier_sha256": carrier.carrier_sha256,
+        "frozen_input_manifest_sha256": canonical_sha256(manifest),
+        "selected_model_payload_sha256": selected_model_payload_sha256,
+        "evidence_rows": len(evidence_positions),
+        "evidence_positions": list(evidence_positions),
+        "evidence_positions_sha256": canonical_sha256(list(evidence_positions)),
+        "combined_utility_E_sha256": canonical_sha256(evidence_utility.tolist()),
+        "state_utility": state_utility,
+        "semantic_mapping": semantic_mapping,
+        "hard_semantic_authority": True,
+        "soft_evidence_used_for_acceptance": False,
+        "selection_reexecuted": False,
+    }
+    evidence_receipt = _status_receipt(
+        contract_version=D6_NA_SEMANTIC_VERSION,
+        failures=evidence_failures,
+        blockers=evidence_blockers,
+        evidence=semantic_evidence,
+    )
+    evidence_receipt.pop("receipt_sha256")
+    evidence_receipt["semantic_evidence_status"] = evidence_receipt.pop("status")
+    evidence_receipt["semantic_evidence_valid"] = evidence_receipt.pop("valid")
+    evidence_receipt["receipt_sha256"] = canonical_sha256(evidence_receipt)
+    return {
+        "contract_version": D6_NA_SEMANTIC_VERSION,
+        "base_contract_version": D6_SEMANTIC_VERSION,
+        "availability_contract_version": D6_AVAILABILITY_VERSION,
         "assignment": assignment,
         "semantic_evidence": evidence_receipt,
         "semantic_mapping": semantic_mapping if evidence_receipt["semantic_evidence_valid"] else None,
