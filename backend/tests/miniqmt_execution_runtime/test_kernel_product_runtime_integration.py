@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import copy
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 import inspect
+import json
 from types import SimpleNamespace
 
 import pytest
 
+from backend.execution_algos.adaptive_is.contracts import (
+    CalendarSnapshot,
+    CalendarSnapshotSet,
+    MarketCode,
+    SessionSegment,
+    canonical_json_bytes,
+)
 from backend.execution_algos.vnpy_compat.facade_contracts import VnpyFacadeAuthorityInputV2
 from backend.services.miniqmt_execution_runtime import kernel_delivery, kernel_product_evidence
 from backend.services.miniqmt_execution_runtime.kernel_creation import KernelAlgoCreationCoordinatorV2
@@ -1376,6 +1384,261 @@ def _plan_reader_facts():
     return plan, binding, session, repository, accounts, runtime_id
 
 
+def _regenerated_session_authority(
+    session,
+    *,
+    effective_at_utc: datetime,
+    segments: tuple[SessionSegment, ...] | None = None,
+    source_version: str = "aistock_calendar_v1",
+):
+    exact_segments = segments or tuple(
+        SessionSegment(
+            start_local=time.fromisoformat(payload["start_local"]),
+            end_local=time.fromisoformat(payload["end_local"]),
+        )
+        for payload in (thaw_json_v1(item) for item in session.ordered_session_segments)
+    )
+    snapshots = {
+        market: CalendarSnapshot(
+            calendar_id=f"calendar_{market.value}_20260727",
+            market=market,
+            trade_date=date(2026, 7, 27),
+            timezone="Asia/Shanghai",
+            session_segments=exact_segments,
+            effective_at_utc=effective_at_utc,
+            source_version=source_version,
+        )
+        for market in MarketCode
+    }
+    snapshot_set = CalendarSnapshotSet(
+        snapshot_set_id=f"calendar_set_restart_{effective_at_utc.timestamp():.0f}",
+        snapshot_by_market=snapshots,
+    )
+    snapshot_json = json.loads(canonical_json_bytes(snapshot_set.canonical_payload()).decode("utf-8"))
+    snapshot_json["set_sha256"] = snapshot_set.set_sha256
+    ordered = (MarketCode.SH, MarketCode.SZ, MarketCode.BJ)
+    return type(session).create(
+        runtime_id=session.runtime_id,
+        exchange_trade_date=session.exchange_trade_date,
+        calendar_snapshot_set_id=snapshot_set.snapshot_set_id,
+        calendar_snapshot_set_json=snapshot_json,
+        calendar_snapshot_set_sha256=snapshot_set.set_sha256,
+        ordered_market_calendar_sha256s=tuple(
+            snapshot_set.snapshot_by_market[market].calendar_sha256 for market in ordered
+        ),
+        ordered_session_segments=tuple(segment.canonical_payload() for segment in exact_segments),
+        source_effective_at_utc=effective_at_utc,
+    )
+
+
+def test_product_session_restart_reuses_durable_authority_for_same_economic_session() -> None:
+    _plan, _binding, persisted, _repository, _accounts, _runtime_id_value = _plan_reader_facts()
+    candidate = _regenerated_session_authority(
+        persisted,
+        effective_at_utc=datetime(2026, 7, 27, 0, 30, tzinfo=UTC),
+    )
+    assert candidate != persisted
+    assert candidate.calendar_snapshot_set_sha256 != persisted.calendar_snapshot_set_sha256
+
+    class Repository:
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            return persisted
+
+        @staticmethod
+        def write_exchange_session_authority(_authority):
+            raise AssertionError("an existing durable authority must be resolved before insert")
+
+    assert (
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=Repository(),
+            candidate=candidate,
+        )
+        == persisted
+    )
+
+
+def test_product_session_restart_race_reuses_compatible_durable_authority() -> None:
+    _plan, _binding, persisted, _repository, _accounts, _runtime_id_value = _plan_reader_facts()
+    candidate = _regenerated_session_authority(
+        persisted,
+        effective_at_utc=datetime(2026, 7, 27, 0, 30, tzinfo=UTC),
+    )
+
+    class Repository:
+        read_count = 0
+
+        def read_exchange_session_authority(self, **_values):
+            self.read_count += 1
+            if self.read_count == 1:
+                raise KeyError("not committed yet")
+            return persisted
+
+        @staticmethod
+        def write_exchange_session_authority(_authority):
+            raise KernelRepositoryConflict("concurrent exchange-session writer won")
+
+    repository = Repository()
+    assert (
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=repository,
+            candidate=candidate,
+        )
+        == persisted
+    )
+    assert repository.read_count == 2
+
+
+def test_product_session_commit_unknown_uses_exact_readback_or_preserves_uncertainty() -> None:
+    _plan, _binding, persisted, _repository, _accounts, _runtime_id_value = _plan_reader_facts()
+    candidate = _regenerated_session_authority(
+        persisted,
+        effective_at_utc=datetime(2026, 7, 27, 0, 30, tzinfo=UTC),
+    )
+
+    class CommittedRepository:
+        read_count = 0
+
+        def read_exchange_session_authority(self, **_values):
+            self.read_count += 1
+            if self.read_count == 1:
+                raise KeyError("not visible before write")
+            return persisted
+
+        @staticmethod
+        def write_exchange_session_authority(_authority):
+            raise KernelRepositoryCommitUnknown("commit acknowledgement lost")
+
+    committed = CommittedRepository()
+    assert (
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=committed,
+            candidate=candidate,
+        )
+        == persisted
+    )
+    assert committed.read_count == 2
+
+    class UnknownRepository:
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            raise KeyError("not visible")
+
+        @staticmethod
+        def write_exchange_session_authority(_authority):
+            raise KernelRepositoryCommitUnknown("commit remains unknown")
+
+    with pytest.raises(KernelRepositoryCommitUnknown, match="commit remains unknown"):
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=UnknownRepository(),
+            candidate=candidate,
+        )
+
+
+def test_product_session_restart_rejects_observation_older_than_durable_generation() -> None:
+    _plan, _binding, persisted, _repository, _accounts, _runtime_id_value = _plan_reader_facts()
+    candidate = _regenerated_session_authority(
+        persisted,
+        effective_at_utc=datetime(2026, 7, 26, 15, 59, tzinfo=UTC),
+    )
+
+    class Repository:
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            return persisted
+
+    with pytest.raises(MiniQMTKernelProductCompositionError) as caught:
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=Repository(),
+            candidate=candidate,
+        )
+    assert caught.value.reason_code == "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_REBUILD_STALE"
+    assert caught.value.context["persisted_source_effective_at_utc"] == persisted.source_effective_at_utc
+    assert caught.value.context["candidate_source_effective_at_utc"] == candidate.source_effective_at_utc
+    assert caught.value.context["economic_conflict_fields"] == []
+    assert caught.value.context["broker_called"] is False
+
+
+def test_product_session_restart_rejects_true_economic_authority_drift_with_hash_evidence() -> None:
+    _plan, _binding, persisted, _repository, _accounts, _runtime_id_value = _plan_reader_facts()
+    candidate = _regenerated_session_authority(
+        persisted,
+        effective_at_utc=datetime(2026, 7, 27, 0, 30, tzinfo=UTC),
+        source_version="aistock_calendar_v2-conflict",
+    )
+
+    class Repository:
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            return persisted
+
+    with pytest.raises(MiniQMTKernelProductCompositionError) as caught:
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=Repository(),
+            candidate=candidate,
+        )
+    assert caught.value.reason_code == "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_AUTHORITY_DRIFT"
+    assert caught.value.context == {
+        "persisted_runtime_id": persisted.runtime_id,
+        "candidate_runtime_id": candidate.runtime_id,
+        "persisted_exchange_trade_date": persisted.exchange_trade_date,
+        "candidate_exchange_trade_date": candidate.exchange_trade_date,
+        "persisted_authority_sha256": persisted.authority_sha256,
+        "candidate_authority_sha256": candidate.authority_sha256,
+        "persisted_calendar_snapshot_set_id": persisted.calendar_snapshot_set_id,
+        "candidate_calendar_snapshot_set_id": candidate.calendar_snapshot_set_id,
+        "persisted_calendar_snapshot_set_sha256": persisted.calendar_snapshot_set_sha256,
+        "candidate_calendar_snapshot_set_sha256": candidate.calendar_snapshot_set_sha256,
+        "persisted_source_effective_at_utc": persisted.source_effective_at_utc,
+        "candidate_source_effective_at_utc": candidate.source_effective_at_utc,
+        "persisted_economic_authority_sha256": product_module._exchange_session_economic_authority_sha256_v1(  # type: ignore[attr-defined]
+            persisted
+        ),
+        "candidate_economic_authority_sha256": product_module._exchange_session_economic_authority_sha256_v1(  # type: ignore[attr-defined]
+            candidate
+        ),
+        "economic_conflict_fields": ["ordered_market_snapshots"],
+        "broker_called": False,
+    }
+
+
+def test_product_session_resolver_fails_loud_on_invalid_readback_and_orphan_write_conflict() -> None:
+    _plan, _binding, candidate, _repository, _accounts, _runtime_id_value = _plan_reader_facts()
+
+    class InvalidReadbackRepository:
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            return {"authority_sha256": candidate.authority_sha256}
+
+    with pytest.raises(MiniQMTKernelProductCompositionError) as invalid:
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=InvalidReadbackRepository(),
+            candidate=candidate,
+        )
+    assert invalid.value.reason_code == "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_INVALID"
+    assert invalid.value.context["readback_type"] == "dict"
+    assert invalid.value.context["broker_called"] is False
+
+    class OrphanConflictRepository:
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            raise KeyError("missing")
+
+        @staticmethod
+        def write_exchange_session_authority(_authority):
+            raise KernelRepositoryConflict("insert conflict without durable row")
+
+    with pytest.raises(MiniQMTKernelProductCompositionError) as orphan:
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=OrphanConflictRepository(),
+            candidate=candidate,
+        )
+    assert orphan.value.reason_code == "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_WRITE_CONFLICT"
+    assert orphan.value.context["candidate_authority_sha256"] == candidate.authority_sha256
+    assert orphan.value.context["repository_conflict"] == "insert conflict without durable row"
+    assert orphan.value.context["broker_called"] is False
+
+
 def test_plan_authority_reader_closes_plan_binding_session_account_and_policy() -> None:
     plan, binding, session, repository, accounts, runtime_id = _plan_reader_facts()
     reader = SimulationK6DPlanAuthorityReader(
@@ -1549,6 +1812,10 @@ def test_product_composition_root_builds_preview_runtime_without_parallel_route(
         def ensure_product_runtime_v1(self, **_values):
             return None
 
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            raise KeyError("not persisted")
+
         def write_exchange_session_authority(self, authority):
             return authority
 
@@ -1614,6 +1881,98 @@ def test_product_composition_root_builds_preview_runtime_without_parallel_route(
         binding=binding,
         managed_order_service=managed,
         quote_context_adapter=SimpleNamespace(context_store=SimpleNamespace(snapshot=lambda: context)),
+        quote_ingress_activation=activation,
+        observed_at=datetime(2026, 7, 27, 1, 20, tzinfo=UTC),
+        broker_side_effects_enabled=False,
+    )
+    assert runtime.runtime_id == runtime_id
+    assert runtime.outbox_dispatcher is None
+    assert registered == [(runtime, ("600000.SH",))]
+
+
+def test_product_composition_restart_uses_durable_session_without_broker_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, binding, persisted, simulation_repository, _accounts, runtime_id = _plan_reader_facts()
+    candidate = _regenerated_session_authority(
+        persisted,
+        effective_at_utc=datetime(2026, 7, 27, 0, 30, tzinfo=UTC),
+    )
+    registered: list[object] = []
+
+    class ProductRepository:
+        @staticmethod
+        def ensure_product_runtime_v1(**_values):
+            return None
+
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            return persisted
+
+        @staticmethod
+        def write_exchange_session_authority(_authority):
+            raise AssertionError("restart must not overwrite the durable session generation")
+
+        @staticmethod
+        def activate_kernel_v2_route_v1(**_values):
+            return None
+
+        @staticmethod
+        def start_worker_incarnation(**_values):
+            return SimpleNamespace(worker_id="worker_product_restart", process_incarnation_id="incarnation_restart")
+
+        @staticmethod
+        def list_dispatchable_outbox_commands(**_values):
+            return ()
+
+        @staticmethod
+        def list_reconcilable_outbox_commands(**_values):
+            return ()
+
+        @staticmethod
+        def read_runtime_last_event_sequence(_runtime_id):
+            return 0
+
+        @staticmethod
+        def read_event_transaction(_event_id):
+            raise KeyError(_event_id)
+
+    product_repository = ProductRepository()
+    monkeypatch.setattr(product_module, "PostgresMiniQMTKernelRepository", lambda **_values: product_repository)
+    monkeypatch.setattr(
+        product_module,
+        "build_full_five_catalog_authority_v1",
+        lambda **_values: SimpleNamespace(
+            catalog_runtime=SimpleNamespace(snapshot=object()),
+            conformance_authority=object(),
+        ),
+    )
+    monkeypatch.setattr(product_module, "_session_authority", lambda _runtime_id, _context: candidate)
+    monkeypatch.setattr(
+        product_module,
+        "build_k6d_route_source_capability_v1",
+        lambda: SimpleNamespace(capability_sha256="e" * 64),
+    )
+    for owner in (
+        product_module.KernelProductDeliveryWorkerV3,
+        product_module.KernelOutboxOutcomeIngressV1,
+        product_module.MiniQMTKernelV2ProductCoordinator,
+        product_module.KernelIngressCoordinatorV1,
+        product_module.KernelProductCallbackIngressV1,
+        product_module.ExchangeSessionClockV1,
+    ):
+        monkeypatch.setattr(owner, "__init__", lambda _self, **_values: None)
+    activation = SimpleNamespace(
+        get_kernel_product_runtime=lambda _runtime_id: None,
+        register_kernel_product_runtime=lambda *, runtime, symbols: registered.append((runtime, symbols)),
+    )
+    managed = SimpleNamespace(_repository=object(), _broker=None, preview_order=lambda _request: None)
+    runtime = build_simulation_miniqmt_product_runtime_v1(
+        simulation_repository=simulation_repository,
+        execution_plan=plan,
+        binding=binding,
+        managed_order_service=managed,
+        quote_context_adapter=SimpleNamespace(context_store=SimpleNamespace(snapshot=_context)),
         quote_ingress_activation=activation,
         observed_at=datetime(2026, 7, 27, 1, 20, tzinfo=UTC),
         broker_side_effects_enabled=False,
