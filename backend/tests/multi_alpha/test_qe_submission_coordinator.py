@@ -267,11 +267,11 @@ def _source(
     )
 
 
-def test_capacity_contract_is_wsl_two_remote_four_and_request_can_only_lower() -> None:
+def test_capacity_contract_is_wsl_one_remote_four_and_request_can_only_lower() -> None:
     service = QEActiveExecutionCapacityService()
-    assert service.resolve_node_capacity("wsl2-5080") == 2
+    assert service.resolve_node_capacity("wsl2-5080") == 1
     assert service.resolve_node_capacity("wsl2-5080", 1) == 1
-    assert service.resolve_node_capacity("wsl2-5080", 8) == 2
+    assert service.resolve_node_capacity("wsl2-5080", 8) == 1
     assert service.resolve_node_capacity("rdagent-node1") == 4
     assert service.resolve_node_capacity("rdagent-node1", 3) == 3
     assert service.resolve_node_capacity("rdagent-node1", 8) == 4
@@ -289,9 +289,10 @@ def test_full_capacity_persists_waiting_and_never_posts() -> None:
     outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
 
     assert outcome.state == "waiting_capacity"
-    assert outcome.active_count == outcome.node_capacity == 2
+    assert outcome.active_count == 2
+    assert outcome.node_capacity == 1
     assert client.submit_calls == 0
-    assert evidence == {"claimed": 0, "waiting": 1, "active_count": 2, "node_capacity": 2}
+    assert evidence == {"claimed": 0, "waiting": 1, "active_count": 2, "node_capacity": 1}
 
 
 def test_activation_unresolved_node_is_queue_only_without_failing_source() -> None:

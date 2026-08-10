@@ -12,8 +12,11 @@ from backend.services.multi_alpha import remote_dispatch as remote_dispatch_modu
 from backend.services.multi_alpha.qe_subprocess_env import (
     DB_CREDENTIAL_KEYS,
     DB_CREDENTIAL_PREFIXES,
+    QE_SECRET_CREDENTIAL_KEYS,
     db_credential_scrub_command,
     is_db_credential_key,
+    is_qe_subprocess_credential_key,
+    qe_subprocess_credential_scrub_command,
     scrubbed_qe_subprocess_env,
 )
 
@@ -31,6 +34,20 @@ DB_VARS = [
     "PGDATABASE",
     "PGSERVICE",
     "PGPASSFILE",
+    "POSTGRES_PASSWORD",
+    "DB_PASSWORD",
+    "SQLALCHEMY_DATABASE_URL",
+]
+SECRET_VARS = [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GITHUB_TOKEN",
+    "HF_TOKEN",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AZURE_CLIENT_SECRET",
+    "SERVICE_ACCESS_KEY_ID",
+    "QE_RESOURCE_SESSION_TOKEN",
 ]
 
 PRESERVED_VARS = {
@@ -38,6 +55,8 @@ PRESERVED_VARS = {
     "QLIB_DATA_PATH": "C:/qlib_data",
     "FACTOR_CACHE_DIR": "C:/factor_cache",
     "AISTOCK_TASK_ID": "task-1",
+    "QE_RESOURCE_SESSION_ID": "qers-1",
+    "QE_RESOURCE_SOURCE_RUN_KEY": "task-1_L1",
 }
 
 
@@ -45,14 +64,18 @@ PRESERVED_VARS = {
 def _poison_db_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in DB_VARS:
         monkeypatch.setenv(name, f"fake-{name.lower()}")
+    for name in SECRET_VARS:
+        monkeypatch.setenv(name, f"fake-{name.lower()}")
     for name, value in PRESERVED_VARS.items():
         monkeypatch.setenv(name, value)
 
 
-def test_scrubbed_qe_subprocess_env_removes_db_credentials_only(_poison_db_env: None) -> None:
+def test_scrubbed_qe_subprocess_env_removes_credentials_and_preserves_control_plane(
+    _poison_db_env: None,
+) -> None:
     env = scrubbed_qe_subprocess_env()
-    for name in DB_VARS:
-        assert name not in env, f"DB credential variable leaked: {name}"
+    for name in [*DB_VARS, *SECRET_VARS]:
+        assert name not in env, f"credential variable leaked: {name}"
     for name, value in PRESERVED_VARS.items():
         assert env.get(name) == value, f"control-plane/file-path variable lost: {name}"
 
@@ -63,9 +86,24 @@ def test_is_db_credential_key() -> None:
     assert is_db_credential_key("DATABASE_URL")
     assert is_db_credential_key("PGHOST")
     assert is_db_credential_key("PGPASSWORD")
+    assert is_db_credential_key("POSTGRES_PASSWORD")
+    assert is_db_credential_key("DB_PASSWORD")
+    assert is_db_credential_key("SQLALCHEMY_DATABASE_URL")
     assert not is_db_credential_key("AISTOCK_PREDICTION_STORE_BASE_URL")
     assert not is_db_credential_key("QLIB_DATA_PATH")
     assert not is_db_credential_key("AISTOCK_TASK_ID")
+
+
+def test_is_qe_subprocess_credential_key_covers_non_database_secrets() -> None:
+    assert is_qe_subprocess_credential_key("OPENAI_API_KEY")
+    assert is_qe_subprocess_credential_key("SERVICE_AUTH_TOKEN")
+    assert is_qe_subprocess_credential_key("GITHUB_TOKEN")
+    assert is_qe_subprocess_credential_key("AWS_ACCESS_KEY_ID")
+    assert is_qe_subprocess_credential_key("AZURE_CLIENT_SECRET")
+    assert is_qe_subprocess_credential_key("SERVICE_ACCESS_KEY_ID")
+    assert not is_qe_subprocess_credential_key("AISTOCK_PREDICTION_STORE_BASE_URL")
+    assert not is_qe_subprocess_credential_key("QE_RESOURCE_SESSION_ID")
+    assert not is_qe_subprocess_credential_key("FACTOR_CACHE_DIR")
 
 
 def test_launched_isolated_subprocess_sees_no_db_credentials(_poison_db_env: None) -> None:
@@ -80,7 +118,7 @@ def test_launched_isolated_subprocess_sees_no_db_credentials(_poison_db_env: Non
         "print('PRESERVED=' + os.environ.get('AISTOCK_PREDICTION_STORE_BASE_URL',''))"
     )
     child = subprocess.run(
-        [sys.executable, "-c", probe, *DB_VARS],
+        [sys.executable, "-c", probe, *DB_VARS, *SECRET_VARS],
         capture_output=True,
         text=True,
         env=scrubbed_qe_subprocess_env(),
@@ -210,9 +248,11 @@ def test_db_credential_scrub_command_runs_in_bash(_poison_db_env: None) -> None:
     if sys.platform == "win32" and not _bash_available():
         pytest.skip("bash is unavailable on this host")
     probe = (
-        "export TDX_DB_HOST=fake PGHOST=fake DATABASE_URL=postgresql://fake; "
+        "export TDX_DB_HOST=fake PGHOST=fake DATABASE_URL=postgresql://fake OPENAI_API_KEY=fake GITHUB_TOKEN=fake; "
         + db_credential_scrub_command()
-        + 'test -z "${TDX_DB_HOST+x}" && test -z "${PGHOST+x}" && test -z "${DATABASE_URL+x}" && echo SCRUBBED'
+        + 'test -z "${TDX_DB_HOST+x}" && test -z "${PGHOST+x}" '
+        + '&& test -z "${DATABASE_URL+x}" && test -z "${OPENAI_API_KEY+x}" '
+        + '&& test -z "${GITHUB_TOKEN+x}" && echo SCRUBBED'
     )
     child = subprocess.run(
         ["bash", "-c", probe],
@@ -236,11 +276,26 @@ def test_qe_subprocess_env_never_emits_values(_poison_db_env: None) -> None:
     """The scrub helpers must not leak credential values in their outputs."""
     env = scrubbed_qe_subprocess_env()
     serialized = repr(env)
-    for value in ("fake-tdx_db_host", "fake-pgpassword", "fake-tdx_db_password"):
+    for value in (
+        "fake-tdx_db_host",
+        "fake-pgpassword",
+        "fake-tdx_db_password",
+        "fake-openai_api_key",
+        "fake-github_token",
+    ):
         assert value not in serialized
     scrub = db_credential_scrub_command()
-    for value in ("fake-tdx_db_host", "fake-pgpassword", "fake-tdx_db_password"):
+    for value in (
+        "fake-tdx_db_host",
+        "fake-pgpassword",
+        "fake-tdx_db_password",
+        "fake-openai_api_key",
+        "fake-github_token",
+    ):
         assert value not in scrub
+    assert qe_subprocess_credential_scrub_command() == scrub
+    for name in QE_SECRET_CREDENTIAL_KEYS:
+        assert name in scrub
 
 
 def test_market_database_access_impossible_without_credentials(_poison_db_env: None) -> None:

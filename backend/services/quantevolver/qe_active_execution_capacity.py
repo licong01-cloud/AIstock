@@ -39,7 +39,11 @@ from .qe_workspace_client import (
 
 
 DEFAULT_WSL_NODE_ID = "wsl2-5080"
-WSL_HARD_CAPACITY = 2
+# One local WSL training slot is the host-responsiveness contract.  A single
+# GeneralPTNN Loop can own a large dataset/GPU working set; cross-task overlap
+# previously drove Windows into memory compression and paging stalls.  Remote
+# CPU execution remains independently parallel.
+WSL_HARD_CAPACITY = 1
 REMOTE_HARD_CAPACITY = 4
 DEFAULT_RESERVATION_LEASE_SECONDS = 120
 _PROCESS_SUBMISSION_OWNER_ID = (

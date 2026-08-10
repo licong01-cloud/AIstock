@@ -4081,6 +4081,52 @@ def test_general_ptnn_default_mse_path_stays_on_qlib_adapter():
     assert "class: TSDatasetH" in yaml_text
 
 
+def test_general_ptnn_local_wsl_uses_host_safe_single_process_loader():
+    parsed = _parse_conf_yaml_with_jinja_placeholders(
+        _base_yaml(
+            model_info=_custom_timeseries_lstm_model_info(),
+            node_id="wsl2-5080",
+        )
+    )
+    model_kwargs = parsed["task"]["model"]["kwargs"]
+
+    assert model_kwargs["batch_size"] == 4096
+    assert model_kwargs["n_jobs"] == 0
+    assert model_kwargs["pin_memory"] is False
+    assert model_kwargs["persistent_workers"] is False
+    assert "prefetch_factor" not in model_kwargs
+
+
+def test_general_ptnn_remote_node_keeps_existing_parallel_loader_contract():
+    parsed = _parse_conf_yaml_with_jinja_placeholders(
+        _base_yaml(
+            model_info=_custom_timeseries_lstm_model_info(),
+            node_id="rdagent-node1",
+        )
+    )
+    model_kwargs = parsed["task"]["model"]["kwargs"]
+
+    assert model_kwargs["n_jobs"] == 2
+    assert model_kwargs["pin_memory"] is True
+    assert model_kwargs["prefetch_factor"] == 2
+
+
+def test_general_ptnn_local_wsl_rejects_unsafe_catalog_loader_override():
+    model_info = _custom_timeseries_lstm_model_info(
+        training_hp={
+            "n_epochs": 200,
+            "lr": 0.001,
+            "batch_size": 4096,
+            "early_stop": 20,
+            "weight_decay": 0.001,
+            "n_jobs": 2,
+        }
+    )
+
+    with pytest.raises(ValueError, match="qe_wsl_host_resource_override_unsafe"):
+        _base_yaml(model_info=model_info, node_id="wsl2-5080")
+
+
 def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
     yaml_text = _base_yaml(
         model_info=_custom_timeseries_lstm_model_info(),
@@ -4275,6 +4321,71 @@ def test_qe_resource_session_env_is_opt_in_and_complete(monkeypatch):
             "/tmp/qe-invalid",
             resource_session_id="qers_incomplete",
         )
+
+
+def test_auto_wsl_command_scrubs_credentials_and_bounds_local_threads(monkeypatch):
+    composer = ConfigComposer()
+    credential_marker = "bug1014-credential-marker"
+    monkeypatch.setenv("OPENAI_API_KEY", credential_marker)
+    monkeypatch.setenv("TDX_DB_PASSWORD", credential_marker)
+    monkeypatch.setenv("AISTOCK_PREDICTION_STORE_BASE_URL", "http://prediction-store:9000")
+
+    env_lines, core_parts = composer._build_auto_wsl_command_parts(
+        "/tmp/qe-host-safe",
+        node_id="wsl2-5080",
+        prediction_store_base_url="http://prediction-store:9000",
+    )
+    command = " && ".join(core_parts)
+
+    assert core_parts[0].startswith("for __qe_credvar in $(compgen -e)")
+    assert "TDX_DB_*" in command
+    assert "*_API_KEY" in command
+    assert credential_marker not in command
+    assert "export OMP_NUM_THREADS=4" in core_parts
+    assert "export MKL_NUM_THREADS=4" in core_parts
+    assert "export OPENBLAS_NUM_THREADS=4" in core_parts
+    assert "export NUMEXPR_NUM_THREADS=4" in core_parts
+    assert "export AISTOCK_PREDICTION_STORE_BASE_URL=http://prediction-store:9000" in env_lines
+
+    full_command = composer._generate_wsl_command(
+        "/tmp/qe-host-safe",
+        has_custom_factors=True,
+        use_custom_model=True,
+        model_type_tag="TimeSeries",
+        mode="auto",
+        node_id="wsl2-5080",
+        prediction_store_base_url="http://prediction-store:9000",
+    )
+    scrub_pos = full_command.index("for __qe_credvar in $(compgen -e)")
+    conda_pos = full_command.index("conda activate")
+    prepare_pos = full_command.index("python prepare_factors.py")
+    qrun_pos = full_command.index("python qrun_limit_minute.py conf.yaml")
+    read_pos = full_command.index("QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py")
+    assert scrub_pos < conda_pos < prepare_pos < qrun_pos < read_pos
+
+    manual_command = composer._generate_wsl_command(
+        "/tmp/qe-host-safe",
+        has_custom_factors=True,
+        use_custom_model=True,
+        model_type_tag="TimeSeries",
+        mode="manual",
+        node_id="wsl2-5080",
+        prediction_store_base_url="http://prediction-store:9000",
+    )
+    assert "\n(\ncd /tmp/qe-host-safe" in manual_command
+    assert "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py\n)" in manual_command
+
+
+def test_auto_remote_command_does_not_apply_local_wsl_thread_cap():
+    composer = ConfigComposer()
+    _, core_parts = composer._build_auto_wsl_command_parts(
+        "/tmp/qe-remote",
+        node_id="rdagent-node1",
+        factor_cache_dir="/home/lc999/data/factor_values",
+    )
+
+    assert "export OMP_NUM_THREADS=4" not in core_parts
+    assert core_parts[0].startswith("for __qe_credvar in $(compgen -e)")
 
 
 def test_seed_ensemble_day_backtest_packages_minute_runner(monkeypatch):
