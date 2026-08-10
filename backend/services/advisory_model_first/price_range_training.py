@@ -36,16 +36,32 @@ def train_price_range_models(
     seed: int,
 ) -> PriceRangeTrainingResult:
     keys = ["decision_as_of_trade_date", "target_trade_date", "instrument"]
-    merged = features.merge(labels, on=keys, how="inner", validate="one_to_one")
-    if len(merged) != len(features) or len(merged) != len(labels):
+    if features.duplicated(keys).any() or labels.duplicated(keys).any():
         raise AdvisoryModelFirstError(
-            "price-range features and labels do not close one-to-one",
+            "price-range features or labels contain duplicate identities",
             reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
-            context={
-                "feature_rows": len(features),
-                "label_rows": len(labels),
-                "merged_rows": len(merged),
-            },
+        )
+    merged = features.merge(labels, on=keys, how="left", validate="one_to_one", indicator=True)
+    if not merged["_merge"].eq("both").all():
+        raise AdvisoryModelFirstError(
+            "price-range frozen feature row has no candidate label",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+            context={"missing_label_rows": int(merged["_merge"].ne("both").sum())},
+        )
+    merged = merged.drop(columns="_merge")
+    missing_feature_rows = labels.merge(
+        features.loc[:, keys], on=keys, how="left", validate="one_to_one", indicator=True
+    )
+    missing_feature_rows = missing_feature_rows.loc[missing_feature_rows["_merge"].eq("left_only")]
+    missing_by_split = {
+        name: int(missing_feature_rows["split"].eq(name).sum())
+        for name in ("train", "validation", "test", "purged")
+    }
+    if missing_by_split["test"]:
+        raise AdvisoryModelFirstError(
+            "price-range test candidate is missing its frozen M1 feature row",
+            reason_code="ADVISORY_PRICE_RANGE_SAMPLE_INSUFFICIENT",
+            context={"missing_feature_rows_by_split": missing_by_split},
         )
     feature_names = tuple(MODEL_FEATURE_COLUMNS)
     missing_features = sorted(set(feature_names) - set(merged.columns))
@@ -168,6 +184,12 @@ def train_price_range_models(
             "test_date_count": int(test_rows["decision_as_of_trade_date"].nunique()),
             "binary_test_row_count": int(binary_masks[2].sum()),
             "executable_gap_test_row_count": int(gap_masks[2].sum()),
+            "feature_available_row_count": len(merged),
+            "feature_unavailable_row_count": len(missing_feature_rows),
+            "feature_unavailable_date_count": int(
+                missing_feature_rows["decision_as_of_trade_date"].nunique()
+            ),
+            "feature_unavailable_rows_by_split": missing_by_split,
             "status": "EXPERIMENTAL_SHADOW",
             "calibration_state": "UNCALIBRATED",
         }

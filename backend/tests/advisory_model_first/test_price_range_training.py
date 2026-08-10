@@ -109,3 +109,41 @@ def test_price_range_probability_contract_rejects_out_of_range_value() -> None:
     with pytest.raises(AdvisoryModelFirstError) as error:
         _require_probabilities(np.asarray([0.2, 1.01]), head="entry_executable_probability")
     assert error.value.reason_code == "ADVISORY_PRICE_RANGE_TRAINING_FAILED"
+
+
+def test_price_range_training_records_inherited_m1_feature_unavailability(monkeypatch) -> None:
+    features, labels = _matrix()
+    train_date = labels.loc[labels["split"].eq("train"), "decision_as_of_trade_date"].iloc[0]
+    features = features.loc[~features["decision_as_of_trade_date"].eq(train_date)].copy()
+    monkeypatch.setattr(
+        price_range_training,
+        "_train_booster",
+        lambda **kwargs: (_FakeModel(str(kwargs["head"])), {}),
+    )
+
+    result = train_price_range_models(features=features, labels=labels, seed=7)
+
+    assert result.metrics["feature_unavailable_row_count"] == 2
+    assert result.metrics["feature_unavailable_date_count"] == 1
+    assert result.metrics["feature_unavailable_rows_by_split"]["train"] == 2
+    assert len(result.test_predictions) == 160
+
+
+def test_price_range_training_rejects_missing_test_feature_row(monkeypatch) -> None:
+    features, labels = _matrix()
+    test_index = labels.index[labels["split"].eq("test")][0]
+    keys = ["decision_as_of_trade_date", "target_trade_date", "instrument"]
+    missing_key = tuple(labels.loc[test_index, keys])
+    mask = pd.Series(True, index=features.index)
+    for column, value in zip(keys, missing_key):
+        mask &= features[column].eq(value)
+    features = features.loc[~mask].copy()
+    monkeypatch.setattr(
+        price_range_training,
+        "_train_booster",
+        lambda **kwargs: (_FakeModel(str(kwargs["head"])), {}),
+    )
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        train_price_range_models(features=features, labels=labels, seed=7)
+    assert error.value.reason_code == "ADVISORY_PRICE_RANGE_SAMPLE_INSUFFICIENT"
