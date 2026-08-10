@@ -54,6 +54,7 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     canonical_decimal_string_v1,
     hash_hex_v1,
     require_sha256_v1,
+    thaw_json_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     BrokerCommandOutboxStatusV1,
@@ -825,6 +826,165 @@ def _session_authority(runtime_id: str, context: QuoteEvaluationContext) -> Exch
     )
 
 
+def _exchange_session_economic_authority_payload_v1(
+    authority: ExchangeSessionAuthorityV1,
+) -> dict[str, Any]:
+    """Project restart-stable exchange facts while retaining the durable generation separately."""
+
+    if not isinstance(authority, ExchangeSessionAuthorityV1):
+        raise TypeError("authority must be ExchangeSessionAuthorityV1")
+    snapshot_set = thaw_json_v1(authority.calendar_snapshot_set_json)
+    snapshots = snapshot_set["snapshot_by_market"]
+    ordered_snapshots: list[dict[str, Any]] = []
+    for market in (MarketCode.SH, MarketCode.SZ, MarketCode.BJ):
+        snapshot = dict(snapshots[f"MarketCode.{market.value}"])
+        snapshot.pop("effective_at_utc")
+        ordered_snapshots.append(snapshot)
+    return {
+        "runtime_id": authority.runtime_id,
+        "exchange_trade_date": authority.exchange_trade_date,
+        "timezone": authority.timezone,
+        "session_definition_version": authority.session_definition_version,
+        "ordered_session_segments": [thaw_json_v1(item) for item in authority.ordered_session_segments],
+        "ordered_market_snapshots": ordered_snapshots,
+    }
+
+
+def _exchange_session_economic_authority_sha256_v1(authority: ExchangeSessionAuthorityV1) -> str:
+    return hash_hex_v1(
+        "miniqmt_exchange_session_economic_authority_v1",
+        _exchange_session_economic_authority_payload_v1(authority),
+    )
+
+
+def _exchange_session_drift_context_v1(
+    *,
+    persisted: ExchangeSessionAuthorityV1,
+    candidate: ExchangeSessionAuthorityV1,
+) -> dict[str, Any]:
+    persisted_economic = _exchange_session_economic_authority_payload_v1(persisted)
+    candidate_economic = _exchange_session_economic_authority_payload_v1(candidate)
+    return {
+        "persisted_runtime_id": persisted.runtime_id,
+        "candidate_runtime_id": candidate.runtime_id,
+        "persisted_exchange_trade_date": persisted.exchange_trade_date,
+        "candidate_exchange_trade_date": candidate.exchange_trade_date,
+        "persisted_authority_sha256": persisted.authority_sha256,
+        "candidate_authority_sha256": candidate.authority_sha256,
+        "persisted_calendar_snapshot_set_id": persisted.calendar_snapshot_set_id,
+        "candidate_calendar_snapshot_set_id": candidate.calendar_snapshot_set_id,
+        "persisted_calendar_snapshot_set_sha256": persisted.calendar_snapshot_set_sha256,
+        "candidate_calendar_snapshot_set_sha256": candidate.calendar_snapshot_set_sha256,
+        "persisted_source_effective_at_utc": persisted.source_effective_at_utc,
+        "candidate_source_effective_at_utc": candidate.source_effective_at_utc,
+        "persisted_economic_authority_sha256": _exchange_session_economic_authority_sha256_v1(persisted),
+        "candidate_economic_authority_sha256": _exchange_session_economic_authority_sha256_v1(candidate),
+        "economic_conflict_fields": sorted(
+            key
+            for key in set(persisted_economic) | set(candidate_economic)
+            if persisted_economic.get(key) != candidate_economic.get(key)
+        ),
+    }
+
+
+def _resolve_product_exchange_session_authority_v1(
+    *,
+    repository: Any,
+    candidate: ExchangeSessionAuthorityV1,
+) -> ExchangeSessionAuthorityV1:
+    """Resolve one insert-once durable session without treating observation identity as economic drift."""
+
+    if not isinstance(candidate, ExchangeSessionAuthorityV1):
+        raise TypeError("candidate must be ExchangeSessionAuthorityV1")
+
+    def read_persisted() -> ExchangeSessionAuthorityV1:
+        try:
+            persisted = repository.read_exchange_session_authority(
+                runtime_id=candidate.runtime_id,
+                exchange_trade_date=date.fromisoformat(candidate.exchange_trade_date),
+            )
+        except KeyError:
+            raise
+        except KernelRepositoryConflict as exc:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_CONFLICT",
+                "durable exchange-session authority failed strict repository readback",
+                context={
+                    "runtime_id": candidate.runtime_id,
+                    "exchange_trade_date": candidate.exchange_trade_date,
+                    "candidate_authority_sha256": candidate.authority_sha256,
+                    "repository_conflict_type": type(exc).__name__,
+                    "repository_conflict": str(exc),
+                },
+            ) from exc
+        if not isinstance(persisted, ExchangeSessionAuthorityV1):
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_INVALID",
+                "durable exchange-session authority readback is not a strict carrier",
+                context={
+                    "runtime_id": candidate.runtime_id,
+                    "exchange_trade_date": candidate.exchange_trade_date,
+                    "candidate_authority_sha256": candidate.authority_sha256,
+                    "readback_type": type(persisted).__name__,
+                },
+            )
+        return persisted
+
+    try:
+        persisted = read_persisted()
+    except KeyError:
+        try:
+            persisted = repository.write_exchange_session_authority(candidate)
+        except (KernelRepositoryConflict, KernelRepositoryCommitUnknown) as exc:
+            try:
+                persisted = read_persisted()
+            except KeyError:
+                if isinstance(exc, KernelRepositoryCommitUnknown):
+                    raise exc
+                raise MiniQMTKernelProductCompositionError(
+                    "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_WRITE_CONFLICT",
+                    "exchange-session write conflicted without an exact durable readback",
+                    context={
+                        "runtime_id": candidate.runtime_id,
+                        "exchange_trade_date": candidate.exchange_trade_date,
+                        "candidate_authority_sha256": candidate.authority_sha256,
+                        "repository_conflict_type": type(exc).__name__,
+                        "repository_conflict": str(exc),
+                    },
+                ) from exc
+        if not isinstance(persisted, ExchangeSessionAuthorityV1):
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_INVALID",
+                "exchange-session writer did not return a strict durable carrier",
+                context={
+                    "runtime_id": candidate.runtime_id,
+                    "exchange_trade_date": candidate.exchange_trade_date,
+                    "candidate_authority_sha256": candidate.authority_sha256,
+                    "readback_type": type(persisted).__name__,
+                },
+            )
+
+    if persisted == candidate:
+        return persisted
+    persisted_economic = _exchange_session_economic_authority_payload_v1(persisted)
+    candidate_economic = _exchange_session_economic_authority_payload_v1(candidate)
+    if persisted_economic == candidate_economic:
+        persisted_effective = datetime.fromisoformat(persisted.source_effective_at_utc.replace("Z", "+00:00"))
+        candidate_effective = datetime.fromisoformat(candidate.source_effective_at_utc.replace("Z", "+00:00"))
+        if candidate_effective < persisted_effective:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_REBUILD_STALE",
+                "current exchange-session observation predates the durable generation",
+                context=_exchange_session_drift_context_v1(persisted=persisted, candidate=candidate),
+            )
+        return persisted
+    raise MiniQMTKernelProductCompositionError(
+        "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_AUTHORITY_DRIFT",
+        "current exchange-session facts conflict with the insert-once durable authority",
+        context=_exchange_session_drift_context_v1(persisted=persisted, candidate=candidate),
+    )
+
+
 def build_simulation_miniqmt_product_runtime_v1(
     *,
     simulation_repository: Any,
@@ -902,15 +1062,10 @@ def build_simulation_miniqmt_product_runtime_v1(
         execution_plan_id=execution_plan.plan_id,
     )
     session = _session_authority(runtime_id, context)
-    try:
-        persisted_session = repository.write_exchange_session_authority(session)
-    except KernelRepositoryConflict:
-        persisted_session = repository.read_exchange_session_authority(
-            runtime_id=runtime_id,
-            exchange_trade_date=execution_plan.target_trade_date,
-        )
-        if persisted_session != session:
-            raise
+    persisted_session = _resolve_product_exchange_session_authority_v1(
+        repository=repository,
+        candidate=session,
+    )
     startup = repository.start_worker_incarnation(
         worker_id="miniqmt_kernel_v2_product",
         process_role="K6D_PRODUCT_DELIVERY",
