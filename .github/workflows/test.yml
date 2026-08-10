@@ -469,6 +469,9 @@ jobs:
 
   failure-bug-register:
     name: Publish PR CI failure evidence
+    # Diagnostics must never replace the deterministic test verdict. Preserve
+    # logs/artifacts/comments when possible, but tolerate publisher failures.
+    continue-on-error: true
     needs: [backend-tests, workflow-validation-tests, prompt-evaluation]
     # Keep this job green/no-op when targeted tests pass or are intentionally
     # skipped. PR failures retain compact evidence without creating a second
@@ -554,7 +557,6 @@ jobs:
       - tdx-go-tests
       - workflow-validation-tests
       - prompt-evaluation
-      - failure-bug-register
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -569,7 +571,6 @@ jobs:
           GO_RESULT: ${{ needs.tdx-go-tests.result }}
           WORKFLOW_RESULT: ${{ needs.workflow-validation-tests.result }}
           PROMPT_RESULT: ${{ needs.prompt-evaluation.result }}
-          REGISTRAR_RESULT: ${{ needs.failure-bug-register.result }}
         run: |
           failures=()
           for entry in "classify:${CLASSIFY_RESULT}" "static:${STATIC_RESULT}"; do
@@ -585,8 +586,7 @@ jobs:
             "frontend:${FRONTEND_RESULT}" \
             "go:${GO_RESULT}" \
             "workflow:${WORKFLOW_RESULT}" \
-            "prompt:${PROMPT_RESULT}" \
-            "registrar:${REGISTRAR_RESULT}"; do
+            "prompt:${PROMPT_RESULT}"; do
             lane="${entry%%:*}"
             result="${entry#*:}"
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then

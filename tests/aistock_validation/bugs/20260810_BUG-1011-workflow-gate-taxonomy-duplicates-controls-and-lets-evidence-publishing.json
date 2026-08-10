@@ -1,6 +1,13 @@
 {
   "actual": "Current workflow has one branch-protection gate but duplicates nine standard control IDs across rules and manual controls, leaves nine manual controls without an explicit failure effect, represents seventeen enabled test plans as runner-disabled, and treats failure-evidence publishing as a CI verdict dependency. Normalize block/warn/advisory phase semantics, preserve safety controls, decouple best-effort evidence publishing, and keep changed-file validation minimal.",
   "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "backend/tests/test_aistock_guardrail_scan.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "backend/tests/test_validation_catalog_integrity.py",
     "tests/aistock_validation/bugs/20260810_BUG-1011-workflow-gate-taxonomy-duplicates-controls-and-lets-evidence-publishing.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,10 +27,28 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260810-aae122975a8b",
       "timestamp": "2026-08-10T08:44:20.138005Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex_app",
+      "note": "Expanded to the exact CI verdict, standard taxonomy, validation plan catalog, loaders, and direct contract tests required by the user-approved workflow gate consolidation.",
+      "timestamp": "2026-08-10T08:58:31.174697Z"
+    },
+    {
+      "action": "scope_refined",
+      "actor": "codex_app",
+      "note": "Removed backend runtime service edits after changed-file inference correctly exposed an unnecessary backend restart contract; execution-mode integrity stays in the existing workflow CLI wrapper.",
+      "timestamp": "2026-08-10T09:01:43.729900Z"
+    },
+    {
+      "action": "scope_minimized",
+      "actor": "codex_app",
+      "note": "Removed CLI source edits as well: existing CI contract tests can enforce taxonomy and execution-mode consistency without introducing unknown runtime impact or overlapping BUG-1009 workflow source.",
+      "timestamp": "2026-08-10T09:03:28.917189Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Only selected deterministic quality and test lanes determine CI verdict; evidence publishing is best-effort, every standard control ID has one explicit effect/phase record, and every non-runner validation plan declares its execution owner.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -39,12 +64,12 @@
     "scope_files": []
   },
   "first_seen_at": "2026-08-10T08:44:20.138020Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-1011-workflow-gate-taxonomy-duplicates-controls-and-l-20260810",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 3254,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3254",
-  "last_seen_at": "2026-08-10T08:44:20.138020Z",
+  "last_seen_at": "2026-08-10T09:03:28.917189Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -54,8 +79,9 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0",
-    "validation_center_backend"
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -70,11 +96,12 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "validation"
   ],
   "title": "workflow gate taxonomy duplicates controls and lets evidence publishing block CI verdict",
+  "task_tier": "T2",
   "trigger_condition": {
     "fingerprint": "aae122975a8b10a0b0a2e7c5",
     "source_event_id": "FE-20260810-aae122975a8b"
@@ -119,7 +146,9 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "guardrail_changed_files",
+      "validation_catalog_integrity",
+      "validation_module_registry_l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -179,11 +208,13 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "guardrail_changed_files",
+        "validation_catalog_integrity",
+        "validation_module_registry_l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "scope_set"
 }

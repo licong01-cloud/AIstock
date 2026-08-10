@@ -25,6 +25,19 @@ def _load_module():
     return module
 
 
+def _unified_controls(catalog: dict) -> dict[str, dict]:
+    controls: dict[str, dict] = {}
+    for item in catalog["rules"]:
+        control_id = item["rule_id"]
+        assert control_id not in controls
+        controls[control_id] = item
+    for item in catalog.get("manual_review_controls", []):
+        control_id = item["control_id"]
+        assert control_id not in controls
+        controls[control_id] = item
+    return controls
+
+
 def test_catalog_loads_and_compiles_regex_rules() -> None:
     scanner = _load_module()
 
@@ -52,22 +65,42 @@ def test_catalog_references_current_human_readable_standard() -> None:
     assert catalog["source_digest_normalization"] == "utf8_lf"
     assert catalog["source_sha256"] == hashlib.sha256(normalized_standard).hexdigest()
     assert standard_path.name == "aistock_development_standard_v1.5_20260523.md"
+    effects = set(catalog["control_taxonomy"]["effects"])
+    phases = set(catalog["control_taxonomy"]["enforcement_phases"])
     for rule in catalog["rules"]:
         if not rule.get("enabled", True):
             continue
         assert rule.get("standard_ref", "").startswith(catalog["source_standard"])
         assert rule["rule_id"] in standard_text
+        assert rule["effect"] in effects
+        assert rule["enforcement_phase"] in phases
+        if (rule.get("checker") or {}).get("type") == "manual_review":
+            assert rule.get("failure_policy")
     for control in catalog.get("manual_review_controls", []):
         assert control.get("standard_ref", "").startswith(catalog["source_standard"])
         control_ref = control["standard_ref"].split("#", 1)[1]
         assert control_ref in standard_text
+        assert control["effect"] in effects
+        assert control["enforcement_phase"] in phases
+        assert control.get("failure_policy")
+
+    controls = _unified_controls(catalog)
+    assert len(controls) == 29
+    assert set(item["control_id"] for item in catalog["manual_review_controls"]) == {
+        "DESIGN-COMPLIANCE-001",
+        "ISSUE-GITHUB-SYNC-001",
+        "DESIGN-MAIN-001",
+        "STD-SYNC-001",
+    }
+    effect_counts = {effect: sum(item["effect"] == effect for item in controls.values()) for effect in effects}
+    assert effect_counts == {"block": 21, "warn": 5, "advisory": 3}
 
 
 def test_rdagent_release_identity_control_is_fail_closed() -> None:
     scanner = _load_module()
 
     catalog = scanner.load_catalog(CATALOG_PATH)
-    controls = {item["control_id"]: item for item in catalog["manual_review_controls"]}
+    controls = _unified_controls(catalog)
     control = controls["RDAGENT-RELEASE-IDENTITY-001"]
 
     assert control["failure_policy"] == "block_release_deploy_restart_and_verified_claims"
@@ -82,13 +115,13 @@ def test_rdagent_release_identity_control_is_fail_closed() -> None:
         "separate_source_deploy_restart_runtime_states",
         "rollback_target",
         "no_source_overlay",
-    } <= set(control["required_evidence"])
+    } <= set(control["checker"]["required_evidence"])
 
 
 def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     scanner = _load_module()
     catalog = scanner.load_catalog(CATALOG_PATH)
-    controls = {item["control_id"]: item for item in catalog["manual_review_controls"]}
+    controls = _unified_controls(catalog)
 
     assert controls["BACKEND-RESTART-OWNERSHIP-001"]["failure_policy"] == (
         "block_process_control_and_runtime_verified_claims"
