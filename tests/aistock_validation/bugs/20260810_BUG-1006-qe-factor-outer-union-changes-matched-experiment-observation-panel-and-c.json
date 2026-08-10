@@ -1,0 +1,250 @@
+{
+  "actual": "Generated prepare_factors.py outer-unions factor result indexes; adding a sparse candidate factor expands the panel and downstream Fillna converts absent baseline features to zero, silently changing the experiment population.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+    "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+    "tests/aistock_validation/bugs/20260810_BUG-1006-qe-factor-outer-union-changes-matched-experiment-observation-panel-and-c.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1006",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-10T03:12:03.570028Z",
+  "description": "Generated prepare_factors.py outer-unions factor result indexes; adding a sparse candidate factor expands the panel and downstream Fillna converts absent baseline features to zero, silently changing the experiment population.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260810-c1e9beaf5259",
+      "timestamp": "2026-08-10T03:12:03.570024Z"
+    }
+  ],
+  "evidence_uris": [
+    "qe_20260810_020755_38d2 Prediction Store manifests L1-L9 and docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+  ],
+  "expected": "Matched QE trials can declare one pre-specified reference-factor intersection; every candidate uses exactly that observation index, while missing configured/reference factors or an empty panel fails closed with stable reason codes.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+      "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+        "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+      ],
+      "impacted_modules": [
+        "qe.sector_risk_overlay",
+        "qe.core",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.long_trend_evaluation",
+        "tests.backend",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/config_composer.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+        "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+      "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+    ]
+  },
+  "first_seen_at": "2026-08-10T03:12:03.570028Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3239,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3239",
+  "last_seen_at": "2026-08-10T03:12:03.570028Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py -q",
+  "required_verification": [
+    "l0",
+    "qe_sector_risk_overlay_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "QE factor outer-union changes matched experiment observation panel and confounds Alpha attribution",
+  "trigger_condition": {
+    "fingerprint": "c1e9beaf5259779c5f980c8f",
+    "source_event_id": "FE-20260810-c1e9beaf5259"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe",
+        "qe_sector_risk_overlay"
+      ],
+      "plans": [
+        "qe_sector_risk_overlay_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe",
+          "qe_sector_risk_overlay"
+        ],
+        "plans": [
+          "qe_sector_risk_overlay_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
