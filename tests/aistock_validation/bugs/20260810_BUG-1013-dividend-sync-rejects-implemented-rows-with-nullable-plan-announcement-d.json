@@ -157,7 +157,7 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "required",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/test_tushare_sync_engine.py -q -p no:cacheprovider",
   "required_verification": [
@@ -168,7 +168,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "production dividend sync for 2026-08-10 through 2026-08-11 completes with successful batches and refresh audit",
+    "database_readback_ref": "market.dividend nullable ann_date identity constraint, target-date rows, and market.dataset_date_refresh_audit readback",
     "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
