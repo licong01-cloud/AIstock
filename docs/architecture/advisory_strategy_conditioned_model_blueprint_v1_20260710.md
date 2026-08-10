@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.6
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.7
 
 > 初始日期：2026-07-10
 > 修订日期：2026-08-10
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M3_RUNTIME_VERIFIED_M4_DESIGN_READY`
+> 当前状态：`MODEL_FIRST_M4A_TRAINED_M4B_PENDING`
 > 当前用户可见功能进度：短反弹真实功能 `3/4`；长期趋势真实功能 `0/1`；M0/M1 离线训练、M2 Top5、M3 收益/周期和当前页面展示均已贯通
-> 规划进度：M0-M3 已完成真实训练、数据库只读推理、API/UI 接入和重启后 readback；下一项只实施 M4 日线级买入、止盈、移动保护和止损参考区间
+> 规划进度：M0-M3 已完成；M4A 四头日线价格模型已真实训练并发布 bundle；下一项只实施 M4B 数据库只读价格投影和现有 API/UI 接入
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -65,7 +65,7 @@
 |---|---|---|
 | SHORT_REBOUND Top20→Top5 | `EXPERIMENTAL_SHADOW_RUNTIME_VERIFIED` | WSL 真实训练、数据库影子推理、API 和页面源码已贯通；真实 test 质量仍低于主要对照 |
 | 预期收益与持股周期 | `COMPLETED_RUNTIME_VERIFIED` | M3 outcome binding 已激活；运行时对真实 20 个候选输出 1/3/5/10/20 日收益分位数、正收益/存活概率、MFE/MAE 和持股周期范围 |
-| 买入/止盈/止损区间 | `NOT_IMPLEMENTED` | 真实模型和价格转换层输出范围 |
+| 买入/止盈/止损区间 | `M4A_TRAINED_M4B_PENDING` | 四头真实模型已完成；数据库 decision-cutoff 未复权价格转换、风险边界和 API/UI 尚未实现 |
 | 荐股页面模型展示 | `M2_M3_RUNTIME_VERIFIED` | 页面源码和真实 API 已贯通 Top5、五期限收益、概率、MFE/MAE 与持股范围；M4 价格区间完成后补齐最后一项展示 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 
@@ -151,7 +151,7 @@ WSL environment identity
 
 当前活跃日线 Bin 未包含中证500、中证1000、创业板指或科创50。它们不是首个 Top20→Top5、收益、周期、日线价格范围或现有 HMM 架构的阻断输入；只有后续模型合同明确使用且实验证明有必要时才补充，不预建通用指数库。
 
-M0 已实现 `OFFLINE_RUNTIME_EQUIVALENT_SELECTION_EFFECTIVE_TOP20_V2`：代表 seed + current zscore + terminal weights 先生成 raw Top25，再取 Program target_count 前20。它同时绑定 `decision_as_of_trade_date` 和下一交易日 `target_trade_date`；正式特征只能读取前者 cutoff。真实文件 smoke 已得到 406 日、8120 个候选且每日深度固定 20；combined/ensemble 只作为诊断，不进入 runtime-equivalent 候选语义。正式训练 bundle 尚未生成，因此 M1 仍不得标记完成。
+M0 已实现 `OFFLINE_RUNTIME_EQUIVALENT_SELECTION_EFFECTIVE_TOP20_V2`：代表 seed + current zscore + terminal weights 先生成 raw Top25，再取 Program target_count 前20。它同时绑定 `decision_as_of_trade_date` 和下一交易日 `target_trade_date`；正式特征只能读取前者 cutoff。真实文件得到 406 日、8120 个候选且每日深度固定 20；combined/ensemble 只作为诊断，不进入 runtime-equivalent 候选语义。M1 bundle、M3 outcome bundle 和 M4A price-range bundle 均已生成，后续阶段继续精确绑定这些身份。
 
 ### 4.2 正式预测数据
 
@@ -393,7 +393,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P1`。
 
-状态：`DESIGN_READY`。详细设计为 `docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`。
+状态：`M4A_TRAINED_M4B_PENDING`。详细设计为 `docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`。M4A request `advprreq_2d826a7b2704137bf3a60d9d` 在 WSL `rdagent-gpu` 生成 bundle `1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3`：4 个真实 LightGBM heads、1600 行/80 日 test 预测、总耗时 13.85 秒、峰值 RSS 491,802,624 bytes。三个开盘缺口分位数零单调违例，q10-q90 test coverage 为 0.72795。可执行标签共 8120 行但只有 4 个权威负例，test 仅 1 个负例，因此 binary 输出保持 `UNCALIBRATED/EXPERIMENTAL_SHADOW`，不得解释为已校准强区分概率或用于隐藏筛选。M4B 尚未实现，短反弹用户可见进度仍为 `3/4`。
 
 - 先使用日线Bin完成真实日线级价格范围模型。
 - 盘中路径模型作为后续独立增量，只在用户确认需要时读取现有分钟Bin。
@@ -430,7 +430,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-101 | 基础历史数据只读取现有QE H5/Parquet/Qlib Bin；预测/模型产物允许PKL；训练不读取生产数据库历史数据 |
 | F-102 | 真实训练仅在WSL Conda执行，Windows不训练 |
 | F-103 | 首模是实际LightGBM模型，不是mock、规则或随机结果 |
-| F-104 | 训练/验证/测试按decision date执行246/10/60/10/80切分，10日purge覆盖最长退出窗口且无未来数据泄漏 |
+| F-104 | M1按decision date执行246/10/60/10/80切分；M3/M4精确复用226/25/50/25/80切分，25日purge覆盖最长20日outcome且无未来数据泄漏 |
 | F-105 | 训练与正式预测共享同一逐列FeatureBuilder/schema、公式、单位、missing和decision cutoff |
 | F-106 | 正式预测区分decision/target双日期，只读取数据库decision cutoff行情和实际Program输入 |
 | F-107 | 真实模型输出Top5并与原始/HMM/随机/等权基线比较 |
@@ -579,15 +579,14 @@ runtime_activation = separate user-confirmed action
 
 ## 16. 当前下一步
 
-下一项任务直接进入 M4，详细设计为：
+下一项任务直接进入 M4B，详细设计为：
 
 `docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`
 
 执行顺序固定为：
 
-1. M4A 在 WSL 复用 M1 的候选/103 特征、M3 split 与 QE 日线 OHLC/factor/涨跌停/停牌文件，训练下一交易日可执行性和开盘缺口模型；不得读取分钟 Bin。
-2. 复用 M3 已训练的五期限 MFE/MAE 与持股周期输出，形成模型驱动的止盈、移动保护和止损幅度，不重复训练等价 head。
-3. M4B 正式预测只读取数据库 decision-cutoff 行情和 PIT 静态属性，把收益幅度转换为未复权 CNY 价格范围并应用已存在的硬止损、价格 tick 和涨跌停边界。
-4. 把每只候选的买入、止盈、移动保护和止损范围接入同一 model-shadow API/UI；M4 不可用时只关闭价格区间子信封，M2/M3 和规则荐股继续运行。
+1. 精确加载 M4A bundle，并复用 M3 已训练的五期限 MFE/MAE 与持股周期输出，形成模型驱动的止盈、移动保护和止损幅度，不重复训练等价 head。
+2. M4B 正式预测只读取数据库 decision-cutoff 行情和 PIT 静态属性，把收益幅度转换为未复权 CNY 价格范围并应用已存在的硬止损、价格 tick 和涨跌停边界。
+3. 把每只候选的买入、止盈、移动保护和止损范围接入同一 model-shadow API/UI；M4 不可用时只关闭价格区间子信封，M2/M3 和规则荐股继续运行。
 
 M4 完成前禁止插入 Historical Range、历史证据、旧 batch/root 清理、通用缓存、ModelOps、角色审批或额外门禁。M5 模型质量迭代继续排在 M4 真实功能之后。

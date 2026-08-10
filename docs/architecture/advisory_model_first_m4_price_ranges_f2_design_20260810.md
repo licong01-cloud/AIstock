@@ -3,7 +3,7 @@
 > 日期：2026-08-10
 > Feature tier：F2
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v2.6
-> 当前阶段：`DESIGN_READY`
+> 当前阶段：`M4A_TRAINED_M4B_PENDING`
 > 适用范围：学术研究与历史回测参考，不构成实时投资建议或交易执行
 
 ## 1. Background / 背景
@@ -426,13 +426,13 @@ M4A 必须保存 test-only 指标：
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-341 | M3 blueprint/design ledger | `backend/tests/advisory_model_first/test_outcome_inference.py`; validation-receipt: deployed model-shadow HTTP 200 at runtime commit `0ab6dec3...`, target `2026-07-16`, 20 aligned candidates | verified | none |
-| F-342 | planned M4 request/pipeline | `backend/tests/advisory_model_first/test_price_range_contracts.py`; `backend/tests/advisory_model_first/test_price_range_pipeline.py` | design_ready | none |
-| F-343 | planned `price_range_labels.py` executable label | `backend/tests/advisory_model_first/test_price_range_labels.py` | design_ready | none |
-| F-344 | planned open-gap label and price-basis contract | `backend/tests/advisory_model_first/test_price_range_labels.py`; `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
-| F-345 | planned `price_range_training.py` four real heads | `backend/tests/advisory_model_first/test_price_range_training.py`; planned external WSL training receipt | design_ready | none |
-| F-346 | planned exact M3 split membership reuse | `backend/tests/advisory_model_first/test_price_range_pipeline.py` | design_ready | none |
-| F-347 | planned `price_range_bundle.py` | `backend/tests/advisory_model_first/test_price_range_bundle.py` | design_ready | none |
-| F-348 | planned Windows launcher + WSL entrypoint | `backend/tests/advisory_model_first/test_price_range_pipeline.py`; planned external WSL training receipt | design_ready | none |
+| F-342 | `price_range_contracts.py`; `price_range_pipeline.py`; exact parent/outcome readback | `backend/tests/advisory_model_first/test_price_range_contracts.py`; `backend/tests/advisory_model_first/test_price_range_pipeline.py` | verified | none |
+| F-343 | `price_range_labels.py` tri-state label | `backend/tests/advisory_model_first/test_price_range_labels.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_runs/advprreq_2d826a7b2704137bf3a60d9d/price_range_label_coverage.json` | verified | none |
+| F-344 | no-cost adjusted open-gap label; planned M4B unadjusted CNY price basis | `backend/tests/advisory_model_first/test_price_range_labels.py`; planned `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
+| F-345 | `price_range_training.py` exact four real heads | `backend/tests/advisory_model_first/test_price_range_training.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_bundles/1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3/manifest.json` | verified | none |
+| F-346 | exact M3 226/25/50/25/80 split reuse | `backend/tests/advisory_model_first/test_price_range_pipeline.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_bundles/1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3/split.json` | verified | none |
+| F-347 | `price_range_bundle.py` atomic publish/hash/readback | `backend/tests/advisory_model_first/test_price_range_bundle.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_bundles/1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3/manifest.json` | verified | none |
+| F-348 | Windows request/launcher + WSL entrypoint + date-batched temporary Parquet | `backend/tests/advisory_model_first/test_price_range_pipeline.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_runs/advprreq_2d826a7b2704137bf3a60d9d/price_range_training_receipt.json` | verified | none |
 | F-349 | planned `PriceRangeRealtimeContext` in the existing readonly transaction | `backend/tests/advisory_model_first/test_realtime_feature_source.py`; `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
 | F-350 | planned entry range projection | `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
 | F-351 | planned M3 holding projection | `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
@@ -441,9 +441,9 @@ M4A 必须保存 test-only 指标：
 | F-354 | planned `model_inference.py` isolated child envelope | `backend/tests/advisory_model_first/test_model_inference.py`; `backend/tests/advisory_model_first/test_model_shadow_api.py` | design_ready | none |
 | F-355 | planned Advisory UI price-range panel | `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | design_ready | none |
 | F-356 | planned exact M4 binding | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | design_ready | none |
-| F-357 | planned changed-file and import-boundary review | `backend/tests/advisory_model_first/test_price_range_boundaries.py` | design_ready | none |
-| F-358 | DESIGN-COMPLIANCE-001 review | `backend/tests/advisory_model_first/test_price_range_boundaries.py`; planned manual compliance receipt | design_ready | none |
-| F-359 | rollout ledger | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py`; planned training/merge/restart/readback ledger | design_ready | none |
+| F-357 | M4A isolated `advisory_model_first` files; planned M4B import-boundary review | `backend/tests/advisory_model_first/test_price_range_boundaries.py` | design_ready | none |
+| F-358 | M4A DESIGN-COMPLIANCE-001 reviewed; full M4 review after M4B | `backend/tests/advisory_model_first/test_price_range_boundaries.py`; M4A module review `132 passed, 1 skipped`; planned final compliance receipt | design_ready | none |
+| F-359 | separate source/training/runtime ledger | artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_runs/advprreq_2d826a7b2704137bf3a60d9d/price_range_training_receipt.json`; planned `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | design_ready | none |
 
 ## 22. DESIGN-COMPLIANCE-001 设计审核要求
 
