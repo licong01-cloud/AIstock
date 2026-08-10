@@ -1,6 +1,10 @@
 {
   "actual": "Both branches use call conda activate AIstock & uvicorn, so activation failure is ignored and bare uvicorn may resolve to the base environment.",
   "allowed_write_scope": [
+    "start_all_ai_stock.bat",
+    "backend/tests/scripts/test_start_all_ai_stock_contract.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260810_BUG-1005-start-all-ai-stock-bat-silently-launches-backend-from-base-conda-environ.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,6 +24,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260810-049d85ca0870",
       "timestamp": "2026-08-10T03:26:06.374387Z"
+    },
+    {
+      "action": "expand_fix_scope",
+      "actor": "Codex",
+      "note": "Add the canonical launcher, its static contract test, runtime-target classification, and file-ownership mapping. No service process control, dependency change, or database action is in scope.",
+      "timestamp": "2026-08-10T03:31:00Z"
+    },
+    {
+      "action": "record_fresh_process_load_evidence",
+      "actor": "Codex",
+      "note": "A standalone cmd process called the absolute conda.bat, activated AIstock, then used the absolute AIstock interpreter to import LightGBM 4.6.0 and uvicorn 0.40.0. It did not import backend.main, bind a port, or control any service.",
+      "timestamp": "2026-08-10T03:34:00Z"
     }
   ],
   "evidence_uris": [],
@@ -59,13 +75,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "fresh_process_evidence": [
+      "cmd /d /c call C:/Users/lc999/miniconda3/condabin/conda.bat activate AIstock && C:/Users/lc999/miniconda3/envs/AIstock/python.exe -c import sys,lightgbm,uvicorn -> executable=C:/Users/lc999/miniconda3/envs/AIstock/python.exe; lightgbm=4.6.0; uvicorn=0.40.0",
+      "cmd /d /c call C:/Users/lc999/miniconda3/condabin/conda.bat activate AIstock && C:/Users/lc999/miniconda3/envs/AIstock/python.exe import smoke -> executable AIstock; lightgbm 4.6.0; uvicorn 0.40.0; backend not started"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
