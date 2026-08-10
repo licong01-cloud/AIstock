@@ -1604,6 +1604,13 @@ def test_product_session_restart_rejects_true_economic_authority_drift_with_hash
 
 def test_product_session_resolver_fails_loud_on_invalid_readback_and_orphan_write_conflict() -> None:
     _plan, _binding, candidate, _repository, _accounts, _runtime_id_value = _plan_reader_facts()
+    with pytest.raises(TypeError, match="authority must be"):
+        product_module._exchange_session_economic_authority_payload_v1(object())  # type: ignore[attr-defined,arg-type]
+    with pytest.raises(TypeError, match="candidate must be"):
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined,arg-type]
+            repository=object(),
+            candidate=object(),
+        )
 
     class InvalidReadbackRepository:
         @staticmethod
@@ -1618,6 +1625,55 @@ def test_product_session_resolver_fails_loud_on_invalid_readback_and_orphan_writ
     assert invalid.value.reason_code == "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_INVALID"
     assert invalid.value.context["readback_type"] == "dict"
     assert invalid.value.context["broker_called"] is False
+
+    class ConflictingReadbackRepository:
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            raise KernelRepositoryConflict("scalar authority drift")
+
+    with pytest.raises(MiniQMTKernelProductCompositionError) as conflicting:
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=ConflictingReadbackRepository(),
+            candidate=candidate,
+        )
+    assert conflicting.value.reason_code == "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_CONFLICT"
+    assert conflicting.value.context["repository_conflict"] == "scalar authority drift"
+    assert conflicting.value.context["broker_called"] is False
+
+    class InvalidWriterRepository:
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            raise KeyError("missing")
+
+        @staticmethod
+        def write_exchange_session_authority(_authority):
+            return {"authority_sha256": candidate.authority_sha256}
+
+    with pytest.raises(MiniQMTKernelProductCompositionError) as invalid_writer:
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=InvalidWriterRepository(),
+            candidate=candidate,
+        )
+    assert invalid_writer.value.reason_code == "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_INVALID"
+    assert invalid_writer.value.context["readback_type"] == "dict"
+    assert invalid_writer.value.context["broker_called"] is False
+
+    class ExactWriterRepository:
+        @staticmethod
+        def read_exchange_session_authority(**_values):
+            raise KeyError("missing")
+
+        @staticmethod
+        def write_exchange_session_authority(_authority):
+            return candidate
+
+    assert (
+        product_module._resolve_product_exchange_session_authority_v1(  # type: ignore[attr-defined]
+            repository=ExactWriterRepository(),
+            candidate=candidate,
+        )
+        == candidate
+    )
 
     class OrphanConflictRepository:
         @staticmethod
