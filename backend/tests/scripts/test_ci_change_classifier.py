@@ -926,7 +926,6 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
         "tdx-go-tests",
         "workflow-validation-tests",
         "prompt-evaluation",
-        "failure-bug-register",
     }
 
     assert verdict["name"] == "CI verdict"
@@ -935,11 +934,22 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
     assert set(verdict["needs"]) == expected_needs
     run = str(verdict["steps"][0]["run"])
     assert '"classify:${CLASSIFY_RESULT}" "static:${STATIC_RESULT}"' in run
-    for lane in ("docs", "backend", "frontend", "go", "workflow", "prompt", "registrar"):
+    for lane in ("docs", "backend", "frontend", "go", "workflow", "prompt"):
         assert f'"{lane}:${{{lane.upper() if lane != "go" else "GO"}_RESULT}}"' in run
+    assert "failure-bug-register" not in verdict["needs"]
+    assert "REGISTRAR_RESULT" not in verdict["steps"][0].get("env", {})
+    assert '"registrar:' not in run
     assert 'result" != "success"' in run
     assert 'result" != "skipped"' in run
     assert "CI verdict failed" in run
+
+    registrar = jobs["failure-bug-register"]
+    assert registrar["continue-on-error"] is True
+    assert set(registrar["needs"]) == {
+        "backend-tests",
+        "workflow-validation-tests",
+        "prompt-evaluation",
+    }
 
     classify_steps = jobs["classify-changes"]["steps"]
     install = next(step for step in classify_steps if step.get("name") == "Install change-classifier dependency")

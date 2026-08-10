@@ -1,0 +1,220 @@
+{
+  "actual": "Current workflow has one branch-protection gate but duplicates nine standard control IDs across rules and manual controls, leaves nine manual controls without an explicit failure effect, represents seventeen enabled test plans as runner-disabled, and treats failure-evidence publishing as a CI verdict dependency. Normalize block/warn/advisory phase semantics, preserve safety controls, decouple best-effort evidence publishing, and keep changed-file validation minimal.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "backend/tests/test_aistock_guardrail_scan.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "backend/tests/test_validation_catalog_integrity.py",
+    "tests/aistock_validation/bugs/20260810_BUG-1011-workflow-gate-taxonomy-duplicates-controls-and-lets-evidence-publishing.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1011",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-10T08:44:20.138020Z",
+  "description": "Current workflow has one branch-protection gate but duplicates nine standard control IDs across rules and manual controls, leaves nine manual controls without an explicit failure effect, represents seventeen enabled test plans as runner-disabled, and treats failure-evidence publishing as a CI verdict dependency. Normalize block/warn/advisory phase semantics, preserve safety controls, decouple best-effort evidence publishing, and keep changed-file validation minimal.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260810-aae122975a8b",
+      "timestamp": "2026-08-10T08:44:20.138005Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex_app",
+      "note": "Expanded to the exact CI verdict, standard taxonomy, validation plan catalog, loaders, and direct contract tests required by the user-approved workflow gate consolidation.",
+      "timestamp": "2026-08-10T08:58:31.174697Z"
+    },
+    {
+      "action": "scope_refined",
+      "actor": "codex_app",
+      "note": "Removed backend runtime service edits after changed-file inference correctly exposed an unnecessary backend restart contract; execution-mode integrity stays in the existing workflow CLI wrapper.",
+      "timestamp": "2026-08-10T09:01:43.729900Z"
+    },
+    {
+      "action": "scope_minimized",
+      "actor": "codex_app",
+      "note": "Removed CLI source edits as well: existing CI contract tests can enforce taxonomy and execution-mode consistency without introducing unknown runtime impact or overlapping BUG-1009 workflow source.",
+      "timestamp": "2026-08-10T09:03:28.917189Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Only selected deterministic quality and test lanes determine CI verdict; evidence publishing is best-effort, every standard control ID has one explicit effect/phase record, and every non-runner validation plan declares its execution owner.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-08-10T08:44:20.138020Z",
+  "fix_branch": "bug/BUG-1011-workflow-gate-taxonomy-duplicates-controls-and-l-20260810",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3254,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3254",
+  "last_seen_at": "2026-08-10T09:03:28.917189Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "workflow gate taxonomy duplicates controls and lets evidence publishing block CI verdict",
+  "task_tier": "T2",
+  "trigger_condition": {
+    "fingerprint": "aae122975a8b10a0b0a2e7c5",
+    "source_event_id": "FE-20260810-aae122975a8b"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "guardrail_changed_files",
+      "validation_catalog_integrity",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "guardrail_changed_files",
+        "validation_catalog_integrity",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "scope_set"
+}

@@ -1,15 +1,30 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 434c4b522c2923df5a125de0e296f56eafdb98c57409213dcc46d9228ec4a3d6
+source_sha256: 48cdf785b412f0cae69286e31c3265800da07e6b418200fbb263a6c30c780a7c
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-03"
+updated_at: "2026-08-10"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
   requirement: Every enabled machine rule references a stable section in the sole human-readable standard.
   source_digest_required: true
   archive_directory: docs/standards/archive
+control_taxonomy:
+  effects:
+    block: Blocks only the declared enforcement phase when the control applies.
+    warn: Emits a visible warning without blocking the current phase.
+    advisory: Provides non-blocking execution or efficiency guidance.
+  enforcement_phases:
+    - changed_file_scan
+    - task_planning
+    - interactive_execution
+    - pr_readiness
+    - issue_lifecycle
+    - design_delivery
+    - standard_change
+    - production_activation
+    - release_deployment
 scan:
   default_roots:
     - backend
@@ -54,6 +69,8 @@ rules:
     severity: P0
     category: architecture
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -79,6 +96,8 @@ rules:
     severity: P0
     category: production_isolation
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -101,6 +120,9 @@ rules:
     severity: P0
     category: production_schema
     enabled: true
+    effect: block
+    enforcement_phase: production_activation
+    failure_policy: block_production_ddl_dml_until_dev_validation_and_target_authorization
     checker:
       type: manual_review
       required_evidence:
@@ -123,6 +145,8 @@ rules:
     severity: P0
     category: error_handling
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -143,6 +167,8 @@ rules:
     severity: P0
     category: trading_safety
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -166,6 +192,8 @@ rules:
     severity: P1
     category: config
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -188,6 +216,8 @@ rules:
     severity: P1
     category: qe_data_completeness
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/services/quantevolver/**/*.py
@@ -208,6 +238,8 @@ rules:
     severity: P2
     category: frontend
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - frontend/src/**/*.tsx
@@ -230,6 +262,8 @@ rules:
     severity: P2
     category: frontend
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - frontend/src/**/*.tsx
@@ -255,6 +289,8 @@ rules:
     severity: P2
     category: resource
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -275,6 +311,8 @@ rules:
     severity: P1
     category: database
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     checker:
       type: external
       command_key: db_schema_comment_smoke
@@ -287,6 +325,8 @@ rules:
     severity: P1
     category: repository_hygiene
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - "*.py"
@@ -325,6 +365,8 @@ rules:
     severity: P1
     category: repository_hygiene
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - "*.py"
@@ -351,6 +393,8 @@ rules:
     severity: P1
     category: documentation
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - "*.md"
@@ -379,6 +423,8 @@ rules:
     severity: P1
     category: performance_memory
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -404,6 +450,8 @@ rules:
     severity: P2
     category: performance_memory
     enabled: true
+    effect: warn
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - backend/**/*.py
@@ -427,6 +475,8 @@ rules:
     severity: P1
     category: error_handling
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
         - debug_tools/**/*.py
@@ -446,6 +496,9 @@ rules:
     severity: P1
     category: agent_efficiency
     enabled: true
+    effect: block
+    enforcement_phase: pr_readiness
+    failure_policy: block_feature_pr_readiness_until_design_validation
     checker:
       type: manual_review
       required_evidence:
@@ -465,6 +518,9 @@ rules:
     severity: P1
     category: agent_efficiency
     enabled: true
+    effect: advisory
+    enforcement_phase: interactive_execution
+    failure_policy: non_blocking_advisory
     checker:
       type: manual_review
       required_evidence:
@@ -480,6 +536,9 @@ rules:
     severity: P1
     category: agent_efficiency
     enabled: true
+    effect: advisory
+    enforcement_phase: task_planning
+    failure_policy: non_blocking_advisory
     checker:
       type: manual_review
       required_evidence:
@@ -495,6 +554,9 @@ rules:
     severity: P1
     category: production_release
     enabled: true
+    effect: block
+    enforcement_phase: production_activation
+    failure_policy: block_runtime_activation_until_dependency_gate_verified
     checker:
       type: manual_review
       required_evidence:
@@ -511,6 +573,9 @@ rules:
     severity: P1
     category: production_release
     enabled: true
+    effect: block
+    enforcement_phase: release_deployment
+    failure_policy: block_release_deploy_restart_and_verified_claims
     checker:
       type: manual_review
       required_evidence:
@@ -533,6 +598,9 @@ rules:
     severity: P1
     category: agent_efficiency
     enabled: true
+    effect: advisory
+    enforcement_phase: interactive_execution
+    failure_policy: non_blocking_advisory
     checker:
       type: manual_review
       required_evidence:
@@ -549,6 +617,9 @@ rules:
     severity: P0
     category: production_isolation
     enabled: true
+    effect: block
+    enforcement_phase: changed_file_scan
+    failure_policy: block_process_control_and_runtime_verified_claims
     applies_to:
       include_globs:
         - scripts/**/*
@@ -574,6 +645,9 @@ rules:
     severity: P0
     category: issue_workflow
     enabled: true
+    effect: block
+    enforcement_phase: issue_lifecycle
+    failure_policy: block_issue_close_sync_and_verified_claims
     checker:
       type: manual_review
       required_evidence:
@@ -602,6 +676,8 @@ manual_review_controls:
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-compliance-001
     severity: P0
     title: "Completed implementation records four explicit checks against approved requirements: complete delivery, visible failures, preserved business semantics, and approved gates or approvals."
+    effect: block
+    enforcement_phase: pr_readiness
     required_evidence:
       - no_simplified_delivery
       - no_silent_error
@@ -612,18 +688,22 @@ manual_review_controls:
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-issue-github-sync-001
     severity: P1
     title: New BUG or Issue records must be synchronized to GitHub and include github_issue_number and github_issue_url before merge.
+    effect: block
+    enforcement_phase: issue_lifecycle
+    failure_policy: block_bug_record_merge_and_close_sync
   - control_id: DESIGN-MAIN-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-main-001
     severity: P1
     title: Completed detailed design deliverables must be validated, committed, and pushed to origin/main unless explicitly exempted.
-  - control_id: DOC-LOCATION-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-doc-location-001
-    severity: P1
-    title: Standards, architecture designs, analysis reports, and validation evidence must live in their approved directories.
+    effect: block
+    enforcement_phase: design_delivery
+    failure_policy: block_design_complete_claim_and_merge
   - control_id: STD-SYNC-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-std-sync-001
     severity: P1
     title: Human-readable standard, machine-readable YAML, and task-relevant client entrypoints stay aligned without unrelated-lane blocking or repeated broad installs.
+    effect: block
+    enforcement_phase: standard_change
     required_evidence:
       - markdown_and_yaml_updated_together
       - full_client_hash_verification_after_entrypoint_merge
@@ -632,49 +712,4 @@ manual_review_controls:
       - explicit_client_profile_target
       - idempotent_lock_protected_staged_client_sync
       - restart_only_when_recommended_or_client_ui_stale
-  - control_id: FEATURE-WORKFLOW-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-feature-workflow-001
-    severity: P1
-    title: New features use the F0/F1/F2 workflow, a Design Acceptance Index, and an acceptance matrix before merge.
-  - control_id: CONTEXT-BUDGET-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-context-budget-001
-    severity: P1
-    title: Tasks use tiered, module-scoped context and load additional history only when evidence requires it.
-  - control_id: ISSUE-BATCH-CONTEXT-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-issue-batch-context-001
-    severity: P1
-    title: Same-module issues should be batch-processed when safe, with per-issue commits and closure evidence.
-  - control_id: PROD-DEPENDENCY-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-dependency-001
-    severity: P1
-    title: Dependency file changes require frontend/backend production dependency gate evidence after main merge.
-  - control_id: RDAGENT-RELEASE-IDENTITY-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-rdagent-release-identity-001
-    severity: P1
-    title: RD-Agent source merge, immutable release, deployment, restart, runtime verification, and rollback keep one verifiable identity chain without source overlays.
-    required_evidence:
-      - merged_commit_in_target_branch
-      - clean_source_checkout
-      - repository_merge_tree_manifest_match
-      - immutable_release_path
-      - repo_external_rdagent_state_root
-      - deployment_receipt
-      - atomic_current_pointer
-      - separate_source_deploy_restart_runtime_states
-      - rollback_target
-      - no_source_overlay
-    failure_policy: block_release_deploy_restart_and_verified_claims
-  - control_id: TOOL-RTK-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-tool-rtk-001
-    severity: P1
-    title: Interactive high-output commands prefer supported RTK wrappers; capability fallback and missing telemetry remain non-blocking.
-  - control_id: BACKEND-RESTART-OWNERSHIP-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-backend-restart-ownership-001
-    severity: P0
-    title: User backend start, stop, and restart require explicit authorization for the current target and cannot be inferred from any workflow stage.
-    failure_policy: block_process_control_and_runtime_verified_claims
-  - control_id: BUG-RESTART-EFFECTIVE-001
-    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001
-    severity: P0
-    title: Runtime BUG closure requires persistent-source, fresh-process, runtime identity, and post-restart read-only smoke evidence.
-    failure_policy: block_issue_close_sync_and_verified_claims
+    failure_policy: block_standard_pr_merge_and_client_current_claims
