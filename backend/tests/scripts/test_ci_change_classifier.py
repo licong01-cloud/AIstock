@@ -403,6 +403,27 @@ def test_feature_workflow_files_use_focused_workflow_lane(tmp_path: Path) -> Non
     assert payload["unmapped_code_files"] == []
 
 
+def test_validation_mcp_issue_files_use_focused_workflow_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/aistock_issue_workflow.py",
+            "backend/tests/scripts/test_aistock_issue_workflow.py",
+            "scripts/aistock_mcp_server.py",
+            "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is False
+    assert payload["unmapped_code_files"] == []
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    ]
+
+
 def test_validation_ui_target_contract_uses_catalog_gate_only(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["backend/tests/test_validation_ui_target_catalog.py"],

@@ -5,6 +5,8 @@
     "backend/tests/scripts/test_aistock_issue_workflow.py",
     "scripts/aistock_mcp_server.py",
     "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260810_BUG-1009-global-bug-id-allocation-scans-every-worktree-and-holds-network-i-o-unde.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -28,8 +30,14 @@
     {
       "action": "validation_passed",
       "actor": "codex_app",
-      "note": "Bounded CLI/MCP allocation, lock recovery, concurrency, exact GitHub lookup, EOF outcome preservation, and local-first MCP creation validated; 293 related tests passed.",
+      "note": "Bounded CLI/MCP allocation, lock recovery, concurrency, exact GitHub lookup, EOF outcome preservation, local-first MCP creation, and CI routing validated; 293 workflow/MCP plus 53 classifier tests passed.",
       "timestamp": "2026-08-10T07:16:15.732032Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex_app",
+      "note": "Added the CI changed-file classifier and its direct tests after CI correctly rejected the newly in-scope MCP workflow files as unmapped executable code.",
+      "timestamp": "2026-08-10T07:23:00Z"
     }
   ],
   "evidence_uris": [],
@@ -40,14 +48,18 @@
       "scripts/aistock_issue_workflow.py",
       "backend/tests/scripts/test_aistock_issue_workflow.py",
       "scripts/aistock_mcp_server.py",
-      "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py"
+      "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ],
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
         "backend/tests/scripts/test_aistock_issue_workflow.py",
         "scripts/aistock_mcp_server.py",
-        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py"
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_ci_change_classifier.py"
       ],
       "impacted_modules": [
         "validation.guardrails",
@@ -56,7 +68,8 @@
         "validation.module_quality",
         "tests.backend",
         "validation.coverage",
-        "scripts"
+        "scripts",
+        "platform.config"
       ],
       "matched_rules": [
         {
@@ -96,6 +109,28 @@
           "primary_module": "tests.backend",
           "risk_level": "medium",
           "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "scripts/ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
         }
       ],
       "risk_levels": [
@@ -106,7 +141,9 @@
         "scripts/aistock_issue_workflow.py",
         "backend/tests/scripts/test_aistock_issue_workflow.py",
         "scripts/aistock_mcp_server.py",
-        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py"
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_ci_change_classifier.py"
       ],
       "unmatched_files": []
     },
@@ -115,7 +152,9 @@
       "scripts/aistock_issue_workflow.py",
       "backend/tests/scripts/test_aistock_issue_workflow.py",
       "scripts/aistock_mcp_server.py",
-      "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py"
+      "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py"
     ]
   },
   "first_seen_at": "2026-08-10T05:02:08.354559Z",
@@ -174,9 +213,11 @@
   },
   "validation_evidence": [
     "pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -> 293 passed",
-    "nox -s guardrail_changed_files -- --changed-only -> blocking=0, mapped=6/6",
+    "pytest backend/tests/scripts/test_ci_change_classifier.py -q -> 53 passed",
+    "ci_change_classifier.py on the eight final PR paths -> workflow_validation_only, unmapped_code_files=[], three direct workflow test targets",
+    "nox -s guardrail_changed_files -- --changed-only -> blocking=0, mapped=8/8",
     "nox -s validation_module_registry_l0 -> 8 passed, mapped=14/14",
-    "ruff check four changed Python/test files -> no issues",
+    "ruff check six changed Python/test files -> no issues",
     "git diff --check -> passed"
   ],
   "verification_budget": {
