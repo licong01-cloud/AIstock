@@ -970,6 +970,221 @@ def _validation_manifest(dates: tuple[date, ...], utility: dict) -> dict:
     }
 
 
+def _calendar_carrier_and_manifest(
+    dates: tuple[date, ...],
+    utility: dict,
+    *,
+    observation_missing: tuple[int, ...] = (),
+    utility_missing: tuple[int, ...] = (),
+) -> tuple[subject.D6ValidationCalendarSeries, dict]:
+    observation_mask = tuple(index not in observation_missing for index in range(len(dates)))
+    observation_positions = tuple(index for index, available in enumerate(observation_mask) if available)
+    observation_values = np.asarray([[float(index)] for index in observation_positions], dtype=np.float64)
+    component_masks = {
+        name: tuple(index not in utility_missing for index in range(len(dates)))
+        for name in ("excess_return_5d", "excess_return_10d", "excess_return_20d")
+    }
+    component_positions = {
+        name: tuple(index for index, available in enumerate(mask) if available)
+        for name, mask in component_masks.items()
+    }
+    component_values = {
+        name: np.asarray(utility[name], dtype=np.float64)[np.asarray(mask, dtype=bool)]
+        for name, mask in component_masks.items()
+    }
+    utility_mask = tuple(index not in utility_missing for index in range(len(dates)))
+    utility_positions = tuple(index for index, available in enumerate(utility_mask) if available)
+    combined_dense = (
+        0.35 * np.asarray(utility["excess_return_5d"], dtype=np.float64)
+        + 0.35 * np.asarray(utility["excess_return_10d"], dtype=np.float64)
+        + 0.30 * np.asarray(utility["excess_return_20d"], dtype=np.float64)
+    )
+    source_identities = {
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "d" * 64,
+        "feature_domain_policy_sha256": "e" * 64,
+    }
+    ledger = tuple(
+        {
+            "date": day.isoformat(),
+            "position": index,
+            "observation_available": observation_mask[index],
+            "utility_available": utility_mask[index],
+            "mode": "emission_update" if observation_mask[index] else "transition_only",
+            "evidence_included": bool(observation_mask[index] and utility_mask[index]),
+            "missing_feature_names": [] if observation_mask[index] else ["feature_1"],
+            "missing_component_names": (
+                [] if utility_mask[index] else ["excess_return_10d", "excess_return_20d", "excess_return_5d"]
+            ),
+            "observation_unavailable_reason_codes": (
+                [] if observation_mask[index] else ["hmm_risk_semantic_validation_observation_unavailable"]
+            ),
+            "utility_unavailable_reason_codes": (
+                [] if utility_mask[index] else ["hmm_risk_semantic_validation_utility_unavailable"]
+            ),
+            "observation_source_receipt": {
+                "sector_code": "S001",
+                "date": dates[index].isoformat(),
+                "feature_names": ["feature_1"],
+                "missing_feature_names": [] if observation_mask[index] else ["feature_1"],
+                "available": observation_mask[index],
+                "source_identities": source_identities,
+            },
+            "observation_source_receipt_sha256": subject.canonical_sha256(
+                {
+                    "sector_code": "S001",
+                    "date": dates[index].isoformat(),
+                    "feature_names": ["feature_1"],
+                    "missing_feature_names": [] if observation_mask[index] else ["feature_1"],
+                    "available": observation_mask[index],
+                    "source_identities": source_identities,
+                }
+            ),
+            "utility_source_receipt": {
+                "sector_code": "S001",
+                "date": dates[index].isoformat(),
+                "component_names": ["excess_return_10d", "excess_return_20d", "excess_return_5d"],
+                "missing_component_names": (
+                    [] if utility_mask[index] else ["excess_return_10d", "excess_return_20d", "excess_return_5d"]
+                ),
+                "available": utility_mask[index],
+                "source_identities": source_identities,
+            },
+            "utility_source_receipt_sha256": subject.canonical_sha256(
+                {
+                    "sector_code": "S001",
+                    "date": dates[index].isoformat(),
+                    "component_names": ["excess_return_10d", "excess_return_20d", "excess_return_5d"],
+                    "missing_component_names": (
+                        [] if utility_mask[index] else ["excess_return_10d", "excess_return_20d", "excess_return_5d"]
+                    ),
+                    "available": utility_mask[index],
+                    "source_identities": source_identities,
+                }
+            ),
+        }
+        for index, day in enumerate(dates)
+    )
+    carrier = subject.D6ValidationCalendarSeries(
+        calendar_dates=dates,
+        feature_names=("feature_1",),
+        observation_available_mask=observation_mask,
+        observation_available_positions=observation_positions,
+        observation_values_f64=observation_values,
+        component_available_masks=component_masks,
+        component_available_positions=component_positions,
+        component_values_f64=component_values,
+        utility_available_mask=utility_mask,
+        utility_available_positions=utility_positions,
+        combined_utility_values_f64=combined_dense[np.asarray(utility_mask, dtype=bool)],
+        availability_ledger=ledger,
+        source_identities=source_identities,
+    )
+    payload = carrier.payload()
+    manifest = {
+        **source_identities,
+        "schema_version": "hmm_risk_d6_frozen_input_manifest_v2",
+        "direct_sector_level": "L1",
+        "sector_code": "S001",
+        "benchmark_identity": "000300.SH",
+        "calendar_carrier_schema_version": carrier.schema_version,
+        "calendar_carrier_payload": payload,
+        "calendar_carrier_sha256": carrier.carrier_sha256,
+        "validation_calendar_sha256": subject.canonical_sha256(payload["calendar_dates"]),
+        "feature_names_sha256": subject.canonical_sha256(payload["feature_names"]),
+        "observation_available_mask_sha256": subject.canonical_sha256(payload["observation_available_mask"]),
+        "observation_available_positions_sha256": subject.canonical_sha256(payload["observation_available_positions"]),
+        "observation_values_sha256": subject.canonical_sha256(payload["observation_values_f64"]),
+        "utility_component_sha256": {
+            name: subject.canonical_sha256(values) for name, values in payload["component_values_f64"].items()
+        },
+        "component_available_mask_sha256": {
+            name: subject.canonical_sha256(values) for name, values in payload["component_available_masks"].items()
+        },
+        "component_available_positions_sha256": {
+            name: subject.canonical_sha256(values) for name, values in payload["component_available_positions"].items()
+        },
+        "utility_available_mask_sha256": subject.canonical_sha256(payload["utility_available_mask"]),
+        "utility_available_positions_sha256": subject.canonical_sha256(payload["utility_available_positions"]),
+        "combined_utility_sha256": subject.canonical_sha256(payload["combined_utility_values_f64"]),
+        "availability_ledger_sha256": subject.canonical_sha256(payload["availability_ledger"]),
+        "source_cutoff": utility["source_cutoff"],
+        "formula_version": utility["formula_version"],
+    }
+    return carrier, manifest
+
+
+def test_d6_na_calendar_excludes_missing_days_without_turning_events_into_failures() -> None:
+    states = [(index // 3) % 3 for index in range(182)]
+    dates = _validation_dates()
+    utility = _utility(states)
+    carrier, manifest = _calendar_carrier_and_manifest(
+        dates,
+        utility,
+        observation_missing=(4,),
+        utility_missing=(10,),
+    )
+    posterior = _posterior(states)
+    posterior[4] = np.asarray([0.5, 0.5, 0.0])
+
+    receipt = subject.evaluate_semantic_validation_calendar(
+        posterior,
+        carrier,
+        frozen_input_manifest=manifest,
+        selected_model_payload_sha256="f" * 64,
+    )
+
+    assert receipt["contract_version"] == subject.D6_NA_SEMANTIC_VERSION
+    assert receipt["assignment"]["semantic_assignment_valid"] is True
+    assert receipt["semantic_evidence"]["semantic_evidence_valid"] is True
+    assert receipt["assignment"]["evidence"]["evidence_rows"] == 180
+    assert 4 in receipt["assignment"]["evidence"]["diagnostic_tie_positions"]
+    assert receipt["assignment"]["failure_reason_codes"] == []
+    assert receipt["assignment"]["blocking_reason_codes"] == []
+    assert receipt["semantic_evidence"]["failure_reason_codes"] == []
+    assert len(receipt["assignment"]["evidence"]["availability_events"]) == 2
+
+
+def test_d6_na_calendar_fails_evidence_at_29_rows_and_rejects_manifest_drift() -> None:
+    states = [(index // 3) % 3 for index in range(182)]
+    dates = _validation_dates()
+    utility = _utility(states)
+    missing = tuple(range(29, 182))
+    carrier, manifest = _calendar_carrier_and_manifest(dates, utility, observation_missing=missing)
+    receipt = subject.evaluate_semantic_validation_calendar(
+        _posterior(states),
+        carrier,
+        frozen_input_manifest=manifest,
+        selected_model_payload_sha256="f" * 64,
+    )
+    assert (
+        "hmm_risk_semantic_validation_evidence_rows_insufficient"
+        in receipt["semantic_evidence"]["failure_reason_codes"]
+    )
+    assert receipt["semantic_mapping"] is None
+
+    drifted = dict(manifest)
+    drifted["calendar_carrier_sha256"] = "0" * 64
+    mismatch = subject.evaluate_semantic_validation_calendar(
+        _posterior(states),
+        carrier,
+        frozen_input_manifest=drifted,
+        selected_model_payload_sha256="f" * 64,
+    )
+    assert (
+        "hmm_risk_semantic_validation_availability_receipt_mismatch" in mismatch["assignment"]["failure_reason_codes"]
+    )
+
+    payload = deepcopy(carrier.payload())
+    source_receipt = payload["availability_ledger"][0]["observation_source_receipt"]
+    source_receipt["available"] = False
+    payload["availability_ledger"][0]["observation_source_receipt_sha256"] = subject.canonical_sha256(source_receipt)
+    with pytest.raises(subject.StateModelSetError, match="source receipt content differs"):
+        subject.D6ValidationCalendarSeries.from_payload(payload)
+
+
 def test_d6_hard_semantic_mapping_is_post_selection_and_rejects_singleton_without_fallback() -> None:
     states = [(index // 3) % 3 for index in range(182)]
     dates = _validation_dates()
