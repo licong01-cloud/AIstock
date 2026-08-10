@@ -1962,11 +1962,13 @@ def test_p6_l2_only_validation_constructor_never_touches_l1(monkeypatch) -> None
         expected_sector_count,
         direct_sector_level,
         frozen_input_identity=None,
+        validation_calendar_dates=None,
     ):
         captured["panel"] = panel
         captured["constituent_manifest_by_l1"] = constituent_manifest_by_l1
         captured["direct_sector_level"] = direct_sector_level
         captured["expected_sector_count"] = expected_sector_count
+        captured["validation_calendar_dates"] = validation_calendar_dates
         return _p6_series()
 
     monkeypatch.setattr(subject, "build_l1_training_series", guarded_build_l1_training_series)
@@ -1976,6 +1978,11 @@ def test_p6_l2_only_validation_constructor_never_touches_l1(monkeypatch) -> None
         lambda inputs: {"L2-000": {"l2_codes": ["L2-000"]}},
     )
     monkeypatch.setattr(subject, "_frozen_input_identity", lambda inputs: {})
+    monkeypatch.setattr(
+        subject,
+        "_validation_calendar_dates_from_manifest",
+        lambda inputs, *, validation_start, validation_end: (validation_start, validation_end),
+    )
     monkeypatch.setattr(subject, "_date", lambda value, label: value)
 
     series = subject._direct_l2_series_for_family(inputs, family)
@@ -1984,6 +1991,7 @@ def test_p6_l2_only_validation_constructor_never_touches_l1(monkeypatch) -> None
     assert captured["constituent_manifest_by_l1"] == {"L2-000": {"l2_codes": ["L2-000"]}}
     assert captured["direct_sector_level"] == "L2"
     assert captured["expected_sector_count"] == subject.B3_P6_EXPECTED_SECTOR_COUNT
+    assert captured["validation_calendar_dates"] == (family["validation_start"], family["validation_end"])
     assert set(series) == set(_p6_series())
 
 
@@ -2373,6 +2381,113 @@ def test_p6_parent_persists_only_accepted_selected_level_and_never_ready(monkeyp
     assert report["phase2_ready"] is False
     assert report["ready_manifest_path"] is None
     assert report["ready_artifact_write_performed"] is False
+
+
+def test_p6_d6_zero_refit_replay_preserves_model_and_selection_lineage(monkeypatch, tmp_path) -> None:
+    request = _request()
+    policy_sha256 = "9" * 64
+    request["feature_domain_policy_sha256"] = policy_sha256
+    semantic_identities = {
+        "semantic_dataset_manifest_hash": "1" * 64,
+        "semantic_mapping_manifest_hash": "2" * 64,
+        "semantic_calendar_manifest_hash": "3" * 64,
+        "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+    }
+    request.update(semantic_identities)
+    codes = tuple(sorted(_p6_series()))
+    model_hashes = {code: subject.canonical_sha256({"code": code}) for code in codes}
+    models = {(43, code): SimpleNamespace(model_payload_sha256=model_hashes[code]) for code in codes}
+    selection = {
+        "receipt_sha256": "8" * 64,
+        "evidence": {"selected_seed": 43},
+        "level_selection_valid": True,
+    }
+    monkeypatch.setattr(
+        subject,
+        "_p6_zero_refit_training_authority",
+        lambda report: (selection, models, {"entries": []}, codes),
+    )
+    monkeypatch.setattr(subject, "_require_approved_b3_windows", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_semantic_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_validate_b3_p6_child_payload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(subject, "_load_verified_formal_semantic_inputs", lambda value, db_prefix: {})
+    monkeypatch.setattr(subject, "_semantic_input_identities", lambda value: semantic_identities)
+    monkeypatch.setattr(
+        subject,
+        "_direct_l2_series_for_family",
+        lambda value, family: {
+            code: SimpleNamespace(validation_input_manifest={"schema_version": "v2", "code": code}) for code in codes
+        },
+    )
+    selected_artifact = {
+        "status": "accepted",
+        "entries": [{"model_payload_sha256": model_hashes[code]} for code in codes],
+    }
+    monkeypatch.setattr(
+        subject,
+        "build_selected_level_artifact",
+        lambda frozen_selection, frozen_models, series, repeat: selected_artifact,
+    )
+    selected_path = tmp_path / "selected.json"
+    monkeypatch.setattr(subject, "_write_b3_p6_selected_level_artifact", lambda root, value: selected_path)
+    monkeypatch.setattr(subject, "read_b3_selected_level_artifact", lambda *args, **kwargs: selected_artifact)
+    monkeypatch.setattr(subject, "_git_commit", lambda: "b" * 40)
+    monkeypatch.setattr(
+        subject,
+        "select_level_restart",
+        lambda *args, **kwargs: pytest.fail("zero-refit replay must not execute D5"),
+    )
+    train_identities = {
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "d" * 64,
+        "feature_domain_policy_sha256": policy_sha256,
+    }
+    child_paths = []
+    child_hashes = []
+    for index, process_identity in enumerate(("fresh_process_1", "fresh_process_2"), start=1):
+        child_hash = str(index) * 64
+        child_path = tmp_path / f"{process_identity}.json"
+        subject._write_diagnostic_report(
+            child_path,
+            {"single_pass_receipt_sha256": child_hash, **train_identities},
+        )
+        child_paths.append(str(child_path))
+        child_hashes.append(child_hash)
+    parent_report = {
+        "fresh_process_receipt_paths": child_paths,
+        "fresh_process_receipt_hashes": child_hashes,
+        **train_identities,
+        **semantic_identities,
+        "producer_commit": "a" * 40,
+    }
+    args = SimpleNamespace(db_env_prefix="TDX_DB_", output_root=str(tmp_path))
+
+    report = subject.run_b3_p6_d6_zero_refit_replay(args, request, parent_report)
+
+    assert report["status"] == "accepted"
+    assert report["fit_performed"] is False
+    assert report["refit_count"] == 0
+    assert report["selection_reexecuted"] is False
+    assert report["selected_seed_unchanged"] is True
+    assert report["model_parameter_hashes_unchanged"] is True
+    assert report["selected_model_payload_hashes"] == [model_hashes[code] for code in codes]
+    assert report["ready_artifact_write_performed"] is False
+    assert report["phase2_ready"] is False
+
+    child_drift = {**parent_report, "fresh_process_receipt_hashes": ["0" * 64, child_hashes[1]]}
+    with pytest.raises(StateModelSetError, match="fresh-process receipt hash differs"):
+        subject.run_b3_p6_d6_zero_refit_replay(args, request, child_drift)
+
+    monkeypatch.setattr(
+        subject,
+        "_semantic_input_identities",
+        lambda value: {**semantic_identities, "semantic_calendar_manifest_hash": "0" * 64},
+    )
+    with pytest.raises(StateModelSetError, match="semantic source authority drifted"):
+        subject.run_b3_p6_d6_zero_refit_replay(args, request, parent_report)
 
 
 def test_p6_child_failure_receipt_never_claims_selection_or_ready(tmp_path) -> None:

@@ -16,7 +16,7 @@ from backend.services.hmm_risk.b3_acceptance import (
     RESTART_SCHEDULE,
     evaluate_covariance_acceptance,
     evaluate_likelihood_acceptance,
-    evaluate_semantic_validation,
+    evaluate_semantic_validation_calendar,
     evaluate_train_occupancy,
 )
 from backend.services.hmm_risk.b3_training import (
@@ -33,7 +33,7 @@ from backend.services.hmm_risk.b3_training import (
 )
 from backend.services.hmm_risk.b3_mixed_dimension import (
     MIXED_DIMENSION_CONTRACT_VERSION,
-    MIXED_LEVEL_SCHEMA_VERSION,
+    MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
     MIXED_MODEL_SCHEMA_VERSION,
     MIXED_REPEAT_SCHEMA_VERSION,
     MIXED_TRAINING_ENTRY_SCHEMA_VERSION,
@@ -44,6 +44,7 @@ from backend.services.hmm_risk.b3_mixed_dimension import (
 )
 from backend.services.hmm_risk import b3_training as training_subject
 from backend.services.hmm_risk.state_model_set import (
+    D6ValidationCalendarSeries,
     StateModelSetError,
     canonical_json_bytes,
     canonical_sha256,
@@ -731,6 +732,81 @@ def test_target_projection_rejects_nonzero_inactive_feature() -> None:
                 "formula_version": C010_FORMULA_VERSION,
             },
         )
+
+
+def _single_day_d6_carrier(values: np.ndarray) -> D6ValidationCalendarSeries:
+    source_identities = {
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "d" * 64,
+        "feature_domain_policy_sha256": TEST_POLICY_SHA256,
+    }
+    observation_receipt = {
+        "sector_code": TARGET_SECTOR,
+        "date": "2024-07-01",
+        "feature_names": list(ALL_CORE_FEATURES),
+        "missing_feature_names": [],
+        "available": True,
+        "source_identities": source_identities,
+    }
+    utility_receipt = {
+        "sector_code": TARGET_SECTOR,
+        "date": "2024-07-01",
+        "component_names": ["excess_return_10d", "excess_return_20d", "excess_return_5d"],
+        "missing_component_names": [],
+        "available": True,
+        "source_identities": source_identities,
+    }
+    mask = (True,)
+    positions = (0,)
+    components = ("excess_return_5d", "excess_return_10d", "excess_return_20d")
+    return D6ValidationCalendarSeries(
+        calendar_dates=(date(2024, 7, 1),),
+        feature_names=ALL_CORE_FEATURES,
+        observation_available_mask=mask,
+        observation_available_positions=positions,
+        observation_values_f64=np.asarray(values, dtype=np.float64).reshape(1, -1),
+        component_available_masks={name: mask for name in components},
+        component_available_positions={name: positions for name in components},
+        component_values_f64={name: np.asarray([0.0], dtype=np.float64) for name in components},
+        utility_available_mask=mask,
+        utility_available_positions=positions,
+        combined_utility_values_f64=np.asarray([0.0], dtype=np.float64),
+        availability_ledger=(
+            {
+                "date": "2024-07-01",
+                "position": 0,
+                "observation_available": True,
+                "utility_available": True,
+                "mode": "emission_update",
+                "evidence_included": True,
+                "missing_feature_names": [],
+                "missing_component_names": [],
+                "observation_unavailable_reason_codes": [],
+                "utility_unavailable_reason_codes": [],
+                "observation_source_receipt": observation_receipt,
+                "observation_source_receipt_sha256": canonical_sha256(observation_receipt),
+                "utility_source_receipt": utility_receipt,
+                "utility_source_receipt_sha256": canonical_sha256(utility_receipt),
+            },
+        ),
+        source_identities=source_identities,
+    )
+
+
+def test_d6_mixed_dimension_checks_raw_full20_before_preprocess_and_projection() -> None:
+    model = _model(family="autocycle_all_core", level="L2", code=TARGET_SECTOR)
+    nonzero_inactive = np.zeros(20, dtype=np.float64)
+    nonzero_inactive[-1] = 1e-12
+    with pytest.raises(StateModelSetError, match="inactive_dimension_contract_invalid"):
+        training_subject._prepare_d6_calendar_observations(_single_day_d6_carrier(nonzero_inactive), model)
+
+    projected = training_subject._prepare_d6_calendar_observations(
+        _single_day_d6_carrier(np.zeros(20, dtype=np.float64)), model
+    )
+    assert projected.shape == (1, 19)
+    assert np.array_equal(projected, np.zeros((1, 19), dtype=np.float64))
 
 
 @pytest.mark.parametrize("invalid_value", [1e-12, np.nan, np.inf, -np.inf])
@@ -1654,7 +1730,7 @@ def _validation_dates() -> tuple[date, ...]:
     return tuple(available[index].date() for index in indexes)
 
 
-def _semantic_receipt(model_hash: str, *, level: str, sector_code: str) -> dict:
+def _semantic_receipt(model_hash: str, *, level: str, sector_code: str) -> tuple[dict, dict]:
     dates = _validation_dates()
     states = [(index // 3) % 3 for index in range(182)]
     posterior = np.zeros((182, 3), dtype=np.float64)
@@ -1667,35 +1743,122 @@ def _semantic_receipt(model_hash: str, *, level: str, sector_code: str) -> dict:
         "source_cutoff": "2025-04-30",
         "formula_version": "hmm_risk_hard_future_excess_035_035_030_v1",
     }
-    component_hashes = {
-        key: canonical_sha256(values.tolist()) for key in ("excess_return_5d", "excess_return_10d", "excess_return_20d")
-    }
-    encoded_dates = [item.isoformat() for item in dates]
-    manifest = {
-        "schema_version": "hmm_risk_d6_frozen_input_manifest_v1",
-        "direct_sector_level": level,
-        "sector_code": sector_code,
-        "benchmark_identity": "000300.SH",
-        "validation_observation_sha256": "f" * 64,
-        "validation_dates": encoded_dates,
-        "validation_dates_sha256": canonical_sha256(encoded_dates),
+    mask = tuple(True for _ in dates)
+    positions = tuple(range(len(dates)))
+    source_identities = {
         "dataset_manifest_hash": "e" * 64,
         "mapping_manifest_hash": "f" * 64,
         "calendar_manifest_hash": "1" * 64,
         "l2_stock_fact_manifest_hash": "2" * 64,
         "feature_domain_policy_sha256": TEST_POLICY_SHA256,
+    }
+    ledger = tuple(
+        {
+            "date": day.isoformat(),
+            "position": index,
+            "observation_available": True,
+            "utility_available": True,
+            "mode": "emission_update",
+            "evidence_included": True,
+            "missing_feature_names": [],
+            "missing_component_names": [],
+            "observation_unavailable_reason_codes": [],
+            "utility_unavailable_reason_codes": [],
+            "observation_source_receipt": {
+                "sector_code": sector_code,
+                "date": day.isoformat(),
+                "feature_names": ["feature_1"],
+                "missing_feature_names": [],
+                "available": True,
+                "source_identities": source_identities,
+            },
+            "observation_source_receipt_sha256": canonical_sha256(
+                {
+                    "sector_code": sector_code,
+                    "date": day.isoformat(),
+                    "feature_names": ["feature_1"],
+                    "missing_feature_names": [],
+                    "available": True,
+                    "source_identities": source_identities,
+                }
+            ),
+            "utility_source_receipt": {
+                "sector_code": sector_code,
+                "date": day.isoformat(),
+                "component_names": ["excess_return_10d", "excess_return_20d", "excess_return_5d"],
+                "missing_component_names": [],
+                "available": True,
+                "source_identities": source_identities,
+            },
+            "utility_source_receipt_sha256": canonical_sha256(
+                {
+                    "sector_code": sector_code,
+                    "date": day.isoformat(),
+                    "component_names": ["excess_return_10d", "excess_return_20d", "excess_return_5d"],
+                    "missing_component_names": [],
+                    "available": True,
+                    "source_identities": source_identities,
+                }
+            ),
+        }
+        for index, day in enumerate(dates)
+    )
+    carrier = D6ValidationCalendarSeries(
+        calendar_dates=dates,
+        feature_names=("feature_1",),
+        observation_available_mask=mask,
+        observation_available_positions=positions,
+        observation_values_f64=np.arange(182, dtype=np.float64).reshape(-1, 1),
+        component_available_masks={key: mask for key in ("excess_return_5d", "excess_return_10d", "excess_return_20d")},
+        component_available_positions={
+            key: positions for key in ("excess_return_5d", "excess_return_10d", "excess_return_20d")
+        },
+        component_values_f64={
+            key: values.copy() for key in ("excess_return_5d", "excess_return_10d", "excess_return_20d")
+        },
+        utility_available_mask=mask,
+        utility_available_positions=positions,
+        combined_utility_values_f64=0.35 * values + 0.35 * values + 0.30 * values,
+        availability_ledger=ledger,
+        source_identities=source_identities,
+    )
+    payload = carrier.payload()
+    manifest = {
+        **source_identities,
+        "schema_version": "hmm_risk_d6_frozen_input_manifest_v2",
+        "direct_sector_level": level,
+        "sector_code": sector_code,
+        "benchmark_identity": "000300.SH",
+        "calendar_carrier_schema_version": carrier.schema_version,
+        "calendar_carrier_payload": payload,
+        "calendar_carrier_sha256": carrier.carrier_sha256,
+        "validation_calendar_sha256": canonical_sha256(payload["calendar_dates"]),
+        "feature_names_sha256": canonical_sha256(payload["feature_names"]),
+        "observation_available_mask_sha256": canonical_sha256(payload["observation_available_mask"]),
+        "observation_available_positions_sha256": canonical_sha256(payload["observation_available_positions"]),
+        "observation_values_sha256": canonical_sha256(payload["observation_values_f64"]),
+        "utility_component_sha256": {
+            name: canonical_sha256(component) for name, component in payload["component_values_f64"].items()
+        },
+        "component_available_mask_sha256": {
+            name: canonical_sha256(component) for name, component in payload["component_available_masks"].items()
+        },
+        "component_available_positions_sha256": {
+            name: canonical_sha256(component) for name, component in payload["component_available_positions"].items()
+        },
+        "utility_available_mask_sha256": canonical_sha256(payload["utility_available_mask"]),
+        "utility_available_positions_sha256": canonical_sha256(payload["utility_available_positions"]),
+        "combined_utility_sha256": canonical_sha256(payload["combined_utility_values_f64"]),
+        "availability_ledger_sha256": canonical_sha256(payload["availability_ledger"]),
         "source_cutoff": utility["source_cutoff"],
         "formula_version": utility["formula_version"],
-        "utility_component_sha256": component_hashes,
-        "combined_utility_sha256": canonical_sha256((0.35 * values + 0.35 * values + 0.30 * values).tolist()),
     }
-    return evaluate_semantic_validation(
+    return evaluate_semantic_validation_calendar(
         posterior,
-        dates,
-        utility,
+        carrier,
         frozen_input_manifest=manifest,
         selected_model_payload_sha256=model_hash,
-    )
+    ), manifest
 
 
 def _training_receipt(model: B3FittedModel) -> dict:
@@ -1884,11 +2047,14 @@ def _selected_artifact(family: str, level: str) -> tuple[dict, dict]:
         training_receipt = _training_receipt(model)
         training_receipts.append(training_receipt)
         semantic_mapping = {"0": "fading", "1": "neutral", "2": "trending"}
-        semantic = _semantic_receipt(model.model_payload_sha256, level=level, sector_code=model.sector_code)
+        semantic, validation_manifest = _semantic_receipt(
+            model.model_payload_sha256, level=level, sector_code=model.sector_code
+        )
         entry_body = {
             **model.payload(),
             "training_receipt": training_receipt,
             "semantic": semantic,
+            "validation_input_manifest": validation_manifest,
             "validation_accessed_after_selection": True,
             "future_utility_accessed_after_selection": True,
             "selection_reexecuted": False,
@@ -1898,9 +2064,9 @@ def _selected_artifact(family: str, level: str) -> tuple[dict, dict]:
     selection = _selection(family, level, training_receipts)
     body = {
         "schema_version": (
-            MIXED_LEVEL_SCHEMA_VERSION
+            MIXED_LEVEL_SCHEMA_VERSION_D6_NA
             if family == "autocycle_all_core" and level == "L2"
-            else "hmm_risk_b3_selected_level_artifact_v1"
+            else training_subject.SELECTED_LEVEL_SCHEMA_VERSION_D6_NA
         ),
         "family": family,
         "level": level,
@@ -1919,6 +2085,7 @@ def _selected_artifact(family: str, level: str) -> tuple[dict, dict]:
                 family=family,
                 level=level,
                 expected_sector_codes=codes,
+                schema_version=MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
             )
         )
     return {**body, "artifact_sha256": canonical_sha256(body)}, selection

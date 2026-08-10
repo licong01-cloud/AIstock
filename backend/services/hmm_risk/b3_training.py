@@ -16,12 +16,14 @@ from backend.services.hmm_risk.b3_acceptance import (
     D4_LIKELIHOOD_VERSION,
     D4_OCCUPANCY_VERSION,
     D5_SELECTION_VERSION,
+    D6_AVAILABILITY_VERSION,
+    D6_NA_SEMANTIC_VERSION,
     D6_SEMANTIC_VERSION,
     L2_RETRAIN_VERSION,
     RESTART_SCHEDULE,
     evaluate_covariance_acceptance,
     evaluate_likelihood_acceptance,
-    evaluate_semantic_validation,
+    evaluate_semantic_validation_calendar,
     evaluate_train_occupancy,
     map_covariance_prior_objective,
     map_numeric_envelope,
@@ -30,7 +32,7 @@ from backend.services.hmm_risk.b3_acceptance import (
 from backend.services.hmm_risk.b3_mixed_dimension import (
     INACTIVE_DIMENSION_REASON_CODE,
     MIXED_DIMENSION_CONTRACT_VERSION,
-    MIXED_LEVEL_SCHEMA_VERSION,
+    MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
     MIXED_MODEL_SCHEMA_VERSION,
     MIXED_REPEAT_SCHEMA_VERSION,
     MIXED_TRAINING_ENTRY_SCHEMA_VERSION,
@@ -43,6 +45,7 @@ from backend.services.hmm_risk.state_model_set import (
     ALL_CORE_FEATURES,
     BASE_FEATURES,
     C008_B3_DIAG04_NU,
+    D6ValidationCalendarSeries,
     HMM_N_ITER,
     L1TrainingSeries,
     SCHEMA_VERSION,
@@ -61,6 +64,8 @@ from backend.services.hmm_risk.state_model_set import (
     canonical_json_bytes,
     canonical_sha256,
     causal_forward_posteriors,
+    causal_forward_posteriors_calendar,
+    validate_d6_frozen_input_manifest,
 )
 from backend.services.hmm_risk.stock_fact_observation import C010_FORMULA_VERSION, validate_c010_policy_manifest
 
@@ -68,6 +73,7 @@ from backend.services.hmm_risk.stock_fact_observation import C010_FORMULA_VERSIO
 REFIT03_RAW_COVARIANCE_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_covariance_raw_capture_v1"
 REFIT03_RAW_COVARIANCE_AUTHORITY = "gaussian_hmm_internal_diag_covars_v1"
 REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION = "hmm_risk_b3_training_stage_evidence_v1"
+SELECTED_LEVEL_SCHEMA_VERSION_D6_NA = "hmm_risk_b3_selected_level_artifact_v2_d6_na"
 
 
 class B3TrainingStageError(StateModelSetError):
@@ -1620,6 +1626,37 @@ def models_from_repeat(repeat: Mapping[str, Any]) -> dict[tuple[int, str], B3Fit
     return models
 
 
+def _prepare_d6_calendar_observations(
+    carrier: D6ValidationCalendarSeries,
+    fitted: B3FittedModel,
+) -> np.ndarray:
+    """Validate full-dimensional availability, then preprocess full features before fixed projection."""
+
+    carrier.validate(len(fitted.feature_names))
+    raw_validation = np.asarray(carrier.observation_values_f64, dtype=np.float64)
+    if fitted.projection_receipt is not None:
+        inactive_indices = tuple(fitted.projection_receipt["inactive_feature_indices"])
+        if inactive_indices and not np.all(raw_validation[:, inactive_indices] == 0.0):
+            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+    validation = _apply_preprocess(raw_validation, fitted.preprocess)
+    if fitted.projection_receipt is not None:
+        validate_projection_receipt(
+            fitted.projection_receipt,
+            family=fitted.family,
+            level=fitted.level,
+            sector_code=fitted.sector_code,
+            full_feature_names=fitted.feature_names,
+            preprocess=fitted.preprocess,
+            means_shape=fitted.means.shape,
+            covariance_shape=fitted.covars.shape,
+        )
+        validation = np.ascontiguousarray(
+            validation[:, tuple(fitted.projection_receipt["active_feature_indices"])],
+            dtype=np.float64,
+        )
+    return validation
+
+
 def build_selected_level_artifact(
     selection: Mapping[str, Any],
     models: Mapping[tuple[int, str], B3FittedModel],
@@ -1673,41 +1710,21 @@ def build_selected_level_artifact(
             or training_receipt.get("model_payload_sha256") != fitted.model_payload_sha256
         ):
             raise StateModelSetError(f"selected training receipt is not accepted for {code}")
-        validation = _apply_preprocess(item.validation_observations, fitted.preprocess)
-        if fitted.projection_receipt is not None:
-            validate_projection_receipt(
-                fitted.projection_receipt,
-                family=fitted.family,
-                level=fitted.level,
-                sector_code=fitted.sector_code,
-                full_feature_names=fitted.feature_names,
-                preprocess=fitted.preprocess,
-                means_shape=fitted.means.shape,
-                covariance_shape=fitted.covars.shape,
-            )
-            validation = np.ascontiguousarray(
-                validation[:, tuple(fitted.projection_receipt["active_feature_indices"])],
-                dtype=np.float64,
-            )
-        posterior = causal_forward_posteriors(
+        carrier = item.validation_calendar_series
+        if carrier is None:
+            raise StateModelSetError("active D6-NA-A requires frozen input manifest v2 calendar carrier")
+        validation = _prepare_d6_calendar_observations(carrier, fitted)
+        posterior = causal_forward_posteriors_calendar(
             validation,
+            carrier.observation_available_mask,
             startprob=fitted.startprob,
             transmat=fitted.transmat,
             means=fitted.means,
             covars=fitted.covars,
         )
-        semantic = evaluate_semantic_validation(
+        semantic = evaluate_semantic_validation_calendar(
             posterior,
-            item.validation_dates,
-            {
-                **item.validation_future_components,
-                "source_cutoff": (
-                    None
-                    if item.validation_utility_source_cutoff is None
-                    else item.validation_utility_source_cutoff.isoformat()
-                ),
-                "formula_version": item.validation_utility_formula_version,
-            },
+            carrier,
             frozen_input_manifest=item.validation_input_manifest,
             selected_model_payload_sha256=fitted.model_payload_sha256,
         )
@@ -1715,6 +1732,7 @@ def build_selected_level_artifact(
             **fitted.payload(),
             "training_receipt": training_receipt,
             "semantic": semantic,
+            "validation_input_manifest": dict(item.validation_input_manifest),
             "validation_accessed_after_selection": True,
             "future_utility_accessed_after_selection": True,
             "selection_reexecuted": False,
@@ -1736,12 +1754,15 @@ def build_selected_level_artifact(
             family=str(selection.get("evidence", {}).get("family") or ""),
             level=str(selection.get("evidence", {}).get("level") or ""),
             expected_sector_codes=expected_codes,
+            schema_version=MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
         )
         if mixed_dimension
         else None
     )
     body = {
-        "schema_version": (MIXED_LEVEL_SCHEMA_VERSION if mixed_dimension else "hmm_risk_b3_selected_level_artifact_v1"),
+        "schema_version": (
+            MIXED_LEVEL_SCHEMA_VERSION_D6_NA if mixed_dimension else SELECTED_LEVEL_SCHEMA_VERSION_D6_NA
+        ),
         "family": selection.get("evidence", {}).get("family"),
         "level": selection.get("evidence", {}).get("level"),
         "selected_seed": selected_seed,
@@ -1788,7 +1809,7 @@ def _validate_ready_layer(
 ) -> None:
     mixed_dimension = uses_mixed_dimension_level(family, level)
     expected_artifact_schema = (
-        MIXED_LEVEL_SCHEMA_VERSION if mixed_dimension else "hmm_risk_b3_selected_level_artifact_v1"
+        MIXED_LEVEL_SCHEMA_VERSION_D6_NA if mixed_dimension else SELECTED_LEVEL_SCHEMA_VERSION_D6_NA
     )
     if artifact.get("schema_version") != expected_artifact_schema:
         raise StateModelSetError(f"B3 READY selected artifact schema is invalid for {family}/{level}")
@@ -1995,7 +2016,9 @@ def _validate_ready_layer(
             or code not in canonical_codes
             or not isinstance(training_receipt, Mapping)
             or not isinstance(semantic, Mapping)
-            or semantic.get("contract_version") != D6_SEMANTIC_VERSION
+            or semantic.get("contract_version") != D6_NA_SEMANTIC_VERSION
+            or semantic.get("base_contract_version") != D6_SEMANTIC_VERSION
+            or semantic.get("availability_contract_version") != D6_AVAILABILITY_VERSION
             or entry.get("semantic_mapping") != semantic.get("semantic_mapping")
             or entry.get("validation_accessed_after_selection") is not True
             or entry.get("future_utility_accessed_after_selection") is not True
@@ -2099,12 +2122,31 @@ def _validate_ready_layer(
             or set(semantic["semantic_mapping"].values()) != {"fading", "neutral", "trending"}
             or not assignment.get("evidence")
             or not semantic_evidence.get("evidence")
-            or assignment.get("evidence", {}).get("validation_rows") != 182
+            or assignment.get("evidence", {}).get("calendar_rows") != 182
             or assignment.get("evidence", {}).get("selected_model_payload_sha256") != entry.get("model_payload_sha256")
             or semantic_evidence.get("evidence", {}).get("selected_model_payload_sha256")
             != entry.get("model_payload_sha256")
         ):
             raise StateModelSetError(f"B3 READY semantic evidence is not accepted for {family}/{level}/{code}")
+        validation_manifest = entry.get("validation_input_manifest")
+        if not isinstance(validation_manifest, Mapping):
+            raise StateModelSetError(f"B3 READY D6 manifest v2 is missing for {family}/{level}/{code}")
+        carrier_payload = validation_manifest.get("calendar_carrier_payload")
+        if not isinstance(carrier_payload, Mapping):
+            raise StateModelSetError(f"B3 READY D6 calendar carrier is missing for {family}/{level}/{code}")
+        carrier = D6ValidationCalendarSeries.from_payload(carrier_payload)
+        validate_d6_frozen_input_manifest(
+            validation_manifest,
+            carrier,
+            sector_code=code,
+            direct_sector_level=level,
+        )
+        if (
+            assignment.get("evidence", {}).get("calendar_carrier_sha256") != carrier.carrier_sha256
+            or semantic_evidence.get("evidence", {}).get("calendar_carrier_sha256") != carrier.carrier_sha256
+            or semantic_evidence.get("evidence", {}).get("evidence_rows", 0) < 30
+        ):
+            raise StateModelSetError(f"B3 READY D6 calendar readback is invalid for {family}/{level}/{code}")
         for evidence_receipt in (assignment, semantic_evidence):
             receipt_evidence = evidence_receipt["evidence"]
             if (
@@ -2126,6 +2168,7 @@ def _validate_ready_layer(
             family=family,
             level=level,
             expected_sector_codes=canonical_codes,
+            schema_version=MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
         )
         for field, expected_value in expected_dimension_identity.items():
             if artifact.get(field) != expected_value:
@@ -2284,6 +2327,9 @@ def write_b3_ready_model_set(
             "d3": D3_CONTRACT_VERSION,
             "l2_retrain": L2_RETRAIN_VERSION,
             "d1_d5_compat": MIXED_DIMENSION_CONTRACT_VERSION,
+            "d6_base": D6_SEMANTIC_VERSION,
+            "d6_availability": D6_AVAILABILITY_VERSION,
+            "d6_composite": D6_NA_SEMANTIC_VERSION,
         },
         "layers": layers,
         "selection_receipts": {
@@ -2377,6 +2423,9 @@ def read_b3_ready_model_set(manifest_path: str | Path) -> dict[str, Any]:
             "d3": D3_CONTRACT_VERSION,
             "l2_retrain": L2_RETRAIN_VERSION,
             "d1_d5_compat": MIXED_DIMENSION_CONTRACT_VERSION,
+            "d6_base": D6_SEMANTIC_VERSION,
+            "d6_availability": D6_AVAILABILITY_VERSION,
+            "d6_composite": D6_NA_SEMANTIC_VERSION,
         }
     ):
         raise StateModelSetError("B3 READY manifest identity is invalid")
