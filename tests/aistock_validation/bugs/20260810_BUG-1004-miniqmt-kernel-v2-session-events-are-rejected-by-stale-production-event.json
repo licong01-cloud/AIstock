@@ -2,7 +2,10 @@
   "actual": "Production CHECK rejects EXCHANGE_SESSION_CLOCK with psycopg2 CheckViolation; runtime remains FAILED_RETRYABLE, all 58 intents fail before broker, durable health is absent, and quote observation callbacks are rejected.",
   "allowed_write_scope": [
     "backend/migrations/miniqmt_execution_kernel_k2_20260725.sql",
+    "backend/migrations/miniqmt_kernel_v2_event_allowlists_20260810.sql",
+    "backend/migrations/miniqmt_kernel_v2_event_allowlists_20260810.rollback.sql",
     "backend/services/miniqmt_execution_runtime/quote_event_schema.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_kernel_v2_event_allowlist_migration.py",
     "backend/tests/miniqmt_execution_runtime/test_quote_event_schema.py",
     "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
     "tests/aistock_validation/bugs/20260810_BUG-1004-miniqmt-kernel-v2-session-events-are-rejected-by-stale-production-event.json",
@@ -24,10 +27,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260810-78d4044edb0f",
       "timestamp": "2026-08-10T02:03:26.729594Z"
+    },
+    {
+      "action": "implementation_verified",
+      "actor": "codex",
+      "note": "Implemented additive KERNEL_V2 event CHECK successor migration and guarded rollback; production pg_catalog predecessor readback remains pending. DEV PostgreSQL apply/idempotency/drift/three-route/rollback matrix passed; MiniQMT L2 1351 passed,70 skipped; direct schema coverage line 92.76%, branch 76.47%; F2 112/112; DESIGN-COMPLIANCE-001 four controls passed.",
+      "timestamp": "2026-08-10T03:19:58Z"
     }
   ],
   "evidence_uris": [
-    "runtime run simrun_d9a68ff5c1f3f54d at 2026-08-10 09:37-09:45 Asia/Shanghai"
+    "runtime run simrun_d9a68ff5c1f3f54d at 2026-08-10 09:37-09:45 Asia/Shanghai",
+    "read-only production pg_catalog: ck_miniqmt_event_type=27 P1-D values; ck_miniqmt_event_source=7 P1-D values; ck_miniqmt_k2_event_composite=10 legacy routes; zero KERNEL_V2 rows persisted",
+    "DEV PostgreSQL disposable schema: successor first/second apply, SESSION, ALGO_START v2, COMMAND_OUTCOME, guarded rollback refusal, cleanup and double rollback passed"
   ],
   "expected": "Existing production schemas are upgraded idempotently to the exact K2/K6 event type/source/payload contract; preflight and independent readback detect stale CHECK definitions before runtime activation; valid EXCHANGE_SESSION_CLOCK SESSION/TIMER/EOD and KERNEL_V2 evidence persist, while unknown source values fail loud.",
   "file_scope_contract": {
@@ -110,30 +121,39 @@
     ]
   },
   "first_seen_at": "2026-08-10T02:03:26.729622Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-1004-miniqmt-kernel-v2-session-events-are-rejected-by-20260810",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 3237,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3237",
-  "last_seen_at": "2026-08-10T02:03:26.729622Z",
+  "last_seen_at": "2026-08-10T03:19:58Z",
   "module": "miniqmt_execution_runtime",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "GET /api/v1/simulation-runtime/scheduler/status -> MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED / ck_miniqmt_event_source; GET /api/v1/simulation-runtime/miniqmt/quote-diagnostics?runtime_id=mqrt_sim_72d885f0d943332dfe02bfbc -> CheckViolation on all symbols",
   "required_verification": [
     "l0",
+    "validation_module_registry_l0",
+    "validation_catalog_integrity",
     "miniqmt_execution_runtime_l2"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "fresh_process_evidence": [
+      "Fresh pytest process imported persisted MiniQMT event schema authority and passed exact quote/KERNEL union, composite routing, migration static checks, and DEV PostgreSQL successor apply/rollback without backend process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
