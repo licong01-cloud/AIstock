@@ -80,18 +80,27 @@ request 同时保存 candidates/features、M3 split、QE daily/limit/suspend 输
 
 ### 7.1 下一交易日可执行性
 
-对每个 decision date 的候选，以交易日历的下一交易日为 target date：
+对每个 decision date 的候选，以交易日历的下一交易日为 target date。标签先确定 `entry_label_status`，再生成 binary 值：
 
 ```text
-entry_executable = 1
-  iff target daily row exists
-  and target is not suspended
-  and target is not one-price limit-up
-  and target open/pre_close are finite and positive
-else 0
+if target is authoritatively suspended or otherwise confirmed non-tradable:
+    entry_label_status = AVAILABLE
+    entry_executable = 0
+elif target daily row is absent without an authoritative non-trading reason:
+    entry_label_status = UNAVAILABLE
+    entry_label_reason = target_market_row_missing_unexplained
+elif target row is one-price limit-up:
+    entry_label_status = AVAILABLE
+    entry_executable = 0
+elif target open/pre_close are finite and positive:
+    entry_label_status = AVAILABLE
+    entry_executable = 1
+else:
+    entry_label_status = UNAVAILABLE
+    entry_label_reason = target_price_invalid
 ```
 
-涨跌停、停牌和前收直接使用现有 QE 日线 Bin/sidecar 的同一回测语义，不重复建设 `stk_limit` 训练文件。缺失日历、缺失前收或非法 OHLC 属于 typed label failure，不能默认为不可执行。
+涨跌停、停牌和前收直接使用现有 QE 日线 Bin/sidecar 的同一回测语义，不重复建设 `stk_limit` 训练文件。缺失日历、无权威原因的行情缺行、缺失前收或非法 OHLC 均为 `UNAVAILABLE` typed label failure，不进入 binary/quantile 训练；只有权威确认的不可交易状态才能标为 0。coverage 必须分别记录正例、权威负例和 unavailable 数量，禁止把数据缺失静默变成负样本。
 
 ### 7.2 可执行开盘缺口
 
@@ -122,6 +131,8 @@ M4A 训练四个 LightGBM heads：
 
 禁止使用常数模型、规则函数、训练集分位数或随机数代替任一 head。binary 标签单类或可执行样本不足时，以 `ADVISORY_PRICE_RANGE_LABEL_VARIATION_MISSING` 或 `ADVISORY_PRICE_RANGE_SAMPLE_INSUFFICIENT` 失败，不发布不完整 bundle。
 
+三个 entry-gap quantile 是 `P(entry_gap | entry_executable=1)` 的条件分布，不是无条件价格预测。该条件身份写入 training request、bundle manifest、API 和 UI；`entry_executable_probability` 不改变候选集合，也不能把条件分布改写成无条件保证。
+
 quantile raw prediction 按排序后的 q10/q50/q90 输出单调化结果，并在 metrics 中记录原始 crossing 行数和比例；不能静默覆盖原始质量问题。
 
 ## 10. PriceRangeBundle
@@ -143,16 +154,33 @@ M4 binding 使用 package/manifest/style/parent bundle/outcome bundle 的 exact 
 
 ## 11. 在线价格数据合同
 
-在线转换从现有数据库 FeatureSource 的 decision-cutoff 数据读取：
+在线转换扩展现有 Advisory-only `PostgresRealtimeFeatureSource.load()`：在已有 `REPEATABLE READ / readonly` 单事务中增加 `PriceRangeRealtimeContext`，但保持既有 `candidate_daily/candidate_static/market_daily` 的复权公式、103 特征和 M2/M3 输入字节语义不变。禁止从当前 `candidate_daily.close` 取绝对价格，因为该列已经乘以复权因子。
 
-- decision date 未复权 `close`，作为 `decision_reference_price`；
-- decision date 当时可知的股票板块、ST 状态和价格 tick；
+`PriceRangeRealtimeContext` 对每个候选至少包含：
+
+- `decision_raw_close`：精确读取 `market.kline_daily_raw.close_li / 1000.0`，不乘 `adj_factor`，作为 `decision_reference_price`；
+- `decision_price_source=market.kline_daily_raw.close_li`、`decision_price_trade_date` 和 `price_unit_divisor=1000.0`；
+- `target_raw_price_multiplier`：把训练使用的 decision/target 复权价格比值还原为 target 未复权价格的 decision-time 可知乘数；无公司行动时精确为 1；
+- `board_type`、`list_date`、上市特殊无涨跌幅阶段状态、decision time PIT ST 状态和 `tick_size`；
 - target date 对应的交易日历日期，但不读取该日行情；
-- Program 已冻结的 `review_policy.stop_loss_bps` 和 `trailing_stop_bps`。
+- Program `review_policy` 的 `stop_loss_bps/take_profit_bps/trailing_stop_bps/take_profit_mode` 以及 `review_policy_sha256`。
 
-下一交易日法规价格边界必须由 decision time 已知的板块/ST 属性和确定性交易所规则计算。不得通过读取 target date 的真实涨跌停价、开盘价或行情行来生成范围。属性不完整、价格口径不明或无法确定 tick 时，返回 typed M4 unavailable。
+PIT ST 状态只读消费现有生产 live ST PIT key 对应的 `market.stock_universe_pit_state/stock_universe_pit_events`：key 必须通过既有 `require_live_st_pit_universe_key`，state 必须已存在、`status=ready`、`dirty=false` 且只需覆盖 decision date。目标状态由纯函数使用“knowledge date/timestamp 不晚于 decision date、action_date 不晚于 target date”的最新 `st_negative/st_restore` 事件向前投影，即“target 生效、decision 时已知”；不得要求 state 或行情已覆盖未来 target date。不得触发 `ensure/rebuild`，不得读取 QE/backtest PIT 文件，也不得把“无行”猜成非 ST。decision-cutoff 状态不完整、事件知识时间/语义不明确或公司行动参考价无法确定时，只关闭对应候选的 M4 价格范围并返回 typed reason，不阻断 M2/M3。
 
-若 target date 存在 decision time 已知的除权除息等会改变法规参考价的公司行动，必须使用当时已知且可确定性计算的调整后参考价；当前数据源不能提供时返回 `ADVISORY_PRICE_RANGE_REGULATORY_BOUNDARY_UNAVAILABLE`，不得继续以 decision close 猜测。
+`model_shadow` 必须从目标 recommendation list 的所有候选 `evidence_json.review_policy_sha256` 读取冻结 policy identity：候选 hash 必须非空且唯一，并精确等于当前 Program `review_policy_sha256`，随后才允许使用当前 Program 的完整 policy 值。hash 不一致时整个 `price_range` 子信封返回 `ADVISORY_PRICE_RANGE_POLICY_IDENTITY_MISMATCH`；不得用新 policy 解释旧列表，也不要求新增历史 policy 表或 DDL。
+
+下一交易日法规价格边界由新的 Advisory-only `price_range_regulatory.py` 使用 decision time 已知的板块、上市日、target ST 状态、规则生效日期和确定性交易所规则计算；不得复用 Selection `price_guidance.py` 中忽略 ST、IPO 特殊阶段和规则生效日期的简化 `_limit_pct()`。法规参考价与模型转换共享 `decision_raw_close * target_raw_price_multiplier`，不能一个使用除权前价格、另一个使用除权后价格。不得通过读取 target date 的真实涨跌停价、开盘价或行情行来生成范围。属性不完整、价格口径不明或无法确定 tick 时，返回 typed M4 unavailable。
+
+法规解析结果是显式联合类型：`LIMITED(low, high, rule_id)` 或 `NO_DAILY_LIMIT(rule_id)`。已确定处于合法无涨跌幅限制阶段时，API 的 regulatory low/high 为 `null`、status 为 `NO_DAILY_LIMIT`，买入区间只验证有限、正数和 tick，不伪造价格上下限；只有规则状态无法确定才返回 unavailable。
+
+训练标签使用同一 QE 复权口径，绝对价格却必须输出未复权 CNY，因此在线转换必须满足：
+
+```text
+target_raw_price_multiplier = decision_adjustment_factor / target_adjustment_factor
+raw_target_price = decision_raw_close * target_raw_price_multiplier * (1 + predicted_adjusted_return)
+```
+
+无公司行动时 multiplier 精确为 1。若 target date 存在 decision time 已知的除权除息等公司行动，必须由当时已知的权威公司行动数据确定 multiplier 和法规参考价；任一值无法确定时返回 `ADVISORY_PRICE_RANGE_REGULATORY_BOUNDARY_UNAVAILABLE`，不得继续按 multiplier=1 或 decision close 猜测。
 
 全部 API 绝对价格使用未复权 CNY，并显式返回 `price_basis=UNADJUSTED_CNY_DECISION_CLOSE`、`tick_size` 和边界来源。训练时的复权比例不得直接显示成价格。
 
@@ -161,16 +189,16 @@ M4 binding 使用 package/manifest/style/parent bundle/outcome bundle 的 exact 
 ### 12.1 买入参考范围
 
 ```text
-raw_entry_price_qx = decision_reference_price * (1 + entry_gap_qx)
+raw_entry_price_qx = decision_reference_price * target_raw_price_multiplier * (1 + entry_gap_qx)
 ```
 
-先单调化 q10/q50/q90，再将 q10/q90 裁剪到 decision-time 可计算的下一交易日法规价格区间。下界向下按 tick 取整，上界向上按 tick 取整，中位数按最近 tick 取整，并重新验证：
+先单调化 q10/q50/q90。法规状态为 `LIMITED` 时将 q10/q90 裁剪到 decision-time 可计算的下一交易日价格区间；状态为 `NO_DAILY_LIMIT` 时不做法规裁剪。下界向下按 tick 取整，上界向上按 tick 取整，中位数按最近 tick 取整。`LIMITED` 状态重新验证：
 
 ```text
 regulatory_low <= entry_low <= entry_mid <= entry_high <= regulatory_high
 ```
 
-若裁剪后区间为空、输入非有限数或排序仍不成立，只关闭该候选的 M4 结果并返回明确 reason code，不退化为 decision close 或固定百分比范围。
+`NO_DAILY_LIMIT` 状态验证 `0 < entry_low <= entry_mid <= entry_high`。若裁剪后区间为空、输入非有限数或排序仍不成立，只关闭该候选的 M4 结果并返回明确 reason code，不退化为 decision close 或固定百分比范围。
 
 ### 12.2 目标持有期限
 
@@ -178,7 +206,7 @@ regulatory_low <= entry_low <= entry_mid <= entry_high <= regulatory_high
 
 ### 12.3 止盈参考范围
 
-在目标 horizon 读取 M3 的 `mfe_q50` 与 `mfe_q90`。由于 M3 MFE 是扣除开仓和退出成本后的净路径收益，必须先反解为市场价格收益：
+在目标 horizon 读取 M3 真实响应字段 `path_mfe_q50` 与 `path_mfe_q90`，分别绑定为下式的 `mfe_q50/mfe_q90`。由于 M3 MFE 是扣除开仓和退出成本后的净路径收益，必须先反解为市场价格收益：
 
 ```text
 market_mfe_qx = max(0, (1 + OPEN_COST) * (1 + mfe_qx) / (1 - CLOSE_COST) - 1)
@@ -190,7 +218,7 @@ take_profit_high = entry_mid * (1 + market_mfe_q90)
 
 ### 12.4 止损参考范围与硬边界
 
-在同一 horizon 读取 M3 的 `mae_q50` 与 `mae_q90`，两者按扣除开仓/退出成本后的非负最大不利幅度解释。先反解对应市场价格回撤，再与现有 Program 硬止损比较：
+在同一 horizon 读取 M3 真实响应字段 `path_mae_loss_q50` 与 `path_mae_loss_q90`，分别绑定为下式的 `mae_q50/mae_q90`；两者按扣除开仓/退出成本后的非负最大不利幅度解释。先反解对应市场价格回撤，再与现有 Program 硬止损比较：
 
 ```text
 hard_stop_drawdown = stop_loss_bps / 10000 when stop_loss_bps > 0 else null
@@ -201,26 +229,37 @@ stop_loss_high = entry_mid * (1 - model_stop_near)
 stop_loss_low  = entry_mid * (1 - model_stop_far)
 ```
 
-当 `stop_loss_bps>0` 时，`stop_loss_low` 不得低于 `entry_mid * (1 - hard_stop_drawdown)`，即模型结果只能比既有硬止损更紧，不能更松。`hard_stop_price`、`stop_loss_low` 和 `stop_loss_high` 均向上按 tick 取整，使显示价格不会因舍入放宽风险边界。当 `stop_loss_bps=0` 时，`hard_stop_price=null`，保留模型 MAE 范围，不能错误压成零回撤。有效硬止损存在时验证：
+当 `stop_loss_bps>0` 时，`stop_loss_low` 不得低于 `entry_mid * (1 - hard_stop_drawdown)`，即模型结果只能比既有硬止损更紧，不能更松。`hard_stop_price`、`stop_loss_low` 和 `stop_loss_high` 均向上按 tick 取整，使显示价格不会因舍入放宽风险边界。当 `stop_loss_bps=0` 时，`hard_stop_price=null`，保留模型 MAE 范围，不能错误压成零回撤。
+
+若反解后的市场回撤为零或 tick rounding 导致无法形成正宽度区间，返回 `stop_loss_price.status=SINGLE_POINT`，令 `low=high=entry_mid`，不伪造区间宽度。因此统一不变量为：
 
 ```text
-hard_stop_price <= stop_loss_low <= stop_loss_high < entry_mid
+hard_stop_price <= stop_loss_low <= stop_loss_high <= entry_mid
 ```
 
-若反解后的市场回撤为零导致无法形成正宽度区间，保留显式 zero-adverse prediction 和单点值，不伪造区间宽度。
+存在正回撤且 tick rounding 后仍有宽度时，额外要求 `stop_loss_high < entry_mid`。所有向上取整结果最终以 `entry_mid` 为上界，不能因舍入生成高于参考买入价的止损。
 
 ### 12.5 移动保护参考范围
 
-仅当 `review_policy.take_profit_mode=trailing` 且 `trailing_stop_bps>0` 时，移动保护由模型幅度与现有规则叠加，且必须分开标识：
+仅当 `review_policy.take_profit_mode=trailing`、`take_profit_bps>0` 且 `trailing_stop_bps>0` 时，移动保护由模型幅度与现有规则叠加，且必须分开标识：
 
 ```text
-activation_return_low/high = market_mfe_q50/q90
-activation_low/high = entry_mid * (1 + activation_return_low/high)
+policy_activation_return = take_profit_bps / 10000
+model_peak_return_low/high = market_mfe_q50/q90
+policy_activation_price = entry_mid * (1 + policy_activation_return)
 trailing_drawdown = trailing_stop_bps / 10000
-protective_floor_low/high = entry_mid * (1 + activation_return_low/high - trailing_drawdown)
+
+if model_peak_return_high < policy_activation_return:
+    protective_price.status = MODEL_BELOW_POLICY_ACTIVATION
+    protective_floor_low/high = null
+else:
+    effective_peak_return_low = max(model_peak_return_low, policy_activation_return)
+    effective_peak_return_high = max(model_peak_return_high, policy_activation_return)
+    protective_price.status = AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION
+    protective_floor_low/high = entry_mid * (1 + effective_peak_return_low/high - trailing_drawdown)
 ```
 
-`activation_*` 来源是 M3 MFE 模型；`trailing_drawdown` 来源是既有 review policy，不宣称由模型训练。保护地板使用与当前 `return_bps <= max_runup_bps - trailing_stop_bps` 一致的加法收益语义，不采用乘法近似。若计算结果低于已启用的硬止损价格，则展示值收紧到硬止损价格。`take_profit_mode=fixed` 或 `trailing_stop_bps=0` 时返回 `protective_price.status=NOT_APPLICABLE` 和空价格，不伪造移动保护范围。M4 只展示研究参考范围，不改变 `advisory_list_transition.py` 的真实淘汰/移动止盈判定。
+`model_peak_*` 来源是 M3 MFE 模型；`policy_activation_return` 和 `trailing_drawdown` 来源是冻结 review policy，不宣称由模型训练。保护地板完整复用当前 `take_profit_bps>0`、`max_runup_bps>=take_profit_bps` 和 `return_bps<=max_runup_bps-trailing_stop_bps` 语义，不采用乘法近似。`policy_activation_price` 向上按 tick 取整以避免提前激活；model peak 下/上界向外取整；floor 向上按 tick 取整以避免舍入放宽保护。若 floor 低于已启用的硬止损价格，则收紧到硬止损价格。`take_profit_mode=fixed`、`take_profit_bps=0` 或 `trailing_stop_bps=0` 时返回 `protective_price.status=NOT_APPLICABLE` 和空 floor，不伪造移动保护范围。M4 只展示研究参考范围，不改变 `advisory_list_transition.py` 的真实淘汰/移动止盈判定。
 
 ## 13. Contracts / API 合同
 
@@ -239,15 +278,17 @@ protective_floor_low/high = entry_mid * (1 + activation_return_low/high - traili
       {
         "symbol": "001229.SZ",
         "status": "EXPERIMENTAL_SHADOW",
-        "entry_executable_probability": 0.0,
-        "decision_reference_price": 0.0,
-        "entry_price": {"low": 0.0, "mid": 0.0, "high": 0.0},
-        "take_profit_price": {"low": 0.0, "high": 0.0, "horizon_trade_days": 5},
-        "protective_price": {"status": "AVAILABLE", "activation_low": 0.0, "activation_high": 0.0, "floor_low": 0.0, "floor_high": 0.0},
-        "stop_loss_price": {"low": 0.0, "high": 0.0, "hard_stop_price": 0.0},
+        "projection_condition": "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID",
+        "entry_executable_probability": 0.62,
+        "decision_reference_price": 10.0,
+        "target_raw_price_multiplier": 1.0,
+        "entry_price": {"condition": "ENTRY_EXECUTABLE", "low": 9.9, "mid": 10.0, "high": 10.1},
+        "take_profit_price": {"low": 11.9, "high": 12.5, "horizon_trade_days": 5},
+        "protective_price": {"status": "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION", "policy_activation_price": 11.8, "model_peak_low": 11.9, "model_peak_high": 12.5, "floor_low": 11.2, "floor_high": 11.8},
+        "stop_loss_price": {"low": 9.2, "high": 9.55, "hard_stop_price": 9.2},
         "tick_size": 0.01,
-        "regulatory_price_range": {"low": 0.0, "high": 0.0, "source": "DECISION_TIME_BOARD_ST_RULE"},
-        "review_policy": {"stop_loss_bps": 800, "trailing_stop_bps": 700},
+        "regulatory_price_range": {"status": "LIMITED", "low": 9.0, "high": 11.0, "rule_id": "MAIN_10PCT_V1", "source": "DECISION_TIME_BOARD_ST_RULE"},
+        "review_policy": {"review_policy_sha256": "...", "stop_loss_bps": 800, "take_profit_bps": 1800, "trailing_stop_bps": 700, "take_profit_mode": "trailing"},
         "reason_code": null,
         "message": null
       }
@@ -258,13 +299,13 @@ protective_floor_low/high = entry_mid * (1 + activation_return_low/high - traili
 }
 ```
 
-候选级错误不得导致整个 model-shadow HTTP 失败；但错误必须在候选 `status/reason_code/message` 和后端结构化日志中可见。bundle 或共同输入失败时返回顶层 M4 unavailable。M4 不得删改 M2/M3 字段，不改变既有响应状态码。
+`entry_price.condition=ENTRY_EXECUTABLE` 必须原样显示，表示买入价格区间只在下一交易日可执行这一条件下成立；候选级 `projection_condition=ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID` 进一步声明止盈、止损和移动保护均以实际在预测 `entry_mid` 建仓为条件。即使 executable probability 很低也不得隐藏这些条件；实际建仓价偏离 `entry_mid` 时，不得宣称既有绝对 TP/SL 价格仍然精确适用。候选级错误不得导致整个 model-shadow HTTP 失败；但错误必须在候选 `status/reason_code/message` 和后端结构化日志中可见。bundle、policy identity 或共同输入失败时返回顶层 M4 unavailable。M4 不得删改 M2/M3 字段，不改变既有响应状态码。
 
 ## 14. Contracts / UI 合同
 
 现有 Advisory 页面在 M3 outcome 面板后新增“价格范围（实验影子）”区域：
 
-- 逐候选展示可执行概率、买入、止盈、移动保护、止损和目标持有期限；
+- 逐候选展示可执行概率、明确标记“条件于下一交易日可执行”的买入范围，并标明止盈、移动保护和止损进一步条件于以预测中位价建仓；
 - 显示未复权 CNY、decision reference、tick、硬止损与规则/模型来源标签；
 - 明确显示 `EXPERIMENTAL_SHADOW / UNCALIBRATED` 和学术研究属性；
 - M4 unavailable 时展示 reason code/message，M2/M3 表格仍正常显示；
@@ -292,10 +333,12 @@ M4A 必须保存 test-only 指标：
 - `ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH`
 - `ADVISORY_PRICE_RANGE_LABEL_VARIATION_MISSING`
 - `ADVISORY_PRICE_RANGE_SAMPLE_INSUFFICIENT`
+- `ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE`
 - `ADVISORY_PRICE_RANGE_DECISION_PRICE_UNAVAILABLE`
 - `ADVISORY_PRICE_RANGE_PIT_ATTRIBUTE_UNAVAILABLE`
 - `ADVISORY_PRICE_RANGE_REGULATORY_BOUNDARY_UNAVAILABLE`
 - `ADVISORY_PRICE_RANGE_OUTCOME_IDENTITY_MISMATCH`
+- `ADVISORY_PRICE_RANGE_POLICY_IDENTITY_MISMATCH`
 - `ADVISORY_PRICE_RANGE_PROJECTION_INVALID`
 - `ADVISORY_PRICE_RANGE_INFERENCE_FAILED`
 
@@ -312,16 +355,19 @@ M4A 必须保存 test-only 指标：
 - `backend/services/advisory_model_first/price_range_pipeline.py`
 - `backend/services/advisory_model_first/price_range_runtime_bundle.py`
 - `backend/services/advisory_model_first/price_range_inference.py`
+- `backend/services/advisory_model_first/price_range_regulatory.py`
 - 对应 `backend/tests/advisory_model_first/test_price_range_*.py`
 
 预期修改：
 
 - `backend/services/advisory_model_first/model_inference.py`
+- `backend/services/advisory_model_first/realtime_feature_source.py`
 - `backend/services/advisory_model_first/errors.py`
 - Advisory model-shadow API schema/typing（若当前 router 无显式 schema，则不为形式统一扩大重构）
 - `frontend/src/lib/api/advisory.ts`
 - `frontend/src/app/paper-v2/advisory/page.tsx`
 - `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts`
+- `backend/tests/advisory_model_first/test_realtime_feature_source.py`
 - Advisory model-first nox/session、ownership 和 runtime target catalog 的必要声明
 
 禁止修改 Selection、StrategyPackage、Paper、模拟盘、QE、Historical Range 或共享推理基础设施。若实现发现必须修改这些受保护模块，应停止并报告设计缺口，不得静默扩大范围。
@@ -339,11 +385,11 @@ M4A 必须保存 test-only 指标：
 
 ## 19. Verification Plan / 验证方案
 
-- label：交易日、正常开盘、停牌、一字涨停、缺失行情、成本、复权比值和 typed failure。
+- label：交易日、正常开盘、权威停牌/不可交易负例、一字涨停、无权威原因的行情缺行、成本、复权比值和 typed failure；验证 unavailable 不进入训练。
 - split：逐行等于 M3 membership，purge/test 不漂移。
 - trainer：真实 LightGBM 小矩阵、四个非空 model、单类/少样本 failure、quantile crossing 记录。
 - bundle：原子发布、canonical identity、四模型完整性、parent/outcome exact binding、tamper/readback/path containment。
-- projection：未复权 CNY、法规上下限、tick rounding、quantile monotonic、M3 horizon、MFE/MAE、硬止损不放宽、规则来源标识。
+- projection：同一只读事务的独立未复权 CNY context、既有复权特征零变化、复权到未复权 multiplier、法规规则生效日/ST/上市特殊阶段、tick rounding、quantile monotonic、候选级条件分布标识、冻结 policy hash、M3 horizon、MFE/MAE、硬止损不放宽和完整 trailing 激活语义。
 - isolation：M4 failure 不改变 M2/M3、候选顺序和列表；不跨 Program/包/bundle 套用。
 - boundary：Selection/Paper/模拟盘/QE/Historical Range 零写入和零反向依赖。
 - WSL：环境身份、commit、四头、test 非空、RSS<8GB、小时级 receipt。
@@ -357,18 +403,18 @@ M4A 必须保存 test-only 指标：
 |---|---|
 | F-341 | M3 源码、bundle 和重启后真实 20 候选 readback 状态与蓝图一致 |
 | F-342 | M4 只读取现有 QE 日线文件、M1 candidates/features、M3 split 和 exact parent/outcome bundle 训练 |
-| F-343 | 下一交易日可执行标签完整覆盖停牌、一字涨停、缺失/非法行情且错误可见 |
+| F-343 | 下一交易日可执行标签区分权威负例和 unavailable 数据缺失；停牌、一字涨停、缺失/非法行情均有明确状态 |
 | F-344 | 可执行开盘缺口按无交易成本的真实市场价格比例构建，不把手续费或复权价格冒充 CNY 价格 |
 | F-345 | 1 个 binary 与 3 个 quantile 真实 LightGBM heads 均非空训练和预测，无常数/mock fallback |
 | F-346 | M4 逐行复用 M3 split/purge，test 不参与选择且无 target 行情泄漏 |
 | F-347 | PriceRangeBundle 原子发布、成员 hash/readback 和 parent/outcome exact identity 完整 |
 | F-348 | WSL `rdagent-gpu` 真实训练、峰值 RSS<8GB、目标小时级且不新建缓存/证据平台 |
-| F-349 | 在线只读数据库 decision-cutoff 未复权价格和 PIT 属性；法规范围不读取 target 行情 |
-| F-350 | 买入 q10/q50/q90 完成单调化、法规裁剪和 tick rounding，异常 typed unavailable |
+| F-349 | 在线同一只读事务新增独立未复权价格/PIT context且不改变既有复权特征；法规范围不读取 target 行情 |
+| F-350 | 条件于可执行的买入 q10/q50/q90 完成单调化、法规裁剪和 tick rounding，条件身份不可丢失 |
 | F-351 | M3 holding mode/range 决定目标 horizon，不新建或伪造周期模型 |
-| F-352 | 止盈/止损范围从 M3 净 MFE/MAE 反解双边成本后生成市场价格，且不放宽 Program 硬止损 |
-| F-353 | 移动保护明确区分 MFE 模型激活范围和既有 trailing policy，不修改列表 transition |
-| F-354 | M4 平级子信封逐候选错误可见，失败不阻断 M2/M3/规则荐股且无静默 fallback |
+| F-352 | 止盈/止损范围从 M3 `path_mfe_*`/`path_mae_loss_*` 净幅度反解双边成本后生成市场价格，且不放宽 Program 硬止损 |
+| F-353 | 移动保护完整复用冻结 policy 的 take-profit 激活与 trailing 语义，并校验列表 policy hash，不修改列表 transition |
+| F-354 | M4 平级子信封保留 conditional identity 且逐候选错误可见，失败不阻断 M2/M3/规则荐股 |
 | F-355 | UI 展示实验影子价格范围、来源、单位和错误，不提供订单或模拟盘操作 |
 | F-356 | 单/原生多 Alpha Program 独立 exact binding，不跨包、Program 或 bundle 套用 |
 | F-357 | Selection、StrategyPackage、Paper、模拟盘、QE、Historical Range 零写入和零业务逻辑修改 |
@@ -379,15 +425,15 @@ M4A 必须保存 test-only 指标：
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-341 | M3 blueprint/design ledger | `artifact:advisory-m3-runtime-readback-20260810`; `backend/tests/advisory_model_first/test_outcome_inference.py` | verified | none |
+| F-341 | M3 blueprint/design ledger | `backend/tests/advisory_model_first/test_outcome_inference.py`; validation-receipt: deployed model-shadow HTTP 200 at runtime commit `0ab6dec3...`, target `2026-07-16`, 20 aligned candidates | verified | none |
 | F-342 | planned M4 request/pipeline | `backend/tests/advisory_model_first/test_price_range_contracts.py`; `backend/tests/advisory_model_first/test_price_range_pipeline.py` | design_ready | none |
 | F-343 | planned `price_range_labels.py` executable label | `backend/tests/advisory_model_first/test_price_range_labels.py` | design_ready | none |
 | F-344 | planned open-gap label and price-basis contract | `backend/tests/advisory_model_first/test_price_range_labels.py`; `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
-| F-345 | planned `price_range_training.py` four real heads | `backend/tests/advisory_model_first/test_price_range_training.py`; `artifact:m4-wsl-training-receipt` | design_ready | none |
+| F-345 | planned `price_range_training.py` four real heads | `backend/tests/advisory_model_first/test_price_range_training.py`; planned external WSL training receipt | design_ready | none |
 | F-346 | planned exact M3 split membership reuse | `backend/tests/advisory_model_first/test_price_range_pipeline.py` | design_ready | none |
 | F-347 | planned `price_range_bundle.py` | `backend/tests/advisory_model_first/test_price_range_bundle.py` | design_ready | none |
-| F-348 | planned Windows launcher + WSL entrypoint | `backend/tests/advisory_model_first/test_price_range_pipeline.py`; `artifact:m4-wsl-training-receipt` | design_ready | none |
-| F-349 | planned realtime decision price/PIT attribute projection | `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
+| F-348 | planned Windows launcher + WSL entrypoint | `backend/tests/advisory_model_first/test_price_range_pipeline.py`; planned external WSL training receipt | design_ready | none |
+| F-349 | planned `PriceRangeRealtimeContext` in the existing readonly transaction | `backend/tests/advisory_model_first/test_realtime_feature_source.py`; `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
 | F-350 | planned entry range projection | `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
 | F-351 | planned M3 holding projection | `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
 | F-352 | planned MFE/MAE price conversion | `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
@@ -396,8 +442,8 @@ M4A 必须保存 test-only 指标：
 | F-355 | planned Advisory UI price-range panel | `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | design_ready | none |
 | F-356 | planned exact M4 binding | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | design_ready | none |
 | F-357 | planned changed-file and import-boundary review | `backend/tests/advisory_model_first/test_price_range_boundaries.py` | design_ready | none |
-| F-358 | DESIGN-COMPLIANCE-001 review | `backend/tests/advisory_model_first/test_price_range_boundaries.py`; `artifact:m4-design-compliance-review` | design_ready | none |
-| F-359 | rollout ledger | `artifact:m4-training-merge-restart-readback-ledger` | design_ready | none |
+| F-358 | DESIGN-COMPLIANCE-001 review | `backend/tests/advisory_model_first/test_price_range_boundaries.py`; planned manual compliance receipt | design_ready | none |
+| F-359 | rollout ledger | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py`; planned training/merge/restart/readback ledger | design_ready | none |
 
 ## 22. DESIGN-COMPLIANCE-001 设计审核要求
 
