@@ -174,6 +174,103 @@
     "python -m nox -s validation_module_registry_l0 -> 8 passed, ownership 14/14 mapped",
     "python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2 -> 112/112 passed, warnings=0"
   ],
+  "validation_receipts": [
+    {
+      "changed_files_digest": "0836dae737131bb131dc66196bdb3c513583924b5182429b8be1da7f772c1841",
+      "command": "python -m nox -s simulation_core_l2",
+      "commit": "04b7d1387f99d503005b129821c235424cbf97eb",
+      "environment_identity": {
+        "executable": "python.exe",
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.13.5"
+      },
+      "evidence_kind": "nox",
+      "plan": "simulation_core_l2",
+      "receipt_id": "022ed08f5caac217",
+      "recorded_at": "2026-08-10T09:06:09.852040Z",
+      "result": "502 passed, 1 skipped",
+      "reuse_key": "022ed08f5caac2172b39195a5d92d332e333cb75be04a7313c548f61dafe2ecc",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "changed_files_digest": "0836dae737131bb131dc66196bdb3c513583924b5182429b8be1da7f772c1841",
+      "command": "python -m nox -s l0",
+      "commit": "04b7d1387f99d503005b129821c235424cbf97eb",
+      "environment_identity": {
+        "executable": "python.exe",
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.13.5"
+      },
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "21f96935bc8d37b6",
+      "recorded_at": "2026-08-10T09:06:09.852074Z",
+      "result": "passed, blocking=0",
+      "reuse_key": "21f96935bc8d37b6319d0d5a40761e4acebfd700454b8a32b4164eb5939afb8e",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "changed_files_digest": "0836dae737131bb131dc66196bdb3c513583924b5182429b8be1da7f772c1841",
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "04b7d1387f99d503005b129821c235424cbf97eb",
+      "environment_identity": {
+        "executable": "python.exe",
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.13.5"
+      },
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "b095c36e6c833d55",
+      "recorded_at": "2026-08-10T09:06:09.852095Z",
+      "result": "8 passed, ownership 14/14 mapped",
+      "reuse_key": "b095c36e6c833d5555de5a345fc199c3c9ebd095a9f3d318528e841ec908a565",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "changed_files_digest": "0836dae737131bb131dc66196bdb3c513583924b5182429b8be1da7f772c1841",
+      "command": "pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q",
+      "commit": "04b7d1387f99d503005b129821c235424cbf97eb",
+      "environment_identity": {
+        "executable": "python.exe",
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.13.5"
+      },
+      "evidence_kind": "pytest",
+      "plan": null,
+      "receipt_id": "4358e25ec97a1b3f",
+      "recorded_at": "2026-08-10T09:06:09.852116Z",
+      "result": "274 passed, 1 skipped",
+      "reuse_key": "4358e25ec97a1b3f9db9455fc130d8c55f4572c088dc91cea7f06d2c634d032a",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "changed_files_digest": "0836dae737131bb131dc66196bdb3c513583924b5182429b8be1da7f772c1841",
+      "command": "python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2",
+      "commit": "04b7d1387f99d503005b129821c235424cbf97eb",
+      "environment_identity": {
+        "executable": "python.exe",
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.13.5"
+      },
+      "evidence_kind": "feature_validation",
+      "plan": null,
+      "receipt_id": "d7b282e820244620",
+      "recorded_at": "2026-08-10T09:06:09.852137Z",
+      "result": "112/112 passed, warnings=0",
+      "reuse_key": "d7b282e820244620d2a052293d361b085f9a80fb18716fc9fe33dd607923b167",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
