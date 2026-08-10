@@ -3,7 +3,7 @@
 > 日期：2026-08-10
 > Feature tier：F2
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v2.6
-> 当前阶段：`M4A_TRAINED_M4B_PENDING`
+> 当前阶段：`M4B_SOURCE_IMPLEMENTED_DEPLOYMENT_PENDING`
 > 适用范围：学术研究与历史回测参考，不构成实时投资建议或交易执行
 
 ## 1. Background / 背景
@@ -154,6 +154,46 @@ M4 binding 使用 package/manifest/style/parent bundle/outcome bundle 的 exact 
 
 ## 11. 在线价格数据合同
 
+### 11.1 公司行动 PIT 数据源（M4B 阻断修复）
+
+现有数据库在 M4A 完成时只有按业务日保存的 `market.adj_factor`，没有可证明在
+`decision_as_of_trade_date` 已知的除权除息日程。M4B 禁止读取 target 日
+`adj_factor` 或行情反推公司行动，也禁止在缺少权威输入时把
+`target_raw_price_multiplier` 静默设为 `1`。因此 M4B 增加唯一必要的窄数据源：
+
+- 复用现有 Tushare ingestion engine，注册官方 `dividend` 数据集；按 `ex_date`
+  精确刷新当前/下一交易日，不回建通用历史平台。
+- 新表 `market.dividend` 只保存官方字段：`ts_code/end_date/ann_date/div_proc`、
+  `stk_div/stk_bo_rate/stk_co_rate/cash_div/cash_div_tax`、`record_date/ex_date/pay_date`、
+  `div_listdate/imp_ann_date/base_date/base_share`。
+- `market.dataset_date_refresh_audit` 对目标 `ex_date` 的成功或合法空结果，是该日
+  公司行动集合完整性的现有权威；model-shadow 不触发同步或写库。
+- 历史投影只消费 `imp_ann_date <= decision_as_of_trade_date` 且
+  `div_proc='实施'` 的 target 日记录。`imp_ann_date` 是实施状态的权威知识时间；
+  实施记录缺失该字段时 typed unavailable，不得退回使用更早的预案 `ann_date`。
+  实施公告日在 decision cutoff 之后的记录不得参与投影。
+- 目标日没有可见实施记录且该 `ex_date` 已有成功刷新回执时，乘数精确为 `1`；
+  缺少成功刷新回执时返回
+  `ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE`，不猜测。
+- 有实施记录时，现金分红采用税前 `cash_div_tax`，送转比例采用 `stk_div`；
+  `stk_div` 与 `stk_bo_rate + stk_co_rate` 必须一致（允许数值舍入误差），否则该候选
+  typed unavailable。多个可见实施记录必须能确定性收敛为同一经济动作，否则
+  typed unavailable。
+
+公司行动乘数使用 decision 未复权收盘价计算：
+
+```text
+share_ratio = stk_div
+cash_per_share = cash_div_tax
+target_raw_price_multiplier =
+    (decision_raw_close - cash_per_share) /
+    (decision_raw_close * (1 + share_ratio))
+```
+
+乘数必须是有限正数。该表和刷新任务仅服务于 M4B 未复权 CNY 投影，不改变
+Selection、Paper、模拟盘、QE 或策略包的数据合同。迁移必须先在 DEV 执行和读回；
+生产 DDL、默认 schedule DML 和首次目标日同步仍分别等待明确授权。
+
 在线转换扩展现有 Advisory-only `PostgresRealtimeFeatureSource.load()`：在已有 `REPEATABLE READ / readonly` 单事务中增加 `PriceRangeRealtimeContext`，但保持既有 `candidate_daily/candidate_static/market_daily` 的复权公式、103 特征和 M2/M3 输入字节语义不变。禁止从当前 `candidate_daily.close` 取绝对价格，因为该列已经乘以复权因子。
 
 `PriceRangeRealtimeContext` 对每个候选至少包含：
@@ -165,11 +205,13 @@ M4 binding 使用 package/manifest/style/parent bundle/outcome bundle 的 exact 
 - target date 对应的交易日历日期，但不读取该日行情；
 - Program `review_policy` 的 `stop_loss_bps/take_profit_bps/trailing_stop_bps/take_profit_mode` 以及 `review_policy_sha256`。
 
-PIT ST 状态只读消费现有生产 live ST PIT key 对应的 `market.stock_universe_pit_state/stock_universe_pit_events`：key 必须通过既有 `require_live_st_pit_universe_key`，state 必须已存在、`status=ready`、`dirty=false` 且只需覆盖 decision date。目标状态由纯函数使用“knowledge date/timestamp 不晚于 decision date、action_date 不晚于 target date”的最新 `st_negative/st_restore` 事件向前投影，即“target 生效、decision 时已知”；不得要求 state 或行情已覆盖未来 target date。不得触发 `ensure/rebuild`，不得读取 QE/backtest PIT 文件，也不得把“无行”猜成非 ST。decision-cutoff 状态不完整、事件知识时间/语义不明确或公司行动参考价无法确定时，只关闭对应候选的 M4 价格范围并返回 typed reason，不阻断 M2/M3。
+PIT ST 状态只读消费现有生产 live ST PIT key 对应的 `market.stock_universe_pit_state/stock_universe_pit_events`：key 必须通过既有 `require_live_st_pit_universe_key`，state 必须已存在、`status=ready`、`dirty=false` 且只需覆盖 decision date。目标状态由纯函数使用“knowledge date/timestamp 不晚于 decision date、action_date 不晚于 target date”的最新 `st_negative/st_restore` 事件向前投影，即“target 生效、decision 时已知”；不得要求 state 或行情已覆盖未来 target date。不得触发 `ensure/rebuild`，不得读取 QE/backtest PIT 文件。只有 state `ready/dirty=false` 且覆盖 decision date 时，事件账本才按闭世界权威解释：生成器会为窗口起点已处于 ST 的股票写入 seed `st_negative` 事件，因此对有效候选的“无可见 ST 事件”是权威非 ST，不是行情猜测。decision-cutoff 状态不完整、事件知识时间/语义不明确或公司行动参考价无法确定时，只关闭对应候选的 M4 价格范围并返回 typed reason，不阻断 M2/M3。
 
 `model_shadow` 必须从目标 recommendation list 的所有候选 `evidence_json.review_policy_sha256` 读取冻结 policy identity：候选 hash 必须非空且唯一，并精确等于当前 Program `review_policy_sha256`，随后才允许使用当前 Program 的完整 policy 值。hash 不一致时整个 `price_range` 子信封返回 `ADVISORY_PRICE_RANGE_POLICY_IDENTITY_MISMATCH`；不得用新 policy 解释旧列表，也不要求新增历史 policy 表或 DDL。
 
 下一交易日法规价格边界由新的 Advisory-only `price_range_regulatory.py` 使用 decision time 已知的板块、上市日、target ST 状态、规则生效日期和确定性交易所规则计算；不得复用 Selection `price_guidance.py` 中忽略 ST、IPO 特殊阶段和规则生效日期的简化 `_limit_pct()`。法规参考价与模型转换共享 `decision_raw_close * target_raw_price_multiplier`，不能一个使用除权前价格、另一个使用除权后价格。不得通过读取 target date 的真实涨跌停价、开盘价或行情行来生成范围。属性不完整、价格口径不明或无法确定 tick 时，返回 typed M4 unavailable。
+
+规则生效日期必须显式固化：科创板和 2020-08-24 起的创业板前五个交易日无涨跌幅限制；创业板改革前的上市首日使用旧 44%/36% 边界，不得回填新规；2023-04-10 起的注册制主板前五日无限制，更早主板上市首日使用旧 44%/36% 边界；北交所上市首日无限制，随后为 30%。有涨跌幅限制的价格按四舍五入取至 `tick_size`；若限价与法规参考价的差值低于一个 tick，按参考价增减一个 tick 重算，价格不得低于一个 tick。
 
 法规解析结果是显式联合类型：`LIMITED(low, high, rule_id)` 或 `NO_DAILY_LIMIT(rule_id)`。已确定处于合法无涨跌幅限制阶段时，API 的 regulatory low/high 为 `null`、status 为 `NO_DAILY_LIMIT`，买入区间只验证有限、正数和 tick，不伪造价格上下限；只有规则状态无法确定才返回 unavailable。
 
@@ -337,6 +379,7 @@ M4A 必须保存 test-only 指标：
 - `ADVISORY_PRICE_RANGE_DECISION_PRICE_UNAVAILABLE`
 - `ADVISORY_PRICE_RANGE_PIT_ATTRIBUTE_UNAVAILABLE`
 - `ADVISORY_PRICE_RANGE_REGULATORY_BOUNDARY_UNAVAILABLE`
+- `ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE`
 - `ADVISORY_PRICE_RANGE_OUTCOME_IDENTITY_MISMATCH`
 - `ADVISORY_PRICE_RANGE_POLICY_IDENTITY_MISMATCH`
 - `ADVISORY_PRICE_RANGE_PROJECTION_INVALID`
@@ -356,6 +399,7 @@ M4A 必须保存 test-only 指标：
 - `backend/services/advisory_model_first/price_range_runtime_bundle.py`
 - `backend/services/advisory_model_first/price_range_inference.py`
 - `backend/services/advisory_model_first/price_range_regulatory.py`
+- `backend/db/migrations/add_advisory_price_range_dividend_20260810.sql`
 - 对应 `backend/tests/advisory_model_first/test_price_range_*.py`
 
 预期修改：
@@ -363,6 +407,9 @@ M4A 必须保存 test-only 指标：
 - `backend/services/advisory_model_first/model_inference.py`
 - `backend/services/advisory_model_first/realtime_feature_source.py`
 - `backend/services/advisory_model_first/errors.py`
+- `backend/services/tushare_dataset_specs.py`
+- `backend/db/init_tushare_schedules.py`
+- `backend/ingestion/tdx_scheduler.py`（仅增加 `dividend` 目标日刷新路由）
 - Advisory model-shadow API schema/typing（若当前 router 无显式 schema，则不为形式统一扩大重构）
 - `frontend/src/lib/api/advisory.ts`
 - `frontend/src/app/paper-v2/advisory/page.tsx`
@@ -419,7 +466,7 @@ M4A 必须保存 test-only 指标：
 | F-356 | 单/原生多 Alpha Program 独立 exact binding，不跨包、Program 或 bundle 套用 |
 | F-357 | Selection、StrategyPackage、Paper、模拟盘、QE、Historical Range 零写入和零业务逻辑修改 |
 | F-358 | 无简化版、placeholder、静默错误、业务语义漂移、角色审批、二次准入或未经确认门禁 |
-| F-359 | 无 DDL/DML；训练、源码合入、binding、用户重启和 deployed readback 分开报告 |
+| F-359 | dividend 迁移、默认 schedule DML、首次同步、源码合入、binding、用户重启和 deployed readback 分开授权与报告 |
 
 ## 21. Design Acceptance Matrix
 
@@ -428,22 +475,22 @@ M4A 必须保存 test-only 指标：
 | F-341 | M3 blueprint/design ledger | `backend/tests/advisory_model_first/test_outcome_inference.py`; validation-receipt: deployed model-shadow HTTP 200 at runtime commit `0ab6dec3...`, target `2026-07-16`, 20 aligned candidates | verified | none |
 | F-342 | `price_range_contracts.py`; `price_range_pipeline.py`; exact parent/outcome readback | `backend/tests/advisory_model_first/test_price_range_contracts.py`; `backend/tests/advisory_model_first/test_price_range_pipeline.py` | verified | none |
 | F-343 | `price_range_labels.py` tri-state label | `backend/tests/advisory_model_first/test_price_range_labels.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_runs/advprreq_2d826a7b2704137bf3a60d9d/price_range_label_coverage.json` | verified | none |
-| F-344 | no-cost adjusted open-gap label; planned M4B unadjusted CNY price basis | `backend/tests/advisory_model_first/test_price_range_labels.py`; planned `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
+| F-344 | no-cost adjusted open-gap label; `price_range_inference.py` unadjusted CNY projection | `backend/tests/advisory_model_first/test_price_range_labels.py`; `backend/tests/advisory_model_first/test_price_range_inference.py` | verified | none |
 | F-345 | `price_range_training.py` exact four real heads | `backend/tests/advisory_model_first/test_price_range_training.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_bundles/1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3/manifest.json` | verified | none |
 | F-346 | exact M3 226/25/50/25/80 split reuse | `backend/tests/advisory_model_first/test_price_range_pipeline.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_bundles/1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3/split.json` | verified | none |
 | F-347 | `price_range_bundle.py` atomic publish/hash/readback | `backend/tests/advisory_model_first/test_price_range_bundle.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_bundles/1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3/manifest.json` | verified | none |
 | F-348 | Windows request/launcher + WSL entrypoint + date-batched temporary Parquet | `backend/tests/advisory_model_first/test_price_range_pipeline.py`; artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_runs/advprreq_2d826a7b2704137bf3a60d9d/price_range_training_receipt.json` | verified | none |
-| F-349 | planned `PriceRangeRealtimeContext` in the existing readonly transaction | `backend/tests/advisory_model_first/test_realtime_feature_source.py`; `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
-| F-350 | planned entry range projection | `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
-| F-351 | planned M3 holding projection | `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
-| F-352 | planned MFE/MAE price conversion | `backend/tests/advisory_model_first/test_price_range_inference.py` | design_ready | none |
-| F-353 | planned protective overlay | `backend/tests/advisory_model_first/test_price_range_inference.py`; `backend/tests/advisory_model_first/test_price_range_boundaries.py` | design_ready | none |
-| F-354 | planned `model_inference.py` isolated child envelope | `backend/tests/advisory_model_first/test_model_inference.py`; `backend/tests/advisory_model_first/test_model_shadow_api.py` | design_ready | none |
-| F-355 | planned Advisory UI price-range panel | `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | design_ready | none |
-| F-356 | planned exact M4 binding | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | design_ready | none |
-| F-357 | M4A isolated `advisory_model_first` files; planned M4B import-boundary review | `backend/tests/advisory_model_first/test_price_range_boundaries.py` | design_ready | none |
-| F-358 | M4A DESIGN-COMPLIANCE-001 reviewed; full M4 review after M4B | `backend/tests/advisory_model_first/test_price_range_boundaries.py`; M4A module review `132 passed, 1 skipped`; planned final compliance receipt | design_ready | none |
-| F-359 | separate source/training/runtime ledger | artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_runs/advprreq_2d826a7b2704137bf3a60d9d/price_range_training_receipt.json`; planned `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | design_ready | none |
+| F-349 | `PriceRangeRealtimeContext`; decision raw close + live ST PIT + dividend ex-date audit in existing readonly transaction | `backend/tests/advisory_model_first/test_realtime_feature_source.py`; `backend/tests/advisory_model_first/test_price_range_inference.py` | verified | none |
+| F-350 | entry q10/q50/q90 monotonic projection, regulatory clipping and tick rounding | `backend/tests/advisory_model_first/test_price_range_inference.py` | verified | none |
+| F-351 | exact M3 holding mode/range horizon selection | `backend/tests/advisory_model_first/test_price_range_inference.py` | verified | none |
+| F-352 | M3 MFE/MAE net-to-market conversion with hard stop bound | `backend/tests/advisory_model_first/test_price_range_inference.py` | verified | none |
+| F-353 | trailing activation/floor overlay + frozen recommendation-list policy hash | `backend/tests/advisory_model_first/test_price_range_inference.py`; `backend/tests/advisory_model_first/test_model_inference.py` | verified | none |
+| F-354 | `model_inference.py` isolated `price_range` child envelope and candidate-level typed failures | `backend/tests/advisory_model_first/test_model_inference.py`; `backend/tests/advisory_model_first/test_model_shadow_api.py` | verified | none |
+| F-355 | Advisory experimental price-range panel, bundle source, unit, unavailable state and three-viewport overflow coverage | `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts`; targeted Playwright `6 passed`; TypeScript `--noEmit` passed | verified | none |
+| F-356 | `price_range_runtime_bundle.py` exact package/style/parent/outcome binding | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | verified | none |
+| F-357 | Advisory-only projection; protected-module boundary unchanged | `backend/tests/advisory_model_first/test_price_range_boundaries.py`; `python scripts/aistock_module_ownership_scan.py --changed-only --fail-on-unmapped --fail-on-ambiguous` | verified | none |
+| F-358 | DESIGN-COMPLIANCE-001 source review | `python -m nox -s advisory_modeling_backend`: 145 passed, 1 skipped; `python -m nox -s data_sync_autonomy_backend`: 156 passed; `python -m nox -s paper_v2_backend`: 1051 passed, 2 skipped, 2 xfailed; `python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1` | verified | none |
+| F-359 | separate training/source/database/binding/restart/readback ledger | `backend/db/migrations/add_advisory_price_range_dividend_20260810.sql`; `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py`; section 25 production impact ledger | verified | none |
 
 ## 22. DESIGN-COMPLIANCE-001 设计审核要求
 
@@ -481,12 +528,12 @@ M4A 必须保存 test-only 指标：
 以下字段只分别陈述交付影响，不是应用运行时审批：
 
 ```text
-production_ddl_gate = noop
-production_dml_gate = noop
+production_ddl_gate = pending_explicit_authorization_after_dev_verification
+production_dml_gate = pending_explicit_authorization_for_schedule_and_target_date_sync
 production_backend_dependency_gate = noop
 production_frontend_dependency_gate = noop
 backend_restart = user-owned; only relevant after M4B source merge
 runtime_activation = exact M4 binding; reported separately from training, source merge and restart
 ```
 
-若实际实现确实需要依赖清单或数据库变更，必须停止并更新设计、说明真实必要性并取得用户确认；不得静默修改上述 `noop`，也不得据此发明应用内审批。
+本次必要数据库变更已经在 11.1 节和上述影响字段中显式登记；源码实现不等于授权执行 DEV/生产 DDL、schedule DML 或首次同步。不得据此发明应用内审批。

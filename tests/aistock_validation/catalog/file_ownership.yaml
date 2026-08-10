@@ -769,6 +769,7 @@ rules:
       - backend/services/tushare_sync.py
       - backend/services/tushare_dataset_specs.py
       - backend/tests/test_tushare_sync_engine.py
+      - backend/tests/test_local_data_management_facade.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2, selection_center]
     layer: data_pipeline

@@ -329,6 +329,61 @@ export type AdvisoryOutcomeShadow = {
   message: string | null;
 };
 
+export type AdvisoryPriceBand = {
+  low: number;
+  high: number;
+};
+
+export type AdvisoryPriceRangeCandidate = {
+  symbol: string;
+  status: "EXPERIMENTAL_SHADOW" | "PRICE_RANGE_UNAVAILABLE";
+  projection_condition: "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID";
+  entry_executable_probability: number | null;
+  decision_reference_price: number | null;
+  target_raw_price_multiplier: number | null;
+  entry_price: ({ condition: "ENTRY_EXECUTABLE"; mid: number } & AdvisoryPriceBand) | null;
+  take_profit_price: (AdvisoryPriceBand & { horizon_trade_days: 1 | 3 | 5 | 10 | 20 }) | null;
+  protective_price: {
+    status: "NOT_APPLICABLE" | "MODEL_BELOW_POLICY_ACTIVATION" | "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION";
+    policy_activation_price: number | null;
+    model_peak_low: number | null;
+    model_peak_high: number | null;
+    floor_low: number | null;
+    floor_high: number | null;
+  } | null;
+  stop_loss_price: (AdvisoryPriceBand & { status: "AVAILABLE" | "SINGLE_POINT"; hard_stop_price: number | null }) | null;
+  tick_size: number | null;
+  regulatory_price_range: {
+    status: "LIMITED" | "NO_DAILY_LIMIT";
+    low: number | null;
+    high: number | null;
+    rule_id: string;
+    source: "DECISION_TIME_BOARD_ST_RULE";
+  } | null;
+  review_policy: {
+    review_policy_sha256: string;
+    stop_loss_bps: number;
+    take_profit_bps: number;
+    trailing_stop_bps: number;
+    take_profit_mode: string;
+  } | null;
+  reason_code: string | null;
+  message: string | null;
+};
+
+export type AdvisoryPriceRangeShadow = {
+  status: "EXPERIMENTAL_SHADOW" | "PRICE_RANGE_UNAVAILABLE";
+  calibration_state: "UNCALIBRATED";
+  price_range_bundle_id: string | null;
+  parent_bundle_id: string | null;
+  outcome_bundle_id: string | null;
+  model_version: string | null;
+  price_basis: "UNADJUSTED_CNY_DECISION_CLOSE";
+  candidates: AdvisoryPriceRangeCandidate[];
+  reason_code: string | null;
+  message: string | null;
+};
+
 export type AdvisoryModelShadowResponse = {
   status: "EXPERIMENTAL_SHADOW" | "MODEL_UNAVAILABLE";
   calibration_state: "UNCALIBRATED";
@@ -348,6 +403,7 @@ export type AdvisoryModelShadowResponse = {
   baselines: JsonObject;
   hmm_unavailable: JsonObject[];
   outcome: AdvisoryOutcomeShadow;
+  price_range: AdvisoryPriceRangeShadow;
   reason_code: string | null;
   message: string | null;
 };

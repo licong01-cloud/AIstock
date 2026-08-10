@@ -148,6 +148,10 @@ function fmtPrice(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "-";
 }
 
+function fmtPriceBand(value: { low: number; high: number } | null | undefined): string {
+  return value ? `${fmtPrice(value.low)} - ${fmtPrice(value.high)}` : "-";
+}
+
 function short(value: unknown, len = 10): string {
   const text = String(value ?? "-");
   return text.length > len ? `${text.slice(0, len)}...` : text;
@@ -1965,6 +1969,58 @@ function AdvisoryPageContent() {
                       </table>
                     </div>
                   </>
+                ) : null}
+              </div>
+              <div style={{ marginTop: 16 }} data-testid="advisory-price-range-shadow">
+                <div className="pv2-card-head">
+                  <div>
+                    <div className="pv2-kicker">价格范围（实验影子）</div>
+                    <h3>买入、止盈、保护与止损参考</h3>
+                  </div>
+                  <div className="pv2-row-actions">
+                    <span className={`pv2-badge ${modelShadow.price_range?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
+                      {modelShadow.price_range?.status || "PRICE_RANGE_UNAVAILABLE"}
+                    </span>
+                    <span className="pv2-badge pv2-badge-neutral">
+                      {modelShadow.price_range?.calibration_state || "UNCALIBRATED"}
+                    </span>
+                  </div>
+                </div>
+                <div className="pv2-muted" data-testid="advisory-price-range-basis">
+                  未复权 CNY；仅供学术研究。买入范围条件于下一交易日可执行，止盈、保护和止损进一步条件于按预测中位价建仓。
+                </div>
+                <div className="pv2-muted" data-testid="advisory-price-range-source">
+                  M4 {short(modelShadow.price_range?.price_range_bundle_id, 14)} · M2 {short(modelShadow.price_range?.parent_bundle_id, 14)} · M3 {short(modelShadow.price_range?.outcome_bundle_id, 14)} · {modelShadow.price_range?.price_basis || "UNADJUSTED_CNY_DECISION_CLOSE"}
+                </div>
+                {modelShadow.price_range?.status !== "EXPERIMENTAL_SHADOW" ? (
+                  <div data-testid="advisory-price-range-unavailable">
+                    <strong>{modelShadow.price_range?.reason_code || "ADVISORY_PRICE_RANGE_RESPONSE_MISSING"}</strong>
+                    <span className="pv2-muted"> {modelShadow.price_range?.message || "价格范围模型响应不可用"}</span>
+                  </div>
+                ) : null}
+                {modelShadow.price_range?.status === "EXPERIMENTAL_SHADOW" ? (
+                  <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
+                    <table className="pv2-table" data-testid="advisory-price-range-table">
+                      <thead>
+                        <tr><th>股票</th><th>可执行概率</th><th>决策参考价</th><th>条件买入范围</th><th>止盈参考</th><th>移动保护</th><th>止损参考 / 硬边界</th><th>法规范围</th><th>状态</th></tr>
+                      </thead>
+                      <tbody>
+                        {modelShadow.price_range.candidates.map((candidate) => (
+                          <tr key={candidate.symbol} data-testid="advisory-price-range-row">
+                            <td>{candidate.symbol}</td>
+                            <td>{fmtPct(candidate.entry_executable_probability)}</td>
+                            <td>{fmtPrice(candidate.decision_reference_price)}</td>
+                            <td>{candidate.entry_price ? `${fmtPriceBand(candidate.entry_price)}（中位 ${fmtPrice(candidate.entry_price.mid)}）` : "-"}</td>
+                            <td>{candidate.take_profit_price ? `${fmtPriceBand(candidate.take_profit_price)} / ${candidate.take_profit_price.horizon_trade_days}日` : "-"}</td>
+                            <td>{candidate.protective_price?.status === "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION" ? `${fmtPriceBand({ low: candidate.protective_price.floor_low!, high: candidate.protective_price.floor_high! })}（激活 ${fmtPrice(candidate.protective_price.policy_activation_price)}）` : candidate.protective_price?.status || "-"}</td>
+                            <td>{candidate.stop_loss_price ? `${fmtPriceBand(candidate.stop_loss_price)} / ${fmtPrice(candidate.stop_loss_price.hard_stop_price)}` : "-"}</td>
+                            <td>{candidate.regulatory_price_range?.status === "LIMITED" ? `${fmtPrice(candidate.regulatory_price_range.low)} - ${fmtPrice(candidate.regulatory_price_range.high)} (${candidate.regulatory_price_range.rule_id})` : candidate.regulatory_price_range ? `${candidate.regulatory_price_range.status} (${candidate.regulatory_price_range.rule_id})` : "-"}</td>
+                            <td>{candidate.status === "EXPERIMENTAL_SHADOW" ? "实验影子" : <><strong>{candidate.reason_code || "PRICE_RANGE_UNAVAILABLE"}</strong><br /><span className="pv2-muted">{candidate.message || "-"}</span></>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 ) : null}
               </div>
             </>

@@ -44,6 +44,45 @@ function outcomeCandidate(symbol: string) {
   };
 }
 
+function priceRangeCandidate(symbol: string) {
+  return {
+    symbol,
+    status: "EXPERIMENTAL_SHADOW",
+    projection_condition: "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID",
+    entry_executable_probability: 0.62,
+    decision_reference_price: 10,
+    target_raw_price_multiplier: 1,
+    entry_price: { condition: "ENTRY_EXECUTABLE", low: 9.9, mid: 10, high: 10.1 },
+    take_profit_price: { low: 11.1, high: 12.1, horizon_trade_days: 5 },
+    protective_price: {
+      status: "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION",
+      policy_activation_price: 11.8,
+      model_peak_low: 11.1,
+      model_peak_high: 12.1,
+      floor_low: 10.4,
+      floor_high: 11.4,
+    },
+    stop_loss_price: { status: "AVAILABLE", low: 9.2, high: 9.6, hard_stop_price: 9.2 },
+    tick_size: 0.01,
+    regulatory_price_range: {
+      status: "LIMITED",
+      low: 9,
+      high: 11,
+      rule_id: "MAIN_10PCT_V1",
+      source: "DECISION_TIME_BOARD_ST_RULE",
+    },
+    review_policy: {
+      review_policy_sha256: "review_hash",
+      stop_loss_bps: 800,
+      take_profit_bps: 1800,
+      trailing_stop_bps: 700,
+      take_profit_mode: "trailing",
+    },
+    reason_code: null,
+    message: null,
+  };
+}
+
 const program = {
   program_id: PROGRAM_ID,
   program_name: "codex_smoke_20260604",
@@ -618,6 +657,18 @@ async function mockAdvisoryApis(page: Page, options: {
             reason_code: "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
             message: "parent model unavailable",
           },
+          price_range: {
+            status: "PRICE_RANGE_UNAVAILABLE",
+            calibration_state: "UNCALIBRATED",
+            price_range_bundle_id: null,
+            parent_bundle_id: null,
+            outcome_bundle_id: null,
+            model_version: null,
+            price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+            candidates: [],
+            reason_code: "ADVISORY_PRICE_RANGE_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+            message: "parent model unavailable",
+          },
           reason_code: "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
           message: "no exact bundle",
         });
@@ -672,6 +723,18 @@ async function mockAdvisoryApis(page: Page, options: {
           model_version: "advoutreq_ui",
           horizons: OUTCOME_HORIZONS,
           candidates: [outcomeCandidate("000002.SZ"), outcomeCandidate("000001.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        price_range: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "UNCALIBRATED",
+          price_range_bundle_id: "price_range_bundle_ui",
+          parent_bundle_id: "bundle_ui",
+          outcome_bundle_id: "outcome_bundle_ui",
+          model_version: "advprreq_ui",
+          price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          candidates: [priceRangeCandidate("000002.SZ"), priceRangeCandidate("000001.SZ")],
           reason_code: null,
           message: null,
         },
@@ -916,6 +979,14 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("3-10日（5日）");
   await page.getByTestId("advisory-outcome-horizon-20").click();
   await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("2.0%");
+  await expect(page.getByTestId("advisory-price-range-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+  await expect(page.getByTestId("advisory-price-range-basis")).toContainText("未复权 CNY");
+  await expect(page.getByTestId("advisory-price-range-source")).toContainText("price_range_bu...");
+  await expect(page.getByTestId("advisory-price-range-source")).toContainText("outcome_bundle...");
+  await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr")).toHaveCount(2);
+  await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr").first()).toContainText("9.90 - 10.10");
+  await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr").first()).toContainText("9.20");
+  await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr").first()).toContainText("MAIN_10PCT_V1");
 
   await page.getByTestId(`advisory-preview-${PROGRAM_ID}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/reviews/preview`)).length).toBe(1);
