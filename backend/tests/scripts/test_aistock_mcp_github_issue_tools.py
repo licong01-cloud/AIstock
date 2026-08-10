@@ -4,6 +4,7 @@ import importlib
 import json
 import sys
 import types
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -211,6 +212,106 @@ def test_report_bug_allocates_without_live_github_scan(mcp_module, monkeypatch: 
     assert result["allocation_mode"] == "local_registry_only_no_live_github_scan"
     assert result["github_sync_required"] is True
     assert result["preferred_tool"] == "mcp_github_issue_create"
+
+
+def test_mcp_allocator_ignores_stale_worktrees_and_never_scans_github(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Canonical filenames are sufficient allocation evidence; the deliberately
+    # invalid body proves the hot path does not open every historical JSON.
+    canonical = _bugs_dir(tmp_path) / "20260810_BUG-007-current-registry-high-water.json"
+    canonical.write_text("{not parsed on the filename fast path\n", encoding="utf-8")
+    stale = (
+        tmp_path
+        / "worktrees"
+        / "stale-task"
+        / "tests"
+        / "aistock_validation"
+        / "bugs"
+        / "20260810_BUG-999-stale.json"
+    )
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text('{"bug_id":"BUG-999"}\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        mcp_module,
+        "_github_issue_client_from_env",
+        lambda: pytest.fail("BUG id allocation must not perform live GitHub inventory reads"),
+    )
+
+    assert mcp_module._next_bug_id() == "BUG-008"
+
+
+def test_mcp_allocator_is_unique_under_concurrent_threads(mcp_module):
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        bug_ids = list(pool.map(lambda _index: mcp_module._next_bug_id(), range(8)))
+
+    assert sorted(bug_ids) == [f"BUG-{number:03d}" for number in range(1, 9)]
+    assert len(set(bug_ids)) == 8
+
+
+def test_mcp_allocator_lock_reclaims_dead_owner(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    lock_path = tmp_path / "bug-id-allocator.lock"
+    lock_path.write_text("999999\n2026-01-01T00:00:00Z\n", encoding="ascii")
+    monkeypatch.setenv("AISTOCK_BUG_ID_LOCK_PATH", str(lock_path))
+    monkeypatch.setattr(mcp_module, "_process_id_is_alive", lambda _pid: False)
+
+    with mcp_module._BugIdAllocatorLock():
+        assert lock_path.read_text(encoding="ascii").splitlines()[0] == str(mcp_module.os.getpid())
+
+    assert not lock_path.exists()
+
+
+def test_github_issue_create_preserves_local_record_when_remote_outcome_is_unknown(
+    mcp_module,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls = {"create": 0}
+
+    class FailingGitHubClient:
+        def create_issue(self, *, title: str, body: str, labels: list[str]) -> dict[str, Any]:
+            calls["create"] += 1
+            registry_files = [path for path in mcp_module.BUG_ROOT.glob("*.json") if not path.name.startswith(".")]
+            assert len(registry_files) == 1
+            assert title.startswith("[BUG-001]")
+            assert "aistock-registry-path" in body
+            assert "aistock:bug" in labels
+            raise RuntimeError('Post "https://api.github.com/repos/owner/repo/issues": EOF')
+
+    monkeypatch.setattr(mcp_module, "_github_issue_client_from_env", lambda: FailingGitHubClient())
+
+    with pytest.raises(RuntimeError, match="EOF"):
+        mcp_module.mcp_github_issue_create(
+            title="Unknown remote create outcome",
+            body="The local registry must be durable before GitHub create.",
+            severity="P1",
+            module="validation_mcp",
+            create_github=True,
+        )
+
+    registry_files = [path for path in mcp_module.BUG_ROOT.glob("*.json") if not path.name.startswith(".")]
+    payload = json.loads(registry_files[0].read_text(encoding="utf-8"))
+    reservation = mcp_module._bug_id_reservation_root() / "BUG-001.json"
+    assert payload["github_sync_state"] == "create_outcome_unknown"
+    assert payload["events"][-1]["action"] == "github_issue_create_outcome_unknown"
+    assert json.loads(reservation.read_text(encoding="utf-8"))["status"] == "github_create_outcome_unknown"
+
+    retry = mcp_module.mcp_github_issue_create(
+        title="Unknown remote create outcome",
+        body="The local registry must be durable before GitHub create.",
+        severity="P1",
+        module="validation_mcp",
+        create_github=True,
+    )
+    assert retry["deduplicated"] is True
+    assert retry["existing"]["github_sync_state"] == "create_outcome_unknown"
+    assert calls["create"] == 1
 
 
 def test_github_issue_create_blocks_canonical_root_before_allocation_or_github(

@@ -571,6 +571,8 @@ def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
     monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
+    monkeypatch.setattr(workflow, "_github_bug_issue_by_number", lambda _issue_number, **_kwargs: (None, []))
     submit_scope_root = tmp_path / "submit-scope"
     monkeypatch.setattr(workflow, "_submit_bug_file_root", lambda: submit_scope_root)
     for relative_path in (
@@ -3352,11 +3354,21 @@ def test_doctor_warns_when_bug_allocator_lags_github(
     monkeypatch.setattr(workflow, "_run_command", lambda *_args, **_kwargs: {"ok": True, "stdout": "{}", "stderr": ""})
     monkeypatch.setattr(
         workflow,
-        "_scan_github_bug_ids",
-        lambda **_kwargs: (
-            [{"bug_id": "BUG-217", "number": 217, "kind": "github_issue", "source": "https://github.example/issues/588"}],
+        "_github_bug_issue_for_id",
+        lambda bug_id, **_kwargs: (
+            {
+                "bug_id": "BUG-217",
+                "number": 217,
+                "kind": "github_issue",
+                "source": "https://github.example/issues/588",
+                "github_issue_number": 588,
+                "github_state": "OPEN",
+                "title": "BUG-217 existing",
+            },
             [],
-        ),
+        )
+        if bug_id == "BUG-217"
+        else (None, []),
     )
     monkeypatch.setattr(
         workflow.code_intelligence,
@@ -3377,6 +3389,7 @@ def test_doctor_warns_when_bug_allocator_lags_github(
     assert payload["workflow_gate"] == "warning"
     assert payload["bug_id_allocation"]["next_number"] == 218
     assert payload["bug_id_allocation"]["github_max_number"] == 217
+    assert payload["bug_id_allocation"]["github_lookup_mode"] == "exact_candidate"
     assert any("bug id allocation" in warning for warning in payload["warnings"])
     assert compact["bug_id_allocation"]["next_number"] == 218
 
@@ -4814,18 +4827,19 @@ def test_submit_bug_allocator_uses_reservations_and_ignores_stale_worktrees(
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
 
 
-def test_submit_bug_allocator_scans_github_only_bug_ids(
+def test_submit_bug_allocator_skips_exact_github_candidate_collision(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 216})
     monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
-    monkeypatch.setattr(
-        workflow,
-        "_scan_github_bug_ids",
-        lambda **_kwargs: (
-            [
+    looked_up: list[str] = []
+
+    def exact_lookup(bug_id: str, **_kwargs: object):
+        looked_up.append(bug_id)
+        if bug_id == "BUG-217":
+            return (
                 {
                     "bug_id": "BUG-217",
                     "number": 217,
@@ -4833,10 +4847,17 @@ def test_submit_bug_allocator_scans_github_only_bug_ids(
                     "source": "https://github.example/issues/588",
                     "github_issue_number": 588,
                     "github_state": "OPEN",
-                }
-            ],
-            [],
-        ),
+                    "title": "BUG-217 P1: Different existing issue",
+                },
+                [],
+            )
+        return None, []
+
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", exact_lookup)
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: pytest.fail("automatic allocation must not run a full GitHub issue scan"),
     )
 
     payload = workflow.build_submit_bug_plan(
@@ -4864,16 +4885,22 @@ def test_submit_bug_allocator_scans_github_only_bug_ids(
 
     assert payload["bug_id"] == "BUG-218"
     assert payload["bug_id_allocation"]["global_max_number"] == 217
-    assert payload["bug_id_allocation"]["warnings"]
+    assert payload["bug_id_allocation"]["github_lookup_mode"] == "exact_candidate"
+    assert payload["bug_id_allocation"]["github_scanned"] is False
+    assert looked_up == ["BUG-217", "BUG-218"]
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 218
 
 
-def test_reserve_bug_id_performs_github_scan_before_allocator_lock(
+def test_reserve_bug_id_performs_exact_github_lookup_after_allocator_lock(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = {"locked": False}
     original_registry_scan = workflow._scan_bug_registry_ids
+    _write_json(
+        workflow.BUGS_ROOT / ".bug_id_allocator.json",
+        {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 216},
+    )
 
     class FakeLock:
         def __enter__(self):
@@ -4884,16 +4911,22 @@ def test_reserve_bug_id_performs_github_scan_before_allocator_lock(
         def __exit__(self, *_args: object) -> None:
             state["locked"] = False
 
-    def github_scan(**_kwargs: object):
+    def exact_lookup(bug_id: str, **_kwargs: object):
         assert state["locked"] is False
-        return ([{"bug_id": "BUG-217", "number": 217, "kind": "github_issue", "source": "https://github.example/issues/588"}], [])
+        assert bug_id == "BUG-217"
+        return None, []
 
     def registry_scan(*args: object, **kwargs: object):
         assert state["locked"] is True
         return original_registry_scan(*args, **kwargs)
 
     monkeypatch.setattr(workflow, "_GlobalBugIdAllocatorLock", FakeLock)
-    monkeypatch.setattr(workflow, "_scan_github_bug_ids", github_scan)
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", exact_lookup)
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: pytest.fail("automatic allocation must not run a full GitHub issue scan"),
+    )
     monkeypatch.setattr(workflow, "_scan_bug_registry_ids", registry_scan)
 
     bug_id, number, report, reservation = workflow._reserve_bug_id(
@@ -4906,9 +4939,10 @@ def test_reserve_bug_id_performs_github_scan_before_allocator_lock(
         reservation_fingerprint="fingerprint-217",
     )
     try:
-        assert bug_id == "BUG-218"
-        assert number == 218
-        assert report["github_scanned"] is True
+        assert bug_id == "BUG-217"
+        assert number == 217
+        assert report["github_scanned"] is False
+        assert report["github_lookup_mode"] == "exact_candidate"
     finally:
         workflow._release_bug_id_reservation(reservation)
 
@@ -4920,23 +4954,59 @@ def test_submit_bug_retry_adopts_matching_open_github_issue(
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
     monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+    common = {
+        "title": "Retry-safe allocator issue",
+        "module": "validation",
+        "severity": "P1",
+        "description": "Retry must adopt the exact open GitHub Issue.",
+        "expected": "No duplicate Issue is created.",
+        "actual": "The first attempt lost transport confirmation.",
+        "reproduce_command": "n/a",
+        "evidence_refs": [],
+        "changed_files": ["scripts/aistock_issue_workflow.py"],
+        "plan_key": None,
+        "nox_session": None,
+        "candidate_type": "bug",
+        "bug_id": None,
+        "github_issue_number": None,
+        "github_issue_url": None,
+        "create_github": True,
+        "create_registry_worktree": False,
+        "registry_pr_only": False,
+        "dry_run": False,
+    }
+    dry_run = workflow.build_submit_bug_plan(**common, apply=False)
+    reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-133.json"
+    _write_json(
+        reservation,
+        {
+            "schema_version": "aistock_bug_id_reservation_v1",
+            "bug_id": "BUG-133",
+            "reserved_at": "2026-08-10T00:00:00Z",
+            "reserved_by": "aistock_issue_workflow.py",
+            "root": str(isolated_workflow_root),
+            "status": "github_create_outcome_unknown",
+            "title": common["title"],
+            "fingerprint": dry_run["record"]["trigger_condition"]["fingerprint"],
+        },
+    )
     monkeypatch.setattr(
         workflow,
-        "_scan_github_bug_ids",
-        lambda **_kwargs: (
-            [
-                {
-                    "bug_id": "BUG-136",
-                    "number": 136,
-                    "kind": "github_issue",
-                    "source": "https://github.example/issues/588",
-                    "github_issue_number": 588,
-                    "github_state": "OPEN",
-                    "title": "BUG-136 P1: Retry-safe allocator issue",
-                }
-            ],
+        "_github_bug_issue_for_id",
+        lambda bug_id, **_kwargs: (
+            {
+                "bug_id": "BUG-133",
+                "number": 133,
+                "kind": "github_issue",
+                "source": "https://github.example/issues/588",
+                "github_issue_number": 588,
+                "github_state": "OPEN",
+                "title": "BUG-133 P1: Retry-safe allocator issue",
+            },
             [],
-        ),
+        )
+        if bug_id == "BUG-133"
+        else (None, []),
     )
     monkeypatch.setattr(
         workflow,
@@ -4944,39 +5014,17 @@ def test_submit_bug_retry_adopts_matching_open_github_issue(
         lambda **_kwargs: pytest.fail("matching orphan Issue must be adopted instead of created again"),
     )
 
-    payload = workflow.build_submit_bug_plan(
-        title="Retry-safe allocator issue",
-        module="validation",
-        severity="P1",
-        description="Retry must adopt the exact open GitHub Issue.",
-        expected="No duplicate Issue is created.",
-        actual="The first attempt lost transport confirmation.",
-        reproduce_command="n/a",
-        evidence_refs=[],
-        changed_files=["scripts/aistock_issue_workflow.py"],
-        plan_key=None,
-        nox_session=None,
-        candidate_type="bug",
-        bug_id=None,
-        github_issue_number=None,
-        github_issue_url=None,
-        create_github=True,
-        apply=True,
-        create_registry_worktree=False,
-        registry_pr_only=False,
-        dry_run=False,
-    )
+    payload = workflow.build_submit_bug_plan(**common, apply=True)
 
-    assert payload["bug_id"] == "BUG-136"
+    assert payload["bug_id"] == "BUG-133"
     assert payload["github"] == {
         "created": False,
         "recovered_existing": True,
         "url": "https://github.example/issues/588",
         "number": 588,
     }
-    reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-136.json"
     assert json.loads(reservation.read_text(encoding="utf-8"))["status"] == "registered"
-    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 136
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 133
 
 
 def test_submit_bug_explicit_duplicate_fails_before_github_create(
@@ -5057,13 +5105,17 @@ def test_submit_bug_explicit_new_id_bumps_allocator(
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
 
 
-def test_submit_bug_offline_github_scan_warns_but_uses_local_scan(
+def test_submit_bug_offline_exact_github_lookup_warns_but_uses_local_scan(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
-    monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], ["github BUG id scan unavailable: offline"]))
+    monkeypatch.setattr(
+        workflow,
+        "_github_bug_issue_for_id",
+        lambda bug_id, **_kwargs: (None, [f"GitHub lookup for {bug_id} unavailable: offline"]),
+    )
 
     payload = workflow.build_submit_bug_plan(
         title="Offline GitHub scan",
@@ -5089,7 +5141,8 @@ def test_submit_bug_offline_github_scan_warns_but_uses_local_scan(
     )
 
     assert payload["bug_id"] == "BUG-133"
-    assert payload["bug_id_allocation"]["warnings"]
+    assert payload["bug_id_allocation"]["warnings"] == ["GitHub lookup for BUG-133 unavailable: offline"]
+    assert payload["bug_id_allocation"]["github_lookup_mode"] == "exact_candidate"
 
 
 def test_install_client_plan_can_copy_global_codex_skill(
@@ -5414,6 +5467,85 @@ def test_github_issue_create_recovers_exact_issue_after_transport_error(
 
     assert result["number"] == 3246
     assert result["recovered_after_transport_error"] is True
+
+
+def test_github_issue_create_plain_eof_preserves_unknown_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = tmp_path / "body.md"
+    body.write_text("body", encoding="utf-8")
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "stdout": "",
+            "stderr": 'Post "https://api.github.com/graphql": EOF',
+        },
+    )
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id: (None, []))
+
+    with pytest.raises(workflow.GitHubOutcomeUnknownError, match="automatic recreate blocked"):
+        workflow._create_github_issue_with_recovery(
+            bug_id="BUG-1009",
+            title="BUG-1009 P1: Retry-safe allocator",
+            body_path=body,
+            labels=["bug"],
+            cwd=tmp_path,
+        )
+
+
+def test_submit_bug_plain_eof_keeps_reservation_for_safe_retry(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
+    monkeypatch.setattr(
+        workflow,
+        "_validate_registry_apply_target",
+        lambda root: {"blocking": [], "warnings": [], "target_root": str(root)},
+    )
+    monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
+    monkeypatch.setattr(
+        workflow,
+        "_create_github_issue_with_recovery",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            workflow.GitHubOutcomeUnknownError(
+                'Post "https://api.github.com/graphql": EOF; reservation preserved and automatic recreate blocked'
+            )
+        ),
+    )
+
+    with pytest.raises(workflow.GitHubOutcomeUnknownError, match="automatic recreate blocked"):
+        workflow.build_submit_bug_plan(
+            title="Preserve EOF reservation",
+            module="validation",
+            severity="P1",
+            description="GitHub may have accepted the Issue create.",
+            expected="Retry cannot create a duplicate Issue.",
+            actual="The create response ended with EOF.",
+            reproduce_command="n/a",
+            evidence_refs=[],
+            changed_files=["scripts/aistock_issue_workflow.py"],
+            plan_key=None,
+            nox_session=None,
+            candidate_type="bug",
+            bug_id=None,
+            github_issue_number=None,
+            github_issue_url=None,
+            create_github=True,
+            apply=True,
+            create_registry_worktree=False,
+            registry_pr_only=False,
+            dry_run=False,
+        )
+
+    reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-133.json"
+    payload = json.loads(reservation.read_text(encoding="utf-8"))
+    assert payload["status"] == "github_create_outcome_unknown"
+    assert payload["last_error_type"] == "GitHubOutcomeUnknownError"
 
 
 def test_github_issue_create_does_not_retry_non_transport_label_error(

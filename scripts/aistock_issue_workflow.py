@@ -166,6 +166,10 @@ class WorkflowError(ValueError):
     """Raised when the high-level AIstock issue workflow cannot proceed safely."""
 
 
+class GitHubOutcomeUnknownError(WorkflowError):
+    """Raised when a GitHub write may have succeeded but cannot be confirmed."""
+
+
 class WorkflowPayloadError(WorkflowError):
     """Raised with a compact machine-readable recovery payload."""
 
@@ -3254,7 +3258,7 @@ def _github_bug_issue_by_number(issue_number: int | str, *, timeout: int = 30) -
 
 def _looks_like_github_transport_failure(message: str) -> bool:
     normalized = message.casefold()
-    return any(
+    return bool(re.search(r"\beof\b", normalized)) or any(
         token in normalized
         for token in (
             "timeout",
@@ -3264,6 +3268,8 @@ def _looks_like_github_transport_failure(message: str) -> bool:
             "connection reset",
             "connection aborted",
             "connection refused",
+            "network is unreachable",
+            "remote end hung up",
             "http2",
             "stream error",
             "temporary failure",
@@ -3321,8 +3327,11 @@ def _create_github_issue_with_recovery(
                 "recovered_after_transport_error": True,
                 "warnings": warnings,
             }
-        recovery_detail = "; ".join(warnings) if warnings else f"no exact {bug_id} GitHub Issue found"
-        raise WorkflowError(f"{message}; GitHub create recovery failed: {recovery_detail}")
+        recovery_detail = "; ".join(warnings) if warnings else f"no exact {bug_id} GitHub Issue found yet"
+        raise GitHubOutcomeUnknownError(
+            f"{message}; GitHub create outcome is unknown: {recovery_detail}; "
+            "reservation preserved and automatic recreate blocked"
+        )
     raise WorkflowError(message)
 
 
@@ -3381,13 +3390,20 @@ def _bug_id_allocation_report(
         warnings=warnings,
     )
     sources.extend(_scan_bug_id_reservations())
+    github_lookup_mode = "not_requested"
     if include_github:
-        github_sources, github_warnings = _scan_github_bug_ids()
-        sources.extend(github_sources)
+        local_report = _build_bug_id_allocation_report(sources, warnings, github_scanned=False)
+        candidate_bug_id = f"BUG-{int(local_report['next_number']):03d}"
+        github_issue, github_warnings = _github_bug_issue_for_id(candidate_bug_id)
+        if github_issue is not None:
+            sources.append(github_issue)
         warnings.extend(github_warnings)
         if github_required and github_warnings:
             raise WorkflowError("; ".join(github_warnings))
-    return _build_bug_id_allocation_report(sources, warnings, github_scanned=include_github)
+        github_lookup_mode = "exact_candidate"
+    report = _build_bug_id_allocation_report(sources, warnings, github_scanned=False)
+    report["github_lookup_mode"] = github_lookup_mode
+    return report
 
 
 def _bug_id_allocation_summary(report: dict[str, Any]) -> dict[str, Any]:
@@ -3399,6 +3415,7 @@ def _bug_id_allocation_summary(report: dict[str, Any]) -> dict[str, Any]:
         "observed_max_number": report.get("observed_max_number"),
         "github_max_number": report.get("github_max_number"),
         "github_scanned": report.get("github_scanned"),
+        "github_lookup_mode": report.get("github_lookup_mode"),
         "warnings": report.get("warnings", []),
     }
 
@@ -3467,6 +3484,8 @@ def _reservation_can_resume(
 ) -> bool:
     if str(payload.get("status") or "") not in {
         "reserved",
+        "github_preflight_unknown",
+        "github_create_outcome_unknown",
         "github_issue_confirmed",
         "github_issue_confirmed_local_incomplete",
     }:
@@ -3483,6 +3502,43 @@ def _reservation_can_resume(
     return bool(github_issue_number or existing_issue)
 
 
+def _matching_automatic_reservation(
+    *,
+    reservation_title: str | None,
+    reservation_fingerprint: str | None,
+    limit: int = 32,
+) -> tuple[Path, dict[str, Any]] | None:
+    if not reservation_fingerprint:
+        return None
+    root = _bug_id_reservation_root()
+    if not root.exists():
+        return None
+    paths = sorted(
+        root.glob("BUG-*.json"),
+        key=lambda path: _bug_id_number(path.name) or 0,
+        reverse=True,
+    )[:limit]
+    resumable_statuses = {
+        "github_preflight_unknown",
+        "github_create_outcome_unknown",
+        "github_issue_confirmed",
+        "github_issue_confirmed_local_incomplete",
+    }
+    for path in paths:
+        try:
+            payload = _load_json(path)
+        except (OSError, json.JSONDecodeError, WorkflowError):
+            continue
+        if str(payload.get("status") or "") not in resumable_statuses:
+            continue
+        if str(payload.get("fingerprint") or "") != reservation_fingerprint:
+            continue
+        if _normalized_github_bug_subject(str(payload.get("title") or "")) != _normalized_github_bug_subject(reservation_title):
+            continue
+        return path, payload
+    return None
+
+
 def _reserve_bug_id(
     root: Path | None,
     *,
@@ -3492,19 +3548,21 @@ def _reserve_bug_id(
     allowed_github_issue_number: int | str | None,
     reservation_title: str | None = None,
     reservation_fingerprint: str | None = None,
+    _candidate_attempt: int = 0,
 ) -> tuple[str, int, dict[str, Any], Path]:
+    if _candidate_attempt >= 20:
+        raise WorkflowError("unable to find an available BUG id after 20 exact GitHub candidate checks")
     canonical_bug_id = (bug_id or "").strip().upper()
     number = _bug_id_number(canonical_bug_id) if canonical_bug_id else None
     if canonical_bug_id and (not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id)):
         raise WorkflowError("--bug-id must match BUG-NNN when provided")
     direct_linked_issue = bool(canonical_bug_id and allowed_github_issue_number)
-    github_sources: list[dict[str, Any]] = []
     github_warnings: list[str] = []
     linked_issue: dict[str, Any] | None = None
 
-    # Network calls must not extend the allocator critical section. The
-    # reservation ledger serializes local contenders; GitHub is advisory for
-    # the next number and provides orphan/retry recovery.
+    # Explicit linkage can be verified before the critical section because it
+    # does not depend on the next local candidate. Automatic allocation first
+    # reserves a local candidate, then performs one exact GitHub lookup.
     if direct_linked_issue:
         linked_issue, github_warnings = _github_bug_issue_by_number(allowed_github_issue_number)
         if (github_warnings or linked_issue is None) and github_required:
@@ -3513,13 +3571,8 @@ def _reserve_bug_id(
             raise WorkflowError(
                 f"linked GitHub Issue {allowed_github_issue_number} title does not match {canonical_bug_id}"
             )
-        if linked_issue is not None:
-            github_sources.append(linked_issue)
-    elif include_github:
-        github_sources, github_warnings = _scan_github_bug_ids()
-        if github_required and github_warnings:
-            raise WorkflowError("; ".join(github_warnings))
 
+    resumed_status: str | None = None
     with _GlobalBugIdAllocatorLock():
         local_warnings: list[str] = []
         sources = _scan_bug_registry_ids(
@@ -3528,26 +3581,35 @@ def _reserve_bug_id(
             warnings=local_warnings,
         )
         sources.extend(_scan_bug_id_reservations())
-        sources.extend(github_sources)
+        if linked_issue is not None:
+            sources.append(linked_issue)
         report = _build_bug_id_allocation_report(
             sources,
             [*local_warnings, *github_warnings],
-            github_scanned=include_github and not direct_linked_issue,
+            github_scanned=False,
         )
-        recovered_issue = None if bug_id else _matching_open_github_issue(github_sources, reservation_title)
-        if recovered_issue is not None:
-            canonical_bug_id = str(recovered_issue.get("bug_id") or "").upper()
+        report["github_lookup_mode"] = "linked_issue_number" if direct_linked_issue else (
+            "exact_candidate" if include_github else "not_requested"
+        )
+        resumed_automatic = None if bug_id else _matching_automatic_reservation(
+            reservation_title=reservation_title,
+            reservation_fingerprint=reservation_fingerprint,
+        )
+        if resumed_automatic is not None:
+            reservation_path, existing_reservation = resumed_automatic
+            canonical_bug_id = str(existing_reservation.get("bug_id") or reservation_path.stem).upper()
             number = _bug_id_number(canonical_bug_id)
-            allowed_github_issue_number = recovered_issue.get("github_issue_number")
-            report["recovered_existing_github_issue"] = recovered_issue
-        elif not bug_id:
-            number = int(report["next_number"])
-            canonical_bug_id = f"BUG-{number:03d}"
+            allowed_github_issue_number = existing_reservation.get("github_issue_number")
+            resumed_status = str(existing_reservation.get("status") or "")
+        else:
+            existing_reservation = None
+            if not bug_id:
+                number = int(report["next_number"])
+                canonical_bug_id = f"BUG-{number:03d}"
         assert number is not None
         reservation_root = _bug_id_reservation_root()
         reservation_path = reservation_root / f"{canonical_bug_id}.json"
-        existing_reservation: dict[str, Any] | None = None
-        if reservation_path.exists():
+        if existing_reservation is None and reservation_path.exists():
             existing_reservation = _load_json(reservation_path)
         reusable_reservation = bool(
             existing_reservation
@@ -3558,7 +3620,8 @@ def _reserve_bug_id(
                 reservation_fingerprint=reservation_fingerprint,
             )
         )
-        if bug_id or recovered_issue is not None:
+        automatic_resume = resumed_automatic is not None
+        if bug_id:
             duplicates = _duplicate_bug_id_sources(
                 report,
                 canonical_bug_id,
@@ -3568,7 +3631,7 @@ def _reserve_bug_id(
             if duplicates:
                 detail = "; ".join(f"{item.get('kind')}:{item.get('source')}" for item in duplicates[:5])
                 raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
-        if existing_reservation is not None and not reusable_reservation:
+        if existing_reservation is not None and not (reusable_reservation or automatic_resume):
             raise WorkflowError(f"{canonical_bug_id} is already reserved: {reservation_path}")
         if existing_reservation is None:
             _write_json(
@@ -3584,7 +3647,7 @@ def _reserve_bug_id(
                     "fingerprint": reservation_fingerprint,
                 },
             )
-        else:
+        elif not automatic_resume:
             _update_bug_id_reservation(
                 reservation_path,
                 status="reserved",
@@ -3592,6 +3655,85 @@ def _reserve_bug_id(
                 title=reservation_title,
                 fingerprint=reservation_fingerprint,
             )
+
+    if direct_linked_issue or not include_github:
+        return canonical_bug_id, number, report, reservation_path
+
+    github_issue, lookup_warnings = _github_bug_issue_for_id(canonical_bug_id)
+    report["warnings"] = flow._unique_strings([*(report.get("warnings") or []), *lookup_warnings])
+    if lookup_warnings:
+        unknown_status = (
+            "github_create_outcome_unknown"
+            if resumed_status in {
+                "github_create_outcome_unknown",
+                "github_issue_confirmed",
+                "github_issue_confirmed_local_incomplete",
+            }
+            else "github_preflight_unknown"
+        )
+        _update_bug_id_reservation(
+            reservation_path,
+            status=unknown_status,
+            last_error="; ".join(lookup_warnings),
+        )
+        if github_required:
+            raise GitHubOutcomeUnknownError(
+                f"GitHub exact lookup for {canonical_bug_id} is unavailable; reservation preserved: "
+                + "; ".join(lookup_warnings)
+            )
+        return canonical_bug_id, number, report, reservation_path
+
+    if github_issue is not None:
+        report.setdefault("sources", []).append(github_issue)
+        same_subject = _normalized_github_bug_subject(str(github_issue.get("title") or "")) == _normalized_github_bug_subject(reservation_title)
+        is_open = str(github_issue.get("github_state") or "").upper() == "OPEN"
+        if same_subject and is_open:
+            report["recovered_existing_github_issue"] = github_issue
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_issue_confirmed",
+                github_issue_number=github_issue.get("github_issue_number"),
+                github_issue_url=github_issue.get("source"),
+            )
+            return canonical_bug_id, number, report, reservation_path
+        _update_bug_id_reservation(
+            reservation_path,
+            status="remote_collision",
+            github_issue_number=github_issue.get("github_issue_number"),
+            github_issue_url=github_issue.get("source"),
+            remote_title=github_issue.get("title"),
+        )
+        if bug_id:
+            raise WorkflowError(f"{canonical_bug_id} already exists on GitHub with a different title or state")
+        return _reserve_bug_id(
+            root,
+            bug_id=None,
+            include_github=include_github,
+            github_required=github_required,
+            allowed_github_issue_number=None,
+            reservation_title=reservation_title,
+            reservation_fingerprint=reservation_fingerprint,
+            _candidate_attempt=_candidate_attempt + 1,
+        )
+
+    if resumed_status in {
+        "github_create_outcome_unknown",
+        "github_issue_confirmed",
+        "github_issue_confirmed_local_incomplete",
+    }:
+        _update_bug_id_reservation(
+            reservation_path,
+            status="github_create_outcome_unknown",
+            last_error=f"exact GitHub lookup still has no indexed {canonical_bug_id}; automatic recreate remains blocked",
+        )
+        raise GitHubOutcomeUnknownError(
+            f"GitHub create outcome for {canonical_bug_id} is still unknown; reservation preserved and automatic recreate blocked"
+        )
+    _update_bug_id_reservation(
+        reservation_path,
+        status="reserved",
+        github_preflight_checked_at=_utc_now(),
+    )
     return canonical_bug_id, number, report, reservation_path
 
 
@@ -5594,6 +5736,7 @@ def build_submit_bug_plan(
             "allocator_root": str(allocation_root),
             "global_max_number": allocation_report.get("max_number"),
             "github_scanned": allocation_report.get("github_scanned"),
+            "github_lookup_mode": allocation_report.get("github_lookup_mode"),
             "warnings": allocation_report.get("warnings", []),
             "reservation_path": str(reservation_path) if reservation_path else None,
         },
@@ -5707,6 +5850,13 @@ def build_submit_bug_plan(
             _update_bug_id_reservation(
                 reservation_path,
                 status="github_issue_confirmed_local_incomplete",
+                last_error_type=type(exc).__name__,
+                last_error=str(exc)[:1000],
+            )
+        elif isinstance(exc, GitHubOutcomeUnknownError) and reservation_path is not None:
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_create_outcome_unknown",
                 last_error_type=type(exc).__name__,
                 last_error=str(exc)[:1000],
             )

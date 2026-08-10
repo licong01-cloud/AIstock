@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "scripts/aistock_mcp_server.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
     "tests/aistock_validation/bugs/20260810_BUG-1009-global-bug-id-allocation-scans-every-worktree-and-holds-network-i-o-unde.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260810-01af545846cd",
       "timestamp": "2026-08-10T05:02:08.354559Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex_app",
+      "note": "Bounded CLI/MCP allocation, lock recovery, concurrency, exact GitHub lookup, EOF outcome preservation, and local-first MCP creation validated; 293 related tests passed.",
+      "timestamp": "2026-08-10T07:16:15.732032Z"
     }
   ],
   "evidence_uris": [],
@@ -30,12 +38,16 @@
     "added_files": [],
     "changed_files": [
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_mcp_server.py",
+      "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py"
     ],
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "scripts/aistock_mcp_server.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py"
       ],
       "impacted_modules": [
         "validation.guardrails",
@@ -43,7 +55,8 @@
         "validation.runner",
         "validation.module_quality",
         "tests.backend",
-        "validation.coverage"
+        "validation.coverage",
+        "scripts"
       ],
       "matched_rules": [
         {
@@ -69,6 +82,20 @@
           "primary_module": "tests.backend",
           "risk_level": "medium",
           "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "scripts/aistock_mcp_server.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
         }
       ],
       "risk_levels": [
@@ -77,23 +104,27 @@
       ],
       "suggested_scope": [
         "scripts/aistock_issue_workflow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py"
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "scripts/aistock_mcp_server.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py"
       ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow.py"
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_mcp_server.py",
+      "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py"
     ]
   },
   "first_seen_at": "2026-08-10T05:02:08.354559Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-1009-global-bug-id-allocation-scans-every-worktree-an-20260810",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 3246,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3246",
-  "last_seen_at": "2026-08-10T05:02:08.354559Z",
+  "last_seen_at": "2026-08-10T07:16:15.732032Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -103,8 +134,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python scripts/aistock_issue_workflow.py doctor",
   "required_verification": [
-    "l0",
-    "guardrail_changed_files"
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -119,7 +150,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "validation"
   ],
@@ -128,6 +159,26 @@
     "fingerprint": "01af545846cd13bc3a208887",
     "source_event_id": "FE-20260810-01af545846cd"
   },
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: BUG intake and GitHub linkage semantics remain source-of-truth and fail closed",
+    "no_silent_error": "passed: preflight and create transport uncertainty preserve durable state and block automatic recreate",
+    "no_simplified_delivery": "passed: both CLI and MCP allocation paths, concurrency, stale locks, retry recovery, and tests are covered",
+    "no_unrequested_gate_or_approval": "passed: no process, database, dependency, runtime, or new approval gate was added",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
+  "performance_evidence": {
+    "cli_local_allocation_scan_max_seconds": 0.0449,
+    "mcp_local_allocation_scan_seconds": 0.0126,
+    "scan_root_count": 2,
+    "source": "local five-sample CLI benchmark and post-fix MCP benchmark on 2026-08-10"
+  },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -> 293 passed",
+    "nox -s guardrail_changed_files -- --changed-only -> blocking=0, mapped=6/6",
+    "nox -s validation_module_registry_l0 -> 8 passed, mapped=14/14",
+    "ruff check four changed Python/test files -> no issues",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
