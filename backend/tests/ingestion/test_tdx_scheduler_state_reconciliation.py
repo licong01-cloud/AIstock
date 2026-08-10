@@ -40,6 +40,34 @@ def test_canonical_weekend_compensation_is_weekly_saturday_and_defaults_are_uniq
         )
 
 
+@pytest.mark.parametrize(
+    ("frequency", "options", "expected_time"),
+    [
+        ("daily", {"at": "20:30"}, dt.time(20, 30)),
+        (
+            "weekly",
+            {"day_of_week": "saturday", "at": "10:00"},
+            dt.time(10, 0),
+        ),
+    ],
+)
+def test_fixed_time_schedules_use_authoritative_china_timezone(
+    frequency,
+    options,
+    expected_time,
+):
+    scheduler = scheduler_module.schedule.Scheduler()
+    job = scheduler_module._build_frequency_job(scheduler, frequency, options).do(
+        lambda: None
+    )
+
+    assert job.at_time_zone.zone == "Asia/Shanghai"
+    next_run_cn = scheduler_module._coerce_datetime(job.next_run).astimezone(
+        scheduler_module._CN_TZ
+    )
+    assert next_run_cn.time().replace(tzinfo=None) == expected_time
+
+
 def test_default_schedule_catalog_rejects_mode_insensitive_duplicate(monkeypatch):
     duplicate = dict(next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "stock_basic"))
     duplicate["mode"] = "incremental"
