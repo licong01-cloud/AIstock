@@ -83,8 +83,7 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
     "fresh_process_evidence": [
-      "cmd /d /c call C:/Users/lc999/miniconda3/condabin/conda.bat activate AIstock && C:/Users/lc999/miniconda3/envs/AIstock/python.exe -c import sys,lightgbm,uvicorn -> executable=C:/Users/lc999/miniconda3/envs/AIstock/python.exe; lightgbm=4.6.0; uvicorn=0.40.0",
-      "cmd /d /c call C:/Users/lc999/miniconda3/condabin/conda.bat activate AIstock && C:/Users/lc999/miniconda3/envs/AIstock/python.exe import smoke -> executable AIstock; lightgbm 4.6.0; uvicorn 0.40.0; backend not started"
+      "cmd /d /c call C:/Users/lc999/miniconda3/condabin/conda.bat activate AIstock && C:/Users/lc999/miniconda3/envs/AIstock/python.exe -c import sys,lightgbm,uvicorn -> executable=C:/Users/lc999/miniconda3/envs/AIstock/python.exe; lightgbm=4.6.0; uvicorn=0.40.0"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
