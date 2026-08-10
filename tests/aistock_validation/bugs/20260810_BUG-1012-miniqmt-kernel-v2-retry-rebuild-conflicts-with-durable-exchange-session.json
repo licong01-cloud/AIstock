@@ -154,12 +154,14 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python pytest process loaded the tracked MiniQMT product-root source and passed restart/race/commit-unknown/stale/true-drift/invalid-orphan cases; backend-main restart remains user-owned.",
-      "Fresh nox processes at the synchronized source branch passed miniqmt_execution_runtime_l2 1353 passed, 69 skipped and simulation_core_l2 502 passed, 1 skipped; no user backend process was controlled."
+      "Fresh nox processes at the synchronized source branch passed miniqmt_execution_runtime_l2 1353 passed, 69 skipped and simulation_core_l2 502 passed, 1 skipped; no user backend process was controlled.",
+      "Fresh nox processes loaded tracked BUG-1012 source and passed MiniQMT/Simulation L2; backend-main restart remains user-owned"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
