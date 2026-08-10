@@ -222,7 +222,8 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "fresh Windows pytest processes verified 123 config-composer tests plus 26 capacity/credential tests; local GeneralPTNN uses n_jobs=0 without prefetch, remote behavior remains n_jobs=2, unsafe local override fails closed, and over-capacity reservations wait without terminating existing work",
-      "fresh WSL bash process verified TDX_DB, POSTGRES, API key, client secret and token names are absent while AISTOCK_PREDICTION_STORE_BASE_URL remains available; output contained no credential values"
+      "fresh WSL bash process verified TDX_DB, POSTGRES, API key, client secret and token names are absent while AISTOCK_PREDICTION_STORE_BASE_URL remains available; output contained no credential values",
+      "Fresh Windows pytest processes loaded the changed QE resource and credential code, and a real WSL bash process returned QE_SCRUB_OK without exposing credential values; no backend or experiment process control was performed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
