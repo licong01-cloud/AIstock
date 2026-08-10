@@ -4,6 +4,8 @@
     "backend/services/quantevolver/config_composer.py",
     "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
     "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260810_BUG-1006-qe-factor-outer-union-changes-matched-experiment-observation-panel-and-c.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260810-c1e9beaf5259",
       "timestamp": "2026-08-10T03:12:03.570024Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "PR #3243 CI classified the focused QE test as unmapped_code_blocked; scope expands only to map that exact test to the existing qe_sector_risk_overlay plan and include it in the existing nox session.",
+      "timestamp": "2026-08-10T04:46:14.716666Z"
     }
   ],
   "evidence_uris": [
@@ -34,13 +42,17 @@
     "changed_files": [
       "backend/services/quantevolver/config_composer.py",
       "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
-      "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+      "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/config_composer.py",
         "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
-        "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+        "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+        "noxfile.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "impacted_modules": [
         "qe.sector_risk_overlay",
@@ -50,7 +62,13 @@
         "qe.data_completeness",
         "qe.long_trend_evaluation",
         "tests.backend",
-        "docs.analysis"
+        "docs.analysis",
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "validation.runner",
+        "validation.center",
+        "tests.frontend"
       ],
       "matched_rules": [
         {
@@ -68,10 +86,16 @@
         },
         {
           "file": "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
-          "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
         },
         {
           "file": "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
@@ -79,17 +103,41 @@
           "primary_module": "docs.analysis",
           "risk_level": "low",
           "rule_id": "docs_analysis"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
         }
       ],
       "risk_levels": [
         "high",
-        "medium",
         "low"
       ],
       "suggested_scope": [
         "backend/services/quantevolver/config_composer.py",
         "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
-        "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+        "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+        "noxfile.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "unmatched_files": []
     },
@@ -97,7 +145,9 @@
     "scope_files": [
       "backend/services/quantevolver/config_composer.py",
       "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
-      "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
+      "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-08-10T03:12:03.570028Z",
@@ -117,7 +167,8 @@
   "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py -q",
   "required_verification": [
     "l0",
-    "qe_sector_risk_overlay_backend"
+    "qe_sector_risk_overlay_backend",
+    "validation_catalog_integrity"
   ],
   "risk_area": "bug",
   "runtime_contract": {
