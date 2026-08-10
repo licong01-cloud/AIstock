@@ -53,6 +53,14 @@ def train_price_range_models(
         features.loc[:, keys], on=keys, how="left", validate="one_to_one", indicator=True
     )
     missing_feature_rows = missing_feature_rows.loc[missing_feature_rows["_merge"].eq("left_only")]
+    allowed_splits = {"train", "validation", "test", "purged"}
+    observed_splits = set(labels["split"].astype(str).unique())
+    if not observed_splits.issubset(allowed_splits):
+        raise AdvisoryModelFirstError(
+            "price-range labels contain an unknown split",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+            context={"splits": sorted(observed_splits)},
+        )
     missing_by_split = {
         name: int(missing_feature_rows["split"].eq(name).sum())
         for name in ("train", "validation", "test", "purged")
@@ -71,6 +79,7 @@ def train_price_range_models(
             reason_code="ADVISORY_MODEL_QE_SCHEMA_MISMATCH",
             context={"missing_features": missing_features},
         )
+    _validate_label_contract(merged)
     matrix, vocabulary = _prepare_matrix(merged, feature_names=feature_names)
     all_test_mask = merged["split"].eq("test")
     if not all_test_mask.any():
@@ -260,6 +269,69 @@ def _prepare_matrix(
     return matrix, vocabulary
 
 
+def _validate_label_contract(merged: pd.DataFrame) -> None:
+    required = {
+        "split",
+        "entry_label_status",
+        "entry_executable",
+        "entry_gap_return",
+        "binary_modelable",
+        "gap_modelable",
+    }
+    missing = sorted(required - set(merged.columns))
+    if missing:
+        raise AdvisoryModelFirstError(
+            "price-range labels omit required training columns",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+            context={"missing_columns": missing},
+        )
+    status = merged["entry_label_status"].astype(str)
+    if not set(status.unique()).issubset({"AVAILABLE", "UNAVAILABLE"}):
+        raise AdvisoryModelFirstError(
+            "price-range labels contain an unknown availability status",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+            context={"statuses": sorted(status.unique().tolist())},
+        )
+    executable = pd.to_numeric(merged["entry_executable"], errors="coerce")
+    available = status.eq("AVAILABLE")
+    unavailable = status.eq("UNAVAILABLE")
+    if (
+        executable.loc[available].isna().any()
+        or not executable.loc[available].isin([0.0, 1.0]).all()
+        or executable.loc[unavailable].notna().any()
+    ):
+        raise AdvisoryModelFirstError(
+            "price-range executable label violates the tri-state contract",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+        )
+    gap = pd.to_numeric(merged["entry_gap_return"], errors="coerce")
+    executable_rows = available & executable.eq(1.0)
+    if (
+        gap.loc[executable_rows].isna().any()
+        or not np.isfinite(gap.loc[executable_rows].to_numpy(dtype=float)).all()
+        or gap.loc[~executable_rows].notna().any()
+    ):
+        raise AdvisoryModelFirstError(
+            "price-range entry-gap label violates its executable-only condition",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+        )
+    active = merged["split"].isin(["train", "validation", "test"])
+    expected_binary = active & available
+    expected_gap = expected_binary & executable.eq(1.0)
+    actual_binary = merged["binary_modelable"]
+    actual_gap = merged["gap_modelable"]
+    if (
+        actual_binary.isna().any()
+        or actual_gap.isna().any()
+        or not actual_binary.astype(bool).equals(expected_binary)
+        or not actual_gap.astype(bool).equals(expected_gap)
+    ):
+        raise AdvisoryModelFirstError(
+            "price-range modelable masks differ from label and split semantics",
+            reason_code="ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE",
+        )
+
+
 def _split_masks(
     merged: pd.DataFrame,
     eligible: pd.Series,
@@ -278,12 +350,12 @@ def _split_masks(
 
 
 def _require_binary_variation(target: pd.Series) -> None:
-    values = pd.to_numeric(target, errors="coerce").dropna().astype(int)
-    if set(values.unique()) != {0, 1}:
+    values = pd.to_numeric(target, errors="coerce")
+    if values.isna().any() or not values.isin([0.0, 1.0]).all() or set(values.unique()) != {0, 1}:
         raise AdvisoryModelFirstError(
             "price-range executable training labels do not contain both classes",
             reason_code="ADVISORY_PRICE_RANGE_LABEL_VARIATION_MISSING",
-            context={"classes": sorted(values.unique().tolist())},
+            context={"classes": sorted(values.dropna().unique().tolist())},
         )
 
 

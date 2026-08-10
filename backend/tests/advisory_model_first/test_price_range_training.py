@@ -94,6 +94,7 @@ def test_price_range_training_builds_exact_four_heads_and_conditional_ranges(mon
 def test_price_range_binary_head_rejects_constant_train_label(monkeypatch) -> None:
     features, labels = _matrix()
     labels.loc[labels["split"].eq("train"), "entry_executable"] = 1
+    labels.loc[labels["split"].eq("train"), "entry_gap_return"] = 0.01
     labels.loc[labels["split"].eq("train"), "gap_modelable"] = True
     monkeypatch.setattr(
         price_range_training,
@@ -147,3 +148,34 @@ def test_price_range_training_rejects_missing_test_feature_row(monkeypatch) -> N
     with pytest.raises(AdvisoryModelFirstError) as error:
         train_price_range_models(features=features, labels=labels, seed=7)
     assert error.value.reason_code == "ADVISORY_PRICE_RANGE_SAMPLE_INSUFFICIENT"
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("entry_executable", 0.5),
+        ("binary_modelable", False),
+        ("gap_modelable", False),
+    ],
+)
+def test_price_range_training_rejects_malformed_label_contract(
+    monkeypatch,
+    column: str,
+    value: object,
+) -> None:
+    features, labels = _matrix()
+    train_index = labels.index[
+        labels["split"].eq("train") & labels["entry_executable"].eq(1)
+    ][0]
+    if column == "entry_executable":
+        labels[column] = labels[column].astype(float)
+    labels.loc[train_index, column] = value
+    monkeypatch.setattr(
+        price_range_training,
+        "_train_booster",
+        lambda **kwargs: (_FakeModel(str(kwargs["head"])), {}),
+    )
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        train_price_range_models(features=features, labels=labels, seed=7)
+    assert error.value.reason_code == "ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE"

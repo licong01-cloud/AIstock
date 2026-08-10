@@ -82,7 +82,7 @@ class FrozenAdvisoryPriceRangeTrainingRequestV1(BaseModel):
     decision_date_end: str = "2026-03-10"
     data_cutoff: str = "2026-06-30"
     trainer_seed: int = 20260810
-    resource_max_rss_bytes: int = 8 * 1024**3
+    resource_max_rss_bytes: int = Field(default=8 * 1024**3, gt=0, le=8 * 1024**3)
 
     @model_validator(mode="after")
     def validate_identity(self) -> "FrozenAdvisoryPriceRangeTrainingRequestV1":

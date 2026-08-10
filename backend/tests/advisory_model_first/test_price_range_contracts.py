@@ -64,3 +64,13 @@ def test_price_range_request_identity_excludes_created_at_and_output_root() -> N
             quantiles=(0.1, 0.5),
             created_at="2026-08-10T00:00:00Z",
         )
+
+
+def test_price_range_request_rejects_resource_limit_above_eight_gibibytes() -> None:
+    with pytest.raises(ValueError, match="less than or equal to"):
+        build_frozen_price_range_training_request(
+            **_values(),
+            output_root="/out",
+            resource_max_rss_bytes=8 * 1024**3 + 1,
+            created_at="2026-08-10T00:00:00Z",
+        )

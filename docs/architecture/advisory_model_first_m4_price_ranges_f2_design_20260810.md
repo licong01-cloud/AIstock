@@ -442,7 +442,7 @@ M4A 必须保存 test-only 指标：
 | F-355 | planned Advisory UI price-range panel | `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | design_ready | none |
 | F-356 | planned exact M4 binding | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | design_ready | none |
 | F-357 | M4A isolated `advisory_model_first` files; planned M4B import-boundary review | `backend/tests/advisory_model_first/test_price_range_boundaries.py` | design_ready | none |
-| F-358 | M4A DESIGN-COMPLIANCE-001 reviewed; full M4 review after M4B | `backend/tests/advisory_model_first/test_price_range_boundaries.py`; planned final compliance receipt | design_ready | none |
+| F-358 | M4A DESIGN-COMPLIANCE-001 reviewed; full M4 review after M4B | `backend/tests/advisory_model_first/test_price_range_boundaries.py`; M4A module review `132 passed, 1 skipped`; planned final compliance receipt | design_ready | none |
 | F-359 | separate source/training/runtime ledger | artifact: `/mnt/f/Dev/AIstock_model_artifacts/advisory_model_first/price_range_runs/advprreq_2d826a7b2704137bf3a60d9d/price_range_training_receipt.json`; planned `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | design_ready | none |
 
 ## 22. DESIGN-COMPLIANCE-001 设计审核要求

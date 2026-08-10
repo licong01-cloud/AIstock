@@ -290,7 +290,19 @@ def _build_labels_in_date_batches(
         )
         coverage = pd.concat(coverage_parts, ignore_index=True)
     finally:
-        shutil.rmtree(scratch_root, ignore_errors=True)
+        if scratch_root.exists():
+            try:
+                shutil.rmtree(scratch_root)
+            except OSError as exc:
+                raise AdvisoryModelFirstError(
+                    "price-range temporary label parts could not be removed",
+                    reason_code="ADVISORY_PRICE_RANGE_TRAINING_FAILED",
+                    context={
+                        "scratch_root": str(scratch_root),
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                ) from exc
     keys = ["decision_as_of_trade_date", "target_trade_date", "instrument"]
     if len(labels) != len(candidates) or labels.duplicated(keys).any():
         raise AdvisoryModelFirstError(
@@ -337,7 +349,7 @@ def _validate_parent_identity(
         raise AdvisoryModelFirstError(
             "price-range parent bundle identity cannot be validated",
             reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
-            context={"error_type": type(exc).__name__},
+            context=_source_error_context(exc),
         ) from exc
     if (
         parent_request.request_id != request.parent_request_id
@@ -384,7 +396,7 @@ def _validate_outcome_identity(
         raise AdvisoryModelFirstError(
             "price-range outcome bundle identity cannot be validated",
             reason_code="ADVISORY_PRICE_RANGE_OUTCOME_IDENTITY_MISMATCH",
-            context={"error_type": type(exc).__name__},
+            context=_source_error_context(exc),
         ) from exc
     split_descriptor = (manifest.get("files") or {}).get("split.json") or {}
     if (
@@ -484,19 +496,28 @@ def _verify_price_range_training_environment(
         "repository_root": request.repository_root,
         "output_root": request.output_root,
     }
-    missing = {name: value for name, value in roots.items() if not Path(value).exists()}
+    missing = {name: value for name, value in roots.items() if not Path(value).is_dir()}
     if missing:
         raise AdvisoryModelFirstError(
             "one or more explicit price-range training roots do not exist",
             reason_code="ADVISORY_MODEL_QE_SCHEMA_MISMATCH",
             context={"missing_roots": missing},
         )
+    try:
+        lightgbm_version = importlib.metadata.version("lightgbm")
+        pyarrow_version = importlib.metadata.version("pyarrow")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise AdvisoryModelFirstError(
+            "price-range WSL training dependency is unavailable",
+            reason_code="ADVISORY_MODEL_TRAINING_REQUIRES_WSL",
+            context={"package": exc.name},
+        ) from exc
     return {
         "platform_release": platform.release(),
         "python_version": platform.python_version(),
         "conda_environment": conda_env,
-        "lightgbm_version": importlib.metadata.version("lightgbm"),
-        "pyarrow_version": importlib.metadata.version("pyarrow"),
+        "lightgbm_version": lightgbm_version,
+        "pyarrow_version": pyarrow_version,
     }
 
 
@@ -511,12 +532,19 @@ def _resolve_wsl_repository_commit(repository_root: Path) -> str:
                 reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
             )
         raw_git_dir = pointer.removeprefix("gitdir: ").strip()
-        translated = subprocess.run(
-            ["wslpath", "-u", raw_git_dir],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        try:
+            translated = subprocess.run(
+                ["wslpath", "-u", raw_git_dir],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except subprocess.CalledProcessError as exc:
+            raise AdvisoryModelFirstError(
+                "WSL could not translate the price-range worktree git directory",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+                context={"wslpath_exit_code": exc.returncode},
+            ) from exc
         git_command.append(f"--git-dir={translated}")
     try:
         result = subprocess.run(
@@ -569,3 +597,14 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, np.generic):
         return value.item()
     raise TypeError(f"unsupported price-range JSON value: {type(value).__name__}")
+
+
+def _source_error_context(exc: Exception) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "error_type": type(exc).__name__,
+        "error_message": str(exc),
+    }
+    if isinstance(exc, AdvisoryModelFirstError):
+        context["source_reason_code"] = exc.reason_code
+        context["source_context"] = exc.context
+    return context
