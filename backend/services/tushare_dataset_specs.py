@@ -45,6 +45,7 @@ class DatasetSpec:
     fetch_params: Dict[str, Any] = field(default_factory=dict)  # fixed request params such as Tushare limit/offset defaults
     trading_day_only: bool = False              # BY_DATE datasets that should iterate market trading days only
     create_table_script: Optional[str] = None    # operator-run DDL helper; engine never creates tables implicitly
+    nullable_identity_columns: List[str] = field(default_factory=list)  # source identity fields that may be NULL
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +358,7 @@ DIVIDEND = DatasetSpec(
     rate_per_minute=200,
     replace_existing_dates=True,
     incremental_cursor_from_audit=True,
+    nullable_identity_columns=["ann_date"],
     create_table_script=(
         "backend/db/migrations/add_advisory_price_range_dividend_20260810.sql"
     ),
