@@ -2540,6 +2540,138 @@ def test_p6_mode_isolation_rejects_legacy_full_child_combination(tmp_path) -> No
         subject._require_b3_p6_mode_isolation(args, p6_parent=True, p6_child=False)
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        *subject.B3_HIDDEN_CHILD_ARGUMENTS,
+        "_b3_p6_autocycle_l2_child",
+        "b3_process_identity",
+        "b3_d1_producer_commit",
+        "b3_d1_current_authority_sha256",
+        "b3_d1_historical_reference_sha256",
+    ],
+)
+def test_p6_zero_refit_mode_isolation_rejects_every_child_identity(field) -> None:
+    values = {
+        **{name: False for name in subject.B3_HIDDEN_CHILD_ARGUMENTS},
+        "_b3_p6_autocycle_l2_child": False,
+        "b3_process_identity": "",
+        "b3_d1_producer_commit": "",
+        "b3_d1_current_authority_sha256": "",
+        "b3_d1_historical_reference_sha256": "",
+    }
+    values[field] = True if field.startswith("_") else "x"
+
+    with pytest.raises(StateModelSetError, match="cannot be combined with another child mode"):
+        subject._require_b3_p6_zero_refit_mode_isolation(SimpleNamespace(**values))
+
+
+def test_p6_zero_refit_cli_rejects_hidden_diagnostic_child_before_dispatch(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_state_model_set.py",
+            "--request",
+            "ignored.json",
+            "--output-root",
+            ".",
+            "--env-file",
+            "ignored.env",
+            "--db-env-prefix",
+            "TEST_",
+            "--b3-p6-d6-zero-refit-output",
+            "zero.json",
+            "--b3-p6-parent-report",
+            "parent.json",
+            "--_c008-b3-diag02-child",
+        ],
+    )
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: {})
+    monkeypatch.setattr(
+        subject,
+        "diagnose_c008_b3_diag02",
+        lambda *args, **kwargs: pytest.fail("hidden diagnostic child must not shadow zero-refit"),
+    )
+
+    assert subject.main() == 1
+    assert "cannot be combined with another child mode" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("mode", ["c008", "c008_b1", "diag02", "diag04"])
+def test_historical_c008_entrypoints_use_dense_diagnostic_constructor(monkeypatch, mode) -> None:
+    producer = "c" * 40
+    request = {
+        "producer_commit": producer,
+        "families": [
+            {
+                "family": "legacy_covfix",
+                "feature_names": list(BASE_FEATURES),
+                "preprocess_family": "identity",
+            }
+        ],
+    }
+    inputs = {
+        "source_spec": SimpleNamespace(universe_key="frozen-universe"),
+        "database": {},
+        "panel": object(),
+        "constituents": {},
+        "dataset_manifest": {},
+        "mapping_manifest": {},
+        "feature_definition": {},
+        "l2_stock_fact_manifest": {},
+    }
+    spec = SimpleNamespace(
+        family="legacy_covfix",
+        family_version="v1",
+        candidate_ids=(),
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+        validation_start=date(2024, 7, 1),
+        validation_end=date(2025, 3, 31),
+        preprocess_family="identity",
+    )
+    dense_series = {"801010.SI": object()}
+    monkeypatch.setattr(subject, "_git_commit", lambda: producer)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda *args, **kwargs: inputs)
+    monkeypatch.setattr(subject, "_family_spec", lambda *args, **kwargs: spec)
+    monkeypatch.setattr(subject, "_frozen_input_identity", lambda value: {})
+    monkeypatch.setattr(
+        subject,
+        "build_l1_training_series",
+        lambda *args, **kwargs: pytest.fail("historical diagnostics must not consume the D6 calendar constructor"),
+    )
+    monkeypatch.setattr(
+        subject,
+        "build_legacy_dense_diagnostic_series",
+        lambda *args, **kwargs: dense_series,
+    )
+    for name in (
+        "diagnose_l1_seed_grid",
+        "diagnose_l1_seed_grid_b1",
+        "diagnose_l1_seed_grid_b3_diag02",
+        "diagnose_l1_seed_grid_b3_diag04",
+    ):
+        monkeypatch.setattr(
+            subject,
+            name,
+            lambda series, **kwargs: {"dense_constructor_used": series is dense_series},
+        )
+    monkeypatch.setattr(subject, "diagnostic_runtime_versions", lambda: {})
+    monkeypatch.setattr(subject, "c008_b3_diag02_fixed_numeric_environment", lambda: {})
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: {})
+
+    if mode == "c008":
+        report = subject.diagnose_c008(request, db_prefix="TEST_")
+    elif mode == "c008_b1":
+        report = subject.diagnose_c008_b1(request, db_prefix="TEST_")
+    elif mode == "diag02":
+        report = subject.diagnose_c008_b3_diag02(request, db_prefix="TEST_")
+    else:
+        report = subject.diagnose_c008_b3_diag04(request, db_prefix="TEST_")
+    assert report["families"][0]["diagnostic"]["dense_constructor_used"] is True
+
+
 def test_p6_second_process_timeout_preserves_first_receipt_without_selection(monkeypatch, tmp_path) -> None:
     request, policy, inputs, args = _p6_parent_setup(monkeypatch, tmp_path)
     first_payload = _p6_child_payload("fresh_process_1", inputs=inputs, policy=policy)

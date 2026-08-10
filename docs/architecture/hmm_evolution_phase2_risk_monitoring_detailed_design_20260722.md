@@ -3,12 +3,12 @@
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
 - 修订日期：2026-08-10
-- 状态：`B3_P6_D5_SELECTED_SEED43_D6_NA_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_PENDING_PR_NO_REPLAY_NO_READY`
+- 状态：`B3_P6_D5_SELECTED_SEED43_D6_NA_SOURCE_PR_3258_REVIEW_FIXES_VERIFIED_PENDING_MERGE_NO_REPLAY_NO_READY`
 - 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.19
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已固化；Slice 0 B3/L2 retrain、C-009、C-010-FORMAL-A、C-010-A5、BUG-977、BUG-982、REFIT-03、D1-D5 mixed-dimension、BUG-995 与 BUG-999 源码均已合入。最新 P6 在 producer `0ab6dec3` 的同一冻结 authority、固定单线程环境和两个 fresh processes 完成 `2096/2096` fits；D5 按 train-only 合同选定 `autocycle_all_core:L2` seed 43。原 D6 因概率域 causal posterior underflow fail closed；BUG-1008 的 log-space修复及 `C-008-B3-D6-NA-A` 源码现已在独立 feature worktree 实现并通过本模块直接审核：完整182日carrier/manifest v2、transition-only、E-mask、calendar-aware structure、composite selected schema与zero-refit lineage均已进入源码，旧schema不能进入active READY。该源码尚未提交PR或合入，且本轮没有执行zero-refit replay；只读根因报告 `d6_date_sequence_diagnostic.json` canonical SHA-256=`08b396d5c901d1e5ed416f56134f9a93bdf6d6f142542d9cbfbef93744a38a7f` 仍是当前运行事实。model/READY、database 与 runtime 动作均为0（见§23.16-23.17、§24）。
+- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已固化；Slice 0 B3/L2 retrain、C-009、C-010-FORMAL-A、C-010-A5、BUG-977、BUG-982、REFIT-03、D1-D5 mixed-dimension、BUG-995 与 BUG-999 源码均已合入。最新 P6 在 producer `0ab6dec3` 的同一冻结 authority、固定单线程环境和两个 fresh processes 完成 `2096/2096` fits；D5 按 train-only 合同选定 `autocycle_all_core:L2` seed 43。原 D6 因概率域 causal posterior underflow fail closed；BUG-1008 的 log-space修复及 `C-008-B3-D6-NA-A` 源码已进入 PR #3258，并在第二轮独立审核后修复历史 C-008 dense diagnostic 构造隔离与 zero-refit hidden-child 模式互斥：完整182日carrier/manifest v2、transition-only、E-mask、calendar-aware structure、composite selected schema与zero-refit lineage均已进入源码，旧schema不能进入active READY。PR 尚未合入，且本轮没有执行zero-refit replay；只读根因报告 `d6_date_sequence_diagnostic.json` canonical SHA-256=`08b396d5c901d1e5ed416f56134f9a93bdf6d6f142542d9cbfbef93744a38a7f` 仍是当前运行事实。model/READY、database 与 runtime 动作均为0（见§23.16-23.17、§24）。
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
@@ -3205,7 +3205,7 @@ contract 时，才能基于明确依赖边追加对应 contract smoke，并在�
 | C-008-B3-D5-01 | train-only family/level-global identity、score/aggregation/tie-break | `RESOLVED_USER_APPROVED_D5_01_B` | `hmm_risk_c008_b3_d5_01_b_v1`：每family分别选择L1 31/31与L2 131/131 level-global seed；`L_final/(N*d)`；min/median/`math.fsum` mean lex maximize；relative+absolute tolerance逐维过滤，最终按schedule index；validation/D6不可见、D6失败不得reselection；historical DIAG不写selection |
 | C-008-B3-D5-02 | 固定数值环境内的可复现性 | `RESOLVED_USER_APPROVED_D5_02_B_FIXED_ENVIRONMENT` | 两个 fresh process canonical hash 必须 bitwise equal；不外推跨 host/BLAS/依赖版本 |
 | C-008-B3-D6-01 | hard semantic validation count/month/run/utility gap | `RESOLVED_USER_APPROVED_D6_01_B` | `hmm_risk_c008_b3_d6_01_b_v1`：selected restart 后的 hard authority；每 state count `>=max(5,ceil(2%*N))`、occupancy `>=2%`、month/run `>=2`、incoming/outgoing `>=2`、max-run-share `<=0.9`、posterior row-sum `<=1e-12`、margin严格 `>1e-12`；hard utility mean/variance finite、numeric adjacent gap；95%/soft evidence只诊断，失败不得换 seed |
-| C-008-B3-D6-NA-A | 冻结 validation calendar 中 observation/utility NA 如何保持 causal posterior 与 hard semantic evidence | `RESOLVED_USER_APPROVED_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_PENDING_PR_NO_REPLAY` | `hmm_risk_c008_b3_d6_na_a_v1`：保留182日完整ledger；feature-NA日transition-only且不插补，utility-NA日保留posterior但不进入evidence；existing D6 gates仅在`E=observation_available AND utility_available`执行，gap打断run/transition；保留既有30行source contract且不新增missing-ratio gate；carrier/manifest v2、full20→19顺序、T/O/U/E、composite selected schema、zero-refit lineage与reason/status映射已实现并通过直接测试；本状态不表示已执行replay、D6 accepted或READY |
+| C-008-B3-D6-NA-A | 冻结 validation calendar 中 observation/utility NA 如何保持 causal posterior 与 hard semantic evidence | `RESOLVED_USER_APPROVED_SOURCE_PR_3258_REVIEW_FIXES_VERIFIED_PENDING_MERGE_NO_REPLAY` | `hmm_risk_c008_b3_d6_na_a_v1`：保留182日完整ledger；feature-NA日transition-only且不插补，utility-NA日保留posterior但不进入evidence；existing D6 gates仅在`E=observation_available AND utility_available`执行，gap打断run/transition；保留既有30行source contract且不新增missing-ratio gate；carrier/manifest v2、full20→19顺序、T/O/U/E、composite selected schema、zero-refit lineage与reason/status映射已实现并通过直接测试；历史 C-008 入口显式保持 dense diagnostic v1，zero-refit 与全部 hidden child identity 在 dispatch 前互斥；本状态不表示已执行replay、D6 accepted或READY |
 | C-008-B3-D7-01 | B3 runtime dependency identity | `RESOLVED_USER_APPROVED_D7_01_A` | 未来实现声明 `hmmlearn==0.3.3`；本 docs-only PR 不安装依赖，未来 production dependency gate 独立 pending |
 | C-008-B3-FORMAL-EXEC-01 | 已批准 B3 合同在当前冻结输入上是否形成两-family READY | `VERIFIED_FORMAL_EXECUTION_BLOCKED_NO_READY` | producer `e2c01bae…` 完成 5184/5184 fits；formal canonical `e7992f87…39f`。D5 只选出 `legacy_covfix:L1/seed=43`，该 level 又在 D6 因 `801980.SI` failed；其余三个 family/level 无 eligible candidate。两 family blocked，selection未读validation/future utility，selection后未refit，model/READY/DB/runtime write均为false |
 | C-008-B3-FORMAL-BLOCKER-DIAG-01 | 是否按 formal rejection summaries 对全部 blocker pair 与 deterministic controls 执行两 fresh-process 定向根因诊断 | `VERIFIED_DIAGNOSTIC_COMPLETE_NO_SELECTION_NO_READY` | producer `ac3687c2…`；artifact canonical `10287e84…cffe8`；150 rejected+24 controls、348/348 fits、3-entry D6 no-refit replay闭合，两次payload hash bitwise相同；不选择seed、不改阈值/authority、不写model/READY/DB/runtime |
@@ -3908,7 +3908,7 @@ model、READY、database 与 runtime 写入均为 0。正式 report canonical SH
 
 ### 23.17 C-008-B3-D6-NA-A 源码正式审核
 
-- **审核结论**：`PASS_LOCAL_PENDING_PR`。实现覆盖log-space因果后验、182日calendar carrier、manifest v2、source constructor、
+- **审核结论**：`PASS_AFTER_REVIEW_FIXES_PR_3258_PENDING_MERGE`。实现覆盖log-space因果后验、182日calendar carrier、manifest v2、source constructor、
   transition-only、T/O/U/E、gap-aware D6、composite selected schema、READY active-schema readback与zero-refit CLI lineage；没有执行HMM fit、
   D5 selection、D6 replay或model/READY写入。
 - **no simplified/subset/POC**：`PASS`。正式路径保留完整calendar与全部selected sector；旧dense v1不能进入active writer/READY，
@@ -3921,6 +3921,11 @@ model、READY、database 与 runtime 写入均为 0。正式 report canonical SH
   人工确认或runtime门禁。
 - **直接证据**：Ruff/format、py_compile及五个直接测试文件已通过；覆盖首/中/末transition-only、T\E diagnostic tie、29/30 evidence、
   gap断开run/transition、manifest/receipt drift、raw20 exact-zero后preprocess/projection、旧schema拒绝和zero-refit no-fit/no-D5 flags。
+- **第二轮源码审核修复**：初审发现历史 C-008-A/B1/DIAG-02/DIAG-04 仍按 dense posterior/utility 行对齐合同消费数据，若误接 D6 carrier
+  会在拟合后发生 utility 行数错位；现以 `build_legacy_dense_diagnostic_series()` 显式隔离历史诊断，正式 D6 继续唯一使用完整 calendar
+  constructor。另发现 zero-refit 可与隐藏 child flag 组合并被较早 child dispatch 覆盖；现于任何 source/fit/dispatch 前拒绝全部 B3 hidden
+  child 与 child identity。四个入口路由、全部 child identity 与 CLI dispatch 反例均已有直接测试，`hmm_risk_backend` 387 项通过、coverage
+  76.21%。复审未发现简化交付、静默错误、业务语义迁移或未经确认的门禁。
 
 ## 24. 当前完成状态与下一步
 
@@ -3974,8 +3979,8 @@ mixed-dimension artifact/parser、dimension receipt与公式/identity/131-entry�
 calendar中的observation/utility availability fail closed。`d6_date_sequence_diagnostic.json` canonical SHA-256=
 `08b396d5c901d1e5ed416f56134f9a93bdf6d6f142542d9cbfbef93744a38a7f`，没有执行refit、selection重算、model/READY、DB或runtime写入。
 
-用户已批准`C-008-B3-D6-NA-A`；本revision现已完成详细设计、源码实施和本地正式审核，但源码尚未提交PR/合入，且新zero-refit
-D6 replay尚未执行。下一步先完成changed-file路由、本模块required plan、提交/PR并等待用户合入确认；合入后只复用已冻结P6模型和
+用户已批准`C-008-B3-D6-NA-A`；本revision现已完成详细设计、源码实施和本地正式审核，源码位于 PR #3258 且尚未合入，新zero-refit
+D6 replay尚未执行。下一步完成PR复核并等待用户合入确认；合入后只复用已冻结P6模型和
 D5 seed43执行零refit D6 replay。若D6仍失败则保持blocked，禁止扩大seed或返回D5；若该selected level
 accepted也仍不能推导两family READY。公共KMeans/EM/covariance合同不变，不重跑2096/5184 fits。
 

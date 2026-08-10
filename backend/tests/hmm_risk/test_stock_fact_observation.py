@@ -406,6 +406,26 @@ def test_feature_panel_recomputes_all_20_features_and_freezes_training_series() 
     assert sparse_carrier.availability_ledger[missing_position]["evidence_included"] is False
     assert sparse.validation_observations.shape == (59, 20)
 
+    legacy = subject.build_legacy_dense_diagnostic_series(
+        sparse_panel,
+        feature_names=ALL_CORE_FEATURES,
+        train_start=calendar[120],
+        train_end=calendar[269],
+        validation_start=calendar[270],
+        validation_end=calendar[329],
+        constituent_manifest_by_l1=constituent,
+        frozen_input_identity=frozen_identity,
+    )["L1-00"]
+    assert legacy.validation_calendar_series is None
+    assert legacy.validation_observations.shape == (59, 20)
+    assert legacy.validation_future_utility.shape == (59,)
+    assert set(legacy.validation_future_components) == {
+        "excess_return_5d",
+        "excess_return_10d",
+        "excess_return_20d",
+    }
+    legacy.validate(20)
+
 
 def test_cross_sectional_features_fail_closed_when_one_l1_day_is_missing() -> None:
     calendar = [item.date() for item in pd.bdate_range("2023-01-02", periods=25)]

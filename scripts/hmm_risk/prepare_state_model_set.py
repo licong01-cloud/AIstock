@@ -125,6 +125,7 @@ from backend.services.hmm_risk.stock_fact_observation import (  # noqa: E402
     MIN_COVERAGE,
     OBSERVATION_VERSION,
     build_c010_feature_domain_panel,
+    build_legacy_dense_diagnostic_series,
     build_l1_feature_panel,
     build_l1_training_series,
     complete_c010_domain_receipts,
@@ -1715,7 +1716,7 @@ def _diagnose_c008(request: dict[str, Any], *, db_prefix: str, include_b1_eviden
             mapping_manifest=inputs["mapping_manifest"],
             feature_definition={**inputs["feature_definition"], "selected_features": list(feature_names)},
         )
-        series = build_l1_training_series(
+        series = build_legacy_dense_diagnostic_series(
             inputs["panel"],
             feature_names=feature_names,
             train_start=spec.train_start,
@@ -1801,7 +1802,7 @@ def diagnose_c008_b3_diag02(request: dict[str, Any], *, db_prefix: str) -> dict[
             mapping_manifest=inputs["mapping_manifest"],
             feature_definition={**inputs["feature_definition"], "selected_features": list(feature_names)},
         )
-        series = build_l1_training_series(
+        series = build_legacy_dense_diagnostic_series(
             inputs["panel"],
             feature_names=feature_names,
             train_start=spec.train_start,
@@ -1876,7 +1877,7 @@ def diagnose_c008_b3_diag04(request: dict[str, Any], *, db_prefix: str) -> dict[
             mapping_manifest=inputs["mapping_manifest"],
             feature_definition={**inputs["feature_definition"], "selected_features": list(feature_names)},
         )
-        series = build_l1_training_series(
+        series = build_legacy_dense_diagnostic_series(
             inputs["panel"],
             feature_names=feature_names,
             train_start=spec.train_start,
@@ -3969,6 +3970,25 @@ def _require_b3_p6_mode_isolation(
             raise StateModelSetError("B3 P6 child process identity is invalid")
 
 
+def _require_b3_p6_zero_refit_mode_isolation(args: argparse.Namespace) -> None:
+    """Reject every parent/child execution identity that could shadow zero-refit dispatch."""
+
+    hidden_children = (
+        *B3_HIDDEN_CHILD_ARGUMENTS,
+        "_b3_p6_autocycle_l2_child",
+    )
+    child_identity_fields = (
+        "b3_process_identity",
+        "b3_d1_producer_commit",
+        "b3_d1_current_authority_sha256",
+        "b3_d1_historical_reference_sha256",
+    )
+    if any(bool(getattr(args, name, False)) for name in hidden_children) or any(
+        bool(getattr(args, name, "")) for name in child_identity_fields
+    ):
+        raise StateModelSetError("B3 P6 D6 zero-refit replay cannot be combined with another child mode")
+
+
 def _parse_b3_p6_child_payload(payload: bytes, *, process_identity: str) -> dict[str, Any]:
     try:
         value = json.loads(payload.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
@@ -5086,6 +5106,7 @@ def main() -> int:
         p6_child = bool(getattr(args, "_b3_p6_autocycle_l2_child", False))
         p6_zero_refit = bool(p6_zero_refit_output)
         if p6_zero_refit:
+            _require_b3_p6_zero_refit_mode_isolation(args)
             if not p6_parent_report:
                 raise StateModelSetError("--b3-p6-parent-report is required for D6 zero-refit replay")
             if (

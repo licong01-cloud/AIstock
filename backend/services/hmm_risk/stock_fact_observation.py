@@ -2421,6 +2421,126 @@ def _future_sum(series: pd.Series, horizon: int) -> pd.Series:
     return pd.concat(pieces, axis=1).sum(axis=1, min_count=horizon)
 
 
+def build_legacy_dense_diagnostic_series(
+    panel: pd.DataFrame,
+    *,
+    feature_names: Sequence[str],
+    train_start: date,
+    train_end: date,
+    validation_start: date,
+    validation_end: date,
+    constituent_manifest_by_l1: Mapping[str, Mapping[str, Any]],
+    expected_sector_count: int = 31,
+    direct_sector_level: str = "L1",
+    frozen_input_identity: Mapping[str, Any] | None = None,
+) -> dict[str, L1TrainingSeries]:
+    """Reproduce the immutable dense input contract used only by historical C-008 diagnostics.
+
+    Formal D6 execution must use :func:`build_l1_training_series`; this dedicated constructor
+    prevents the historical diagnostic CLIs from consuming a calendar carrier while still
+    expecting row-aligned dense utility arrays.
+    """
+
+    features = tuple(str(item) for item in feature_names)
+    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
+        raise StateModelSetError("feature_names is not an approved family")
+    work = panel.copy()
+    future_components = {horizon: _future_sum(work["daily_excess"], horizon) for horizon in (5, 10, 20)}
+    for horizon, values in future_components.items():
+        work[f"validation_excess_return_{horizon}d"] = values
+    work["validation_future_utility"] = (
+        0.35 * future_components[5] + 0.35 * future_components[10] + 0.30 * future_components[20]
+    )
+    output: dict[str, L1TrainingSeries] = {}
+    for code in sorted(work.index.get_level_values("l1_code").unique()):
+        sector = work.xs(code, level="l1_code")
+        sector_dates = sector.index.date
+        train = sector.loc[
+            (sector_dates >= train_start) & (sector_dates <= train_end),
+            list(features),
+        ].dropna()
+        validation = sector.loc[
+            (sector_dates >= validation_start) & (sector_dates <= validation_end),
+            [
+                *features,
+                "validation_future_utility",
+                "validation_excess_return_5d",
+                "validation_excess_return_10d",
+                "validation_excess_return_20d",
+            ],
+        ].dropna()
+        if len(train) < MIN_TRAINING_ROWS or len(validation) < 30:
+            raise StateModelSetError(
+                f"{code} diagnostic observation coverage is insufficient "
+                f"train={len(train)} validation={len(validation)}"
+            )
+        constituent = constituent_manifest_by_l1.get(str(code))
+        if not isinstance(constituent, Mapping):
+            raise StateModelSetError(f"{code} constituent manifest is missing")
+        l2_codes = tuple(sorted(str(item) for item in constituent.get("l2_codes") or ()))
+        if not l2_codes:
+            raise StateModelSetError(f"{code} constituent manifest has no L2 codes")
+        validation_dates = [item.date().isoformat() for item in validation.index]
+        utility_components = {
+            "excess_return_5d": validation["validation_excess_return_5d"].to_numpy(dtype=np.float64),
+            "excess_return_10d": validation["validation_excess_return_10d"].to_numpy(dtype=np.float64),
+            "excess_return_20d": validation["validation_excess_return_20d"].to_numpy(dtype=np.float64),
+        }
+        validation_observations = validation.loc[:, list(features)].to_numpy(dtype=np.float64)
+        validation_utility = validation["validation_future_utility"].to_numpy(dtype=np.float64)
+        validation_input_manifest = {
+            **dict(frozen_input_identity or {}),
+            "schema_version": "hmm_risk_d6_frozen_input_manifest_v1",
+            "direct_sector_level": direct_sector_level,
+            "sector_code": str(code),
+            "validation_dates": validation_dates,
+            "validation_dates_sha256": canonical_sha256(validation_dates),
+            "validation_observation_sha256": canonical_sha256(validation_observations.tolist()),
+            "utility_component_sha256": {
+                name: canonical_sha256(values.tolist()) for name, values in sorted(utility_components.items())
+            },
+            "combined_utility_sha256": canonical_sha256(validation_utility.tolist()),
+            "source_cutoff": "2025-04-30",
+            "formula_version": "hmm_risk_hard_future_excess_035_035_030_v1",
+            "benchmark_identity": "000300.SH",
+        }
+        output[str(code)] = L1TrainingSeries(
+            sector_code=str(code),
+            sector_name=str(sector["l1_name"].dropna().iloc[-1]),
+            train_observations=train.to_numpy(dtype=np.float64),
+            train_dates=tuple(item.date() for item in train.index),
+            validation_observations=validation_observations,
+            validation_dates=tuple(item.date() for item in validation.index),
+            validation_future_utility=validation_utility,
+            pit_l2_constituents=l2_codes,
+            pit_constituent_manifest_hash=canonical_sha256(constituent),
+            observation_manifest_hash=canonical_sha256(
+                {
+                    "observation_version": OBSERVATION_VERSION,
+                    "direct_sector_level": direct_sector_level,
+                    "sector_code": str(code),
+                    "feature_names": list(features),
+                    "train_dates": [item.date().isoformat() for item in train.index],
+                    "validation_dates": validation_dates,
+                    "train_sha256": canonical_sha256(train.to_numpy(dtype=np.float64).tolist()),
+                    "validation_sha256": canonical_sha256(validation.to_numpy(dtype=np.float64).tolist()),
+                }
+            ),
+            validation_future_components=utility_components,
+            validation_utility_source_cutoff=date(2025, 4, 30),
+            validation_utility_formula_version="hmm_risk_hard_future_excess_035_035_030_v1",
+            validation_input_manifest=validation_input_manifest,
+        )
+    if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
+        raise StateModelSetError("diagnostic series requires an approved L1/31 or L2/131 contract")
+    if len(output) != expected_sector_count:
+        raise StateModelSetError(
+            f"diagnostic series requires {expected_sector_count} direct {direct_sector_level} sectors; "
+            f"actual={len(output)}"
+        )
+    return output
+
+
 def build_l1_training_series(
     panel: pd.DataFrame,
     *,
