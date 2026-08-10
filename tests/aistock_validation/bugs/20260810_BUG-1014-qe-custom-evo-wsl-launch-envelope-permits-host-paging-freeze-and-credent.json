@@ -39,6 +39,12 @@
       "actor": "codex",
       "note": "Low-frequency 05:30 +08:00 readback found MA-E16 at 9 completed, 2 failed and Loop12 running. Host CPU was 28.7%-34.6%, available memory about 2.0 GB and paging about 3.4k-9.0k pages/sec. Loop12 still uses the pre-merge two-worker loader, so this is evidence for the fix rather than post-fix activation. No process control was performed.",
       "timestamp": "2026-08-10T21:39:54Z"
+    },
+    {
+      "action": "runtime_probe_contract_corrected",
+      "actor": "codex",
+      "note": "Normalized backend-main identity and business probes to executable absolute HTTP URLs and declared database readback not required because BUG-1014 has no DDL or DML. This metadata-only correction enables fail-closed post-restart verification without changing runtime behavior.",
+      "timestamp": "2026-08-10T21:52:00Z"
     }
   ],
   "evidence_uris": [
@@ -212,13 +218,13 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "GET http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
-    "database_readback_ref": "noop:no_database_change",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "fresh Windows pytest processes verified 123 config-composer tests plus 26 capacity/credential tests; local GeneralPTNN uses n_jobs=0 without prefetch, remote behavior remains n_jobs=2, unsafe local override fails closed, and over-capacity reservations wait without terminating existing work",
       "fresh WSL bash process verified TDX_DB, POSTGRES, API key, client secret and token names are absent while AISTOCK_PREDICTION_STORE_BASE_URL remains available; output contained no credential values"
     ],
-    "identity_ref": "GET http://127.0.0.1:8001/api/v1/runtime-identity",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
