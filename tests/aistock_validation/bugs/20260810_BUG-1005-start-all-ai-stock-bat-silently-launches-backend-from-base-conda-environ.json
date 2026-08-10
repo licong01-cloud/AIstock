@@ -2,7 +2,7 @@
   "actual": "Both branches use call conda activate AIstock & uvicorn, so activation failure is ignored and bare uvicorn may resolve to the base environment.",
   "allowed_write_scope": [
     "start_all_ai_stock.bat",
-    "backend/tests/scripts/test_start_all_ai_stock_contract.py",
+    "backend/tests/test_aistock_guardrail_scan.py",
     "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260810_BUG-1005-start-all-ai-stock-bat-silently-launches-backend-from-base-conda-environ.json",
@@ -36,6 +36,12 @@
       "actor": "Codex",
       "note": "A standalone cmd process called the absolute conda.bat, activated AIstock, then used the absolute AIstock interpreter to import LightGBM 4.6.0 and uvicorn 0.40.0. It did not import backend.main, bind a port, or control any service.",
       "timestamp": "2026-08-10T03:34:00Z"
+    },
+    {
+      "action": "align_static_test_with_ci_catalog",
+      "actor": "Codex",
+      "note": "Move the launcher contract assertions into the existing guardrail test target instead of expanding the generic CI classifier for one startup script.",
+      "timestamp": "2026-08-10T03:47:00Z"
     }
   ],
   "evidence_uris": [],

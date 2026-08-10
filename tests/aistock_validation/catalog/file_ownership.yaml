@@ -722,7 +722,6 @@ rules:
     priority: 90
     include:
       - start_all_ai_stock.bat
-      - backend/tests/scripts/test_start_all_ai_stock_contract.py
     primary_module: platform.config
     impact_modules: [platform.api]
     layer: runtime_launcher

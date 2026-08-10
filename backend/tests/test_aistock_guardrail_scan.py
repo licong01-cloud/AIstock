@@ -9,11 +9,14 @@ from pathlib import Path
 import pytest
 import yaml
 
+from backend.services.validation.file_ownership import FileOwnershipCatalog
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
 CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.yaml"
 RUNTIME_TARGET_CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
+WINDOWS_LAUNCHER_PATH = ROOT / "start_all_ai_stock.bat"
 
 
 def _load_module():
@@ -103,6 +106,56 @@ def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     assert runtime_catalog["policy"]["post_restart_verify_mode"] == "read_only"
     assert runtime_catalog["targets"]["backend-main"]["production_port"] == 8001
     assert runtime_catalog["targets"]["backend-main"]["isolated_validation_ports"] == [8011, 8012]
+    assert "start_all_ai_stock.bat" in runtime_catalog["targets"]["backend-main"]["source_globs"]
+
+
+def test_windows_backend_launcher_uses_the_aistock_interpreter_in_both_branches() -> None:
+    text = WINDOWS_LAUNCHER_PATH.read_text(encoding="utf-8")
+    backend_commands = [line.strip() for line in text.splitlines() if "backend.main:app" in line]
+
+    assert backend_commands == [
+        (
+            '; new-tab --title "AIstock Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% && '
+            "call %AISTOCK_CONDA_BAT% activate AIstock && %AISTOCK_BACKEND_PYTHON% -m uvicorn "
+            'backend.main:app --host 0.0.0.0 --port 8001" ^'
+        ),
+        'start "AIstock Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% && '
+        "call %AISTOCK_CONDA_BAT% activate AIstock && %AISTOCK_BACKEND_PYTHON% -m uvicorn "
+        'backend.main:app --host 0.0.0.0 --port 8001"',
+    ]
+    assert "call conda activate AIstock & uvicorn backend.main:app" not in text
+    assert " & uvicorn backend.main:app" not in text
+
+
+def test_windows_backend_launcher_fails_before_startup_when_runtime_paths_are_missing() -> None:
+    text = WINDOWS_LAUNCHER_PATH.read_text(encoding="utf-8")
+
+    assert 'set "AISTOCK_CONDA_BAT=C:\\Users\\lc999\\miniconda3\\condabin\\conda.bat"' in text
+    assert 'set "AISTOCK_BACKEND_PYTHON=C:\\Users\\lc999\\miniconda3\\envs\\AIstock\\python.exe"' in text
+    assert (
+        'if not exist "%AISTOCK_CONDA_BAT%" (\n'
+        "  echo ERROR: Conda activation script not found: %AISTOCK_CONDA_BAT%\n"
+        "  pause\n"
+        "  exit /b 1\n"
+        ")"
+    ) in text
+    assert (
+        'if not exist "%AISTOCK_BACKEND_PYTHON%" (\n'
+        "  echo ERROR: AIstock backend Python not found: %AISTOCK_BACKEND_PYTHON%\n"
+        "  pause\n"
+        "  exit /b 1\n"
+        ")"
+    ) in text
+    assert text.index('if not exist "%AISTOCK_CONDA_BAT%"') < text.index("where wt")
+    assert text.index('if not exist "%AISTOCK_BACKEND_PYTHON%"') < text.index("where wt")
+
+
+def test_windows_backend_launcher_has_platform_config_ownership() -> None:
+    ownership = FileOwnershipCatalog().match_path("start_all_ai_stock.bat")
+
+    assert ownership.ownership_status == "mapped"
+    assert ownership.primary_module == "platform.config"
+    assert "platform.api" in ownership.impact_modules
 
 
 @pytest.mark.parametrize(
