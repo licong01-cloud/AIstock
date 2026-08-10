@@ -170,11 +170,14 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/dividend/status",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/targets/dst_716424bc0867f6dd25055406",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "python -c isolated BUG-1013 source load -> passed FRESH_PROCESS_SOURCE_SMOKE"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
