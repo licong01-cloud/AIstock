@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1011",
-  "closed_at": null,
+  "closed_at": "2026-08-10T12:49:36Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -65,8 +65,8 @@
   },
   "first_seen_at": "2026-08-10T08:44:20.138020Z",
   "fix_branch": "bug/BUG-1011-workflow-gate-taxonomy-duplicates-controls-and-l-20260810",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "905ddc6508ed1afa480e76b92f5353df3e0a2874",
+  "fixed_at": "2026-08-10T12:49:36Z",
   "github_issue_number": 3254,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3254",
   "last_seen_at": "2026-08-10T09:03:28.917189Z",
@@ -74,6 +74,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3256",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -89,6 +90,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -96,16 +99,22 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "workflow gate taxonomy duplicates controls and lets evidence publishing block CI verdict",
   "task_tier": "T2",
+  "title": "workflow gate taxonomy duplicates controls and lets evidence publishing block CI verdict",
   "trigger_condition": {
     "fingerprint": "aae122975a8b10a0b0a2e7c5",
     "source_event_id": "FE-20260810-aae122975a8b"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/test_aistock_guardrail_scan.py backend/tests/test_validation_catalog_integrity.py -q -> passed (85 tests)",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed (0 findings, 0 blocking, ownership 9/9)",
+    "python -m nox -s validation_catalog_integrity -> passed (7 tests, 0 findings)",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 tests, ownership 14/14)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
