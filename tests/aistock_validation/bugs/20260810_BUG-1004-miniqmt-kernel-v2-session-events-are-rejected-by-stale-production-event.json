@@ -122,7 +122,7 @@
   },
   "first_seen_at": "2026-08-10T02:03:26.729622Z",
   "fix_branch": "bug/BUG-1004-miniqmt-kernel-v2-session-events-are-rejected-by-20260810",
-  "fix_commit": null,
+  "fix_commit": "03632ea83776da526ba9993b21483fe5eb4aaef8",
   "fixed_at": null,
   "github_issue_number": 3237,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3237",
@@ -163,7 +163,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
