@@ -1702,7 +1702,11 @@ class ConfigComposer:
         if has_custom_factors:
             factor_marker = self._compose_factor_file(factors_info)
             has_factor_files = factor_marker is not None
-            prepare_factors_py = self._compose_prepare_factors(factors_info, data_split=data_split)
+            prepare_factors_py = self._compose_prepare_factors(
+                factors_info,
+                data_split=data_split,
+                custom_params=custom_params,
+            )
 
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
@@ -2093,7 +2097,12 @@ class ConfigComposer:
                 if code:
                     experiment_files[f"factors/{f['factor_name']}.py"] = code
 
-            prepare_factors_py = self._compose_prepare_factors(factors_info, factor_data_dir=factor_data_dir, data_split=data_split)
+            prepare_factors_py = self._compose_prepare_factors(
+                factors_info,
+                factor_data_dir=factor_data_dir,
+                data_split=data_split,
+                custom_params=custom_params,
+            )
             if prepare_factors_py:
                 experiment_files["prepare_factors.py"] = prepare_factors_py
 
@@ -2838,7 +2847,11 @@ class ConfigComposer:
         if has_custom_factors:
             factor_marker = self._compose_factor_file(factors_info)
             has_factor_files = factor_marker is not None
-            prepare_factors_py = self._compose_prepare_factors(factors_info, data_split=data_split)
+            prepare_factors_py = self._compose_prepare_factors(
+                factors_info,
+                data_split=data_split,
+                custom_params=custom_params,
+            )
 
         # 保存文件
         conf_path = exp_dir / "conf.yaml"
@@ -4238,11 +4251,96 @@ class ConfigComposer:
             "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
         }
 
+    @staticmethod
+    def _normalize_observation_panel_contract(
+        custom_params: Optional[Dict[str, Any]],
+        factor_names: List[str],
+    ) -> Dict[str, Any]:
+        """Validate the opt-in matched-experiment observation panel contract.
+
+        The contract is deliberately limited to custom-factor-only experiments.
+        Alpha158 uses a separate loader/index and therefore cannot make the same
+        reference-factor intersection guarantee.
+        """
+
+        if custom_params is None or "observation_panel" not in custom_params:
+            return {}
+
+        raw_contract = custom_params.get("observation_panel")
+        if not isinstance(raw_contract, dict):
+            raise ValueError(
+                "qe_observation_panel_contract_invalid: observation_panel must be an object"
+            )
+
+        allowed_keys = {
+            "schema_version",
+            "panel_id",
+            "mode",
+            "reference_factor_names",
+        }
+        unknown_keys = sorted(set(raw_contract) - allowed_keys)
+        if unknown_keys:
+            raise ValueError(
+                "qe_observation_panel_unknown_keys: " + ",".join(unknown_keys)
+            )
+
+        if raw_contract.get("schema_version") != "qe_observation_panel_v1":
+            raise ValueError(
+                "qe_observation_panel_schema_invalid: expected qe_observation_panel_v1"
+            )
+        if raw_contract.get("mode") != "reference_factor_intersection":
+            raise ValueError(
+                "qe_observation_panel_mode_invalid: expected reference_factor_intersection"
+            )
+
+        panel_id = raw_contract.get("panel_id")
+        if not isinstance(panel_id, str) or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", panel_id
+        ) is None:
+            raise ValueError(
+                "qe_observation_panel_id_invalid: panel_id must be a stable identifier"
+            )
+
+        reference_factor_names = raw_contract.get("reference_factor_names")
+        if (
+            not isinstance(reference_factor_names, list)
+            or not reference_factor_names
+            or any(not isinstance(name, str) or not name for name in reference_factor_names)
+        ):
+            raise ValueError(
+                "qe_observation_panel_reference_factors_invalid: "
+                "reference_factor_names must be a non-empty string list"
+            )
+        if len(set(reference_factor_names)) != len(reference_factor_names):
+            raise ValueError(
+                "qe_observation_panel_reference_factors_duplicate: "
+                "reference_factor_names must be unique"
+            )
+
+        missing_factor_names = sorted(set(reference_factor_names) - set(factor_names))
+        if missing_factor_names:
+            raise ValueError(
+                "qe_observation_panel_reference_factor_not_configured: "
+                + ",".join(missing_factor_names)
+            )
+        if custom_params.get("disable_alpha158") is not True:
+            raise ValueError(
+                "qe_observation_panel_alpha158_not_supported: disable_alpha158 must be true"
+            )
+
+        return {
+            "schema_version": "qe_observation_panel_v1",
+            "panel_id": panel_id,
+            "mode": "reference_factor_intersection",
+            "reference_factor_names": list(reference_factor_names),
+        }
+
     def _compose_prepare_factors(
         self,
         factors_info: List[Dict],
         factor_data_dir: Optional[str] = None,
         data_split: Optional[Dict[str, str]] = None,
+        custom_params: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """生成 prepare_factors.py 预处理脚本（含因子值缓存集成）。
 
@@ -4263,6 +4361,10 @@ class ConfigComposer:
             return None
 
         factor_names = [f["factor_name"] for f in custom_factors]
+        observation_panel_contract = self._normalize_observation_panel_contract(
+            custom_params,
+            factor_names,
+        )
         factor_cache_universe_metadata = self._resolve_factor_cache_universe_metadata(
             start_date=train_start,
             end_date=test_end,
@@ -4300,6 +4402,9 @@ class ConfigComposer:
                     "end": QE_DATASET_SIGNAL_END_DATE.isoformat(),
                 }
             )
+        )
+        lines.append(
+            "QE_OBSERVATION_PANEL_CONTRACT = " + repr(observation_panel_contract)
         )
         lines.append("")
         lines.append("")
@@ -4767,6 +4872,59 @@ class ConfigComposer:
         lines.append("        return _execute_factor_locked(factor_name, factor_code, work_dir)")
         lines.append("")
         lines.append("")
+        lines.append("def _require_factor_results(factor_names, factor_results):")
+        lines.append("    missing_results = [")
+        lines.append("        name for name in factor_names if factor_results.get(name) is None")
+        lines.append("    ]")
+        lines.append("    if missing_results:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_factor_result_incomplete: ' + ','.join(missing_results)")
+        lines.append("        )")
+        lines.append("    missing_columns = [")
+        lines.append("        name")
+        lines.append("        for name in factor_names")
+        lines.append("        if name not in factor_results[name].columns")
+        lines.append("    ]")
+        lines.append("    if missing_columns:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_factor_result_column_missing: ' + ','.join(missing_columns)")
+        lines.append("        )")
+        lines.append("")
+        lines.append("")
+        lines.append("def _apply_observation_panel(combined):")
+        lines.append("    contract = QE_OBSERVATION_PANEL_CONTRACT")
+        lines.append("    if not contract:")
+        lines.append("        return combined")
+        lines.append("    reference_factor_names = list(contract['reference_factor_names'])")
+        lines.append("    missing_references = [")
+        lines.append("        name for name in reference_factor_names if name not in combined.columns")
+        lines.append("    ]")
+        lines.append("    if missing_references:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_observation_panel_reference_factor_missing: '")
+        lines.append("            + ','.join(missing_references)")
+        lines.append("        )")
+        lines.append("    rows_before = len(combined)")
+        lines.append("    reference_mask = combined.loc[:, reference_factor_names].notna().all(axis=1)")
+        lines.append("    filtered = combined.loc[reference_mask].copy()")
+        lines.append("    if filtered.empty:")
+        lines.append("        raise RuntimeError(")
+        lines.append("            'qe_observation_panel_empty: '")
+        lines.append("            + str(contract['panel_id'])")
+        lines.append("        )")
+        lines.append("    logger.info(")
+        lines.append("        'QE observation panel applied: panel_id=%s mode=%s references=%s '")
+        lines.append("        'rows_before=%d rows_after=%d rows_dropped=%d',")
+        lines.append("        contract['panel_id'],")
+        lines.append("        contract['mode'],")
+        lines.append("        reference_factor_names,")
+        lines.append("        rows_before,")
+        lines.append("        len(filtered),")
+        lines.append("        rows_before - len(filtered),")
+        lines.append("    )")
+        lines.append("    return filtered")
+        lines.append("")
+        lines.append("")
         lines.append("def main():")
         lines.append("    script_dir = os.path.dirname(os.path.abspath(__file__))")
         lines.append("    os.chdir(script_dir)")
@@ -4788,20 +4946,19 @@ class ConfigComposer:
 
         lines.append("")
         lines.append("    # 逐个执行因子")
-        lines.append("    factor_results = []")
+        lines.append("    factor_results = {}")
         lines.append("    for factor_name, factor_code in factor_codes.items():")
         lines.append("        logger.info(f'Executing factor: {factor_name}...')")
         lines.append("        result = execute_factor(factor_name, factor_code, script_dir)")
-        lines.append("        if result is not None:")
-        lines.append("            factor_results.append(result)")
+        lines.append("        factor_results[factor_name] = result")
         lines.append("")
         lines.append("    # 合并为 combined_factors_df.parquet")
-        lines.append("    if not factor_results:")
-        lines.append("        logger.error('No factors computed successfully!')")
-        lines.append("        sys.exit(1)")
+        lines.append("    _require_factor_results(list(factor_codes), factor_results)")
         lines.append("")
         lines.append("    logger.info(f'Combining {len(factor_results)} factor results...')")
-        lines.append("    combined = pd.concat(factor_results, axis=1)")
+        lines.append("    combined = pd.concat(")
+        lines.append("        [factor_results[name] for name in factor_codes], axis=1")
+        lines.append("    )")
         lines.append("    combined = combined.sort_index()")
         lines.append("    combined = combined.loc[:, ~combined.columns.duplicated(keep='last')]")
         lines.append("")
@@ -4824,6 +4981,8 @@ class ConfigComposer:
         lines.append("            logger.info('Swapping index levels to (datetime, instrument)...')")
         lines.append("            combined = combined.swaplevel('datetime', 'instrument')")
         lines.append("        combined = combined.sort_index()")
+        lines.append("")
+        lines.append("    combined = _apply_observation_panel(combined)")
         lines.append("")
         lines.append("    # 添加 'feature' 多级列索引（与 RDAgent factor_runner.py 一致）")
         lines.append("    new_columns = pd.MultiIndex.from_product([['feature'], combined.columns])")

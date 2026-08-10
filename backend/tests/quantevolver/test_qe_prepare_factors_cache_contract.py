@@ -41,6 +41,45 @@ def _script(monkeypatch) -> str:
     return script
 
 
+def _observation_panel(reference_factor_names: list[str]) -> dict[str, object]:
+    return {
+        "schema_version": "qe_observation_panel_v1",
+        "panel_id": "ma_e16_ce3_reference_v1",
+        "mode": "reference_factor_intersection",
+        "reference_factor_names": reference_factor_names,
+    }
+
+
+def _panel_script(
+    monkeypatch,
+    *,
+    factor_names: list[str] | None = None,
+    reference_factor_names: list[str] | None = None,
+) -> str:
+    _patch_universe(monkeypatch)
+    names = factor_names or ["BaseA", "BaseB", "Candidate"]
+    references = reference_factor_names or ["BaseA", "BaseB"]
+    factors_info = [
+        {
+            "factor_name": name,
+            "code_text": f"def calculate_{name}(instruments, start_date, end_date):\n    return None\n",
+        }
+        for name in names
+    ]
+    script = ConfigComposer()._compose_prepare_factors(
+        factors_info,
+        factor_data_dir="/tmp/factor_data",
+        data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT),
+        custom_params={
+            "disable_alpha158": True,
+            "observation_panel": _observation_panel(references),
+        },
+    )
+    assert script is not None
+    compile(script, "prepare_factors.py", "exec")
+    return script
+
+
 def test_prepare_factors_generates_official_cache_hit_contract(monkeypatch) -> None:
     script = _script(monkeypatch)
 
@@ -188,3 +227,202 @@ def test_prepare_factors_contract_classifies_hash_mismatch(monkeypatch, tmp_path
 
     assert contract["gate_status"] == "failed"
     assert contract["miss_reasons"]["hash_mismatch"] == ["DemoFactor"]
+
+
+def test_prepare_factors_embeds_normalized_observation_panel_contract(monkeypatch) -> None:
+    script = _panel_script(monkeypatch)
+    ns: dict[str, object] = {}
+    exec(script, ns)
+
+    assert ns["QE_OBSERVATION_PANEL_CONTRACT"] == _observation_panel(["BaseA", "BaseB"])
+    assert "def _apply_observation_panel" in script
+    assert "qe_observation_panel_empty" in script
+
+
+@pytest.mark.parametrize(
+    ("custom_params", "reason_code"),
+    [
+        (
+            {"disable_alpha158": True, "observation_panel": "not-an-object"},
+            "qe_observation_panel_contract_invalid",
+        ),
+        (
+            {
+                "disable_alpha158": True,
+                "observation_panel": {
+                    **_observation_panel(["BaseA"]),
+                    "unexpected": True,
+                },
+            },
+            "qe_observation_panel_unknown_keys",
+        ),
+        (
+            {
+                "disable_alpha158": True,
+                "observation_panel": {
+                    **_observation_panel(["BaseA"]),
+                    "schema_version": "qe_observation_panel_v2",
+                },
+            },
+            "qe_observation_panel_schema_invalid",
+        ),
+        (
+            {
+                "disable_alpha158": True,
+                "observation_panel": {
+                    **_observation_panel(["BaseA"]),
+                    "mode": "outer_union",
+                },
+            },
+            "qe_observation_panel_mode_invalid",
+        ),
+        (
+            {
+                "disable_alpha158": True,
+                "observation_panel": {
+                    **_observation_panel(["BaseA"]),
+                    "panel_id": "contains spaces",
+                },
+            },
+            "qe_observation_panel_id_invalid",
+        ),
+        (
+            {
+                "disable_alpha158": True,
+                "observation_panel": _observation_panel([]),
+            },
+            "qe_observation_panel_reference_factors_invalid",
+        ),
+        (
+            {
+                "disable_alpha158": True,
+                "observation_panel": _observation_panel(["BaseA", "BaseA"]),
+            },
+            "qe_observation_panel_reference_factors_duplicate",
+        ),
+        (
+            {
+                "disable_alpha158": True,
+                "observation_panel": _observation_panel(["Missing"]),
+            },
+            "qe_observation_panel_reference_factor_not_configured",
+        ),
+        (
+            {
+                "disable_alpha158": False,
+                "observation_panel": _observation_panel(["BaseA"]),
+            },
+            "qe_observation_panel_alpha158_not_supported",
+        ),
+    ],
+)
+def test_observation_panel_contract_rejects_invalid_declarations(
+    custom_params: dict[str, object],
+    reason_code: str,
+) -> None:
+    with pytest.raises(ValueError, match=reason_code):
+        ConfigComposer._normalize_observation_panel_contract(
+            custom_params,
+            ["BaseA", "BaseB", "Candidate"],
+        )
+
+
+def test_observation_panel_keeps_identical_reference_index_for_sparse_candidate(monkeypatch) -> None:
+    script = _panel_script(monkeypatch)
+    ns: dict[str, object] = {}
+    exec(script, ns)
+    base_index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2026-01-05"), "000001.SZ"),
+            (pd.Timestamp("2026-01-05"), "000002.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    candidate_index = base_index.append(
+        pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2026-01-05"), "920001.BJ")],
+            names=["datetime", "instrument"],
+        )
+    )
+    combined = pd.concat(
+        [
+            pd.DataFrame({"BaseA": [1.0, 2.0]}, index=base_index),
+            pd.DataFrame({"BaseB": [3.0, 4.0]}, index=base_index),
+            pd.DataFrame({"Candidate": [5.0, float("nan"), 6.0]}, index=candidate_index),
+        ],
+        axis=1,
+    )
+
+    filtered = ns["_apply_observation_panel"](combined)
+
+    pd.testing.assert_index_equal(filtered.index, base_index)
+    assert pd.isna(filtered.loc[base_index[1], "Candidate"])
+
+
+def test_observation_panel_legacy_mode_preserves_outer_union(monkeypatch) -> None:
+    script = _script(monkeypatch)
+    ns: dict[str, object] = {}
+    exec(script, ns)
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-01-05"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    combined = pd.DataFrame({"DemoFactor": [1.0]}, index=index)
+
+    assert ns["QE_OBSERVATION_PANEL_CONTRACT"] == {}
+    assert ns["_apply_observation_panel"](combined) is combined
+
+
+def test_observation_panel_missing_reference_column_fails_closed(monkeypatch) -> None:
+    script = _panel_script(monkeypatch)
+    ns: dict[str, object] = {}
+    exec(script, ns)
+    combined = pd.DataFrame({"BaseA": [1.0], "Candidate": [2.0]})
+
+    with pytest.raises(RuntimeError, match="qe_observation_panel_reference_factor_missing"):
+        ns["_apply_observation_panel"](combined)
+
+
+def test_observation_panel_empty_intersection_fails_closed(monkeypatch) -> None:
+    script = _panel_script(monkeypatch)
+    ns: dict[str, object] = {}
+    exec(script, ns)
+    combined = pd.DataFrame(
+        {
+            "BaseA": [1.0, float("nan")],
+            "BaseB": [float("nan"), 2.0],
+            "Candidate": [3.0, 4.0],
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="qe_observation_panel_empty"):
+        ns["_apply_observation_panel"](combined)
+
+
+@pytest.mark.parametrize(
+    ("factor_results", "reason_code"),
+    [
+        (
+            {"BaseA": pd.DataFrame({"BaseA": [1.0]}), "BaseB": None},
+            "qe_factor_result_incomplete",
+        ),
+        (
+            {
+                "BaseA": pd.DataFrame({"BaseA": [1.0]}),
+                "BaseB": pd.DataFrame({"wrong": [2.0]}),
+            },
+            "qe_factor_result_column_missing",
+        ),
+    ],
+)
+def test_prepare_factors_missing_configured_output_fails_closed(
+    monkeypatch,
+    factor_results: dict[str, pd.DataFrame | None],
+    reason_code: str,
+) -> None:
+    script = _panel_script(monkeypatch)
+    ns: dict[str, object] = {}
+    exec(script, ns)
+
+    with pytest.raises(RuntimeError, match=reason_code):
+        ns["_require_factor_results"](["BaseA", "BaseB"], factor_results)

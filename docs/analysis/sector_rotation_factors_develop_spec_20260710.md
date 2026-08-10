@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发与实验分析蓝图 / 历史批次 `Gate-0` 开发记录（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v6.0（策略演进最高优先级；活动进度更新至 MA-E13；主线转为近期 regime 适配与正交 Alpha 发现；Multi-Alpha 基础架构继续 maintenance-only，2026-08-09）
+- 当前版本：v6.1（策略演进最高优先级；活动进度更新至 MA-E15；MA-E14 regime overlay 已结束，MA-E15 暴露观测面板混杂，先以 BUG-1006 恢复 matched Alpha 归因；Multi-Alpha 基础架构继续 maintenance-only，2026-08-10）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 - 多 Alpha 基础研发详细设计：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
@@ -15,7 +15,7 @@
 >
 > 关联缺口（已解除，2026-08-06）：停牌输入不再依赖数据库——已构建版本化冻结候选数据集 `suspend_d_daily_candidate_20180801_20260630`（`suspend_d.parquet` + `manifest.json`，含逐交易日完整性回执，离线构建期只读导出自 `market.suspend_d`，`suspend_type='S'`，仅 sh/sz、剔除 BJ），作为冻结 bin 目录的同级 sidecar 同步至全部计算节点；新装配由 `qe_build_frozen_suspend_filter.py` 在计算节点按 `qe_frozen_build_spec.json` 的 suspend 钉（dataset_id/cutoff/universe key/SHA256）重建 `qe_suspend_filter.json`，钉/身份/日期覆盖/字段不符一律 fail closed，无数据库回退。原 `qe_suspend_filter_offline_dataset_gap` 阻断随之解除。
 
-> **v6.0 活动权威（2026-08-09）：**截至本次修订，MA-E07、MA-E10、MA-E12、MA-E13G 与 MA-E13R 均已有终态真实结果。全窗口收益仍较强，但 2025-07-01 至 2026-06-29 的近期窗口 CAGR/Sharpe 仅约 `12.35%/0.831`；当前首要问题是 regime drift 与真正正交的新 Alpha 不足，不是继续建设平台或机械增加模型腿。第 2.5、9.9.2～9.9.4、12、13、15、17 节是当前状态与后续顺序的权威入口；其他版本段落只保留当时事实，不构成活动 backlog。
+> **v6.1 活动权威（2026-08-10）：**MA-E14 与 MA-E15 均已取得终态真实结果。MA-E14 的 H95/C85 regime overlay 在 full/early/late 三个窗口都降低 CAGR，当前阈值调优分支结束；MA-E15 的 9/9 Loop 显示压缩扩张三因子、增加 breadth 的四因子以及 LSTM 之间存在可继续研究的信号差异，但 `prepare_factors.py` 的 outer-union 令四因子实验额外纳入 1,511 行观测，不能据此归因 breadth 的真实增量。BUG-1006 是当前唯一阻断下一轮归因的 QE BUG；它只修复显式 matched observation panel，不恢复平台建设。第 2.5、9.9.2～9.9.4、12、13、15、17 节是当前状态与后续顺序的权威入口；其他版本段落只保留当时事实，不构成活动 backlog。
 
 > **未来关系实验的数据边界：**任何 HIST、动态图、概念图、回撤 hazard 或新 Alpha trial 都只能消费实验启动前已经生成并钉住版本/cutoff/hash 的 H5/Parquet/bin/sidecar。实验、composer、worker 与 qrun 不得查询 `market.*`、连接数据库补齐关系或在缺文件时降级。专用数据集构建流程与 QE 实验运行严格分离；是否建设新的冻结数据集只按未来策略价值另行评估，不成为当前实验前置。
 
@@ -133,7 +133,9 @@ v5.24 纠正“平台完整度先于策略演进”的执行偏移。Multi-Alpha
 
 v6.0 以 MA-E07～MA-E13 终态结果替代 v5.24 的运行中快照。四腿 soft de-risk 与 drop-TCN 三腿形成全窗口 Pareto 候选；G18 新增腿明显退化；近期一年窗口仅取得约 `12%` CAGR，确认首要瓶颈是 regime drift；三种子 industry-bias 结果把静态行业关系从直接 Alpha 重分类为关系先验/组合正则。活动研究不再按 `MA-E01→MA-E02` 的单线编号排队，而按 `POLICY/ALPHA/RELATION/LABEL` 四个稳定 track 并行组织，真实策略结果始终优先。新增 Alpha 首批聚焦波幅压缩扩张、大单—小单参与差、领导耗竭与多模型分歧；动态图、右尾标签和基本面扩散随后推进。基础设施、UI、Archive、历史补账和平台完整化边界不变。
 
-### 2.5 当前执行总账（截至 2026-08-09）
+v6.1 将 MA-E14/MA-E15 纳入终态总账并修正活动顺序。MA-E14 结束当前 H95/C85 threshold-overlay 分支；MA-E15 的 CE3/CE4-B/LSTM 结果保留，但因生成脚本 outer-union 改变观测总体，breadth 增量结论撤回为待复验。BUG-1006 以 opt-in 的显式参考因子交集恢复 matched trial，运行态生效后直接执行 MA-E16。该最小修复由真实 Alpha trial 触发，符合 maintenance-only 边界，不恢复任何平台、UI、Archive 或历史工程。
+
+### 2.5 当前执行总账（截至 2026-08-10）
 
 本表是阅读本文时判断“已完成/待执行/仅设计”的首要入口。历史 Gate-0 receipt 不因后续进度而删除，但当前状态以本表、对应实验 task/run 和第 15 节验收矩阵为准。
 
@@ -169,6 +171,11 @@ v6.0 以 MA-E07～MA-E13 终态结果替代 v5.24 的运行中快照。四腿 so
 | MA-E12 G18-SDR 新增腿 | `SUCCEEDED_BUT_DEGRADED` | `macb_idem_06623a223e94d9c84cdda714e27fae69c34eb413` | CAGR/Sharpe/Calmar/MDD=`63.92%/1.759/2.980/-21.45%`；证明机械追加因子/模型腿会稀释已有组合，不继续沿用“更多腿即增量”的假设。 |
 | MA-E13G EfficientGATs industry-bias 三种子 | `COMPLETED_3_OF_3_RELATION_PRIOR` | seed123 `qe_20260807_141614_c062`；seed314/2718 `qe_20260809_035858_2d90` | 相对 matched R11B embedding-only，平均 CAGR/primary information-ratio 提升约 `9.38pp/0.251`，RankIC 下降约 `0.00374`；该 primary 指标与上一行 absolute Sharpe 分开解释。静态行业关系仅作为关系先验、风险状态或组合正则继续研究。 |
 | MA-E13R drop-TCN 近期窗口 | `SUCCEEDED_LATE_WINDOW_WEAK_ALPHA` | `macb_idem_bf8128c3456de563139e841fe89146d3444e9659` | 2025-07-01～2026-06-29：CAGR/Sharpe/Calmar/MDD=`12.35%/0.831/0.719/-17.18%`；较四腿 MA-E09 的 `12.20%/0.827/0.638/-19.13%` 风险改善但收益近乎不变，首要缺口是 regime 适配与新 Alpha。 |
+| MA-E14 H95/C85 regime overlay | `COMPLETED_CURRENT_POLICY_DEGRADED` | 两节点真实 full/early/late 对照；H95/C85 policy receipt | 相对 matched anchor 的 CAGR 在 full/early/late 分别降低约 `4.34pp/2.25pp/1.10pp`，且风险/换手没有形成补偿性改善。结束当前阈值 overlay 调优，不外推否定所有 regime 状态研究。 |
+| MA-E15 压缩扩张独立专家 | `COMPLETED_9_OF_9_RESULT_CONFOUNDED_BY_PANEL` | `qe_20260810_020755_38d2`；远端 LGBM Loop1～6、WSL LSTM Loop7～9 | CE3-LGBM 三种子均值 IC/RankIC/CAGR/Sharpe/MDD/Calmar/turnover=`0.03880/0.06978/46.91%/1.676/-15.04%/3.121/5.249`；CE4-B LGBM=`0.03818/0.06814/29.64%/1.176/-19.12%/1.554/6.151`；CE4-B LSTM=`0.03644/0.07804/36.78%/1.423/-14.46%/2.539/4.781`。这些是实际运行结果，但 CE3/CE4-B 的总体不同，禁止解释为 breadth 的干净因果增量。 |
+| MA-E15 观测面板诊断 | `COMPLETED_ROOT_CAUSE_CONFIRMED` | Prediction Store Loop1～9 manifests/labels/predictions；BUG-1006/#3239 | CE3 有 `2,203,063` 行，CE4-B 有 `2,204,574` 行；CE3 index 是 CE4-B 的严格子集，额外 `1,511` 行（`0.068539%`），共同样本标签逐值一致。额外行中 `1,091` 行 h20 标签有效；LGBM 把这些额外有效行全部排入逐日 Top20，说明极小的总体差异也能显著改变组合。LSTM Loop9 只有 3 个额外样本进入 Top20，进一步表明模型与缺失填零交互不能被当作因子效应。 |
+| BUG-1006 matched observation panel | `SOURCE_VALIDATED_PENDING_PR_MERGE_RESTART` | BUG-1006 / Issue #3239；`qe_observation_panel_v1`；聚焦测试与工作流验证 | 新 trial 可声明预先指定的参考因子交集；缺配置因子、缺参考列或空面板均以稳定 reason code fail closed。未声明的旧任务保持原行为。该修复是 MA-E15 暴露的最小阻断 BUG，不扩展 UI、Archive、schema 或历史工程；运行态需源码合入后由用户重启。 |
+| MA-E16 matched CE3/CE4-B 复验 | `DESIGN_READY_PENDING_BUG1006_RUNTIME` | 第 9.9.2～9.9.3 节预注册矩阵 | 参考面板固定为 CE3 三因子交集；LGBM 与 LSTM 各比较 CE3/CE4-B × seeds 123/314/2718，保持 h20 裸收益、Top50/n_drop1、数据快照和执行参数一致。只有该轮完成后，才对 breadth 增量及 fixed-weight blend/LOO 形成新结论。 |
 | 多 Alpha QE 演进平台基础 | `P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY` | 第 4.11、9.9、Phase G0-H；已合入基础 PR 与后续阻断 BUG 修复 | 当前能力足以继续演进。只修真实 trial 暴露且无安全替代路径的阻断 BUG；禁止通用编排、UI、Archive、历史补账或 provenance 完整化研发抢占实验。 |
 | 两层板块 oracle / R8M / HIST / 概念超图 | `P2_CONDITIONAL_NON_BLOCKING` | 第 9.5～9.8 节；F-016/F-018/F-019 | 只在现有冻结文件与空闲资源足够、且不延迟 P0/P1 candidate 时运行；概念/事件数据缺失不触发前置平台建设或历史补算。 |
 
@@ -1042,7 +1049,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 详细设计和逐文件实施顺序见 `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`。P0-1～P0-4 的完成标准是可靠性与 UI 生命周期能力，不是任何 Alpha 方向的 go/stop 条件。
 
-#### 9.9.2 v6.0 科研架构与方向优先级
+#### 9.9.2 v6.1 科研架构与方向优先级
 
 当前总体结构固定为：`冻结文件数据 -> DIRECT_ALPHA 专家 -> CONDITIONING_STATE/RELATION_PRIOR -> 条件化组合 -> PORTFOLIO_POLICY`。同一个因子或模型在一个 trial 中必须声明主角色，避免把风险状态硬塞成直接预测腿。
 
@@ -1054,15 +1061,17 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 | `PORTFOLIO_POLICY` | 权重、入场、减仓、退出、重入 | entry-gate、bounded de-risk、dynamic n-drop | 组合改善不反推基础预测 RankIC 已提高 |
 | `NEGATIVE_CONTROL` | 方向、冗余和 regime 互证 | 资金流加速、领导持续性原方向、失败新增腿 | 负结果不伪装为缺失，也不外推终止整个方向 |
 
-**P0-A：近期 regime 适配的三腿策略。**以 MA-E10 全窗口三腿和 MA-E13R 近期窗口为同口径锚点，先复用已有 prediction，不重训主模型。使用只依赖历史冻结文件的 breadth、残差协同、资金背离、领导持续性及多模型分歧，比较固定 entry-gate 与条件化权重/风险预算。目标不是只维持全窗口高 CAGR，而是解释并改善近期一年 `12.35%/0.831` 的 CAGR/Sharpe，同时记录对全窗口 Pareto 的损失。
+**v6.1 归因修正。**MA-E15 不是“breadth 已证伪”。CE4-B 比 CE3 多出的 `m_sector_volume_confirmed_breadth_5d_20d` 同时改变了 outer-union 观测总体；Qlib 后续 Fillna 又把缺失基线特征变成零。共同样本标签一致只能排除标签漂移，不能排除模型对额外零填充样本的排序响应。因此 CE3/CE4-B 的原始收益差异只能标记为 `CONFOUNDED_BY_PANEL`。MA-E16 使用 `qe_observation_panel_v1`，预先固定参考因子 `m_intraday_range_60d_min_ratio`、`m_turnover_acceleration`、`m_sector_mf_divergence_lg` 的非空交集；候选 breadth 可以在该固定索引内缺失并沿用既有 loader 填充，但不得新增观测行。
 
-**P0-B：波幅压缩—资金确认—扩张 Alpha。**`m_intraday_range_60d_min_ratio` 的官方 h20 IC 在 full/out-sample/recent-6m 为 `0.05566/0.07385/0.05651`，h20 RankIC 为 `0.05652/0.08320/0.06919`，HAC companion 同方向。它当前不在 MA-E13G 的 G14-FP 因子集内。先建立独立专家，组合“接近 60 日最小日内振幅、板块/个股资金加速、breadth 扩散”，再做 matched-seed 与组合 LOO；不直接把单因子追加到现有大因子集。
+**P0-A：近期 regime 适配的三腿策略。**MA-E14 已完成 H95/C85 overlay 的 full/early/late 对照，三个窗口 CAGR 均下降，当前阈值 overlay 分支结束。regime、breadth、残差协同和资金背离仍保留为 `CONDITIONING_STATE`，但下一轮不继续搜索阈值；先完成 MA-E16 的直接 Alpha 面板隔离，再根据结果决定它们是否仅用于风险正则或动态权重。
+
+**P0-B：波幅压缩—资金确认—扩张 Alpha。**`m_intraday_range_60d_min_ratio` 的官方 h20 IC 在 full/out-sample/recent-6m 为 `0.05566/0.07385/0.05651`，h20 RankIC 为 `0.05652/0.08320/0.06919`，HAC companion 同方向。MA-E15 已完成首轮 CE3/CE4-B × LGBM/LSTM 的 9 个 Loop，但由于观测面板混杂只保留为探索证据。MA-E16 采用同一显式参考面板，运行 LGBM 与 LSTM 各自的 CE3/CE4-B matched-seed 复验；不直接把单因子追加到既有大因子集，也不在复验前选择方向。
 
 **P0-C：板块大单—小单参与差 Alpha。**现有 `Industry_Turnover_SmallBuy_Flow_Ratio_Factor` 的 h20 IC 在 full/out-sample/recent-6m 为 `0.03453/0.06024/0.08714`，但原始 `sw2_amount / mf_sm_buy_vol` 存在单位、规模和分母稳定性风险。新版本按 PIT 行业聚合大单/超大单净流入占成交额、小单参与占比及其 5 日相对 20 日加速度，使用 amount/share 或截面 rank 的单位一致口径；大单/小单只表示订单规模代理，不推断账户或投资者身份。它是新命名、新公式、新 trial，不用测试期结果事后改原因子。
 
 **P0-D：领导耗竭/拥挤反转 Alpha。**`m_stock_sector_leadership_persistence_20d_10d` 的 full/out-sample h20 IC 为 `-0.04969/-0.04285`，而近期方向混合。新候选使用“领导持续性 × breadth 减速 × 资金背离恶化”的预先定义语义，分别保留原方向负对照与耗竭方向；优先作为条件 Alpha、退出或降权信号，不事后简单取负覆盖旧结果。
 
-**P0-E：多模型一致性与分歧。**从已有 LGBM/LSTM/GAT/TCN prediction 文件计算每日 percentile-rank 共识、分歧、分歧变化和单腿近期可靠度。该方向无需新数据或新平台，优先用于三腿动态权重和“共识高排名 vs 单模型尖峰”直接 Alpha 对照。
+**P0-E：多模型一致性与分歧。**MA-E15 中 CE3-LGBM 与 CE4-B LSTM 的日截面 rank correlation 约 `0.68～0.73`、Top50 overlap 约 `7.6%～10%`；同一 CE4-B 的 LGBM/LSTM rank correlation 约 `0.67～0.72`、Top50 overlap 约 `3.8%～5.2%`，而 LSTM 三种子相关约 `0.969～0.991`。这说明模型间互补性值得继续，但这些数值仍受面板差异影响。MA-E16 完成后，先在同一面板做固定权重 prediction blend 与任务级 LOO，再研究动态分歧权重；不以低 overlap 自动授予组合腿身份。
 
 **P1-A：动态多关系与回撤 hazard。**复用 R11B h40 与 MA-E13G matched-seed 基线，只从冻结文件构造 rolling residual co-movement、flow/state、leadership 和 cross-sector lead-lag；逐关系消融。图输出优先进入 `CONDITIONING_STATE/RELATION_PRIOR` 及未来 5/10/20 日回撤 hazard，不做静态关系直接分数融合。
 
@@ -1074,7 +1083,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 **继续终止。**历史 Loop 总账补齐、Archive 补录、旧制品物化、F-014 Phase 5、通用 UI/schema/provenance 完整化及没有明确增量假设的 TCN/Transformer/更多腿扫描，不重新进入活动 backlog。
 
-#### 9.9.3 策略优先执行合同（v6.0）
+#### 9.9.3 策略优先执行合同（v6.1）
 
 1. 当前全窗口 Pareto 锚点为 MA-E07 四腿 soft de-risk 与 MA-E10 drop-TCN 三腿；近期 regime 锚点为 MA-E13R。R12P 继续是历史组合基线，不再是唯一活动比较入口。
 2. 每个候选并列记录 full（2024-07-01～2026-06-29）、early（2024-07-01～2025-06-30）和 late（2025-07-01～2026-06-29）窗口。窗口差异用于解释适用范围，不形成研究准入门禁；不得只用全窗口掩盖近期失效。
@@ -1086,14 +1095,15 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 8. WSL 优先承担 `gpu_serial_graph=1` 的图/关系训练及已验证的 GPU 模型；远端节点优先承担 LGBM、组合与窗口回测。并发由现有调度器和资源证据决定，工作目录、recorder、cache 与内存必须隔离；不得为了占满算力越过资源契约。
 9. 不新增通用 UI、schema、Archive writer、历史解析器或历史物化任务。只有真实 trial 暴露、可复现且直接阻止产生结果、又无安全替代路径的 BUG 才能暂停实验；修复后恢复原 candidate。
 10. 后端启动、停止、重启仍归用户所有。后端重启不应终止已启动的外部 QE worker；本蓝图及任何实验授权都不产生进程控制权限。
-11. 下一执行顺序固定为：近期三腿 regime policy -> 压缩扩张/参与差/领导耗竭独立专家 -> 多模型分歧动态权重 -> 动态关系回撤 hazard -> PIT 基本面扩散与右尾多任务。P2 方向不得延迟前四项。
+11. matched 因子实验必须显式声明 `qe_observation_panel_v1`、稳定 `panel_id`、`reference_factor_intersection` 和参考因子列表，并使用 `disable_alpha158=true`。所有 trial 的参考索引定义必须相同；缺配置因子、缺参考列、空交集或声明拼写错误均 fail closed。未声明该契约的历史 task 不改写、不回填。
+12. 下一执行顺序固定为：BUG-1006 源码合入与用户重启 -> MA-E16 同面板 CE3/CE4-B 双模型三种子 -> 基于 MA-E16 结果的固定权重 blend + LOO（仅在存在互补证据时）-> 参与差/领导耗竭独立专家 -> 多模型分歧动态权重 -> 动态关系回撤 hazard -> PIT 基本面扩散与右尾多任务。P2 方向不得延迟前五项。
 
-#### 9.9.4 v6.0 DESIGN-COMPLIANCE-001 文档审核
+#### 9.9.4 v6.1 DESIGN-COMPLIANCE-001 文档审核
 
-- `no_simplified_delivery`：MA-E07～MA-E13 的真实终态结果、退化结果和近期弱点均逐项写入；蓝图没有把文档、代码、单测或单因子 IC 冒充策略完成。
-- `no_silent_error`：MA-E12 退化、近期窗口弱 Alpha、industry-bias RankIC 下降、因子方向翻转和历史缺口均显式保留；缺文件/漂移/DB 数据面访问继续 fail closed。
-- `no_business_semantic_drift`：裸前向收益主标签、QE-only/文件数据面、既有组合公式与真实指标不改写；静态关系只重分类研究角色，不伪造新的预测结论。
-- `no_unrequested_gate_or_approval`：full/early/late、matched-seed、LOO 和角色分类是分析与归因方法，不是人工审批或研究准入；P0-1～P0-4、F-014、UI、Archive 与历史完整度均不成为前置。
+- `no_simplified_delivery`：MA-E14 的三窗口退化、MA-E15 的 9/9 指标、观测面板混杂和 MA-E16 完整双模型三种子矩阵均逐项写入；蓝图没有把 BUG 源码、单测或首轮混杂结果冒充新 Alpha 验证完成。
+- `no_silent_error`：额外 `1,511` 行、`1,091` 个有效标签、LGBM/LSTM 的 Top20 差异和 outer-union + Fillna 机制均显式保留；缺因子、缺参考列、空面板、文件漂移或 DB 数据面访问继续 fail closed。
+- `no_business_semantic_drift`：裸前向收益主标签、QE-only/文件数据面、Top50/n_drop1、full/early/late 和原始 MA-E15 结果不改写；新契约只固定 matched trial 的观测索引，不改变候选因子值、标签或组合公式。
+- `no_unrequested_gate_or_approval`：观测面板是形成可归因对照所必需的实验合同，不是人工审批；历史 task 保持原行为，P0-1～P0-4、F-014、UI、Archive 与历史完整度仍不成为前置。
 
 #### 9.9.5 v5.24 科研方向快照（历史，不代表当前排期）
 
@@ -1262,11 +1272,12 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 | F-024 | Alpha/状态/关系/策略角色分离 | 每个候选声明 `DIRECT_ALPHA`、`CONDITIONING_STATE`、`RELATION_PRIOR`、`PORTFOLIO_POLICY` 或 `NEGATIVE_CONTROL` 主角色；信号、关系和组合改善分别归因，不互相冒充。 |
 | F-025 | 多窗口与 matched-seed 真实性 | 活动候选并列报告 full/early/late；训练型候选默认使用 seeds 123/314/2718；单次回测、单因子 IC、单最好 seed 和全窗口结果不得覆盖近期失效或被外推为稳定结论。 |
 | F-026 | QE 数据面零数据库扩展 | 新 Alpha、HIST、动态图、hazard 与概念关系只消费钉住的 H5/Parquet/bin/sidecar；实验/composer/worker/qrun 不访问数据库、不在线补齐、不回退。 |
-| F-027 | v6.0 活动演进顺序 | 近期三腿 regime policy -> 压缩扩张/参与差/领导耗竭专家 -> 多模型分歧动态权重 -> 动态关系回撤 hazard -> PIT 基本面扩散与右尾多任务；P2 不延迟 P0/P1。 |
+| F-027 | v6.1 活动演进顺序 | BUG-1006 运行态生效 -> MA-E16 matched CE3/CE4-B -> 条件固定权重 blend/LOO -> 参与差/领导耗竭专家 -> 多模型分歧动态权重 -> 动态关系回撤 hazard -> PIT 基本面扩散与右尾多任务；P2 不延迟 P0/P1。 |
+| F-028 | matched observation panel | 训练型因子归因 trial 预先声明 `qe_observation_panel_v1` 和参考因子交集；同组 candidate 使用完全相同的观测索引。缺配置因子、缺参考列、空面板或无效声明 fail closed；历史 task 不改写。 |
 
 ## 13. Implementation Plan / 实施计划
 
-v6.0 当前执行顺序覆盖以下历史 Phase 顺序：文档合入后直接进入近期三腿 regime policy 与三个独立 Alpha 专家，不再等待平台、历史证据或 P2 数据准备。其余 Phase 只作为既有设计目录，只有不延迟下一 P0/P1 candidate 时才可取用。F-014/UI/历史补账/物化和底座完整化继续不实施。
+v6.1 当前执行顺序覆盖以下历史 Phase 顺序：BUG-1006 合入并由用户重启后，立即提交 MA-E16 的同面板 CE3/CE4-B 双模型三种子矩阵；不再继续 MA-E14 阈值 overlay，也不在 matched 复验前解释 MA-E15 breadth 增量。其余 Phase 只作为既有设计目录，只有不延迟下一 P0/P1 candidate 时才可取用。F-014/UI/历史补账/物化和底座完整化继续不实施。
 
 ### Phase G0-A：研究设计与证据记录
 
@@ -1302,7 +1313,9 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 8. `[GRAPH_LONG_HORIZON_BASELINE_COMPLETE]` GAT h20、embedding、二值行业边、R7 简单融合及 R11B h40/h60 三种子证据已齐；h40 为当前效率锚点，后续追加动态板块关系、趋势/回撤双头、sector gating 和动态退出。
 9. `[R12G_COMPLETE_R12P_RECOVERY_COMPLETE]` EfficientGATs cooperative-execution canary `qe_20260718_040323_9a4a` 已 1/1 完成；跨任务四腿 portfolio fusion 已通过 append-only successor 恢复形成 baseline、equal、orthogonality-aware 和八条 LOO，最终研究可用 child 为 11/21。低成本板块回撤 overlay 已进入 F2 设计/实现，右尾/板块状态研究、四格 oracle、LSTM R8B2 和 TCN G14-FP 长期限对照继续设计。
 10. `[MA_E07_TO_E13_TERMINAL]` MA-E07 四腿与 MA-E10 三腿形成全窗口 Pareto；MA-E12 新增腿退化；MA-E13G 将静态行业关系重分类为关系先验；MA-E13R 暴露近期 regime 弱 Alpha。真实 run/指标见第 2.5 与 9.9.2 节。
-11. `[NEXT_ACTIVE]` 先执行近期三腿 regime policy、压缩扩张/参与差/领导耗竭独立专家和多模型分歧动态权重；动态图 hazard、基本面扩散与右尾多任务依次跟进。R8M、概念图和高成本架构降为 P2 条件方向。
+11. `[MA_E14_TERMINAL]` H95/C85 regime overlay 在 full/early/late 均降低 CAGR，当前阈值 overlay 分支结束；regime 状态只保留为未来风险正则/动态权重输入，不继续参数扫描。
+12. `[MA_E15_TERMINAL_CONFOUNDED]` `qe_20260810_020755_38d2` 已 9/9 完成；CE3/CE4-B 的模型结果与互补性可读，但 outer-union 引入 1,511 个额外观测，原始因子归因无效。BUG-1006 只修复该真实阻断。
+13. `[NEXT_ACTIVE]` BUG-1006 合入和用户重启后提交 MA-E16；若同面板结果确认模型互补，再做固定权重 blend/LOO。随后依次执行参与差/领导耗竭、多模型分歧、动态图 hazard、基本面扩散与右尾多任务。R8M、概念图和高成本架构降为 P2 条件方向。
 
 ### Phase G0-F：PIT 关系模型 canary
 
@@ -1375,7 +1388,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 ## 15. Design Acceptance Matrix / 设计验收矩阵
 
-v6.0 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设计和证据状态，不代表当前排期。F-024～F-027 定义当前角色、窗口、数据边界和顺序。实验未完成项保持 `DESIGN_READY/PLANNED`，不冒充结果；它们也不是人工审批门禁。历史补账、UI 和平台完整化继续终止。
+v6.1 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设计和证据状态，不代表当前排期。F-024～F-028 定义当前角色、窗口、数据边界、顺序和 matched observation panel。实验未完成项保持 `DESIGN_READY/PLANNED`，不冒充结果；它们也不是人工审批门禁。历史补账、UI 和平台完整化继续终止。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -1401,11 +1414,12 @@ v6.0 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设�
 | F-020 | 本文 9.6.4、9.9、14 | validation-receipt: R12P 与 MA-E07～MA-E13 的预测/组合/LOO/窗口结果 | APPROVED_BY_USER: TASK_LEVEL_ALPHA_COMPARISON_ACTIVE | 基础任务级比较已完成；新专家继续记录独立腿与组合 LOO，不以模型名或低相关自动授予腿身份。 |
 | F-021 | 本文 2.2、2.4、2.5、9.4.5、9.6.5–9.6.7、9.9.3、Phase G0-E | validation-receipt: 既有事实只读保留；新 trial 最小输出合同 | APPROVED_BY_USER: FROZEN_HISTORY_CURRENT_TRIAL_MINIMUM_ONLY | 禁止历史 Archive 补录、旧 Loop 物化、状态重算和总账固化；新 trial 只自然保存比较所需最小结果。 |
 | F-022 | 本文 4.11、9.9.1、9.9.3、Phase G0-H；`multi_alpha_qe_evolution_foundation_f2_design_20260718.md` | validation-receipt: P0-1～P0-4 与后续真实运行/阻断 BUG 修复 | APPROVED_BY_USER: P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY | 当前基础满足策略演进；只修真实 trial 暴露且无安全替代路径的阻断 BUG。 |
-| F-023 | 本文 2.2、2.5、9.9.2–9.9.4、Phase G0-E；`qe_sector_risk_overlay_f2_design_20260726.md` | validation-receipt: MA-E07、MA-E10、MA-E12、MA-E13G、MA-E13R 终态指标 | APPROVED_BY_USER: MA_E13_COMPLETE_NEXT_DIRECTION_DEFINED | 全窗口 Pareto、失败新增腿、静态关系角色和近期弱 Alpha 均已回读；下一步转入 regime policy 与正交 Alpha 专家。 |
+| F-023 | 本文 2.2、2.5、9.9.2–9.9.4、Phase G0-E；`qe_sector_risk_overlay_f2_design_20260726.md` | validation-receipt: MA-E07～MA-E15 终态指标、三窗口 overlay 与 Prediction Store 面板诊断 | APPROVED_BY_USER: MA_E15_COMPLETE_ATTRIBUTION_BLOCKER_ISOLATED | MA-E14 当前 overlay 退化；MA-E15 结果完整但因面板混杂不可做 breadth 因果归因；BUG-1006 是恢复真实演进的最小阻断修复。 |
 | F-024 | 本文 9.9.2 | validation-receipt: 角色表与逐候选 role/归因输出合同 | DESIGN_READY_ROLE_SEPARATION | 无 |
 | F-025 | 本文 2.5、9.9.3 | validation-receipt: MA-E13G matched-seed 先例与 full/early/late + seeds 123/314/2718 输出合同 | DESIGN_READY_MULTI_WINDOW_MATCHED_SEED | 无 |
 | F-026 | 本文顶部不变量、9.7、9.9.3、Phase G0-F/G | validation-receipt: DB-poison/静态扫描、dataset identity/hash、双节点文件一致性 | APPROVED_BY_USER: ZERO_DB_RUNTIME_INVARIANT_ACTIVE | BUG-989 已建立现有链路证据；所有新方向继承并在自身 trial 显式验证，不得回退数据库。 |
-| F-027 | 本文 2.5、9.9.2–9.9.3、Phase G0-E | validation-receipt: v6.0 优先级、输出合同与后续真实 QE run receipt 位置 | DESIGN_READY_NEXT_EVOLUTION_SEQUENCE | 无 |
+| F-027 | 本文 2.5、9.9.2–9.9.3、Phase G0-E | validation-receipt: v6.1 优先级、MA-E14/MA-E15 结果、输出合同与 MA-E16 预注册矩阵；PR/运行态/实验状态在第 17 节独立记录 | DESIGN_READY_NEXT_EVOLUTION_SEQUENCE | 无 |
+| F-028 | `config_composer.py`、生成的 `prepare_factors.py`、BUG-1006、本文 9.9.2～9.9.3 | validation-receipt: canonical contract、sparse-candidate 同索引、legacy no-contract、缺结果/缺列/空面板 fail-closed 聚焦测试；合入与运行态不属于设计验收状态 | VERIFIED | 无 |
 
 ## 16. Rollout / Rollback / 发布回滚
 
@@ -1434,6 +1448,7 @@ v6.0 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设�
 - v5.23 F-014 human-search acceptance：PR #2964 将 Run/Task/outcome snapshot/L2 sector 改为业务检索选择器，canonical ID 仅作隐藏 value；操作员视图移除 raw JSON/人工 ID 输入，Top-K 展示真实完整/缺失覆盖而不以首条历史缺失冒充整体 missing。AIstock CI `30598333361` 的类型、Lint、四组 QE 后端门禁和 Playwright Chromium 全部通过，artifact `frontend-ui-evidence-30598333361` 含成功截图与 HTML report。当前 3000 runtime visual、normal Loop、完整 runtime/root SHA 对齐、其余 5 个 R8B 与 Phase 5 继续独立 pending；本轮未执行 DDL/DML、服务启停、评价 POST 或历史回填。
 - v5.24 strategy-evolution-first rollout（历史）：用户终止 v5.23 及更早版本仍列作未来动作的 UI visual、normal Loop 平台 smoke、其余 R8B、Phase 5、历史补算/物化、Archive 补录和总账固化；这些边界继续有效。该版本提交四个 MA-E01 policy run、共 8 个 child；当时结果仍在运行，现已由 v6.0 的 MA-E07～MA-E13 终态总账替代。
 - v6.0 regime-and-orthogonal-alpha rollout：更新 MA-E07～MA-E13 终态指标，确认 MA-E07/MA-E10 为全窗口 Pareto、MA-E12 新增腿退化、MA-E13G 静态关系属于正则角色、MA-E13R 近期 Alpha 偏弱。活动方向改为三腿 regime policy、压缩扩张/参与差/领导耗竭独立专家、多模型分歧动态权重和动态关系 hazard；基本面扩散/右尾多任务为 P1，概念/高成本图架构为 P2。本文变更仅更新设计与活动快照，不提交实验、不修改代码/数据/DB/依赖/运行时。
+- v6.1 matched-observation rollout：记录 MA-E14 三窗口 overlay 退化、MA-E15 9/9 双节点结果、CE3/CE4-B 额外 1,511 行及其 Top20 影响；BUG-1006 以 opt-in `qe_observation_panel_v1` 固定参考因子交集，并对缺结果/缺列/空面板 fail closed。源码/测试/文档作为同一 BUG PR 交付；PR 合入、用户重启、MA-E16 提交和实验结果仍分别报告。本次不执行 DDL/DML、依赖安装、服务启停、数据切换、历史补账或非 QE 动作。
 - v5.6 多 Alpha foundation design audit：修正未经逐项确认的批准标记、stop/pause 语义、child `not_computable` 和聚合规则、跨 QE 路径容量统计、状态/event 原子性、Archive 静默初始化、schema 的 QE-scoped failure 以及规范 UI 入口/逐像素视觉验收。该修订仍只更新设计文档，不执行 DDL、不修改运行代码、不创建/恢复实验、不写 DB、不重启服务。
 - Schema rollout：现有 factor h20 指标已可用；F-014 Phase 2 control table 与 Phase 3 metric/artifact 表已在当前 runtime DB ready/readback，Loop4 已形成非空数据；未来目标特定 DDL 仍独立授权，依赖既有每日备份，不新增导出门禁。
 - Data rollout：R8–R12 当前继续冻结 2026-06-30 QE 快照；任何新快照另立 dataset identity 并保留上一版本回滚，不影响非 QE PIT/模拟盘数据。
@@ -1444,19 +1459,19 @@ v6.0 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设�
 
 | 项目 | 当前状态 | 说明 |
 |---|---|---|
-| source merge | STRATEGY_SOURCE_REUSABLE_BLUEPRINT_V6_PENDING_PR | MA-E07～MA-E13 已使用现有策略/模型/组合源码形成真实结果；本次只修改文档，文档 commit/PR/merge 与既有运行态分别报告。 |
+| source merge | BUG1006_SOURCE_VALIDATED_PENDING_PR_MERGE | MA-E14/MA-E15 已形成真实结果；本批修改 composer、聚焦测试与 v6.1 蓝图。commit/push/PR、merge、runtime activation 与后续 MA-E16 分别报告。 |
 | QE dataset | VERIFIED_20260630_FILE_ONLY | 当前 QE 快照与冻结 sidecar 已支持 R6～MA-E13；未来数据切换继续要求版本化 identity/hash 和上一版本回滚，实验运行期禁止数据库访问。 |
 | 唯一硬边界 | QE_ONLY_ZERO_NON_QE_IMPACT | 所有实验、评价、缓存、CAS、表、API/MCP/UI 和写入仅限 QE；不读取、修改、调用或影响任何非 QE 模块。 |
 | factor asset | RESEARCH_AVAILABLE_IN_QE | catalog 1525/1528/1532 可供 QE；本蓝图不接入荐股、模拟盘或生产交易。 |
 | QE schema | EXISTING_SCHEMA_SUFFICIENT_NO_HISTORY_MATERIALIZATION | Multi-Alpha P0 与 F-014 既有表满足当前演进；Loop4 的 2,004 metric + 6 artifact 只读保留。不再物化其余 5 个 R8B，也不为历史完整化新增 schema。 |
-| QE research writes | NEW_TRIAL_MINIMUM_OUTPUT_ONLY | 既有 R9S～MA-E13 结果只读复用；后续 trial 仅写入运行自然产生的版本化 candidate、输入身份、指标、成本、风险和失败原因，不执行历史补账、状态重算或总账固化。 |
+| QE research writes | NEW_TRIAL_MINIMUM_OUTPUT_ONLY | 既有 R9S～MA-E15 结果只读复用；后续 trial 仅写入运行自然产生的版本化 candidate、输入身份、指标、成本、风险和失败原因，不执行历史补账、状态重算或总账固化。 |
 | frontend/backend dependency | noop | 本批无依赖或 lockfile 变化。 |
 | production DDL/DML | noop | 本批无 migration、DDL、DML 或数据库写入。 |
 | candidate snapshot | VERIFIED_QE_20260630 | R6～MA-E13 使用该快照及对应冻结 sidecar；其他快照必须另立 identity，不覆盖当前版本。 |
-| QE experiment | MA_E13_TERMINAL_NEXT_NOT_SUBMITTED | MA-E07、MA-E10、MA-E12、MA-E13G、MA-E13R 已终态；v6.0 后续实验尚未提交，不能把本设计写成实验已完成。 |
-| strategy evolution priority | REGIME_AND_ORTHOGONAL_ALPHA_ACTIVE | P0 为近期三腿 regime policy、压缩扩张/参与差/领导耗竭专家和多模型分歧；动态图 hazard 与基本面/右尾随后执行。 |
+| QE experiment | MA_E15_TERMINAL_MA_E16_PENDING_BUG1006_RUNTIME | MA-E14 与 MA-E15 已终态；MA-E15 的原始对比受面板混杂。MA-E16 仅完成设计，尚未提交，不能把 BUG 源码或单测写成实验完成。 |
+| strategy evolution priority | MATCHED_ALPHA_ATTRIBUTION_ACTIVE | P0 为 MA-E16 同面板 CE3/CE4-B 双模型三种子；其后才是固定权重 blend/LOO、参与差/领导耗竭、多模型分歧与动态图 hazard。 |
 | multi-alpha platform | P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY | durable orchestration、控制/恢复、创建器、运行网格和重启 readback 已满足演进；只修复真实 trial 暴露且无安全替代路径的阻断问题。 |
-| service/runtime restart | noop_for_this_document_change | 本次文档更新未启动、停止或重启 8001/3000/19080、WSL/远端 worker 或任何用户进程；不以旧进程时间戳推断当前运行态。 |
+| service/runtime restart | PENDING_USER_AFTER_SOURCE_MERGE | 本批未启动、停止或重启 8001/3000/19080、WSL/远端 worker 或任何用户进程。BUG-1006 合入后 backend-main 重启仍归用户所有。 |
 | F-014 CAS | R8B_6_OF_6_PUBLISHED_AND_HASH_VERIFIED | 根目录为 `F:\Dev\AIstock\rdagent_assets\long_trend_evaluation_store`，与 Prediction Store 分离且不在 `E:`；R8B 六个 manifest 及 required artifacts 已完成 hash/size/row-count 回读。 |
 | paper/live trading | NOT_ENABLED | 不属于本规格自动动作。 |
 
