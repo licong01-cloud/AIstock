@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1006",
-  "closed_at": null,
+  "closed_at": "2026-08-10T13:14:09.940090Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -165,8 +165,8 @@
   },
   "first_seen_at": "2026-08-10T03:12:03.570028Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c76068f6dffcc083b7b65b0f16eaccdbc85f4214",
+  "fixed_at": "2026-08-10T11:18:14Z",
   "github_issue_number": 3239,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3239",
   "last_seen_at": "2026-08-10T03:12:03.570028Z",
@@ -174,6 +174,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3243",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -195,9 +196,10 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1006\\post-restart-verify.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
-    "runtime_identity_match": "pending",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
@@ -206,7 +208,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "qe"
   ],
@@ -215,6 +217,9 @@
     "fingerprint": "c1e9beaf5259779c5f980c8f",
     "source_event_id": "FE-20260810-c1e9beaf5259"
   },
+  "validation_evidence": [
+    "python -m nox -s qe_sector_risk_overlay_backend -> 74 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
