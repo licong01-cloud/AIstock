@@ -3,7 +3,7 @@
 > 日期：2026-08-09
 > Feature tier：F2
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
-> 当前阶段：`M3B_SOURCE_COMPLETE_RUNTIME_PENDING`
+> 当前阶段：`COMPLETED_RUNTIME_VERIFIED`
 > 适用范围：学术研究与历史回测参考，不构成实时投资建议或交易执行
 
 ## 1. Background / 背景
@@ -283,7 +283,7 @@ ADVISORY_OUTCOME_INFERENCE_FAILED
 | F-337 | Selection、Paper、模拟盘、StrategyPackage、QE 业务逻辑零写入和零反向依赖 |
 | F-338 | 无简化版、mock-only、placeholder、常数模型、静默 fallback 或业务语义偏移 |
 | F-339 | 无新增角色、审批、二次准入、收益门槛或未经确认的门禁 |
-| F-340 | 无 DDL/DML；模型文件、源码合入、依赖、重启、binding激活和运行时验证分开报告 |
+| F-340 | 无 DDL/DML；模型文件、源码合入、依赖、重启、binding激活和运行时验证分开报告并完成 deployed readback |
 
 ## 17. Design Acceptance Matrix / 设计验收矩阵
 
@@ -306,12 +306,12 @@ ADVISORY_OUTCOME_INFERENCE_FAILED
 | F-337 | Advisory-only changed-file review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; ownership scan | verified | none |
 | F-338 | DESIGN-COMPLIANCE-001 review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `nox -s advisory_modeling_backend`; real 46-head smoke | verified | none |
 | F-339 | no role/approval/admission gate review | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; source scan | verified | none |
-| F-340 | no DDL/DML/dependency/restart/formal binding activation | `backend/tests/advisory_model_first/test_outcome_runtime_bundle.py`; temporary binding smoke cleaned | verified | none |
+| F-340 | no DDL/DML/dependency change; merge/binding/restart/readback reported separately | PR #3234; outcome binding; runtime commit `0ab6dec3...`; deployed model-shadow receipt | verified | none |
 
 ## 18. Rollout / Rollback
 
 - M3A 训练只新增独立 outcome bundle，不修改已激活 M1 bundle 或 binding；训练失败时保留 typed receipt，不发布不完整目录。
-- M3B 源码合入、依赖、outcome binding、用户重启和 deployed readback 分开执行。
+- M3B 源码合入、outcome binding、用户重启和 deployed readback 已分开执行并分别记录。
 - outcome 异常时移除或不配置 outcome binding，只关闭 M3 panel；M2 rank 和规则荐股继续运行。
 - rollback 不删除训练产物、不修改数据库、不回滚 Selection/Program；只停止加载指定 outcome bundle。
 
@@ -337,3 +337,12 @@ production_frontend_dependency_gate = noop unless M3B changes frontend dependenc
 backend_restart = user-owned and only relevant after M3B source merge
 runtime_activation = exact outcome binding, separate from source merge and training
 ```
+
+## 21. Deployed Runtime Acceptance / 部署后验收
+
+- Source：PR #3234，merge commit `84362027da8f6e87ec5b627a5b7df15b88c5763b`。
+- Runtime：`GET /api/v1/runtime-identity` 返回 `0ab6dec36c6bc05f7d9655de63b07bbd5353dfd2`，包含 M3 merge。
+- Environment：backend 进程由 `C:/Users/lc999/miniconda3/envs/AIstock/python.exe` 运行，LightGBM 可加载。
+- Binding：父 bundle `9cf14e80...` 与 outcome bundle `17ce7ceb...` 的 exact binding 均存在。
+- Business readback：目标 Program `advp_3126...` 在 `target_trade_date=2026-07-16` 返回 `EXPERIMENTAL_SHADOW`，20 个 M2 候选和 20 个 M3 outcome 候选完整对齐；horizons=`1,3,5,10,20`，父/子 reason code 均为空。
+- Performance：本次真实 HTTP 推理耗时 33.236 秒；该结果是研究影子输出，不构成交易建议或执行输入。

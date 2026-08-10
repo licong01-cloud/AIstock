@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.5
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.6
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-09
+> 修订日期：2026-08-10
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M3B_SOURCE_COMPLETE_RUNTIME_PENDING`
-> 当前用户可见功能进度：短反弹真实功能 `0/4`；长期趋势真实功能 `0/1`；离线模型里程碑 M0/M1 `2/2`，尚未计入用户可见功能
-> 规划进度：M0/M1 真实训练、M2 数据库影子推理和 M3A 46-head outcome bundle 已完成；M3B exact loader、同一实时 103 特征矩阵推理、API 子信封和五期限页面已完成源码与本地真实 bundle 验证，待用户确认后执行源码合入、outcome binding 激活、用户重启和 deployed readback
+> 当前状态：`MODEL_FIRST_M3_RUNTIME_VERIFIED_M4_DESIGN_READY`
+> 当前用户可见功能进度：短反弹真实功能 `3/4`；长期趋势真实功能 `0/1`；M0/M1 离线训练、M2 Top5、M3 收益/周期和当前页面展示均已贯通
+> 规划进度：M0-M3 已完成真实训练、数据库只读推理、API/UI 接入和重启后 readback；下一项只实施 M4 日线级买入、止盈、移动保护和止损参考区间
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -59,14 +59,14 @@
 
 长期趋势策略另行完成长期重排、生存、time-to-hit 和大行情捕获模型，不阻断短反弹主线。
 
-截至 2026-08-07：
+截至 2026-08-10：
 
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
 | SHORT_REBOUND Top20→Top5 | `EXPERIMENTAL_SHADOW_RUNTIME_VERIFIED` | WSL 真实训练、数据库影子推理、API 和页面源码已贯通；真实 test 质量仍低于主要对照 |
-| 预期收益与持股周期 | `M3B_SOURCE_COMPLETE_RUNTIME_PENDING` | 真实模型、loader、数据库实时特征复用、API/UI 源码和本地真实 bundle 推理已完成；生产 binding 与重启后 readback 未执行 |
+| 预期收益与持股周期 | `COMPLETED_RUNTIME_VERIFIED` | M3 outcome binding 已激活；运行时对真实 20 个候选输出 1/3/5/10/20 日收益分位数、正收益/存活概率、MFE/MAE 和持股周期范围 |
 | 买入/止盈/止损区间 | `NOT_IMPLEMENTED` | 真实模型和价格转换层输出范围 |
-| 荐股页面模型展示 | `SOURCE_COMPLETE_RUNTIME_PENDING` | 五期限收益、概率、MFE/MAE 和持股范围页面已通过三视口 Playwright；待合入和用户重启后验证真实 API 数据 |
+| 荐股页面模型展示 | `M2_M3_RUNTIME_VERIFIED` | 页面源码和真实 API 已贯通 Top5、五期限收益、概率、MFE/MAE 与持股范围；M4 价格区间完成后补齐最后一项展示 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
@@ -384,7 +384,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P1`。
 
-状态：`M3B_SOURCE_COMPLETE_RUNTIME_PENDING`。详细设计为 `docs/architecture/advisory_model_first_m3_outcome_holding_period_f2_design_20260809.md`；M3A bundle `17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0` 含 46 个真实 LightGBM 模型、1600 行/80 日零 NaN test 预测，训练 108 秒、峰值 RSS 655,581,184 bytes。M3B 已实现 exact outcome binding/loader、复用 M2 同一数据库实时特征矩阵的五期限推理、typed unavailable 隔离、API 子信封和页面；本地真实 bundle 对 20 个候选完成 46-head 推理。未写正式 binding，未合入、未重启、未做 deployed readback。
+状态：`COMPLETED_RUNTIME_VERIFIED`。详细设计为 `docs/architecture/advisory_model_first_m3_outcome_holding_period_f2_design_20260809.md`；M3A bundle `17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0` 含 46 个真实 LightGBM 模型、1600 行/80 日零 NaN test 预测，训练 108 秒、峰值 RSS 655,581,184 bytes。M3B 随 PR #3234 合入，merge commit 为 `84362027da8f6e87ec5b627a5b7df15b88c5763b`；outcome binding 已存在。运行时 commit `0ab6dec36c6bc05f7d9655de63b07bbd5353dfd2` 在 AIstock Conda 环境对 `decision=2026-07-15 / target=2026-07-16` 的 20 个真实候选完成父 bundle 和 outcome bundle 推理，耗时 33.236 秒，五个 horizon 均非空且无 reason code。
 
 - 在现有QE文件上训练收益分位数、正收益概率和周期模型。
 - 接入同一Advisory预测和页面。
@@ -392,6 +392,8 @@ calibration_state = UNCALIBRATED or PARTIAL
 ### M4：买入、止盈和止损范围
 
 优先级：`P1`。
+
+状态：`DESIGN_READY`。详细设计为 `docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`。
 
 - 先使用日线Bin完成真实日线级价格范围模型。
 - 盘中路径模型作为后续独立增量，只在用户确认需要时读取现有分钟Bin。
@@ -577,20 +579,15 @@ runtime_activation = separate user-confirmed action
 
 ## 16. 当前下一步
 
-“QE文件训练与数据库实时推理垂直切片”详细设计已经形成：
+下一项任务直接进入 M4，详细设计为：
 
-`docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_20260808.md`
+`docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`
 
-该设计已经：
+执行顺序固定为：
 
-1. 绑定目标父包精确roster、两腿代表seed/model SHA、current zscore、terminal weights和runtime semantics；完整seed、合成预测和逐日权重只作诊断。
-2. 定位目标QE H5/Parquet/Qlib Bin和实际schema，确认基础数据只读文件来源。
-3. 明确逐列首模特征、decision/target双日期、完整标签公式、10日purge和时间切分。
-4. 明确HMM文件输入、状态规范化、因果预测、文件截止posterior续推和旧HMM仅对照边界。
-5. 明确首版日线价格范围不依赖分钟Bin，盘中路径属于后续增量。
-6. 明确WSL真实训练命令、资源上限和模型输出。
-7. 明确数据库实时FeatureSource与共享FeatureBuilder。
-8. 明确真实影子推理API和页面readback。
-9. 明确禁止Historical Range、Source Catalog、SEALED、历史DML和旧任务处理。
+1. M4A 在 WSL 复用 M1 的候选/103 特征、M3 split 与 QE 日线 OHLC/factor/涨跌停/停牌文件，训练下一交易日可执行性和开盘缺口模型；不得读取分钟 Bin。
+2. 复用 M3 已训练的五期限 MFE/MAE 与持股周期输出，形成模型驱动的止盈、移动保护和止损幅度，不重复训练等价 head。
+3. M4B 正式预测只读取数据库 decision-cutoff 行情和 PIT 静态属性，把收益幅度转换为未复权 CNY 价格范围并应用已存在的硬止损、价格 tick 和涨跌停边界。
+4. 把每只候选的买入、止盈、移动保护和止损范围接入同一 model-shadow API/UI；M4 不可用时只关闭价格区间子信封，M2/M3 和规则荐股继续运行。
 
-下一项任务直接进入 M2：实现数据库 decision-cutoff FeatureSource、exact bundle loader、只读影子推理 API 和 Advisory 页面 readback，并展示真实 baseline 与 `EXPERIMENTAL_SHADOW` 状态。不得在 M2 前插入其它基础设施、证据、历史固化或治理任务；模型质量优化按 M5 排序，不得用规则或基线替代真实模型输出。
+M4 完成前禁止插入 Historical Range、历史证据、旧 batch/root 清理、通用缓存、ModelOps、角色审批或额外门禁。M5 模型质量迭代继续排在 M4 真实功能之后。
