@@ -81,6 +81,7 @@ rules:
       - backend/services/quantevolver/sector_risk_overlay*.py
       - backend/services/quantevolver/config_composer.py
       - backend/tests/quantevolver/test_*sector_risk_overlay*.py
+      - backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py
       - backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py
       - backend/tests/unified_engine/test_score_weighted_capacity_registration.py
       - backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py
@@ -768,6 +769,7 @@ rules:
       - backend/services/tushare_sync.py
       - backend/services/tushare_dataset_specs.py
       - backend/tests/test_tushare_sync_engine.py
+      - backend/tests/test_local_data_management_facade.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2, selection_center]
     layer: data_pipeline
