@@ -56,6 +56,7 @@ ARTIFACT_PATH_PATTERNS = (
     "node_modules",
 )
 BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
+BUG_ID_FILENAME_RE = re.compile(r"(?:^|[^A-Za-z0-9])BUG-(\d{3,})(?!\d)", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
 PR_BODY_CODEGRAPH_TEST_LIMIT = 10
@@ -2979,6 +2980,11 @@ def _bug_id_number(value: str | None) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _bug_id_number_from_filename(value: str | None) -> int | None:
+    match = BUG_ID_FILENAME_RE.search(value or "")
+    return int(match.group(1)) if match else None
+
+
 def _unique_existing_paths(paths: list[Path]) -> list[Path]:
     seen: set[str] = set()
     unique: list[Path] = []
@@ -3025,15 +3031,11 @@ def _bug_id_scan_roots(root: Path | None = None) -> list[Path]:
         _bugs_root(REPO_ROOT),
         _bugs_root(_canonical_root()),
     ]
-    worktree_root = _default_worktree_root()
-    if worktree_root.exists():
-        for child in worktree_root.iterdir():
-            if child.is_dir():
-                candidates.append(_bugs_root(child))
-    for item in _parse_worktree_list():
-        worktree = item.get("worktree")
-        if worktree:
-            candidates.append(_bugs_root(Path(worktree)))
+    # Active allocations are represented by the global reservation ledger.
+    # Scanning every worktree re-reads hundreds of copies of the same BUG
+    # registry and makes allocation cost grow as worktrees * BUG records.
+    # Keep legacy/canonical recovery bounded to the current, invocation and
+    # canonical registry roots; reservations cover in-flight task worktrees.
     return _unique_existing_paths(candidates)
 
 
@@ -3093,13 +3095,16 @@ def _scan_bug_registry_ids(
                     }
                 )
         for path in sorted(p for p in bugs_root.glob("*.json") if not p.name.startswith(".")):
-            bug_id: str | None = None
-            try:
-                payload = _load_json(path)
-                bug_id = str(payload.get("bug_id") or "")
-            except (OSError, json.JSONDecodeError, WorkflowError):
-                bug_id = None
-            number = _bug_id_number(bug_id) or _bug_id_number(path.name)
+            # Canonical BUG filenames already carry BUG-NNN. Avoid opening and
+            # parsing every historical JSON; only legacy/non-standard names
+            # need a content fallback.
+            number = _bug_id_number_from_filename(path.name)
+            if number is None:
+                try:
+                    payload = _load_json(path)
+                    number = _bug_id_number(str(payload.get("bug_id") or ""))
+                except (OSError, json.JSONDecodeError, WorkflowError):
+                    number = None
             if number:
                 sources.append(
                     {
@@ -3168,18 +3173,51 @@ def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[
     return sources, []
 
 
-def _github_bug_issue_for_id(bug_id: str, *, limit: int = 1000, timeout: int = 30) -> tuple[dict[str, Any] | None, list[str]]:
+def _github_bug_issue_for_id(bug_id: str, *, limit: int = 20, timeout: int = 30) -> tuple[dict[str, Any] | None, list[str]]:
     normalized = bug_id.strip().upper()
-    sources, warnings = _scan_github_bug_ids(limit=limit, timeout=timeout)
+    result = _run_command(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--state",
+            "all",
+            "--search",
+            f"{normalized} in:title",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,url,state,labels",
+        ],
+        timeout=timeout,
+    )
+    if not result.get("ok"):
+        message = result.get("stderr") or result.get("stdout") or "gh issue lookup failed"
+        return None, [f"GitHub lookup for {normalized} unavailable: {message}"]
+    try:
+        issues = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError as exc:
+        return None, [f"GitHub lookup for {normalized} returned invalid JSON: {exc}"]
     matches = [
-        item
-        for item in sources
-        if str(item.get("bug_id") or "").upper() == normalized and item.get("kind") == "github_issue"
+        issue
+        for issue in issues if isinstance(issue, dict) and _bug_id_number(str(issue.get("title") or "")) == _bug_id_number(normalized)
     ]
     if not matches:
-        return None, warnings
-    matches.sort(key=lambda item: int(item.get("github_issue_number") or 0), reverse=True)
-    return matches[0], warnings
+        return None, []
+    matches.sort(key=lambda item: int(item.get("number") or 0), reverse=True)
+    issue = matches[0]
+    return {
+        "bug_id": normalized,
+        "number": _bug_id_number(normalized),
+        "kind": "github_issue",
+        "source": issue.get("url") or f"github_issue:{issue.get('number')}",
+        "github_issue_number": issue.get("number"),
+        "github_state": issue.get("state"),
+        "title": issue.get("title"),
+        "labels": issue.get("labels") or [],
+    }, []
 
 
 def _github_bug_issue_by_number(issue_number: int | str, *, timeout: int = 30) -> tuple[dict[str, Any] | None, list[str]]:
@@ -3214,26 +3252,88 @@ def _github_bug_issue_by_number(issue_number: int | str, *, timeout: int = 30) -
     }, []
 
 
-def _bug_id_allocation_report(
-    root: Path | None = None,
-    *,
-    include_github: bool = False,
-    github_required: bool = False,
-    tolerate_unrelated_allocator_errors: bool = True,
-) -> dict[str, Any]:
-    warnings: list[str] = []
-    sources = _scan_bug_registry_ids(
-        root,
-        tolerate_unrelated_allocator_errors=tolerate_unrelated_allocator_errors,
-        warnings=warnings,
+def _looks_like_github_transport_failure(message: str) -> bool:
+    normalized = message.casefold()
+    return any(
+        token in normalized
+        for token in (
+            "timeout",
+            "timed out",
+            "tls handshake",
+            "unexpected eof",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "http2",
+            "stream error",
+            "temporary failure",
+        )
     )
-    sources.extend(_scan_bug_id_reservations())
-    if include_github:
-        github_sources, github_warnings = _scan_github_bug_ids()
-        sources.extend(github_sources)
-        warnings.extend(github_warnings)
-        if github_required and github_warnings:
-            raise WorkflowError("; ".join(github_warnings))
+
+
+def _create_github_issue_with_recovery(
+    *,
+    bug_id: str,
+    title: str,
+    body_path: Path,
+    labels: list[str],
+    cwd: Path,
+) -> dict[str, Any]:
+    result = _run_command(
+        [
+            "gh",
+            "issue",
+            "create",
+            "--repo",
+            GITHUB_REPO,
+            "--title",
+            title,
+            "--body-file",
+            str(body_path),
+            "--label",
+            _csv_arg(labels),
+        ],
+        cwd=cwd,
+        timeout=120,
+    )
+    issue_url = str(result.get("stdout") or "").splitlines()[-1].strip() if result.get("ok") else ""
+    issue_number = _github_issue_number_from_url(issue_url) if issue_url else None
+    if result.get("ok") and issue_url and issue_number:
+        return {
+            "created": True,
+            "url": issue_url,
+            "number": issue_number,
+            "recovered_after_transport_error": False,
+            "warnings": [],
+        }
+
+    message = str(result.get("stderr") or result.get("stdout") or "gh issue create failed")
+    uncertain_remote_result = bool(result.get("ok")) or _looks_like_github_transport_failure(message)
+    if uncertain_remote_result:
+        recovered, warnings = _github_bug_issue_for_id(bug_id)
+        if recovered is not None and str(recovered.get("title") or "").strip() == title.strip():
+            recovered_number = recovered.get("github_issue_number")
+            recovered_url = str(recovered.get("source") or _github_issue_url(recovered_number))
+            return {
+                "created": True,
+                "url": recovered_url,
+                "number": recovered_number,
+                "recovered_after_transport_error": True,
+                "warnings": warnings,
+            }
+        recovery_detail = "; ".join(warnings) if warnings else f"no exact {bug_id} GitHub Issue found"
+        raise WorkflowError(f"{message}; GitHub create recovery failed: {recovery_detail}")
+    raise WorkflowError(message)
+
+
+def _build_bug_id_allocation_report(
+    sources: list[dict[str, Any]],
+    warnings: list[str],
+    *,
+    github_scanned: bool,
+) -> dict[str, Any]:
+    sources = list(sources)
+    warnings = flow._unique_strings(warnings)
     max_number = max((int(source.get("number") or 0) for source in sources), default=0)
     max_by_kind: dict[str, int] = {}
     for source in sources:
@@ -3259,12 +3359,35 @@ def _bug_id_allocation_report(
         "next_number": max_number + 1,
         "sources": sources,
         "warnings": warnings,
-        "github_scanned": include_github,
+        "github_scanned": github_scanned,
         "max_by_kind": max_by_kind,
         "allocator_max_number": allocator_max,
         "observed_max_number": observed_max,
         "github_max_number": max_by_kind.get("github_issue", 0),
     }
+
+
+def _bug_id_allocation_report(
+    root: Path | None = None,
+    *,
+    include_github: bool = False,
+    github_required: bool = False,
+    tolerate_unrelated_allocator_errors: bool = True,
+) -> dict[str, Any]:
+    warnings: list[str] = []
+    sources = _scan_bug_registry_ids(
+        root,
+        tolerate_unrelated_allocator_errors=tolerate_unrelated_allocator_errors,
+        warnings=warnings,
+    )
+    sources.extend(_scan_bug_id_reservations())
+    if include_github:
+        github_sources, github_warnings = _scan_github_bug_ids()
+        sources.extend(github_sources)
+        warnings.extend(github_warnings)
+        if github_required and github_warnings:
+            raise WorkflowError("; ".join(github_warnings))
+    return _build_bug_id_allocation_report(sources, warnings, github_scanned=include_github)
 
 
 def _bug_id_allocation_summary(report: dict[str, Any]) -> dict[str, Any]:
@@ -3285,6 +3408,7 @@ def _duplicate_bug_id_sources(
     bug_id: str,
     *,
     allowed_github_issue_number: int | str | None = None,
+    allowed_reservation_source: str | None = None,
 ) -> list[dict[str, Any]]:
     number = _bug_id_number(bug_id)
     allowed_issue = str(allowed_github_issue_number) if allowed_github_issue_number is not None else None
@@ -3297,8 +3421,66 @@ def _duplicate_bug_id_sources(
             continue
         if kind == "github_issue" and allowed_issue and str(source.get("github_issue_number")) == allowed_issue:
             continue
+        if kind == "reservation" and allowed_reservation_source and _same_path(Path(str(source.get("source") or "")), Path(allowed_reservation_source)):
+            continue
         duplicates.append(source)
     return duplicates
+
+
+def _normalized_github_bug_subject(title: str | None) -> str:
+    raw = re.sub(r"^\s*BUG-\d{3,}\s+(?:P[0-3]\s*:\s*)?", "", str(title or ""), flags=re.IGNORECASE)
+    return " ".join(raw.casefold().split())
+
+
+def _matching_open_github_issue(sources: list[dict[str, Any]], title: str | None) -> dict[str, Any] | None:
+    expected = _normalized_github_bug_subject(title)
+    if not expected:
+        return None
+    matches = [
+        source
+        for source in sources
+        if source.get("kind") == "github_issue"
+        and str(source.get("github_state") or "").upper() == "OPEN"
+        and _normalized_github_bug_subject(str(source.get("title") or "")) == expected
+    ]
+    if not matches:
+        return None
+    matches.sort(key=lambda item: int(item.get("github_issue_number") or 0), reverse=True)
+    return matches[0]
+
+
+def _update_bug_id_reservation(path: Path | None, **updates: Any) -> None:
+    if path is None or not path.exists():
+        return
+    payload = _load_json(path)
+    payload.update({key: value for key, value in updates.items() if value is not None})
+    payload["updated_at"] = _utc_now()
+    _write_json(path, payload)
+
+
+def _reservation_can_resume(
+    payload: dict[str, Any],
+    *,
+    github_issue_number: int | str | None,
+    reservation_title: str | None,
+    reservation_fingerprint: str | None,
+) -> bool:
+    if str(payload.get("status") or "") not in {
+        "reserved",
+        "github_issue_confirmed",
+        "github_issue_confirmed_local_incomplete",
+    }:
+        return False
+    existing_issue = payload.get("github_issue_number")
+    if existing_issue is not None and github_issue_number is not None and str(existing_issue) != str(github_issue_number):
+        return False
+    existing_title = str(payload.get("title") or "")
+    if existing_title and reservation_title and _normalized_github_bug_subject(existing_title) != _normalized_github_bug_subject(reservation_title):
+        return False
+    existing_fingerprint = str(payload.get("fingerprint") or "")
+    if existing_fingerprint and reservation_fingerprint and existing_fingerprint != reservation_fingerprint:
+        return False
+    return bool(github_issue_number or existing_issue)
 
 
 def _reserve_bug_id(
@@ -3308,56 +3490,108 @@ def _reserve_bug_id(
     include_github: bool,
     github_required: bool,
     allowed_github_issue_number: int | str | None,
+    reservation_title: str | None = None,
+    reservation_fingerprint: str | None = None,
 ) -> tuple[str, int, dict[str, Any], Path]:
-    with _GlobalBugIdAllocatorLock():
-        canonical_bug_id = (bug_id or "").strip().upper()
-        number = _bug_id_number(canonical_bug_id) if canonical_bug_id else None
-        if canonical_bug_id and (not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id)):
-            raise WorkflowError("--bug-id must match BUG-NNN when provided")
-        direct_linked_issue = bool(canonical_bug_id and allowed_github_issue_number)
-        report = _bug_id_allocation_report(
-            root,
-            include_github=include_github and not direct_linked_issue,
-            github_required=github_required and not direct_linked_issue,
-        )
-        if direct_linked_issue:
-            linked_issue, linked_warnings = _github_bug_issue_by_number(allowed_github_issue_number)
-            if (linked_warnings or linked_issue is None) and github_required:
-                raise WorkflowError("; ".join(linked_warnings or ["linked GitHub Issue lookup failed"]))
-            if linked_issue is not None and str(linked_issue.get("bug_id") or "").upper() != canonical_bug_id:
-                raise WorkflowError(
-                    f"linked GitHub Issue {allowed_github_issue_number} title does not match {canonical_bug_id}"
-                )
-            if linked_issue is not None:
-                report["sources"].append(linked_issue)
-            report["warnings"].extend(linked_warnings)
-        if bug_id:
-            duplicates = _duplicate_bug_id_sources(
-                report,
-                canonical_bug_id,
-                allowed_github_issue_number=allowed_github_issue_number,
+    canonical_bug_id = (bug_id or "").strip().upper()
+    number = _bug_id_number(canonical_bug_id) if canonical_bug_id else None
+    if canonical_bug_id and (not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id)):
+        raise WorkflowError("--bug-id must match BUG-NNN when provided")
+    direct_linked_issue = bool(canonical_bug_id and allowed_github_issue_number)
+    github_sources: list[dict[str, Any]] = []
+    github_warnings: list[str] = []
+    linked_issue: dict[str, Any] | None = None
+
+    # Network calls must not extend the allocator critical section. The
+    # reservation ledger serializes local contenders; GitHub is advisory for
+    # the next number and provides orphan/retry recovery.
+    if direct_linked_issue:
+        linked_issue, github_warnings = _github_bug_issue_by_number(allowed_github_issue_number)
+        if (github_warnings or linked_issue is None) and github_required:
+            raise WorkflowError("; ".join(github_warnings or ["linked GitHub Issue lookup failed"]))
+        if linked_issue is not None and str(linked_issue.get("bug_id") or "").upper() != canonical_bug_id:
+            raise WorkflowError(
+                f"linked GitHub Issue {allowed_github_issue_number} title does not match {canonical_bug_id}"
             )
-            if duplicates:
-                detail = "; ".join(f"{item.get('kind')}:{item.get('source')}" for item in duplicates[:5])
-                raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
-        else:
+        if linked_issue is not None:
+            github_sources.append(linked_issue)
+    elif include_github:
+        github_sources, github_warnings = _scan_github_bug_ids()
+        if github_required and github_warnings:
+            raise WorkflowError("; ".join(github_warnings))
+
+    with _GlobalBugIdAllocatorLock():
+        local_warnings: list[str] = []
+        sources = _scan_bug_registry_ids(
+            root,
+            tolerate_unrelated_allocator_errors=True,
+            warnings=local_warnings,
+        )
+        sources.extend(_scan_bug_id_reservations())
+        sources.extend(github_sources)
+        report = _build_bug_id_allocation_report(
+            sources,
+            [*local_warnings, *github_warnings],
+            github_scanned=include_github and not direct_linked_issue,
+        )
+        recovered_issue = None if bug_id else _matching_open_github_issue(github_sources, reservation_title)
+        if recovered_issue is not None:
+            canonical_bug_id = str(recovered_issue.get("bug_id") or "").upper()
+            number = _bug_id_number(canonical_bug_id)
+            allowed_github_issue_number = recovered_issue.get("github_issue_number")
+            report["recovered_existing_github_issue"] = recovered_issue
+        elif not bug_id:
             number = int(report["next_number"])
             canonical_bug_id = f"BUG-{number:03d}"
         assert number is not None
         reservation_root = _bug_id_reservation_root()
         reservation_path = reservation_root / f"{canonical_bug_id}.json"
+        existing_reservation: dict[str, Any] | None = None
         if reservation_path.exists():
-            raise WorkflowError(f"{canonical_bug_id} is already reserved: {reservation_path}")
-        _write_json(
-            reservation_path,
-            {
-                "schema_version": "aistock_bug_id_reservation_v1",
-                "bug_id": canonical_bug_id,
-                "reserved_at": _utc_now(),
-                "reserved_by": "aistock_issue_workflow.py",
-                "root": str((root or REPO_ROOT).resolve()),
-            },
+            existing_reservation = _load_json(reservation_path)
+        reusable_reservation = bool(
+            existing_reservation
+            and _reservation_can_resume(
+                existing_reservation,
+                github_issue_number=allowed_github_issue_number,
+                reservation_title=reservation_title,
+                reservation_fingerprint=reservation_fingerprint,
+            )
         )
+        if bug_id or recovered_issue is not None:
+            duplicates = _duplicate_bug_id_sources(
+                report,
+                canonical_bug_id,
+                allowed_github_issue_number=allowed_github_issue_number,
+                allowed_reservation_source=str(reservation_path) if reusable_reservation else None,
+            )
+            if duplicates:
+                detail = "; ".join(f"{item.get('kind')}:{item.get('source')}" for item in duplicates[:5])
+                raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
+        if existing_reservation is not None and not reusable_reservation:
+            raise WorkflowError(f"{canonical_bug_id} is already reserved: {reservation_path}")
+        if existing_reservation is None:
+            _write_json(
+                reservation_path,
+                {
+                    "schema_version": "aistock_bug_id_reservation_v1",
+                    "bug_id": canonical_bug_id,
+                    "reserved_at": _utc_now(),
+                    "reserved_by": "aistock_issue_workflow.py",
+                    "root": str((root or REPO_ROOT).resolve()),
+                    "status": "reserved",
+                    "title": reservation_title,
+                    "fingerprint": reservation_fingerprint,
+                },
+            )
+        else:
+            _update_bug_id_reservation(
+                reservation_path,
+                status="reserved",
+                github_issue_number=allowed_github_issue_number,
+                title=reservation_title,
+                fingerprint=reservation_fingerprint,
+            )
     return canonical_bug_id, number, report, reservation_path
 
 
@@ -3368,6 +3602,52 @@ def _release_bug_id_reservation(path: Path | None) -> None:
         path.unlink()
     except FileNotFoundError:
         pass
+
+
+def _process_id_is_alive(pid: int) -> bool | None:
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            # Access denied still proves that the PID exists.
+            return True if ctypes.get_last_error() == 5 else False
+        except (AttributeError, OSError, ValueError):
+            return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
+def _reclaim_stale_allocator_lock(path: Path, *, invalid_metadata_max_age_seconds: float = 1800.0) -> bool:
+    try:
+        original = path.read_text(encoding="ascii", errors="replace")
+        first_line = original.splitlines()[0].strip() if original.splitlines() else ""
+        pid = int(first_line) if first_line.isdigit() else None
+        alive = _process_id_is_alive(pid) if pid is not None else None
+        age_seconds = max(0.0, time.time() - path.stat().st_mtime)
+        stale = alive is False or (pid is None and age_seconds >= invalid_metadata_max_age_seconds)
+        if not stale or path.read_text(encoding="ascii", errors="replace") != original:
+            return False
+        path.unlink()
+        return True
+    except (FileNotFoundError, OSError, ValueError):
+        return False
 
 
 class _GlobalBugIdAllocatorLock:
@@ -3385,6 +3665,8 @@ class _GlobalBugIdAllocatorLock:
                 os.write(self._fd, f"{os.getpid()}\n{_utc_now()}\n".encode("ascii"))
                 return self
             except FileExistsError as exc:
+                if _reclaim_stale_allocator_lock(self.path):
+                    continue
                 if time.monotonic() >= deadline:
                     raise WorkflowError(f"timed out waiting for global BUG id allocator lock: {self.path}") from exc
                 time.sleep(0.1)
@@ -5056,6 +5338,28 @@ def build_submit_bug_plan(
     canonical_bug_id: str
     allocated_number: int
     allocation_report: dict[str, Any]
+    event_args = argparse.Namespace(
+        source="manual",
+        source_json=None,
+        title=title,
+        module=module,
+        severity_guess=severity,
+        actual=actual or description or title,
+        plan_key=plan_key,
+        nox_session=nox_session,
+        reproduce_command=reproduce_command,
+        evidence_ref=evidence_refs,
+        changed_file=scope_files,
+    )
+    event = flow.build_failure_event(event_args)
+    candidate = flow.candidate_from_event(
+        event,
+        title=title,
+        candidate_type=candidate_type,
+        expected=expected,
+        actual=actual or description,
+    )
+    remote_issue_confirmed = False
     try:
         if effective_apply:
             canonical_bug_id, allocated_number, allocation_report, reservation_path = _reserve_bug_id(
@@ -5064,6 +5368,8 @@ def build_submit_bug_plan(
                 include_github=include_github_scan,
                 github_required=create_github,
                 allowed_github_issue_number=github_issue_number,
+                reservation_title=title,
+                reservation_fingerprint=str(candidate.get("fingerprint") or ""),
             )
         else:
             allocation_report = _bug_id_allocation_report(
@@ -5085,32 +5391,20 @@ def build_submit_bug_plan(
                 raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
             allocated_number = number
 
-        event_args = argparse.Namespace(
-            source="manual",
-            source_json=None,
-            title=title,
-            module=module,
-            severity_guess=severity,
-            actual=actual or description or title,
-            plan_key=plan_key,
-            nox_session=nox_session,
-            reproduce_command=reproduce_command,
-            evidence_ref=evidence_refs,
-            changed_file=scope_files,
-        )
-        event = flow.build_failure_event(event_args)
-        candidate = flow.candidate_from_event(
-            event,
-            title=title,
-            candidate_type=candidate_type,
-            expected=expected,
-            actual=actual or description,
-        )
+        recovered_existing_issue = allocation_report.get("recovered_existing_github_issue")
+        effective_github_issue_number = github_issue_number
+        effective_github_issue_url = github_issue_url
+        if isinstance(recovered_existing_issue, dict):
+            effective_github_issue_number = recovered_existing_issue.get("github_issue_number")
+            effective_github_issue_url = str(
+                recovered_existing_issue.get("source") or _github_issue_url(effective_github_issue_number)
+            )
+            remote_issue_confirmed = True
         record = flow.promote_candidate_to_bug(
             candidate,
             bug_id=canonical_bug_id,
-            github_issue_number=github_issue_number,
-            github_issue_url=github_issue_url,
+            github_issue_number=effective_github_issue_number,
+            github_issue_url=effective_github_issue_url,
         )
         now = _utc_now()
         record.setdefault("created_at", now)
@@ -5174,7 +5468,16 @@ def build_submit_bug_plan(
             _repo_rel(bug_path, registry_root),
             _repo_rel(_allocator_path(registry_root), registry_root),
         )
-        github_result: dict[str, Any] | None = None
+        github_result: dict[str, Any] | None = (
+            {
+                "created": False,
+                "recovered_existing": True,
+                "url": effective_github_issue_url,
+                "number": effective_github_issue_number,
+            }
+            if isinstance(recovered_existing_issue, dict)
+            else None
+        )
         github_labels = flow._unique_strings(
             _issue_labels_for_bug(module=module, severity=severity, ui_hints=ui_hints)
             + list(extra_github_labels or [])
@@ -5189,32 +5492,39 @@ def build_submit_bug_plan(
                 github_body_for_create = Path(tempfile.gettempdir()) / "aistock_issue_workflow" / f"{canonical_bug_id}-github-issue-body.md"
             _write_text(github_body_for_create, _render_github_issue_body(record, candidate))
             github_title = f"{canonical_bug_id} {severity}: {title}"
-            result = _execute_checked(
-                [
-                    "gh",
-                    "issue",
-                    "create",
-                    "--repo",
-                    GITHUB_REPO,
-                    "--title",
-                    github_title,
-                    "--body-file",
-                    str(github_body_for_create),
-                    "--label",
-                    _csv_arg(github_labels),
-                ],
-        cwd=github_create_root,
-                timeout=120,
+            github_result = _create_github_issue_with_recovery(
+                bug_id=canonical_bug_id,
+                title=github_title,
+                body_path=github_body_for_create,
+                labels=github_labels,
+                cwd=github_create_root,
             )
-            issue_url = str(result.get("stdout") or "").splitlines()[-1].strip()
-            issue_number = _github_issue_number_from_url(issue_url)
-            if not issue_url or not issue_number:
-                raise WorkflowError(f"cannot parse created GitHub issue URL: {issue_url!r}")
+            issue_url = str(github_result.get("url") or "")
+            issue_number = github_result.get("number")
             record["github_issue_url"] = issue_url
             record["github_issue_number"] = issue_number
-            github_result = {"created": True, "url": issue_url, "number": issue_number}
+            remote_issue_confirmed = True
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_issue_confirmed",
+                github_issue_number=issue_number,
+                github_issue_url=issue_url,
+                github_issue_title=github_title,
+                recovered_after_transport_error=github_result.get("recovered_after_transport_error"),
+            )
         elif create_github and not record.get("github_issue_url"):
             github_result = {"created": False, "planned": True, "body_path": _repo_rel(github_body_path, registry_root)}
+
+        if effective_apply and record.get("github_issue_number") and record.get("github_issue_url"):
+            remote_issue_confirmed = True
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_issue_confirmed",
+                github_issue_number=record.get("github_issue_number"),
+                github_issue_url=record.get("github_issue_url"),
+                title=title,
+                fingerprint=str(candidate.get("fingerprint") or ""),
+            )
 
         has_linkage = bool(record.get("github_issue_number") and record.get("github_issue_url"))
         if effective_apply and not has_linkage:
@@ -5319,7 +5629,7 @@ def build_submit_bug_plan(
             _write_json(write_candidate_path, {"event": event, "candidate": candidate})
             _write_text(write_github_body_path, _render_github_issue_body(record, candidate))
             _write_json(write_bug_path, record)
-            _write_allocator(allocated_number, write_root)
+            _write_allocator(max(allocated_number, int(allocation_report.get("max_number") or 0)), write_root)
             fix_registration_commit = (
                 _commit_bug_registration_in_fix_worktree(write_root, canonical_bug_id)
                 if create_fix_worktree and write_root != registry_root
@@ -5344,6 +5654,12 @@ def build_submit_bug_plan(
                     if create_fix_worktree
                     else ["run_issue_workflow_plan", "create_worktree", "read_context_pack"]
                 ),
+            )
+            _update_bug_id_reservation(
+                reservation_path,
+                status="registered",
+                bug_json=_repo_rel(write_bug_path, write_root),
+                registration_root=str(write_root.resolve()),
             )
             payload["state_path"] = _repo_rel(_state_path(canonical_bug_id, write_root), write_root)
             payload["events_path"] = _repo_rel(_events_path(canonical_bug_id, write_root), write_root)
@@ -5386,8 +5702,16 @@ def build_submit_bug_plan(
                 ),
             }
         return payload
-    except Exception:
-        _release_bug_id_reservation(reservation_path)
+    except Exception as exc:
+        if remote_issue_confirmed:
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_issue_confirmed_local_incomplete",
+                last_error_type=type(exc).__name__,
+                last_error=str(exc)[:1000],
+            )
+        else:
+            _release_bug_id_reservation(reservation_path)
         raise
 
 
