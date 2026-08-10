@@ -1,0 +1,288 @@
+{
+  "actual": "The plan reader rejects every real VirtualAccount with MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID because the dataclass has no model_dump; tests only supplied a SimpleNamespace fake with model_dump and did not exercise the repository contract.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+    "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "tests/aistock_validation/bugs/20260810_BUG-1007-miniqmt-kernel-v2-rejects-authoritative-virtualaccount-dataclass-before.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1007",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-10T03:45:52.566852Z",
+  "description": "The plan reader rejects every real VirtualAccount with MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID because the dataclass has no model_dump; tests only supplied a SimpleNamespace fake with model_dump and did not exercise the repository contract.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260810-43f2fd738792",
+      "timestamp": "2026-08-10T03:45:52.566846Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime error: virtual account authority does not expose an exact JSON object"
+  ],
+  "expected": "K6 plan creation and later product evidence must use one strict deterministic virtual-account projection authority over the repository-owned VirtualAccount carrier, with exact owner/schema/hash closure and typed fail-loud rejection for malformed or mismatched carriers.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+      "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+      "backend/services/qmt_strategy_ledger/models.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+        "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+        "backend/services/qmt_strategy_ledger/models.py",
+        "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "platform.api",
+        "platform.db",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_services"
+        },
+        {
+          "file": "backend/services/qmt_strategy_ledger/models.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+        "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+        "backend/services/qmt_strategy_ledger/models.py",
+        "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/miniqmt_kernel_product.py",
+      "backend/services/miniqmt_execution_runtime/kernel_product_evidence.py",
+      "backend/services/qmt_strategy_ledger/models.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ]
+  },
+  "first_seen_at": "2026-08-10T03:45:52.566852Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3242,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3242",
+  "last_seen_at": "2026-08-10T03:45:52.566852Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest -q backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py -k plan_authority",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2",
+    "miniqmt_execution_runtime_l2",
+    "platform_api_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT KERNEL_V2 rejects authoritative VirtualAccount dataclass before plan start",
+  "trigger_condition": {
+    "fingerprint": "43f2fd73879274caed1daf36",
+    "source_event_id": "FE-20260810-43f2fd738792"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core",
+        "miniqmt_execution_runtime",
+        "platform_api"
+      ],
+      "plans": [
+        "simulation_core_l2",
+        "miniqmt_execution_runtime_l2",
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core",
+          "miniqmt_execution_runtime",
+          "platform_api"
+        ],
+        "plans": [
+          "simulation_core_l2",
+          "miniqmt_execution_runtime_l2",
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
