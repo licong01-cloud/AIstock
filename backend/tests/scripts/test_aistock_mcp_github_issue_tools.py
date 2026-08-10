@@ -420,7 +420,7 @@ def test_github_client_skips_unsupported_socks_proxy_env(mcp_module, monkeypatch
         return original_find_spec(name, *args, **kwargs)
 
     monkeypatch.setattr(mcp_module.importlib.util, "find_spec", fake_find_spec)
-    client = mcp_module.GitHubIssueClient(repo="owner/repo", token="pytest-token")
+    client = mcp_module.GitHubIssueClient(repo="owner/repo", token="test")
 
     with client._client() as http_client:
         assert http_client._trust_env is False
