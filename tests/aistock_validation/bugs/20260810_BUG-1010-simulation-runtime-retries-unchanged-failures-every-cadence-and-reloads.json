@@ -140,7 +140,8 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "fresh Python pytest process loaded scheduler and repository source and passed 272 lifecycle tests plus the DEV PostgreSQL independent writer/readback node; backend-main restart remains user-owned",
-      "Fresh pytest process loaded HEAD 091c2781 and passed first/source-change durable claim token CAS, stale-writer rejection, DEV PostgreSQL independent writer/readback, and 274 lifecycle tests; backend-main restart remains user-owned"
+      "Fresh pytest process loaded HEAD 091c2781 and passed first/source-change durable claim token CAS, stale-writer rejection, DEV PostgreSQL independent writer/readback, and 274 lifecycle tests; backend-main restart remains user-owned",
+      "Fresh process at synchronized HEAD 51142335cfe4717807cf7a48ee468a68ef58fa88 loaded scheduler/repository and passed simulation_core_l2 502 passed, 1 skipped; first/source-change durable claim token CAS and DEV PostgreSQL independent writer/readback remain verified; backend-main restart remains user-owned"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
