@@ -1848,6 +1848,7 @@ def test_simulation_retry_control_is_hash_closed_bounded_and_single_claimed() ->
         as_of_time=observed + timedelta(seconds=62),
         base_delay_seconds=60,
         max_delay_seconds=3600,
+        expected_claim_token=changed.claim_token,
     )
     forged_payload = deepcopy(corrupted.run_payload_json)
     forged_payload["simulation_scheduler_retry_control_v1"]["entries"]["BINDING_FAILED_RETRYABLE"]["next_retry_at"] = (
@@ -1862,6 +1863,176 @@ def test_simulation_retry_control_is_hash_closed_bounded_and_single_claimed() ->
             as_of_time=observed + timedelta(seconds=63),
             lease_seconds=600,
         )
+
+
+def test_simulation_retry_first_and_source_changed_attempts_are_durably_single_claimed() -> None:
+    scheduler, repo, _broker, _binding = _miniqmt_event_loop_test_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=observed,
+    )
+    run = planned.results[0].run
+    assert run is not None
+
+    first = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_FIRST_CLAIM",
+        source_fingerprint="a" * 64,
+        as_of_time=observed,
+        lease_seconds=600,
+    )
+    duplicate_first = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_FIRST_CLAIM",
+        source_fingerprint="a" * 64,
+        as_of_time=observed,
+        lease_seconds=600,
+    )
+    assert first.should_execute is True
+    assert first.claim_token is not None
+    assert duplicate_first.should_execute is False
+    assert duplicate_first.reason == "attempt_in_progress"
+    assert duplicate_first.claim_token == first.claim_token
+    with pytest.raises(InvalidStateTransitionError) as missing_record_token:
+        repo.record_simulation_retry_failure(
+            run_id=run.run_id,
+            retry_key="RECOVERY:TEST_FIRST_CLAIM",
+            source_fingerprint="a" * 64,
+            failure_fingerprint="f" * 64,
+            failure_stage="TEST_FIRST_CLAIM",
+            error={"type": "RuntimeError", "message": "missing token", "reason_code": None, "context": {}},
+            as_of_time=observed + timedelta(seconds=1),
+            base_delay_seconds=60,
+            max_delay_seconds=3600,
+        )
+    assert missing_record_token.value.context["reason_code"] == ("SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED")
+    with pytest.raises(InvalidStateTransitionError) as missing_clear_token:
+        repo.clear_simulation_retry_control(
+            run_id=run.run_id,
+            retry_key="RECOVERY:TEST_FIRST_CLAIM",
+        )
+    assert missing_clear_token.value.context["reason_code"] == "SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED"
+
+    failed = repo.record_simulation_retry_failure(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="b" * 64,
+        failure_fingerprint="c" * 64,
+        failure_stage="TEST_SOURCE_CHANGE",
+        error={"type": "RuntimeError", "message": "old source", "reason_code": None, "context": {}},
+        as_of_time=observed,
+        base_delay_seconds=60,
+        max_delay_seconds=3600,
+    )
+    assert failed.run_id == run.run_id
+    changed = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="d" * 64,
+        as_of_time=observed + timedelta(seconds=1),
+        lease_seconds=600,
+    )
+    duplicate_changed = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="d" * 64,
+        as_of_time=observed + timedelta(seconds=1),
+        lease_seconds=600,
+    )
+    assert changed.should_execute is True
+    assert changed.reason == "source_changed"
+    assert changed.claim_token is not None
+    assert duplicate_changed.should_execute is False
+    assert duplicate_changed.reason == "attempt_in_progress"
+    assert duplicate_changed.claim_token == changed.claim_token
+
+    successor = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="d" * 64,
+        as_of_time=observed + timedelta(seconds=602),
+        lease_seconds=600,
+    )
+    assert successor.should_execute is True
+    assert successor.reason == "initial_claim_recovered"
+    assert successor.claim_token is not None
+    assert successor.claim_token != changed.claim_token
+    with pytest.raises(InvalidStateTransitionError) as stale_exc:
+        repo.record_simulation_retry_failure(
+            run_id=run.run_id,
+            retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+            source_fingerprint="d" * 64,
+            failure_fingerprint="e" * 64,
+            failure_stage="TEST_SOURCE_CHANGE",
+            error={"type": "RuntimeError", "message": "stale writer", "reason_code": None, "context": {}},
+            as_of_time=observed + timedelta(seconds=603),
+            base_delay_seconds=60,
+            max_delay_seconds=3600,
+            expected_claim_token=changed.claim_token,
+        )
+    assert stale_exc.value.context["reason_code"] == "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER"
+    with pytest.raises(InvalidStateTransitionError) as stale_clear:
+        repo.clear_simulation_retry_control(
+            run_id=run.run_id,
+            retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+            expected_claim_token=changed.claim_token,
+        )
+    assert stale_clear.value.context["reason_code"] == "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER"
+    recorded = repo.record_simulation_retry_failure(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="d" * 64,
+        failure_fingerprint="e" * 64,
+        failure_stage="TEST_SOURCE_CHANGE",
+        error={"type": "RuntimeError", "message": "current writer", "reason_code": None, "context": {}},
+        as_of_time=observed + timedelta(seconds=604),
+        base_delay_seconds=60,
+        max_delay_seconds=3600,
+        expected_claim_token=successor.claim_token,
+    )
+    assert (
+        "RECOVERY:TEST_SOURCE_CHANGE" not in recorded.run_payload_json["simulation_scheduler_retry_claims_v1"]["claims"]
+    )
+
+
+def test_simulation_retry_initial_claim_strict_readback_rejects_hash_drift() -> None:
+    scheduler, repo, _broker, _binding = _miniqmt_event_loop_test_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=observed,
+    )
+    run = planned.results[0].run
+    assert run is not None
+    claimed = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:CLAIM_HASH",
+        source_fingerprint="a" * 64,
+        as_of_time=observed,
+        lease_seconds=600,
+    )
+    forged_payload = deepcopy(claimed.run.run_payload_json)
+    forged_payload["simulation_scheduler_retry_claims_v1"]["claims"]["RECOVERY:CLAIM_HASH"]["lease_until"] = (
+        (observed + timedelta(days=1)).astimezone(UTC).isoformat()
+    )
+    repo.daily_runs[run.run_id] = claimed.run.model_copy(update={"run_payload_json": forged_payload})
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="RECOVERY:CLAIM_HASH",
+            source_fingerprint="a" * 64,
+            as_of_time=observed + timedelta(seconds=1),
+            lease_seconds=600,
+        )
+    assert exc_info.value.context["reason_code"] == "SIMULATION_SCHEDULER_RETRY_CLAIM_HASH_DRIFT"
 
 
 @pytest.mark.parametrize(
@@ -2004,7 +2175,7 @@ def test_localsim_pre_trade_blocked_replan_uses_same_durable_retry_contract() ->
     assert retry_entry["failure_stage"] == "LOCAL_SIM_PRE_TRADE_BLOCKED_REPLAN"
     assert retry_entry["next_retry_at"] == (observed + timedelta(minutes=1)).astimezone(UTC).isoformat()
 
-    _, deferred = scheduler._claim_binding_retry_or_defer(  # noqa: SLF001
+    _, deferred, claim_token, source_fingerprint = scheduler._claim_binding_retry_or_defer(  # noqa: SLF001
         binding=local_binding,
         run=first.run,
         plan=plan,
@@ -2014,6 +2185,8 @@ def test_localsim_pre_trade_blocked_replan_uses_same_durable_retry_contract() ->
         as_of_time=observed + timedelta(seconds=30),
     )
     assert deferred is not None
+    assert claim_token is None
+    assert source_fingerprint is None
     assert deferred.status == "RETRY_BACKOFF"
     assert deferred.error is None
     assert deferred.lifecycle_diagnostic["reason_code"] == "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE"
@@ -7238,6 +7411,7 @@ def test_scheduler_recovery_isolates_one_bad_durable_run_and_continues_peer_runs
             should_execute=True,
             reason="no_previous_failure",
             retry_entry=None,
+            claim_token=None,
         ),
     )
     monkeypatch.setattr(
@@ -8822,6 +8996,29 @@ def test_localsim_economic_readback_uses_committed_independent_dev_postgres_conn
             raw_connection.close()
 
         retry_observed = datetime(2026, 5, 22, 10, 0, tzinfo=UTC)
+        initial_claim = writer.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_INITIAL_CLAIM",
+            source_fingerprint="f" * 64,
+            as_of_time=retry_observed,
+            lease_seconds=600,
+        )
+        duplicate_initial_claim = readback.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_INITIAL_CLAIM",
+            source_fingerprint="f" * 64,
+            as_of_time=retry_observed,
+            lease_seconds=600,
+        )
+        assert initial_claim.should_execute is True
+        assert initial_claim.claim_token is not None
+        assert duplicate_initial_claim.should_execute is False
+        assert duplicate_initial_claim.claim_token == initial_claim.claim_token
+        writer.clear_simulation_retry_control(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_INITIAL_CLAIM",
+            expected_claim_token=initial_claim.claim_token,
+        )
         writer.record_simulation_retry_failure(
             run_id=run.run_id,
             retry_key="RECOVERY:DEV_POSTGRES_READBACK",
@@ -8858,6 +9055,7 @@ def test_localsim_economic_readback_uses_committed_independent_dev_postgres_conn
         cleared_retry = writer.clear_simulation_retry_control(
             run_id=run.run_id,
             retry_key="RECOVERY:DEV_POSTGRES_READBACK",
+            expected_claim_token=due_retry.claim_token,
         )
         assert "simulation_scheduler_retry_control_v1" not in cleared_retry.run_payload_json
 

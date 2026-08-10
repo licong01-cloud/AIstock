@@ -58,6 +58,9 @@ LOCAL_SIM_VALUATION_COMPLETION_PAYLOAD_KEY = "local_sim_valuation_completion_v1"
 SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY = "simulation_scheduler_retry_control_v1"
 SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA = "simulation_scheduler_retry_control_v1"
 SIMULATION_SCHEDULER_RETRY_ENTRY_SCHEMA = "simulation_scheduler_retry_entry_v1"
+SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY = "simulation_scheduler_retry_claims_v1"
+SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA = "simulation_scheduler_retry_claims_v1"
+SIMULATION_SCHEDULER_RETRY_CLAIM_SCHEMA = "simulation_scheduler_retry_claim_v1"
 _SIMULATION_SCHEDULER_RETRY_MAX_ENTRIES = 16
 _SIMULATION_SCHEDULER_RETRY_ENTRY_FIELDS = frozenset(
     {
@@ -77,6 +80,16 @@ _SIMULATION_SCHEDULER_RETRY_ENTRY_FIELDS = frozenset(
         "entry_sha256",
     }
 )
+_SIMULATION_SCHEDULER_RETRY_CLAIM_FIELDS = frozenset(
+    {
+        "schema_version",
+        "retry_key",
+        "source_fingerprint",
+        "claimed_at",
+        "lease_until",
+        "claim_token",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +98,7 @@ class SimulationRetryAttemptDecision:
     should_execute: bool
     reason: str
     retry_entry: dict[str, Any] | None
+    claim_token: str | None
 
 
 def _retry_required_text(value: Any, *, field: str) -> str:
@@ -371,6 +385,157 @@ def _retry_control_payload_with_entries(payload: dict[str, Any], entries: dict[s
     return merged
 
 
+def _retry_claim_hash_payload(claim: dict[str, Any]) -> dict[str, Any]:
+    return {key: claim[key] for key in sorted(_SIMULATION_SCHEDULER_RETRY_CLAIM_FIELDS - {"claim_token"})}
+
+
+def _retry_claim_with_token(claim: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(claim)
+    normalized["claim_token"] = canonical_json_sha256(_retry_claim_hash_payload(normalized))
+    return normalized
+
+
+def _retry_claims_with_hash(claims: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    payload = {
+        "schema_version": SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA,
+        "claims": {key: claims[key] for key in sorted(claims)},
+    }
+    return {**payload, "claims_sha256": canonical_json_sha256(payload)}
+
+
+def _simulation_retry_claims(payload: dict[str, Any]) -> dict[str, Any] | None:
+    raw = payload.get(SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY)
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) != {"schema_version", "claims", "claims_sha256"}:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry claims envelope is invalid",
+            context={"reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID"},
+        )
+    if raw.get("schema_version") != SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry claims schema version is invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID",
+                "actual_schema_version": raw.get("schema_version"),
+            },
+        )
+    claims = raw.get("claims")
+    if not isinstance(claims, dict) or len(claims) > _SIMULATION_SCHEDULER_RETRY_MAX_ENTRIES:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry claims are invalid",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID",
+                "claim_count": len(claims) if isinstance(claims, dict) else None,
+            },
+        )
+    normalized_claims: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_claim in claims.items():
+        retry_key = _retry_required_text(raw_key, field="retry_key")
+        if not isinstance(raw_claim, dict) or set(raw_claim) != _SIMULATION_SCHEDULER_RETRY_CLAIM_FIELDS:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        claim = dict(raw_claim)
+        if claim.get("schema_version") != SIMULATION_SCHEDULER_RETRY_CLAIM_SCHEMA:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim schema version is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIMS_SCHEMA_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        if _retry_required_text(claim.get("retry_key"), field="retry_key") != retry_key:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim map identity conflicts with its payload",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_IDENTITY_CONFLICT",
+                    "map_retry_key": retry_key,
+                    "payload_retry_key": claim.get("retry_key"),
+                },
+            )
+        _retry_sha256(claim.get("source_fingerprint"), field="source_fingerprint")
+        claimed_at = _retry_time(claim.get("claimed_at"), field="claimed_at")
+        lease_until = _retry_time(claim.get("lease_until"), field="lease_until")
+        if claimed_at is None or lease_until is None:
+            raise AssertionError("required retry claim timestamps were not parsed")
+        if lease_until < claimed_at:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim timeline is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_TIMELINE_INVALID",
+                    "retry_key": retry_key,
+                },
+            )
+        expected_token = canonical_json_sha256(_retry_claim_hash_payload(claim))
+        if _retry_sha256(claim.get("claim_token"), field="claim_token") != expected_token:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry claim token drifted",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_HASH_DRIFT",
+                    "retry_key": retry_key,
+                    "expected": expected_token,
+                    "actual": claim.get("claim_token"),
+                },
+            )
+        normalized_claims[retry_key] = claim
+    expected_claims = _retry_claims_with_hash(normalized_claims)
+    if _retry_sha256(raw.get("claims_sha256"), field="claims_sha256") != expected_claims["claims_sha256"]:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry claims hash drifted",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_HASH_DRIFT",
+                "expected": expected_claims["claims_sha256"],
+                "actual": raw.get("claims_sha256"),
+            },
+        )
+    return expected_claims
+
+
+def _retry_claims_payload_with_claims(payload: dict[str, Any], claims: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    merged = dict(payload)
+    if claims:
+        merged[SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY] = _retry_claims_with_hash(claims)
+    else:
+        merged.pop(SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY, None)
+    return merged
+
+
+def _simulation_retry_state(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    control = _simulation_retry_control(payload)
+    claims = _simulation_retry_claims(payload)
+    entry_keys = set(control["entries"]) if control is not None else set()
+    claim_keys = set(claims["claims"]) if claims is not None else set()
+    overlap = sorted(entry_keys & claim_keys)
+    if overlap:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry failure entries and initial claims overlap",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_IDENTITY_CONFLICT",
+                "retry_keys": overlap,
+            },
+        )
+    return control, claims
+
+
+def _new_retry_initial_claim(
+    *, retry_key: str, source_fingerprint: str, as_of_time: datetime, lease_seconds: int
+) -> dict[str, Any]:
+    return _retry_claim_with_token(
+        {
+            "schema_version": SIMULATION_SCHEDULER_RETRY_CLAIM_SCHEMA,
+            "retry_key": retry_key,
+            "source_fingerprint": source_fingerprint,
+            "claimed_at": as_of_time.isoformat(),
+            "lease_until": (as_of_time + timedelta(seconds=lease_seconds)).isoformat(),
+        }
+    )
+
+
 def _claim_retry_attempt_payload(
     *,
     payload: dict[str, Any],
@@ -378,26 +543,63 @@ def _claim_retry_attempt_payload(
     source_fingerprint: str,
     as_of_time: datetime,
     lease_seconds: int,
-) -> tuple[dict[str, Any], bool, str, dict[str, Any] | None]:
+) -> tuple[dict[str, Any], bool, str, dict[str, Any] | None, str | None]:
     retry_key = _retry_required_text(retry_key, field="retry_key")
     source_fingerprint = _retry_sha256(source_fingerprint, field="source_fingerprint")
-    control = _simulation_retry_control(payload)
-    if control is None or retry_key not in control["entries"]:
-        return dict(payload), True, "no_previous_failure", None
-    entries = dict(control["entries"])
+    now = _retry_as_of_time(as_of_time)
+    control, claims_control = _simulation_retry_state(payload)
+    entries = dict(control["entries"]) if control is not None else {}
+    claims = dict(claims_control["claims"]) if claims_control is not None else {}
+    existing_claim = claims.get(retry_key)
+    recovered_initial_claim = False
+    initial_claim_source_changed = False
+    if existing_claim is not None:
+        claim_lease_until = _retry_time(existing_claim.get("lease_until"), field="lease_until")
+        if claim_lease_until is None:
+            raise AssertionError("retry claim lease timestamp was not parsed")
+        if existing_claim["source_fingerprint"] == source_fingerprint and claim_lease_until > now:
+            return dict(payload), False, "attempt_in_progress", existing_claim, existing_claim["claim_token"]
+        recovered_initial_claim = existing_claim["source_fingerprint"] == source_fingerprint
+        initial_claim_source_changed = not recovered_initial_claim
+        claims.pop(retry_key)
+    if retry_key not in entries:
+        claim = _new_retry_initial_claim(
+            retry_key=retry_key,
+            source_fingerprint=source_fingerprint,
+            as_of_time=now,
+            lease_seconds=lease_seconds,
+        )
+        claims[retry_key] = claim
+        next_payload = _retry_claims_payload_with_claims(payload, claims)
+        reason = (
+            "source_changed"
+            if initial_claim_source_changed
+            else "initial_claim_recovered"
+            if recovered_initial_claim
+            else "no_previous_failure"
+        )
+        return next_payload, True, reason, None, claim["claim_token"]
     entry = dict(entries[retry_key])
     if entry["source_fingerprint"] != source_fingerprint:
         entries.pop(retry_key)
-        return _retry_control_payload_with_entries(payload, entries), True, "source_changed", None
-    now = _retry_as_of_time(as_of_time)
+        claim = _new_retry_initial_claim(
+            retry_key=retry_key,
+            source_fingerprint=source_fingerprint,
+            as_of_time=now,
+            lease_seconds=lease_seconds,
+        )
+        claims[retry_key] = claim
+        next_payload = _retry_control_payload_with_entries(payload, entries)
+        next_payload = _retry_claims_payload_with_claims(next_payload, claims)
+        return next_payload, True, "source_changed", None, claim["claim_token"]
     lease_until = _retry_time(entry.get("attempt_lease_until"), field="attempt_lease_until", optional=True)
     if lease_until is not None and lease_until > now:
-        return dict(payload), False, "attempt_in_progress", entry
+        return dict(payload), False, "attempt_in_progress", entry, entry["entry_sha256"]
     next_retry_at = _retry_time(entry.get("next_retry_at"), field="next_retry_at")
     if next_retry_at is None:
         raise AssertionError("next retry timestamp was not parsed")
     if next_retry_at > now:
-        return dict(payload), False, "backoff_not_due", entry
+        return dict(payload), False, "backoff_not_due", entry, None
     entry.update(
         {
             "attempt_count": int(entry["attempt_count"]) + 1,
@@ -407,7 +609,9 @@ def _claim_retry_attempt_payload(
     )
     entry = _retry_entry_with_hash(entry)
     entries[retry_key] = entry
-    return _retry_control_payload_with_entries(payload, entries), True, "retry_claimed", entry
+    next_payload = _retry_control_payload_with_entries(payload, entries)
+    next_payload = _retry_claims_payload_with_claims(next_payload, claims)
+    return next_payload, True, "retry_claimed", entry, entry["entry_sha256"]
 
 
 def inspect_simulation_retry_backoff(
@@ -427,7 +631,7 @@ def inspect_simulation_retry_backoff(
 
     if type(lease_seconds) is not int or lease_seconds <= 0:
         raise ValueError("lease_seconds must be a positive integer")
-    _, should_execute, reason, retry_entry = _claim_retry_attempt_payload(
+    _, should_execute, reason, retry_entry, claim_token = _claim_retry_attempt_payload(
         payload=run.run_payload_json,
         retry_key=retry_key,
         source_fingerprint=source_fingerprint,
@@ -441,7 +645,24 @@ def inspect_simulation_retry_backoff(
         should_execute=False,
         reason=reason,
         retry_entry=deepcopy(retry_entry),
+        claim_token=claim_token,
     )
+
+
+def simulation_retry_claim_token(payload: dict[str, Any], *, retry_key: str) -> str | None:
+    retry_key = _retry_required_text(retry_key, field="retry_key")
+    control, claims_control = _simulation_retry_state(payload)
+    claims = claims_control["claims"] if claims_control is not None else {}
+    claim = claims.get(retry_key)
+    if claim is not None:
+        return str(claim["claim_token"])
+    entries = control["entries"] if control is not None else {}
+    entry = entries.get(retry_key)
+    if entry is None:
+        return None
+    if entry.get("last_attempt_at") is not None and entry.get("attempt_lease_until") is not None:
+        return str(entry["entry_sha256"])
+    return None
 
 
 def _record_retry_failure_payload(
@@ -455,14 +676,50 @@ def _record_retry_failure_payload(
     as_of_time: datetime,
     base_delay_seconds: int,
     max_delay_seconds: int,
+    expected_claim_token: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     retry_key = _retry_required_text(retry_key, field="retry_key")
     source_fingerprint = _retry_sha256(source_fingerprint, field="source_fingerprint")
     failure_fingerprint = _retry_sha256(failure_fingerprint, field="failure_fingerprint")
     failure_stage = _retry_required_text(failure_stage, field="failure_stage")
-    control = _simulation_retry_control(payload)
+    control, claims_control = _simulation_retry_state(payload)
     entries = dict(control["entries"]) if control is not None else {}
+    claims = dict(claims_control["claims"]) if claims_control is not None else {}
     previous = entries.get(retry_key)
+    active_token = simulation_retry_claim_token(payload, retry_key=retry_key)
+    if expected_claim_token is not None:
+        expected_claim_token = _retry_sha256(expected_claim_token, field="expected_claim_token")
+        if active_token != expected_claim_token:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry failure writer no longer owns the attempt claim",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER",
+                    "retry_key": retry_key,
+                    "expected_claim_token": expected_claim_token,
+                    "actual_claim_token": active_token,
+                },
+            )
+        claim = claims.get(retry_key)
+        active_source = claim.get("source_fingerprint") if claim is not None else previous.get("source_fingerprint")
+        if active_source != source_fingerprint:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry failure source no longer matches the attempt claim",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_SOURCE_CONFLICT",
+                    "retry_key": retry_key,
+                    "expected_source_fingerprint": active_source,
+                    "actual_source_fingerprint": source_fingerprint,
+                },
+            )
+    elif active_token is not None:
+        raise InvalidStateTransitionError(
+            "simulation scheduler retry failure writer omitted the active attempt claim token",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED",
+                "retry_key": retry_key,
+                "active_claim_token": active_token,
+            },
+        )
     same_failure = bool(
         previous
         and previous["source_fingerprint"] == source_fingerprint
@@ -502,7 +759,10 @@ def _record_retry_failure_payload(
         }
     )
     entries[retry_key] = entry
-    return _retry_control_payload_with_entries(payload, entries), entry
+    claims.pop(retry_key, None)
+    next_payload = _retry_control_payload_with_entries(payload, entries)
+    next_payload = _retry_claims_payload_with_claims(next_payload, claims)
+    return next_payload, entry
 
 
 _LOCAL_SIM_EMPTY_AUTHORITY_DIRECT_CARRIERS = (
@@ -2303,8 +2563,8 @@ class SimulationRuntimeRepository:
         as_of_time: datetime,
         lease_seconds: int,
     ) -> SimulationRetryAttemptDecision:
-        if lease_seconds <= 0:
-            raise ValueError("lease_seconds must be positive")
+        if type(lease_seconds) is not int or lease_seconds <= 0:
+            raise ValueError("lease_seconds must be a positive integer")
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -2315,7 +2575,7 @@ class SimulationRuntimeRepository:
                 if row is None:
                     raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
                 current_payload = dict(row.get("run_payload_json") or {})
-                next_payload, should_execute, reason, retry_entry = _claim_retry_attempt_payload(
+                next_payload, should_execute, reason, retry_entry, claim_token = _claim_retry_attempt_payload(
                     payload=current_payload,
                     retry_key=retry_key,
                     source_fingerprint=source_fingerprint,
@@ -2332,12 +2592,13 @@ class SimulationRuntimeRepository:
                         (psycopg2.extras.Json(next_payload), run_id),
                     )
         readback = self.get_simulation_daily_run(run_id)
-        _simulation_retry_control(readback.run_payload_json)
+        _simulation_retry_state(readback.run_payload_json)
         return SimulationRetryAttemptDecision(
             run=readback,
             should_execute=should_execute,
             reason=reason,
             retry_entry=deepcopy(retry_entry),
+            claim_token=claim_token,
         )
 
     def record_simulation_retry_failure(
@@ -2352,8 +2613,14 @@ class SimulationRuntimeRepository:
         as_of_time: datetime,
         base_delay_seconds: int,
         max_delay_seconds: int,
+        expected_claim_token: str | None = None,
     ) -> SimulationDailyRun:
-        if base_delay_seconds <= 0 or max_delay_seconds < base_delay_seconds:
+        if (
+            type(base_delay_seconds) is not int
+            or type(max_delay_seconds) is not int
+            or base_delay_seconds <= 0
+            or max_delay_seconds < base_delay_seconds
+        ):
             raise ValueError("retry delay bounds are invalid")
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -2374,6 +2641,7 @@ class SimulationRuntimeRepository:
                     as_of_time=as_of_time,
                     base_delay_seconds=base_delay_seconds,
                     max_delay_seconds=max_delay_seconds,
+                    expected_claim_token=expected_claim_token,
                 )
                 cur.execute(
                     """
@@ -2384,10 +2652,16 @@ class SimulationRuntimeRepository:
                     (psycopg2.extras.Json(next_payload), run_id),
                 )
         readback = self.get_simulation_daily_run(run_id)
-        _simulation_retry_control(readback.run_payload_json)
+        _simulation_retry_state(readback.run_payload_json)
         return readback
 
-    def clear_simulation_retry_control(self, *, run_id: str, retry_key: str) -> SimulationDailyRun:
+    def clear_simulation_retry_control(
+        self,
+        *,
+        run_id: str,
+        retry_key: str,
+        expected_claim_token: str | None = None,
+    ) -> SimulationDailyRun:
         retry_key = _retry_required_text(retry_key, field="retry_key")
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -2399,11 +2673,36 @@ class SimulationRuntimeRepository:
                 if row is None:
                     raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
                 current_payload = dict(row.get("run_payload_json") or {})
-                control = _simulation_retry_control(current_payload)
-                if control is not None and retry_key in control["entries"]:
-                    entries = dict(control["entries"])
-                    entries.pop(retry_key)
+                control, claims_control = _simulation_retry_state(current_payload)
+                entries = dict(control["entries"]) if control is not None else {}
+                claims = dict(claims_control["claims"]) if claims_control is not None else {}
+                active_token = simulation_retry_claim_token(current_payload, retry_key=retry_key)
+                if expected_claim_token is not None:
+                    expected_claim_token = _retry_sha256(expected_claim_token, field="expected_claim_token")
+                    if active_token != expected_claim_token:
+                        raise InvalidStateTransitionError(
+                            "simulation scheduler retry success writer no longer owns the attempt claim",
+                            context={
+                                "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER",
+                                "retry_key": retry_key,
+                                "expected_claim_token": expected_claim_token,
+                                "actual_claim_token": active_token,
+                            },
+                        )
+                elif active_token is not None:
+                    raise InvalidStateTransitionError(
+                        "simulation scheduler retry success writer omitted the active attempt claim token",
+                        context={
+                            "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED",
+                            "retry_key": retry_key,
+                            "active_claim_token": active_token,
+                        },
+                    )
+                if retry_key in entries or retry_key in claims:
+                    entries.pop(retry_key, None)
+                    claims.pop(retry_key, None)
                     next_payload = _retry_control_payload_with_entries(current_payload, entries)
+                    next_payload = _retry_claims_payload_with_claims(next_payload, claims)
                     cur.execute(
                         """
                         UPDATE paper_v2.simulation_daily_run
@@ -2413,7 +2712,7 @@ class SimulationRuntimeRepository:
                         (psycopg2.extras.Json(next_payload), run_id),
                     )
         readback = self.get_simulation_daily_run(run_id)
-        _simulation_retry_control(readback.run_payload_json)
+        _simulation_retry_state(readback.run_payload_json)
         return readback
 
     def list_local_sim_execution_states(
@@ -3516,10 +3815,10 @@ class InMemorySimulationRuntimeRepository:
         as_of_time: datetime,
         lease_seconds: int,
     ) -> SimulationRetryAttemptDecision:
-        if lease_seconds <= 0:
-            raise ValueError("lease_seconds must be positive")
+        if type(lease_seconds) is not int or lease_seconds <= 0:
+            raise ValueError("lease_seconds must be a positive integer")
         current = self.get_simulation_daily_run(run_id)
-        next_payload, should_execute, reason, retry_entry = _claim_retry_attempt_payload(
+        next_payload, should_execute, reason, retry_entry, claim_token = _claim_retry_attempt_payload(
             payload=current.run_payload_json,
             retry_key=retry_key,
             source_fingerprint=source_fingerprint,
@@ -3529,12 +3828,13 @@ class InMemorySimulationRuntimeRepository:
         if next_payload != current.run_payload_json:
             current = current.model_copy(update={"run_payload_json": next_payload, "updated_at": datetime.now(UTC)})
             self.daily_runs[run_id] = current
-        _simulation_retry_control(current.run_payload_json)
+        _simulation_retry_state(current.run_payload_json)
         return SimulationRetryAttemptDecision(
             run=current,
             should_execute=should_execute,
             reason=reason,
             retry_entry=deepcopy(retry_entry),
+            claim_token=claim_token,
         )
 
     def record_simulation_retry_failure(
@@ -3549,8 +3849,14 @@ class InMemorySimulationRuntimeRepository:
         as_of_time: datetime,
         base_delay_seconds: int,
         max_delay_seconds: int,
+        expected_claim_token: str | None = None,
     ) -> SimulationDailyRun:
-        if base_delay_seconds <= 0 or max_delay_seconds < base_delay_seconds:
+        if (
+            type(base_delay_seconds) is not int
+            or type(max_delay_seconds) is not int
+            or base_delay_seconds <= 0
+            or max_delay_seconds < base_delay_seconds
+        ):
             raise ValueError("retry delay bounds are invalid")
         current = self.get_simulation_daily_run(run_id)
         next_payload, _ = _record_retry_failure_payload(
@@ -3563,21 +3869,53 @@ class InMemorySimulationRuntimeRepository:
             as_of_time=as_of_time,
             base_delay_seconds=base_delay_seconds,
             max_delay_seconds=max_delay_seconds,
+            expected_claim_token=expected_claim_token,
         )
         updated = current.model_copy(update={"run_payload_json": next_payload, "updated_at": datetime.now(UTC)})
         self.daily_runs[run_id] = updated
-        _simulation_retry_control(updated.run_payload_json)
+        _simulation_retry_state(updated.run_payload_json)
         return updated
 
-    def clear_simulation_retry_control(self, *, run_id: str, retry_key: str) -> SimulationDailyRun:
+    def clear_simulation_retry_control(
+        self,
+        *,
+        run_id: str,
+        retry_key: str,
+        expected_claim_token: str | None = None,
+    ) -> SimulationDailyRun:
         retry_key = _retry_required_text(retry_key, field="retry_key")
         current = self.get_simulation_daily_run(run_id)
-        control = _simulation_retry_control(current.run_payload_json)
-        if control is None or retry_key not in control["entries"]:
+        control, claims_control = _simulation_retry_state(current.run_payload_json)
+        entries = dict(control["entries"]) if control is not None else {}
+        claims = dict(claims_control["claims"]) if claims_control is not None else {}
+        active_token = simulation_retry_claim_token(current.run_payload_json, retry_key=retry_key)
+        if expected_claim_token is not None:
+            expected_claim_token = _retry_sha256(expected_claim_token, field="expected_claim_token")
+            if active_token != expected_claim_token:
+                raise InvalidStateTransitionError(
+                    "simulation scheduler retry success writer no longer owns the attempt claim",
+                    context={
+                        "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER",
+                        "retry_key": retry_key,
+                        "expected_claim_token": expected_claim_token,
+                        "actual_claim_token": active_token,
+                    },
+                )
+        elif active_token is not None:
+            raise InvalidStateTransitionError(
+                "simulation scheduler retry success writer omitted the active attempt claim token",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED",
+                    "retry_key": retry_key,
+                    "active_claim_token": active_token,
+                },
+            )
+        if retry_key not in entries and retry_key not in claims:
             return current
-        entries = dict(control["entries"])
-        entries.pop(retry_key)
+        entries.pop(retry_key, None)
+        claims.pop(retry_key, None)
         next_payload = _retry_control_payload_with_entries(current.run_payload_json, entries)
+        next_payload = _retry_claims_payload_with_claims(next_payload, claims)
         updated = current.model_copy(update={"run_payload_json": next_payload, "updated_at": datetime.now(UTC)})
         self.daily_runs[run_id] = updated
         return updated

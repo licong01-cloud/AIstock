@@ -124,6 +124,7 @@ from .miniqmt_quote_activation import (
     build_miniqmt_quote_ingress_activation_from_env,
 )
 from .repository import (
+    SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY,
     SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY,
     InMemorySimulationRuntimeRepository,
     SimulationRuntimeRepository,
@@ -2649,10 +2650,20 @@ class SimulationSchedulerBindingResult:
     error: dict[str, Any] | None = None
     lifecycle_diagnostic: dict[str, Any] | None = None
     data_source: str | None = None
+    retry_claim_token: str | None = None
+    retry_source_fingerprint: str | None = None
 
     @property
     def is_success(self) -> bool:
         return self.error is None
+
+
+class _BindingRetryAttemptError(Exception):
+    def __init__(self, *, original: Exception, claim_token: str, source_fingerprint: str) -> None:
+        super().__init__(str(original))
+        self.original = original
+        self.claim_token = claim_token
+        self.source_fingerprint = source_fingerprint
 
 
 @dataclass(frozen=True)
@@ -3428,14 +3439,21 @@ class SimulationLifecycleScheduler:
             except Exception as exc:  # noqa: BLE001 - isolate one binding without starving later eligible bindings.
                 if raise_on_error:
                     raise
+                retry_claim_token = exc.claim_token if isinstance(exc, _BindingRetryAttemptError) else None
+                retry_source_fingerprint = (
+                    exc.source_fingerprint if isinstance(exc, _BindingRetryAttemptError) else None
+                )
+                original_exc = exc.original if isinstance(exc, _BindingRetryAttemptError) else exc
                 results.append(
                     self._record_pre_run_binding_failure_result(
                         binding=binding,
                         trade_date=trade_date,
                         data_source=data_source,
                         created_by=created_by,
-                        exc=exc,
+                        exc=original_exc,
                         as_of_time=as_of_time,
+                        retry_claim_token=retry_claim_token,
+                        retry_source_fingerprint=retry_source_fingerprint,
                     )
                 )
         return SimulationSchedulerRunOnceResult(
@@ -3519,8 +3537,12 @@ class SimulationLifecycleScheduler:
             )
         try:
             result = func()
-            if retry_decision.retry_entry is not None:
-                self.repository.clear_simulation_retry_control(run_id=run.run_id, retry_key=retry_key)
+            if retry_decision.claim_token is not None:
+                self.repository.clear_simulation_retry_control(
+                    run_id=run.run_id,
+                    retry_key=retry_key,
+                    expected_claim_token=retry_decision.claim_token,
+                )
             return result
         except Exception as exc:  # noqa: BLE001 - one bad durable run must not starve other runs or bindings.
             if raise_on_error:
@@ -3531,6 +3553,8 @@ class SimulationLifecycleScheduler:
                 failure_stage=stage,
                 exc=exc,
                 as_of_time=as_of_time,
+                expected_claim_token=retry_decision.claim_token,
+                source_fingerprint=source_fingerprint,
             )
             diagnostic = SimulationLifecycleScheduler._recovery_failure_diagnostic(stage=stage, exc=exc, run=failed_run)
             retry_control = failed_run.run_payload_json.get(SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY)
@@ -3547,6 +3571,7 @@ class SimulationLifecycleScheduler:
     def _simulation_retry_source_fingerprint(*, run: SimulationDailyRun, retry_key: str) -> str:
         payload = dict(run.run_payload_json or {})
         payload.pop(SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY, None)
+        payload.pop(SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY, None)
         if retry_key == _SIMULATION_BINDING_RETRY_KEY:
             payload = {
                 key: deepcopy(payload.get(key))
@@ -3606,6 +3631,8 @@ class SimulationLifecycleScheduler:
         failure_stage: str,
         exc: BaseException,
         as_of_time: datetime | None,
+        expected_claim_token: str | None = None,
+        source_fingerprint: str | None = None,
     ) -> SimulationDailyRun:
         error = self._simulation_retry_error_evidence(exc=exc, failure_stage=failure_stage)
         return self._record_simulation_retry_failure_evidence(
@@ -3614,6 +3641,8 @@ class SimulationLifecycleScheduler:
             failure_stage=failure_stage,
             error=error,
             as_of_time=as_of_time,
+            expected_claim_token=expected_claim_token,
+            source_fingerprint=source_fingerprint,
         )
 
     def _record_simulation_retry_failure_evidence(
@@ -3624,6 +3653,8 @@ class SimulationLifecycleScheduler:
         failure_stage: str,
         error: dict[str, Any],
         as_of_time: datetime | None,
+        expected_claim_token: str | None = None,
+        source_fingerprint: str | None = None,
     ) -> SimulationDailyRun:
         normalized_error = simulation_retry_json_safe_evidence(error)
         if not isinstance(normalized_error, dict):
@@ -3642,13 +3673,15 @@ class SimulationLifecycleScheduler:
         return self.repository.record_simulation_retry_failure(
             run_id=run.run_id,
             retry_key=retry_key,
-            source_fingerprint=self._simulation_retry_source_fingerprint(run=run, retry_key=retry_key),
+            source_fingerprint=source_fingerprint
+            or self._simulation_retry_source_fingerprint(run=run, retry_key=retry_key),
             failure_fingerprint=failure_fingerprint,
             failure_stage=failure_stage,
             error=normalized_error,
             as_of_time=self._scheduler_time(as_of_time),
             base_delay_seconds=_SIMULATION_RETRY_BASE_DELAY_SECONDS,
             max_delay_seconds=_SIMULATION_RETRY_MAX_DELAY_SECONDS,
+            expected_claim_token=expected_claim_token,
         )
 
     @staticmethod
@@ -3676,7 +3709,11 @@ class SimulationLifecycleScheduler:
                 "reason_code": "SIMULATION_SCHEDULER_RECOVERY_BACKOFF_NOT_DUE",
                 "stage": stage,
                 "auto_retry": True,
-                "next_retry_at": retry_entry.get("next_retry_at") if isinstance(retry_entry, dict) else None,
+                "next_retry_at": (
+                    retry_entry.get("next_retry_at") or retry_entry.get("lease_until")
+                    if isinstance(retry_entry, dict)
+                    else None
+                ),
             },
         }
 
@@ -3949,6 +3986,8 @@ class SimulationLifecycleScheduler:
         created_by: str,
         exc: Exception,
         as_of_time: datetime | None = None,
+        retry_claim_token: str | None = None,
+        retry_source_fingerprint: str | None = None,
     ) -> SimulationSchedulerBindingResult:
         if self._is_binding_tick_in_progress_error(exc):
             return self._record_binding_tick_in_progress_result(
@@ -4015,6 +4054,8 @@ class SimulationLifecycleScheduler:
                 failure_stage=self._run_failure_stage(failed_run),
                 exc=exc,
                 as_of_time=as_of_time,
+                expected_claim_token=retry_claim_token,
+                source_fingerprint=retry_source_fingerprint,
             )
         if not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError)):
             pre_run_failure = failed_run.run_payload_json.get("pre_run_failure")
@@ -6766,9 +6807,9 @@ class SimulationLifecycleScheduler:
         data_source: str,
         submit: bool,
         as_of_time: datetime | None,
-    ) -> tuple[SimulationDailyRun, SimulationSchedulerBindingResult | None]:
+    ) -> tuple[SimulationDailyRun, SimulationSchedulerBindingResult | None, str | None, str | None]:
         if not submit or not self._run_requires_binding_retry_control(run):
-            return run, None
+            return run, None, None, None
         source_fingerprint = self._simulation_retry_source_fingerprint(
             run=run,
             retry_key=_SIMULATION_BINDING_RETRY_KEY,
@@ -6789,7 +6830,7 @@ class SimulationLifecycleScheduler:
                 lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
             )
         if decision.should_execute:
-            return decision.run, None
+            return decision.run, None, decision.claim_token, source_fingerprint
         retry_entry = deepcopy(decision.retry_entry)
         error = {
             "schema_version": "simulation_binding_retry_backoff_v1",
@@ -6801,29 +6842,38 @@ class SimulationLifecycleScheduler:
             "failure_stage": self._run_failure_stage(decision.run),
             "retry_control": retry_entry,
             "auto_retry": True,
-            "next_retry_at": retry_entry.get("next_retry_at") if isinstance(retry_entry, dict) else None,
-        }
-        return decision.run, SimulationSchedulerBindingResult(
-            binding_id=binding.binding_id,
-            strategy_id=binding.strategy_id,
-            broker_backend=binding.broker_backend,
-            status="RETRY_BACKOFF",
-            run=decision.run,
-            execution_plan=plan,
-            lifecycle_diagnostic={
-                **error,
-                "alert": {
-                    "severity": "WARNING",
-                    "reason_code": "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE",
-                    "auto_retry": True,
-                    "next_retry_at": error["next_retry_at"],
-                },
-            },
-            data_source=self._effective_market_data_source_for_binding(
-                binding=binding,
-                trade_date=trade_date,
-                default_data_source=data_source,
+            "next_retry_at": (
+                retry_entry.get("next_retry_at") or retry_entry.get("lease_until")
+                if isinstance(retry_entry, dict)
+                else None
             ),
+        }
+        return (
+            decision.run,
+            SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="RETRY_BACKOFF",
+                run=decision.run,
+                execution_plan=plan,
+                lifecycle_diagnostic={
+                    **error,
+                    "alert": {
+                        "severity": "WARNING",
+                        "reason_code": "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE",
+                        "auto_retry": True,
+                        "next_retry_at": error["next_retry_at"],
+                    },
+                },
+                data_source=self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            ),
+            None,
+            None,
         )
 
     def _finalize_binding_retry_result(
@@ -6863,16 +6913,77 @@ class SimulationLifecycleScheduler:
                 failure_stage=failure_stage,
                 error=error,
                 as_of_time=as_of_time,
+                expected_claim_token=result.retry_claim_token,
+                source_fingerprint=result.retry_source_fingerprint,
             )
             return replace(result, run=updated)
-        retry_control = run.run_payload_json.get(SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY)
-        if isinstance(retry_control, dict) and _SIMULATION_BINDING_RETRY_KEY in (retry_control.get("entries") or {}):
+        if result.retry_claim_token is not None:
             updated = self.repository.clear_simulation_retry_control(
                 run_id=run.run_id,
                 retry_key=_SIMULATION_BINDING_RETRY_KEY,
+                expected_claim_token=result.retry_claim_token,
             )
             return replace(result, run=updated)
         return result
+
+    def _execute_existing_plan_retry_attempt(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        data_source: str,
+        submit: bool,
+        mode: str,
+        created_by: str,
+        selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None,
+        shared_selection_keys: set[tuple[Any, ...]] | None,
+        as_of_time: datetime | None,
+    ) -> SimulationSchedulerBindingResult:
+        if self._should_rebuild_localsim_plan_after_side_effect_free_failure(
+            binding=binding,
+            run=run,
+            submit=submit,
+            trade_date=trade_date,
+            as_of_time=as_of_time,
+        ):
+            return self._rebuild_localsim_plan_after_side_effect_free_failure(
+                binding=binding,
+                run=run,
+                runtime_release=runtime_release,
+                trade_date=trade_date,
+                data_source=data_source,
+                submit=submit,
+                mode=mode,
+                created_by=created_by,
+                selection_cache=selection_cache,
+                shared_selection_keys=shared_selection_keys,
+                as_of_time=as_of_time,
+            )
+        if self._should_rebuild_miniqmt_plan_after_side_effect_free_failure(binding=binding, run=run):
+            return self._rebuild_miniqmt_plan_after_side_effect_free_failure(
+                binding=binding,
+                run=run,
+                runtime_release=runtime_release,
+                trade_date=trade_date,
+                data_source=data_source,
+                submit=submit,
+                mode=mode,
+                created_by=created_by,
+                selection_cache=selection_cache,
+                shared_selection_keys=shared_selection_keys,
+                as_of_time=as_of_time,
+            )
+        return self._existing_plan_result(
+            binding=binding,
+            run=run,
+            trade_date=trade_date,
+            data_source=data_source,
+            submit=submit,
+            mode=mode,
+            as_of_time=as_of_time,
+        )
 
     def _run_binding(
         self,
@@ -6895,7 +7006,7 @@ class SimulationLifecycleScheduler:
         )
         if existing is not None and existing.execution_plan_id:
             existing_plan = self.repository.get_execution_plan(existing.execution_plan_id)
-            existing, deferred = self._claim_binding_retry_or_defer(
+            existing, deferred, retry_claim_token, retry_source_fingerprint = self._claim_binding_retry_or_defer(
                 binding=binding,
                 run=existing,
                 plan=existing_plan,
@@ -6906,14 +7017,8 @@ class SimulationLifecycleScheduler:
             )
             if deferred is not None:
                 return deferred
-            if self._should_rebuild_localsim_plan_after_side_effect_free_failure(
-                binding=binding,
-                run=existing,
-                submit=submit,
-                trade_date=trade_date,
-                as_of_time=as_of_time,
-            ):
-                return self._rebuild_localsim_plan_after_side_effect_free_failure(
+            try:
+                result = self._execute_existing_plan_retry_attempt(
                     binding=binding,
                     run=existing,
                     runtime_release=runtime_release,
@@ -6926,28 +7031,18 @@ class SimulationLifecycleScheduler:
                     shared_selection_keys=shared_selection_keys,
                     as_of_time=as_of_time,
                 )
-            if self._should_rebuild_miniqmt_plan_after_side_effect_free_failure(binding=binding, run=existing):
-                return self._rebuild_miniqmt_plan_after_side_effect_free_failure(
-                    binding=binding,
-                    run=existing,
-                    runtime_release=runtime_release,
-                    trade_date=trade_date,
-                    data_source=data_source,
-                    submit=submit,
-                    mode=mode,
-                    created_by=created_by,
-                    selection_cache=selection_cache,
-                    shared_selection_keys=shared_selection_keys,
-                    as_of_time=as_of_time,
-                )
-            return self._existing_plan_result(
-                binding=binding,
-                run=existing,
-                trade_date=trade_date,
-                data_source=data_source,
-                submit=submit,
-                mode=mode,
-                as_of_time=as_of_time,
+            except Exception as exc:
+                if retry_claim_token is not None and retry_source_fingerprint is not None:
+                    raise _BindingRetryAttemptError(
+                        original=exc,
+                        claim_token=retry_claim_token,
+                        source_fingerprint=retry_source_fingerprint,
+                    ) from exc
+                raise
+            return replace(
+                result,
+                retry_claim_token=retry_claim_token,
+                retry_source_fingerprint=retry_source_fingerprint,
             )
 
         context = self._load_run_context(
