@@ -737,13 +737,16 @@ class QELongTrendPhase2Service:
         client: QEWorkspaceClient,
         artifact_store: QELongTrendArtifactStore | None = None,
         _claimed_row: Mapping[str, Any] | None = None,
+        _inspection: QELongTrendJobInspection | None = None,
     ) -> dict[str, Any]:
-        inspection = await self.inspect(
-            evaluation_id=evaluation_id,
-            task_id=task_id,
-            loop_index=loop_index,
-            client=client,
-        )
+        inspection = _inspection
+        if inspection is None:
+            inspection = await self.inspect(
+                evaluation_id=evaluation_id,
+                task_id=task_id,
+                loop_index=loop_index,
+                client=client,
+            )
         if inspection.status not in {"succeeded", "partial", "failed", "cancelled"}:
             return {"status": "awaiting_worker", "evaluation_id": evaluation_id, "remote_status": inspection.status}
         claimed = (
@@ -1060,6 +1063,7 @@ class QELongTrendPhase2Service:
         *,
         row: Mapping[str, Any],
         client: QEWorkspaceClient,
+        inspection: QELongTrendJobInspection | None = None,
     ) -> dict[str, Any]:
         evaluation_id = str(row["evaluation_id"])
         task_id = str(row["parent_task_id"])
@@ -1102,12 +1106,13 @@ class QELongTrendPhase2Service:
                 _claimed_row=row,
             )
             return {"status": receipt.status if receipt else "awaiting_data", "evaluation_id": evaluation_id}
-        inspection = await self.inspect(
-            evaluation_id=evaluation_id,
-            task_id=task_id,
-            loop_index=loop_index,
-            client=client,
-        )
+        if inspection is None:
+            inspection = await self.inspect(
+                evaluation_id=evaluation_id,
+                task_id=task_id,
+                loop_index=loop_index,
+                client=client,
+            )
         if inspection.status in {"succeeded", "partial", "failed", "cancelled"}:
             return await self.collect_and_publish(
                 evaluation_id=evaluation_id,
@@ -1115,6 +1120,7 @@ class QELongTrendPhase2Service:
                 loop_index=loop_index,
                 client=client,
                 _claimed_row=row,
+                _inspection=inspection,
             )
         lease = self.control_repository.lease_from(row)
         local_status = "running" if inspection.status == "running" else "submitted"
@@ -1139,21 +1145,136 @@ class QELongTrendPhase2Service:
         results: list[dict[str, Any]] = []
         for row in self.control_repository.list_nonterminal(limit=limit):
             try:
-                bound = self.control_repository.bind_available_archive_run(str(row["evaluation_id"]))
+                evaluation_id = str(row["evaluation_id"])
+                if not row.get("job_id"):
+                    bound = self.control_repository.bind_available_archive_run(evaluation_id)
+                    if self._long_trend_prejob_observation_unchanged(bound):
+                        results.append(
+                            {
+                                "evaluation_id": evaluation_id,
+                                "status": "awaiting_data",
+                                "unchanged": True,
+                            }
+                        )
+                        continue
+                    claimed = self.control_repository.claim(
+                        evaluation_id,
+                        owner_id=self.owner_id,
+                        lease_seconds=COLLECT_LEASE_SECONDS,
+                        expected_row_version=int(bound["row_version"]),
+                    )
+                    if claimed is None:
+                        results.append(
+                            {
+                                "evaluation_id": evaluation_id,
+                                "status": "stale_observation",
+                                "owned": False,
+                            }
+                        )
+                        continue
+                    async with QEWorkspaceClient.for_node(str(claimed["node_id"])) as client:
+                        results.append(
+                            await self._reconcile_claimed(row=claimed, client=client)
+                        )
+                    continue
+
+                async with QEWorkspaceClient.for_node(str(row["node_id"])) as client:
+                    inspection = await self.inspect(
+                        evaluation_id=evaluation_id,
+                        task_id=str(row["parent_task_id"]),
+                        loop_index=int(row["parent_loop_index"]),
+                        client=client,
+                    )
+                    if self._long_trend_observation_unchanged(row, inspection):
+                        results.append(
+                            {
+                                "evaluation_id": evaluation_id,
+                                "status": inspection.status,
+                                "unchanged": True,
+                            }
+                        )
+                        continue
+                    bound = self.control_repository.bind_available_archive_run(evaluation_id)
+                    claimed = self.control_repository.claim(
+                        str(bound["evaluation_id"]),
+                        owner_id=self.owner_id,
+                        lease_seconds=COLLECT_LEASE_SECONDS,
+                        expected_row_version=int(bound["row_version"]),
+                    )
+                    if claimed is None:
+                        results.append(
+                            {
+                                "evaluation_id": evaluation_id,
+                                "status": "stale_observation",
+                                "owned": False,
+                            }
+                        )
+                        continue
+                    results.append(
+                        await self._reconcile_claimed(
+                            row=claimed,
+                            client=client,
+                            inspection=inspection,
+                        )
+                    )
+            except QELongTrendWorkspaceError as exc:
+                if self._long_trend_failure_unchanged(row, exc):
+                    results.append(
+                        {
+                            "evaluation_id": row["evaluation_id"],
+                            "status": "remote_state_unknown",
+                            "recovery_persisted": True,
+                            "unchanged": True,
+                        }
+                    )
+                    continue
                 claimed = self.control_repository.claim(
-                    str(bound["evaluation_id"]),
+                    str(row["evaluation_id"]),
                     owner_id=self.owner_id,
                     lease_seconds=COLLECT_LEASE_SECONDS,
+                    expected_row_version=int(row["row_version"]),
                 )
-                async with QEWorkspaceClient.for_node(str(claimed["node_id"])) as client:
-                    results.append(await self._reconcile_claimed(row=claimed, client=client))
-            except QELongTrendWorkspaceError as exc:
+                if claimed is None:
+                    results.append(
+                        {
+                            "evaluation_id": row["evaluation_id"],
+                            "status": "stale_observation",
+                            "owned": False,
+                        }
+                    )
+                    continue
                 recovery = self._persist_reconcile_failure(str(row["evaluation_id"]), exc)
                 if exc.reason_code != QELongTrendReason.NODE_STATE_UNKNOWN.value:
                     results.append({"evaluation_id": row["evaluation_id"], "status": "platform_error", "reason_code": exc.reason_code, **recovery})
                 else:
                     results.append({"evaluation_id": row["evaluation_id"], "status": "remote_state_unknown", **recovery})
             except Exception as exc:
+                if self._long_trend_failure_unchanged(row, exc):
+                    results.append(
+                        {
+                            "evaluation_id": row["evaluation_id"],
+                            "status": "platform_error",
+                            "reason_code": getattr(exc, "reason_code", type(exc).__name__),
+                            "recovery_persisted": True,
+                            "unchanged": True,
+                        }
+                    )
+                    continue
+                claimed = self.control_repository.claim(
+                    str(row["evaluation_id"]),
+                    owner_id=self.owner_id,
+                    lease_seconds=COLLECT_LEASE_SECONDS,
+                    expected_row_version=int(row["row_version"]),
+                )
+                if claimed is None:
+                    results.append(
+                        {
+                            "evaluation_id": row["evaluation_id"],
+                            "status": "stale_observation",
+                            "owned": False,
+                        }
+                    )
+                    continue
                 recovery = self._persist_reconcile_failure(str(row["evaluation_id"]), exc)
                 results.append(
                     {
@@ -1165,6 +1286,60 @@ class QELongTrendPhase2Service:
                     }
                 )
         return results
+
+    @staticmethod
+    def _long_trend_prejob_observation_unchanged(row: Mapping[str, Any]) -> bool:
+        request = dict(row.get("request_json") or {})
+        delivery = dict(row.get("platform_delivery_status_json") or {})
+        return (
+            request.get("schema_version") != "qe_long_trend_job_request_v1"
+            and delivery == {"worker": "not_submitted", "cas": "awaiting_data"}
+            and not row.get("reason_code")
+            and dict(row.get("reason_json") or {}) == {}
+        )
+
+    @staticmethod
+    def _long_trend_observation_unchanged(
+        row: Mapping[str, Any],
+        inspection: QELongTrendJobInspection,
+    ) -> bool:
+        if inspection.status in {"succeeded", "partial", "failed", "cancelled"}:
+            return False
+        local_status = "running" if inspection.status == "running" else "submitted"
+        delivery = dict(row.get("platform_delivery_status_json") or {})
+        return (
+            str(row.get("status") or "") == local_status
+            and str(row.get("current_attempt_id") or "")
+            == str(inspection.current_attempt_id or "")
+            and delivery
+            == {"worker": inspection.status, "cas": "awaiting_worker"}
+            and not row.get("reason_code")
+            and dict(row.get("reason_json") or {}) == {}
+        )
+
+    @staticmethod
+    def _long_trend_failure_unchanged(
+        row: Mapping[str, Any],
+        exc: BaseException,
+    ) -> bool:
+        reason_code = str(
+            getattr(exc, "reason_code", None)
+            or QELongTrendReason.NODE_STATE_UNKNOWN.value
+        )
+        reason = dict(row.get("reason_json") or {})
+        delivery = dict(row.get("platform_delivery_status_json") or {})
+        return (
+            str(row.get("status") or "") == "remote_state_unknown"
+            and str(row.get("reason_code") or "") == reason_code
+            and str(reason.get("error_type") or "") == type(exc).__name__
+            and str(reason.get("message") or "") == str(exc)
+            and str(reason.get("recovery") or "") == "continuous_reconcile_retry"
+            and delivery
+            == {
+                "worker": "remote_state_unknown",
+                "cas": "reconcile_retry_pending",
+            }
+        )
 
     def _persist_reconcile_failure(self, evaluation_id: str, exc: BaseException) -> dict[str, Any]:
         try:

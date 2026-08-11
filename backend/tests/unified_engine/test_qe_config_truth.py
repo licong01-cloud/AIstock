@@ -25,6 +25,7 @@ from backend.routers.quantevolver_evolution import (
     _reject_nested_runtime_flags,
 )
 from backend.services.quantevolver import qe_evolution_service as qes
+from backend.services.quantevolver import qe_reconciliation_coordinator as qerc
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
 from backend.services.quantevolver.config_composer import (
     PRECOMPUTED_HMM_COEFF_JSON_PARAM,
@@ -1256,7 +1257,8 @@ def test_custom_evo_parallelism_queue_helper_marks_pending_then_running():
 
     assert "ELSE 'pending'" in source
     assert "status = 'running'" in source
-    assert "await asyncio.sleep(poll_seconds)" in source
+    assert "wait_for_qe_reconciliation" in source
+    assert "await asyncio.sleep(poll_seconds)" not in source
 
 
 def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
@@ -1285,12 +1287,13 @@ def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
     def fake_enforce(cur, *, task, loop_index, target_node_id, loop_db_id):
         return slots.pop(0)
 
-    async def fake_sleep(seconds):
-        state["sleeps"].append(seconds)
+    async def fake_wait(*_args, **kwargs):
+        state["sleeps"].append(kwargs["timeout_seconds"])
+        return 0
 
     monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", fake_enforce)
     monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
-    monkeypatch.setattr(qes.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", fake_wait)
 
     slot = asyncio.run(
         scheduler._mark_custom_evo_loop_running_when_slot_available(
@@ -1306,7 +1309,7 @@ def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
 
     assert slot is not None
     assert slot["available"] is True
-    assert state["sleeps"] == [15]
+    assert state["sleeps"] == [60]
     assert state["enters"] == state["exits"] == 2
     assert any("VALUES (%s, %s, %s, 'pending', %s, %s)" in sql for sql in state["sql"])
     assert any("VALUES (%s, %s, %s, 'running', %s, %s)" in sql for sql in state["sql"])
@@ -1371,7 +1374,16 @@ def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(mo
         def mark_session_terminal(self, session_id, *, status, reason_code=None):
             observations.append(("terminal", session_id, status, reason_code))
 
-    statuses = iter(["running", "completed"])
+    class FakeWake:
+        @staticmethod
+        def resource_state(_session_id):
+            return {
+                "current_phase": "gpu_phase_released",
+                "loop_status": "completed",
+            }
+
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
 
     class Cursor:
         def __enter__(self):
@@ -1385,7 +1397,7 @@ def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(mo
 
         def fetchone(self):
             observations.append(("loop_poll", lease.active))
-            return (next(statuses),)
+            return ("completed",)
 
     class Conn:
         def __enter__(self):
@@ -1397,12 +1409,10 @@ def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(mo
         def cursor(self, *_args, **_kwargs):
             return Cursor()
 
-    async def no_sleep(_seconds):
-        return None
-
     monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
     monkeypatch.setattr(qes, "get_conn", lambda: Conn())
-    monkeypatch.setattr(qes.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(qerc, "qe_reconciliation_wakeup", FakeWake())
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     asyncio.run(
         scheduler._wait_resource_session_until_safe_release(
@@ -1413,7 +1423,7 @@ def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(mo
         )
     )
 
-    assert observations[0] == ("loop_poll", False)
+    assert lease.active is False
     assert observations[-1] == ("terminal", "qers_1", "completed", None)
 
 
@@ -1529,10 +1539,10 @@ def test_scheduler_releases_local_gate_before_retrying_durable_busy_session(monk
                 raise qes.QEResourcePhaseError(qes.GPU_LEASE_BUSY_REASON, "occupied")
             return types.SimpleNamespace(session_id="session-after-retry")
 
-    async def no_sleep(_seconds):
-        return None
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
 
-    monkeypatch.setattr(qes.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     async def scenario():
         lease, session = await scheduler._reserve_gpu_phase_session(
@@ -1570,6 +1580,17 @@ def test_gpu_phase_waiter_keeps_slot_for_release_rejected_until_terminal(monkeyp
 
     statuses = iter(["running", "completed"])
 
+    class FakeWake:
+        @staticmethod
+        def resource_state(_session_id):
+            return {
+                "current_phase": "release_rejected",
+                "loop_status": next(statuses),
+            }
+
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
+
     class Cursor:
         def __enter__(self):
             return self
@@ -1594,12 +1615,10 @@ def test_gpu_phase_waiter_keeps_slot_for_release_rejected_until_terminal(monkeyp
         def cursor(self, *_args, **_kwargs):
             return Cursor()
 
-    async def no_sleep(_seconds):
-        return None
-
     monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
     monkeypatch.setattr(qes, "get_conn", lambda: Conn())
-    monkeypatch.setattr(qes.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(qerc, "qe_reconciliation_wakeup", FakeWake())
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     asyncio.run(
         scheduler._wait_resource_session_until_safe_release(
@@ -1610,14 +1629,14 @@ def test_gpu_phase_waiter_keeps_slot_for_release_rejected_until_terminal(monkeyp
         )
     )
 
-    assert observations[0] == ("loop_poll", True)
-    assert observations[1] == ("loop_poll", True)
-    assert observations[-1] == (
-        "terminal",
-        "qers_2",
-        "completed",
-        "QE_GPU_PHASE_LIFECYCLE_INCOMPLETE",
-    )
+    assert observations == [
+        (
+            "terminal",
+            "qers_2",
+            "completed",
+            "QE_GPU_PHASE_LIFECYCLE_INCOMPLETE",
+        )
+    ]
 
 
 def test_gpu_phase_waiter_releases_local_slot_when_terminal_session_write_fails(monkeypatch):
@@ -1662,8 +1681,21 @@ def test_gpu_phase_waiter_releases_local_slot_when_terminal_session_write_fails(
         def cursor(self, *_args, **_kwargs):
             return Cursor()
 
+    class FakeWake:
+        @staticmethod
+        def resource_state(_session_id):
+            return {
+                "current_phase": "release_rejected",
+                "loop_status": "completed",
+            }
+
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
+
     monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
     monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+    monkeypatch.setattr(qerc, "qe_reconciliation_wakeup", FakeWake())
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     asyncio.run(
         scheduler._wait_resource_session_until_safe_release(
@@ -1729,8 +1761,21 @@ def test_gpu_phase_waiter_releases_parallel_lease_at_terminal_without_unsupporte
         def cursor(self, *_args, **_kwargs):
             return Cursor()
 
+    class FakeWake:
+        @staticmethod
+        def resource_state(_session_id):
+            return {
+                "current_phase": "bootstrap",
+                "loop_status": "completed",
+            }
+
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
+
     monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
     monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+    monkeypatch.setattr(qerc, "qe_reconciliation_wakeup", FakeWake())
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     asyncio.run(
         scheduler._wait_resource_session_until_safe_release(

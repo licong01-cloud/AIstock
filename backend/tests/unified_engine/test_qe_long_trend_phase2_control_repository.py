@@ -36,6 +36,8 @@ class _Cursor:
             self.rows = [(name,) for name in self.state["columns"]]  # type: ignore[index]
         elif normalized.startswith("SELECT * FROM qe_archive.run_evaluation WHERE status <> ALL"):
             self.rows = [dict(self.state["row"])]  # type: ignore[arg-type]
+        elif normalized.startswith("SELECT row_version FROM qe_archive.run_evaluation"):
+            self.row = {"row_version": self.state["row"]["row_version"]}  # type: ignore[index]
         elif normalized.startswith("SELECT e.*, s.status AS resource_status"):
             self.row = dict(self.state["row"])  # type: ignore[arg-type]
         elif normalized.startswith("UPDATE qe_archive.run_resource_session SET status = 'reserved'"):
@@ -101,6 +103,25 @@ def _state() -> dict[str, object]:
         },
         "executed": [],
     }
+
+
+def test_conditional_claim_stale_row_version_performs_no_update() -> None:
+    state = _state()
+    repository = QELongTrendEvaluationControlRepository(
+        connection_provider=lambda: _Connection(state)
+    )
+
+    claimed = repository.claim(
+        str(state["row"]["evaluation_id"]),  # type: ignore[index]
+        owner_id="owner-2",
+        lease_seconds=60,
+        expected_row_version=999,
+    )
+
+    assert claimed is None
+    statements = [sql for sql, _params in state["executed"]]  # type: ignore[index]
+    assert any(sql.startswith("SELECT row_version") for sql in statements)
+    assert not any(sql.startswith("UPDATE qe_archive.run_evaluation") for sql in statements)
 
 
 def test_transition_sql_is_fenced_by_owner_token_version_and_expected_status() -> None:

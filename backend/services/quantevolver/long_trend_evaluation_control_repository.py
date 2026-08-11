@@ -579,12 +579,32 @@ class QELongTrendEvaluationControlRepository:
                     )
             conn.commit()
 
-    def claim(self, evaluation_id: str, *, owner_id: str, lease_seconds: int = 120) -> dict[str, Any]:
+    def claim(
+        self,
+        evaluation_id: str,
+        *,
+        owner_id: str,
+        lease_seconds: int = 120,
+        expected_row_version: int | None = None,
+    ) -> dict[str, Any] | None:
         if not str(owner_id or "").strip() or int(lease_seconds) < 10:
             raise ValueError("claim requires owner_id and lease_seconds >= 10")
         self.ensure_schema_ready()
         with self._connection(transactional=True) as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if expected_row_version is not None:
+                    cur.execute(
+                        f"SELECT row_version FROM {TABLE_NAME} WHERE evaluation_id = %s FOR UPDATE",
+                        (evaluation_id,),
+                    )
+                    observed = cur.fetchone()
+                    if (
+                        observed is None
+                        or int(observed.get("row_version") or 0)
+                        != int(expected_row_version)
+                    ):
+                        conn.commit()
+                        return None
                 cur.execute(
                     f"""
                     UPDATE {TABLE_NAME}
@@ -598,10 +618,19 @@ class QELongTrendEvaluationControlRepository:
                       AND (owner_id IS NULL OR lease_expires_at < clock_timestamp() OR owner_id = %s)
                     RETURNING *
                     """,
-                    (owner_id, int(lease_seconds), evaluation_id, list(TERMINAL_STATUSES), owner_id),
+                    (
+                        owner_id,
+                        int(lease_seconds),
+                        evaluation_id,
+                        list(TERMINAL_STATUSES),
+                        owner_id,
+                    ),
                 )
                 row = cur.fetchone()
                 if row is None:
+                    if expected_row_version is not None:
+                        conn.commit()
+                        return None
                     raise QELongTrendControlRepositoryError(
                         "evaluation control row is terminal or leased by another owner"
                     )

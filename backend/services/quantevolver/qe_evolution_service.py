@@ -148,7 +148,7 @@ CUSTOM_EVO_STARTED_LOOP_STATUSES = {
     "stopped",
 }
 CUSTOM_EVO_ACTIVE_LOOP_STATUSES = ("running", "processing")
-CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS = 15
+CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS = 60
 
 
 _PROCESS_GPU_PHASE_GATES: weakref.WeakKeyDictionary[
@@ -339,6 +339,7 @@ class AutoEvolutionScheduler:
     ) -> tuple[GPUPhaseLease, ResourceSessionSecret]:
         """Atomically reserve the durable GPU slot after acquiring the process-local fair gate."""
 
+        wait_generation: int | None = None
         while True:
             lease = await self._acquire_gpu_phase_lease(node_id, policy)
             try:
@@ -366,7 +367,17 @@ class AutoEvolutionScheduler:
             except Exception:
                 await lease.release()
                 raise
-            await asyncio.sleep(CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS)
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                wait_for_qe_reconciliation,
+            )
+
+            wait_generation = await wait_for_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=f"{task_id}_Loop{int(loop_index)}",
+                timeout_seconds=60,
+                observed_generation=wait_generation,
+            )
 
     def _reconcile_resource_sessions_after_restart(self) -> None:
         """Reconcile terminal resource sessions without making schema readiness a legacy-runtime gate."""
@@ -440,10 +451,23 @@ class AutoEvolutionScheduler:
         service = QEResourcePhaseService()
         released = False
         terminal_safe_release = False
+        wait_generation: int | None = None
         try:
             while True:
                 try:
-                    state = service.get_session_state(session_id)
+                    from .qe_reconciliation_coordinator import (
+                        QEReconciliationScope,
+                        qe_reconciliation_wakeup,
+                        wait_for_qe_reconciliation,
+                    )
+
+                    wait_generation = await wait_for_qe_reconciliation(
+                        QEReconciliationScope.RESOURCE_SESSION,
+                        key=session_id,
+                        timeout_seconds=60,
+                        observed_generation=wait_generation,
+                    )
+                    state = qe_reconciliation_wakeup.resource_state(session_id)
                     current_phase = str((state or {}).get("current_phase") or "")
                     if gpu_lease is not None and current_phase == "gpu_phase_released":
                         logger.info(
@@ -456,14 +480,7 @@ class AutoEvolutionScheduler:
                         released = True
                         gpu_lease = None
 
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "SELECT status FROM qe_evolution_loops WHERE loop_id = %s",
-                                (f"{task_id}_Loop{int(loop_index)}",),
-                            )
-                            row = cur.fetchone()
-                    loop_status = str(row[0]) if row else "failed"
+                    loop_status = str((state or {}).get("loop_status") or "")
                     if loop_status in {
                         "completed",
                         "failed",
@@ -515,7 +532,6 @@ class AutoEvolutionScheduler:
                         exc,
                         exc_info=True,
                     )
-                await asyncio.sleep(5)
         finally:
             if gpu_lease is not None and terminal_safe_release:
                 await gpu_lease.release()
@@ -2734,7 +2750,6 @@ class AutoEvolutionScheduler:
         3. F5: 检测 running 的 task 但没有任何活跃 loop（僵尸 task）
         """
         try:
-            self._reconcile_resource_sessions_after_restart()
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     # 原有：扫描 running 状态的 loop
@@ -5603,20 +5618,37 @@ class AutoEvolutionScheduler:
                     return None
                 max_wait = 7200
                 waited = 0
-                interval = 10
+                interval = 60
                 final_status = None
+                wait_generation: int | None = None
                 while waited < max_wait:
-                    await asyncio.sleep(interval)
+                    from .qe_reconciliation_coordinator import (
+                        QEReconciliationScope,
+                        qe_reconciliation_wakeup,
+                        wait_for_qe_reconciliation,
+                    )
+
+                    wait_generation = await wait_for_qe_reconciliation(
+                        QEReconciliationScope.EVOLUTION,
+                        key=loop_id,
+                        timeout_seconds=interval,
+                        observed_generation=wait_generation,
+                    )
                     waited += interval
-                    if self._get_task_status(task_id) != "running":
+                    if qe_reconciliation_wakeup.loop_state(loop_id) in (
+                        "cancelled",
+                        "canceled",
+                        "failed",
+                    ):
                         logger.info(f"策略演进任务 {task_id} 停止; 等待 Loop {loop_index} 中断")
                         return loop_id
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
-                            row = cur.fetchone()
-                    final_status = row[0] if row else None
-                    if not row or final_status in ("completed", "failed", "cancelled"):
+                    final_status = qe_reconciliation_wakeup.loop_state(loop_id)
+                    if final_status is None or final_status in (
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "canceled",
+                    ):
                         break
                 if waited >= max_wait:
                     logger.error(f"策略演进 Loop {loop_index} 等待超时（{max_wait}s）")
@@ -6568,15 +6600,16 @@ class AutoEvolutionScheduler:
         """Keep the loop queued until the per-node node_parallelism slot is free."""
 
         task_id = str(task.get("task_id") or "")
+        initial_task_status = str(task.get("status") or "")
+        if initial_task_status and initial_task_status not in ("pending", "running"):
+            logger.info(
+                "Custom evolution task %s stopped before Loop %s acquired node_parallelism slot",
+                task_id,
+                loop_index,
+            )
+            return None
+        wait_generation: int | None = None
         while True:
-            task_status = self._get_task_status(task_id)
-            if task_status not in ("pending", "running"):
-                logger.info(
-                    "Custom evolution task %s stopped before Loop %s acquired node_parallelism slot",
-                    task_id,
-                    loop_index,
-                )
-                return None
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     slot = self._enforce_custom_evo_node_parallelism_slot(
@@ -6604,6 +6637,13 @@ class AutoEvolutionScheduler:
                                     END,
                                     node_id = COALESCE(qe_evolution_loops.node_id, EXCLUDED.node_id),
                                     updated_at = NOW()
+                                WHERE (
+                                    qe_evolution_loops.status NOT IN ('running', 'processing', 'completed')
+                                    AND qe_evolution_loops.status IS DISTINCT FROM 'pending'
+                                ) OR (
+                                    qe_evolution_loops.node_id IS NULL
+                                    AND EXCLUDED.node_id IS NOT NULL
+                                )
                                 """,
                                 (loop_db_id, task_id, loop_index, action_type, target_node_id),
                             )
@@ -6614,6 +6654,7 @@ class AutoEvolutionScheduler:
                                 SET status = 'pending', updated_at = NOW()
                                 WHERE loop_id = %s
                                   AND status NOT IN ('running', 'processing', 'completed')
+                                  AND status IS DISTINCT FROM 'pending'
                                 """,
                                 (loop_db_id,),
                             )
@@ -6671,7 +6712,17 @@ class AutoEvolutionScheduler:
                 slot["active_count"] if slot else "?",
                 slot["limit"] if slot else "?",
             )
-            await asyncio.sleep(poll_seconds)
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                wait_for_qe_reconciliation,
+            )
+
+            wait_generation = await wait_for_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=loop_db_id,
+                timeout_seconds=max(60, poll_seconds),
+                observed_generation=wait_generation,
+            )
 
     async def rerun_custom_evo_loop(
         self,
@@ -6888,20 +6939,25 @@ class AutoEvolutionScheduler:
     async def _wait_and_process_custom_evo_loop(self, task_id: str, loop_index: int, loop_id: str) -> None:
         max_wait = 14400
         waited = 0
-        interval = 15
+        interval = 60
         final_status = None
+        wait_generation: int | None = None
         while waited < max_wait:
-            await asyncio.sleep(interval)
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                qe_reconciliation_wakeup,
+                wait_for_qe_reconciliation,
+            )
+
+            wait_generation = await wait_for_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=loop_id,
+                timeout_seconds=interval,
+                observed_generation=wait_generation,
+            )
             waited += interval
-            if self._get_task_status(task_id) != "running":
-                logger.info("Custom evolution task %s stopped while waiting for Loop %s", task_id, loop_index)
-                return
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
-                    row = cur.fetchone()
-            final_status = row[0] if row else None
-            if not row or final_status in ("completed", "failed", "cancelled", "canceled"):
+            final_status = qe_reconciliation_wakeup.loop_state(loop_id)
+            if final_status is None or final_status in ("completed", "failed", "cancelled", "canceled"):
                 break
         if waited >= max_wait:
             logger.error("Custom evolution Loop %s wait timed out (%ss); marking failed", loop_index, max_wait)
@@ -7576,29 +7632,11 @@ class AutoEvolutionScheduler:
                 loop_id = await self.submit_custom_evo_loop(task_id, loop_index, force_full_train=force_full_train)
                 if not loop_id:
                     return None
-                max_wait = 14400
-                waited = 0
-                interval = 15
-                final_status = None
-                while waited < max_wait:
-                    await asyncio.sleep(interval)
-                    waited += interval
-                    if self._get_task_status(task_id) != "running":
-                        logger.info(f"Custom evolution task {task_id} stopped while waiting for Loop {loop_index}")
-                        return loop_id
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
-                            row = cur.fetchone()
-                    final_status = row[0] if row else None
-                    if not row or final_status in ("completed", "failed", "cancelled"):
-                        break
-                if waited >= max_wait:
-                    logger.error("Custom evolution Loop %s wait timed out (%ss)", loop_index, max_wait)
-                if loop_id and final_status == "completed":
-                    await self._safe_process_completed_loop(task_id, loop_id)
-                elif loop_id:
-                    logger.info(f"Custom evolution Loop {loop_index} ended with status={final_status}; skip metrics processing")
+                await self._wait_and_process_custom_evo_loop(
+                    task_id,
+                    int(loop_index),
+                    loop_id,
+                )
                 return loop_id
 
         tasks = [_run_custom_evo_loop(lc) for lc in loops_to_run]

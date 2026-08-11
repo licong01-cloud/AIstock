@@ -22,7 +22,6 @@ from .qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     CapacityWaitRecorder,
     QEExecutionReservationAcquireResult,
-    QEExecutionReservationError,
     QEExecutionReservationRepository,
     QEExecutionReservationSpec,
     QEExecutionReservationToken,
@@ -663,6 +662,20 @@ class QEExecutionSourceClaimFactory:
             )
             cur.execute(
                 """
+                SELECT loop_id, task_id, status, node_id, agent_analysis
+                FROM qe_evolution_loops
+                WHERE loop_id = %s
+                  AND status = 'pending'
+                  AND node_id IS NOT DISTINCT FROM %s
+                  AND agent_analysis IS NOT DISTINCT FROM %s::jsonb
+                """,
+                (normalized_loop_id, normalized_node_id, evidence),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                return existing
+            cur.execute(
+                """
                 UPDATE qe_evolution_loops
                 SET status = 'pending',
                     node_id = %s,
@@ -720,6 +733,26 @@ class QEExecutionSourceClaimFactory:
             _active_count: int,
             _node_capacity: int,
         ) -> Mapping[str, Any] | None:
+            cur.execute(
+                """
+                SELECT experiment_id, status, qe_task_id, qe_loop_id
+                FROM qe_experiments
+                WHERE experiment_id = %s
+                  AND status = 'pending'
+                  AND qe_task_id IS NOT DISTINCT FROM %s
+                  AND qe_loop_id IS NOT DISTINCT FROM %s
+                  AND custom_params ->> 'execution_node_id' = %s
+                """,
+                (
+                    normalized_experiment_id,
+                    normalized_task_id,
+                    normalized_loop_id,
+                    normalized_node_id,
+                ),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                return existing
             cur.execute(
                 """
                 UPDATE qe_experiments
@@ -814,6 +847,37 @@ class QEExecutionSourceClaimFactory:
             _active_count: int,
             _node_capacity: int,
         ) -> Mapping[str, Any] | None:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS exact_count
+                FROM qe_multi_alpha_groups
+                WHERE parent_experiment_id = %s
+                  AND group_name = ANY(%s)
+                  AND assigned_node_id IS NOT DISTINCT FROM %s
+                  AND qe_loop_id IS NOT DISTINCT FROM %s
+                  AND status = 'pending'
+                """,
+                (
+                    normalized_experiment_id,
+                    list(normalized_group_names),
+                    normalized_node_id,
+                    normalized_loop_id,
+                ),
+            )
+            exact = cur.fetchone()
+            exact_count = (
+                int(exact.get("exact_count") or 0)
+                if isinstance(exact, Mapping)
+                else int(exact[0] or 0) if exact else 0
+            )
+            if exact_count == len(normalized_group_names):
+                return {
+                    "parent_experiment_id": normalized_experiment_id,
+                    "status": "pending",
+                    "node_id": normalized_node_id,
+                    "qe_loop_id": normalized_loop_id,
+                    "group_names": list(normalized_group_names),
+                }
             return _update(cur, status="pending")
 
         return claim_source, record_waiting
@@ -871,6 +935,31 @@ class QEExecutionSourceClaimFactory:
             active_count: int,
             node_capacity: int,
         ) -> Mapping[str, Any] | None:
+            progress = {
+                "qe_submission": {
+                    "phase": "waiting_capacity",
+                    "backtest_name": normalized_backtest_name,
+                    "node_id": normalized_node_id,
+                    "active_count": int(active_count),
+                    "node_capacity": int(node_capacity),
+                }
+            }
+            cur.execute(
+                """
+                SELECT id, status, phase, progress_json
+                FROM strategy_pkg.multi_alpha_combine_backtest_run
+                WHERE id = %s
+                  AND phase = 'waiting_capacity'
+                  AND progress_json -> 'qe_submission' = %s::jsonb -> 'qe_submission'
+                """,
+                (
+                    normalized_run_id,
+                    json.dumps(progress, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                return existing
             return _update(
                 cur,
                 phase="waiting_capacity",
@@ -1592,9 +1681,16 @@ class QEExecutionReservationReconciler:
         self._owner_id = str(owner_id or qe_submission_owner_id()).strip()
         self._lease_seconds = max(1, int(lease_seconds))
         self._post_grace_seconds = max(1, int(post_grace_seconds))
+        self._initialized = False
+
+    def initialize(self) -> None:
+        if self._initialized:
+            return
+        self._repository.preflight_schema(raise_on_error=True)
+        self._initialized = True
 
     async def scan_once(self) -> dict[str, int]:
-        self._repository.preflight_schema(raise_on_error=True)
+        self.initialize()
         counters = {
             "checked": 0,
             "transitioned": 0,
@@ -1625,22 +1721,30 @@ class QEExecutionReservationReconciler:
         return counters
 
     async def _reconcile_one(self, reservation: Mapping[str, Any]) -> str | None:
-        owned = self._claim_or_reuse(reservation)
-        if owned is None:
-            return "owned_elsewhere"
-
-        node_id = str(owned.get("node_id") or "").strip()
-        task_id = str(owned.get("qe_task_id") or "").strip()
-        loop_id = str(owned.get("qe_loop_id") or "").strip()
+        # Remote inspection is read-only.  Acquire/heartbeat the fenced row only
+        # after the observation requires a durable transition.
+        node_id = str(reservation.get("node_id") or "").strip()
+        task_id = str(reservation.get("qe_task_id") or "").strip()
+        loop_id = str(reservation.get("qe_loop_id") or "").strip()
         client = QEWorkspaceClient.for_node(node_id)
         async with client:
             inspection = await client.inspect_loop_submission(
                 task_id,
                 loop_id,
-                submission_intent_hash=str(owned.get("submission_intent_hash") or ""),
+                submission_intent_hash=str(
+                    reservation.get("submission_intent_hash") or ""
+                ),
             )
 
         if inspection.status == "not_reserved":
+            if (
+                str(reservation.get("status") or "") == "reconciling"
+                and str(reservation.get("remote_status") or "") == "not_reserved"
+            ):
+                return None
+            owned = self._claim_or_reuse(reservation)
+            if owned is None:
+                return "owned_elsewhere"
             updated = self._transition_if_needed(
                 owned,
                 next_status="reconciling",
@@ -1649,13 +1753,13 @@ class QEExecutionReservationReconciler:
             )
             return "transitioned" if updated else "not_reserved"
 
-        expected_intent = str(owned.get("submission_intent_hash") or "")
+        expected_intent = str(reservation.get("submission_intent_hash") or "")
         if inspection.submission_intent_hash != expected_intent:
             raise QEWorkspaceSubmissionCoordinatorError(
                 "QE receipt intent does not match the active reservation",
                 reason_code="qe_workspace_submission_identity_mismatch",
                 context={
-                    "reservation_id": owned.get("reservation_id"),
+                    "reservation_id": reservation.get("reservation_id"),
                     "expected_submission_intent_hash": expected_intent,
                     "actual_submission_intent_hash": inspection.submission_intent_hash,
                 },
@@ -1664,6 +1768,14 @@ class QEExecutionReservationReconciler:
         next_status, release_reason = QEWorkspaceSubmissionCoordinator._reservation_state_for_remote(
             inspection.status
         )
+        if (
+            str(reservation.get("status") or "") == next_status
+            and str(reservation.get("remote_status") or "") == inspection.status
+        ):
+            return None
+        owned = self._claim_or_reuse(reservation)
+        if owned is None:
+            return "owned_elsewhere"
         updated = self._transition_if_needed(
             owned,
             next_status=next_status,
@@ -1680,29 +1792,12 @@ class QEExecutionReservationReconciler:
         self,
         reservation: Mapping[str, Any],
     ) -> Mapping[str, Any] | None:
-        current_owner = str(reservation.get("owner_id") or "")
-        if current_owner == self._owner_id:
-            if self._post_is_inside_grace_period(reservation):
-                return reservation
-            try:
-                return self._repository.heartbeat_execution_reservation(
-                    str(reservation["reservation_id"]),
-                    token=QEWorkspaceSubmissionCoordinator._token_for(reservation),
-                    lease_seconds=self._lease_seconds,
-                )
-            except QEExecutionReservationError as exc:
-                if exc.reason_code not in {
-                    "qe_execution_reservation_stale_owner",
-                    "qe_execution_reservation_stale_row_version",
-                    "qe_execution_reservation_lease_expired",
-                    "qe_execution_reservation_cas_failed",
-                }:
-                    raise
         return self._repository.claim_reservation_for_source(
             source_kind=str(reservation.get("source_kind") or ""),
             source_execution_id=str(reservation.get("source_execution_id") or ""),
             owner_id=self._owner_id,
             lease_seconds=self._lease_seconds,
+            expected_row_version=int(reservation.get("row_version") or 0),
         )
 
     def _transition_if_needed(
@@ -1726,6 +1821,14 @@ class QEExecutionReservationReconciler:
             remote_status=remote_status,
             release_reason_code=release_reason_code,
         )
+        if next_status in {"released", "failed", "cancelled"}:
+            from .qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            notify_qe_reconciliation(QEReconciliationScope.EXPERIMENT, force=True)
+            notify_qe_reconciliation(QEReconciliationScope.EVOLUTION, force=True)
         return True
 
     def _post_is_inside_grace_period(self, reservation: Mapping[str, Any]) -> bool:

@@ -808,15 +808,18 @@ class TestQEWorkspaceClientFailFast:
 
 
 class TestRouterRunStatusFailFast:
-    def test_run_status_requires_qe_task_id_when_running(self):
+    def test_run_status_get_returns_persisted_running_row_without_remote_validation(self):
         with patch.object(quantevolver_router, "get_conn") as mock_get_conn:
             conn = mock_get_conn.return_value.__enter__.return_value
             cur = conn.cursor.return_value.__enter__.return_value
             cur.fetchone.return_value = ("running", None, "Loop1", None, "single")
             cur.description = [("status",), ("qe_task_id",), ("qe_loop_id",), ("result_metrics",), ("alpha_mode",)]
 
-            with pytest.raises(quantevolver_router.HTTPException, match="qe_task_id"):
-                asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
+            result = asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
+
+        assert result["status"] == "running"
+        assert result["qe_task_id"] is None
+        assert result["status_source"] == "persisted"
 
     def test_run_status_rejects_empty_live_status(self):
         class DummyClient:
@@ -837,7 +840,7 @@ class TestRouterRunStatusFailFast:
             cur.description = [("status",), ("qe_task_id",), ("qe_loop_id",), ("result_metrics",), ("alpha_mode",)]
 
             with pytest.raises(quantevolver_router.HTTPException, match="空状态"):
-                asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
+                asyncio.run(quantevolver_router.reconcile_experiment_run_status("exp_1"))
 
 
 class TestRouterMultiAlphaResultsFallback:
@@ -1653,7 +1656,7 @@ class TestMultiAlphaPhase2ArtifactValidation:
             cur.fetchone.return_value = ("running", "task_x", "Loop1", None, "multi")
             cur.description = [("status",), ("qe_task_id",), ("qe_loop_id",), ("result_metrics",), ("alpha_mode",)]
 
-            result = asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
+            result = asyncio.run(quantevolver_router.reconcile_experiment_run_status("exp_1"))
 
         assert result["status"] == "completed"
         assert result["multi_alpha_stage"] == "failed_artifact"
