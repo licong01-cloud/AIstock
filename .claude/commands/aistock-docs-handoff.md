@@ -14,7 +14,7 @@ Use this command for AIstock documentation, README, handoff, and temporary Codex
 
 ## Rules
 
-- Prefer RTK for supported high-output interactive commands; use direct fallback when unsupported and never make RTK or telemetry a docs gate.
+- Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK; direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure, with one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a task/PR/CI gate.
 - Docs work never authorizes backend start/stop/restart; user backend process control remains user-owned even when documenting a runbook or restart contract.
 - Use an isolated worktree/branch for tracked docs changes.
 - For docs-fast, use `git diff --check` as the validation step.

@@ -424,6 +424,42 @@ class _CapabilityRepository:
         return self.attempts.get(attempt_id)
 
 
+class _SubmitRepository(_CapabilityRepository):
+    def preflight_p0_2_schema(self, *, raise_on_error: bool = False):
+        assert raise_on_error is True
+        return {"ready": True}
+
+    @staticmethod
+    def create_or_get_command(spec: DurableCommandSpec):
+        return {
+            "command_id": spec.command_id,
+            "run_id": spec.run_id,
+            "status": "accepted",
+            "action": spec.action,
+        }
+
+
+def test_committed_control_command_notifies_process_local_orchestrator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _SubmitRepository()
+    notifications: list[str] = []
+    monkeypatch.setattr(
+        "backend.services.multi_alpha.durable_control.notify_durable_orchestrator",
+        lambda: notifications.append("committed"),
+    )
+
+    result = DurableMultiAlphaControlService(repository).submit(  # type: ignore[arg-type]
+        run_id="macb_a",
+        action="pause",
+        idempotency_key="pause-1",
+        requested_by="test",
+    )
+
+    assert result.command["status"] == "accepted"
+    assert notifications == ["committed"]
+
+
 @pytest.mark.parametrize(
     ("child_id", "attempt_id"),
     [

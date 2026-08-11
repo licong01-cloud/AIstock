@@ -21,8 +21,8 @@ Environment:
     AISTOCK_VALIDATION_BASE_URL  default http://127.0.0.1:8001/api/v1/validation
     AISTOCK_REPO_ROOT            default the parent of this script's directory
     AISTOCK_HTTP_TIMEOUT         default 30 seconds
-    GH_TOKEN                     optional for live GitHub issue calls; falls back to gh auth token
-    GITHUB_REPOSITORY            optional for live GitHub issue calls; falls back to env file or git origin
+    GH_TOKEN                     optional for live GitHub issue calls; can use gh auth token
+    GITHUB_REPOSITORY            optional for live GitHub issue calls; can use env file or git origin
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ import logging
 import os
 import re
 import subprocess
-import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -43,6 +43,33 @@ from urllib.parse import urlparse
 import httpx
 
 from backend.mcp.validation_issue_items import compact_issue_item
+
+try:
+    from scripts.aistock_bug_id_allocator import (
+        FINGERPRINT_INDEX_VERSION,
+        BugIdLockError,
+        ExistingBugReservationError,
+        GlobalBugIdLock,
+        bootstrap_fingerprint_index,
+        find_matching_reservation,
+        read_allocator_state,
+        read_reservations,
+        write_fingerprint_index,
+        write_allocator_state,
+    )
+except ModuleNotFoundError:  # Direct execution: python scripts/aistock_mcp_server.py
+    from aistock_bug_id_allocator import (
+        FINGERPRINT_INDEX_VERSION,
+        BugIdLockError,
+        ExistingBugReservationError,
+        GlobalBugIdLock,
+        bootstrap_fingerprint_index,
+        find_matching_reservation,
+        read_allocator_state,
+        read_reservations,
+        write_fingerprint_index,
+        write_allocator_state,
+    )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -167,12 +194,41 @@ def _git_branch(root: Path) -> str | None:
     return completed.stdout.strip() or None
 
 
+def _git_branch_from_metadata(root: Path) -> str | None:
+    """Read the current branch without spawning Git in allocator hot paths."""
+
+    dot_git = root / ".git"
+    git_dir = dot_git
+    if dot_git.is_file():
+        try:
+            marker = dot_git.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return None
+        if not marker.lower().startswith("gitdir:"):
+            return None
+        raw = marker.split(":", 1)[1].strip()
+        git_dir = Path(raw)
+        if not git_dir.is_absolute():
+            git_dir = (root / git_dir).resolve()
+    head = git_dir / "HEAD"
+    try:
+        value = head.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    prefix = "ref: refs/heads/"
+    return value[len(prefix) :] if value.startswith(prefix) else None
+
+
 def _require_bug_json_write_target(path: Path) -> None:
-    repo_root = _git_toplevel(path)
+    repo_root = REPO_ROOT.resolve()
+    try:
+        path.resolve().relative_to(repo_root)
+    except ValueError:
+        return
     canonical = _canonical_root()
     if repo_root is None or canonical is None:
         return
-    if _same_path(repo_root, canonical) and _git_branch(repo_root) == "main":
+    if _same_path(repo_root, canonical) and _git_branch_from_metadata(repo_root) == "main":
         raise RuntimeError(
             "refusing to write BUG JSON in canonical root main; use "
             "scripts/aistock_issue_workflow.py submit-bug --create-registry-worktree "
@@ -493,17 +549,17 @@ def _scan_existing_bug_ids() -> set[int]:
     if not BUG_ROOT.exists():
         return set()
     ids: set[int] = set()
-    pattern = re.compile(r"BUG-(\d{3,})")
     for path in BUG_ROOT.glob("*.json"):
-        match = pattern.search(path.name)
-        if match:
-            ids.add(int(match.group(1)))
+        number = _bug_id_number_from_filename(path.name)
+        if number is not None:
+            ids.add(number)
+            continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             continue
         bug_id = str(payload.get("bug_id") or "")
-        match = pattern.search(bug_id)
+        match = BUG_ID_RE.search(bug_id)
         if match:
             ids.add(int(match.group(1)))
     return ids
@@ -543,12 +599,24 @@ def _bug_id_reservation_root() -> Path:
     return Path(os.environ.get("AISTOCK_BUG_ID_RESERVATION_ROOT") or (_worktree_root() / ".locks" / "bug-id-reservations"))
 
 
+def _bug_id_state_path() -> Path:
+    return Path(os.environ.get("AISTOCK_BUG_ID_STATE_PATH") or (_worktree_root() / ".locks" / "bug-id-state.json"))
+
+
 def _bug_root_for(repo_root: Path) -> Path:
     return repo_root / "tests" / "aistock_validation" / "bugs"
 
 
 def _bug_id_number(value: str | None) -> int | None:
     match = BUG_ID_RE.search(value or "")
+    return int(match.group(1)) if match else None
+
+
+def _bug_id_number_from_filename(value: str) -> int | None:
+    # ``\bBUG`` does not match canonical names such as
+    # ``20260810_BUG-1009-title.json`` because underscore is a word
+    # character. File names use a narrower alphanumeric boundary.
+    match = re.search(r"(?<![A-Za-z0-9])BUG-(\d{3,})(?!\d)", value, re.IGNORECASE)
     return int(match.group(1)) if match else None
 
 
@@ -572,14 +640,14 @@ def _bug_id_scan_roots() -> list[Path]:
     canonical = _canonical_root()
     if canonical is not None:
         candidates.append(_bug_root_for(canonical))
-    worktree_root = _worktree_root()
-    if worktree_root.exists():
-        candidates.extend(_bug_root_for(child) for child in worktree_root.iterdir() if child.is_dir())
+    # In-flight worktrees are represented by the shared reservation ledger.
+    # Enumerating every worktree multiplies allocation cost by the number of
+    # worktrees and repeatedly parses copies of the same BUG registry.
     return _unique_existing_paths(candidates)
 
 
-def _scan_global_bug_ids(*, include_github: bool = True) -> set[int]:
-    ids = set(_scan_existing_bug_ids())
+def _scan_global_bug_ids(*, include_github: bool = False) -> set[int]:
+    ids: set[int] = set()
     for bugs_root in _bug_id_scan_roots():
         allocator = bugs_root / ".bug_id_allocator.json"
         if allocator.exists():
@@ -591,18 +659,19 @@ def _scan_global_bug_ids(*, include_github: bool = True) -> set[int]:
             if number > 0:
                 ids.add(number)
         for path in bugs_root.glob("*.json"):
-            number = _bug_id_number(path.name)
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8-sig"))
-                number = _bug_id_number(str(payload.get("bug_id") or "")) or number
-            except (OSError, json.JSONDecodeError):
-                pass
+            number = _bug_id_number_from_filename(path.name)
+            if number is None:
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+                    number = _bug_id_number(str(payload.get("bug_id") or ""))
+                except (OSError, json.JSONDecodeError):
+                    number = None
             if number:
                 ids.add(number)
     reservation_root = _bug_id_reservation_root()
     if reservation_root.exists():
         for path in reservation_root.glob("BUG-*.json"):
-            number = _bug_id_number(path.name)
+            number = _bug_id_number_from_filename(path.name)
             if number:
                 ids.add(number)
     if include_github:
@@ -616,30 +685,79 @@ def _scan_global_bug_ids(*, include_github: bool = True) -> set[int]:
     return ids
 
 
+def _fingerprint_bootstrap_records() -> list[dict[str, Any]]:
+    """Read bounded current/canonical records for a one-time index migration."""
+
+    records: list[dict[str, Any]] = []
+    for bugs_root in _bug_id_scan_roots():
+        for path in bugs_root.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict) or not str(payload.get("fingerprint") or "").strip():
+                continue
+            records.append({**payload, "registry_path": str(path)})
+    records.extend(read_reservations(_bug_id_reservation_root()))
+    return records
+
+
+def _process_id_is_alive(pid: int) -> bool | None:
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return True if ctypes.get_last_error() == 5 else False
+        except (AttributeError, OSError, ValueError):
+            return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
 class _BugIdAllocatorLock:
     def __enter__(self) -> "_BugIdAllocatorLock":
         lock_path = _bug_id_lock_path()
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock_path = lock_path
-        deadline = time.monotonic() + 10
-        while True:
-            try:
-                self._fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(self._fd, f"{os.getpid()}\n".encode("ascii"))
-                return self
-            except FileExistsError:
-                if time.monotonic() >= deadline:
-                    raise RuntimeError(f"timed out waiting for bug id allocator lock: {lock_path}")
-                time.sleep(0.1)
-
-    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
-        fd = getattr(self, "_fd", None)
-        if fd is not None:
-            os.close(fd)
+        self._delegate = GlobalBugIdLock(
+            lock_path,
+            timeout=10.0,
+            process_is_alive=_process_id_is_alive,
+        )
         try:
-            self._lock_path.unlink()
-        except FileNotFoundError:
-            pass
+            self._delegate.__enter__()
+        except BugIdLockError as exc:
+            raise RuntimeError(str(exc)) from exc
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        delegate = getattr(self, "_delegate", None)
+        if delegate is None:
+            return
+        try:
+            delegate.__exit__(exc_type, exc, tb)
+        except BugIdLockError as lock_exc:
+            if exc_type is None:
+                raise RuntimeError(str(lock_exc)) from lock_exc
+
+    def telemetry(self) -> dict[str, float | None]:
+        return self._delegate.telemetry() if getattr(self, "_delegate", None) is not None else {"wait_ms": None, "hold_ms": None}
 
 
 def _write_bug_id_allocator(last_allocated: int) -> None:
@@ -656,35 +774,131 @@ def _write_bug_id_allocator(last_allocated: int) -> None:
     tmp_path.replace(BUG_ID_ALLOCATOR_PATH)
 
 
-def _allocate_next_bug_id(*, include_github: bool = True) -> str:
-    with _BugIdAllocatorLock():
-        registry_max = max(_scan_global_bug_ids(include_github=include_github) or {0})
-        next_int = max(_read_bug_id_allocator_last(), registry_max) + 1
+def _allocate_next_bug_id(
+    *,
+    reservation_title: str | None = None,
+    reservation_fingerprint: str | None = None,
+) -> str:
+    allocation_lock = _BugIdAllocatorLock()
+    with allocation_lock:
+        # Normal allocation reads one host-wide counter and checks one exact
+        # candidate path. Registry/reservation reconstruction is a one-time
+        # bounded bootstrap; live GitHub reads never happen under this lock.
+        try:
+            allocator_state = read_allocator_state(_bug_id_state_path())
+        except BugIdLockError as exc:
+            raise RuntimeError(str(exc)) from exc
+        state_bootstrap_required = allocator_state is None
+        fingerprint_bootstrap_required = (
+            allocator_state is None
+            or int(allocator_state.get("fingerprint_index_version") or 0) != FINGERPRINT_INDEX_VERSION
+        )
+        state_max = int((allocator_state or {}).get("last_allocated") or 0)
+        registry_max = max(_scan_global_bug_ids(include_github=False) or {0}) if state_bootstrap_required else 0
+        bootstrap_max = max(_read_bug_id_allocator_last(), state_max, registry_max)
+        if fingerprint_bootstrap_required:
+            bootstrap_fingerprint_index(_bug_id_reservation_root(), _fingerprint_bootstrap_records())
+            try:
+                write_allocator_state(
+                    _bug_id_state_path(),
+                    last_allocated=bootstrap_max,
+                    updated_at=_utcnow_iso(),
+                    updated_by="aistock_mcp_server.py/bootstrap",
+                    fingerprint_index_version=FINGERPRINT_INDEX_VERSION,
+                )
+            except BugIdLockError as exc:
+                raise RuntimeError(str(exc)) from exc
+        try:
+            existing = find_matching_reservation(_bug_id_reservation_root(), reservation_fingerprint)
+        except BugIdLockError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if existing is not None:
+            raise ExistingBugReservationError(existing)
+        next_int = bootstrap_max + 1
         reservation_root = _bug_id_reservation_root()
         reservation_root.mkdir(parents=True, exist_ok=True)
         reservation = reservation_root / f"BUG-{next_int:03d}.json"
-        if reservation.exists():
-            raise RuntimeError(f"BUG-{next_int:03d} is already reserved: {reservation}")
+        while reservation.exists():
+            next_int += 1
+            reservation = reservation_root / f"BUG-{next_int:03d}.json"
+        reservation_payload = {
+            "schema_version": "aistock_bug_id_reservation_v1",
+            "bug_id": f"BUG-{next_int:03d}",
+            "reserved_at": _utcnow_iso(),
+            "reserved_by": "aistock_mcp_server.py",
+            "root": str(REPO_ROOT),
+            "status": "reserved",
+            "title": reservation_title,
+            "fingerprint": reservation_fingerprint,
+        }
         reservation.write_text(
-            json.dumps(
-                {
-                    "schema_version": "aistock_bug_id_reservation_v1",
-                    "bug_id": f"BUG-{next_int:03d}",
-                    "reserved_at": _utcnow_iso(),
-                    "reserved_by": "aistock_mcp_server.py",
-                    "root": str(REPO_ROOT),
-                },
-                indent=2,
-            )
-            + "\n",
+            json.dumps(reservation_payload, indent=2) + "\n",
             encoding="utf-8",
         )
+        write_fingerprint_index(
+            reservation_root,
+            {**reservation_payload, "reservation_path": str(reservation)},
+        )
         _write_bug_id_allocator(next_int)
+        try:
+            write_allocator_state(
+                _bug_id_state_path(),
+                last_allocated=next_int,
+                updated_at=_utcnow_iso(),
+                updated_by="aistock_mcp_server.py",
+                fingerprint_index_version=FINGERPRINT_INDEX_VERSION,
+            )
+        except BugIdLockError as exc:
+            raise RuntimeError(str(exc)) from exc
+    metrics = allocation_lock.telemetry()
+    logging.info(
+        "BUG id allocation completed: bug_id=BUG-%03d wait_ms=%s hold_ms=%s state_bootstrap=%s",
+        next_int,
+        metrics.get("wait_ms"),
+        metrics.get("hold_ms"),
+        str(state_bootstrap_required).lower(),
+    )
     return f"BUG-{next_int:03d}"
 
 
-def _next_bug_id(*, include_github: bool = True) -> str:
-    return _allocate_next_bug_id(include_github=include_github)
+def _next_bug_id(
+    *,
+    reservation_title: str | None = None,
+    reservation_fingerprint: str | None = None,
+) -> str:
+    return _allocate_next_bug_id(
+        reservation_title=reservation_title,
+        reservation_fingerprint=reservation_fingerprint,
+    )
+
+
+def _update_bug_id_reservation(bug_id: str, **updates: Any) -> None:
+    path = _bug_id_reservation_root() / f"{bug_id}.json"
+    # Allocation readers and status writers share one lock.  On Windows an
+    # otherwise short-lived concurrent read can make os.replace fail with
+    # WinError 5, and a fixed .tmp name also allows writers to collide.
+    with _BugIdAllocatorLock():
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return
+        payload.update({key: value for key, value in updates.items() if value is not None})
+        payload["updated_at"] = _utcnow_iso()
+        tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            tmp_path.replace(path)
+        finally:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+        write_fingerprint_index(
+            _bug_id_reservation_root(),
+            {**payload, "reservation_path": str(path)},
+        )
 
 
 def _fingerprint(module: str, title: str, reproduce_command: str) -> str:
@@ -693,21 +907,20 @@ def _fingerprint(module: str, title: str, reproduce_command: str) -> str:
 
 
 def _existing_bug_for_fingerprint(fingerprint: str) -> dict[str, Any] | None:
-    if not BUG_ROOT.exists():
+    try:
+        payload = find_matching_reservation(_bug_id_reservation_root(), fingerprint)
+    except BugIdLockError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if payload is None:
         return None
-    for path in BUG_ROOT.glob("*.json"):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if payload.get("fingerprint") == fingerprint:
-            return {
-                "path": str(path.relative_to(REPO_ROOT)).replace("\\", "/"),
-                "bug_id": payload.get("bug_id"),
-                "status": payload.get("status"),
-                "title": payload.get("title"),
-            }
-    return None
+    source_path = payload.get("registry_path") or payload.get("reservation_path")
+    return {
+        "path": str(source_path) if source_path else None,
+        "bug_id": payload.get("bug_id"),
+        "status": payload.get("status"),
+        "title": payload.get("title"),
+        "github_sync_state": payload.get("github_sync_state"),
+    }
 
 
 def _build_bug_record(
@@ -1238,7 +1451,7 @@ def _github_issue_client_from_env() -> GitHubIssueClient:
     if missing:
         raise ValueError(
             "live GitHub issue calls require env "
-            f"{', '.join(missing)}; default MCP issue tools use the local bugs JSON registry"
+            f"{', '.join(missing)}; offline MCP issue tools use the local bugs JSON registry"
         )
     return _github_client_factory(repo=str(repo), token=str(token))
 
@@ -1762,7 +1975,22 @@ def report_bug(
             "existing": duplicate,
             "fingerprint": fingerprint,
         }
-    bug_id = _next_bug_id(include_github=False)
+    try:
+        bug_id = _next_bug_id(
+            reservation_title=title,
+            reservation_fingerprint=fingerprint,
+        )
+    except ExistingBugReservationError as exc:
+        return {
+            "deduplicated": True,
+            "existing": {
+                "bug_id": exc.record.get("bug_id"),
+                "status": exc.record.get("status"),
+                "reservation_path": exc.record.get("reservation_path"),
+            },
+            "fingerprint": fingerprint,
+            "reason": "matching_reservation",
+        }
     now_iso = _utcnow_iso()
     record = _build_bug_record(
         bug_id=bug_id,
@@ -1781,6 +2009,7 @@ def report_bug(
     )
     slug = _slugify(title)
     path = _write_bug_record(record, slug)
+    _update_bug_id_reservation(bug_id, status="local_registry_written", registry_path=_repo_relative_path(path))
     return {
         "deduplicated": False,
         "bug_id": bug_id,
@@ -1808,7 +2037,7 @@ def mcp_github_issue_list(
 
     ``source`` can be ``local`` (default), ``github``, or ``both``. Live GitHub
     reads are opt-in and use explicit env, local env-file defaults, git origin
-    inference, and the gh CLI token fallback.
+    inference, and gh CLI token lookup.
     """
     source_norm = _normalize_source(source)
     state_norm = _normalize_github_state(state)
@@ -1930,7 +2159,24 @@ def mcp_github_issue_create(
         }
 
     _require_bug_intake_write_target()
-    bug_id = _next_bug_id()
+    github_client = _github_issue_client_from_env() if create_github else None
+    try:
+        bug_id = _next_bug_id(
+            reservation_title=title.strip(),
+            reservation_fingerprint=fingerprint,
+        )
+    except ExistingBugReservationError as exc:
+        return {
+            "deduplicated": True,
+            "existing": {
+                "bug_id": exc.record.get("bug_id"),
+                "status": exc.record.get("status"),
+                "reservation_path": exc.record.get("reservation_path"),
+            },
+            "fingerprint": fingerprint,
+            "github": {"created": False, "reason": "matching_reservation"},
+            "registry_is_source_of_truth": True,
+        }
     now_iso = _utcnow_iso()
     record = _build_bug_record(
         bug_id=bug_id,
@@ -1953,29 +2199,67 @@ def mcp_github_issue_create(
     record["allowed_write_scope"] = []
     record["suspected_modules"] = [module.strip()]
     record["custom_github_labels"] = label_values
+    slug = _slugify(title)
+    path = _write_bug_record(record, slug)
+    _update_bug_id_reservation(bug_id, status="local_registry_written", registry_path=_repo_relative_path(path))
     github_result: dict[str, Any] = {"created": False, "reason": "create_github_false"}
 
     if create_github:
-        record["_source_path"] = _repo_relative_path(BUG_ROOT / f"{_today_yyyymmdd()}_{bug_id}-{_slugify(title)}.json")
-        issue = _github_issue_client_from_env().create_issue(
-            title=_issue_title_for_bug_record(record),
-            body=_issue_body_for_bug_record(record),
-            labels=_github_labels_for_bug_record(record, extra_labels=label_values),
-        )
+        assert github_client is not None
+        record["_source_path"] = _repo_relative_path(path)
+        try:
+            issue = github_client.create_issue(
+                title=_issue_title_for_bug_record(record),
+                body=_issue_body_for_bug_record(record),
+                labels=_github_labels_for_bug_record(record, extra_labels=label_values),
+            )
+        except Exception as exc:
+            record.pop("_source_path", None)
+            record["github_sync_state"] = "create_outcome_unknown"
+            record["github_sync_last_error_type"] = type(exc).__name__
+            record["github_sync_last_error"] = str(exc)[:1000]
+            _append_bug_event(
+                record,
+                actor=fix_owner or "mcp_agent",
+                action="github_issue_create_outcome_unknown",
+                note="GitHub create failed after the local registry write; automatic recreate is blocked by fingerprint deduplication.",
+            )
+            _write_existing_bug_record(path, record)
+            _update_bug_id_reservation(
+                bug_id,
+                status="github_create_outcome_unknown",
+                github_sync_state="create_outcome_unknown",
+                last_error_type=type(exc).__name__,
+                last_error=str(exc)[:1000],
+            )
+            raise
+        record.pop("_source_path", None)
         record["github_issue_number"] = issue.get("number")
         record["github_issue_url"] = issue.get("html_url")
+        record["github_sync_state"] = "synced"
         if issue.get("html_url"):
             record["evidence_uris"].append(str(issue["html_url"]))
+        _append_bug_event(
+            record,
+            actor=fix_owner or "mcp_agent",
+            action="github_issue_created",
+            note=f"Mirrored to GitHub Issue #{issue.get('number')}.",
+        )
+        _write_existing_bug_record(path, record)
+        _update_bug_id_reservation(
+            bug_id,
+            status="github_issue_confirmed",
+            github_sync_state="synced",
+            github_issue_number=issue.get("number"),
+            github_issue_url=issue.get("html_url"),
+        )
         github_result = {
             "created": True,
             "number": issue.get("number"),
             "html_url": issue.get("html_url"),
             "state": issue.get("state"),
         }
-        record.pop("_source_path", None)
 
-    slug = _slugify(title)
-    path = _write_bug_record(record, slug)
     return {
         "deduplicated": False,
         "bug_id": bug_id,
@@ -1999,7 +2283,7 @@ def assign_bug(
 
     Set ``sync_github=True`` to mirror the updated assignment/status labels to
     the linked GitHub Issue. Live GitHub sync uses explicit env, local env-file
-    defaults, git origin inference, and the gh CLI token fallback.
+    defaults, git origin inference, and gh CLI token lookup.
     """
     if not isinstance(assigned_agent, str) or not assigned_agent.strip():
         raise ValueError("assigned_agent must be a non-empty string")

@@ -1,7 +1,7 @@
 # AIstock 项目开发规范 v1.5
 
 > 版本：1.5
-> 更新日期：2026-08-01
+> 更新日期：2026-08-11
 > 状态：唯一人类可读开发规范
 > 权威文件：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 > 机器派生目录：`docs/standards/aistock_development_standard_v1.5_20260523.yaml`
@@ -47,9 +47,9 @@
    - `block` 只阻断该控制适用的任务类型、文件范围和阶段，不升级为全任务或全仓门禁；
    - `warn` 产生可见警告和修复建议，但不阻断当前阶段；
    - `advisory` 只提供效率或执行建议，不进入完成、PR、合入或运行时判定。
-3. `enforcement_phase` 使用 `changed_file_scan`、`task_planning`、`interactive_execution`、`pr_readiness`、`issue_lifecycle`、`design_delivery`、`standard_change`、`production_activation` 或 `release_deployment`。条件控制在不适用时记为 `noop`，不得伪装成 pending gate。
+3. `enforcement_phase` 使用 `changed_file_scan`、`task_planning`、`interactive_execution`、`pr_readiness`、`issue_lifecycle`、`design_delivery`、`standard_change`、`production_activation` 或 `release_deployment`。条件控制在不适用时记为 `noop`，禁止伪装成 pending gate。
 4. CI job、页面 check、测试计划和门禁分别计数。skipped job、warning、advisory、delegated plan、诊断 evidence publisher 和 telemetry collector 都不是合并硬门禁。
-5. 失败证据发布器保持 best-effort、可见和可审计，但不得成为 `CI verdict` 的依赖或用自身故障覆盖真实测试结论。分支保护只消费聚合后的确定性质量判定。
+5. 失败证据发布器保持 best-effort、可见和可审计，但禁止成为 `CI verdict` 的依赖或用自身故障覆盖真实测试结论。分支保护只消费聚合后的确定性质量判定。
 
 ### 2.4 PR、合入和 aftercare
 
@@ -57,6 +57,8 @@
 2. CI 只执行变更模块的必要计划和全仓通用轻量检查；深度回归由 Validation Center/CI/nightly 去重执行。
 3. 合入后同步 BUG/GitHub 状态、根目录 `main`、task worktree/branch 和客户端入口。
 4. 生产 DDL、依赖安装、运行时激活分别报告为 `noop`、`applied_and_verified` 或 `pending`；代码合入与运行时激活是两个独立结果。
+5. 授权按动作和目标独立判断，但不按消息次数拆分。同一条用户指令可以明确打包源码合入、精确命名的 source worktree/local branch/remote branch cleanup，以及已通过 DEV 验证的具体生产目标与 migration；授权包完整时，合入后直接继续这些已授权动作，禁止再次索要同一授权。
+6. 裸 `merge` 授权仍只覆盖源码合入和必要 BUG/metadata 同步，不推导 cleanup、DDL/DML、依赖、激活、进程控制或删除。打包动作逐项执行和报告；某一项前置条件失败只阻断该项，不伪造成功，也不扩大其他授权。
 
 ## 3. 风险与工作量分级
 
@@ -150,7 +152,7 @@ Windows backend 通过 worker API、AIstock-owned artifact store、入库 payloa
 <a id="rule-prod-ddl-001"></a>
 ### 6.3 [PROD-DDL-001] Production DDL gate
 
-数据库 DDL 和 DML 先在现有 DEV 数据库完成验证。验证环境沿用该 DEV 数据库；生产库备份、导出或快照属于独立运维事项。生产 DDL/DML 在用户明确授权具体生产目标后执行。DEV 验证、生产授权、迁移执行和回读校验分别记录；无 schema 变化时 `production_ddl_gate=noop`。schema 变更以 migration/bootstrap 文件交付，并在获授权的生产目标执行 preflight、DDL/DML、前后 schema/comment 校验和 API/scheduler smoke。
+数据库 DDL 和 DML 先在现有 DEV 数据库完成验证。验证环境沿用该 DEV 数据库；生产库备份、导出或快照属于独立运维事项，不是 migration 前置门禁。生产 DDL/DML 在用户明确授权具体生产目标和 migration 后执行；该授权可以与 merge/cleanup 写在同一条指令中，完整授权包不需要合入后二次确认。执行顺序必须是 DEV receipt 已通过、不可变 merge commit 已确认进入目标分支、生产 target preflight、DDL/DML apply、前后 schema/comment 回读及 API/scheduler smoke。DEV 验证、生产授权、merge commit、迁移执行和回读校验分别记录；任一前置条件失败时仅将生产项记为 `blocked`/`pending`，不回滚或隐瞒已完成的源码合入。无 schema 变化时 `production_ddl_gate=noop`。
 
 <a id="rule-err-fallback-001"></a>
 ### 6.4 [ERR-FALLBACK-001] 错误可见性
@@ -239,7 +241,7 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 <a id="rule-tool-rtk-001"></a>
 ### 6.20 [TOOL-RTK-001] RTK 输出压缩
 
-交互开发窗口在 RTK 可用且支持目标子命令时，优先使用 `rtk git`、`rtk rg`、`rtk pytest`、`rtk nox`、`rtk npm` 等包装降低命令输出和上下文消耗。`Get-Content`、`Test-Path`、PowerShell 控制语句或 RTK 不支持的调用允许直接执行，并记录基于能力缺失的回退原因；RTK 缺失、不支持或未受信任时任务继续，`rtk trust` 只在用户明确授权后执行。CI 使用原始确定性命令，不要求安装 RTK。workflow 仅在调用方已提供 telemetry 时记录 `rtk_used/version/fallback`；telemetry 缺失时直接记录 `not_recorded`，不增加探测命令。
+交互开发窗口对 RTK 已支持且预计产生高输出的命令必须使用 `rtk git`、`rtk rg`、`rtk pytest`、`rtk nox`、`rtk npm` 等包装。只有目标调用不受支持、RTK 不可用、诊断需要精确原始输出，或包装器首次执行失败/改变语义时才直接回退，并用一句话记录原因；禁止为同一能力重复探测。未受信任的项目自定义 filter 只是不加载该 filter，不影响继续使用 RTK 内置包装；禁止任何窗口自行执行 `rtk trust`。RTK 缺失或回退产生可见警告但不阻断任务、PR、合入或 CI；CI 使用原始确定性命令且不安装 RTK。workflow 仅消费调用方已有的 `rtk_used/version/fallback` telemetry，缺失时记录 `not_recorded`，不新增探测命令或门禁。
 
 <a id="rule-backend-restart-ownership-001"></a>
 ### 6.21 [BACKEND-RESTART-OWNERSHIP-001] 后端重启所有权
@@ -260,11 +262,12 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 - T2/T3 按明确依赖加载设计和跨模块契约。
 - 命令输出采用 compact receipt；完整 JSON 只用于失败诊断、状态恢复或持久证据。
 - 精确搜索无结果时记录 scoped miss reason，再扩大搜索范围。
+- 分支 changed-file 范围以 merge base（如 `origin/main...HEAD`）为准，再合并当前 worktree、index 与未跟踪文件；禁止用会把主线新增文件反向计入任务范围的 two-dot stale-branch diff。
 
 <a id="rule-issue-batch-context-001"></a>
 ### 7.2 [ISSUE-BATCH-CONTEXT-001] 同模块批处理
 
-同模块、相同风险、相容 scope 和相同验证链的 issue 使用一个 batch worktree。Batch Context Pack 记录 issue 列表、共享文件、逐 issue 验收、提交映射、共享测试和拆分条件。
+同模块、相同风险、相容 scope 和相同验证链的 issue 在安全时可优先使用一个 batch worktree；不批处理时记录简短 split reason。Batch Context Pack 记录 issue 列表、共享文件、逐 issue 验收、提交映射、共享测试和拆分条件。
 
 <a id="rule-prod-dependency-001"></a>
 ### 7.3 [PROD-DEPENDENCY-001] Production dependency gate
@@ -283,11 +286,13 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 
 ### 8.2 客户端同步
 
+- 普通任务直接执行选定 lane 的 `run`、`resume`、`submit-bug` 或对应入口，不把 `doctor` 作为通用前置门禁。仅在客户端/bootstrap 状态未知、workflow/client 代码刚变更、恢复状态 stale/conflict，或用户明确要求诊断时运行一次 `doctor`；失败后按具体检查修复，禁止反复全量 doctor。
 - `.codex/**` 或 `.claude/**` 合入后，由一个明确 owner 对列入本次任务的目标执行完整 `install-client --apply`，随后使用 `verify-clients --workflow-only` 校验全部 workflow lane；禁止多个窗口无差别重复安装。
 - 官方隔离 Codex 或单一客户端目标必须显式传入 `--codex-home <path>`/`--claude-home <path>` 和对应的 `--skip-*`。客户端 profile 只在本次任务明确列入目标时更新。
 - 在途任务仅在 `doctor` 报告客户端 stale、窗口恢复或当前 lane 需要新入口时，使用 `verify-clients --workflow-only --selected-lane <lane>` 校验 router 与当前 lane。router/当前 lane stale 才阻断；无关 lane stale 只告警并记录待同步，禁止升级为全局任务门禁。
 - `install-client --selected-lane <lane>` 只同步 router 与该 lane，hash 相同时跳过，并通过跨进程锁与 staged replacement 避免并发窗口观察到部分安装。一次目标限定同步失败后停止并报告，禁止循环重装。
 - 同步完成且 `restart_recommended=false` 时，旧窗口重新读取 router 与当前 lane 后继续；只有 CLI 明确建议重启或客户端 UI 仍加载旧入口时才重启客户端。客户端同步不授权任何后端进程控制。
+- 授权以动作和目标为边界，而不是以消息次数为边界。同一条用户指令可明确打包 merge、精确 cleanup targets 和具体 production target/migration；完整授权包在合入后连续执行，无需二次询问，并分别报告结果。裸 PR/branch merge 授权仍只覆盖源码合入和必要 BUG/metadata 同步；禁止据此推导 source cleanup、生产 DDL/DML、依赖安装、runtime/frontend/client 激活、程序控制或任何删除。
 
 ## 9. 完成报告
 

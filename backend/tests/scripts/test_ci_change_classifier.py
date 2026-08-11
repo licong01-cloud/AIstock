@@ -403,6 +403,28 @@ def test_feature_workflow_files_use_focused_workflow_lane(tmp_path: Path) -> Non
     assert payload["unmapped_code_files"] == []
 
 
+def test_validation_mcp_issue_files_use_focused_workflow_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/aistock_bug_id_allocator.py",
+            "scripts/aistock_issue_workflow.py",
+            "backend/tests/scripts/test_aistock_issue_workflow.py",
+            "scripts/aistock_mcp_server.py",
+            "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is False
+    assert payload["unmapped_code_files"] == []
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    ]
+
+
 def test_validation_ui_target_contract_uses_catalog_gate_only(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["backend/tests/test_validation_ui_target_catalog.py"],
@@ -441,6 +463,20 @@ def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_
     assert payload["catalog_impacted_modules"][0] == "simulation_runtime"
     assert payload["backend_plan_keys"] == ["l0", "simulation_core_l2"]
     assert payload["backend_sessions"] == ["simulation_core_l2"]
+
+
+def test_qrun_mlflow_retry_test_uses_qe_sector_risk_overlay_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_plan_keys"] == ["l0", "qe_sector_risk_overlay_backend"]
+    assert payload["backend_sessions"] == ["qe_sector_risk_overlay_backend"]
+    assert payload["unmapped_code_files"] == []
 
 
 def test_ci_changed_file_resolver_uses_its_direct_workflow_target(tmp_path: Path) -> None:

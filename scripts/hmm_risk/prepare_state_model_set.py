@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import json
 import os
@@ -40,7 +40,11 @@ from backend.services.hmm_risk.state_model_set import (  # noqa: E402
     diagnose_l1_seed_grid_b3_diag04,
     sha256_bytes,
 )
-from backend.services.hmm_risk.b3_acceptance import RESTART_SCHEDULE, select_level_restart  # noqa: E402
+from backend.services.hmm_risk.b3_acceptance import (  # noqa: E402
+    D5_SELECTION_VERSION,
+    RESTART_SCHEDULE,
+    select_level_restart,
+)
 from backend.services.hmm_risk.b3_blocker_diagnostic import (  # noqa: E402
     DIAGNOSTIC_VERSION as B3_BLOCKER_DIAGNOSTIC_VERSION,
     FORMAL_AUTHORITY as B3_BLOCKER_FORMAL_AUTHORITY,
@@ -164,6 +168,8 @@ B3_P6_EXPECTED_SECTOR_COUNT = 131
 B3_P6_SINGLE_PASS_SCHEMA = "hmm_risk_b3_p6_autocycle_l2_single_pass_v1"
 B3_P6_REPORT_SCHEMA = "hmm_risk_b3_p6_autocycle_l2_preparation_v1"
 B3_P6_FAILURE_SCHEMA = "hmm_risk_b3_p6_autocycle_l2_parent_failure_v1"
+B3_P6_D5_CHECKPOINT_SCHEMA = "hmm_risk_b3_p6_d5_checkpoint_v1"
+B3_P6_D5_TRAINING_ARTIFACT_SCHEMA = "hmm_risk_b3_p6_d5_selected_training_v1"
 B3_P6_CLI_SCHEMA = "hmm_risk_b3_p6_autocycle_l2_cli_receipt_v1"
 B3_P6_OUTPUT_ARGUMENT = "b3_p6_autocycle_l2_output"
 B3_P6_D6_ZERO_REFIT_SCHEMA = "hmm_risk_b3_d6_zero_refit_replay_v1"
@@ -4142,6 +4148,249 @@ def _b3_p6_parent_failure_path(args: argparse.Namespace) -> Path:
     return output_path.with_name(f"{output_path.stem}.parent.failure.json")
 
 
+def _b3_p6_d5_checkpoint_path(args: argparse.Namespace) -> Path:
+    output_path = Path(args.b3_p6_autocycle_l2_output).resolve()
+    return output_path.with_name(f"{output_path.stem}.d5.checkpoint.json")
+
+
+def _build_b3_p6_selected_training_artifact(
+    selection: Mapping[str, Any],
+    training_repeat: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Freeze only the selected training authority; never access D6 inputs."""
+
+    selection_body = {key: value for key, value in selection.items() if key != "receipt_sha256"}
+    evidence = selection.get("evidence")
+    if (
+        selection.get("level_selection_valid") is not True
+        or selection.get("level_selection_status") != "accepted"
+        or selection.get("contract_version") != D5_SELECTION_VERSION
+        or selection.get("failure_reason_codes") != []
+        or selection.get("blocking_reason_codes") != []
+        or selection.get("warning_reason_codes") != []
+        or selection.get("primary_reason_code") is not None
+        or selection.get("receipt_sha256") != canonical_sha256(selection_body)
+        or not isinstance(evidence, Mapping)
+        or evidence.get("family") != B3_P6_FAMILY
+        or evidence.get("level") != B3_P6_LEVEL
+        or evidence.get("schedule") != list(RESTART_SCHEDULE)
+        or evidence.get("feature_count") != len(ALL_CORE_FEATURES)
+        or evidence.get("validation_accessed") is not False
+        or evidence.get("future_utility_accessed") is not False
+        or evidence.get("semantic_labelability_accessed") is not False
+        or evidence.get("d6_status_accessed") is not False
+        or evidence.get("selection_followed_by_refit") is not False
+    ):
+        raise StateModelSetError("B3 P6 D5 checkpoint selection authority is invalid")
+    selected_seed = evidence.get("selected_seed")
+    expected_codes = tuple(str(value) for value in training_repeat.get("canonical_sector_codes") or ())
+    if (
+        selected_seed not in RESTART_SCHEDULE
+        or training_repeat.get("family") != B3_P6_FAMILY
+        or training_repeat.get("level") != B3_P6_LEVEL
+        or tuple(training_repeat.get("schedule") or ()) != RESTART_SCHEDULE
+        or expected_codes != tuple(sorted(expected_codes))
+        or len(expected_codes) != B3_P6_EXPECTED_SECTOR_COUNT
+        or tuple(str(value) for value in evidence.get("canonical_sector_codes") or ()) != expected_codes
+        or evidence.get("canonical_sector_set_sha256") != canonical_sha256(list(expected_codes))
+        or evidence.get("selected_schedule_index") != RESTART_SCHEDULE.index(int(selected_seed))
+    ):
+        raise StateModelSetError("B3 P6 D5 checkpoint training identity is invalid")
+
+    fitted_models = models_from_repeat(training_repeat)
+    repeat_entries = list(training_repeat.get("entries") or ())
+    entries: list[dict[str, Any]] = []
+    for code in expected_codes:
+        fitted = fitted_models.get((int(selected_seed), code))
+        matching_receipts = [
+            value for value in repeat_entries if value.get("seed") == selected_seed and value.get("sector_code") == code
+        ]
+        if fitted is None or len(matching_receipts) != 1:
+            raise StateModelSetError(f"B3 P6 D5 checkpoint selected training authority is missing for {code}")
+        training_receipt = matching_receipts[0]
+        training_body = {key: value for key, value in training_receipt.items() if key != "entry_receipt_sha256"}
+        if (
+            training_receipt.get("entry_receipt_sha256") != canonical_sha256(training_body)
+            or training_receipt.get("model_entry_status") != "accepted"
+            or training_receipt.get("model_entry_valid") is not True
+            or training_receipt.get("model_payload_sha256") != fitted.model_payload_sha256
+        ):
+            raise StateModelSetError(f"B3 P6 D5 checkpoint selected training receipt is invalid for {code}")
+        entry_body = {**fitted.payload(), "training_receipt": training_receipt}
+        entries.append({**entry_body, "selected_entry_sha256": canonical_sha256(entry_body)})
+
+    body = {
+        "schema_version": B3_P6_D5_TRAINING_ARTIFACT_SCHEMA,
+        "family": B3_P6_FAMILY,
+        "level": B3_P6_LEVEL,
+        "selected_seed": selected_seed,
+        "selection_receipt_sha256": selection["receipt_sha256"],
+        "entry_count": len(entries),
+        "entries": entries,
+        "selection_reexecuted": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "ready": False,
+    }
+    return {**body, "artifact_sha256": canonical_sha256(body)}
+
+
+def _validate_b3_p6_d5_checkpoint(checkpoint: Mapping[str, Any]) -> None:
+    body = {key: value for key, value in checkpoint.items() if key != "receipt_sha256"}
+    selection = checkpoint.get("selection")
+    selected_training = checkpoint.get("selected_training_artifact")
+    selection_body = (
+        {key: value for key, value in selection.items() if key != "receipt_sha256"}
+        if isinstance(selection, Mapping)
+        else {}
+    )
+    selected_training_body = (
+        {key: value for key, value in selected_training.items() if key != "artifact_sha256"}
+        if isinstance(selected_training, Mapping)
+        else {}
+    )
+    selection_evidence = selection.get("evidence") if isinstance(selection, Mapping) else None
+    selected_seed = selection_evidence.get("selected_seed") if isinstance(selection_evidence, Mapping) else None
+    child_hashes = tuple(str(value) for value in checkpoint.get("fresh_process_receipt_hashes") or ())
+    child_paths = tuple(str(value) for value in checkpoint.get("fresh_process_receipt_paths") or ())
+    producer_commit = str(checkpoint.get("producer_commit") or "").lower()
+    identity_fields = (
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "calendar_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+        "semantic_dataset_manifest_hash",
+        "semantic_mapping_manifest_hash",
+        "semantic_calendar_manifest_hash",
+        "semantic_l2_stock_fact_manifest_hash",
+        "feature_domain_policy_sha256",
+    )
+    identities = tuple(str(checkpoint.get(field) or "").lower() for field in identity_fields)
+    expected_fit_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE) * 2
+    if (
+        checkpoint.get("schema_version") != B3_P6_D5_CHECKPOINT_SCHEMA
+        or checkpoint.get("status") != "selected"
+        or checkpoint.get("target_family") != B3_P6_FAMILY
+        or checkpoint.get("target_level") != B3_P6_LEVEL
+        or checkpoint.get("receipt_sha256") != canonical_sha256(body)
+        or checkpoint.get("selection_performed") is not True
+        or checkpoint.get("selection_used_validation") is not False
+        or checkpoint.get("selection_used_future_utility") is not False
+        or checkpoint.get("selection_followed_by_refit") is not False
+        or checkpoint.get("semantic_source_accessed_after_selection") is not False
+        or checkpoint.get("d6_performed_after_selection") is not False
+        or checkpoint.get("selected_level_artifact_write_performed") is not False
+        or checkpoint.get("family_model_set_status") != "blocked"
+        or checkpoint.get("phase2_ready") is not False
+        or checkpoint.get("ready_artifact_write_performed") is not False
+        or checkpoint.get("database_write_performed") is not False
+        or checkpoint.get("runtime_action_performed") is not False
+        or len(producer_commit) != 40
+        or any(character not in "0123456789abcdef" for character in producer_commit)
+        or any(
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value) for value in identities
+        )
+        or checkpoint.get("formula_version") != C010_FORMULA_VERSION
+        or checkpoint.get("planned_fit_count") != expected_fit_count
+        or checkpoint.get("terminal_entry_count") != expected_fit_count
+        or len(child_hashes) != 2
+        or any(
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value.lower())
+            for value in child_hashes
+        )
+        or len(child_paths) != 2
+        or any(not value or not Path(value).is_absolute() for value in child_paths)
+        or not isinstance(selection, Mapping)
+        or selection.get("level_selection_valid") is not True
+        or selection.get("level_selection_status") != "accepted"
+        or selection.get("contract_version") != D5_SELECTION_VERSION
+        or selection.get("failure_reason_codes") != []
+        or selection.get("blocking_reason_codes") != []
+        or selection.get("warning_reason_codes") != []
+        or selection.get("primary_reason_code") is not None
+        or selection.get("receipt_sha256") != canonical_sha256(selection_body)
+        or not isinstance(selection_evidence, Mapping)
+        or selection_evidence.get("family") != B3_P6_FAMILY
+        or selection_evidence.get("level") != B3_P6_LEVEL
+        or selected_seed not in RESTART_SCHEDULE
+        or selection_evidence.get("schedule") != list(RESTART_SCHEDULE)
+        or selection_evidence.get("feature_count") != len(ALL_CORE_FEATURES)
+        or selection_evidence.get("feature_domain_policy_sha256") != checkpoint.get("feature_domain_policy_sha256")
+        or selection_evidence.get("validation_accessed") is not False
+        or selection_evidence.get("future_utility_accessed") is not False
+        or selection_evidence.get("semantic_labelability_accessed") is not False
+        or selection_evidence.get("d6_status_accessed") is not False
+        or selection_evidence.get("selection_followed_by_refit") is not False
+        or selection_evidence.get("selected_schedule_index") != RESTART_SCHEDULE.index(int(selected_seed))
+        or not isinstance(selected_training, Mapping)
+        or selected_training.get("schema_version") != B3_P6_D5_TRAINING_ARTIFACT_SCHEMA
+        or selected_training.get("family") != B3_P6_FAMILY
+        or selected_training.get("level") != B3_P6_LEVEL
+        or selected_training.get("selected_seed") != selected_seed
+        or selected_training.get("selection_receipt_sha256") != selection.get("receipt_sha256")
+        or selected_training.get("entry_count") != B3_P6_EXPECTED_SECTOR_COUNT
+        or selected_training.get("selection_reexecuted") is not False
+        or selected_training.get("validation_accessed") is not False
+        or selected_training.get("future_utility_accessed") is not False
+        or selected_training.get("ready") is not False
+        or selected_training.get("artifact_sha256") != canonical_sha256(selected_training_body)
+    ):
+        raise StateModelSetError("B3 P6 D5 checkpoint authority is invalid")
+
+
+def _load_b3_p6_d5_checkpoint(path: Path, *, expected_receipt_sha256: str | None = None) -> dict[str, Any]:
+    checkpoint = _load_json_mapping(path.resolve(), label="B3 P6 D5 checkpoint")
+    _validate_b3_p6_d5_checkpoint(checkpoint)
+    _p6_zero_refit_training_authority(checkpoint)
+    if expected_receipt_sha256 is not None and checkpoint.get("receipt_sha256") != expected_receipt_sha256:
+        raise StateModelSetError("B3 P6 D5 checkpoint receipt differs from its parent failure reference")
+    return checkpoint
+
+
+def _build_b3_p6_d5_checkpoint(
+    repeats: Sequence[Mapping[str, Any]],
+    process_receipt_paths: Sequence[str],
+    selection: Mapping[str, Any],
+    selected_training_artifact: Mapping[str, Any],
+    semantic_identities: Mapping[str, str],
+) -> dict[str, Any]:
+    if len(repeats) != 2 or len(process_receipt_paths) != 2:
+        raise StateModelSetError("B3 P6 D5 checkpoint requires both fresh-process receipts")
+    body = {
+        "schema_version": B3_P6_D5_CHECKPOINT_SCHEMA,
+        "status": "selected",
+        "producer_commit": _git_commit(),
+        "target_family": B3_P6_FAMILY,
+        "target_level": B3_P6_LEVEL,
+        "planned_fit_count": B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE) * 2,
+        "terminal_entry_count": sum(int(repeat["terminal_entry_count"]) for repeat in repeats),
+        "dataset_manifest_hash": repeats[0]["dataset_manifest_hash"],
+        "mapping_manifest_hash": repeats[0]["mapping_manifest_hash"],
+        "calendar_manifest_hash": repeats[0]["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": repeats[0]["l2_stock_fact_manifest_hash"],
+        **semantic_identities,
+        "feature_domain_policy_sha256": repeats[0]["feature_domain_policy_sha256"],
+        "formula_version": repeats[0]["formula_version"],
+        "fresh_process_receipt_hashes": [repeat["single_pass_receipt_sha256"] for repeat in repeats],
+        "fresh_process_receipt_paths": list(process_receipt_paths),
+        "selection": dict(selection),
+        "selected_training_artifact": dict(selected_training_artifact),
+        "selection_performed": True,
+        "selection_used_validation": False,
+        "selection_used_future_utility": False,
+        "selection_followed_by_refit": False,
+        "semantic_source_accessed_after_selection": False,
+        "d6_performed_after_selection": False,
+        "selected_level_artifact_write_performed": False,
+        "family_model_set_status": "blocked",
+        "phase2_ready": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def _build_b3_p6_parent_failure(
     args: argparse.Namespace,
     error: Exception,
@@ -4191,12 +4440,40 @@ def _build_b3_p6_parent_failure(
             }
         )
     planned_fit_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE) * 2
+    checkpoint_path = _b3_p6_d5_checkpoint_path(args)
+    checkpoint: dict[str, Any] | None = None
+    checkpoint_status = "missing"
+    checkpoint_error_type = None
+    checkpoint_error = None
+    if checkpoint_path.exists():
+        try:
+            checkpoint = _load_b3_p6_d5_checkpoint(checkpoint_path)
+            expected_child_hashes = [
+                value["single_pass_receipt_sha256"] for value in process_receipts if value.get("status") == "verified"
+            ]
+            if (
+                len(expected_child_hashes) != 2
+                or checkpoint.get("fresh_process_receipt_hashes") != expected_child_hashes
+            ):
+                raise StateModelSetError("B3 P6 D5 checkpoint child lineage differs from parent failure receipts")
+            checkpoint_status = "verified"
+        except Exception as exc:
+            checkpoint = None
+            checkpoint_status = "invalid"
+            checkpoint_error_type = type(exc).__name__
+            checkpoint_error = str(exc)[-1000:]
     if known_report is not None:
         selection = known_report.get("selection") or {}
         selection_performed = bool(known_report.get("selection_performed"))
         selection_status = str(selection.get("level_selection_status") or "unknown")
         d6_performed = bool(known_report.get("d6_performed_after_selection"))
         selected_level_write = bool(known_report.get("selected_level_artifact_write_performed"))
+    elif checkpoint is not None:
+        selection = checkpoint["selection"]
+        selection_performed = True
+        selection_status = str(selection.get("level_selection_status") or "unknown")
+        d6_performed = None
+        selected_level_write = None
     else:
         selection_performed = None
         selection_status = "unknown_due_parent_failure"
@@ -4217,6 +4494,11 @@ def _build_b3_p6_parent_failure(
         "terminal_entry_count": terminal_entry_count,
         "fit_grid_completed": verified_process_count == 2 and terminal_entry_count == planned_fit_count,
         "process_receipts": process_receipts,
+        "d5_checkpoint_status": checkpoint_status,
+        "d5_checkpoint_path": str(checkpoint_path),
+        "d5_checkpoint_receipt_sha256": None if checkpoint is None else checkpoint["receipt_sha256"],
+        "d5_checkpoint_error_type": checkpoint_error_type,
+        "d5_checkpoint_error": checkpoint_error,
         "selection_performed": selection_performed,
         "selection_status": selection_status,
         "d6_performed_after_selection": d6_performed,
@@ -4616,6 +4898,29 @@ def run_b3_p6_autocycle_l2_repeated(args: argparse.Namespace, request: dict[str,
             "semantic_l2_stock_fact_manifest_hash",
         )
     }
+    d5_checkpoint = None
+    d5_checkpoint_path = None
+    d5_checkpoint_write_performed = False
+    if selection["level_selection_valid"]:
+        selected_training_artifact = _build_b3_p6_selected_training_artifact(selection, first_repeat)
+        d5_checkpoint = _build_b3_p6_d5_checkpoint(
+            repeats,
+            process_receipt_paths,
+            selection,
+            selected_training_artifact,
+            semantic_identities,
+        )
+        d5_checkpoint_path = _b3_p6_d5_checkpoint_path(args)
+        _write_diagnostic_report(d5_checkpoint_path, d5_checkpoint)
+        if (
+            _load_b3_p6_d5_checkpoint(
+                d5_checkpoint_path,
+                expected_receipt_sha256=d5_checkpoint["receipt_sha256"],
+            )
+            != d5_checkpoint
+        ):
+            raise StateModelSetError("B3 P6 D5 durable checkpoint readback differs")
+        d5_checkpoint_write_performed = True
     semantic_source_accessed_after_selection = False
     selected_artifact = None
     selected_artifact_path = None
@@ -4682,6 +4987,9 @@ def run_b3_p6_autocycle_l2_repeated(args: argparse.Namespace, request: dict[str,
         "fresh_process_receipt_hashes": [repeat["single_pass_receipt_sha256"] for repeat in repeats],
         "fresh_process_receipt_paths": process_receipt_paths,
         "selection": selection,
+        "d5_checkpoint_path": None if d5_checkpoint_path is None else str(d5_checkpoint_path),
+        "d5_checkpoint_receipt_sha256": None if d5_checkpoint is None else d5_checkpoint["receipt_sha256"],
+        "d5_checkpoint_write_performed": d5_checkpoint_write_performed,
         "selected_artifact": selected_artifact,
         "selected_level_artifact_path": None if selected_artifact_path is None else str(selected_artifact_path),
         "selected_level_artifact_write_performed": selected_artifact_write_performed,
@@ -4701,12 +5009,65 @@ def run_b3_p6_autocycle_l2_repeated(args: argparse.Namespace, request: dict[str,
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def _resolve_p6_zero_refit_training_authority(parent_report: Mapping[str, Any]) -> dict[str, Any]:
+    schema_version = parent_report.get("schema_version")
+    if schema_version == B3_P6_D5_CHECKPOINT_SCHEMA:
+        _validate_b3_p6_d5_checkpoint(parent_report)
+        _p6_zero_refit_training_authority(parent_report)
+        return dict(parent_report)
+    if schema_version != B3_P6_FAILURE_SCHEMA:
+        return dict(parent_report)
+    failure_body = {key: value for key, value in parent_report.items() if key != "receipt_sha256"}
+    if parent_report.get("receipt_sha256") != canonical_sha256(failure_body):
+        raise StateModelSetError("B3 P6 zero-refit parent failure receipt is invalid")
+    checkpoint_path = str(parent_report.get("d5_checkpoint_path") or "")
+    checkpoint_hash = str(parent_report.get("d5_checkpoint_receipt_sha256") or "")
+    if parent_report.get("d5_checkpoint_status") != "verified" or not checkpoint_path or len(checkpoint_hash) != 64:
+        raise StateModelSetError("B3 P6 zero-refit D5 checkpoint is missing; D5 re-execution is prohibited")
+    checkpoint = _load_b3_p6_d5_checkpoint(Path(checkpoint_path), expected_receipt_sha256=checkpoint_hash)
+    process_receipts = parent_report.get("process_receipts")
+    expected_fit_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE) * 2
+    if (
+        parent_report.get("status") != "failed"
+        or parent_report.get("target_family") != B3_P6_FAMILY
+        or parent_report.get("target_level") != B3_P6_LEVEL
+        or parent_report.get("fit_grid_completed") is not True
+        or parent_report.get("verified_process_count") != 2
+        or parent_report.get("planned_fit_count") != expected_fit_count
+        or parent_report.get("terminal_entry_count") != expected_fit_count
+        or parent_report.get("d5_checkpoint_error_type") is not None
+        or parent_report.get("d5_checkpoint_error") is not None
+        or parent_report.get("selection_performed") is not True
+        or parent_report.get("selection_status") != "accepted"
+        or parent_report.get("family_model_set_status") != "blocked"
+        or parent_report.get("phase2_ready") is not False
+        or parent_report.get("ready_artifact_write_performed") is not False
+        or parent_report.get("database_write_performed") is not False
+        or parent_report.get("runtime_action_performed") is not False
+        or not isinstance(process_receipts, list)
+        or len(process_receipts) != 2
+    ):
+        raise StateModelSetError("B3 P6 zero-refit parent failure authority is invalid")
+    for index, process_identity in enumerate(("fresh_process_1", "fresh_process_2")):
+        receipt = process_receipts[index]
+        if (
+            not isinstance(receipt, Mapping)
+            or receipt.get("process_identity") != process_identity
+            or receipt.get("status") != "verified"
+            or receipt.get("path") != checkpoint["fresh_process_receipt_paths"][index]
+            or receipt.get("single_pass_receipt_sha256") != checkpoint["fresh_process_receipt_hashes"][index]
+        ):
+            raise StateModelSetError("B3 P6 zero-refit parent failure child lineage differs from checkpoint")
+    return checkpoint
+
+
 def _p6_zero_refit_training_authority(
     parent_report: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[tuple[int, str], Any], dict[str, Any], tuple[str, ...]]:
     parent_body = {key: value for key, value in parent_report.items() if key != "receipt_sha256"}
+    checkpoint_authority = parent_report.get("schema_version") == B3_P6_D5_CHECKPOINT_SCHEMA
     if (
-        parent_report.get("schema_version") != B3_P6_REPORT_SCHEMA
+        parent_report.get("schema_version") not in {B3_P6_REPORT_SCHEMA, B3_P6_D5_CHECKPOINT_SCHEMA}
         or parent_report.get("target_family") != B3_P6_FAMILY
         or parent_report.get("target_level") != B3_P6_LEVEL
         or parent_report.get("receipt_sha256") != canonical_sha256(parent_body)
@@ -4715,7 +5076,7 @@ def _p6_zero_refit_training_authority(
     ):
         raise StateModelSetError("B3 P6 zero-refit parent report authority is invalid")
     selection = parent_report.get("selection")
-    selected_artifact = parent_report.get("selected_artifact")
+    selected_artifact = parent_report.get("selected_training_artifact" if checkpoint_authority else "selected_artifact")
     if not isinstance(selection, Mapping) or not isinstance(selected_artifact, Mapping):
         raise StateModelSetError("B3 P6 zero-refit selected authority is missing")
     selection_body = {key: value for key, value in selection.items() if key != "receipt_sha256"}
@@ -4724,12 +5085,37 @@ def _p6_zero_refit_training_authority(
     if (
         selection.get("receipt_sha256") != canonical_sha256(selection_body)
         or selection.get("level_selection_valid") is not True
+        or selection.get("level_selection_status") != "accepted"
+        or selection.get("contract_version") != D5_SELECTION_VERSION
+        or selection.get("failure_reason_codes") != []
+        or selection.get("blocking_reason_codes") != []
+        or selection.get("warning_reason_codes") != []
+        or selection.get("primary_reason_code") is not None
         or selected_seed != 43
+        or selection.get("evidence", {}).get("schedule") != list(RESTART_SCHEDULE)
+        or selection.get("evidence", {}).get("feature_count") != len(ALL_CORE_FEATURES)
+        or selection.get("evidence", {}).get("feature_domain_policy_sha256")
+        != parent_report.get("feature_domain_policy_sha256")
+        or selection.get("evidence", {}).get("validation_accessed") is not False
+        or selection.get("evidence", {}).get("future_utility_accessed") is not False
+        or selection.get("evidence", {}).get("semantic_labelability_accessed") is not False
+        or selection.get("evidence", {}).get("d6_status_accessed") is not False
+        or selection.get("evidence", {}).get("selection_followed_by_refit") is not False
+        or selection.get("evidence", {}).get("selected_schedule_index") != RESTART_SCHEDULE.index(int(selected_seed))
         or selected_artifact.get("artifact_sha256") != canonical_sha256(selected_body)
         or selected_artifact.get("family") != B3_P6_FAMILY
         or selected_artifact.get("level") != B3_P6_LEVEL
         or selected_artifact.get("selected_seed") != selected_seed
         or selected_artifact.get("selection_receipt_sha256") != selection.get("receipt_sha256")
+        or selected_artifact.get("entry_count") != B3_P6_EXPECTED_SECTOR_COUNT
+        or (
+            checkpoint_authority
+            and (
+                selected_artifact.get("schema_version") != B3_P6_D5_TRAINING_ARTIFACT_SCHEMA
+                or selected_artifact.get("validation_accessed") is not False
+                or selected_artifact.get("future_utility_accessed") is not False
+            )
+        )
     ):
         raise StateModelSetError("B3 P6 zero-refit D5/model authority is invalid")
     entries = list(selected_artifact.get("entries") or ())
@@ -4774,20 +5160,39 @@ def _p6_zero_refit_training_authority(
         ):
             raise StateModelSetError("B3 P6 zero-refit selected entry readback failed")
         training_body = {key: value for key, value in training_receipt.items() if key != "entry_receipt_sha256"}
-        if training_receipt.get("entry_receipt_sha256") != canonical_sha256(training_body):
+        if (
+            training_receipt.get("entry_receipt_sha256") != canonical_sha256(training_body)
+            or training_receipt.get("model_entry_status") != "accepted"
+            or training_receipt.get("model_entry_valid") is not True
+        ):
             raise StateModelSetError("B3 P6 zero-refit training receipt readback failed")
         model = {key: entry[key] for key in model_keys if key in entry}
         model_body = {key: value for key, value in model.items() if key != "model_payload_sha256"}
         if model.get("model_payload_sha256") != canonical_sha256(model_body):
             raise StateModelSetError("B3 P6 zero-refit model payload readback failed")
         code = str(model.get("sector_code") or "")
-        if not code or code in codes:
+        if (
+            model.get("family") != B3_P6_FAMILY
+            or model.get("level") != B3_P6_LEVEL
+            or model.get("seed") != selected_seed
+            or not code
+            or code in codes
+            or training_receipt.get("seed") != selected_seed
+            or training_receipt.get("sector_code") != code
+            or training_receipt.get("model_payload_sha256") != model.get("model_payload_sha256")
+        ):
             raise StateModelSetError("B3 P6 zero-refit selected sector identity is invalid")
         codes.append(code)
         models.append(model)
         training_receipts.append(dict(training_receipt))
     canonical_codes = tuple(sorted(codes))
-    if tuple(codes) != canonical_codes or len(canonical_codes) != B3_P6_EXPECTED_SECTOR_COUNT:
+    selection_codes = tuple(str(value) for value in selection.get("evidence", {}).get("canonical_sector_codes") or ())
+    if (
+        tuple(codes) != canonical_codes
+        or len(canonical_codes) != B3_P6_EXPECTED_SECTOR_COUNT
+        or selection_codes != canonical_codes
+        or selection.get("evidence", {}).get("canonical_sector_set_sha256") != canonical_sha256(list(canonical_codes))
+    ):
         raise StateModelSetError("B3 P6 zero-refit selected sector set is not canonical")
     repeat = {
         "schema_version": MIXED_REPEAT_SCHEMA_VERSION,
@@ -4818,8 +5223,9 @@ def run_b3_p6_d6_zero_refit_replay(
     _require_approved_b3_windows(request)
     _require_formal_semantic_identity(request)
     _require_c010_policy_identity(request)
-    selection, models, training_repeat, expected_codes = _p6_zero_refit_training_authority(parent_report)
-    training_producer = str(parent_report.get("producer_commit") or "")
+    training_authority = _resolve_p6_zero_refit_training_authority(parent_report)
+    selection, models, training_repeat, expected_codes = _p6_zero_refit_training_authority(training_authority)
+    training_producer = str(training_authority.get("producer_commit") or "")
     replay_producer = _git_commit()
     if len(training_producer) != 40 or len(replay_producer) != 40:
         raise StateModelSetError("B3 P6 zero-refit producer commit identity is invalid")
@@ -4830,10 +5236,10 @@ def run_b3_p6_d6_zero_refit_replay(
         "l2_stock_fact_manifest_hash",
         "feature_domain_policy_sha256",
     )
-    if any(len(str(parent_report.get(field) or "")) != 64 for field in train_identity_fields):
+    if any(len(str(training_authority.get(field) or "")) != 64 for field in train_identity_fields):
         raise StateModelSetError("B3 P6 zero-refit train source identity is invalid")
-    child_hashes = tuple(str(value) for value in parent_report.get("fresh_process_receipt_hashes") or ())
-    child_paths = tuple(str(value) for value in parent_report.get("fresh_process_receipt_paths") or ())
+    child_hashes = tuple(str(value) for value in training_authority.get("fresh_process_receipt_hashes") or ())
+    child_paths = tuple(str(value) for value in training_authority.get("fresh_process_receipt_paths") or ())
     if len(child_hashes) != 2 or len(child_paths) != 2:
         raise StateModelSetError("B3 P6 zero-refit fresh-process lineage is incomplete")
     for process_identity, expected_hash, raw_path in zip(
@@ -4842,13 +5248,13 @@ def run_b3_p6_d6_zero_refit_replay(
         child = _load_json_mapping(Path(raw_path).resolve(), label=f"B3 P6 {process_identity} receipt")
         _validate_b3_p6_child_payload(child, process_identity=process_identity)
         if child.get("single_pass_receipt_sha256") != expected_hash or any(
-            child.get(field) != parent_report.get(field) for field in train_identity_fields
+            child.get(field) != training_authority.get(field) for field in train_identity_fields
         ):
             raise StateModelSetError("B3 P6 zero-refit fresh-process receipt hash differs")
     semantic_inputs = _load_verified_formal_semantic_inputs(request, db_prefix=str(args.db_env_prefix))
     semantic_identities = _semantic_input_identities(semantic_inputs)
     expected_semantic_identities = {
-        field: str(parent_report.get(field) or "")
+        field: str(training_authority.get(field) or "")
         for field in (
             "semantic_dataset_manifest_hash",
             "semantic_mapping_manifest_hash",
@@ -4858,7 +5264,7 @@ def run_b3_p6_d6_zero_refit_replay(
     }
     if semantic_identities != expected_semantic_identities:
         raise StateModelSetError("B3 P6 zero-refit semantic source authority drifted")
-    policy_sha256 = str(parent_report.get("feature_domain_policy_sha256") or "")
+    policy_sha256 = str(training_authority.get("feature_domain_policy_sha256") or "")
     if policy_sha256 != str(request.get("feature_domain_policy_sha256") or ""):
         raise StateModelSetError("B3 P6 zero-refit feature-domain policy identity drifted")
     semantic_inputs["feature_domain_policy_sha256"] = policy_sha256
@@ -4887,10 +5293,10 @@ def run_b3_p6_d6_zero_refit_replay(
             family=B3_P6_FAMILY,
             level=B3_P6_LEVEL,
             expected_count=B3_P6_EXPECTED_SECTOR_COUNT,
-            dataset_manifest_hash=str(parent_report["dataset_manifest_hash"]),
-            mapping_manifest_hash=str(parent_report["mapping_manifest_hash"]),
-            calendar_manifest_hash=str(parent_report["calendar_manifest_hash"]),
-            l2_stock_fact_manifest_hash=str(parent_report["l2_stock_fact_manifest_hash"]),
+            dataset_manifest_hash=str(training_authority["dataset_manifest_hash"]),
+            mapping_manifest_hash=str(training_authority["mapping_manifest_hash"]),
+            calendar_manifest_hash=str(training_authority["calendar_manifest_hash"]),
+            l2_stock_fact_manifest_hash=str(training_authority["l2_stock_fact_manifest_hash"]),
             semantic_dataset_manifest_hash=semantic_identities["semantic_dataset_manifest_hash"],
             semantic_mapping_manifest_hash=semantic_identities["semantic_mapping_manifest_hash"],
             semantic_calendar_manifest_hash=semantic_identities["semantic_calendar_manifest_hash"],
@@ -4904,6 +5310,8 @@ def run_b3_p6_d6_zero_refit_replay(
         "schema_version": B3_P6_D6_ZERO_REFIT_SCHEMA,
         "status": "accepted" if selected_artifact.get("status") == "accepted" else "blocked",
         "original_p6_parent_report_sha256": canonical_sha256(dict(parent_report)),
+        "training_authority_schema_version": training_authority["schema_version"],
+        "training_authority_receipt_sha256": training_authority["receipt_sha256"],
         "fresh_process_receipt_hashes": list(child_hashes),
         "d5_selection_receipt_sha256": selection["receipt_sha256"],
         "family": B3_P6_FAMILY,
@@ -4912,7 +5320,7 @@ def run_b3_p6_d6_zero_refit_replay(
         "selected_model_payload_hashes": selected_model_hashes,
         "selected_model_payload_hashes_sha256": canonical_sha256(selected_model_hashes),
         "train_source_identities": {
-            field: parent_report.get(field)
+            field: training_authority.get(field)
             for field in (
                 "dataset_manifest_hash",
                 "mapping_manifest_hash",

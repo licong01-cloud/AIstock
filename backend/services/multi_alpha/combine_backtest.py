@@ -38,7 +38,10 @@ from backend.services.model_store import ModelStoreService, PredictionStoreError
 from backend.services.multi_alpha.combiner import CombinerLeg, MultiAlphaCombiner, MultiAlphaCombinerError
 from backend.services.multi_alpha.orthogonality import MultiAlphaOrthogonalityError, normalize_prediction_frame
 from backend.services.multi_alpha.panels import MultiAlphaPanelBuilder, MultiAlphaPanelError, PanelLegSpec
-from backend.services.multi_alpha.qe_subprocess_env import scrubbed_qe_subprocess_env
+from backend.services.multi_alpha.qe_subprocess_env import (
+    qe_subprocess_credential_scrub_command,
+    scrubbed_qe_subprocess_env,
+)
 from backend.services.quantevolver.config_composer import QE_STRATEGY_RUNTIME_HELPER_FILES
 
 
@@ -311,6 +314,7 @@ class ShellPredBacktestExecutor:
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest",
+                env=scrubbed_qe_subprocess_env(),
                 error_context={**error_context, "stage": "custom_command"},
             )
             if completed.returncode != 0:
@@ -645,6 +649,7 @@ def _default_local_pred_backtest_commands(
         )
     distro, conda_sh, conda_env = _wsl_runtime_settings(backtest_config=backtest_config, require_conda=True)
     workspace_wsl = win_to_wsl_path(str(workspace.resolve()))
+    scrub_credentials = qe_subprocess_credential_scrub_command()
     prefix = (
         "set -eo pipefail; "
         f"source {shlex.quote(str(conda_sh))}; "
@@ -652,12 +657,13 @@ def _default_local_pred_backtest_commands(
         "set -u; "
         f"cd {shlex.quote(workspace_wsl)}; "
         "if [ -f .factor_env ]; then . ./.factor_env; fi; "
+        f"{scrub_credentials}; "
     )
     qrun_script = prefix + f"python qrun_limit_minute.py conf.yaml --pred-backtest {shlex.quote(pred_name)}"
     read_script = prefix + "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py"
     return (
-        ["wsl", "-d", distro, "bash", "-lc", qrun_script],
-        ["wsl", "-d", distro, "bash", "-lc", read_script],
+        ["wsl", "-d", distro, "bash", "--noprofile", "--norc", "-c", qrun_script],
+        ["wsl", "-d", distro, "bash", "--noprofile", "--norc", "-c", read_script],
         read_env,
     )
 
