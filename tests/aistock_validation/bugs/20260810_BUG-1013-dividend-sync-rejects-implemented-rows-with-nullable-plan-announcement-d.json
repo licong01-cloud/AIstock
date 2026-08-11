@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1013",
-  "closed_at": null,
+  "closed_at": "2026-08-11T14:48:33.683665Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -147,8 +147,8 @@
   },
   "first_seen_at": "2026-08-10T14:08:58.443073Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c2147b3fbb98eca9a3a5b9ede09cf4325998aaea",
+  "fixed_at": "2026-08-10T17:45:37Z",
   "github_issue_number": 3263,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3263",
   "last_seen_at": "2026-08-10T14:08:58.443073Z",
@@ -156,8 +156,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3265",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "required",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python -m pytest backend/tests/test_tushare_sync_engine.py -q -p no:cacheprovider",
   "required_verification": [
@@ -176,8 +177,9 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1013\\post-restart-verify.json",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -187,7 +189,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -196,6 +198,9 @@
     "fingerprint": "98b7c22dd26c4b6bfcd7e602",
     "source_event_id": "FE-20260810-98b7c22dd26c"
   },
+  "validation_evidence": [
+    "python -m nox -s data_sync_autonomy_backend -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
