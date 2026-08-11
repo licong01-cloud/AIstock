@@ -32,6 +32,11 @@ from backend.services.advisory_model_first.price_range_inference import (
 from backend.services.advisory_model_first.price_range_runtime_bundle import (
     load_exact_price_range_bundle,
 )
+from backend.services.advisory_model_first.quality_contracts import (
+    ENSEMBLE_SCORE_POLICY,
+    QUALITY_SEEDS,
+    SELECTION_PRIOR_POLICY,
+)
 from backend.services.advisory_model_first.realtime_feature_source import (
     PostgresAdvisoryReviewSource,
     PostgresRealtimeFeatureSource,
@@ -287,7 +292,7 @@ class AdvisoryModelShadowService:
         shortlist_count = min(5, len(scored))
         return {
             "status": "EXPERIMENTAL_SHADOW",
-            "calibration_state": "UNCALIBRATED",
+            "calibration_state": bundle.manifest["calibration_state"],
             "program_id": program_id,
             "binding_version_id": binding["binding_version_id"],
             "package_id": PACKAGE_ID,
@@ -521,10 +526,20 @@ class AdvisoryModelShadowService:
 
 def _validate_bundle_runtime(bundle: LoadedAdvisoryModelBundle) -> None:
     manifest = bundle.manifest
+    schema_version = manifest.get("schema_version", "advisory_model_bundle_v1")
+    expected_calibration = (
+        "UNCALIBRATED" if schema_version == "advisory_model_bundle_v1" else "NOT_APPLICABLE_RANKING_SCORE"
+    )
     terminal_weights = manifest.get("terminal_weights") or {}
+    if schema_version == "advisory_model_bundle_v2" and not _valid_m5_runtime_policy(bundle):
+        raise AdvisoryModelFirstError(
+            "M5A model bundle runtime policy is incompatible with the frozen quality contract",
+            reason_code="ADVISORY_M5_RUNTIME_POLICY_MISMATCH",
+        )
     if (
-        manifest.get("status") != "EXPERIMENTAL_SHADOW"
-        or manifest.get("calibration_state") != "UNCALIBRATED"
+        schema_version not in {"advisory_model_bundle_v1", "advisory_model_bundle_v2"}
+        or manifest.get("status") != "EXPERIMENTAL_SHADOW"
+        or manifest.get("calibration_state") != expected_calibration
         or manifest.get("selection_runtime_semantics_hash") != RUNTIME_SEMANTICS_HASH
         or manifest.get("selection_runtime_semantics") != RUNTIME_SEMANTICS_PAYLOAD
         or manifest.get("style_profile_id") != STYLE_PROFILE_ID
@@ -535,6 +550,23 @@ def _validate_bundle_runtime(bundle: LoadedAdvisoryModelBundle) -> None:
             "model bundle runtime semantics are incompatible with the Advisory shadow path",
             reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
         )
+
+
+def _valid_m5_runtime_policy(bundle: LoadedAdvisoryModelBundle) -> bool:
+    manifest = bundle.manifest
+    try:
+        model_weight = float(manifest.get("model_weight"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        manifest.get("ensemble_score_policy") == ENSEMBLE_SCORE_POLICY
+        and manifest.get("selection_prior_policy") == SELECTION_PRIOR_POLICY
+        and manifest.get("explanation_policy") == "MODEL_MEMBER_RAW_CONTRIBUTION_MEAN_V1"
+        and tuple(manifest.get("seeds") or ()) == QUALITY_SEEDS
+        and model_weight in {0.25, 0.5, 0.75, 1.0}
+        and len(bundle.boosters) == len(QUALITY_SEEDS)
+        and bundle.booster is None
+    )
 
 
 def _validate_review_policy_identity(
@@ -716,15 +748,18 @@ def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[di
             matrix.loc[unseen, missing_indicator] = 1
             numeric = numeric.mask(unseen)
         matrix[column] = pd.Categorical(numeric, categories=categories)
-    model_feature_names = tuple(bundle.booster.feature_name())
-    if model_feature_names != tuple(MODEL_FEATURE_COLUMNS):
+    schema_version = bundle.manifest.get("schema_version", "advisory_model_bundle_v1")
+    boosters = (bundle.booster,) if schema_version == "advisory_model_bundle_v1" else bundle.boosters
+    if not boosters or any(tuple(booster.feature_name()) != tuple(MODEL_FEATURE_COLUMNS) for booster in boosters):
         raise AdvisoryModelFirstError(
             "LightGBM feature order differs from the frozen feature schema",
             reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
         )
     try:
-        scores = np.asarray(bundle.booster.predict(matrix), dtype=float)
-        contributions = np.asarray(bundle.booster.predict(matrix, pred_contrib=True), dtype=float)
+        raw_scores = [np.asarray(booster.predict(matrix), dtype=float) for booster in boosters]
+        raw_contributions = [
+            np.asarray(booster.predict(matrix, pred_contrib=True), dtype=float) for booster in boosters
+        ]
     except Exception as exc:
         LOGGER.exception(
             "LightGBM shadow inference failed bundle_id=%s candidate_count=%d",
@@ -736,39 +771,78 @@ def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[di
             reason_code="ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
             context={"error_type": type(exc).__name__},
         ) from exc
-    if scores.shape != (len(features),) or contributions.shape != (len(features), len(MODEL_FEATURE_COLUMNS) + 1):
+    if any(score.shape != (len(features),) for score in raw_scores) or any(
+        contribution.shape != (len(features), len(MODEL_FEATURE_COLUMNS) + 1) for contribution in raw_contributions
+    ):
         raise AdvisoryModelFirstError(
             "LightGBM shadow output dimensions are invalid",
             reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
         )
-    if not np.isfinite(scores).all() or not np.isfinite(contributions).all():
+    if any(not np.isfinite(score).all() for score in raw_scores) or any(
+        not np.isfinite(contribution).all() for contribution in raw_contributions
+    ):
         raise AdvisoryModelFirstError(
             "LightGBM shadow output contains a non-finite value",
             reason_code="ADVISORY_MODEL_REALTIME_DATA_UNAVAILABLE",
         )
+    if schema_version == "advisory_model_bundle_v1":
+        scores = raw_scores[0]
+        contributions = raw_contributions[0]
+        score_components: list[dict[str, float] | None] = [None] * len(features)
+    else:
+        percentile_scores = np.column_stack([_runtime_percentile(raw, features) for raw in raw_scores])
+        ensemble_scores = percentile_scores.mean(axis=1)
+        group_size = len(features)
+        selection_ranks = pd.to_numeric(features["selection_effective_rank"], errors="raise").to_numpy(dtype=float)
+        selection_prior = (group_size - selection_ranks) / max(group_size - 1, 1)
+        model_weight = float(bundle.manifest["model_weight"])
+        scores = model_weight * ensemble_scores + (1.0 - model_weight) * selection_prior
+        contributions = np.mean(np.stack(raw_contributions, axis=0), axis=0) * model_weight
+        score_components = [
+            {
+                "ensemble_score": float(ensemble_scores[index]),
+                "selection_prior": float(selection_prior[index]),
+                "model_weight": model_weight,
+            }
+            for index in range(len(features))
+        ]
     order = sorted(range(len(features)), key=lambda index: (-scores[index], str(features.iloc[index]["instrument"])))
     rank_by_index = {index: rank for rank, index in enumerate(order, start=1)}
     output: list[dict[str, Any]] = []
     for index, row in features.reset_index(drop=True).iterrows():
         top_indices = np.argsort(np.abs(contributions[index, :-1]), kind="stable")[-5:][::-1]
-        output.append(
-            {
-                "symbol": str(row["instrument"]),
-                "selection_effective_rank": int(row["selection_effective_rank"]),
-                "selection_score": float(row["parent_combined_score"]),
-                "advisory_model_rank": int(rank_by_index[index]),
-                "advisory_model_score": float(scores[index]),
-                "is_top5": rank_by_index[index] <= 5,
-                "top_feature_contributions": [
-                    {
-                        "feature": MODEL_FEATURE_COLUMNS[int(feature_index)],
-                        "contribution": float(contributions[index, feature_index]),
-                    }
-                    for feature_index in top_indices
-                ],
-            }
-        )
+        item = {
+            "symbol": str(row["instrument"]),
+            "selection_effective_rank": int(row["selection_effective_rank"]),
+            "selection_score": float(row["parent_combined_score"]),
+            "advisory_model_rank": int(rank_by_index[index]),
+            "advisory_model_score": float(scores[index]),
+            "is_top5": rank_by_index[index] <= 5,
+            "top_feature_contributions": [
+                {
+                    "feature": MODEL_FEATURE_COLUMNS[int(feature_index)],
+                    "contribution": float(contributions[index, feature_index]),
+                }
+                for feature_index in top_indices
+            ],
+        }
+        if score_components[index] is not None:
+            item["score_components"] = score_components[index]
+            item["explanation_policy"] = bundle.manifest["explanation_policy"]
+        output.append(item)
     return sorted(output, key=lambda item: (item["advisory_model_rank"], item["symbol"]))
+
+
+def _runtime_percentile(raw_scores: np.ndarray, features: pd.DataFrame) -> np.ndarray:
+    order = sorted(
+        range(len(features)),
+        key=lambda index: (-raw_scores[index], str(features.iloc[index]["instrument"])),
+    )
+    denominator = max(len(order) - 1, 1)
+    output = np.empty(len(order), dtype=float)
+    for position, index in enumerate(order):
+        output[index] = 1.0 - position / denominator
+    return output
 
 
 def _unavailable_response(
