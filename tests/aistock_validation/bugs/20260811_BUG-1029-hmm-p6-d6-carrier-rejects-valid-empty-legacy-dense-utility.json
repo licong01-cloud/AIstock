@@ -2,7 +2,12 @@
   "actual": "A current-code formal P6 run completed 2096/2096 fits and durably accepted D5 seed 43, but D6 failed at 801011.SI before selected-level construction with 'utility must contain only finite values'. D6-NA-A build_l1_training_series intentionally stores validation_future_utility as an empty legacy dense sentinel when validation_calendar_series v2 is authoritative, while L1TrainingSeries.validate unconditionally calls _finite_array before checking the carrier and rejects the valid sentinel. Fix carrier-v2 validation to use only its compact finite utility authority while preserving strict dense-v1 validation, add direct regression tests, and verify zero-refit from the durable D5 checkpoint/failure without refitting, reselection, threshold changes, semantic-authority changes, model/READY fabrication, DB writes, or runtime actions.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260811_BUG-1029-hmm-p6-d6-carrier-rejects-valid-empty-legacy-dense-utility.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/hmm_risk/state_model_set.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "backend/tests/hmm_risk/test_state_model_set.py",
+    "backend/tests/hmm_risk/test_stock_fact_observation.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1029",
@@ -22,21 +27,50 @@
       "timestamp": "2026-08-11T19:33:40.712572Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/hmm_risk/p6_checkpoint_rerun_20260812_2ae9df85/p6_autocycle_l2_preparation.parent.failure.json#sha256=49acf35353dad821a7378fdaae6af46ef04c504b18711dc63f0667df18d8a44d",
+    "F:/Dev/AIstock_artifacts/hmm_risk/p6_checkpoint_rerun_20260812_2ae9df85/p6_autocycle_l2_preparation.d5.checkpoint.json#receipt_sha256=012f5f93b0d47a8a6e084486fcb47869c7f9b489a7e038fdf764e8c6a3d7d650"
+  ],
+  "expected": "D6 carrier v2 validates its compact masked utility authority while the legacy dense field is a strict empty one-dimensional sentinel; dense-v1 remains finite and aligned. Zero-refit must reach typed D6 acceptance or evidence rejection without fitting or reselection.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/state_model_set.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "backend/services/hmm_risk/state_model_set.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        "hmm_risk_services"
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/state_model_set.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/state_model_set.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py"
+    ]
   },
   "first_seen_at": "2026-08-11T19:33:40.712587Z",
   "fix_branch": null,
@@ -52,7 +86,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Use the immutable BUG-1029 D5 checkpoint and parent failure under F:/Dev/AIstock_artifacts/hmm_risk/p6_checkpoint_rerun_20260812_2ae9df85; zero-refit only, no HMM fit or D5 reselection.",
   "required_verification": [
     "l0",
     "hmm_risk_backend"
@@ -183,5 +217,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
