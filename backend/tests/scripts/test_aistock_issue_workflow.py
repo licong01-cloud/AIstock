@@ -1034,6 +1034,68 @@ def test_validation_receipt_binds_allowlisted_command_to_current_commit(
     assert len(receipt["receipt_id"]) == 16
 
 
+@pytest.mark.parametrize(
+    ("evidence", "expected_kind", "expected_plan"),
+    [
+        ("rtk nox -s guardrail_changed_files -> passed", "nox", "guardrail_changed_files"),
+        (
+            "rtk pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 44 passed",
+            "pytest",
+            None,
+        ),
+    ],
+)
+def test_validation_receipt_accepts_rtk_wrapped_commands(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    evidence: str,
+    expected_kind: str,
+    expected_plan: str | None,
+) -> None:
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "abcdef1234567890abcdef1234567890abcdef12")
+
+    receipts, errors = workflow._build_validation_receipts([evidence], root=isolated_workflow_root)
+
+    assert errors == []
+    assert receipts[0]["evidence_kind"] == expected_kind
+    assert receipts[0]["plan"] == expected_plan
+
+
+def test_finish_changed_files_combines_branch_and_worktree_paths(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow.flow,
+        "changed_files_from_git",
+        lambda base, head: ["scripts/aistock_issue_workflow.py", "AGENTS.md", ".claude/commands/fix-aistock-issue.md"],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_dirty_files",
+        lambda root: ["AGENTS.md", "docs/standards/README.md", "new-untracked.md"],
+    )
+
+    assert workflow._finish_changed_files("origin/main", "HEAD", root=isolated_workflow_root) == [
+        "scripts/aistock_issue_workflow.py",
+        "AGENTS.md",
+        ".claude/commands/fix-aistock-issue.md",
+        "docs/standards/README.md",
+        "new-untracked.md",
+    ]
+
+
+def test_normalize_changed_files_removes_only_explicit_relative_prefix() -> None:
+    assert workflow._normalize_changed_files(
+        ["./scripts/tool.py", ".claude/commands/tool.md", ".codex/skills/tool/SKILL.md", ".github/workflows/test.yml"]
+    ) == [
+        "scripts/tool.py",
+        ".claude/commands/tool.md",
+        ".codex/skills/tool/SKILL.md",
+        ".github/workflows/test.yml",
+    ]
+
+
 def test_validation_receipt_reuse_key_changes_with_identity_inputs(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5784,6 +5846,101 @@ def test_legacy_reservation_compaction_only_removes_durable_statusless_record(
     assert unknown.exists()
 
 
+def test_workflow_policy_sources_are_compact_and_semantically_consistent() -> None:
+    root = workflow.REPO_ROOT
+    standard_path = root / "docs/standards/aistock_development_standard_v1.5_20260523.md"
+    catalog_path = root / "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    quickstart_path = root / "docs/standards/aistock_issue_workflow_quickstart.md"
+    standard = standard_path.read_text(encoding="utf-8")
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    rules = {item["rule_id"]: item for item in catalog["rules"]}
+
+    assert "必须使用 `rtk git`" in standard
+    assert "不把 `doctor` 作为通用前置门禁" in standard
+    assert "同一条用户指令可以明确打包源码合入" in standard
+    assert "禁止再次索要同一授权" in standard
+    assert "裸 `merge` 授权仍只覆盖源码合入" in standard
+    assert rules["TOOL-RTK-001"]["effect"] == "warn"
+    assert rules["TOOL-RTK-001"]["failure_policy"] == "non_blocking_visible_warning"
+    assert rules["ISSUE-BATCH-CONTEXT-001"]["effect"] == "advisory"
+    assert rules["SCRIPT-LOCATION-001"]["effect"] == "warn"
+    assert rules["DOC-LOCATION-001"]["effect"] == "warn"
+    ddl_evidence = rules["PROD-DDL-001"]["checker"]["required_evidence"]
+    assert "authorization_may_be_bundled_with_merge_without_second_prompt" in ddl_evidence
+    assert "immutable_merge_commit_confirmed_before_production_apply" in ddl_evidence
+
+    lane_paths = [
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".codex/skills/aistock-readonly-triage/SKILL.md",
+        ".codex/skills/aistock-docs-handoff/SKILL.md",
+        ".codex/skills/aistock-validation-delegation/SKILL.md",
+        ".codex/skills/verify-aistock-feature/SKILL.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/fix-aistock-issue.md",
+        ".claude/commands/aistock-merge-aftercare.md",
+        ".claude/commands/aistock-readonly-triage.md",
+        ".claude/commands/aistock-docs-handoff.md",
+        ".claude/commands/aistock-validation-delegation.md",
+        ".claude/commands/aistock-feature-workflow.md",
+    ]
+    for relative in lane_paths:
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "TOOL-RTK-001" in text, relative
+        assert "must use RTK" in text, relative
+        assert "never make RTK or telemetry a task/PR/CI gate" in text, relative
+
+    for relative in (
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/fix-aistock-issue.md",
+    ):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "doctor` before repository mutation" not in text
+        assert "Run `python scripts/aistock_issue_workflow.py doctor`" not in text
+
+    for relative in (
+        ".codex/skills/aistock-merge-aftercare/SKILL.md",
+        ".claude/commands/aistock-merge-aftercare.md",
+    ):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "Authorizations are action-scoped, not message-scoped" in text
+        assert "do not ask for the same authorization a second time" in text
+        assert "Bare merge authorization" in text
+        assert "exact named cleanup targets" in text
+        assert "confirm the immutable merge commit first" in text
+
+    quickstart = quickstart_path.read_text(encoding="utf-8")
+    assert len(quickstart.splitlines()) <= 130
+    assert "普通任务直接使用" in quickstart
+    assert "same explicit merge authorization requires" not in quickstart
+    assert "full aftercare loop unless" not in quickstart
+    assert "授权按动作和目标独立，但可以在一条用户指令中打包" in quickstart
+    assert "不再二次询问" in quickstart
+
+    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    assert len(agents.splitlines()) <= 80
+    assert "Architecture Overview" not in agents
+    assert "TOOL-RTK-001" in agents
+    assert "docs/standards/aistock_development_standard_v1.5_20260523.md" in agents
+    assert "Authorizations are action-scoped, not message-scoped" in agents
+    assert "A complete bundle needs no second prompt after merge" in agents
+
+    project_memory = (root / "docs/codex_project_memory.md").read_text(encoding="utf-8")
+    assert "Active Multi-Alpha Strategy Evolution Snapshot" not in project_memory
+    assert "Advisory Research Program Working Memory" not in project_memory
+    assert "never add snapshots here" in project_memory
+    assert "Authorization is action-scoped rather than message-scoped" in project_memory
+    assert "with no second prompt after merge" in project_memory
+
+    ownership = (root / "tests/aistock_validation/catalog/file_ownership.yaml").read_text(encoding="utf-8")
+    assert ".claude/commands/aistock-issue-doctor.md" in ownership
+    assert "docs/standards/aistock_development_standard_v1.5_20260523.md" in workflow.WORKFLOW_RULE_DIGEST_REFS
+    assert "docs/standards/aistock_issue_workflow_quickstart.md" not in workflow.WORKFLOW_RULE_DIGEST_REFS
+
+
 def test_rdagent_release_aftercare_is_part_of_every_client_and_resume_digest() -> None:
     assert ("merge_aftercare", "aistock-merge-aftercare") in workflow.CLIENT_CODEX_SKILLS
     assert ("merge_aftercare", "aistock-merge-aftercare.md") in workflow.CLIENT_CLAUDE_COMMANDS
@@ -5825,6 +5982,45 @@ def test_verification_budget_does_not_require_nightly_without_deferred_plans() -
         "plans": [],
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs",
     }
+    catalog_budget = workflow._verification_budget_for_record(
+        {
+            "title": "Standards catalog synchronization",
+            "description": "Validate the source digest and machine catalog.",
+            "module": "validation",
+            "severity": "P1",
+            "required_verification": ["l0", "validation_catalog_integrity"],
+        }
+    )
+    assert catalog_budget["premerge_required_plans"] == ["l0", "validation_catalog_integrity"]
+    assert catalog_budget["deferred_nightly_verification"]["required"] is False
+
+
+def test_verification_budget_does_not_treat_ddl_policy_wording_as_schema_work() -> None:
+    policy_budget = workflow._verification_budget_for_record(
+        {
+            "title": "Clarify merge and DDL authorization policy",
+            "description": "Workflow standards discuss production migration authorization without changing a database.",
+            "module": "validation",
+            "severity": "P1",
+            "allowed_write_scope": ["docs/standards/aistock_development_standard_v1.5_20260523.md"],
+            "production_ddl_gate": "noop",
+            "required_verification": ["l0"],
+        }
+    )
+    migration_budget = workflow._verification_budget_for_record(
+        {
+            "title": "Apply production DDL migration",
+            "description": "Add a committed migration for the production DB.",
+            "module": "database",
+            "severity": "P2",
+            "allowed_write_scope": ["backend/db/migrations/20260811_add_index.sql"],
+            "production_ddl_gate": "pending",
+            "required_verification": ["l0"],
+        }
+    )
+
+    assert policy_budget["budget"] == "standard"
+    assert migration_budget["budget"] == "deep"
 
 
 def test_verification_budget_requires_nightly_for_explicit_broad_plan() -> None:
@@ -7062,6 +7258,40 @@ def test_merge_finalizer_uses_batch_close_sync_for_multiple_bug_ids(
     assert captured["bug_ids"] == ["BUG-266", "BUG-267"]
     assert captured["create_registry_worktree"] is True
     assert captured["merge_commit"] == "merge123"
+
+
+def test_merge_finalizer_plan_preserves_bundled_cleanup_and_gate_actions() -> None:
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id=["BUG-266", "BUG-267"],
+        issue_json="F:/Dev/task/bug.json",
+        source_pr_url="https://github.example/pull/266",
+        source_branch="bug/BUG-266-workflow",
+        source_worktree="F:/Dev/task worktree",
+        validation_evidence=["rtk nox -s l0 -> passed"],
+        allow_missing_linkage=True,
+        production_gates={
+            "production_ddl_gate": "pending_authorized_apply",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        },
+        sync_root=True,
+        merge_close_sync_pr=True,
+        cleanup=True,
+        apply=False,
+    )
+
+    assert payload["workflow_gate"] == "ready_for_apply"
+    command = payload["next_command"]
+    assert command.count("--bug-id") == 2
+    assert '--source-branch "bug/BUG-266-workflow"' in command
+    assert '--source-worktree "F:/Dev/task worktree"' in command
+    assert '--validation-evidence "rtk nox -s l0 -> passed"' in command
+    assert "--allow-missing-linkage" in command
+    assert "--sync-root" in command
+    assert "--merge-close-sync-pr" in command
+    assert "--cleanup" in command
+    assert '--production-ddl-gate "pending_authorized_apply"' in command
+    assert command.endswith("--apply")
 
 
 def test_merge_finalizer_parser_accepts_repeated_bug_ids() -> None:

@@ -385,7 +385,7 @@ def _guardrail_baseline_json(session: nox.Session) -> str:
 def _l0_changed_files() -> list[str]:
     paths: list[str] = []
     commands = (
-        ("diff", "--name-only", "--diff-filter=ACMRT", "origin/main", "HEAD", "--"),
+        ("diff", "--name-only", "--diff-filter=ACMRT", "origin/main...HEAD", "--"),
         ("diff", "--name-only", "--diff-filter=ACMRT", "--"),
         ("diff", "--cached", "--name-only", "--diff-filter=ACMRT", "--"),
         ("ls-files", "--others", "--exclude-standard"),

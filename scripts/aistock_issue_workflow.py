@@ -108,28 +108,29 @@ RUNTIME_TARGET_CATALOG = REPO_ROOT / "docs" / "standards" / "aistock_runtime_tar
 RUNTIME_IMPACTS = {"none", "frontend", "client", "database", "backend", "worker_scheduler", "unknown"}
 VALIDATION_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
 VALIDATION_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
+RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("nox", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
+    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
     (
         "pytest",
         re.compile(
-            r"^(?:python(?:\.exe)?\s+-m\s+)?pytest\b[^\r\n]*(?:backend[/\\]tests|frontend[/\\]tests|tests)[/\\]\S+",
+            rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?pytest\b[^\r\n]*(?:backend[/\\]tests|frontend[/\\]tests|tests)[/\\]\S+",
             re.IGNORECASE,
         ),
     ),
-    ("ruff", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?ruff\s+check\b", re.IGNORECASE)),
-    ("diff_check", re.compile(r"^git\s+diff\s+--check\b", re.IGNORECASE)),
-    ("compile", re.compile(r"^python(?:\.exe)?\s+-m\s+(?:compileall|py_compile)\b", re.IGNORECASE)),
+    ("ruff", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?ruff\s+check\b", re.IGNORECASE)),
+    ("diff_check", re.compile(rf"^{RTK_COMMAND_PREFIX}git\s+diff\s+--check\b", re.IGNORECASE)),
+    ("compile", re.compile(rf"^{RTK_COMMAND_PREFIX}python(?:\.exe)?\s+-m\s+(?:compileall|py_compile)\b", re.IGNORECASE)),
     (
         "workflow_smoke",
         re.compile(
-            r"^python(?:\.exe)?\s+scripts/aistock_issue_workflow\.py\s+(?:batch-)?workflow-smoke\b",
+            rf"^{RTK_COMMAND_PREFIX}python(?:\.exe)?\s+scripts/aistock_issue_workflow\.py\s+(?:batch-)?workflow-smoke\b",
             re.IGNORECASE,
         ),
     ),
-    ("feature_validation", re.compile(r"^python(?:\.exe)?\s+scripts/aistock_feature_workflow\.py\s+validate\b", re.IGNORECASE)),
-    ("frontend", re.compile(r"^(?:npm|npx)\s+(?:run|exec|test)\b", re.IGNORECASE)),
-    ("go", re.compile(r"^go\s+test\b", re.IGNORECASE)),
+    ("feature_validation", re.compile(rf"^{RTK_COMMAND_PREFIX}python(?:\.exe)?\s+scripts/aistock_feature_workflow\.py\s+validate\b", re.IGNORECASE)),
+    ("frontend", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:npm|npx)\s+(?:run|exec|test)\b", re.IGNORECASE)),
+    ("go", re.compile(rf"^{RTK_COMMAND_PREFIX}go\s+test\b", re.IGNORECASE)),
 )
 FAST_PATH_REGISTRY_PREFIXES = ("tests/aistock_validation/bugs/",)
 FAST_PATH_CATALOG_PREFIXES = ("tests/aistock_validation/catalog/",)
@@ -256,7 +257,12 @@ def _size_and_token_estimate(path: Path) -> dict[str, Any]:
     }
 
 
-LOCAL_PREMERGE_PLAN_KEYS = {"l0", "validation_module_registry_l0", "guardrail_changed_files"}
+LOCAL_PREMERGE_PLAN_KEYS = {
+    "l0",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+}
 BROAD_VALIDATION_PLAN_SUFFIXES = ("_backend", "_ui", "_l2", "_l3")
 BROAD_VALIDATION_PLAN_KEYS = {
     "data_quality_deep",
@@ -399,15 +405,25 @@ def _sha256_tree(path: Path) -> str | None:
 
 
 WORKFLOW_RULE_DIGEST_REFS = (
+    "AGENTS.md",
     ".codex/skills/aistock-task-router/SKILL.md",
     ".codex/skills/fix-aistock-issue/SKILL.md",
     ".codex/skills/aistock-merge-aftercare/SKILL.md",
+    ".codex/skills/aistock-readonly-triage/SKILL.md",
+    ".codex/skills/aistock-docs-handoff/SKILL.md",
+    ".codex/skills/aistock-validation-delegation/SKILL.md",
+    ".codex/skills/verify-aistock-feature/SKILL.md",
     ".claude/commands/aistock-task-router.md",
     ".claude/commands/fix-aistock-issue.md",
     ".claude/commands/aistock-merge-aftercare.md",
+    ".claude/commands/aistock-readonly-triage.md",
+    ".claude/commands/aistock-docs-handoff.md",
+    ".claude/commands/aistock-validation-delegation.md",
+    ".claude/commands/aistock-feature-workflow.md",
     "docs/codex_project_memory.md",
     "docs/standards/README.md",
-    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
 )
 
 
@@ -5350,12 +5366,30 @@ def _verification_budget_for_record(
         str(record.get(key) or "noop") not in {"", "noop"}
         for key in ("production_ddl_gate", "production_backend_dependency_gate", "production_frontend_dependency_gate")
     )
+    scope_files = flow._unique_strings(
+        [
+            *flow._as_list(record.get("allowed_write_scope")),
+            *flow._as_list((record.get("file_scope_contract") or {}).get("scope_files")),
+        ]
+    )
+    normalized_scope = [str(path).replace("\\", "/").lower() for path in scope_files]
+    schema_scope = (
+        module in {"database", "db", "platform.database", "validation.database"}
+        or any(
+            path.endswith(".sql")
+            or "/migrations/" in f"/{path}"
+            or path.startswith(("backend/db/", "scripts/migrations/", "scripts/db/"))
+            for path in normalized_scope
+        )
+    )
     high_risk_modules = {"paper_v2", "strategy_package", "selection_center", "research_assistant", "validation_center"}
     runtime_markers = ("runtime", "order", "cash", "position", "miniqmt", "broker", "ddl", "migration")
     text = _small_text_blob(
         [str(record.get("title") or ""), str(record.get("description") or ""), str(record.get("actual") or ""), str(record.get("expected") or "")]
     ).lower()
-    if has_production_gate or any(marker in text for marker in ("ddl", "migration", "production db")):
+    if has_production_gate or (
+        schema_scope and any(marker in text for marker in ("ddl", "migration", "production db"))
+    ):
         budget = "deep"
         target_pct = "45-60%"
     elif severity in {"P0", "P1"} or module in high_risk_modules or any(marker in text for marker in runtime_markers):
@@ -6582,13 +6616,15 @@ def _build_batch_code_intelligence_summary(
 
 
 def _normalize_changed_files(changed_files: list[str] | None) -> list[str]:
-    return flow._unique_strings(
-        [
-            str(path).replace("\\", "/").lstrip("./")
-            for path in changed_files or []
-            if str(path).strip()
-        ]
-    )
+    normalized: list[str] = []
+    for path in changed_files or []:
+        value = str(path).strip().replace("\\", "/")
+        if not value:
+            continue
+        while value.startswith("./"):
+            value = value[2:]
+        normalized.append(value)
+    return flow._unique_strings(normalized)
 
 
 def _submit_bug_file_root() -> Path:
@@ -6919,27 +6955,27 @@ def build_fast_path_plan(
 def _estimated_fast_path_steps(tier: str, *, has_bug: bool) -> list[str]:
     if tier == "T0":
         return [
-            "doctor once",
+            "conditional doctor only for client/bootstrap/stale-state diagnostics",
             "targeted diff or metadata edit",
             "changed-file lint or l0 only when code/catalog changed",
             "commit and PR evidence",
         ]
     if tier == "T1":
         return [
-            "doctor once",
+            "conditional doctor only for client/bootstrap/stale-state diagnostics",
             "run plan/create worktree and read compact Context Pack",
             "targeted fix within allowed_write_scope",
             "finish plan-only, selected validation, PR automation",
         ]
     if tier == "T2":
         return [
-            "doctor once",
+            "conditional doctor only for client/bootstrap/stale-state diagnostics",
             "run-p0/start-batch when issues share module and validation",
             "shared context/code-intelligence refs",
             "selected module validation plus per-issue evidence",
         ]
     return [
-        "doctor once",
+        "conditional doctor only for client/bootstrap/stale-state diagnostics",
         "design/architecture doc and acceptance matrix",
         "implementation with broader scope review",
         "full required validation and production gates",
@@ -7590,6 +7626,17 @@ def build_start_plan(
     }
 
 
+def _finish_changed_files(base: str, head: str, *, root: Path = REPO_ROOT) -> list[str]:
+    """Combine committed branch changes with the current staged, dirty, and untracked task paths."""
+
+    return _normalize_changed_files(
+        [
+            *flow.changed_files_from_git(base, head),
+            *_dirty_files(root),
+        ]
+    )
+
+
 def build_finish_plan(
     *,
     bug_id: str | None,
@@ -7604,7 +7651,7 @@ def build_finish_plan(
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
-    changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
+    changed = _normalize_changed_files(changed_files) if changed_files is not None else _finish_changed_files(base, head)
     validation = _apply_validation_budget(
         record=record,
         validation=flow.select_validation(changed, module=record.get("module")),
@@ -12507,11 +12554,35 @@ def build_merge_finalizer_plan(
         return payload
     if not apply:
         payload["workflow_gate"] = "ready_for_apply"
-        bug_args = " ".join(f"--bug-id {item}" for item in canonical_bug_ids)
-        payload["next_command"] = (
-            f"python scripts/aistock_issue_workflow.py merge-finalizer {bug_args} "
-            f"--source-pr-url {source_pr_url} --validation-evidence \"<command> -> passed\" --apply"
-        )
+        command_parts = [
+            "python scripts/aistock_issue_workflow.py merge-finalizer",
+            *(f"--bug-id {item}" for item in canonical_bug_ids),
+            f"--source-pr-url {_shell_quote(source_pr_url)}",
+        ]
+        if issue_json:
+            command_parts.append(f"--issue-json {_shell_quote(issue_json)}")
+        if source_branch:
+            command_parts.append(f"--source-branch {_shell_quote(source_branch)}")
+        if source_worktree:
+            command_parts.append(f"--source-worktree {_shell_quote(source_worktree)}")
+        for item in evidence or ["<command> -> passed"]:
+            command_parts.append(f"--validation-evidence {_shell_quote(item)}")
+        if allow_missing_linkage:
+            command_parts.append("--allow-missing-linkage")
+        if sync_root:
+            command_parts.append("--sync-root")
+        if merge_close_sync_pr:
+            command_parts.append("--merge-close-sync-pr")
+        if cleanup:
+            command_parts.append("--cleanup")
+        for key, flag in (
+            ("production_ddl_gate", "--production-ddl-gate"),
+            ("production_frontend_dependency_gate", "--production-frontend-dependency-gate"),
+            ("production_backend_dependency_gate", "--production-backend-dependency-gate"),
+        ):
+            command_parts.append(f"{flag} {_shell_quote(str(payload['production_gates'].get(key) or 'noop'))}")
+        command_parts.append("--apply")
+        payload["next_command"] = " ".join(command_parts)
         return payload
 
     source_pr_check = source_pr_check or _verify_pr_merged(source_pr_url)

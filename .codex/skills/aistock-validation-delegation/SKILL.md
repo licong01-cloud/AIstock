@@ -12,7 +12,7 @@ Use this skill when local Codex validation would become broad, repetitive, or lo
 ## Boundary
 
 - Validation Center, CI and Nightly may manage only explicitly marked runner-owned temporary processes on isolated ports. They must never start, stop or restart a user backend, and delegation never transfers user restart authority.
-- Prefer RTK only in interactive windows when supported; CI runners use the original deterministic commands and do not install or require RTK.
+- Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK; direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure, with one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a task/PR/CI gate. CI runners keep raw deterministic commands.
 - Codex keeps the minimal pre-merge gate: changed-file lint/compile, direct fix-point targeted test or contract smoke, `git diff --check`, scope check, and production gates.
 - Deep validation runs in Validation Center, GitHub CI, or Nightly; Codex does not manually run broad module matrices, UI journeys, or cross-module business-flow suites for every BUG.
 - When a local test fails, Codex should rerun only the failed nodeid or `pytest --lf` before escalating to a broader suite.

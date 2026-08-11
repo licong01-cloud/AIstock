@@ -1177,6 +1177,7 @@ rules:
       - .claude/commands/aistock-merge-aftercare.md
       - .claude/commands/aistock-readonly-triage.md
       - .claude/commands/aistock-validation-delegation.md
+      - .claude/commands/aistock-issue-doctor.md
       - .claude/commands/fix-aistock-issue.md
       - .claude/commands/aistock-feature-workflow.md
     primary_module: docs.standards
