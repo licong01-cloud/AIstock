@@ -1,0 +1,336 @@
+{
+  "actual": "Production ck_miniqmt_event_type/source reject valid K2 values. The same event_id mqrtevt_1ebd108a... was retried about 7 times in 244ms, causing repeated database reads, locks, failed writes and rollbacks until backend shutdown.",
+  "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime/kernel_repository_schema.py",
+    "backend/services/miniqmt_execution_runtime/quote_event_schema.py",
+    "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+    "backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql",
+    "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.sql",
+    "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql",
+    "tests/aistock_validation/bugs/20260811_BUG-1019-p0-miniqmt-kernel-v2-event-check-conflicts-trigger-quote-callback-databa.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1019",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-11T02:36:55.818588Z",
+  "description": "Production ck_miniqmt_event_type/source reject valid K2 values. The same event_id mqrtevt_1ebd108a... was retried about 7 times in 244ms, causing repeated database reads, locks, failed writes and rollbacks until backend shutdown.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260811-78b13244a7d2",
+      "timestamp": "2026-08-11T02:36:55.818584Z"
+    }
+  ],
+  "evidence_uris": [
+    "production pg_constraint readback 2026-08-11 and user log for mqrtevt_1ebd108a76d9087d42e1f36240d56d964f6199abfc2ba9743360248c02923ac0"
+  ],
+  "expected": "The predecessor P1-D schema and KERNEL_V2 schema must have one compatible exact event type/source authority; every valid K2 composite event is writable, invalid combinations remain rejected, schema readiness cannot report a false positive, and deterministic schema failures are surfaced once then retried only on an automatic bounded cadence with peer-runtime isolation.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql",
+      "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.sql",
+      "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql"
+    ],
+    "changed_files": [
+      "backend/services/miniqmt_execution_runtime/kernel_repository_schema.py",
+      "backend/services/miniqmt_execution_runtime/quote_event_schema.py",
+      "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py",
+      "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/miniqmt_execution_runtime/kernel_repository_schema.py",
+        "backend/services/miniqmt_execution_runtime/quote_event_schema.py",
+        "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+        "backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py",
+        "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+        "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql",
+        "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.sql",
+        "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql"
+      ],
+      "impacted_modules": [
+        "miniqmt_execution_runtime",
+        "paper_v2",
+        "simulation_runtime",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/miniqmt_execution_runtime/kernel_repository_schema.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_services"
+        },
+        {
+          "file": "backend/services/miniqmt_execution_runtime/quote_event_schema.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_services"
+        },
+        {
+          "file": "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_runtime_tests"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_kernel_migrations"
+        },
+        {
+          "file": "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.sql",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_kernel_migrations"
+        },
+        {
+          "file": "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql",
+          "impact_modules": [
+            "paper_v2"
+          ],
+          "primary_module": "miniqmt_execution_runtime",
+          "risk_level": "critical",
+          "rule_id": "miniqmt_execution_kernel_migrations"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/miniqmt_execution_runtime/kernel_repository_schema.py",
+        "backend/services/miniqmt_execution_runtime/quote_event_schema.py",
+        "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+        "backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py",
+        "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+        "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+        "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql",
+        "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.sql",
+        "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/miniqmt_execution_runtime/kernel_repository_schema.py",
+      "backend/services/miniqmt_execution_runtime/quote_event_schema.py",
+      "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+      "backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py",
+      "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+      "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+      "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql",
+      "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.sql",
+      "backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql"
+    ]
+  },
+  "first_seen_at": "2026-08-11T02:36:55.818588Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3274,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3274",
+  "last_seen_at": "2026-08-11T02:36:55.818588Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read production pg_constraint for qmt_strategy.execution_runtime_event, then ingest RuntimeEventEnvelopeV2(event_type=SESSION, source=EXCHANGE_SESSION_CLOCK, payload_schema_version=miniqmt_session_event_v1) through KernelIngressCoordinatorV1.",
+  "required_verification": [
+    "l0",
+    "miniqmt_execution_runtime_l2",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "P0 MiniQMT KERNEL_V2 event CHECK conflicts trigger quote-callback database storm",
+  "trigger_condition": {
+    "fingerprint": "78b13244a7d207993d550c8f",
+    "source_event_id": "FE-20260811-78b13244a7d2"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "miniqmt_execution_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "miniqmt_execution_runtime_l2",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "miniqmt_execution_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "miniqmt_execution_runtime_l2",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
