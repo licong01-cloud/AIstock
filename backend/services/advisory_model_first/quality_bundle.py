@@ -12,8 +12,10 @@ from backend.services.advisory_model_first.model_bundle import _read_and_validat
 from backend.services.advisory_model_first.prediction_source import sha256_file
 from backend.services.advisory_model_first.quality_contracts import (
     ENSEMBLE_SCORE_POLICY,
+    QUALITY_BASELINE_NAMES,
     QUALITY_SEEDS,
     SELECTION_PRIOR_POLICY,
+    AdvisoryRerankerQualityTestRequestV1,
     AdvisoryRerankerQualityTrainRequestV1,
     QualityWinnerReceiptV1,
 )
@@ -24,6 +26,7 @@ def publish_quality_model_bundle(
     *,
     model_root: str | Path,
     train_request: AdvisoryRerankerQualityTrainRequestV1,
+    test_request: AdvisoryRerankerQualityTestRequestV1,
     winner_receipt: QualityWinnerReceiptV1,
     test_report_path: str | Path,
 ) -> tuple[str, Path, dict[str, Any]]:
@@ -38,26 +41,95 @@ def publish_quality_model_bundle(
             "M5A winner does not contain the complete five-seed ensemble",
             reason_code="ADVISORY_M5_BUNDLE_INCOMPLETE",
         )
+    frozen_winner_path = Path(test_request.winner_receipt_path)
     if (
         winner_receipt.train_request_id != train_request.request_id
         or winner_receipt.train_request_sha256 != train_request.request_sha256
+        or test_request.train_request_id != train_request.request_id
+        or test_request.train_request_sha256 != train_request.request_sha256
+        or test_request.parent_bundle_id != train_request.parent_bundle_id
+        or test_request.parent_split_sha256 != train_request.parent_split_sha256
+        or test_request.winner_receipt_id != winner_receipt.receipt_id
+        or not frozen_winner_path.is_file()
+        or sha256_file(frozen_winner_path) != test_request.winner_receipt_sha256
     ):
         raise AdvisoryModelFirstError(
-            "M5A winner receipt differs from the frozen train request",
+            "M5A publish inputs differ from the frozen train and winner",
             reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
         )
+    try:
+        frozen_winner = QualityWinnerReceiptV1.model_validate_json(
+            frozen_winner_path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise AdvisoryModelFirstError(
+            "M5A frozen winner receipt cannot be read during publication",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    if frozen_winner != winner_receipt:
+        raise AdvisoryModelFirstError(
+            "M5A publish winner differs from the test request winner artifact",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
+    for artifact_name, descriptor in train_request.parent_artifacts.items():
+        artifact_path = Path(descriptor.path)
+        if not artifact_path.is_file() or sha256_file(artifact_path) != descriptor.sha256:
+            raise AdvisoryModelFirstError(
+                "M5A parent artifact changed before bundle publication",
+                reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+                context={"artifact": artifact_name},
+            )
     parent_bundle_path = Path(train_request.parent_artifacts["training_request.json"].path).parent
     parent_manifest = _read_json(parent_bundle_path / "manifest.json")
-    if parent_manifest.get("bundle_id") != train_request.parent_bundle_id:
+    parent_training_request = _read_json(parent_bundle_path / "training_request.json")
+    expected_parent_identity = {
+        "bundle_id": train_request.parent_bundle_id,
+        "request_id": train_request.parent_request_id,
+        "package_id": train_request.package_id,
+        "manifest_sha256": train_request.manifest_sha256,
+        "style_profile_id": train_request.style_profile_id,
+        "style_profile_hash": train_request.style_profile_hash,
+        "selection_runtime_semantics_hash": train_request.selection_runtime_semantics_hash,
+    }
+    expected_training_identity = {
+        "program_id": train_request.program_id,
+        "binding_version_id": train_request.binding_version_id,
+    }
+    if (
+        {key: parent_manifest.get(key) for key in expected_parent_identity} != expected_parent_identity
+        or {key: parent_training_request.get(key) for key in expected_training_identity}
+        != expected_training_identity
+    ):
         raise AdvisoryModelFirstError(
             "M5A parent bundle differs from the frozen request",
             reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
         )
+    tournament_report_path = Path(winner_receipt.tournament_report_path)
+    if (
+        not tournament_report_path.is_file()
+        or sha256_file(tournament_report_path) != winner_receipt.tournament_report_sha256
+    ):
+        raise AdvisoryModelFirstError(
+            "M5A tournament report changed after winner freeze",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
     test_path = Path(test_report_path)
     test_report = _read_json(test_path)
-    if test_report.get("winner_receipt_sha256") != winner_receipt.receipt_sha256:
+    winner_metrics = test_report.get("winner_metrics")
+    baselines = test_report.get("baselines")
+    if (
+        test_report.get("schema_version") != "advisory_reranker_quality_test_report_v1"
+        or test_report.get("evaluation_id") != test_request.evaluation_id
+        or test_report.get("test_request_sha256") != test_request.request_sha256
+        or test_report.get("winner_receipt_id") != winner_receipt.receipt_id
+        or test_report.get("winner_receipt_sha256") != winner_receipt.receipt_sha256
+        or not isinstance(winner_metrics, dict)
+        or not isinstance(baselines, dict)
+        or not set(QUALITY_BASELINE_NAMES).issubset(baselines)
+    ):
         raise AdvisoryModelFirstError(
-            "M5A test report differs from the frozen winner",
+            "M5A test report differs from the frozen Stage B evaluation",
             reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
         )
 
@@ -95,13 +167,19 @@ def publish_quality_model_bundle(
         feature_schema = _read_json(parent_bundle_path / "feature_schema.json")
         feature_schema["categorical_vocabulary"] = vocabulary
         _write_json(temporary / "feature_schema.json", feature_schema)
-        shutil.copyfile(parent_bundle_path / "fresh_hmm_models.json", temporary / "fresh_hmm_models.json")
+        shutil.copyfile(
+            train_request.parent_artifacts["fresh_hmm_models.json"].path,
+            temporary / "fresh_hmm_models.json",
+        )
         _write_json(
             temporary / "baseline_comparison.json",
             {
-                "schema_version": "advisory_m5_baseline_comparison_v1",
-                "winner_metrics": test_report["winner_metrics"],
-                "baselines": test_report["baselines"],
+                "model_top5": winner_metrics,
+                **baselines,
+                "comparison_context": {
+                    "schema_version": "advisory_m5_baseline_comparison_v1",
+                    "winner_receipt_id": winner_receipt.receipt_id,
+                },
             },
         )
         train_request.write_json(temporary / "quality_train_request.json")
@@ -120,6 +198,8 @@ def publish_quality_model_bundle(
             "calibration_state": "NOT_APPLICABLE_RANKING_SCORE",
             "request_id": train_request.request_id,
             "request_sha256": train_request.request_sha256,
+            "program_id": train_request.program_id,
+            "binding_version_id": train_request.binding_version_id,
             "package_id": train_request.package_id,
             "manifest_sha256": train_request.manifest_sha256,
             "package_asset_closure_hash": parent_manifest["package_asset_closure_hash"],

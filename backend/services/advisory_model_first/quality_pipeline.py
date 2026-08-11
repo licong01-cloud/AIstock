@@ -8,7 +8,7 @@ import platform
 import subprocess
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -41,8 +41,10 @@ from backend.services.strategy_package.runtime_variant import canonical_json_sha
 
 
 PARENT_ARTIFACT_NAMES = (
+    "manifest.json",
     "training_request.json",
     "feature_schema.json",
+    "fresh_hmm_models.json",
     "label_policy.json",
     "split.json",
 )
@@ -144,6 +146,7 @@ def create_quality_train_request(
     root = Path(model_root).resolve()
     bundle_path = root / "bundles" / parent_bundle_id
     manifest = _read_json(bundle_path / "manifest.json")
+    parent_training_request = _read_json(bundle_path / "training_request.json")
     artifacts = {
         name: ParentArtifactDescriptor(
             path=(
@@ -162,6 +165,8 @@ def create_quality_train_request(
         parent_artifacts=artifacts,
         parent_split_sha256=artifacts["split.json"].sha256,
         train_validation_projection=train_validation_projection,
+        program_id=str(parent_training_request["program_id"]),
+        binding_version_id=str(parent_training_request["binding_version_id"]),
         package_id=str(manifest["package_id"]),
         manifest_sha256=str(manifest["manifest_sha256"]),
         style_profile_id=str(manifest["style_profile_id"]),
@@ -179,6 +184,7 @@ def run_quality_stage_a(request_path: str | Path) -> QualityWinnerReceiptV1:
     _verify_training_environment(request)
     _validate_parent_artifacts(request)
     projection = _read_projection(request.train_validation_projection)
+    _validate_projection_request_identity(projection, request=request)
     run_root = Path(request.output_root).resolve() / "quality_runs" / request.request_id
     run_root.mkdir(parents=True, exist_ok=True)
     existing_receipt_path = run_root / "winner_receipt.json"
@@ -186,7 +192,36 @@ def run_quality_stage_a(request_path: str | Path) -> QualityWinnerReceiptV1:
         existing = QualityWinnerReceiptV1.model_validate_json(existing_receipt_path.read_text(encoding="utf-8"))
         _validate_existing_winner(existing, request=request)
         return existing
-    result = run_quality_tournament(projection)
+
+    def report_family_progress(details: dict[str, Any]) -> None:
+        peak_rss_bytes = _peak_rss_bytes()
+        print(
+            json.dumps(
+                {
+                    "event": "M5A_FAMILY_COMPLETED",
+                    "request_id": request.request_id,
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "peak_rss_bytes": peak_rss_bytes,
+                    **details,
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        if peak_rss_bytes > request.resource_max_rss_bytes:
+            raise AdvisoryModelFirstError(
+                "M5A tournament exceeded the frozen RSS limit",
+                reason_code="ADVISORY_MODEL_TRAINING_MEMORY_LIMIT_EXCEEDED",
+                context={
+                    "peak_rss_bytes": peak_rss_bytes,
+                    "limit_bytes": request.resource_max_rss_bytes,
+                    "window_id": details["window_id"],
+                    "family_id": details["family_id"],
+                },
+            )
+
+    result = run_quality_tournament(projection, progress_callback=report_family_progress)
     peak_rss_bytes = _peak_rss_bytes()
     if peak_rss_bytes > request.resource_max_rss_bytes:
         raise AdvisoryModelFirstError(
@@ -307,12 +342,40 @@ def create_quality_test_request(
     )
 
 
+def load_quality_test_projection(
+    *,
+    projection_receipt_path: str | Path,
+    train_request: AdvisoryRerankerQualityTrainRequestV1,
+) -> QualityProjectionDescriptor:
+    payload = _read_json(Path(projection_receipt_path))
+    actual_receipt_sha256 = str(payload.get("receipt_sha256") or "")
+    functional = dict(payload)
+    functional.pop("receipt_sha256", None)
+    if (
+        payload.get("schema_version") != "advisory_reranker_quality_projection_receipt_v1"
+        or actual_receipt_sha256 != canonical_json_sha256(functional)
+        or payload.get("parent_bundle_id") != train_request.parent_bundle_id
+        or payload.get("parent_request_id") != train_request.parent_request_id
+    ):
+        raise AdvisoryModelFirstError(
+            "M5A projection receipt identity is invalid",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
+    train_projection = QualityProjectionDescriptor.model_validate(payload.get("train_validation_projection"))
+    if train_projection != train_request.train_validation_projection:
+        raise AdvisoryModelFirstError(
+            "M5A projection receipt differs from the frozen Stage A input",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
+    return QualityProjectionDescriptor.model_validate(payload.get("test_projection"))
+
+
 def run_quality_stage_b(
     request_path: str | Path,
     *,
     train_request_path: str | Path,
 ) -> dict[str, Any]:
-    started_at = datetime.now(UTC)
+    started_at = datetime.now(timezone.utc)
     started = time.monotonic()
     request = AdvisoryRerankerQualityTestRequestV1.model_validate_json(Path(request_path).read_text(encoding="utf-8"))
     train_request = AdvisoryRerankerQualityTrainRequestV1.model_validate_json(
@@ -347,21 +410,19 @@ def run_quality_stage_b(
     report_path = run_root / "test_report.json"
     if receipt_path.is_file():
         existing = _read_json(receipt_path)
-        if (
-            existing.get("test_request_sha256") != request.request_sha256
-            or existing.get("winner_receipt_sha256") != winner.receipt_sha256
-            or existing.get("status") != "SUCCEEDED"
-            or not report_path.is_file()
-            or sha256_file(report_path) != existing.get("test_report_sha256")
-        ):
-            raise AdvisoryModelFirstError(
-                "M5A test-once receipt conflicts with the requested evaluation",
-                reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
-            )
+        _validate_existing_test_receipt(
+            existing,
+            evaluation_id=request.evaluation_id,
+            test_request_sha256=request.request_sha256,
+            test_input_sha256=request.test_projection.sha256,
+            winner_receipt_sha256=winner.receipt_sha256,
+            report_path=report_path,
+        )
         return {"report": _read_json(report_path), "receipt": existing, "idempotent": True}
     run_root.mkdir(parents=True, exist_ok=True)
 
     test = _read_projection(request.test_projection)
+    _validate_projection_request_identity(test, request=train_request)
     if winner.winner.model_weight == 0.0:
         scored = apply_ensemble_scores(test, score_columns=(), model_weight=0.0)
     else:
@@ -385,6 +446,16 @@ def run_quality_stage_b(
         lift_values,
         seed=int(request.request_sha256[:16], 16),
     )
+    peak_rss_bytes = _peak_rss_bytes()
+    if peak_rss_bytes > train_request.resource_max_rss_bytes:
+        raise AdvisoryModelFirstError(
+            "M5A test evaluation exceeded the frozen RSS limit",
+            reason_code="ADVISORY_MODEL_TRAINING_MEMORY_LIMIT_EXCEEDED",
+            context={
+                "peak_rss_bytes": peak_rss_bytes,
+                "limit_bytes": train_request.resource_max_rss_bytes,
+            },
+        )
     report = {
         "schema_version": "advisory_reranker_quality_test_report_v1",
         "evaluation_id": request.evaluation_id,
@@ -409,13 +480,13 @@ def run_quality_stage_b(
         },
         "top5_by_date": _top5_records(top5),
         "wall_seconds": round(time.monotonic() - started, 3),
-        "peak_rss_bytes": _peak_rss_bytes(),
+        "peak_rss_bytes": peak_rss_bytes,
         "cpu_threads": 4,
         "winner_model_size_bytes": sum(Path(path).stat().st_size for path in winner.winner.member_model_paths),
         "test_projection_size_bytes": Path(request.test_projection.path).stat().st_size,
     }
     _write_json_atomic(report, report_path)
-    finished_at = datetime.now(UTC)
+    finished_at = datetime.now(timezone.utc)
     receipt = {
         "schema_version": "advisory_reranker_quality_test_once_receipt_v1",
         "evaluation_id": request.evaluation_id,
@@ -513,32 +584,38 @@ def _test_baselines(
             reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
         )
     parent = pd.read_parquet(parent_path)
-    expected_keys = set(
-        zip(
-            pd.to_datetime(test["decision_as_of_trade_date"]).dt.normalize(),
-            test["instrument"].astype(str),
-            strict=True,
+    keys = ["decision_as_of_trade_date", "target_trade_date", "instrument"]
+    required_parent_columns = {*keys, "advisory_model_score", "advisory_model_rank"}
+    missing_parent_columns = sorted(required_parent_columns - set(parent.columns))
+    if missing_parent_columns:
+        raise AdvisoryModelFirstError(
+            "M5A parent M1 baseline omits frozen ranking columns",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+            context={"missing_columns": missing_parent_columns},
         )
-    )
-    parent_keys = set(
-        zip(
-            pd.to_datetime(parent["decision_as_of_trade_date"]).dt.normalize(),
-            parent["instrument"].astype(str),
-            strict=True,
-        )
-    )
+    parent = parent.loc[:, [*keys, "advisory_model_score", "advisory_model_rank"]].copy()
+    for date_column in ("decision_as_of_trade_date", "target_trade_date"):
+        parent[date_column] = pd.to_datetime(parent[date_column]).dt.normalize()
+    try:
+        parent_baseline = test.merge(parent, on=keys, how="left", validate="one_to_one")
+    except pd.errors.MergeError as exc:
+        raise AdvisoryModelFirstError(
+            "M5A parent M1 baseline candidate identity is not one-to-one",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+            context={"error_type": type(exc).__name__},
+        ) from exc
     if (
         len(parent) != len(test)
-        or parent.duplicated(["decision_as_of_trade_date", "instrument"]).any()
-        or parent_keys != expected_keys
+        or parent_baseline[["advisory_model_score", "advisory_model_rank"]].isna().any().any()
     ):
         raise AdvisoryModelFirstError(
             "M5A parent M1 baseline candidate identity differs from frozen test",
             reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
         )
-    baseline_frames["current_m1_model_top5"] = parent
+    baseline_frames["current_m1_model_top5"] = parent_baseline
     selection = test.sort_values(["decision_as_of_trade_date", "selection_effective_rank", "instrument"]).copy()
-    selection["advisory_model_rank"] = selection.groupby("decision_as_of_trade_date").cumcount().add(1)
+    selection["advisory_model_rank"] = pd.to_numeric(selection["selection_effective_rank"], errors="raise")
+    selection["advisory_model_score"] = -selection["advisory_model_rank"].astype(float)
     baseline_frames["selection_rank_top5"] = selection
     if "hmm_bull_posterior" in test:
         hmm = (
@@ -550,18 +627,23 @@ def _test_baselines(
             .copy()
         )
         hmm["advisory_model_rank"] = hmm.groupby("decision_as_of_trade_date").cumcount().add(1)
+        hmm["advisory_model_score"] = hmm["hmm_bull_posterior"].astype(float)
         baseline_frames["hmm_top5"] = hmm
     random_groups = []
     for decision, group in test.groupby("decision_as_of_trade_date", sort=True):
         digest = hashlib.sha256(f"{seed}:{pd.Timestamp(decision).date().isoformat()}".encode("ascii")).digest()
         rng = np.random.default_rng(int.from_bytes(digest[:8], "big"))
-        positions = set(rng.choice(len(group), size=min(5, len(group)), replace=False).tolist())
-        item = group.copy()
-        item["advisory_model_rank"] = [1 if index in positions else 6 for index in range(len(group))]
+        item = group.reset_index(drop=True).copy()
+        permutation = rng.permutation(len(item))
+        rank_by_position = np.empty(len(item), dtype=int)
+        rank_by_position[permutation] = np.arange(1, len(item) + 1)
+        item["advisory_model_rank"] = rank_by_position
+        item["advisory_model_score"] = -rank_by_position.astype(float)
         random_groups.append(item)
     baseline_frames["random_top5"] = pd.concat(random_groups, ignore_index=True)
     top20 = test.copy()
     top20["advisory_model_rank"] = 1
+    top20["advisory_model_score"] = 0.0
     baseline_frames["candidate_top20_equal"] = top20
     return {name: evaluate_shortlist(frame, selection_reference=test) for name, frame in baseline_frames.items()}
 
@@ -624,6 +706,57 @@ def _validate_parent_artifacts(request: AdvisoryRerankerQualityTrainRequestV1) -
                 reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
                 context={"artifact": name},
             )
+    manifest = _read_json(Path(request.parent_artifacts["manifest.json"].path))
+    training_request = _read_json(Path(request.parent_artifacts["training_request.json"].path))
+    expected_manifest_identity = {
+        "bundle_id": request.parent_bundle_id,
+        "request_id": request.parent_request_id,
+        "package_id": request.package_id,
+        "manifest_sha256": request.manifest_sha256,
+        "style_profile_id": request.style_profile_id,
+        "style_profile_hash": request.style_profile_hash,
+        "selection_runtime_semantics_hash": request.selection_runtime_semantics_hash,
+    }
+    actual_manifest_identity = {key: manifest.get(key) for key in expected_manifest_identity}
+    expected_training_identity = {
+        "program_id": request.program_id,
+        "binding_version_id": request.binding_version_id,
+    }
+    actual_training_identity = {key: training_request.get(key) for key in expected_training_identity}
+    if actual_manifest_identity != expected_manifest_identity or actual_training_identity != expected_training_identity:
+        raise AdvisoryModelFirstError(
+            "M5A parent authority declarations differ from the frozen request",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+            context={
+                "manifest_identity_matches": actual_manifest_identity == expected_manifest_identity,
+                "training_identity_matches": actual_training_identity == expected_training_identity,
+            },
+        )
+
+
+def _validate_projection_request_identity(
+    frame: pd.DataFrame,
+    *,
+    request: AdvisoryRerankerQualityTrainRequestV1,
+) -> None:
+    expected = {
+        "program_id": request.program_id,
+        "binding_version_id": request.binding_version_id,
+        "package_id": request.package_id,
+        "manifest_sha256": request.manifest_sha256,
+        "selection_runtime_semantics_hash": request.selection_runtime_semantics_hash,
+    }
+    mismatches = {}
+    for column, expected_value in expected.items():
+        actual_values = sorted(frame[column].astype(str).unique().tolist())
+        if actual_values != [expected_value]:
+            mismatches[column] = actual_values[:10]
+    if mismatches:
+        raise AdvisoryModelFirstError(
+            "M5A projection row identity differs from the frozen request",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+            context={"mismatches": mismatches},
+        )
 
 
 def _validate_existing_winner(
@@ -673,6 +806,23 @@ def _verify_training_environment(request: AdvisoryRerankerQualityTrainRequestV1)
             capture_output=True,
             text=True,
         )
+        source_status = subprocess.run(
+            [
+                "git",
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--",
+                "backend/services/advisory_model_first",
+                "scripts/advisory_model_quality_prepare_request.py",
+                "scripts/advisory_model_quality_train_wsl.py",
+                "scripts/wsl/advisory_model_quality_train.py",
+            ],
+            cwd=Path(request.repository_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     except (importlib.metadata.PackageNotFoundError, OSError, subprocess.SubprocessError) as exc:
         raise AdvisoryModelFirstError(
             "M5A training environment identity cannot be resolved",
@@ -680,11 +830,15 @@ def _verify_training_environment(request: AdvisoryRerankerQualityTrainRequestV1)
             context={"error_type": type(exc).__name__},
         ) from exc
     actual_commit = completed.stdout.strip().lower()
+    actual_repository_root = Path(request.repository_root).resolve()
+    executing_repository_root = Path(__file__).resolve().parents[3]
     if (
         platform.system() != "Linux"
         or actual_environment != request.conda_environment
         or actual_lightgbm != request.lightgbm_version
         or actual_commit != request.repository_commit
+        or actual_repository_root != executing_repository_root
+        or bool(source_status.stdout.strip())
     ):
         raise AdvisoryModelFirstError(
             "M5A training environment differs from the frozen request",
@@ -694,7 +848,49 @@ def _verify_training_environment(request: AdvisoryRerankerQualityTrainRequestV1)
                 "conda_environment": actual_environment,
                 "lightgbm_version": actual_lightgbm,
                 "repository_commit": actual_commit,
+                "repository_identity_matches": actual_repository_root == executing_repository_root,
+                "relevant_source_dirty": bool(source_status.stdout.strip()),
             },
+        )
+
+
+def _validate_existing_test_receipt(
+    receipt: dict[str, Any],
+    *,
+    evaluation_id: str,
+    test_request_sha256: str,
+    test_input_sha256: str,
+    winner_receipt_sha256: str,
+    report_path: Path,
+) -> None:
+    actual_receipt_sha256 = str(receipt.get("receipt_sha256") or "")
+    functional = dict(receipt)
+    functional.pop("receipt_sha256", None)
+    if (
+        receipt.get("schema_version") != "advisory_reranker_quality_test_once_receipt_v1"
+        or actual_receipt_sha256 != canonical_json_sha256(functional)
+        or receipt.get("evaluation_id") != evaluation_id
+        or receipt.get("test_request_sha256") != test_request_sha256
+        or receipt.get("test_input_sha256") != test_input_sha256
+        or receipt.get("winner_receipt_sha256") != winner_receipt_sha256
+        or receipt.get("status") != "SUCCEEDED"
+        or not report_path.is_file()
+        or sha256_file(report_path) != receipt.get("test_report_sha256")
+    ):
+        raise AdvisoryModelFirstError(
+            "M5A test-once receipt conflicts with the requested evaluation",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
+    report = _read_json(report_path)
+    if (
+        report.get("schema_version") != "advisory_reranker_quality_test_report_v1"
+        or report.get("evaluation_id") != evaluation_id
+        or report.get("test_request_sha256") != test_request_sha256
+        or report.get("winner_receipt_sha256") != winner_receipt_sha256
+    ):
+        raise AdvisoryModelFirstError(
+            "M5A test report identity conflicts with the test-once receipt",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
         )
 
 

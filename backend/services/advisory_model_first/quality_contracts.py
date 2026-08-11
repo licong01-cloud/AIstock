@@ -17,6 +17,13 @@ QUALITY_FAMILIES = (
     "REGRESSION_L1_UTILITY5",
 )
 QUALITY_MODEL_WEIGHTS = (0.25, 0.5, 0.75, 1.0)
+QUALITY_BASELINE_NAMES = (
+    "current_m1_model_top5",
+    "selection_rank_top5",
+    "hmm_top5",
+    "random_top5",
+    "candidate_top20_equal",
+)
 ENSEMBLE_SCORE_POLICY = "PERCENTILE_RANK_MEAN_V1"
 SELECTION_PRIOR_POLICY = "SELECTION_EFFECTIVE_RANK_PERCENTILE_V1"
 TEST_ONCE_POLICY = "WINNER_FROZEN_BEFORE_TEST_READ_V1"
@@ -74,6 +81,8 @@ class AdvisoryRerankerQualityTrainRequestV1(BaseModel):
     parent_artifacts: dict[str, ParentArtifactDescriptor]
     parent_split_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     train_validation_projection: QualityProjectionDescriptor
+    program_id: str = Field(min_length=1)
+    binding_version_id: str = Field(min_length=1)
     package_id: str
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     style_profile_id: str
@@ -82,7 +91,7 @@ class AdvisoryRerankerQualityTrainRequestV1(BaseModel):
     repository_root: str
     repository_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     conda_environment: Literal["rdagent-gpu"] = "rdagent-gpu"
-    lightgbm_version: str
+    lightgbm_version: str = Field(min_length=1)
     trial_matrix: QualityTrialMatrix = QualityTrialMatrix()
     ensemble_score_policy: Literal["PERCENTILE_RANK_MEAN_V1"] = ENSEMBLE_SCORE_POLICY
     selection_prior_policy: Literal["SELECTION_EFFECTIVE_RANK_PERCENTILE_V1"] = SELECTION_PRIOR_POLICY
@@ -97,13 +106,27 @@ class AdvisoryRerankerQualityTrainRequestV1(BaseModel):
         if self.request_sha256 != expected or self.request_id != f"advm5train_{expected[:24]}":
             raise ValueError("M5A train request identity mismatch")
         required_parent = {
+            "manifest.json",
             "training_request.json",
             "feature_schema.json",
+            "fresh_hmm_models.json",
             "label_policy.json",
             "split.json",
         }
         if set(self.parent_artifacts) != required_parent:
             raise ValueError("M5A parent artifact set is incomplete")
+        artifact_parents = {Path(descriptor.path).parent for descriptor in self.parent_artifacts.values()}
+        if (
+            len(artifact_parents) != 1
+            or next(iter(artifact_parents)).name != self.parent_bundle_id
+            or any(
+                Path(descriptor.path).name != artifact_name
+                for artifact_name, descriptor in self.parent_artifacts.items()
+            )
+        ):
+            raise ValueError("M5A parent artifacts do not share the exact parent bundle path")
+        if self.parent_split_sha256 != self.parent_artifacts["split.json"].sha256:
+            raise ValueError("M5A parent split hash differs from its artifact descriptor")
         return self
 
     def functional_payload(self) -> dict[str, Any]:
@@ -132,9 +155,22 @@ class QualityWinnerCandidate(BaseModel):
 
     @model_validator(mode="after")
     def validate_candidate(self) -> "QualityWinnerCandidate":
+        required_metrics = {
+            "mean_daily_top5_excess_return_5",
+            "median_daily_top5_excess_return_5",
+            "excess_hit_rate",
+            "shortlist_turnover",
+        }
+        if not required_metrics.issubset(self.validation_metrics):
+            raise ValueError("M5A winner validation metrics are incomplete")
+        if self.model_weight not in (0.0, *QUALITY_MODEL_WEIGHTS):
+            raise ValueError("M5A winner model weight differs from the frozen matrix")
         if self.model_weight == 0.0:
             if (
                 self.candidate_id != "SELECTION_PRIOR_ONLY"
+                or self.window_id != "SELECTION_PRIOR_ONLY"
+                or self.family_id != "SELECTION_PRIOR_ONLY"
+                or self.seeds
                 or self.member_model_paths
                 or self.member_model_sha256
                 or self.categorical_vocabulary_path is not None
@@ -149,6 +185,9 @@ class QualityWinnerCandidate(BaseModel):
             or len(self.member_model_sha256) != len(QUALITY_SEEDS)
             or not self.categorical_vocabulary_path
             or not self.categorical_vocabulary_sha256
+            or self.candidate_id != f"{self.window_id}__{self.family_id}__MW_{self.model_weight:.2f}"
+            or len(set(self.member_model_paths)) != len(QUALITY_SEEDS)
+            or any(not _is_sha256(value) for value in self.member_model_sha256)
         ):
             raise ValueError("model winner is not a complete frozen five-seed candidate")
         return self
@@ -298,3 +337,7 @@ def _write_model(model: BaseModel, path: str | Path) -> None:
     temporary = target.with_suffix(target.suffix + ".tmp")
     temporary.write_text(model.model_dump_json(indent=2), encoding="utf-8")
     temporary.replace(target)
+
+
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)

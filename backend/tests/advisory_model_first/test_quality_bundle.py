@@ -18,8 +18,11 @@ from backend.services.advisory_model_first.prediction_source import sha256_file
 from backend.services.advisory_model_first.quality_bundle import publish_quality_model_bundle
 from backend.services.advisory_model_first.quality_contracts import (
     QUALITY_SEEDS,
+    QUALITY_BASELINE_NAMES,
+    ParentArtifactDescriptor,
     QualityProjectionDescriptor,
     QualityWinnerCandidate,
+    build_quality_test_request,
     build_winner_receipt,
 )
 from backend.services.advisory_model_first.quality_pipeline import create_quality_train_request
@@ -86,7 +89,12 @@ def test_v2_bundle_publishes_and_exact_loader_reads_all_five_members(tmp_path: P
         member_model_sha256=tuple(model_hashes),
         categorical_vocabulary_path=str(vocabulary),
         categorical_vocabulary_sha256=sha256_file(vocabulary),
-        validation_metrics={"mean_daily_top5_excess_return_5": 0.01},
+        validation_metrics={
+            "mean_daily_top5_excess_return_5": 0.01,
+            "median_daily_top5_excess_return_5": 0.01,
+            "excess_hit_rate": 0.6,
+            "shortlist_turnover": 0.5,
+        },
     )
     winner = build_winner_receipt(
         train_request_id=train.request_id,
@@ -98,13 +106,47 @@ def test_v2_bundle_publishes_and_exact_loader_reads_all_five_members(tmp_path: P
     )
     winner_path = run / "winner_receipt.json"
     winner.write_json(winner_path)
+    parent_predictions = run / "parent_test_predictions.parquet"
+    parent_predictions.write_bytes(b"parent-predictions")
+    test_request = build_quality_test_request(
+        output_root=str(tmp_path),
+        train_request_id=train.request_id,
+        train_request_sha256=train.request_sha256,
+        parent_bundle_id=train.parent_bundle_id,
+        parent_split_sha256=train.parent_split_sha256,
+        winner_receipt_path=str(winner_path),
+        winner_receipt_sha256=sha256_file(winner_path),
+        winner_receipt_id=winner.receipt_id,
+        test_projection=QualityProjectionDescriptor(
+            path="/projection/test.parquet",
+            sha256="b" * 64,
+            row_count=5,
+            date_start="2026-03-11",
+            date_end="2026-06-30",
+            split_names=("test",),
+        ),
+        parent_test_predictions=ParentArtifactDescriptor(
+            path=str(parent_predictions),
+            sha256=sha256_file(parent_predictions),
+        ),
+    )
     test_report = run / "test_report.json"
     test_report.write_text(
         json.dumps(
             {
+                "schema_version": "advisory_reranker_quality_test_report_v1",
+                "evaluation_id": test_request.evaluation_id,
+                "test_request_sha256": test_request.request_sha256,
+                "winner_receipt_id": winner.receipt_id,
                 "winner_receipt_sha256": winner.receipt_sha256,
-                "winner_metrics": {"mean_daily_top5_excess_return_5": 0.01},
-                "baselines": {"selection_rank_top5": {"mean_daily_top5_excess_return_5": 0.0}},
+                "winner_metrics": {
+                    "mean_daily_top5_excess_return_5": 0.01,
+                    "mean_excess_return_5": 0.01,
+                },
+                "baselines": {
+                    name: {"mean_daily_top5_excess_return_5": 0.0}
+                    for name in QUALITY_BASELINE_NAMES
+                },
             }
         ),
         encoding="utf-8",
@@ -113,6 +155,7 @@ def test_v2_bundle_publishes_and_exact_loader_reads_all_five_members(tmp_path: P
     bundle_id, _path, manifest = publish_quality_model_bundle(
         model_root=tmp_path / "published",
         train_request=train,
+        test_request=test_request,
         winner_receipt=winner,
         test_report_path=test_report,
     )
@@ -128,6 +171,21 @@ def test_v2_bundle_publishes_and_exact_loader_reads_all_five_members(tmp_path: P
     )
     assert loaded.booster is None
     assert len(loaded.boosters) == 5
+    assert loaded.baselines["model_top5"]["mean_daily_top5_excess_return_5"] == 0.01
+    assert loaded.baselines["model_top5"]["mean_excess_return_5"] == 0.01
+    assert "selection_rank_top5" in loaded.baselines
+    tampered_report = json.loads(test_report.read_text(encoding="utf-8"))
+    tampered_report["evaluation_id"] = "different-evaluation"
+    test_report.write_text(json.dumps(tampered_report), encoding="utf-8")
+    with pytest.raises(AdvisoryModelFirstError) as report_error:
+        publish_quality_model_bundle(
+            model_root=tmp_path / "published",
+            train_request=train,
+            test_request=test_request,
+            winner_receipt=winner,
+            test_report_path=test_report,
+        )
+    assert report_error.value.reason_code == "ADVISORY_M5_INPUT_IDENTITY_MISMATCH"
     member_path = loaded.bundle_path / f"model_seed_{QUALITY_SEEDS[0]}.txt"
     member_path.write_text("tampered", encoding="utf-8")
     with pytest.raises(AdvisoryModelFirstError) as raised:
@@ -165,8 +223,12 @@ def _parent_root(tmp_path: Path) -> Path:
         "decision_clock_version": "decision-clock-v1",
     }
     (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    for name in ("training_request.json", "label_policy.json", "split.json"):
+    for name in ("label_policy.json", "split.json"):
         (bundle / name).write_text(json.dumps({"name": name}), encoding="utf-8")
+    (bundle / "training_request.json").write_text(
+        json.dumps({"program_id": "program", "binding_version_id": "binding"}),
+        encoding="utf-8",
+    )
     (bundle / "feature_schema.json").write_text(
         json.dumps(
             {

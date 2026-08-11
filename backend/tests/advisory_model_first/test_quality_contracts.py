@@ -27,20 +27,30 @@ def _descriptor() -> QualityProjectionDescriptor:
 
 
 def _values() -> dict[str, object]:
+    parent_bundle_id = "9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629"
     return {
         "output_root": "/out/a",
-        "parent_bundle_id": "9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629",
+        "parent_bundle_id": parent_bundle_id,
         "parent_request_id": "parent-request",
         "parent_artifacts": {
-            name: {"path": f"/bundle/{name}", "sha256": character * 64}
+            name: {"path": f"/bundle/{parent_bundle_id}/{name}", "sha256": character * 64}
             for name, character in zip(
-                ("training_request.json", "feature_schema.json", "label_policy.json", "split.json"),
-                "cdef",
+                (
+                    "manifest.json",
+                    "training_request.json",
+                    "feature_schema.json",
+                    "fresh_hmm_models.json",
+                    "label_policy.json",
+                    "split.json",
+                ),
+                "cde56f",
                 strict=True,
             )
         },
         "parent_split_sha256": "f" * 64,
         "train_validation_projection": _descriptor(),
+        "program_id": "program",
+        "binding_version_id": "binding",
         "package_id": "pkg",
         "manifest_sha256": "1" * 64,
         "style_profile_id": "style",

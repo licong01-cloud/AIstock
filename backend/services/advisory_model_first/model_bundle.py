@@ -6,7 +6,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -15,6 +15,7 @@ from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.feature_schema_v1 import FEATURE_SCHEMA_HASH, FEATURE_SCHEMA_PAYLOAD
 from backend.services.advisory_model_first.quality_contracts import (
     ENSEMBLE_SCORE_POLICY,
+    QUALITY_BASELINE_NAMES,
     QUALITY_SEEDS,
     SELECTION_PRIOR_POLICY,
 )
@@ -219,7 +220,7 @@ def publish_shadow_binding(
         "feature_schema_hash": manifest["feature_schema_hash"],
         "bundle_id": bundle_id,
         "bundle_manifest_sha256": _sha256_file(manifest_path),
-        "activated_at": activated_at or datetime.now(UTC).isoformat(),
+        "activated_at": activated_at or datetime.now(timezone.utc).isoformat(),
     }
     payload["binding_sha256"] = canonical_json_sha256(payload)
     target = shadow_binding_path(
@@ -461,6 +462,9 @@ def _read_and_validate_bundle(
             or manifest.get("ensemble_score_policy") != ENSEMBLE_SCORE_POLICY
             or manifest.get("selection_prior_policy") != SELECTION_PRIOR_POLICY
             or manifest.get("explanation_policy") != "MODEL_MEMBER_RAW_CONTRIBUTION_MEAN_V1"
+            or manifest.get("calibration_state") != "NOT_APPLICABLE_RANKING_SCORE"
+            or not str(manifest.get("program_id") or "").strip()
+            or not str(manifest.get("binding_version_id") or "").strip()
             or not _valid_m5_model_weight(manifest.get("model_weight"))
         ):
             raise AdvisoryModelFirstError(
@@ -512,6 +516,15 @@ def _read_and_validate_bundle(
         )
     hmm_models = _read_json(bundle_path / "fresh_hmm_models.json", reason="fresh HMM bundle cannot be read")
     baselines = _read_json(bundle_path / "baseline_comparison.json", reason="baseline report cannot be read")
+    if schema_version == "advisory_model_bundle_v2" and (
+        not {"model_top5", "comparison_context", *QUALITY_BASELINE_NAMES}.issubset(baselines)
+        or not isinstance(baselines.get("model_top5"), dict)
+        or not isinstance(baselines.get("comparison_context"), dict)
+    ):
+        raise AdvisoryModelFirstError(
+            "M5A baseline comparison contract is incomplete",
+            reason_code="ADVISORY_M5_BUNDLE_INCOMPLETE",
+        )
     return manifest, feature_schema, hmm_models, baselines
 
 

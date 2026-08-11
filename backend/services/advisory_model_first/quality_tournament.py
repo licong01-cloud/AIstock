@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -38,7 +38,11 @@ class TournamentResult:
     winning_family: TrainedFamilyCandidate | None
 
 
-def run_quality_tournament(frame: pd.DataFrame) -> TournamentResult:
+def run_quality_tournament(
+    frame: pd.DataFrame,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> TournamentResult:
     prepared = validate_quality_projection(frame, allowed_splits=("train", "validation"))
     trained: list[TrainedFamilyCandidate] = []
     rows: list[dict[str, Any]] = []
@@ -50,6 +54,15 @@ def run_quality_tournament(frame: pd.DataFrame) -> TournamentResult:
                 family_id=family_id,
             )
             trained.append(candidate)
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "window_id": window_id,
+                        "family_id": family_id,
+                        "seed_count": len(candidate.seeds),
+                        "best_iterations": [int(history["best_iteration"]) for history in candidate.evaluation_history],
+                    }
+                )
             for model_weight in QUALITY_MODEL_WEIGHTS:
                 scored = apply_ensemble_scores(
                     candidate.validation_predictions,
@@ -83,7 +96,12 @@ def run_quality_tournament(frame: pd.DataFrame) -> TournamentResult:
         **evaluate_shortlist(prior),
     }
     all_rows = [*rows, prior_row]
-    winner = sorted(all_rows, key=_winner_sort_key)[0]
+    best_model = sorted(rows, key=_winner_sort_key)[0]
+    winner = (
+        prior_row
+        if float(prior_row["mean_daily_top5_excess_return_5"]) >= float(best_model["mean_daily_top5_excess_return_5"])
+        else best_model
+    )
     winning_family = next(
         (item for item in trained if item.window_id == winner["window_id"] and item.family_id == winner["family_id"]),
         None,
@@ -241,8 +259,14 @@ def validate_quality_projection(
         "decision_as_of_trade_date",
         "target_trade_date",
         "instrument",
+        "program_id",
+        "binding_version_id",
+        "package_id",
+        "manifest_sha256",
+        "selection_runtime_semantics_hash",
         "split",
         "selection_effective_rank",
+        "candidate_group_size",
         "parent_combined_score",
         "relevance",
         "utility_5",
@@ -260,8 +284,78 @@ def validate_quality_projection(
             context={"missing_columns": missing},
         )
     result = frame.copy()
-    result["decision_as_of_trade_date"] = pd.to_datetime(result["decision_as_of_trade_date"]).dt.normalize()
-    result["target_trade_date"] = pd.to_datetime(result["target_trade_date"]).dt.normalize()
+    try:
+        result["decision_as_of_trade_date"] = pd.to_datetime(
+            result["decision_as_of_trade_date"], errors="raise"
+        ).dt.normalize()
+        result["target_trade_date"] = pd.to_datetime(result["target_trade_date"], errors="raise").dt.normalize()
+    except (TypeError, ValueError) as exc:
+        raise AdvisoryModelFirstError(
+            "M5A projection contains an invalid date",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    if (
+        result[["decision_as_of_trade_date", "target_trade_date"]].isna().any().any()
+        or (result["target_trade_date"] <= result["decision_as_of_trade_date"]).any()
+    ):
+        raise AdvisoryModelFirstError(
+            "M5A projection date identity is incomplete or non-forward",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
+    identity_columns = (
+        "instrument",
+        "program_id",
+        "binding_version_id",
+        "package_id",
+        "manifest_sha256",
+        "selection_runtime_semantics_hash",
+    )
+    if any(result[column].isna().any() or (result[column].astype(str).str.strip() == "").any() for column in identity_columns):
+        raise AdvisoryModelFirstError(
+            "M5A projection contains an empty row identity",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
+    numeric_columns = (
+        "selection_effective_rank",
+        "candidate_group_size",
+        "relevance",
+        "utility_5",
+        "stock_net_return_5",
+        "excess_return_5",
+        "path_mfe_5",
+        "path_mae_loss_5",
+    )
+    try:
+        numeric_values = result.loc[:, numeric_columns].apply(pd.to_numeric, errors="raise")
+    except (TypeError, ValueError) as exc:
+        raise AdvisoryModelFirstError(
+            "M5A projection contains a non-numeric target or candidate identity",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+            context={"error_type": type(exc).__name__},
+        ) from exc
+    if not np.isfinite(numeric_values.to_numpy(dtype=float)).all():
+        raise AdvisoryModelFirstError(
+            "M5A projection contains a non-finite target or candidate identity",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
+    result.loc[:, numeric_columns] = numeric_values
+    rank = numeric_values["selection_effective_rank"]
+    group_size = numeric_values["candidate_group_size"]
+    relevance = numeric_values["relevance"]
+    if (
+        (rank < 1).any()
+        or (rank % 1 != 0).any()
+        or (group_size < rank).any()
+        or (group_size % 1 != 0).any()
+        or (relevance < 0).any()
+        or (relevance > 4).any()
+        or (relevance % 1 != 0).any()
+    ):
+        raise AdvisoryModelFirstError(
+            "M5A projection rank, group size, or relevance identity is invalid",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
     actual_splits = tuple(sorted(result["split"].astype(str).unique().tolist()))
     if set(actual_splits) != set(allowed_splits):
         raise AdvisoryModelFirstError(
@@ -280,6 +374,16 @@ def validate_quality_projection(
     if duplicates.any():
         raise AdvisoryModelFirstError(
             "M5A projection contains duplicate candidate identities",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
+    rank_duplicates = result.duplicated(
+        ["decision_as_of_trade_date", "selection_effective_rank"], keep=False
+    )
+    group_size_versions = result.groupby("decision_as_of_trade_date")["candidate_group_size"].transform("nunique")
+    observed_group_size = result.groupby("decision_as_of_trade_date")["instrument"].transform("size")
+    if rank_duplicates.any() or (group_size_versions != 1).any() or (result["candidate_group_size"] < observed_group_size).any():
+        raise AdvisoryModelFirstError(
+            "M5A projection candidate group identity is inconsistent",
             reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
         )
     for split_name in allowed_splits:
@@ -310,6 +414,13 @@ def prepare_model_matrix(
                     reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
                     context={"feature": column, "error_type": type(exc).__name__},
                 ) from exc
+            finite = matrix[column].dropna().to_numpy(dtype=float)
+            if not np.isfinite(finite).all():
+                raise AdvisoryModelFirstError(
+                    "M5A frozen feature contains a non-finite value",
+                    reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+                    context={"feature": column},
+                )
     all_null = (
         [column for column in MODEL_FEATURE_COLUMNS if matrix.loc[train_mask, column].isna().all()]
         if validate_all_null_train
@@ -332,10 +443,12 @@ def prepare_model_matrix(
                 reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
                 context={"feature": column},
             )
-        matrix[column] = pd.Categorical(
-            pd.to_numeric(matrix[column], errors="coerce"),
-            categories=vocabulary[column],
-        )
+        numeric = pd.to_numeric(matrix[column], errors="coerce")
+        unseen = numeric.notna() & ~numeric.isin(vocabulary[column])
+        missing_indicator = f"{column}__missing"
+        if unseen.any() and missing_indicator in matrix:
+            matrix.loc[unseen, missing_indicator] = 1
+        matrix[column] = pd.Categorical(numeric.mask(unseen), categories=vocabulary[column])
     return matrix, vocabulary
 
 
@@ -351,10 +464,22 @@ def apply_ensemble_scores(
             reason_code="ADVISORY_M5_RUNTIME_POLICY_MISMATCH",
         )
     result = frame.copy().reset_index(drop=True)
-    group_size = result.groupby("decision_as_of_trade_date")["instrument"].transform("size").astype(float)
-    result["selection_prior"] = (
-        group_size - pd.to_numeric(result["selection_effective_rank"], errors="raise")
-    ) / np.maximum(group_size - 1.0, 1.0)
+    group_size = pd.to_numeric(result["candidate_group_size"], errors="raise").astype(float)
+    group_size_identity_count = result.groupby("decision_as_of_trade_date")["candidate_group_size"].transform("nunique")
+    observed_group_size = result.groupby("decision_as_of_trade_date")["instrument"].transform("size").astype(float)
+    selection_rank = pd.to_numeric(result["selection_effective_rank"], errors="raise").astype(float)
+    if (
+        (group_size_identity_count != 1).any()
+        or (group_size < observed_group_size).any()
+        or (group_size < 1).any()
+        or (selection_rank < 1).any()
+        or (selection_rank > group_size).any()
+    ):
+        raise AdvisoryModelFirstError(
+            "M5A candidate group identity is inconsistent with frozen selection ranks",
+            reason_code="ADVISORY_M5_INPUT_IDENTITY_MISMATCH",
+        )
+    result["selection_prior"] = (group_size - selection_rank) / np.maximum(group_size - 1.0, 1.0)
     if model_weight > 0.0:
         if len(score_columns) != len(QUALITY_SEEDS) or any(column not in result for column in score_columns):
             raise AdvisoryModelFirstError(
@@ -408,12 +533,19 @@ def evaluate_shortlist(
         ndcg_values.append(_dcg(actual["relevance"].to_numpy(dtype=int)[:5]) / ideal_dcg if ideal_dcg else 0.0)
     raw_columns = [column for column in scored if column.startswith("raw_score_")]
     spearman = _ranking_stability(scored, raw_columns)
+    expected_date_count = int(
+        selection_source["decision_as_of_trade_date"].nunique()
+    )
     return {
+        "status": "available",
         "mean_daily_top5_excess_return_5": float(daily.mean()),
         "median_daily_top5_excess_return_5": float(daily.median()),
         "mean_stock_net_return_5": float(top5["stock_net_return_5"].mean()),
+        "mean_excess_return_5": float(top5["excess_return_5"].mean()),
         "absolute_hit_rate": float((top5["stock_net_return_5"] > 0).mean()),
         "excess_hit_rate": float((top5["excess_return_5"] > 0).mean()),
+        "mean_path_mfe_5": float(top5["path_mfe_5"].mean()),
+        "mean_path_mae_loss_5": float(top5["path_mae_loss_5"].mean()),
         "date_level_ndcg_at_5": float(np.mean(ndcg_values)),
         "shortlist_turnover": _shortlist_turnover(top5),
         "seed_spearman_mean": spearman[0],
@@ -422,6 +554,7 @@ def evaluate_shortlist(
         "median_daily_lift_vs_selection_rank": float((aligned["model"] - aligned["selection"]).median()),
         "date_count": int(daily.size),
         "row_count": int(len(top5)),
+        "modelable_date_coverage": float(daily.size / max(expected_date_count, 1)),
     }
 
 

@@ -384,8 +384,7 @@ class AdvisoryModelShadowService:
             )
         except Exception as exc:
             LOGGER.exception(
-                "advisory price-range shadow failed unexpectedly program_id=%s "
-                "target_trade_date=%s elapsed_ms=%d",
+                "advisory price-range shadow failed unexpectedly program_id=%s target_trade_date=%s elapsed_ms=%d",
                 program_id,
                 target_trade_date.isoformat(),
                 round((time.monotonic() - started) * 1000),
@@ -466,8 +465,7 @@ class AdvisoryModelShadowService:
             return unavailable_outcome_envelope(reason_code=exc.reason_code, message=str(exc))
         except Exception as exc:
             LOGGER.exception(
-                "advisory outcome shadow failed unexpectedly program_id=%s target_trade_date=%s "
-                "elapsed_ms=%d",
+                "advisory outcome shadow failed unexpectedly program_id=%s target_trade_date=%s elapsed_ms=%d",
                 program_id,
                 target_trade_date.isoformat(),
                 round((time.monotonic() - started) * 1000),
@@ -477,8 +475,7 @@ class AdvisoryModelShadowService:
                 message=f"unexpected outcome inference failure: {type(exc).__name__}",
             )
         LOGGER.info(
-            "advisory outcome shadow completed program_id=%s target_trade_date=%s "
-            "candidate_count=%d elapsed_ms=%d",
+            "advisory outcome shadow completed program_id=%s target_trade_date=%s candidate_count=%d elapsed_ms=%d",
             program_id,
             target_trade_date.isoformat(),
             len(ordered),
@@ -652,11 +649,18 @@ def _candidate_frame(
             reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
             context={"target_count": target_count},
         )
-    selected = sorted((row for row in rows if int(row.rank) <= target_count), key=lambda row: (int(row.rank), row.symbol))
+    selected = sorted(
+        (row for row in rows if int(row.rank) <= target_count), key=lambda row: (int(row.rank), row.symbol)
+    )
     expected_ranks = list(range(1, len(selected) + 1))
     actual_ranks = [int(row.rank) for row in selected]
     symbols = [str(row.symbol).upper() for row in selected]
-    if not selected or len(selected) > target_count or actual_ranks != expected_ranks or len(set(symbols)) != len(symbols):
+    if (
+        not selected
+        or len(selected) > target_count
+        or actual_ranks != expected_ranks
+        or len(set(symbols)) != len(symbols)
+    ):
         raise AdvisoryModelFirstError(
             "persisted Selection candidate group is incomplete or non-contiguous",
             reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
@@ -694,9 +698,7 @@ def _candidate_frame(
             float(legs[leg_id]["normalized_score"]) * float(terminal_weights[leg_id])
             for leg_id in (LSTM_LEG_ID, FUND_LEG_ID)
         )
-        if not np.isfinite(weighted_score) or not np.isclose(
-            float(row.score), weighted_score, rtol=0.0, atol=1e-8
-        ):
+        if not np.isfinite(weighted_score) or not np.isclose(float(row.score), weighted_score, rtol=0.0, atol=1e-8):
             raise AdvisoryModelFirstError(
                 "persisted Selection score differs from the frozen Alpha-leg combination",
                 reason_code="ADVISORY_MODEL_RUNTIME_SEMANTICS_MISMATCH",
@@ -792,9 +794,23 @@ def _score(bundle: LoadedAdvisoryModelBundle, features: pd.DataFrame) -> list[di
     else:
         percentile_scores = np.column_stack([_runtime_percentile(raw, features) for raw in raw_scores])
         ensemble_scores = percentile_scores.mean(axis=1)
-        group_size = len(features)
+        declared_group_sizes = pd.to_numeric(features["candidate_group_size"], errors="raise").to_numpy(dtype=float)
+        if (
+            len(set(declared_group_sizes.tolist())) != 1
+            or declared_group_sizes[0] < len(features)
+            or declared_group_sizes[0] < 1
+        ):
+            raise AdvisoryModelFirstError(
+                "M5A runtime candidate group identity is invalid",
+                reason_code="ADVISORY_M5_RUNTIME_POLICY_MISMATCH",
+            )
         selection_ranks = pd.to_numeric(features["selection_effective_rank"], errors="raise").to_numpy(dtype=float)
-        selection_prior = (group_size - selection_ranks) / max(group_size - 1, 1)
+        if (selection_ranks < 1).any() or (selection_ranks > declared_group_sizes).any():
+            raise AdvisoryModelFirstError(
+                "M5A runtime selection rank is outside the frozen candidate group",
+                reason_code="ADVISORY_M5_RUNTIME_POLICY_MISMATCH",
+            )
+        selection_prior = (declared_group_sizes - selection_ranks) / np.maximum(declared_group_sizes - 1.0, 1.0)
         model_weight = float(bundle.manifest["model_weight"])
         scores = model_weight * ensemble_scores + (1.0 - model_weight) * selection_prior
         contributions = np.mean(np.stack(raw_contributions, axis=0), axis=0) * model_weight

@@ -257,7 +257,7 @@ entry-gap q10/q90使用同样的validation-only coverage adjustment。entry-exec
 - `ADVISORY_M5_BUNDLE_INCOMPLETE`
 - `ADVISORY_M5_RUNTIME_POLICY_MISMATCH`
 
-训练CLI以非零退出并写结构化failure receipt；后台日志只记录request/trial/winner/reason/耗时/RSS，不输出逐行特征或无价值循环日志。在线候选级错误进入现有model-shadow子信封；共同bundle/identity错误使M5 reranker unavailable，但不阻断规则荐股或M3/M4。
+训练CLI以非零退出并写结构化failure receipt；`rdagent-gpu` 当前 Python 3.10 是必须兼容的真实运行环境，不得使用仅 Python 3.11+ 可导入的标准库符号。后台日志只记录request/trial/winner/reason/耗时/RSS，不输出逐行特征或无价值循环日志。在线候选级错误进入现有model-shadow子信封；共同bundle/identity错误使M5 reranker unavailable，但不阻断规则荐股或M3/M4。
 
 ## 13. 计划代码范围
 
@@ -270,6 +270,7 @@ M5A允许修改：
 - `backend/services/advisory_model_first/model_bundle.py`
 - `backend/services/advisory_model_first/model_inference.py`
 - `backend/services/advisory_model_first/runtime_bundle.py`
+- `frontend/src/lib/api/advisory.ts` 中父重排模型 calibration state 的 v2 类型扩展
 - `scripts/advisory_model_quality_prepare_request.py`
 - `scripts/advisory_model_quality_train_wsl.py`
 - `scripts/wsl/advisory_model_quality_train.py`
@@ -317,7 +318,7 @@ M5A允许修改：
 | F-365 | v2 bundle包含五个模型、完整hash、融合策略、tournament和test身份，原子发布/readback |
 | F-366 | runtime显式支持v1/v2且exact package/style绑定；v2失败不降级或跨包套用 |
 | F-367 | test报告与M1相同基线和经济指标，负结果完整保留，bootstrap不成为隐藏门禁 |
-| F-368 | WSL真实训练峰值RSS<8GB并在小时级完成，不新建缓存/证据平台 |
+| F-368 | WSL执行器完整支持45-trial矩阵、Python 3.10、RSS/耗时记录和非零失败；合入前以真实五种子smoke验证可执行性，不新建缓存/证据平台；完整正式训练属于§14.7合入后运行任务 |
 | F-369 | Selection、StrategyPackage、Paper、模拟盘、QE、Historical Range和数据库零写入 |
 | F-370 | 无简化版、静默错误、业务语义漂移、角色审批、二次准入或未经确认门禁 |
 | F-371 | M5B校准和M5C coverage调整不进入M5A首批代码，entry executable负例不足不伪造校准 |
@@ -332,9 +333,9 @@ M5A允许修改：
 | F-363 | `backend/services/advisory_model_first/quality_contracts.py` dual request, `backend/services/advisory_model_first/quality_pipeline.py` Stage A/B and test-once receipt | `backend/tests/advisory_model_first/test_quality_contracts.py::test_test_request_cannot_be_created_before_winner_receipt_exists`, `backend/tests/advisory_model_first/test_quality_pipeline.py::test_stage_a_exact_retry_reuses_frozen_winner_without_retraining` | implemented_local_verified | none |
 | F-364 | `backend/services/advisory_model_first/quality_contracts.py::QualityWinnerReceiptV1`, prior-only Stage B and publish refusal | `backend/tests/advisory_model_first/test_quality_contracts.py`, `backend/tests/advisory_model_first/test_quality_bundle.py` | implemented_local_verified | none |
 | F-365 | `backend/services/advisory_model_first/quality_bundle.py`, `backend/services/advisory_model_first/model_bundle.py` explicit v2 validation/load | `backend/tests/advisory_model_first/test_quality_bundle.py` | implemented_local_verified | none |
-| F-366 | `backend/services/advisory_model_first/model_bundle.py`, `backend/services/advisory_model_first/model_inference.py` explicit v1/v2 paths | `backend/tests/advisory_model_first/test_quality_scoring.py`, `backend/tests/advisory_model_first/test_model_inference.py`, `backend/tests/advisory_model_first/test_review_regressions.py` | implemented_local_verified | none |
+| F-366 | `backend/services/advisory_model_first/model_bundle.py`, `backend/services/advisory_model_first/model_inference.py` explicit v1/v2 paths; `frontend/src/lib/api/advisory.ts` v2 calibration type | `backend/tests/advisory_model_first/test_quality_scoring.py`, `backend/tests/advisory_model_first/test_model_inference.py`, `backend/tests/advisory_model_first/test_review_regressions.py` | implemented_local_verified | none |
 | F-367 | `backend/services/advisory_model_first/quality_pipeline.py` test report, current M1/selection/HMM/random/Top20 baselines and moving-block bootstrap | `backend/tests/advisory_model_first/test_quality_pipeline.py::test_moving_block_bootstrap_is_deterministic_for_frozen_seed`; command `python -m nox -s advisory_modeling_backend` | implemented_local_verified | none |
-| F-368 | `scripts/advisory_model_quality_prepare_request.py`, `scripts/advisory_model_quality_train_wsl.py`, `scripts/wsl/advisory_model_quality_train.py` | `backend/tests/advisory_model_first/test_quality_tournament.py`; artifact target `F:/Dev/AIstock_model_artifacts/advisory_model_first/quality_runs/<request_id>/winner_receipt.json` | implemented_local_verified | none |
+| F-368 | `scripts/advisory_model_quality_prepare_request.py`, `scripts/advisory_model_quality_train_wsl.py`, `scripts/wsl/advisory_model_quality_train.py` | `backend/tests/advisory_model_first/test_quality_tournament.py::test_tournament_executes_all_45_boosters_and_all_fusion_weights`；`rdagent-gpu` Python 3.10真实五种子单家族smoke：4957 train/validation rows、1599 test rows、80 test dates、5 non-empty boosters、五类baseline完整 | implemented_local_verified | none |
 | F-369 | Advisory-only changed files; no protected module or DB diff | `backend/tests/advisory_model_first/test_quality_boundaries.py`; command `python scripts/aistock_module_ownership_scan.py --changed-only --fail-on-unmapped --fail-on-ambiguous` | verified | none |
 | F-370 | DESIGN-COMPLIANCE-001 source review | command `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md --tier F2`; command `python -m nox -s advisory_modeling_backend` | implemented_local_verified | none |
 | F-371 | M5A-only source; no M5B/M5C implementation/import | `backend/tests/advisory_model_first/test_quality_boundaries.py`; command `python scripts/aistock_module_ownership_scan.py --changed-only --fail-on-unmapped --fail-on-ambiguous` | verified | none |

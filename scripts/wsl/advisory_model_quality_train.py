@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -74,7 +74,7 @@ def _write_failure_receipt(args: argparse.Namespace, error: dict[str, object]) -
             "schema_version": "advisory_reranker_quality_failure_receipt_v1",
             "stage": args.command,
             "identity": identity,
-            "failed_at": datetime.now(UTC).isoformat(),
+            "failed_at": datetime.now(timezone.utc).isoformat(),
             **error,
         }
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
@@ -110,11 +110,11 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
     from backend.services.advisory_model_first.quality_contracts import (
         AdvisoryRerankerQualityTestRequestV1,
         AdvisoryRerankerQualityTrainRequestV1,
-        QualityProjectionDescriptor,
         QualityWinnerReceiptV1,
     )
     from backend.services.advisory_model_first.quality_pipeline import (
         create_quality_test_request,
+        load_quality_test_projection,
         run_quality_stage_a,
         run_quality_stage_b,
     )
@@ -126,8 +126,10 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         train = AdvisoryRerankerQualityTrainRequestV1.model_validate_json(
             Path(args.train_request).read_text(encoding="utf-8")
         )
-        projection_receipt = json.loads(Path(args.projection_receipt).read_text(encoding="utf-8"))
-        test_projection = QualityProjectionDescriptor.model_validate(projection_receipt["test_projection"])
+        test_projection = load_quality_test_projection(
+            projection_receipt_path=args.projection_receipt,
+            train_request=train,
+        )
         winner_receipt = args.winner_receipt or str(
             Path(train.output_root) / "quality_runs" / train.request_id / "winner_receipt.json"
         )
@@ -163,6 +165,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
     bundle_id, bundle_path, _manifest = publish_quality_model_bundle(
         model_root=args.model_root,
         train_request=train,
+        test_request=test_request,
         winner_receipt=winner,
         test_report_path=test_report,
     )
