@@ -33,7 +33,7 @@
   ],
   "assigned_agent": "codex_app",
   "bug_id": "BUG-1017",
-  "closed_at": null,
+  "closed_at": "2026-08-11T04:46:31Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -41,6 +41,13 @@
   ],
   "created_at": "2026-08-10T19:14:48.756580Z",
   "description": "Current entrypoints contradict the sole standard and cause repeated diagnostics, unnecessary gates, excessive context, misleading changed-file scans, and inconsistent RTK use between windows.",
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: changes are limited to workflow policy, guardrail semantics, finalizer argument preservation, and direct tests",
+    "no_silent_error": "passed: incomplete authorization or failed per-action preconditions remain visible as noop, pending, or blocked states",
+    "no_simplified_delivery": "passed: sole standard, machine catalog, AGENTS, memory, quickstart, Codex/Claude lanes, finalizer behavior, and semantic tests are synchronized",
+    "no_unrequested_gate_or_approval": "passed: no new control was added; bundled action-scoped authorization removes duplicate prompts while bare merge remains bounded",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -491,8 +498,15 @@
   },
   "first_seen_at": "2026-08-10T19:14:48.756580Z",
   "fix_branch": "bug/BUG-1017-workflow-standards-consistency-20260811",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fc9c004972d516a82cd8525bcd85a7d34be1b746",
+  "fixed_at": "2026-08-11T04:46:31Z",
+  "gate_inventory": {
+    "advisory": 2,
+    "block": 19,
+    "note": "Controls are conditional by scope and enforcement phase; only applicable block controls are gates for a given task. This change adds no control.",
+    "total_controls": 29,
+    "warn": 8
+  },
   "github_issue_number": 3270,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3270",
   "last_seen_at": "2026-08-11T03:28:17.641306Z",
@@ -500,6 +514,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3276",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -516,6 +531,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "client",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -523,7 +540,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -531,20 +548,6 @@
   "trigger_condition": {
     "fingerprint": "617edbfe69747d121c22a0d1",
     "source_event_id": "FE-20260810-617edbfe6974"
-  },
-  "design_compliance_review": {
-    "no_business_semantic_drift": "passed: changes are limited to workflow policy, guardrail semantics, finalizer argument preservation, and direct tests",
-    "no_silent_error": "passed: incomplete authorization or failed per-action preconditions remain visible as noop, pending, or blocked states",
-    "no_simplified_delivery": "passed: sole standard, machine catalog, AGENTS, memory, quickstart, Codex/Claude lanes, finalizer behavior, and semantic tests are synchronized",
-    "no_unrequested_gate_or_approval": "passed: no new control was added; bundled action-scoped authorization removes duplicate prompts while bare merge remains bounded",
-    "schema_version": "aistock_design_compliance_review_v1"
-  },
-  "gate_inventory": {
-    "advisory": 2,
-    "block": 19,
-    "total_controls": 29,
-    "warn": 8,
-    "note": "Controls are conditional by scope and enforcement phase; only applicable block controls are gates for a given task. This change adds no control."
   },
   "validation_evidence": [
     "rtk pytest targeted workflow semantic/finalizer/budget tests -> passed",
@@ -554,7 +557,13 @@
     "rtk nox -s validation_module_registry_l0 -> 8 passed, mapped=14/14",
     "rtk nox -s guardrail_changed_files -- --changed-only -> blocking=0, mapped=29/29",
     "python -m py_compile scripts/aistock_issue_workflow.py scripts/aistock_guardrail_scan.py -> passed",
-    "rtk git diff --check -> passed"
+    "rtk git diff --check -> passed",
+    "python -m pytest targeted workflow consistency nodeids and scanner/nox files -q -> 52 passed",
+    "rtk nox -s l0 -> passed; findings=0; blocking=0",
+    "rtk nox -s validation_catalog_integrity -> 7 passed; findings=0",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership=14/14",
+    "rtk nox -s guardrail_changed_files -- --changed-only -> passed; blocking=0; ownership=28/28",
+    "GitHub PR #3276 CI verdict -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
