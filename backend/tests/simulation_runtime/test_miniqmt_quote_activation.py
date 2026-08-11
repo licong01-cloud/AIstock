@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -2852,20 +2853,26 @@ activation = module.build_miniqmt_quote_ingress_activation_from_env(
     environ={"MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED": "false"},
     schema_gate_reader=lambda: "pending",
 )
+health = activation.health()
 source_path = Path(module.__file__).resolve()
 print(json.dumps({
     "pid": os.getpid(),
     "source_path": str(source_path),
     "source_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
-    "kernel_product_runtimes": activation.health()["kernel_product_runtimes"],
-    "status": activation.health()["status"],
+    "kernel_product_runtimes": health["kernel_product_runtimes"],
+    "status": health["status"],
 }, sort_keys=True))
 """
+    child_env = dict(os.environ)
+    child_env["MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED"] = "false"
+    child_env["ENABLE_SIMULATION_RUNTIME_PRODUCTION_PROVIDER"] = "false"
+    child_env["SIMULATION_RUNTIME_CONTEXT_PROVIDER"] = ""
     completed = subprocess.run(
         [sys.executable, "-c", code],
         cwd=repo_root,
         check=True,
         capture_output=True,
+        env=child_env,
         text=True,
         timeout=30,
     )

@@ -246,8 +246,8 @@
     ]
   },
   "first_seen_at": "2026-08-11T02:36:55.818588Z",
-  "fix_branch": null,
-  "fix_commit": null,
+  "fix_branch": "bug/BUG-1019-p0-miniqmt-kernel-v2-event-check-conflicts-trigg-20260811",
+  "fix_commit": "5d480713b41eb538f5073dc1b8d200780fa9f02b",
   "fixed_at": null,
   "github_issue_number": 3274,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3274",
@@ -272,7 +272,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "fresh_process_evidence": [
-      "rtk pytest backend/tests/simulation_runtime/test_miniqmt_quote_activation.py::test_fresh_process_imports_current_activation_source_with_empty_process_local_retry_state -q -> 1 passed; independent Python subprocess imported tracked miniqmt_quote_activation.py SHA-256 7e41c49ad75cce2ec5b5c46d3fecf6546ce62c4ed7306f92021a3b92a7eb491a and read back empty process-local runtime/retry state with status DRAINING"
+      "rtk pytest backend/tests/simulation_runtime/test_miniqmt_quote_activation.py::test_fresh_process_imports_current_activation_source_with_empty_process_local_retry_state -q -> 1 passed; independent Python subprocess explicitly disabled global runtime activation, imported tracked miniqmt_quote_activation.py SHA-256 1802202b0ab81175f595717165a5ab28a85039cb6e59d553161fb92106782366 without database access, and read back empty process-local runtime/retry state with status DRAINING"
     ],
     "persistence_basis": "git_tracked_source",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
@@ -296,18 +296,22 @@
     "fingerprint": "78b13244a7d207993d550c8f",
     "source_event_id": "FE-20260811-78b13244a7d2"
   },
+  "validation_evidence": [
+    "AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 rtk pytest backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py -k event_contract -q -> 11 passed on guarded disposable DEV PostgreSQL schemas",
+    "rtk nox -s l0 -> passed, blocking=0",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14 mapped, unmapped=0, ambiguous=0",
+    "rtk nox -s miniqmt_execution_runtime_l2 -> 1434 passed, 81 skipped",
+    "rtk nox -s simulation_core_l2 -> 590 passed, 1 skipped",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2 -> 112/112 passed, warnings=0",
+    "independent frozen-code review -> P0=0, P1=0, P2=0; direct activation=85, quote ingress=68, B0 seven-file=54, product integration=46, scheduler=293 passed/1 skipped",
+    "optional quote-evidence shared DEV repository rerun blocked before writes because aistock_dev has no qmt_strategy schema; earlier guarded disposable DEV repository matrix=19 passed remains the direct repository receipt"
+  ],
   "verification_budget": {
-    "budget": "standard",
+    "budget": "deep",
     "deferred_nightly_verification": {
-      "modules": [
-        "miniqmt_execution_runtime",
-        "simulation_core"
-      ],
-      "plans": [
-        "miniqmt_execution_runtime_l2",
-        "simulation_core_l2"
-      ],
-      "required": true,
+      "modules": [],
+      "plans": [],
+      "required": false,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -337,7 +341,9 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "validation_module_registry_l0",
+      "miniqmt_execution_runtime_l2",
+      "simulation_core_l2"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -356,17 +362,11 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "standard",
+      "budget": "deep",
       "deferred_nightly_verification": {
-        "modules": [
-          "miniqmt_execution_runtime",
-          "simulation_core"
-        ],
-        "plans": [
-          "miniqmt_execution_runtime_l2",
-          "simulation_core_l2"
-        ],
-        "required": true,
+        "modules": [],
+        "plans": [],
+        "required": false,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
@@ -396,7 +396,9 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0"
+        "validation_module_registry_l0",
+        "miniqmt_execution_runtime_l2",
+        "simulation_core_l2"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
