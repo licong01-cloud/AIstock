@@ -39,7 +39,12 @@ from .qe_workspace_client import (
 
 
 DEFAULT_WSL_NODE_ID = "wsl2-5080"
-WSL_HARD_CAPACITY = 2
+NONCANONICAL_LOCAL_WSL_NODE_ALIASES = frozenset({"wsl", "local"})
+# One local WSL training slot is the host-responsiveness contract.  A single
+# GeneralPTNN Loop can own a large dataset/GPU working set; cross-task overlap
+# previously drove Windows into memory compression and paging stalls.  Remote
+# CPU execution remains independently parallel.
+WSL_HARD_CAPACITY = 1
 REMOTE_HARD_CAPACITY = 4
 DEFAULT_RESERVATION_LEASE_SECONDS = 120
 _PROCESS_SUBMISSION_OWNER_ID = (
@@ -140,17 +145,30 @@ class QEActiveExecutionCapacityService:
                 "QE node hard capacities must be positive",
                 reason_code="qe_execution_capacity_contract_invalid",
             )
-        self._wsl_node_id = str(wsl_node_id).strip()
+        self._wsl_node_id = str(wsl_node_id).strip().casefold()
         self._wsl_hard_capacity = int(wsl_hard_capacity)
         self._remote_hard_capacity = int(remote_hard_capacity)
 
-    def resolve_node_capacity(self, node_id: str, requested_limit: int | None = None) -> int:
+    def canonical_node_id(self, node_id: str) -> str:
         normalized_node_id = str(node_id or "").strip()
         if not normalized_node_id:
             raise QEWorkspaceSubmissionCoordinatorError(
                 "QE node identity must not be empty",
                 reason_code="qe_execution_capacity_node_invalid",
             )
+        folded = normalized_node_id.casefold()
+        if folded in NONCANONICAL_LOCAL_WSL_NODE_ALIASES:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "local WSL capacity requires the canonical node identity",
+                reason_code="qe_execution_capacity_node_alias_noncanonical",
+                context={"node_id": normalized_node_id, "canonical_node_id": self._wsl_node_id},
+            )
+        if folded == self._wsl_node_id:
+            return self._wsl_node_id
+        return normalized_node_id
+
+    def resolve_node_capacity(self, node_id: str, requested_limit: int | None = None) -> int:
+        normalized_node_id = self.canonical_node_id(node_id)
         hard_cap = (
             self._wsl_hard_capacity
             if normalized_node_id == self._wsl_node_id
@@ -892,8 +910,9 @@ class QEWorkspaceSubmissionCoordinator:
             source.node_id,
             source.requested_node_capacity,
         )
+        capacity_node_id = self._capacity_service.canonical_node_id(source.node_id)
         spec = QEExecutionReservationSpec(
-            node_id=source.node_id,
+            node_id=capacity_node_id,
             source_kind=source.source_kind,
             source_execution_id=source.source_execution_id,
             qe_task_id=payload.task_id,
@@ -901,7 +920,7 @@ class QEWorkspaceSubmissionCoordinator:
             submission_intent_hash=source.submission_intent_hash,
         )
         queue_only_diagnostics = self._capacity_service.queue_only_diagnostics(
-            source.node_id
+            capacity_node_id
         )
         if queue_only_diagnostics:
             queued = self._repository.record_queue_only_wait_if_unreserved(

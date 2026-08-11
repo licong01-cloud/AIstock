@@ -68,6 +68,13 @@ _REMOVED_GATS_RESOURCE_OPTIONS = {
 }
 _CUDA_EXPANDABLE_SEGMENTS_ENV = "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 _CPU_ONLY_QE_NODE_IDS = {"rdagent-node1"}
+_LOCAL_WSL_QE_NODE_IDS = {"wsl2-5080"}
+_LOCAL_WSL_THREAD_ENV = (
+    "export OMP_NUM_THREADS=4",
+    "export MKL_NUM_THREADS=4",
+    "export OPENBLAS_NUM_THREADS=4",
+    "export NUMEXPR_NUM_THREADS=4",
+)
 _GENERAL_PTNN_LTR_HP_KEYS = {
     "ltr_loss_mode",
     "topk_train_k",
@@ -106,6 +113,37 @@ def _requires_qe_custom_loaders(
 def _is_gpu_qe_node(node_id: Optional[str]) -> bool:
     normalized = str(node_id or "").strip().lower()
     return normalized not in _CPU_ONLY_QE_NODE_IDS
+
+
+def _is_local_wsl_qe_node(node_id: Optional[str]) -> bool:
+    """Treat the legacy/unspecified composer target as the local WSL node."""
+
+    normalized = str(node_id or "").strip().lower()
+    return not normalized or normalized in _LOCAL_WSL_QE_NODE_IDS
+
+
+def _quote_qe_shell_path(value: Any, *, field_name: str) -> str:
+    """Quote one Linux path and reject control characters before shell use."""
+
+    text = str(value or "")
+    if not text or any(char in text for char in ("\x00", "\r", "\n")):
+        raise ValueError(
+            "reason_code=qe_shell_path_invalid: "
+            f"{field_name} must be a non-empty single-line path"
+        )
+    return shlex.quote(text)
+
+
+def _qe_subprocess_credential_scrub_command() -> str:
+    """Load the shared scrub helper after ConfigComposer initialization.
+
+    ``multi_alpha.__init__`` imports ConfigComposer for compatibility exports,
+    so a module-level reverse import would create an initialization cycle.
+    """
+
+    from ..multi_alpha.qe_subprocess_env import qe_subprocess_credential_scrub_command
+
+    return qe_subprocess_credential_scrub_command()
 
 
 def _coerce_optional_json_object(value: Any, *, field_name: str, reason_code: str) -> Optional[Dict[str, Any]]:
@@ -671,7 +709,7 @@ class ConfigComposer:
                 node_id=node_id,
             )
 
-        remote_node = bool(node_id and node_id != "wsl2-5080")
+        remote_node = not _is_local_wsl_qe_node(node_id)
         callback_base_configured = any(
             (os.getenv(name) or "").strip()
             for name in (
@@ -2085,6 +2123,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             execution_algo=execution_algo,
             execution_algo_params=execution_algo_params,
+            node_id=node_id,
             initial_cash=(strategy_params or {}).get("initial_cash"),
         )
         experiment_files["conf.yaml"] = conf_yaml
@@ -2996,6 +3035,7 @@ class ConfigComposer:
         execution_algo: Optional[str] = None,  # None/"TWAP" → TailTWAPWithLimitStrategy | "CLOSE_PRICE" → CloseExecutionStrategy
         execution_algo_params: Optional[Dict[str, Any]] = None,
         initial_cash: Optional[int] = None,  # 初始资金，None → 100000000
+        node_id: Optional[str] = None,
     ) -> str:
         """生成QLib conf.yaml内容。
 
@@ -3014,6 +3054,7 @@ class ConfigComposer:
         model_type_tag = None  # "TimeSeries" | "Tabular" | None
         model_dataset_cls = "DatasetH"
         model_step_len: Optional[int] = None
+        local_wsl_host_safe = _is_local_wsl_qe_node(node_id)
 
         if model_info:
             model_type = (model_info.get("model_type") or "").upper()
@@ -3052,15 +3093,21 @@ class ConfigComposer:
                     "weight_decay": float(thp.get("weight_decay", 1e-4)) if isinstance(thp.get("weight_decay", 1e-4), str) else thp.get("weight_decay", 1e-4),
                     "metric": "loss",
                     "loss": "mse",
-                    "n_jobs": 2,
+                    "n_jobs": 0 if local_wsl_host_safe else 2,
                     "GPU": 0,
                     "use_amp": False,
                     "gradient_accumulation_steps": 1,
-                    "pin_memory": True,
-                    "prefetch_factor": 2,
+                    "pin_memory": not local_wsl_host_safe,
                     "persistent_workers": False,
                     "pt_model_uri": "model.model_cls",
                 }
+                if not local_wsl_host_safe:
+                    model_kwargs["prefetch_factor"] = 2
+                for loader_key in ("n_jobs", "pin_memory", "prefetch_factor", "persistent_workers"):
+                    if loader_key in thp:
+                        # Preserve the request long enough for the authoritative
+                        # local-WSL contract below to accept it or fail closed.
+                        model_kwargs[loader_key] = thp[loader_key]
                 if str(thp.get("ltr_loss_mode", "mse")) != "mse" or thp.get("loss") == "approx_ndcg_at_k":
                     model_kwargs.update(
                         {
@@ -3246,9 +3293,16 @@ class ConfigComposer:
                     "weight_decay": 1e-4,
                     "metric": "loss",
                     "loss": "mse",
-                    "n_jobs": 2,
+                    "n_jobs": 0 if local_wsl_host_safe else 2,
                     "GPU": 0,
                 }
+                if local_wsl_host_safe:
+                    model_kwargs.update(
+                        {
+                            "pin_memory": False,
+                            "persistent_workers": False,
+                        }
+                    )
 
                 training_hp = model_info.get("model_training_hyperparameters")
                 if training_hp:
@@ -3581,6 +3635,34 @@ class ConfigComposer:
             if set(custom_params.keys()) - set(filtered_params.keys()):
                 logger.info(f"策略参数过滤: 移除非策略参数 {set(custom_params.keys()) - set(filtered_params.keys())}")
             strategy_kwargs.update(filtered_params)
+
+        if model_class in _GENERAL_PTNN_MODEL_CLASSES and local_wsl_host_safe:
+            try:
+                normalized_n_jobs = int(model_kwargs.get("n_jobs", 0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "reason_code=qe_wsl_host_resource_override_unsafe: GeneralPTNN n_jobs must be 0 on local WSL"
+                ) from exc
+            unsafe_loader_options = {
+                "n_jobs": model_kwargs.get("n_jobs") if normalized_n_jobs != 0 else None,
+                "pin_memory": model_kwargs.get("pin_memory") if _bool_param(model_kwargs.get("pin_memory", False)) else None,
+                "persistent_workers": (
+                    model_kwargs.get("persistent_workers")
+                    if _bool_param(model_kwargs.get("persistent_workers", False))
+                    else None
+                ),
+                "prefetch_factor": model_kwargs.get("prefetch_factor"),
+            }
+            unsafe_loader_options = {key: value for key, value in unsafe_loader_options.items() if value is not None}
+            if unsafe_loader_options:
+                raise ValueError(
+                    "reason_code=qe_wsl_host_resource_override_unsafe: "
+                    f"unsupported_options={sorted(unsafe_loader_options)}"
+                )
+            model_kwargs["n_jobs"] = 0
+            model_kwargs["pin_memory"] = False
+            model_kwargs["persistent_workers"] = False
+            model_kwargs.pop("prefetch_factor", None)
 
         model_name_for_ltr = str((model_info or {}).get("model_name") or (model_info or {}).get("model_id") or model_class)
         model_class, model_module, model_kwargs = _finalize_general_ptnn_ltr_routing(
@@ -5384,7 +5466,10 @@ class ConfigComposer:
         # Every generated workspace may contain QE-owned runtime modules such as
         # the long-horizon label maturity processor.  Keep the workspace import
         # path explicit instead of relying on the launcher's current directory.
-        env_lines.append(f'export PYTHONPATH="{wsl_path}:${{QLIB_RDAGENT_ROOT_WSL:-.}}:$PYTHONPATH"')
+        quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
+        env_lines.append(
+            f'export PYTHONPATH={quoted_wsl_path}:"${{QLIB_RDAGENT_ROOT_WSL:-.}}:${{PYTHONPATH:-}}"'
+        )
 
         if use_custom_model and model_type_tag:
             if model_type_tag == "TimeSeries":
@@ -5441,13 +5526,17 @@ class ConfigComposer:
                     "QE backtest factor_cache_dir must point to official factor_values cache root or its single subdirectory"
                 )
             # 远端节点：直接使用配置的绝对路径
-            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_dir}"')
+            env_lines.append(
+                f"export FACTOR_CACHE_DIR={_quote_qe_shell_path(factor_cache_dir, field_name='factor_cache_dir')}"
+            )
         else:
             # 本地节点：强制使用 Windows 路径转换后的 QE 回测缓存，覆盖任何继承环境变量。
             factor_cache_wsl = self._windows_to_wsl_path(str(FACTOR_CACHE_ROOT_WIN))
             if not _is_official_factor_cache_path_shape(factor_cache_wsl):
                 raise RuntimeError("QE backtest FACTOR_CACHE_ROOT_WIN must resolve to official factor_values cache root")
-            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_wsl}"')
+            env_lines.append(
+                f"export FACTOR_CACHE_DIR={_quote_qe_shell_path(factor_cache_wsl, field_name='factor_cache_dir')}"
+            )
         env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 
         link_data_cmd = (
@@ -5458,11 +5547,16 @@ class ConfigComposer:
 
         runner = "qrun_limit_minute.py" if seed_ensemble_enabled or backtest_freq != "day" else "qrun_limit.py"
 
+        scrub_credentials = _qe_subprocess_credential_scrub_command()
         core_parts = [
+            scrub_credentials,
             self._build_conda_activate_chain(),
+            scrub_credentials,
             "export MALLOC_ARENA_MAX=4",
             "export PYTHONUNBUFFERED=1",
         ]
+        if _is_local_wsl_qe_node(node_id):
+            core_parts.extend(_LOCAL_WSL_THREAD_ENV)
         if _is_gpu_qe_node(node_id):
             core_parts.append(_CUDA_EXPANDABLE_SEGMENTS_ENV)
         if train_only:
@@ -5472,14 +5566,19 @@ class ConfigComposer:
             core_parts.append("chmod 600 qe_resource_session_secret.json")
         core_parts.append(link_data_cmd)
         if has_custom_factors:
+            core_parts.append(scrub_credentials)
             core_parts.append("python prepare_factors.py")
             core_parts.append(". ./.factor_env")
+            core_parts.append(scrub_credentials)
         runner_cmd = f"python {runner} conf.yaml"
         if train_only:
             runner_cmd += " --train-only"
+        core_parts.append(scrub_credentials)
         core_parts.append(runner_cmd)
         if long_trend_postprocess_enabled:
+            core_parts.append(scrub_credentials)
             core_parts.append("python long_trend_postprocess_adapter.py")
+        core_parts.append(scrub_credentials)
         core_parts.append("QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py")
         return env_lines, core_parts
 
@@ -5533,10 +5632,22 @@ class ConfigComposer:
             long_trend_postprocess_enabled=long_trend_postprocess_enabled,
         )
         env_block = "\n".join(env_lines)
+        scrub_credentials = _qe_subprocess_credential_scrub_command()
+        quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
+        manual_conda_chain = self._build_conda_activate_chain()
+        manual_runtime_guard_lines = ["set -euo pipefail", scrub_credentials]
+        if _is_local_wsl_qe_node(node_id):
+            manual_runtime_guard_lines.extend(_LOCAL_WSL_THREAD_ENV)
+        manual_runtime_guard_block = "\n".join(manual_runtime_guard_lines)
+        manual_factor_data_default = _quote_qe_shell_path(
+            str(factor_data_dir or RDAGENT_FACTOR_DATA_WSL or "."),
+            field_name="factor_data_dir",
+        )
 
         # 手动模式的数据链接步骤（可读格式）
         _link_data_manual = f"""# 链接策略所需数据文件到实验目录（幂等）
-_FDD="${{RDAGENT_FACTOR_DATA_WSL:-{RDAGENT_FACTOR_DATA_WSL}}}"
+_FDD="${{RDAGENT_FACTOR_DATA_WSL:-}}"
+[ -n "$_FDD" ] || _FDD={manual_factor_data_default}
 for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do
   [ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .
 done"""
@@ -5546,7 +5657,7 @@ done"""
 
         # ── auto 模式：纯净命令链，供子进程直接执行 ──
         if mode == "auto":
-            return " && ".join([f"cd {wsl_path}", *core_parts])
+            return " && ".join([f"cd -- {quoted_wsl_path}", *core_parts])
 
         # ── manual 模式：面向用户手动复制执行 ──
         train_only_flag = " --train-only" if train_only else ""
@@ -5554,32 +5665,42 @@ done"""
             return f"""# QuantEvolver 实验执行命令（含自定义因子预处理）
 # 请在WSL终端中执行以下命令：
 
-cd {wsl_path}
-conda activate rdagent-gpu
+(
+cd -- {quoted_wsl_path}
+{manual_runtime_guard_block}
+{manual_conda_chain}
+{scrub_credentials}
 
 {_link_data_manual}
 
 # 步骤1: 预计算因子 -> 生成 combined_factors_df.parquet
+{scrub_credentials}
 python prepare_factors.py
 
 # 步骤2: 设置环境变量
 {env_block}
 # 加载因子预处理输出的 num_features（由 prepare_factors.py 自动计算）
 . .factor_env
+{scrub_credentials}
 
 # 步骤3: 运行QLib回测
 python {runner} conf.yaml{train_only_flag}
 
 # 步骤4: 读取结果
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
+)
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
         elif use_custom_model:
             return f"""# QuantEvolver 实验执行命令（含自定义模型）
 # 请在WSL终端中执行以下命令：
 
-cd {wsl_path}
-conda activate rdagent-gpu
+(
+cd -- {quoted_wsl_path}
+{manual_runtime_guard_block}
+{manual_conda_chain}
+{scrub_credentials}
 
 # 设置环境变量
 {env_block}
@@ -5587,26 +5708,35 @@ conda activate rdagent-gpu
 {_link_data_manual}
 
 # 运行QLib回测
+{scrub_credentials}
 python {runner} conf.yaml{train_only_flag}
 
 # 读取结果
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
+)
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
         else:
             return f"""# QuantEvolver 实验执行命令
 # 请在WSL终端中执行以下命令：
 
-cd {wsl_path}
-conda activate rdagent-gpu
+(
+cd -- {quoted_wsl_path}
+{manual_runtime_guard_block}
+{manual_conda_chain}
+{scrub_credentials}
 
 # 设置环境变量
 {env_block}
 
 {_link_data_manual}
 
+{scrub_credentials}
 python {runner} conf.yaml{train_only_flag}
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
+)
 
 # 执行完成后，回到AIstock界面点击"同步结果"按钮"""
 
