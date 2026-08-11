@@ -192,7 +192,9 @@ def test_event_runs_only_its_family_and_repeated_key_is_throttled() -> None:
         await coordinator.reconcile_once(
             pending={QEReconciliationScope.RESOURCE_SESSION: {"session-1": False}}
         )
-        assert calls == Counter({"aggregate_select": 1, "experiment": 1})
+        assert calls == Counter(
+            {"aggregate_select": 2, "experiment": 1, "resource": 1}
+        )
 
     asyncio.run(scenario())
 
@@ -400,6 +402,84 @@ def test_100_same_key_wakes_and_forces_throttle_before_due_probe() -> None:
         await coordinator.reconcile_once(pending=forced)
         await coordinator.reconcile_once(pending=forced)
         assert calls == Counter({"select": 2, "scanner": 2})
+
+    asyncio.run(scenario())
+
+
+def test_different_first_seen_keys_in_same_family_submit_immediately() -> None:
+    async def scenario() -> None:
+        calls: Counter[str] = Counter()
+
+        def due_probe(**_kwargs):  # type: ignore[no-untyped-def]
+            calls["select"] += 1
+            return QEReconciliationDue(experiment=True)
+
+        coordinator = QEReconciliationCoordinator(
+            due_probe=due_probe,
+            experiment_scanner=lambda: _async_count(calls, "experiment"),
+            wake_bus=QEReconciliationWakeBus(),
+        )
+        await coordinator.reconcile_once(
+            pending={QEReconciliationScope.EXPERIMENT: {"exp-1": False}}
+        )
+        await coordinator.reconcile_once(
+            pending={QEReconciliationScope.EXPERIMENT: {"exp-2": False}}
+        )
+
+        assert calls == Counter({"select": 2, "experiment": 2})
+
+    asyncio.run(scenario())
+
+
+def test_different_first_seen_keys_across_families_submit_immediately() -> None:
+    async def scenario() -> None:
+        calls: Counter[str] = Counter()
+
+        def due_probe(**_kwargs):  # type: ignore[no-untyped-def]
+            calls["select"] += 1
+            return QEReconciliationDue(experiment=True, evolution=True)
+
+        coordinator = QEReconciliationCoordinator(
+            due_probe=due_probe,
+            experiment_scanner=lambda: _async_count(calls, "experiment"),
+            evolution_scanner=lambda: _async_count(calls, "evolution"),
+            wake_bus=QEReconciliationWakeBus(),
+        )
+        await coordinator.reconcile_once(
+            pending={QEReconciliationScope.EXPERIMENT: {"exp-1": False}}
+        )
+        await coordinator.reconcile_once(
+            pending={QEReconciliationScope.EVOLUTION: {"task-1": False}}
+        )
+
+        assert calls == Counter({"select": 2, "experiment": 1, "evolution": 1})
+
+    asyncio.run(scenario())
+
+
+def test_multiple_new_keys_coalesced_in_one_wake_use_one_probe() -> None:
+    async def scenario() -> None:
+        calls: Counter[str] = Counter()
+
+        def due_probe(**_kwargs):  # type: ignore[no-untyped-def]
+            calls["select"] += 1
+            return QEReconciliationDue(experiment=True)
+
+        coordinator = QEReconciliationCoordinator(
+            due_probe=due_probe,
+            experiment_scanner=lambda: _async_count(calls, "experiment"),
+            wake_bus=QEReconciliationWakeBus(),
+        )
+        await coordinator.reconcile_once(
+            pending={
+                QEReconciliationScope.EXPERIMENT: {
+                    "exp-1": False,
+                    "exp-2": False,
+                }
+            }
+        )
+
+        assert calls == Counter({"select": 1, "experiment": 1})
 
     asyncio.run(scenario())
 

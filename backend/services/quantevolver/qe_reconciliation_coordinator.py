@@ -443,7 +443,6 @@ class QEReconciliationCoordinator:
         ] = OrderedDict()
         self._last_family_scan_at: dict[QEReconciliationScope, float] = {}
         self._last_safety_probe_at: float | None = None
-        self._last_event_probe_at: float | None = None
         self._inflight: dict[QEReconciliationScope, asyncio.Task[None]] = {}
         self._inflight_dirty: set[QEReconciliationScope] = set()
         self._replay_ready: set[QEReconciliationScope] = set()
@@ -583,10 +582,6 @@ class QEReconciliationCoordinator:
             self._last_safety_probe_at is None
             or now - self._last_safety_probe_at >= self._safety_sweep_seconds
         )
-        event_probe_due = (
-            self._last_event_probe_at is None
-            or now - self._last_event_probe_at >= self._safety_sweep_seconds
-        )
         force_probe_due = any(
             force for work in pending.values() for force in work.values()
         ) or has_replay
@@ -594,7 +589,7 @@ class QEReconciliationCoordinator:
             has_snapshots
             or force_probe_due
             or (is_safety_sweep and safety_probe_due)
-            or (bool(pending) and event_probe_due)
+            or bool(pending)
         ):
             return QEReconciliationDue()
         resource_ids = tuple(
@@ -625,8 +620,6 @@ class QEReconciliationCoordinator:
         completed_at = time.monotonic()
         if is_safety_sweep and safety_probe_due:
             self._last_safety_probe_at = completed_at
-        if pending or has_replay:
-            self._last_event_probe_at = completed_at
         self._wake_bus.publish_states(
             due,
             resource_session_ids=resource_ids,
@@ -872,10 +865,10 @@ class QEReconciliationCoordinator:
         if not is_safety_sweep and scope not in pending and scope not in replay_scopes:
             return False
         now = time.monotonic()
-        force = scope in replay_scopes or any(pending.get(scope, {}).values())
+        event_driven = scope in replay_scopes or scope in pending
         previous = self._last_family_scan_at.get(scope)
         if (
-            not force
+            not event_driven
             and previous is not None
             and now - previous < self._family_interval(scope)
         ):

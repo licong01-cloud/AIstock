@@ -2143,7 +2143,10 @@ async def on_loop_completed_webhook(request: Request, payload: LoopCompletedPayl
                 key=payload.loop_id,
                 force=True,
             )
-            notify_qe_reconciliation(QEReconciliationScope.RESOURCE_SESSION)
+            notify_qe_reconciliation(
+                QEReconciliationScope.RESOURCE_SESSION,
+                key=f"{payload.task_id}:{payload.loop_id}",
+            )
 
     _task = asyncio.create_task(_process_with_logging())
     _task.add_done_callback(lambda t: logger.error(f"Webhook task error: {t.exception()}") if t.exception() else None)

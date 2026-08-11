@@ -1862,8 +1862,17 @@ class QEExecutionReservationReconciler:
                 notify_qe_reconciliation,
             )
 
-            notify_qe_reconciliation(QEReconciliationScope.EXPERIMENT, force=True)
-            notify_qe_reconciliation(QEReconciliationScope.EVOLUTION, force=True)
+            wake_key = str(reservation.get("reservation_id") or "").strip()
+            notify_qe_reconciliation(
+                QEReconciliationScope.EXPERIMENT,
+                key=wake_key,
+                force=True,
+            )
+            notify_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=wake_key,
+                force=True,
+            )
         return True
 
     def _post_is_inside_grace_period(self, reservation: Mapping[str, Any]) -> bool:
