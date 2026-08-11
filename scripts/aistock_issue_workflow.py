@@ -10638,11 +10638,10 @@ def _cleanup_protected_receipt_paths(bug_id: str | None) -> set[str]:
         return set()
     runtime = record.get("runtime_contract") if isinstance(record.get("runtime_contract"), dict) else {}
     receipt_ref = _normalize_worktree_artifact_path(str(runtime.get("post_restart_receipt_ref") or ""))
-    for prefix in WORKTREE_TRANSIENT_PREFIXES:
-        marker_index = receipt_ref.find(prefix)
-        if marker_index > 0:
-            receipt_ref = receipt_ref[marker_index:]
-            break
+    workflow_marker = WORKFLOW_ROOT.as_posix().rstrip("/") + "/"
+    marker_index = receipt_ref.find(workflow_marker)
+    if marker_index > 0:
+        receipt_ref = receipt_ref[marker_index:]
     summary = runtime.get("post_restart_receipt_summary")
     required_summary_fields = (
         "receipt_sha256",

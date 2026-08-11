@@ -64,11 +64,11 @@
 ### 2.5 [WORKTREE-CLEANUP-EVIDENCE-001] worktree 临时证据终结与清理
 
 1. worktree 内的完整测试日志、coverage/XML、Context Pack、PR 草稿、`tmp/**`、任务本地 `var/research_assistant/**`、Python/前端缓存和与 canonical root 内容一致的本地配置只属于临时执行产物；PR、BUG 或 Validation History 已保存与当前 commit 绑定的紧凑结构化 receipt 后，不长期保留这些副本。
-2. 正式 receipt 至少保存 schema、receipt ID、commit/merge identity、验证种类或 plan、命令摘要、结果、时间和必要 digest；禁止用完整日志或 ignored 文件目录替代 receipt。Validation Center archive 成功后，worktree 内的源 artifact 立即转为可清理；archive 失败保持可见并阻断该 artifact 的清理，但不覆盖真实测试结论。规则生效前已经 `fixed`/`verified` 的历史 BUG，可用同时包含 PR、fix commit 和非空验证摘要的关闭记录作为一次性兼容终结依据；新记录不得继续生成这种非结构化 receipt。
+2. 正式 receipt 至少保存 schema、receipt ID、commit/merge identity、验证种类或 plan、命令摘要、结果、时间和必要 digest；禁止用完整日志或 ignored 文件目录替代 receipt。Validation Center archive 成功后，worktree 内的源 artifact 立即转为可清理；archive 失败保持可见并阻断该 artifact 的清理，但不覆盖真实测试结论。规则生效前已经 `fixed`/`verified` 的历史 BUG，可用同时包含 PR、fix commit 和非空验证摘要的关闭记录作为一次性兼容终结依据；新记录禁止继续生成这种非结构化 receipt。
 3. runtime `post-restart-verify` receipt 在 close-sync 消费前属于受保护证据。close-sync 通过后必须把 expected/observed identity、runtime proof、contract/catalog/probe digest、receipt SHA-256 和 gate 保存为不含响应正文的 durable summary；只有 durable summary 完整时，worktree-local receipt 才可清理。等待用户重启不要求保留 source worktree；后续 receipt 写入 canonical/registry workflow root 并由 close-sync 固化。
 4. 已明确授权的精确 cleanup 在合入/close-sync 后连续执行，无需再次授权：先重新验证 PR/HEAD、干净状态、活动进程引用和路径边界，再生成 ignored artifact manifest；`transient` 可在同一次 cleanup 内删除，`protected` 或 `unknown` 必须 fail closed。裸 merge 仍不推导 cleanup。
 5. cleanup 只能删除 manifest 中已分类且位于目标 worktree 内的精确 transient roots；禁止 `git clean`、通配符删除、越界路径、跟随 symlink/junction 到目标外或在 manifest 漂移后继续。与 canonical root 不同的本地配置、未固化 receipt、未知文件和活动进程引用均阻断删除。
-6. 执行顺序固定为：evidence finalization → ignored/process manifest → transient purge → 普通 `git worktree remove` → local branch delete → remote branch SHA 校验与 delete → 路径/注册/local/remote 四态读回。任一步失败只报告已完成状态并停止后续破坏性动作，不得伪造 `cleanup_done`。
+6. 执行顺序固定为：evidence finalization → ignored/process manifest → transient purge → 普通 `git worktree remove` → local branch delete → remote branch SHA 校验与 delete → 路径/注册/local/remote 四态读回。任一步失败只报告已完成状态并停止后续破坏性动作，禁止伪造 `cleanup_done`。
 7. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
 
 ## 3. 风险与工作量分级

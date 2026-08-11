@@ -9073,7 +9073,7 @@ def test_cleanup_protects_absolute_runtime_receipt_until_durable_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    receipt_ref = str(tmp_path / "tmp" / "issue_workflow" / "BUG-199" / "post-restart-verify.json")
+    receipt_ref = "/tmp/pytest-run/tmp/issue_workflow/BUG-199/post-restart-verify.json"
     record = {
         "bug_id": "BUG-199",
         "runtime_contract": {"post_restart_receipt_ref": receipt_ref},
