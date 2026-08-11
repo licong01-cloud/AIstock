@@ -4,6 +4,8 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
 
+import pytest
+
 from backend.services.multi_alpha.durable_execution_adapter import (
     DurableCollectedResult,
     DurablePublishedArtifacts,
@@ -12,14 +14,143 @@ from backend.services.multi_alpha.durable_execution_adapter import (
 from backend.services.multi_alpha.durable_models import OwnershipToken
 from backend.services.multi_alpha.durable_orchestrator import (
     DurableMultiAlphaOrchestrator,
+    DurableOrchestratorCycleResult,
     DurableOrchestratorConfig,
     DurableOrchestratorError,
 )
 from backend.services.multi_alpha.durable_control import DurableMultiAlphaControlService
+from backend.services.multi_alpha.durable_wakeup import notify_durable_orchestrator
 
 
 class _Noop:
     pass
+
+
+class _IdleRepository:
+    def __init__(self) -> None:
+        self.due_reads = 0
+
+    def has_due_orchestrator_work(self, **_kwargs: Any) -> bool:
+        self.due_reads += 1
+        return False
+
+
+class _BacklogRepository:
+    def __init__(self, pending: int) -> None:
+        self.pending = pending
+        self.due_reads = 0
+
+    def has_due_orchestrator_work(self, **_kwargs: Any) -> bool:
+        self.due_reads += 1
+        return self.pending > 0
+
+
+def test_idle_worker_uses_only_coalesced_due_reads_and_never_enters_claim_cycle() -> None:
+    repository = _IdleRepository()
+    orchestrator = DurableMultiAlphaOrchestrator(
+        repository=repository,  # type: ignore[arg-type]
+        planner=_Noop(),  # type: ignore[arg-type]
+        adapter=_Noop(),  # type: ignore[arg-type]
+        archive_capture=_Noop(),  # type: ignore[arg-type]
+        active_import_service=_Noop(),  # type: ignore[arg-type]
+        recovery_worker=_Noop(),  # type: ignore[arg-type]
+        config=DurableOrchestratorConfig(
+            poll_seconds=0.2,
+            lease_seconds=600,
+            heartbeat_seconds=60,
+            items_per_pass=1,
+            archive_batch_size=1,
+            remote_poll_seconds=60,
+            safety_sweep_seconds=0.01,
+        ),
+        owner_id="idle-worker",
+    )
+    orchestrator._activation_import_completed = True
+    orchestrator._p0_2_schema_ready = True
+
+    async def forbidden_cycle() -> Any:
+        raise AssertionError("an idle due-summary must bypass all claim/DML passes")
+
+    orchestrator.run_cycle = forbidden_cycle  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        stop_event = asyncio.Event()
+        worker = asyncio.create_task(orchestrator.run_forever(stop_event))
+        await asyncio.sleep(0.025)
+        # A burst of commits coalesces; no work in PostgreSQL still means no
+        # claim cycle and therefore no DML/event/remote side effect.
+        for _ in range(20):
+            notify_durable_orchestrator()
+        await asyncio.sleep(0.01)
+        stop_event.set()
+        notify_durable_orchestrator()
+        await worker
+
+    asyncio.run(scenario())
+
+    assert DurableOrchestratorConfig().safety_sweep_seconds == 60.0
+    assert 2 <= repository.due_reads <= 6
+
+
+def test_runtime_config_rejects_database_heartbeat_faster_than_once_per_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISTOCK_MULTI_ALPHA_DURABLE_HEARTBEAT_SECONDS", "30")
+
+    with pytest.raises(DurableOrchestratorError) as caught:
+        DurableOrchestratorConfig.from_env()
+
+    assert caught.value.reason_code == "multi_alpha_durable_config_invalid"
+
+
+def test_bounded_backlog_self_wakes_until_more_than_one_batch_is_drained() -> None:
+    repository = _BacklogRepository(pending=17)
+    orchestrator = DurableMultiAlphaOrchestrator(
+        repository=repository,  # type: ignore[arg-type]
+        planner=_Noop(),  # type: ignore[arg-type]
+        adapter=_Noop(),  # type: ignore[arg-type]
+        archive_capture=_Noop(),  # type: ignore[arg-type]
+        active_import_service=_Noop(),  # type: ignore[arg-type]
+        recovery_worker=_Noop(),  # type: ignore[arg-type]
+        config=DurableOrchestratorConfig(
+            lease_seconds=600,
+            heartbeat_seconds=60,
+            items_per_pass=8,
+            archive_batch_size=8,
+            remote_poll_seconds=60,
+            safety_sweep_seconds=60,
+        ),
+        owner_id="backlog-worker",
+    )
+    orchestrator._activation_import_completed = True
+    orchestrator._p0_2_schema_ready = True
+    batches: list[int] = []
+
+    async def scenario() -> None:
+        stop_event = asyncio.Event()
+
+        async def drain_one_batch() -> DurableOrchestratorCycleResult:
+            count = min(orchestrator._config.items_per_pass, repository.pending)
+            repository.pending -= count
+            batches.append(count)
+            if repository.pending == 0:
+                stop_event.set()
+            return DurableOrchestratorCycleResult(
+                planned_runs=count,
+                dispatched_attempts=0,
+                reconciled_attempts=0,
+                finalized_runs=0,
+                archive_events=0,
+            )
+
+        orchestrator.run_cycle = drain_one_batch  # type: ignore[method-assign]
+        await asyncio.wait_for(orchestrator.run_forever(stop_event), timeout=0.5)
+
+    asyncio.run(scenario())
+
+    assert batches == [8, 8, 1]
+    assert repository.pending == 0
+    assert repository.due_reads == 3
 
 
 class _ThrottleRepository:
@@ -62,6 +193,8 @@ class _ThrottleRepository:
         self.events: list[dict[str, Any]] = []
         self.claims = 0
         self.heartbeats = 0
+        self.yields = 0
+        self.claim_conflict = False
 
     def advance(self, seconds: float = 2.0) -> None:
         self.now += seconds
@@ -71,6 +204,7 @@ class _ThrottleRepository:
         *,
         owner_id: str,
         lease_seconds: int,
+        p0_2_schema_ready: bool = True,
         claim_kind: str = "dispatch",
         node_id: str | None = None,
         excluded_attempt_ids: Sequence[str] = (),
@@ -88,6 +222,46 @@ class _ThrottleRepository:
         self.attempt["fencing_token"] += 1
         self.attempt["lease_expires_at"] = self.now + lease_seconds
         self.attempt["updated_at"] = self.now
+        return dict(self.attempt)
+
+    def observe_next_reconcilable_attempt(
+        self,
+        *,
+        p0_2_schema_ready: bool = True,
+        excluded_attempt_ids: Sequence[str] = (),
+        min_recheck_interval_seconds: int = 60,
+    ) -> Mapping[str, Any] | None:
+        if self.attempt["attempt_id"] in excluded_attempt_ids:
+            return None
+        if (
+            self.attempt["status"] != "submitting"
+            and self.now - self.attempt["updated_at"] < min_recheck_interval_seconds
+        ):
+            return None
+        return dict(self.attempt)
+
+    def claim_observed_attempt(
+        self,
+        attempt_id: str,
+        *,
+        p0_2_schema_ready: bool = True,
+        expected_row_version: int,
+        owner_id: str,
+        lease_seconds: int,
+    ) -> Mapping[str, Any] | None:
+        if self.claim_conflict:
+            return None
+        if (
+            attempt_id != self.attempt["attempt_id"]
+            or expected_row_version != self.attempt["row_version"]
+        ):
+            return None
+        self.claims += 1
+        self.attempt["owner_id"] = owner_id
+        self.attempt["fencing_token"] += 1
+        self.attempt["lease_expires_at"] = self.now + lease_seconds
+        self.attempt["updated_at"] = self.now
+        self.attempt["row_version"] += 1
         return dict(self.attempt)
 
     def get_child(self, child_id: str) -> Mapping[str, Any] | None:
@@ -132,6 +306,7 @@ class _ThrottleRepository:
         phase: str,
         write_event: bool = True,
     ) -> Mapping[str, Any]:
+        self.yields += 1
         self.attempt["owner_id"] = None
         self.attempt["lease_expires_at"] = None
         self.attempt["updated_at"] = self.now
@@ -215,6 +390,53 @@ class _ThrottleRepository:
         return None
 
 
+class _PreP0ThrottleRepository(_ThrottleRepository):
+    """Baseline attempt storage has neither run_id nor execution_kind.
+
+    observe/claim return the parent identity derived from the baseline child
+    join, matching the repository SQL contract rather than forging a P0-2
+    column in the stored attempt row.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempt.pop("run_id")
+
+    def observe_next_reconcilable_attempt(
+        self,
+        *,
+        p0_2_schema_ready: bool = True,
+        excluded_attempt_ids: Sequence[str] = (),
+        min_recheck_interval_seconds: int = 60,
+    ) -> Mapping[str, Any] | None:
+        assert p0_2_schema_ready is False
+        row = super().observe_next_reconcilable_attempt(
+            p0_2_schema_ready=p0_2_schema_ready,
+            excluded_attempt_ids=excluded_attempt_ids,
+            min_recheck_interval_seconds=min_recheck_interval_seconds,
+        )
+        return {**row, "run_id": self.child["run_id"]} if row is not None else None
+
+    def claim_observed_attempt(
+        self,
+        attempt_id: str,
+        *,
+        p0_2_schema_ready: bool = True,
+        expected_row_version: int,
+        owner_id: str,
+        lease_seconds: int,
+    ) -> Mapping[str, Any] | None:
+        assert p0_2_schema_ready is False
+        row = super().claim_observed_attempt(
+            attempt_id,
+            p0_2_schema_ready=p0_2_schema_ready,
+            expected_row_version=expected_row_version,
+            owner_id=owner_id,
+            lease_seconds=lease_seconds,
+        )
+        return {**row, "run_id": self.child["run_id"]} if row is not None else None
+
+
 class _InspectAdapter:
     def __init__(self, repository: _ThrottleRepository, remote_status: str = "running") -> None:
         self.repository = repository
@@ -282,7 +504,7 @@ class _InspectAdapter:
             detail={},
         )
 
-    async def record_remote_terminal(
+    def record_remote_terminal(
         self,
         *,
         intent: DurableSubmissionIntent,
@@ -330,6 +552,7 @@ def _orchestrator(
             remote_poll_seconds=remote_poll_seconds,
         ),
         owner_id="worker",
+        monotonic=lambda: repository.now,
     )
 
 
@@ -344,8 +567,11 @@ def test_reconcile_poll_throttle_limits_remote_reads_and_events() -> None:
         asyncio.run(orchestrator.reconcile_pass_once())
         repository.advance(2.0)
 
-    assert adapter.inspect_calls <= 5
+    assert adapter.inspect_calls == 4
     assert adapter.submit_calls == 0
+    assert repository.claims == 0
+    assert repository.heartbeats == 0
+    assert repository.yields == 0
     # unchanged running state produced no durable events at all
     assert repository.events == []
 
@@ -370,6 +596,54 @@ def test_running_to_succeeded_records_one_terminal_event_and_result_once() -> No
     ]
     assert len(terminal_events) == 1
     assert repository.child["selected_attempt_id"] == "macba_poll"
+
+
+def test_pre_p0_remote_status_change_uses_child_derived_run_identity() -> None:
+    repository = _PreP0ThrottleRepository()
+    repository.attempt["remote_status"] = "reserved"
+    adapter = _InspectAdapter(repository, remote_status="running")
+    orchestrator = _orchestrator(repository, adapter)
+    orchestrator._p0_2_schema_ready = False
+
+    asyncio.run(orchestrator.reconcile_pass_once())
+
+    assert "run_id" not in repository.attempt
+    assert "execution_kind" not in repository.attempt
+    assert repository.attempt["status"] == "running"
+    assert repository.attempt["remote_status"] == "running"
+    assert repository.claims == 1
+    assert repository.yields == 1
+
+
+def test_pre_p0_terminal_observation_completes_without_attempt_run_id_column() -> None:
+    repository = _PreP0ThrottleRepository()
+    adapter = _InspectAdapter(repository, remote_status="completed")
+    orchestrator = _orchestrator(repository, adapter)
+    orchestrator._p0_2_schema_ready = False
+
+    asyncio.run(orchestrator.reconcile_pass_once())
+
+    assert "run_id" not in repository.attempt
+    assert "execution_kind" not in repository.attempt
+    assert repository.attempt["status"] == "succeeded"
+    assert adapter.terminal_calls == 1
+    assert adapter.collect_calls == 1
+    assert repository.child["selected_attempt_id"] == "macba_poll"
+
+
+def test_stale_remote_observation_is_discarded_when_snapshot_claim_loses_race() -> None:
+    repository = _ThrottleRepository()
+    repository.claim_conflict = True
+    adapter = _InspectAdapter(repository, remote_status="completed")
+    orchestrator = _orchestrator(repository, adapter)
+
+    asyncio.run(orchestrator.reconcile_pass_once())
+
+    assert adapter.inspect_calls == 1
+    assert adapter.collect_calls == 0
+    assert adapter.terminal_calls == 0
+    assert repository.attempt["status"] == "running"
+    assert repository.events == []
 
 
 def test_restart_recovery_resumes_and_does_not_resubmit_running_process() -> None:
@@ -515,6 +789,7 @@ def test_control_reconciliation_pending_is_not_reappended_while_unchanged() -> N
         if event.get("phase") == "control_reconciliation_pending"
     ]
     assert len(pending) <= 1
+    assert repository.preflight_calls == 0
 
 
 class _ControlRepository:
@@ -533,11 +808,13 @@ class _ControlRepository:
         }
         self.events: list[dict[str, Any]] = []
         self.now = 0.0
+        self.preflight_calls = 0
 
     def advance(self, seconds: float = 2.0) -> None:
         self.now += seconds
 
     def preflight_p0_2_schema(self, *, raise_on_error: bool = False) -> SimpleNamespace:
+        self.preflight_calls += 1
         return SimpleNamespace(ready=True)
 
     def claim_next_command(

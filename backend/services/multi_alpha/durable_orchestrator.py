@@ -4,10 +4,11 @@ import asyncio
 import logging
 import os
 import socket
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from backend.services.multi_alpha.combine_backtest import delta, metric_columns
 from backend.services.multi_alpha.durable_execution_adapter import (
@@ -40,6 +41,7 @@ from backend.services.multi_alpha.durable_runtime_health import (
     mark_durable_orchestrator_stopped,
     mark_durable_orchestrator_unavailable,
 )
+from backend.services.multi_alpha.durable_wakeup import durable_orchestrator_wakeup
 from backend.services.qe_archive.event_capture import QEArchiveEventCapture
 from backend.services.quantevolver.qe_active_execution_capacity import (
     QEActiveExecutionImportService,
@@ -91,10 +93,11 @@ class DurableOrchestratorError(RuntimeError):
 class DurableOrchestratorConfig:
     poll_seconds: float = 2.0
     lease_seconds: int = 600
-    heartbeat_seconds: float = 30.0
+    heartbeat_seconds: float = 60.0
     items_per_pass: int = 8
     archive_batch_size: int = 200
     remote_poll_seconds: int = 60
+    safety_sweep_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if not 0.2 <= self.poll_seconds <= 60.0:
@@ -136,9 +139,25 @@ class DurableOrchestratorConfig:
                 reason_code="multi_alpha_durable_config_invalid",
                 context={"remote_poll_seconds": self.remote_poll_seconds},
             )
+        if not 0.01 <= self.safety_sweep_seconds <= 3600.0:
+            raise DurableOrchestratorError(
+                "durable orchestrator safety sweep interval is invalid",
+                reason_code="multi_alpha_durable_config_invalid",
+                context={"safety_sweep_seconds": self.safety_sweep_seconds},
+            )
 
     @classmethod
     def from_env(cls) -> DurableOrchestratorConfig:
+        heartbeat_seconds = _env_float(
+            "AISTOCK_MULTI_ALPHA_DURABLE_HEARTBEAT_SECONDS",
+            60.0,
+        )
+        if heartbeat_seconds < 60.0:
+            raise DurableOrchestratorError(
+                "durable orchestrator database lease heartbeat cannot run more than once per minute",
+                reason_code="multi_alpha_durable_config_invalid",
+                context={"heartbeat_seconds": heartbeat_seconds, "minimum_seconds": 60},
+            )
         return cls(
             poll_seconds=_env_float(
                 "AISTOCK_MULTI_ALPHA_DURABLE_POLL_SECONDS",
@@ -148,10 +167,7 @@ class DurableOrchestratorConfig:
                 "AISTOCK_MULTI_ALPHA_DURABLE_LEASE_SECONDS",
                 600,
             ),
-            heartbeat_seconds=_env_float(
-                "AISTOCK_MULTI_ALPHA_DURABLE_HEARTBEAT_SECONDS",
-                30.0,
-            ),
+            heartbeat_seconds=heartbeat_seconds,
             items_per_pass=_env_int(
                 "AISTOCK_MULTI_ALPHA_DURABLE_ITEMS_PER_PASS",
                 8,
@@ -484,6 +500,7 @@ class DurableMultiAlphaOrchestrator:
         recovery_worker: DurableRecoveryWorker | None = None,
         config: DurableOrchestratorConfig | None = None,
         owner_id: str | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._repository = repository or MultiAlphaDurableRepository()
         self._planner = planner or DeterministicChildPlanner(self._repository)
@@ -517,6 +534,8 @@ class DurableMultiAlphaOrchestrator:
         self._last_claimed_attempt_id: str | None = None
         self._last_claimed_command_id: str | None = None
         self._last_claimed_delivery_id: str | None = None
+        self._monotonic = monotonic
+        self._last_remote_observation_at: dict[str, float] = {}
 
     @property
     def owner_id(self) -> str:
@@ -598,18 +617,25 @@ class DurableMultiAlphaOrchestrator:
         stale_after_seconds = max(
             60,
             self._config.lease_seconds * 2,
-            int(self._config.poll_seconds * 4),
+            int(self._config.safety_sweep_seconds * 4),
         )
         mark_durable_orchestrator_starting(
             owner_id=self._owner_id,
             stale_after_seconds=stale_after_seconds,
         )
+        loop = asyncio.get_running_loop()
+        wake_event = asyncio.Event()
+        durable_orchestrator_wakeup.register(loop=loop, event=wake_event)
+        # Startup/restart recovery performs one immediate read-only due scan.
+        wake_event.set()
         try:
             while not stop_event.is_set():
                 if not self._activation_import_completed:
+                    wake_event.clear()
                     try:
                         await self.initialize()
                         mark_durable_orchestrator_ready(owner_id=self._owner_id)
+                        wake_event.set()
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
@@ -622,19 +648,43 @@ class DurableMultiAlphaOrchestrator:
                             "multi_alpha_durable_initialization_unavailable; retrying: %s",
                             error,
                         )
-                        try:
-                            await asyncio.wait_for(
-                                stop_event.wait(),
-                                timeout=self._config.poll_seconds,
-                            )
-                            break
-                        except asyncio.TimeoutError:
-                            continue
+                        await self._wait_for_wakeup_or_safety_sweep(
+                            wake_event=wake_event,
+                            stop_event=stop_event,
+                        )
+                        continue
+                if not wake_event.is_set():
+                    await self._wait_for_wakeup_or_safety_sweep(
+                        wake_event=wake_event,
+                        stop_event=stop_event,
+                    )
+                if stop_event.is_set():
+                    break
+                # Clear before the SELECT/cycle. A commit that arrives while
+                # processing sets the Event again and cannot be lost.
+                wake_event.clear()
                 try:
+                    due = await asyncio.to_thread(
+                        self._repository.has_due_orchestrator_work,
+                        p0_2_schema_ready=self._p0_2_schema_ready,
+                        remote_poll_seconds=self._config.remote_poll_seconds,
+                        archive_enabled=bool(
+                            getattr(self._archive_capture, "enabled", False)
+                        ),
+                        excluded_recent_attempt_ids=self._recent_remote_observation_ids(),
+                    )
+                    if not due:
+                        mark_durable_orchestrator_ready(owner_id=self._owner_id)
+                        continue
                     cycle = await self.run_cycle()
                     mark_durable_orchestrator_ready(owner_id=self._owner_id)
                     if cycle.work_count:
                         logger.info("multi-alpha durable cycle completed: %s", cycle)
+                        # Drain backlogs immediately in bounded batches.  The
+                        # Event coalesces this self-wake with any concurrent
+                        # submission/control commit, while a follow-up due
+                        # summary prevents empty claim passes.
+                        wake_event.set()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -644,15 +694,40 @@ class DurableMultiAlphaOrchestrator:
                         "multi-alpha durable cycle failed without changing remote execution ownership: %s",
                         error,
                     )
-                try:
-                    await asyncio.wait_for(
-                        stop_event.wait(),
-                        timeout=self._config.poll_seconds,
-                    )
-                except asyncio.TimeoutError:
-                    continue
         finally:
+            durable_orchestrator_wakeup.unregister(loop=loop, event=wake_event)
             mark_durable_orchestrator_stopped()
+
+    async def _wait_for_wakeup_or_safety_sweep(
+        self,
+        *,
+        wake_event: asyncio.Event,
+        stop_event: asyncio.Event,
+    ) -> None:
+        wake_task = asyncio.create_task(wake_event.wait())
+        stop_task = asyncio.create_task(stop_event.wait())
+        tasks = {wake_task, stop_task}
+        try:
+            await asyncio.wait(
+                tasks,
+                timeout=self._config.safety_sweep_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _recent_remote_observation_ids(self) -> tuple[str, ...]:
+        now = self._monotonic()
+        cutoff = now - float(self._config.remote_poll_seconds)
+        self._last_remote_observation_at = {
+            attempt_id: observed_at
+            for attempt_id, observed_at in self._last_remote_observation_at.items()
+            if observed_at > cutoff
+        }
+        return tuple(sorted(self._last_remote_observation_at))
 
     async def planner_pass_once(self, *, excluded_run_ids: Sequence[str] = ()) -> bool:
         run = await asyncio.to_thread(
@@ -848,6 +923,7 @@ class DurableMultiAlphaOrchestrator:
             self._repository.claim_next_attempt,
             owner_id=self._owner_id,
             lease_seconds=self._config.lease_seconds,
+            p0_2_schema_ready=self._p0_2_schema_ready,
             claim_kind="dispatch",
             excluded_attempt_ids=excluded_attempt_ids,
         )
@@ -937,6 +1013,7 @@ class DurableMultiAlphaOrchestrator:
             self._repository.claim_next_attempt,
             owner_id=self._owner_id,
             lease_seconds=self._config.lease_seconds,
+            p0_2_schema_ready=self._p0_2_schema_ready,
             claim_kind="cancel",
             excluded_attempt_ids=excluded_attempt_ids,
             write_claim_event=False,
@@ -984,40 +1061,44 @@ class DurableMultiAlphaOrchestrator:
         *,
         excluded_attempt_ids: Sequence[str] = (),
     ) -> bool:
-        attempt = await asyncio.to_thread(
-            self._repository.claim_next_attempt,
-            owner_id=self._owner_id,
-            lease_seconds=self._config.lease_seconds,
-            claim_kind="reconcile",
-            excluded_attempt_ids=excluded_attempt_ids,
+        locally_throttled = set(self._recent_remote_observation_ids())
+        observation = await asyncio.to_thread(
+            self._repository.observe_next_reconcilable_attempt,
+            p0_2_schema_ready=self._p0_2_schema_ready,
+            excluded_attempt_ids=tuple(
+                sorted(locally_throttled | set(excluded_attempt_ids))
+            ),
             min_recheck_interval_seconds=self._config.remote_poll_seconds,
-            write_claim_event=False,
         )
-        if attempt is None:
+        if observation is None:
             return False
-        attempt_id = str(attempt["attempt_id"])
+        attempt_id = str(observation["attempt_id"])
         self._last_claimed_attempt_id = attempt_id
-        token = _ownership_token(attempt)
+        token: OwnershipToken | None = None
         try:
             child = _required(
                 "child",
-                attempt["child_id"],
-                self._repository.get_child(str(attempt["child_id"])),
+                observation["child_id"],
+                self._repository.get_child(str(observation["child_id"])),
             )
             run = _required(
                 "run",
-                attempt["run_id"],
-                self._repository.get_run(str(attempt["run_id"])),
+                observation["run_id"],
+                self._repository.get_run(str(observation["run_id"])),
             )
             if str(run.get("status") or "") in {"cancel_requested", "cancelling"}:
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
                 await self._reconcile_cancelled_attempt_claimed(
-                    attempt=attempt,
+                    attempt=claimed,
                     token=token,
                     child=child,
                     run=run,
                 )
                 return True
-            node_id = str(attempt.get("node_id") or "").strip()
+            node_id = str(observation.get("node_id") or "").strip()
             if not node_id:
                 raise DurableOrchestratorError(
                     "submitted durable attempt is missing node_id",
@@ -1027,7 +1108,7 @@ class DurableMultiAlphaOrchestrator:
             intent = self._adapter.prepare_submission_intent(
                 run=run,
                 child=child,
-                attempt=attempt,
+                attempt=observation,
                 node_id=node_id,
             )
             artifacts = self._adapter.load_published_artifacts(
@@ -1036,8 +1117,13 @@ class DurableMultiAlphaOrchestrator:
                 attempt_id=attempt_id,
             )
             try:
+                self._last_remote_observation_at[attempt_id] = self._monotonic()
                 inspection = await self._adapter.inspect_remote(intent=intent)
             except Exception as exc:
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
                 await self._keep_attempt_reconciling(
                     attempt_id=attempt_id,
                     token=token,
@@ -1048,6 +1134,10 @@ class DurableMultiAlphaOrchestrator:
                 return True
             remote_status = str(inspection.status.get("status") or "").strip().lower()
             if remote_status == "not_reserved":
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
                 outcome = await self._adapter.submit(
                     artifacts=artifacts,
                     intent=intent,
@@ -1071,6 +1161,51 @@ class DurableMultiAlphaOrchestrator:
                     **dict(inspection.status),
                     "submission_receipt": _receipt_evidence(inspection.receipt),
                 }
+            if token is None and not self._remote_observation_requires_write(
+                run=run,
+                child=child,
+                attempt=observation,
+                remote_status=remote_status,
+                remote_payload=remote_payload,
+            ):
+                return True
+            if token is None:
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
+            else:
+                claimed = _required(
+                    "attempt",
+                    attempt_id,
+                    self._repository.get_attempt(attempt_id),
+                )
+                token = self._owned_attempt_token_from_row(
+                    attempt_id=attempt_id,
+                    current=claimed,
+                    lineage=token,
+                )
+            # Control may have changed the parent while the remote read was in
+            # flight. Re-read after the exact row-version claim before applying
+            # any side effect.
+            child = _required(
+                "child",
+                claimed["child_id"],
+                self._repository.get_child(str(claimed["child_id"])),
+            )
+            run = _required(
+                "run",
+                claimed["run_id"],
+                self._repository.get_run(str(claimed["run_id"])),
+            )
+            if str(run.get("status") or "") in {"cancel_requested", "cancelling"}:
+                await self._reconcile_cancelled_attempt_claimed(
+                    attempt=claimed,
+                    token=token,
+                    child=child,
+                    run=run,
+                )
+                return True
             await self._apply_remote_status(
                 run=run,
                 child=child,
@@ -1088,6 +1223,11 @@ class DurableMultiAlphaOrchestrator:
                 attempt_id,
                 _exception_payload(exc),
             )
+            if token is None:
+                claimed = await self._claim_observed_attempt(observation)
+                if claimed is None:
+                    return True
+                token = _ownership_token(claimed)
             await self._fail_attempt_from_current_owner(
                 attempt_id=attempt_id,
                 token=token,
@@ -1095,6 +1235,53 @@ class DurableMultiAlphaOrchestrator:
                 phase="reconcile_failed",
             )
             return True
+
+    async def _claim_observed_attempt(
+        self,
+        observation: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        return await asyncio.to_thread(
+            self._repository.claim_observed_attempt,
+            str(observation["attempt_id"]),
+            p0_2_schema_ready=self._p0_2_schema_ready,
+            expected_row_version=int(observation["row_version"]),
+            owner_id=self._owner_id,
+            lease_seconds=self._config.lease_seconds,
+        )
+
+    def _remote_observation_requires_write(
+        self,
+        *,
+        run: Mapping[str, Any],
+        child: Mapping[str, Any],
+        attempt: Mapping[str, Any],
+        remote_status: str,
+        remote_payload: Mapping[str, Any],
+    ) -> bool:
+        normalized = str(remote_status or "").strip().lower()
+        if normalized not in ACTIVE_REMOTE_STATUSES:
+            return True
+        if str(child.get("status") or "") == "queued":
+            return True
+        if (
+            str(attempt.get("status") or "") == "submitting"
+            and normalized in {"running", "processing"}
+        ):
+            return True
+        previous_remote = str(attempt.get("remote_status") or "").strip().lower()
+        if previous_remote != normalized:
+            return True
+        request = self._adapter.request_from_run(run)
+        observed_deadlines = _execution_deadline_evidence(
+            run=run,
+            attempt=attempt,
+            scheme_timeout_seconds=request.scheme_timeout_seconds,
+            run_timeout_seconds=request.run_timeout_seconds,
+            remote_status=normalized,
+            remote_payload=remote_payload,
+        )
+        existing_deadlines = _deadline_evidence_from_attempt(attempt)
+        return any(kind not in existing_deadlines for kind in observed_deadlines)
 
     async def finalizer_pass_once(
         self,
