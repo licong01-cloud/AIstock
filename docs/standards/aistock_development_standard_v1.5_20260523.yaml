@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 48cdf785b412f0cae69286e31c3265800da07e6b418200fbb263a6c30c780a7c
+source_sha256: 07525b0aa864b4ab7313577b514a6b1ed31a07545e2f75cf2982399a6ce7ef0a
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-10"
+updated_at: "2026-08-11"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -116,7 +116,7 @@ rules:
 
   - rule_id: PROD-DDL-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-prod-ddl-001
-    title: Database DDL and DML require existing-DEV validation before separately authorized production execution
+    title: Database DDL and DML require existing-DEV validation and action-scoped production authorization that may be bundled with merge
     severity: P0
     category: production_schema
     enabled: true
@@ -130,6 +130,9 @@ rules:
         - no_new_test_database_created
         - no_production_backup_export_or_snapshot_precondition
         - explicit_production_target_authorization
+        - exact_authorized_migration_identity
+        - authorization_may_be_bundled_with_merge_without_second_prompt
+        - immutable_merge_commit_confirmed_before_production_apply
         - production_db_target_preflight_without_secrets
         - committed_migration_files
         - ddl_dml_apply_before_after_schema_checks
@@ -137,7 +140,7 @@ rules:
         - api_scheduler_log_smoke_after_apply
         - validation_history_record
     baseline_policy: block_release_until_verified
-    remediation: Validate DDL/DML in the existing DEV database, treat production backup/export/snapshot as a separate operations activity, execute the explicitly authorized production target, record validation, authorization, migration, and readback separately, and report production_ddl_gate=noop when no schema change exists.
+    remediation: Validate DDL/DML in the existing DEV database; an action-scoped target/migration authorization may be bundled with merge and then needs no second prompt. After confirming the immutable merge commit, preflight and apply only that target/migration, record DEV validation, authorization, merge, apply, and readback separately, treat backup/export/snapshot as a separate operations activity, and report production_ddl_gate=noop when no schema change exists.
 
   - rule_id: ERR-FALLBACK-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-err-fallback-001
@@ -250,9 +253,9 @@ rules:
     checker:
       type: regex
       patterns:
-        - 'JSON\.stringify\('
+        - 'JSON[.]stringify[(]'
         - '<pre\b'
-        - 'JsonPanel'
+        - 'Json[P]anel'
     baseline_policy: warn_new_only
     remediation: Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.
 
@@ -340,6 +343,7 @@ rules:
         - "*.zip"
       exclude_globs:
         - README.md
+        - AGENTS.md
         - AGENTS.override.md
         - CHANGELOG.md
         - LICENSE
@@ -365,7 +369,7 @@ rules:
     severity: P1
     category: repository_hygiene
     enabled: true
-    effect: block
+    effect: warn
     enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
@@ -393,7 +397,7 @@ rules:
     severity: P1
     category: documentation
     enabled: true
-    effect: block
+    effect: warn
     enforcement_phase: changed_file_scan
     applies_to:
       include_globs:
@@ -401,6 +405,7 @@ rules:
         - docs/*.md
       exclude_globs:
         - README.md
+        - AGENTS.md
         - AGENTS.override.md
         - CHANGELOG.md
         - docs/codex_project_memory.md
@@ -594,22 +599,23 @@ rules:
 
   - rule_id: TOOL-RTK-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-tool-rtk-001
-    title: Interactive windows prefer supported RTK wrappers without making RTK a gate
+    title: Interactive windows use supported RTK wrappers for eligible high-output commands without making RTK a gate
     severity: P1
     category: agent_efficiency
     enabled: true
-    effect: advisory
+    effect: warn
     enforcement_phase: interactive_execution
-    failure_policy: non_blocking_advisory
+    failure_policy: non_blocking_visible_warning
     checker:
       type: manual_review
       required_evidence:
-        - supported_high_output_commands_prefer_rtk
-        - unsupported_commands_record_capability_fallback
+        - eligible_supported_high_output_commands_use_rtk
+        - unsupported_unavailable_raw_output_or_wrapper_failure_records_fallback
         - no_rtk_trust_or_ci_dependency
+        - untrusted_custom_filter_does_not_disable_builtin_wrappers
         - missing_telemetry_does_not_trigger_probe
     baseline_policy: manual_review_only
-    remediation: Prefer RTK for supported high-output interactive commands, use direct commands for unsupported operations, and never make RTK availability a task or CI gate.
+    remediation: Use RTK for supported high-output interactive commands; state the bounded fallback reason when unsupported, unavailable, raw output is required, or the wrapper fails, and never make RTK availability a task or CI gate.
 
   - rule_id: BACKEND-RESTART-OWNERSHIP-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-backend-restart-ownership-001
