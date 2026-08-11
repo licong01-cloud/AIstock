@@ -578,6 +578,12 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             )
 
         background_tasks.add_task(scheduler.submit_next_loop, task_id)
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(QEReconciliationScope.EVOLUTION, key=task_id)
         return {"status": "success", "task_id": task_id, "message": "演进任务已创建并在后台启动"}
     except HTTPException:
         raise
@@ -655,6 +661,12 @@ def resolve_factor_issues(task_id: str, req: FactorResolveRequest, background_ta
 
         # 恢复任务执行
         background_tasks.add_task(scheduler.submit_next_loop, task_id)
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(QEReconciliationScope.EVOLUTION, key=task_id)
 
         return {
             "status": "success",
@@ -1029,6 +1041,15 @@ async def resume_evolution_task(task_id: str, req: EvolutionTaskResumeRequest, b
             return {"status": "success", "task_id": resumed_id, "message": msg}
         else:
             background_tasks.add_task(scheduler.submit_next_loop, resumed_id)
+            from ..services.quantevolver.qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            notify_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=resumed_id,
+            )
             return {"status": "success", "task_id": resumed_id, "message": "演进任务已恢复并在后台继续执行"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1218,6 +1239,15 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
                 raise HTTPException(status_code=500, detail=f"合并额外因子到 fork 任务失败: {e}")
 
         background_tasks.add_task(scheduler.submit_next_loop, new_task_id)
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.EVOLUTION,
+            key=new_task_id,
+        )
         return {
             "status": "success",
             "task_id": new_task_id,
@@ -2102,6 +2132,21 @@ async def on_loop_completed_webhook(request: Request, payload: LoopCompletedPayl
             await scheduler.process_completed_loop(payload.task_id, payload.loop_id)
         except Exception as e:
             logger.error(f"Webhook process_completed_loop failed for {payload.loop_id}: {e}", exc_info=True)
+        finally:
+            from ..services.quantevolver.qe_reconciliation_coordinator import (
+                QEReconciliationScope,
+                notify_qe_reconciliation,
+            )
+
+            notify_qe_reconciliation(
+                QEReconciliationScope.EVOLUTION,
+                key=payload.loop_id,
+                force=True,
+            )
+            notify_qe_reconciliation(
+                QEReconciliationScope.RESOURCE_SESSION,
+                key=f"{payload.task_id}:{payload.loop_id}",
+            )
 
     _task = asyncio.create_task(_process_with_logging())
     _task.add_done_callback(lambda t: logger.error(f"Webhook task error: {t.exception()}") if t.exception() else None)
@@ -2117,6 +2162,15 @@ def on_loop_resource_phase_webhook(request: Request, payload: LoopResourcePhaseP
         result = QEResourcePhaseService().ingest_event(
             token=token,
             payload=payload.model_dump(mode="json", exclude_unset=True),
+        )
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.RESOURCE_SESSION,
+            key=payload.session_id,
         )
         return {"status": "success", "data": result}
     except QEResourcePhaseError as exc:
@@ -2180,6 +2234,15 @@ async def register_long_trend_postprocess(
                 loop_index=payload.loop_index,
                 client=client,
             )
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.LONG_TREND,
+            key=prepared.evaluation_id,
+        )
         row = service.control_repository.get(prepared.evaluation_id) or prepared.control_row
         outcome_snapshot = payload.frozen_identity.get("outcome_dataset", {}).get("long_trend_snapshot")
         evaluation_asof = (

@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from backend.services.quantevolver import config_composer as config_composer_module
+from backend.services.quantevolver import qe_reconciliation_coordinator as qerc
 from backend.services.quantevolver.config_composer import ConfigComposer
 from backend.services.quantevolver.meta_model import MetaModelCombiner
 from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
@@ -20,6 +21,59 @@ from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
 from backend.services.quantevolver.callback_urls import build_aistock_callback_base_url, build_aistock_callback_url
 from backend.routers import quantevolver as quantevolver_router
 from backend.routers.quantevolver import _build_multi_alpha_group_command
+
+
+def test_mixed_multi_alpha_parent_100x_steady_state_has_zero_dml_and_wakes(monkeypatch):
+    statements: list[str] = []
+    notifications: list[tuple[object, object]] = []
+    started_at = object()
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params=None):  # type: ignore[no-untyped-def]
+            normalized = " ".join(str(sql).split())
+            statements.append(normalized)
+            assert normalized.startswith("SELECT ")
+
+        def fetchone(self):
+            return ("running", "qe-task", "Loop1", started_at)
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(quantevolver_router, "get_conn", lambda: Connection())
+    monkeypatch.setattr(
+        qerc,
+        "notify_qe_reconciliation",
+        lambda scope, **kwargs: notifications.append((scope, kwargs)),
+    )
+
+    for _ in range(100):
+        changed = quantevolver_router._persist_multi_alpha_parent_running_state(
+            experiment_id="exp-mixed",
+            qe_task_id="qe-task",
+            primary_loop_id="Loop1",
+        )
+        assert changed is False
+
+    assert len(statements) == 100
+    assert all(statement.startswith("SELECT ") for statement in statements)
+    assert notifications == []
 
 
 class TestQrunLimitMinutePredBacktest:
@@ -199,9 +253,10 @@ class TestConfigComposerCommandGeneration:
         assert all(not part.startswith("cd ") for part in core_parts)
         assert "python prepare_factors.py" in core_parts
         assert ". ./.factor_env" in core_parts
-        assert '[ -n "${QLIB_WSL_CONDA_SH:-}" ]' in core_parts[0]
-        assert '$HOME/miniconda3/etc/profile.d/conda.sh' in core_parts[0]
-        assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in core_parts[0]
+        command_parts = " && ".join(core_parts)
+        assert '[ -n "${QLIB_WSL_CONDA_SH:-}" ]' in command_parts
+        assert '$HOME/miniconda3/etc/profile.d/conda.sh' in command_parts
+        assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in command_parts
 
     def test_build_auto_wsl_command_parts_injects_prediction_store_env(self):
         composer = ConfigComposer()
@@ -336,7 +391,7 @@ class TestConfigComposerCommandGeneration:
                 composer._precompute_hmm_coefficients(strategy_params, data_split)
             mock_run.assert_not_called()
 
-    def test_generate_auto_wsl_command_keeps_legacy_cd_prefix(self):
+    def test_generate_auto_wsl_command_uses_option_safe_cd_prefix(self):
         composer = ConfigComposer()
         wsl_path = "/mnt/f/Dev/RD-Agent-main/qe_workspace/demo"
         command = composer._generate_wsl_command(
@@ -347,7 +402,7 @@ class TestConfigComposerCommandGeneration:
             backtest_freq="1min",
         )
 
-        assert command.startswith(f"cd {wsl_path} && ")
+        assert command.startswith(f"cd -- {wsl_path} && ")
         assert "python prepare_factors.py" in command
         assert "python qrun_limit_minute.py conf.yaml" in command
 
@@ -808,15 +863,18 @@ class TestQEWorkspaceClientFailFast:
 
 
 class TestRouterRunStatusFailFast:
-    def test_run_status_requires_qe_task_id_when_running(self):
+    def test_run_status_get_returns_persisted_running_row_without_remote_validation(self):
         with patch.object(quantevolver_router, "get_conn") as mock_get_conn:
             conn = mock_get_conn.return_value.__enter__.return_value
             cur = conn.cursor.return_value.__enter__.return_value
             cur.fetchone.return_value = ("running", None, "Loop1", None, "single")
             cur.description = [("status",), ("qe_task_id",), ("qe_loop_id",), ("result_metrics",), ("alpha_mode",)]
 
-            with pytest.raises(quantevolver_router.HTTPException, match="qe_task_id"):
-                asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
+            result = asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
+
+        assert result["status"] == "running"
+        assert result["qe_task_id"] is None
+        assert result["status_source"] == "persisted"
 
     def test_run_status_rejects_empty_live_status(self):
         class DummyClient:
@@ -837,7 +895,7 @@ class TestRouterRunStatusFailFast:
             cur.description = [("status",), ("qe_task_id",), ("qe_loop_id",), ("result_metrics",), ("alpha_mode",)]
 
             with pytest.raises(quantevolver_router.HTTPException, match="空状态"):
-                asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
+                asyncio.run(quantevolver_router.reconcile_experiment_run_status("exp_1"))
 
 
 class TestRouterMultiAlphaResultsFallback:
@@ -1653,7 +1711,7 @@ class TestMultiAlphaPhase2ArtifactValidation:
             cur.fetchone.return_value = ("running", "task_x", "Loop1", None, "multi")
             cur.description = [("status",), ("qe_task_id",), ("qe_loop_id",), ("result_metrics",), ("alpha_mode",)]
 
-            result = asyncio.run(quantevolver_router.get_experiment_run_status("exp_1"))
+            result = asyncio.run(quantevolver_router.reconcile_experiment_run_status("exp_1"))
 
         assert result["status"] == "completed"
         assert result["multi_alpha_stage"] == "failed_artifact"
