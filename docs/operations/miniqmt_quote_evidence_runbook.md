@@ -47,6 +47,10 @@ GET /simulation-runtime/miniqmt/quote-evidence?runtime_id=<runtime_id>&market_da
 |---|---|---|---|
 | high-priority evidence outbox 满 | `ADAPTIVE_IS_MARKET_DATA_EVIDENCE_OUTBOX_FULL` / `PERSIST` | 对应未来 B0_QUOTE_V2 symbol 保持 fail-closed；health/cadence 使用独立低优先级 slot；已发生 child receipt 使用显式 reserve；无关 symbol 可继续 | 丢弃 action/child/markout、让 health/cadence 挤占、提交 broker |
 | transient PostgreSQL SQLSTATE | `...EVIDENCE_PERSIST_FAILED` / `PERSIST` | 仅 `08000/08001/08003/08006/40001/40P01/55P03/57P01` 使用显式有界指数退避 | retry schema/CHECK/FK/hash 冲突；回退 JSON 或内存成功 |
+| runtime-event CHECK 在运行期漂移 | `MINIQMT_KERNEL_EVENT_SCHEMA_CONSTRAINT_FAILED` / `CALLBACK|WATCHDOG` | 首次真实 `23514` fail loud；按 runtime、lifecycle generation、operation 单写，60/120/240/480/960/1920/3600 秒自动退避；未到期 callback 零 repository 访问且返回显式 suppression；每个 runtime 仅有一个持久 callback actor，quote 只进入持有该 symbol 的 runtime，同 symbol 多 runtime 才 fan-out；阻塞 runtime/supervisor/release worker 不阻塞 peer | 每个 tick 重试 SQL、向非 owner runtime 广播、每 tick 创建线程、停订阅、切 legacy、人工 acknowledge/RBAC/审批 |
+| callback 在 10ms 内尚未完成 | `ASYNC_IN_FLIGHT` / `CALLBACK` | 返回 frame-bound pending carrier，`executed=true/outcome_pending=true/business_success=null`；actor 最终成功才清除 active failure，最终失败保留 runtime/worker evidence | 固定 `True` ACK、把 pending 记为业务成功、等待 callback 阻塞全部 peer |
+| callback 晚到的非 schema 失败 | `MINIQMT_K6_PRODUCT_OPERATION_FAILED` / `CALLBACK` | health 保持 `RETRY_READY` 和 active failure，下一条合法 live quote 自动重试；成功后才恢复 `HEALTHY` | 日志后把 health 记为 healthy、无限 backoff、人工 acknowledge 或新业务 gate |
+| writer batch / generation replay 中途失败 | `WRITER_FRAME_SINK_FAILED`、`WRITER_BATCH_ABORTED_AFTER_FRAME_SINK_FAILURE`、`PENDING_PUBLISH_REPLAY_REJECTED` 或 `PENDING_PUBLISH_REPLAY_ABORTED` | 对失败帧和所有已 pop 未处理帧逐一记录 bounded reason/count/generation/sequence；不产生成功 ACK | 静默丢弃 batch 尾部、清空 backlog 后假报成功 |
 | idempotency conflict | `...EVIDENCE_IDEMPOTENCY_CONFLICT` / `PERSIST` | coordinator 进入 FAILED，保留两侧 hash context | 覆盖 event、换 event type/source、宣称 durable ack |
 | target 后无可证明首个 mark quote | `...MARK_WINDOW_EXPIRED` 或 `...MARKOUT_QUOTE_UNAVAILABLE` / `MARKOUT` | 追加 stable `UNAVAILABLE` mark | 等待午休后、下一交易日或选择更晚 quote |
 | history/generation/restart gap | `...MARKOUT_HISTORY_UNAVAILABLE` / `MARKOUT` | 追加 stable `UNAVAILABLE`，不猜测首个 quote | 用重启后的 latest quote 替代 |
@@ -57,18 +61,39 @@ GET /simulation-runtime/miniqmt/quote-evidence?runtime_id=<runtime_id>&market_da
 
 ## DDL gate 与 production readback
 
-P1-D 只允许 operator 在明确授权后运行下列两份 SQL；应用启动、诊断 API 和 Codex 均不得自动执行：
+BUG-1019 的唯一 operator artifact 是下列三件套；20260712 的两约束 migration 已退休，不能再用于 KERNEL_V2。应用启动、诊断 API 和 agent 均不得自动执行生产 DDL：
 
 ```text
-backend/migrations/miniqmt_quote_ingress_event_types_20260712.sql
-backend/migrations/miniqmt_quote_ingress_event_types_20260712.rollback.sql
+backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql
+backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.sql
+backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql
 ```
 
-forward migration 只扩展 `ck_miniqmt_event_type` 与 `ck_miniqmt_event_source`。它在 transaction 中做 exact-old/exact-target preflight、锁表后二次 preflight、target no-op 与 `pg_get_constraintdef` readback；不新建表、列、索引、role 或数据。
+canonical-LF SHA-256 固定为：preflight=`013ca9838ff0f88bdd3c30682895114adc5a2c7d9d07832516cb63bf6f5f1217`，forward=`b1cf49270234af5034461fc6c6c30e6ee56c2278defb922fb3b4d879cd9c3e9a`，rollback=`741d6cd667600d2ae09be15da28a5b928f86a4248706ff2c3a65e235ff170c96`。执行前必须从实际 checkout 以 canonical LF 独立重算并相等；不得从日志或 PR 描述抄写后冒充 readback。
 
-生产 readback 必须记录 constraint names/OIDs、validated flags、canonical definition/hash、old/new event/source row counts、unknown-value count、migration/rollback file SHA-256、查询时间和 DB identity。只有 readback exact target 且 unknown count 为零时，才可报告 `production_ddl_gate=applied_and_verified`。未获授权或尚未执行时固定报告 `pending`。
+forward 在一个锁定事务中把 `ck_miniqmt_event_id`、`ck_miniqmt_event_sequence`、`ck_miniqmt_event_type`、`ck_miniqmt_event_source`、`ck_miniqmt_k2_event_composite`、`ck_miniqmt_k2_event_contract` 六项完整 authority 从 exact immediate predecessor 原子替换为 exact target，并验证全部六项。target 的 identity/type/source/composite/contract CHECK 均使用二值 `IS TRUE`，因此即使未来列的 NOT NULL 属性发生漂移，NULL 也不能借 PostgreSQL 三值 CHECK 漏过。artifact 的 transaction-local `search_path` 固定为 `pg_catalog,qmt_strategy,pg_temp`，显式把临时 schema 放到最后；K2-D helper 继续保持冻结合同 `proconfig IS NULL` 并继承该调用上下文。catalog canonical order 固定 `COLLATE "C"`；target no-op 不重建 helper，也不改变 OID/xmin/body/config。
 
-rollback 只在 exact target schema 且五个新 event type 和 `quote_ingress` source 的行数都为零时允许执行；任何新行存在都必须拒绝并记录 type/source counts 与 min/max sequence。rollback 不删除 evidence，不切换 revision，也不改变 active parent。
+执行顺序固定如下：preflight 自己拥有一个 RR/RO transaction，在同一 transaction 内完成 assertion 和 receipt 后提交；forward 与 rollback 各自先提交锁定的 DDL transaction，再启动独立 RR/RO post-COMMIT assertion/receipt transaction。禁止额外加 `--single-transaction`：
+
+```powershell
+psql -X -v ON_ERROR_STOP=1 -f backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql
+# 仅在 production_ddl_gate 已由用户明确授权后：
+psql -X -v ON_ERROR_STOP=1 -f backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.sql
+```
+
+preflight 只读且必须先成功；forward 只允许在用户明确生产 DDL 授权后执行。项目已有每日数据库备份，本流程不要求也禁止 agent 自行导出、备份或创建快照。执行 DDL 时 backend-main 必须保持用户已停止状态；启动/停止/重启始终由用户负责，不因 DDL、merge 或 aftercare 自动授权。
+
+forward 的独立 production readback receipt 必须同时保存：database/user/table OID、server version、database collation；六个 CHECK 的 name/OID/validated/definition SHA；K2 与 K2-D helper 的 OID/body SHA/config；helper、独立重算与 code-owned 的 K2/K2-D catalog SHA 及各自 verified 布尔；durable event/KERNEL_V2 counts和查询时间。三份 artifact 都必须先 exact 校验 K2-D helper 的无参签名、SQL/STABLE、`proconfig IS NULL` 与冻结 body，再独立执行冻结 body，并与 helper readback、code-owned K2-D catalog SHA 三方相等；最终 receipt 显式输出这三份 SHA 与 equality 结果，仅输出 helper 返回值不构成 readback。application 的 `applied_and_verified` 还必须由 `PostgresMiniQMTKernelRepository.preflight_schema()` 在同一 RR/RO snapshot 与完整 relation locks 下闭合；单独六-CHECK receipt 只能报告 `pending_full_kernel_readback`，不得产生假绿色。
+
+rollback 命令仅用于已明确授权的生产 rollback：
+
+```powershell
+psql -X -v ON_ERROR_STOP=1 -f backend/migrations/miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql
+```
+
+rollback 只接受 exact target，且必须证明 KERNEL_V2 event 及全部 K2、K2-D、K6 durable fact tables 均为零；任一 fact 存在即 `destructive rollback refused`。它不删除、改写、归档或重排任何 durable row。提交后第二个 RR/RO transaction 必须重新锁定完整 graph、重数每个 successor fact table、验证 predecessor 六项 CHECK、helper body/config、独立 K2/K2-D catalog，并在 receipt 中输出逐表 counts。第二次 rollback 是真实 no-op，不得重建 helper。
+
+source merge、生产 DDL、用户重启和 runtime 生效是四个独立状态。DDL 独立 readback 成功后由用户启动 backend-main，再核对 `GET /api/v1/runtime-identity` 的 commit 与 main/deployed source 一致，随后只读检查 `GET /api/v1/simulation-runtime/scheduler/status`：schema gate 必须为 `applied_and_verified`，无同 constraint 高频重试，健康 peer cadence 不受失败 runtime 阻塞。未完成这些 readback 前，close-sync 保持 pending。
 
 ## 留存、指标与告警
 

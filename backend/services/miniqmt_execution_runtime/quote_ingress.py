@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping
 
@@ -46,6 +46,230 @@ from backend.services.miniqmt_execution_runtime.quote_normalizer import (
 
 
 logger = logging.getLogger(__name__)
+_KERNEL_CONTEXTUAL_FANOUT_WAIT_SECONDS = 0.01
+
+
+def kernel_product_pending_identity_sha256_v1(
+    *,
+    runtime_id: str,
+    symbol: str,
+    market_data_id: str | None,
+    ingress_generation: int | None,
+    ingress_sequence: int | None,
+    context_id: Any,
+    values: tuple[Any, ...],
+) -> str:
+    """Return the single callback-frame identity shared by producer and consumer."""
+
+    def component(value: Any) -> str:
+        return "" if value is None else str(value)
+
+    identity_payload = "|".join(
+        (
+            runtime_id,
+            symbol,
+            market_data_id or "",
+            component(ingress_generation),
+            component(ingress_sequence),
+            component(context_id),
+            ",".join(type(value).__qualname__ for value in values),
+        )
+    )
+    return hashlib.sha256(identity_payload.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class MiniQMTKernelProductIngressSuppression:
+    """Nominal, frame-bound proof that one callback was deliberately not run."""
+
+    runtime_id: str
+    consumer_id: str
+    operation: str
+    disposition: str
+    lifecycle_generation: int
+    symbol: str | None
+    ingress_generation: int | None
+    ingress_sequence: int | None
+    market_data_id: str | None
+    failure_fingerprint_sha256: str | None
+    next_retry_at_utc: str | None
+    pending_identity_sha256: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "miniqmt_kernel_product_ingress_suppression_v1",
+            "runtime_id": self.runtime_id,
+            "consumer_id": self.consumer_id,
+            "operation": self.operation,
+            "disposition": self.disposition,
+            "lifecycle_generation": self.lifecycle_generation,
+            "symbol": self.symbol,
+            "ingress_generation": self.ingress_generation,
+            "ingress_sequence": self.ingress_sequence,
+            "market_data_id": self.market_data_id,
+            "failure_fingerprint_sha256": self.failure_fingerprint_sha256,
+            "next_retry_at_utc": self.next_retry_at_utc,
+            "pending_identity_sha256": self.pending_identity_sha256,
+            "executed": False,
+            "business_success": False,
+        }
+
+
+@dataclass(frozen=True)
+class MiniQMTKernelProductIngressCompletion:
+    """Exact process-local completion for one previously returned pending carrier."""
+
+    runtime_id: str
+    consumer_id: str
+    operation: str
+    lifecycle_generation: int
+    attempt_token: int
+    symbol: str
+    ingress_generation: int
+    ingress_sequence: int
+    market_data_id: str
+    pending_identity_sha256: str
+    completed_at_utc: str
+    business_success: bool
+    failure: Mapping[str, Any] | None = field(default=None, repr=False, compare=False)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "miniqmt_kernel_product_ingress_completion_v1",
+            "runtime_id": self.runtime_id,
+            "consumer_id": self.consumer_id,
+            "operation": self.operation,
+            "disposition": "ASYNC_SUCCEEDED" if self.business_success else "ASYNC_FAILED",
+            "lifecycle_generation": self.lifecycle_generation,
+            "attempt_token": self.attempt_token,
+            "symbol": self.symbol,
+            "ingress_generation": self.ingress_generation,
+            "ingress_sequence": self.ingress_sequence,
+            "market_data_id": self.market_data_id,
+            "pending_identity_sha256": self.pending_identity_sha256,
+            "completed_at_utc": self.completed_at_utc,
+            "executed": True,
+            "outcome_pending": False,
+            "business_success": self.business_success,
+            "failure": dict(self.failure) if self.failure is not None else None,
+        }
+
+
+class MiniQMTKernelProductIngressCompletionSignal:
+    """Single-assignment process-local completion channel with exact frame identity."""
+
+    def __init__(
+        self,
+        *,
+        runtime_id: str,
+        consumer_id: str,
+        operation: str,
+        lifecycle_generation: int,
+        attempt_token: int,
+        symbol: str,
+        ingress_generation: int,
+        ingress_sequence: int,
+        market_data_id: str,
+        pending_identity_sha256: str,
+    ) -> None:
+        self._identity = {
+            "runtime_id": runtime_id,
+            "consumer_id": consumer_id,
+            "operation": operation,
+            "lifecycle_generation": lifecycle_generation,
+            "attempt_token": attempt_token,
+            "symbol": symbol,
+            "ingress_generation": ingress_generation,
+            "ingress_sequence": ingress_sequence,
+            "market_data_id": market_data_id,
+            "pending_identity_sha256": pending_identity_sha256,
+        }
+        self._lock = threading.Lock()
+        self._completion: MiniQMTKernelProductIngressCompletion | None = None
+        self._subscribers: list[Callable[[MiniQMTKernelProductIngressCompletion], None]] = []
+
+    def identity(self) -> dict[str, Any]:
+        return dict(self._identity)
+
+    def subscribe(self, subscriber: Callable[[MiniQMTKernelProductIngressCompletion], None]) -> None:
+        if not callable(subscriber):
+            raise TypeError("kernel product completion subscriber must be callable")
+        with self._lock:
+            completion = self._completion
+            if completion is None:
+                self._subscribers.append(subscriber)
+                return
+        subscriber(completion)
+
+    def resolve(
+        self,
+        *,
+        business_success: bool,
+        completed_at_utc: datetime,
+        failure: Mapping[str, Any] | None,
+    ) -> MiniQMTKernelProductIngressCompletion:
+        if type(business_success) is not bool:
+            raise TypeError("kernel product completion success must be an exact bool")
+        if completed_at_utc.tzinfo is None or completed_at_utc.utcoffset() != UTC.utcoffset(None):
+            raise TypeError("kernel product completion timestamp must be UTC aware")
+        if business_success and failure is not None:
+            raise ValueError("successful kernel product completion cannot carry failure evidence")
+        if not business_success and not isinstance(failure, Mapping):
+            raise ValueError("failed kernel product completion requires failure evidence")
+        completion = MiniQMTKernelProductIngressCompletion(
+            **self._identity,
+            completed_at_utc=completed_at_utc.astimezone(UTC).isoformat(),
+            business_success=business_success,
+            failure=dict(failure) if failure is not None else None,
+        )
+        with self._lock:
+            if self._completion is not None:
+                raise RuntimeError("kernel product completion signal was resolved more than once")
+            self._completion = completion
+            subscribers = tuple(self._subscribers)
+            self._subscribers.clear()
+        for subscriber in subscribers:
+            subscriber(completion)
+        return completion
+
+
+@dataclass(frozen=True)
+class MiniQMTKernelProductIngressPending:
+    """Frame-bound proof that one callback is executing asynchronously."""
+
+    runtime_id: str
+    consumer_id: str
+    operation: str
+    lifecycle_generation: int
+    attempt_token: int
+    symbol: str | None
+    ingress_generation: int | None
+    ingress_sequence: int | None
+    market_data_id: str | None
+    pending_identity_sha256: str
+    completion_signal: MiniQMTKernelProductIngressCompletionSignal = field(repr=False, compare=False)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "miniqmt_kernel_product_ingress_pending_v1",
+            "runtime_id": self.runtime_id,
+            "consumer_id": self.consumer_id,
+            "operation": self.operation,
+            "disposition": "ASYNC_IN_FLIGHT",
+            "lifecycle_generation": self.lifecycle_generation,
+            "attempt_token": self.attempt_token,
+            "symbol": self.symbol,
+            "ingress_generation": self.ingress_generation,
+            "ingress_sequence": self.ingress_sequence,
+            "market_data_id": self.market_data_id,
+            "pending_identity_sha256": self.pending_identity_sha256,
+            "executed": True,
+            "outcome_pending": True,
+            "business_success": None,
+        }
+
+
+MiniQMTKernelProductIngressResult = MiniQMTKernelProductIngressSuppression | MiniQMTKernelProductIngressPending | None
 
 
 class ReservedSymbolMailbox:
@@ -68,6 +292,8 @@ class ReservedSymbolMailbox:
         self._accepted_count = 0
         self._coalesced_count = 0
         self._ordering_rejected_count = 0
+        self._drop_count_by_reason: dict[str, int] = {}
+        self._last_drop: dict[str, Any] | None = None
 
     def admit(self, symbols: tuple[str, ...]) -> None:
         normalized = tuple(dict.fromkeys(str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()))
@@ -104,7 +330,9 @@ class ReservedSymbolMailbox:
             revoked = self._admitted - admitted
             self._admitted = admitted
             for symbol in revoked:
-                self._slots.pop(symbol, None)
+                frame = self._slots.pop(symbol, None)
+                if frame is not None:
+                    self._record_drop_locked(frame, reason="SYMBOL_REVOKED")
                 self._queued.discard(symbol)
             if revoked:
                 self._tokens = deque(symbol for symbol in self._tokens if symbol not in revoked)
@@ -125,6 +353,8 @@ class ReservedSymbolMailbox:
                     context={"generation": generation, "generation_floor": self._generation_floor},
                 )
             self._generation_floor = generation
+            for frame in self._slots.values():
+                self._record_drop_locked(frame, reason="GENERATION_ACTIVATED_PURGE")
             self._slots.clear()
             self._queued.clear()
             self._tokens.clear()
@@ -133,6 +363,8 @@ class ReservedSymbolMailbox:
     def fence_generation(self, generation: int) -> None:
         with self._condition:
             self._generation_floor = max(self._generation_floor, generation + 1)
+            for frame in self._slots.values():
+                self._record_drop_locked(frame, reason="GENERATION_FENCED")
             self._slots.clear()
             self._queued.clear()
             self._tokens.clear()
@@ -154,11 +386,15 @@ class ReservedSymbolMailbox:
                 )
             if frame.ingress_generation < self._generation_floor:
                 self._ordering_rejected_count += 1
+                self._record_drop_locked(frame, reason="MAILBOX_STALE_GENERATION")
                 return "STALE_GENERATION"
             current = self._slots.get(frame.symbol)
             if current is not None and not self._is_newer(frame, current):
                 self._ordering_rejected_count += 1
+                self._record_drop_locked(frame, reason="MAILBOX_ORDERING_REJECTED")
                 return "ORDERING_REJECTED"
+            if current is not None:
+                self._record_drop_locked(current, reason="MAILBOX_COALESCED_SUPERSEDED")
             self._slots[frame.symbol] = frame
             if frame.symbol in self._queued:
                 self._coalesced_count += 1
@@ -193,7 +429,22 @@ class ReservedSymbolMailbox:
                 "coalesced_count": self._coalesced_count,
                 "ordering_rejected_count": self._ordering_rejected_count,
                 "generation_floor": self._generation_floor,
+                "drop_count_by_reason": dict(sorted(self._drop_count_by_reason.items())),
+                "last_drop": dict(self._last_drop) if self._last_drop is not None else None,
             }
+
+    def record_lifecycle_drop(self, frame: RawQuoteFrame, *, reason: str) -> None:
+        with self._condition:
+            self._record_drop_locked(frame, reason=reason)
+
+    def _record_drop_locked(self, frame: RawQuoteFrame, *, reason: str) -> None:
+        self._drop_count_by_reason[reason] = self._drop_count_by_reason.get(reason, 0) + 1
+        self._last_drop = {
+            "reason": reason,
+            "symbol": frame.symbol,
+            "generation": frame.ingress_generation,
+            "sequence": frame.ingress_sequence,
+        }
 
     @staticmethod
     def _is_newer(candidate: RawQuoteFrame, current: RawQuoteFrame) -> bool:
@@ -252,6 +503,20 @@ class PhaseOneRawQuoteSnapshotStore:
             return dict(self._latest_by_symbol)
 
 
+@dataclass(frozen=True)
+class _ContextualObservationSinkOwner:
+    """Exact process-local ownership for one contextual quote sink."""
+
+    consumer_id: str
+    symbols: tuple[str, ...]
+    sink: Callable[
+        [NormalizedQuoteObservation, QuoteEvaluationContext],
+        MiniQMTKernelProductIngressResult,
+    ]
+    registration_generation: int
+    ownership_sha256: str
+
+
 class PhaseOneQuoteProjectionSink:
     """P1-C same-writer raw-to-normalized projection; never calls providers or a broker."""
 
@@ -262,57 +527,207 @@ class PhaseOneQuoteProjectionSink:
         normalized_store: BoundedNormalizedQuoteStore,
         context_store: QuoteEvaluationContextStore,
         loud_sink: Callable[[QuoteContractError], None] | None = None,
-        observation_sink: Callable[[NormalizedQuoteObservation], None] | None = None,
+        observation_sink: Callable[[NormalizedQuoteObservation], MiniQMTKernelProductIngressResult] | None = None,
     ) -> None:
         self._raw_store = raw_store
         self._normalized_store = normalized_store
         self._context_store = context_store
         self._ordering = QuoteOrderingTracker()
         self._loud_sink = loud_sink
-        self._observation_sinks: dict[str, Callable[[NormalizedQuoteObservation], None]] = {}
+        self._observation_sinks: dict[
+            str,
+            Callable[[NormalizedQuoteObservation], MiniQMTKernelProductIngressResult],
+        ] = {}
         self._contextual_observation_sinks: dict[
             str,
-            Callable[[NormalizedQuoteObservation, QuoteEvaluationContext], None],
+            _ContextualObservationSinkOwner,
         ] = {}
+        self._contextual_sink_registration_generation = 0
         if observation_sink is not None:
             self._observation_sinks["initial"] = observation_sink
         self._lock = threading.RLock()
         self._last_error_by_symbol: dict[str, dict[str, Any]] = {}
+        self._last_suppression_by_symbol: dict[str, dict[str, Any]] = {}
+        self._active_pending_by_owner: dict[tuple[str, str], dict[str, Any]] = {}
+        self._last_completion_by_owner: dict[tuple[str, str], dict[str, Any]] = {}
+        self._pending_drop_count_by_reason: dict[str, int] = {}
+        self._last_pending_drop: dict[str, Any] | None = None
         self._accepted_count = 0
         self._rejected_count = 0
+        self._suppressed_count = 0
+        self._pending_count = 0
+        self._pending_completion_count = 0
 
     @property
     def normalized_store(self) -> BoundedNormalizedQuoteStore:
         return self._normalized_store
 
     def replace_admitted(self, symbols: tuple[str, ...]) -> None:
-        self._raw_store.replace_admitted(symbols)
-        self._normalized_store.replace_admitted(symbols)
+        exact_symbols = self._exact_symbol_ownership(symbols, allow_empty=True)
+        with self._lock:
+            self._validated_contextual_sink_snapshot_locked()
+        self._raw_store.replace_admitted(exact_symbols)
+        self._normalized_store.replace_admitted(exact_symbols)
+        admitted = frozenset(exact_symbols)
+        with self._lock:
+            self._last_error_by_symbol = {
+                symbol: payload for symbol, payload in self._last_error_by_symbol.items() if symbol in admitted
+            }
+            self._last_suppression_by_symbol = {
+                symbol: payload for symbol, payload in self._last_suppression_by_symbol.items() if symbol in admitted
+            }
+            for owner_key, payload in tuple(self._active_pending_by_owner.items()):
+                if owner_key[1] not in admitted:
+                    self._record_projection_pending_drop_locked(
+                        payload,
+                        reason="PROJECTION_PENDING_SYMBOL_REVOKED",
+                    )
+                    self._active_pending_by_owner.pop(owner_key, None)
+            self._last_completion_by_owner = {
+                owner_key: payload
+                for owner_key, payload in self._last_completion_by_owner.items()
+                if owner_key[1] in admitted
+            }
 
     def register_observation_sink(
         self,
         *,
         consumer_id: str,
-        sink: Callable[[NormalizedQuoteObservation, QuoteEvaluationContext], None],
+        symbols: tuple[str, ...],
+        sink: Callable[
+            [NormalizedQuoteObservation, QuoteEvaluationContext],
+            MiniQMTKernelProductIngressResult,
+        ],
     ) -> None:
-        normalized_id = str(consumer_id or "").strip()
-        if not normalized_id or not callable(sink):
+        exact_consumer_id = self._exact_consumer_id(consumer_id)
+        exact_symbols = self._exact_symbol_ownership(symbols, allow_empty=False)
+        if not callable(sink):
             raise quote_contract_error(
                 QuoteContractReasonCode.PAYLOAD_INVALID,
-                "observation sink registration requires consumer identity and callable sink",
+                "observation sink registration requires a callable sink",
+                context={"consumer_id": exact_consumer_id},
             )
         with self._lock:
-            if normalized_id in self._observation_sinks or normalized_id in self._contextual_observation_sinks:
+            self._validated_contextual_sink_snapshot_locked()
+            if exact_consumer_id in self._observation_sinks or exact_consumer_id in self._contextual_observation_sinks:
                 raise quote_contract_error(
                     QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
                     "observation sink consumer id is already registered",
-                    context={"consumer_id": normalized_id},
+                    context={"consumer_id": exact_consumer_id},
                 )
-            self._contextual_observation_sinks[normalized_id] = sink
+            self._contextual_sink_registration_generation += 1
+            registration_generation = self._contextual_sink_registration_generation
+            owner = _ContextualObservationSinkOwner(
+                consumer_id=exact_consumer_id,
+                symbols=exact_symbols,
+                sink=sink,
+                registration_generation=registration_generation,
+                ownership_sha256=self._contextual_sink_ownership_sha256(
+                    consumer_id=exact_consumer_id,
+                    symbols=exact_symbols,
+                    registration_generation=registration_generation,
+                ),
+            )
+            for owner_key, payload in tuple(self._active_pending_by_owner.items()):
+                if owner_key[0] != exact_consumer_id:
+                    continue
+                self._record_projection_pending_drop_locked(
+                    payload,
+                    reason="PROJECTION_PENDING_OWNER_REREGISTERED",
+                )
+                self._active_pending_by_owner.pop(owner_key, None)
+            for owner_key in tuple(self._last_completion_by_owner):
+                if owner_key[0] == exact_consumer_id:
+                    self._last_completion_by_owner.pop(owner_key, None)
+            self._contextual_observation_sinks[exact_consumer_id] = owner
 
-    def unregister_observation_sink(self, *, consumer_id: str) -> bool:
+    def unregister_observation_sink(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+        sink: Callable[
+            [NormalizedQuoteObservation, QuoteEvaluationContext],
+            MiniQMTKernelProductIngressResult,
+        ],
+    ) -> bool:
+        exact_consumer_id = self._exact_consumer_id(consumer_id)
+        exact_symbols = self._exact_symbol_ownership(symbols, allow_empty=False)
+        if not callable(sink):
+            raise quote_contract_error(
+                QuoteContractReasonCode.PAYLOAD_INVALID,
+                "observation sink unregistration requires a callable sink",
+                context={"consumer_id": exact_consumer_id},
+            )
         with self._lock:
-            return self._contextual_observation_sinks.pop(str(consumer_id or "").strip(), None) is not None
+            self._validated_contextual_sink_snapshot_locked()
+            owner = self._contextual_observation_sinks.get(exact_consumer_id)
+            if owner is None:
+                return False
+            self._assert_contextual_sink_identity(
+                owner=owner,
+                consumer_id=exact_consumer_id,
+                symbols=exact_symbols,
+                sink=sink,
+                operation="UNREGISTER",
+            )
+            del self._contextual_observation_sinks[exact_consumer_id]
+            for owner_key, payload in tuple(self._active_pending_by_owner.items()):
+                if owner_key[0] != exact_consumer_id:
+                    continue
+                self._record_projection_pending_drop_locked(
+                    payload,
+                    reason="PROJECTION_PENDING_SINK_UNREGISTERED",
+                )
+                self._active_pending_by_owner.pop(owner_key, None)
+            for owner_key in tuple(self._last_completion_by_owner):
+                if owner_key[0] == exact_consumer_id:
+                    self._last_completion_by_owner.pop(owner_key, None)
+            return True
+
+    def get_observation_sink(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+    ) -> (
+        Callable[
+            [NormalizedQuoteObservation, QuoteEvaluationContext],
+            MiniQMTKernelProductIngressResult,
+        ]
+        | None
+    ):
+        exact_consumer_id = self._exact_consumer_id(consumer_id)
+        exact_symbols = self._exact_symbol_ownership(symbols, allow_empty=False)
+        with self._lock:
+            self._validated_contextual_sink_snapshot_locked()
+            owner = self._contextual_observation_sinks.get(exact_consumer_id)
+            if owner is None:
+                return None
+            self._assert_contextual_sink_identity(
+                owner=owner,
+                consumer_id=exact_consumer_id,
+                symbols=exact_symbols,
+                operation="READBACK",
+            )
+            return owner.sink
+
+    def shutdown_observation_sinks(self) -> int:
+        """Remove every process-local sink only after its owner has fenced deliveries."""
+
+        with self._lock:
+            self._validated_contextual_sink_snapshot_locked()
+            removed = len(self._observation_sinks) + len(self._contextual_observation_sinks)
+            for payload in self._active_pending_by_owner.values():
+                self._record_projection_pending_drop_locked(
+                    payload,
+                    reason="PROJECTION_PENDING_SINK_SHUTDOWN",
+                )
+            self._active_pending_by_owner.clear()
+            self._last_completion_by_owner.clear()
+            self._observation_sinks.clear()
+            self._contextual_observation_sinks.clear()
+        return removed
 
     def on_generation_published(self, generation: int) -> None:
         self._ordering.activate_generation(generation)
@@ -370,12 +785,35 @@ class PhaseOneQuoteProjectionSink:
             )
             self._normalized_store.accept(observation)
             observation_sink_failed = False
+            observation_sink_pending = False
             with self._lock:
                 observation_sinks = tuple(self._observation_sinks.items())
-                contextual_observation_sinks = tuple(self._contextual_observation_sinks.items())
+                contextual_observation_sink_owners = self._validated_contextual_sink_snapshot_locked()
             for consumer_id, observation_sink in observation_sinks:
                 try:
-                    observation_sink(observation)
+                    result = observation_sink(observation)
+                    carrier = self._validated_sink_result(
+                        result,
+                        consumer_id=consumer_id,
+                        frame=frame,
+                        observation=observation,
+                        values=(observation,),
+                    )
+                    if isinstance(carrier, MiniQMTKernelProductIngressSuppression):
+                        observation_sink_failed = True
+                        self._record_suppression(
+                            frame=frame,
+                            carrier=carrier,
+                        )
+                    elif isinstance(carrier, MiniQMTKernelProductIngressPending):
+                        observation_sink_pending = (
+                            self._record_pending(
+                                frame=frame,
+                                carrier=carrier,
+                                expected_owner=observation_sink,
+                            )
+                            or observation_sink_pending
+                        )
                 except QuoteContractError as error:
                     observation_sink_failed = True
                     self._record_loud(frame=frame, error=error)
@@ -393,49 +831,318 @@ class PhaseOneQuoteProjectionSink:
                             },
                         ),
                     )
-            for consumer_id, observation_sink in contextual_observation_sinks:
-                try:
-                    observation_sink(observation, context)
-                except QuoteContractError as error:
-                    observation_sink_failed = True
-                    self._record_loud(frame=frame, error=error)
-                except Exception as exc:  # noqa: BLE001 - observation reporting must not rewrite quote state.
+            deferred_contextual_sinks: list[tuple[_ContextualObservationSinkOwner, Callable[..., Any], Any]] = []
+            synchronous_contextual_sinks: list[_ContextualObservationSinkOwner] = []
+            for owner in contextual_observation_sink_owners:
+                if frame.symbol not in owner.symbols:
+                    continue
+                enqueue = getattr(owner.sink, "enqueue_kernel_product_callback_v1", None)
+                await_result = getattr(owner.sink, "await_kernel_product_callback_v1", None)
+                if callable(enqueue) and callable(await_result):
+                    try:
+                        dispatch = enqueue(observation, context)
+                    except QuoteContractError as error:
+                        observation_sink_failed = True
+                        self._record_loud(frame=frame, error=error)
+                    except Exception as exc:  # noqa: BLE001 - all peers must still receive the frame.
+                        observation_sink_failed = True
+                        self._record_contextual_sink_exception(
+                            frame=frame,
+                            context=context,
+                            consumer_id=owner.consumer_id,
+                            exception=exc,
+                            stage="ENQUEUE",
+                        )
+                    else:
+                        deferred_contextual_sinks.append((owner, await_result, dispatch))
+                elif callable(enqueue) or callable(await_result):
                     observation_sink_failed = True
                     self._record_loud(
                         frame=frame,
                         error=quote_contract_error(
                             QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
-                            "contextual quote observation sink raised unexpectedly",
-                            context={
-                                "symbol": frame.symbol,
-                                "consumer_id": consumer_id,
-                                "context_id": context.context_id,
-                                "exception_type": type(exc).__name__,
-                            },
+                            "contextual quote sink exposes an incomplete asynchronous dispatch contract",
+                            context={"consumer_id": owner.consumer_id, "symbol": frame.symbol},
                         ),
+                    )
+                else:
+                    synchronous_contextual_sinks.append(owner)
+
+            fanout_deadline = time.monotonic() + _KERNEL_CONTEXTUAL_FANOUT_WAIT_SECONDS
+            for owner, await_result, dispatch in deferred_contextual_sinks:
+                consumer_id = owner.consumer_id
+                try:
+                    result = await_result(
+                        dispatch=dispatch,
+                        timeout_seconds=max(0.0, fanout_deadline - time.monotonic()),
+                    )
+                    carrier = self._validated_sink_result(
+                        result,
+                        consumer_id=consumer_id,
+                        frame=frame,
+                        observation=observation,
+                        values=(observation, context),
+                    )
+                    if isinstance(carrier, MiniQMTKernelProductIngressSuppression):
+                        observation_sink_failed = True
+                        self._record_suppression(
+                            frame=frame,
+                            carrier=carrier,
+                        )
+                    elif isinstance(carrier, MiniQMTKernelProductIngressPending):
+                        observation_sink_pending = (
+                            self._record_pending(
+                                frame=frame,
+                                carrier=carrier,
+                                expected_owner=owner,
+                            )
+                            or observation_sink_pending
+                        )
+                except QuoteContractError as error:
+                    observation_sink_failed = True
+                    self._record_loud(frame=frame, error=error)
+                except Exception as exc:  # noqa: BLE001 - all peers were already enqueued before this wait.
+                    observation_sink_failed = True
+                    self._record_contextual_sink_exception(
+                        frame=frame,
+                        context=context,
+                        consumer_id=consumer_id,
+                        exception=exc,
+                        stage="AWAIT",
+                    )
+            for owner in synchronous_contextual_sinks:
+                consumer_id = owner.consumer_id
+                try:
+                    result = owner.sink(observation, context)
+                    carrier = self._validated_sink_result(
+                        result,
+                        consumer_id=consumer_id,
+                        frame=frame,
+                        observation=observation,
+                        values=(observation, context),
+                    )
+                    if isinstance(carrier, MiniQMTKernelProductIngressSuppression):
+                        observation_sink_failed = True
+                        self._record_suppression(frame=frame, carrier=carrier)
+                    elif isinstance(carrier, MiniQMTKernelProductIngressPending):
+                        observation_sink_pending = (
+                            self._record_pending(
+                                frame=frame,
+                                carrier=carrier,
+                                expected_owner=owner,
+                            )
+                            or observation_sink_pending
+                        )
+                except QuoteContractError as error:
+                    observation_sink_failed = True
+                    self._record_loud(frame=frame, error=error)
+                except Exception as exc:  # noqa: BLE001 - generic non-kernel observers retain loud isolation.
+                    observation_sink_failed = True
+                    self._record_contextual_sink_exception(
+                        frame=frame,
+                        context=context,
+                        consumer_id=consumer_id,
+                        exception=exc,
+                        stage="SYNCHRONOUS",
                     )
             with self._lock:
                 self._accepted_count += 1
-                if not observation_sink_failed:
+                if not observation_sink_failed and not observation_sink_pending:
                     self._last_error_by_symbol.pop(frame.symbol, None)
+                    self._last_suppression_by_symbol.pop(frame.symbol, None)
         except QuoteContractError as error:
             self._record_loud(frame=frame, error=error)
 
     def health(self) -> dict[str, Any]:
         with self._lock:
+            contextual_observation_sink_owners = self._validated_contextual_sink_snapshot_locked()
             errors = {symbol: dict(payload) for symbol, payload in self._last_error_by_symbol.items()}
+            suppressions = {symbol: dict(payload) for symbol, payload in self._last_suppression_by_symbol.items()}
+            pending_by_owner = {
+                owner_key: dict(payload) for owner_key, payload in self._active_pending_by_owner.items()
+            }
+            completions_by_owner = {
+                owner_key: dict(payload) for owner_key, payload in self._last_completion_by_owner.items()
+            }
             accepted_count = self._accepted_count
             rejected_count = self._rejected_count
+            suppressed_count = self._suppressed_count
+            pending_count = self._pending_count
+            pending_completion_count = self._pending_completion_count
+            pending_drop_count_by_reason = dict(sorted(self._pending_drop_count_by_reason.items()))
+            last_pending_drop = dict(self._last_pending_drop) if self._last_pending_drop is not None else None
+        active_pending_by_consumer: dict[str, dict[str, dict[str, Any]]] = {}
+        active_pending_by_symbol: dict[str, dict[str, dict[str, Any]]] = {}
+        for (consumer_id, symbol), pending_payload in sorted(pending_by_owner.items()):
+            active_pending_by_consumer.setdefault(consumer_id, {})[symbol] = pending_payload
+            active_pending_by_symbol.setdefault(symbol, {})[consumer_id] = pending_payload
+        completion_by_consumer: dict[str, dict[str, dict[str, Any]]] = {}
+        for (consumer_id, symbol), completion_payload in sorted(completions_by_owner.items()):
+            completion_by_consumer.setdefault(consumer_id, {})[symbol] = completion_payload
         return {
             "projection": {
                 "accepted_count": accepted_count,
                 "rejected_count": rejected_count,
+                "suppressed_count": suppressed_count,
+                "pending_count": pending_count,
+                "active_pending_count": len(pending_by_owner),
+                "pending_completion_count": pending_completion_count,
                 "last_error_by_symbol": errors,
+                "last_suppression_by_symbol": suppressions,
+                "last_pending_by_owner": active_pending_by_consumer,
+                "last_pending_by_symbol": active_pending_by_symbol,
+                "last_completion_by_owner": completion_by_consumer,
+                "pending_drop_count_by_reason": pending_drop_count_by_reason,
+                "last_pending_drop": last_pending_drop,
                 "ordering": self._ordering.health(),
                 "normalized_store": self._normalized_store.health(),
                 "context": self._context_store.health(),
+                "contextual_observation_sink_owners": {
+                    owner.consumer_id: {
+                        "schema_version": "miniqmt_contextual_observation_sink_owner_v1",
+                        "consumer_id": owner.consumer_id,
+                        "symbols": list(owner.symbols),
+                        "symbol_count": len(owner.symbols),
+                        "registration_generation": owner.registration_generation,
+                        "ownership_sha256": owner.ownership_sha256,
+                        "sink_registered": True,
+                    }
+                    for owner in contextual_observation_sink_owners
+                },
             }
         }
+
+    @staticmethod
+    def _exact_consumer_id(consumer_id: object) -> str:
+        if type(consumer_id) is not str or not consumer_id or consumer_id != consumer_id.strip():
+            raise quote_contract_error(
+                QuoteContractReasonCode.PAYLOAD_INVALID,
+                "observation sink ownership requires an exact non-empty consumer identity",
+                context={"consumer_id_type": type(consumer_id).__qualname__},
+            )
+        return consumer_id
+
+    @staticmethod
+    def _exact_symbol_ownership(symbols: object, *, allow_empty: bool) -> tuple[str, ...]:
+        if type(symbols) is not tuple:
+            raise quote_contract_error(
+                QuoteContractReasonCode.PAYLOAD_INVALID,
+                "observation sink ownership symbols must be an exact tuple",
+                context={"symbols_type": type(symbols).__qualname__},
+            )
+        if not symbols and not allow_empty:
+            raise quote_contract_error(
+                QuoteContractReasonCode.PAYLOAD_INVALID,
+                "observation sink ownership requires at least one symbol",
+            )
+        exact_symbols: list[str] = []
+        for index, symbol in enumerate(symbols):
+            if type(symbol) is not str or not symbol or symbol != symbol.strip():
+                raise quote_contract_error(
+                    QuoteContractReasonCode.PAYLOAD_INVALID,
+                    "observation sink ownership contains a non-exact symbol",
+                    context={"symbol_index": index, "symbol_type": type(symbol).__qualname__},
+                )
+            exact_symbols.append(symbol)
+        if len(set(exact_symbols)) != len(exact_symbols):
+            raise quote_contract_error(
+                QuoteContractReasonCode.PAYLOAD_INVALID,
+                "observation sink ownership symbols must be unique",
+                context={"symbol_count": len(exact_symbols)},
+            )
+        return tuple(exact_symbols)
+
+    @staticmethod
+    def _contextual_sink_ownership_sha256(
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+        registration_generation: int,
+    ) -> str:
+        hasher = hashlib.sha256()
+        for component in (
+            "miniqmt_contextual_observation_sink_owner_v1",
+            consumer_id,
+            str(registration_generation),
+            str(len(symbols)),
+            *symbols,
+        ):
+            encoded = component.encode("utf-8")
+            hasher.update(len(encoded).to_bytes(8, byteorder="big", signed=False))
+            hasher.update(encoded)
+        return hasher.hexdigest()
+
+    def _validated_contextual_sink_snapshot_locked(self) -> tuple[_ContextualObservationSinkOwner, ...]:
+        owners: list[_ContextualObservationSinkOwner] = []
+        for registry_consumer_id, owner in self._contextual_observation_sinks.items():
+            if type(owner) is not _ContextualObservationSinkOwner:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                    "contextual observation sink registry contains an invalid owner carrier",
+                    context={"consumer_id": registry_consumer_id, "owner_type": type(owner).__qualname__},
+                )
+            exact_consumer_id = self._exact_consumer_id(owner.consumer_id)
+            exact_symbols = self._exact_symbol_ownership(owner.symbols, allow_empty=False)
+            if type(owner.registration_generation) is not int or owner.registration_generation <= 0:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                    "contextual observation sink registration generation is invalid",
+                    context={"consumer_id": registry_consumer_id},
+                )
+            expected_hash = self._contextual_sink_ownership_sha256(
+                consumer_id=exact_consumer_id,
+                symbols=exact_symbols,
+                registration_generation=owner.registration_generation,
+            )
+            if (
+                registry_consumer_id != exact_consumer_id
+                or not callable(owner.sink)
+                or owner.ownership_sha256 != expected_hash
+            ):
+                raise quote_contract_error(
+                    QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                    "contextual observation sink ownership identity is inconsistent",
+                    context={
+                        "registry_consumer_id": registry_consumer_id,
+                        "owner_consumer_id": exact_consumer_id,
+                        "expected_ownership_sha256": expected_hash,
+                        "actual_ownership_sha256": owner.ownership_sha256,
+                        "sink_callable": callable(owner.sink),
+                    },
+                )
+            owners.append(owner)
+        return tuple(owners)
+
+    @staticmethod
+    def _assert_contextual_sink_identity(
+        *,
+        owner: _ContextualObservationSinkOwner,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+        operation: str,
+        sink: Callable[
+            [NormalizedQuoteObservation, QuoteEvaluationContext],
+            MiniQMTKernelProductIngressResult,
+        ]
+        | None = None,
+    ) -> None:
+        expected_hash = PhaseOneQuoteProjectionSink._contextual_sink_ownership_sha256(
+            consumer_id=consumer_id,
+            symbols=symbols,
+            registration_generation=owner.registration_generation,
+        )
+        if owner.ownership_sha256 != expected_hash or (sink is not None and owner.sink is not sink):
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "contextual observation sink ownership does not match the exact requested identity",
+                context={
+                    "consumer_id": consumer_id,
+                    "operation": operation,
+                    "requested_ownership_sha256": expected_hash,
+                    "registered_ownership_sha256": owner.ownership_sha256,
+                    "sink_identity_match": sink is None or owner.sink is sink,
+                },
+            )
 
     def _record_ordering_rejection(self, *, frame: RawQuoteFrame, disposition: str) -> None:
         error = quote_contract_error(
@@ -449,6 +1156,425 @@ class PhaseOneQuoteProjectionSink:
             },
         )
         self._record_loud(frame=frame, error=error)
+
+    @classmethod
+    def _validated_sink_result(
+        cls,
+        result: Any,
+        *,
+        consumer_id: str,
+        frame: RawQuoteFrame,
+        observation: NormalizedQuoteObservation,
+        values: tuple[Any, ...],
+    ) -> MiniQMTKernelProductIngressResult:
+        if type(result) is MiniQMTKernelProductIngressPending:
+            return cls._validated_sink_pending(
+                result,
+                consumer_id=consumer_id,
+                frame=frame,
+                observation=observation,
+                values=values,
+            )
+        return cls._validated_sink_suppression(
+            result,
+            consumer_id=consumer_id,
+            frame=frame,
+            observation=observation,
+            values=values,
+        )
+
+    @staticmethod
+    def _validated_sink_suppression(
+        result: Any,
+        *,
+        consumer_id: str,
+        frame: RawQuoteFrame,
+        observation: NormalizedQuoteObservation,
+        values: tuple[Any, ...],
+    ) -> MiniQMTKernelProductIngressSuppression | None:
+        if result is None:
+            return None
+        if type(result) is not MiniQMTKernelProductIngressSuppression:
+            raise quote_contract_error(
+                QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+                "quote observation sink returned an unregistered non-None result carrier",
+                context={"consumer_id": consumer_id, "result_type": type(result).__qualname__},
+            )
+        payload = result.as_dict()
+        required = {
+            "schema_version",
+            "runtime_id",
+            "consumer_id",
+            "operation",
+            "disposition",
+            "lifecycle_generation",
+            "symbol",
+            "ingress_generation",
+            "ingress_sequence",
+            "market_data_id",
+            "failure_fingerprint_sha256",
+            "next_retry_at_utc",
+            "pending_identity_sha256",
+            "executed",
+            "business_success",
+        }
+        lifecycle_generation = payload.get("lifecycle_generation") if isinstance(payload, dict) else None
+        failure_sha256 = payload.get("failure_fingerprint_sha256") if isinstance(payload, dict) else None
+        pending_sha256 = payload.get("pending_identity_sha256") if isinstance(payload, dict) else None
+        next_retry_at_utc = payload.get("next_retry_at_utc") if isinstance(payload, dict) else None
+        disposition = payload.get("disposition") if isinstance(payload, dict) else None
+        runtime_id = payload.get("runtime_id") if isinstance(payload, dict) else None
+        expected_consumer_id = f"k6d-kernel-v2:{runtime_id}" if type(runtime_id) is str else None
+        expected_pending_identity = (
+            kernel_product_pending_identity_sha256_v1(
+                runtime_id=runtime_id,
+                symbol=frame.symbol,
+                market_data_id=observation.market_data_id,
+                ingress_generation=frame.ingress_generation,
+                ingress_sequence=frame.ingress_sequence,
+                context_id=observation.context_id,
+                values=values,
+            )
+            if type(runtime_id) is str and runtime_id
+            else None
+        )
+
+        def valid_sha256(value: Any, *, nullable: bool) -> bool:
+            if value is None:
+                return nullable
+            return (
+                type(value) is str
+                and len(value) == 64
+                and value == value.lower()
+                and all(character in "0123456789abcdef" for character in value)
+            )
+
+        retry_timestamp_valid = next_retry_at_utc is None
+        if type(next_retry_at_utc) is str:
+            try:
+                parsed_retry_at = datetime.fromisoformat(next_retry_at_utc)
+            except ValueError:
+                retry_timestamp_valid = False
+            else:
+                retry_timestamp_valid = (
+                    parsed_retry_at.tzinfo is not None
+                    and parsed_retry_at.utcoffset() == UTC.utcoffset(None)
+                    and next_retry_at_utc == parsed_retry_at.astimezone(UTC).isoformat()
+                )
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != required
+            or payload.get("schema_version") != "miniqmt_kernel_product_ingress_suppression_v1"
+            or type(payload.get("runtime_id")) is not str
+            or not payload["runtime_id"]
+            or payload["runtime_id"] != payload["runtime_id"].strip()
+            or payload.get("consumer_id") != consumer_id
+            or payload.get("consumer_id") != expected_consumer_id
+            or payload.get("operation") != "CALLBACK"
+            or disposition
+            not in {
+                "LIFECYCLE_FENCED",
+                "SINGLE_FLIGHT_SUPPRESSED",
+                "RETRY_BACKOFF_SUPPRESSED",
+            }
+            or type(lifecycle_generation) is not int
+            or lifecycle_generation <= 0
+            or payload.get("symbol") != frame.symbol
+            or type(payload.get("ingress_generation")) is not int
+            or payload.get("ingress_generation") != frame.ingress_generation
+            or type(payload.get("ingress_sequence")) is not int
+            or payload.get("ingress_sequence") != frame.ingress_sequence
+            or payload.get("market_data_id") != observation.market_data_id
+            or not valid_sha256(failure_sha256, nullable=True)
+            or not valid_sha256(pending_sha256, nullable=False)
+            or pending_sha256 != expected_pending_identity
+            or not retry_timestamp_valid
+            or (next_retry_at_utc is not None and failure_sha256 is None)
+            or (disposition == "RETRY_BACKOFF_SUPPRESSED" and (failure_sha256 is None or next_retry_at_utc is None))
+            or payload.get("executed") is not False
+            or payload.get("business_success") is not False
+        ):
+            raise quote_contract_error(
+                QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+                "quote observation sink suppression carrier is malformed",
+                context={"consumer_id": consumer_id, "result_type": type(result).__qualname__},
+            )
+        return result
+
+    @staticmethod
+    def _validated_sink_pending(
+        result: MiniQMTKernelProductIngressPending,
+        *,
+        consumer_id: str,
+        frame: RawQuoteFrame,
+        observation: NormalizedQuoteObservation,
+        values: tuple[Any, ...],
+    ) -> MiniQMTKernelProductIngressPending:
+        payload = result.as_dict()
+        runtime_id = payload.get("runtime_id")
+        expected_consumer_id = f"k6d-kernel-v2:{runtime_id}" if type(runtime_id) is str else None
+        expected_pending_identity = (
+            kernel_product_pending_identity_sha256_v1(
+                runtime_id=runtime_id,
+                symbol=frame.symbol,
+                market_data_id=observation.market_data_id,
+                ingress_generation=frame.ingress_generation,
+                ingress_sequence=frame.ingress_sequence,
+                context_id=observation.context_id,
+                values=values,
+            )
+            if type(runtime_id) is str and runtime_id
+            else None
+        )
+        required = {
+            "schema_version",
+            "runtime_id",
+            "consumer_id",
+            "operation",
+            "disposition",
+            "lifecycle_generation",
+            "attempt_token",
+            "symbol",
+            "ingress_generation",
+            "ingress_sequence",
+            "market_data_id",
+            "pending_identity_sha256",
+            "executed",
+            "outcome_pending",
+            "business_success",
+        }
+        pending_sha256 = payload.get("pending_identity_sha256")
+        signal_identity = (
+            result.completion_signal.identity()
+            if type(result.completion_signal) is MiniQMTKernelProductIngressCompletionSignal
+            else None
+        )
+        expected_signal_identity = {
+            field_name: payload.get(field_name)
+            for field_name in (
+                "runtime_id",
+                "consumer_id",
+                "operation",
+                "lifecycle_generation",
+                "attempt_token",
+                "symbol",
+                "ingress_generation",
+                "ingress_sequence",
+                "market_data_id",
+                "pending_identity_sha256",
+            )
+        }
+        if (
+            set(payload) != required
+            or payload.get("schema_version") != "miniqmt_kernel_product_ingress_pending_v1"
+            or type(runtime_id) is not str
+            or not runtime_id
+            or runtime_id != runtime_id.strip()
+            or payload.get("consumer_id") != consumer_id
+            or payload.get("consumer_id") != expected_consumer_id
+            or payload.get("operation") != "CALLBACK"
+            or payload.get("disposition") != "ASYNC_IN_FLIGHT"
+            or type(payload.get("lifecycle_generation")) is not int
+            or payload["lifecycle_generation"] <= 0
+            or type(payload.get("attempt_token")) is not int
+            or payload["attempt_token"] <= 0
+            or payload.get("symbol") != frame.symbol
+            or type(payload.get("ingress_generation")) is not int
+            or payload.get("ingress_generation") != frame.ingress_generation
+            or type(payload.get("ingress_sequence")) is not int
+            or payload.get("ingress_sequence") != frame.ingress_sequence
+            or payload.get("market_data_id") != observation.market_data_id
+            or type(pending_sha256) is not str
+            or len(pending_sha256) != 64
+            or pending_sha256 != pending_sha256.lower()
+            or any(character not in "0123456789abcdef" for character in pending_sha256)
+            or pending_sha256 != expected_pending_identity
+            or payload.get("executed") is not True
+            or payload.get("outcome_pending") is not True
+            or payload.get("business_success") is not None
+            or signal_identity != expected_signal_identity
+        ):
+            raise quote_contract_error(
+                QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+                "quote observation sink pending carrier is malformed",
+                context={"consumer_id": consumer_id, "result_type": type(result).__qualname__},
+            )
+        return result
+
+    def _record_suppression(
+        self,
+        *,
+        frame: RawQuoteFrame,
+        carrier: MiniQMTKernelProductIngressSuppression,
+    ) -> None:
+        with self._lock:
+            self._suppressed_count += 1
+            self._last_suppression_by_symbol[frame.symbol] = carrier.as_dict()
+
+    def _record_contextual_sink_exception(
+        self,
+        *,
+        frame: RawQuoteFrame,
+        context: QuoteEvaluationContext,
+        consumer_id: str,
+        exception: Exception,
+        stage: str,
+    ) -> None:
+        self._record_loud(
+            frame=frame,
+            error=quote_contract_error(
+                QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+                "contextual quote observation sink raised unexpectedly",
+                context={
+                    "symbol": frame.symbol,
+                    "consumer_id": consumer_id,
+                    "context_id": context.context_id,
+                    "dispatch_stage": stage,
+                    "exception_type": type(exception).__name__,
+                },
+            ),
+        )
+
+    def _record_pending(
+        self,
+        *,
+        frame: RawQuoteFrame,
+        carrier: MiniQMTKernelProductIngressPending,
+        expected_owner: object,
+    ) -> bool:
+        payload = carrier.as_dict()
+        owner_key = (carrier.consumer_id, frame.symbol)
+        with self._lock:
+            self._pending_count += 1
+            if self._registered_sink_owner_locked(carrier.consumer_id) is not expected_owner:
+                self._record_projection_pending_drop_locked(
+                    payload,
+                    reason="PROJECTION_PENDING_STALE_SINK_OWNER",
+                )
+                return False
+            existing = self._active_pending_by_owner.get(owner_key)
+            if existing is not None and (
+                existing.get("pending_identity_sha256") != carrier.pending_identity_sha256
+                or existing.get("attempt_token") != carrier.attempt_token
+            ):
+                self._record_projection_pending_drop_locked(
+                    existing,
+                    reason="PROJECTION_PENDING_OWNER_REPLACED",
+                    replacement=payload,
+                )
+            self._active_pending_by_owner[owner_key] = payload
+        carrier.completion_signal.subscribe(
+            lambda completion: self._consume_pending_completion(
+                owner_key=owner_key,
+                expected=payload,
+                expected_owner=expected_owner,
+                completion=completion,
+            )
+        )
+        with self._lock:
+            current = self._active_pending_by_owner.get(owner_key)
+            return bool(
+                current is not None
+                and current.get("pending_identity_sha256") == carrier.pending_identity_sha256
+                and current.get("attempt_token") == carrier.attempt_token
+            )
+
+    def _consume_pending_completion(
+        self,
+        *,
+        owner_key: tuple[str, str],
+        expected: Mapping[str, Any],
+        expected_owner: object,
+        completion: MiniQMTKernelProductIngressCompletion,
+    ) -> None:
+        payload = completion.as_dict()
+        identity_fields = (
+            "runtime_id",
+            "consumer_id",
+            "operation",
+            "lifecycle_generation",
+            "attempt_token",
+            "symbol",
+            "ingress_generation",
+            "ingress_sequence",
+            "market_data_id",
+            "pending_identity_sha256",
+        )
+        if any(payload.get(field_name) != expected.get(field_name) for field_name in identity_fields):
+            raise quote_contract_error(
+                QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+                "asynchronous quote completion differs from its exact pending owner",
+                context={
+                    "consumer_id": owner_key[0],
+                    "symbol": owner_key[1],
+                    "expected_pending_identity_sha256": expected.get("pending_identity_sha256"),
+                    "actual_pending_identity_sha256": payload.get("pending_identity_sha256"),
+                    "expected_attempt_token": expected.get("attempt_token"),
+                    "actual_attempt_token": payload.get("attempt_token"),
+                },
+            )
+        with self._lock:
+            current = self._active_pending_by_owner.get(owner_key)
+            if self._registered_sink_owner_locked(owner_key[0]) is not expected_owner:
+                if current is not None and (
+                    current.get("pending_identity_sha256") == expected.get("pending_identity_sha256")
+                    and current.get("attempt_token") == expected.get("attempt_token")
+                ):
+                    self._active_pending_by_owner.pop(owner_key, None)
+                self._record_projection_pending_drop_locked(
+                    expected,
+                    reason="ASYNC_COMPLETION_STALE_SINK_OWNER",
+                    replacement=current,
+                )
+                return
+            if current is None:
+                self._record_projection_pending_drop_locked(
+                    expected,
+                    reason="ASYNC_COMPLETION_PENDING_OWNER_ABSENT",
+                    replacement=payload,
+                )
+                self._last_completion_by_owner[owner_key] = payload
+                return
+            if (
+                current.get("pending_identity_sha256") != expected.get("pending_identity_sha256")
+                or current.get("attempt_token") != expected.get("attempt_token")
+            ):
+                self._record_projection_pending_drop_locked(
+                    expected,
+                    reason="ASYNC_COMPLETION_STALE_PENDING_OWNER",
+                    replacement=current,
+                )
+                return
+            self._active_pending_by_owner.pop(owner_key)
+            self._pending_completion_count += 1
+            self._last_completion_by_owner[owner_key] = payload
+
+    def _registered_sink_owner_locked(self, consumer_id: str) -> object | None:
+        contextual_owner = self._contextual_observation_sinks.get(consumer_id)
+        if contextual_owner is not None:
+            return contextual_owner
+        return self._observation_sinks.get(consumer_id)
+
+    def _record_projection_pending_drop_locked(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        reason: str,
+        replacement: Mapping[str, Any] | None = None,
+    ) -> None:
+        self._pending_drop_count_by_reason[reason] = self._pending_drop_count_by_reason.get(reason, 0) + 1
+        self._last_pending_drop = {
+            "reason": reason,
+            "runtime_id": payload.get("runtime_id"),
+            "consumer_id": payload.get("consumer_id"),
+            "symbol": payload.get("symbol"),
+            "attempt_token": payload.get("attempt_token"),
+            "pending_identity_sha256": payload.get("pending_identity_sha256"),
+            "replacement_attempt_token": replacement.get("attempt_token") if replacement is not None else None,
+            "replacement_pending_identity_sha256": (
+                replacement.get("pending_identity_sha256") if replacement is not None else None
+            ),
+        }
 
     def _record_loud(self, *, frame: RawQuoteFrame, error: QuoteContractError) -> None:
         payload = error.as_loud_payload()
@@ -521,6 +1647,8 @@ class QuoteIngressWorker:
         self._restart_count = 0
         self._restart_attempts_in_epoch = 0
         self._next_restart_after_monotonic_ns = 0
+        self._pending_drop_count_by_reason: dict[str, int] = {}
+        self._last_pending_drop: dict[str, Any] | None = None
 
     def admit_symbols(self, symbols: tuple[str, ...]) -> None:
         self._mailbox.admit(symbols)
@@ -530,6 +1658,9 @@ class QuoteIngressWorker:
         admitted = set(symbols)
         with self._lock:
             for generation, frames in list(self._pending_by_generation.items()):
+                for symbol, frame in frames.items():
+                    if symbol not in admitted:
+                        self._record_pending_drop_locked(frame, reason="PENDING_SYMBOL_REVOKED")
                 retained = {symbol: frame for symbol, frame in frames.items() if symbol in admitted}
                 if retained:
                     self._pending_by_generation[generation] = retained
@@ -561,6 +1692,7 @@ class QuoteIngressWorker:
     def ingest_frame(self, frame: RawQuoteFrame) -> bool:
         with self._lock:
             if frame.ingress_generation <= self._fenced_generation:
+                self._record_pending_drop_locked(frame, reason="PENDING_FENCED_GENERATION")
                 stale = quote_contract_error(
                     QuoteContractReasonCode.ORDERING_REJECTED,
                     "fenced quote generation cannot enter the Phase 1 mailbox",
@@ -568,6 +1700,7 @@ class QuoteIngressWorker:
                         "event": "STALE_GENERATION",
                         "consumer_id": self._consumer_id,
                         "generation": frame.ingress_generation,
+                        "sequence": frame.ingress_sequence,
                         "fenced_generation": self._fenced_generation,
                         "symbol": frame.symbol,
                     },
@@ -577,8 +1710,14 @@ class QuoteIngressWorker:
             elif self._active_generation != frame.ingress_generation:
                 pending = self._pending_by_generation.setdefault(frame.ingress_generation, {})
                 current = pending.get(frame.symbol)
-                if current is None or ReservedSymbolMailbox._is_newer(frame, current):
+                if current is None:
                     pending[frame.symbol] = frame
+                    return True
+                if ReservedSymbolMailbox._is_newer(frame, current):
+                    self._record_pending_drop_locked(current, reason="PENDING_COALESCED_SUPERSEDED")
+                    pending[frame.symbol] = frame
+                    return True
+                self._record_pending_drop_locked(frame, reason="PENDING_ORDERING_REJECTED")
                 return True
             else:
                 error = None
@@ -609,7 +1748,12 @@ class QuoteIngressWorker:
 
     def on_generation_published(self, data_session_key: str, generation: int) -> bool:
         with self._lock:
-            if generation == self._active_generation and self._status not in {"FAILED", "STOPPED"}:
+            if generation == self._active_generation and self._status not in {
+                "FAILED",
+                "STOPPED",
+                "STOPPING",
+                "SHUTDOWN_UNKNOWN",
+            }:
                 return True
             if generation <= self._fenced_generation:
                 error = quote_contract_error(
@@ -653,14 +1797,29 @@ class QuoteIngressWorker:
                 )
                 for pending_generation in list(self._pending_by_generation):
                     if pending_generation < generation:
-                        self._pending_by_generation.pop(pending_generation, None)
+                        stale_frames = self._pending_by_generation.pop(pending_generation, {})
+                        for frame in stale_frames.values():
+                            self._record_pending_drop_locked(
+                                frame,
+                                reason="PENDING_GENERATION_SUPERSEDED",
+                            )
                 self._status = "STARTING"
                 error = None
         if error is not None:
             self._emit_loud(error)
             return False
-        for frame in pending_frames:
+        for index, frame in enumerate(pending_frames):
             if not self.ingest_frame(frame):
+                with self._lock:
+                    self._record_pending_drop_locked(
+                        frame,
+                        reason="PENDING_PUBLISH_REPLAY_REJECTED",
+                    )
+                    for remaining_frame in pending_frames[index + 1 :]:
+                        self._record_pending_drop_locked(
+                            remaining_frame,
+                            reason="PENDING_PUBLISH_REPLAY_ABORTED",
+                        )
                 return False
         started = self._start_writer_if_needed()
         if started:
@@ -672,7 +1831,7 @@ class QuoteIngressWorker:
         """Pure readiness check used before a physical generation is committed."""
 
         with self._lock:
-            if self._status == "STOPPED" or generation <= self._fenced_generation:
+            if self._status in {"STOPPED", "STOPPING", "SHUTDOWN_UNKNOWN"} or generation <= self._fenced_generation:
                 return False
             fenced_writer = (
                 self._writer_thread
@@ -690,7 +1849,7 @@ class QuoteIngressWorker:
             # writer or fail-open path is introduced.
             fenced_writer.join(timeout=2.0)
         with self._lock:
-            if self._status == "STOPPED" or generation <= self._fenced_generation:
+            if self._status in {"STOPPED", "STOPPING", "SHUTDOWN_UNKNOWN"} or generation <= self._fenced_generation:
                 return False
             return not (
                 self._writer_thread is not None
@@ -700,7 +1859,9 @@ class QuoteIngressWorker:
 
     def on_generation_fenced(self, data_session_key: str, generation: int) -> None:
         with self._lock:
-            self._pending_by_generation.pop(generation, None)
+            pending_frames = self._pending_by_generation.pop(generation, {})
+            for frame in pending_frames.values():
+                self._record_pending_drop_locked(frame, reason="PENDING_GENERATION_FENCED")
             if self._active_generation is not None and generation == self._active_generation:
                 self._mailbox.fence_generation(generation)
                 self._fenced_generation = max(self._fenced_generation, generation)
@@ -731,7 +1892,13 @@ class QuoteIngressWorker:
             heartbeat_stale = (
                 heartbeat_age_ns is not None and heartbeat_age_ns > self._config.heartbeat_timeout_ms * 1_000_000
             )
-            if generation is None or self._status in {"IDLE", "FENCED", "STOPPED"}:
+            if generation is None or self._status in {
+                "IDLE",
+                "FENCED",
+                "STOPPED",
+                "STOPPING",
+                "SHUTDOWN_UNKNOWN",
+            }:
                 return None
             if self._restart_attempts_in_epoch >= self._config.restart_max_attempts:
                 error = quote_contract_error(
@@ -816,24 +1983,54 @@ class QuoteIngressWorker:
                 "accepted_count": mailbox["accepted_count"],
                 "coalesced_count": mailbox["coalesced_count"],
                 "ordering_rejected_count": mailbox["ordering_rejected_count"],
+                "drop_count_by_reason": mailbox["drop_count_by_reason"],
+                "last_drop": mailbox["last_drop"],
+                "pending_generation_count": len(self._pending_by_generation),
+                "pending_frame_count": sum(len(frames) for frames in self._pending_by_generation.values()),
+                "pending_drop_count_by_reason": dict(sorted(self._pending_drop_count_by_reason.items())),
+                "last_pending_drop": (dict(self._last_pending_drop) if self._last_pending_drop is not None else None),
             }
 
     def shutdown(self) -> None:
         with self._lock:
-            self._status = "STOPPED"
+            self._status = "STOPPING"
             if self._active_generation is not None:
                 self._mailbox.fence_generation(self._active_generation)
                 self._fenced_generation = max(self._fenced_generation, self._active_generation)
             self._active_generation = None
+            for frames in self._pending_by_generation.values():
+                for frame in frames.values():
+                    self._record_pending_drop_locked(frame, reason="PENDING_SHUTDOWN")
             self._pending_by_generation.clear()
             writer = self._writer_thread
             self._fence_writer_locked()
         if writer is not None and writer.is_alive():
             writer.join(timeout=2.0)
+        if writer is not None and writer.is_alive():
+            error = quote_contract_error(
+                QuoteContractReasonCode.CONSUMER_FAILURE,
+                "Phase 1 quote ingress writer did not stop within the bounded shutdown interval",
+                context={
+                    "consumer_id": self._consumer_id,
+                    "writer_epoch": self._writer_thread_epoch,
+                    "writer_thread_name": writer.name,
+                    "writer_thread_alive": True,
+                    "shutdown_outcome": "UNKNOWN",
+                },
+            )
+            with self._lock:
+                self._record_failure_locked(error, status="SHUTDOWN_UNKNOWN")
+            self._emit_loud(error)
+            raise error
+        with self._lock:
+            self._status = "STOPPED"
+            self._writer_thread = None
+            self._writer_thread_epoch = None
+            self._writer_stop_event = None
 
     def _start_writer_if_needed(self) -> bool:
         with self._lock:
-            if self._status == "STOPPED":
+            if self._status in {"STOPPED", "STOPPING", "SHUTDOWN_UNKNOWN"}:
                 return False
             if self._writer_thread is not None and self._writer_thread.is_alive():
                 return self._status not in {"FAILED", "RESTART_PENDING"}
@@ -866,15 +2063,31 @@ class QuoteIngressWorker:
                     self._last_drain_at = datetime.now(UTC)
                     if self._status not in {"STOPPED", "FENCED", "RESTART_PENDING"}:
                         self._status = "ACTIVE"
-                for frame in frames:
+                for index, frame in enumerate(frames):
                     with self._lock:
                         if (
                             writer_epoch != self._writer_epoch
                             or frame.ingress_generation != self._active_generation
                             or self._status in {"STOPPED", "FAILED", "FENCED", "RESTART_PENDING"}
                         ):
+                            self._mailbox.record_lifecycle_drop(
+                                frame,
+                                reason="WRITER_LIFECYCLE_FENCED",
+                            )
                             continue
-                    self._frame_sink(frame)
+                    try:
+                        self._frame_sink(frame)
+                    except Exception:
+                        self._mailbox.record_lifecycle_drop(
+                            frame,
+                            reason="WRITER_FRAME_SINK_FAILED",
+                        )
+                        for remaining_frame in frames[index + 1 :]:
+                            self._mailbox.record_lifecycle_drop(
+                                remaining_frame,
+                                reason="WRITER_BATCH_ABORTED_AFTER_FRAME_SINK_FAILURE",
+                            )
+                        raise
         except Exception as exc:  # noqa: BLE001 - worker failure is fenced and recovered by its supervisor
             error = quote_contract_error(
                 QuoteContractReasonCode.CONSUMER_FAILURE,
@@ -893,6 +2106,15 @@ class QuoteIngressWorker:
         self._writer_epoch += 1
         if self._writer_stop_event is not None:
             self._writer_stop_event.set()
+
+    def _record_pending_drop_locked(self, frame: RawQuoteFrame, *, reason: str) -> None:
+        self._pending_drop_count_by_reason[reason] = self._pending_drop_count_by_reason.get(reason, 0) + 1
+        self._last_pending_drop = {
+            "reason": reason,
+            "symbol": frame.symbol,
+            "generation": frame.ingress_generation,
+            "sequence": frame.ingress_sequence,
+        }
 
     def _new_restart_request_locked(self, *, generation: int, now: int) -> QuoteIngressRestartRequest:
         self._restart_attempts_in_epoch += 1
@@ -963,6 +2185,18 @@ class QuoteIngressConsumer:
     lease: PhaseOneQuoteLease | None = None
 
 
+@dataclass(frozen=True)
+class _QuoteIngressConsumerLeaseOwner:
+    """Copy-on-write local claim over one immutable physical lease identity."""
+
+    consumer_id: str
+    symbols: tuple[str, ...]
+    lease: PhaseOneQuoteLease
+    registration_generation: int
+    local_state: str
+    owner_identity_sha256: str
+
+
 class QuoteIngressSupervisor:
     """Scheduler-owned lease lifecycle; read-only callers cannot construct it."""
 
@@ -978,7 +2212,7 @@ class QuoteIngressSupervisor:
         normalized_store: BoundedNormalizedQuoteStore | None = None,
         context_store: QuoteEvaluationContextStore | None = None,
         loud_sink: Callable[[QuoteContractError], None] | None = None,
-        observation_sink: Callable[[NormalizedQuoteObservation], None] | None = None,
+        observation_sink: Callable[[NormalizedQuoteObservation], MiniQMTKernelProductIngressResult] | None = None,
     ) -> None:
         if not config.enabled:
             raise quote_contract_error(
@@ -1002,6 +2236,10 @@ class QuoteIngressSupervisor:
         self._loud_sink = loud_sink
         self._lock = threading.RLock()
         self._consumers: dict[str, QuoteIngressConsumer] = {}
+        self._consumer_lease_owner_lock = threading.RLock()
+        self._consumer_lease_owner_generation = 0
+        self._consumer_lease_owners: dict[str, _QuoteIngressConsumerLeaseOwner] = {}
+        self._last_release_reconciliation: dict[str, Any] | None = None
         self._source_session_id = f"phase1-{hashlib.sha256(data_session_key.encode('utf-8')).hexdigest()[:24]}"
         self._clock_domain_id = MINIQMT_QUOTE_CLOCK_DOMAIN_ID
         self._projection_sink = PhaseOneQuoteProjectionSink(
@@ -1034,12 +2272,322 @@ class QuoteIngressSupervisor:
         self,
         *,
         consumer_id: str,
-        sink: Callable[[NormalizedQuoteObservation, QuoteEvaluationContext], None],
+        symbols: tuple[str, ...],
+        sink: Callable[
+            [NormalizedQuoteObservation, QuoteEvaluationContext],
+            MiniQMTKernelProductIngressResult,
+        ],
     ) -> None:
-        self._projection_sink.register_observation_sink(consumer_id=consumer_id, sink=sink)
+        self._projection_sink.register_observation_sink(
+            consumer_id=consumer_id,
+            symbols=symbols,
+            sink=sink,
+        )
 
-    def unregister_observation_sink(self, *, consumer_id: str) -> bool:
-        return self._projection_sink.unregister_observation_sink(consumer_id=consumer_id)
+    def unregister_observation_sink(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+        sink: Callable[
+            [NormalizedQuoteObservation, QuoteEvaluationContext],
+            MiniQMTKernelProductIngressResult,
+        ],
+    ) -> bool:
+        return self._projection_sink.unregister_observation_sink(
+            consumer_id=consumer_id,
+            symbols=symbols,
+            sink=sink,
+        )
+
+    def get_observation_sink(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+    ) -> (
+        Callable[
+            [NormalizedQuoteObservation, QuoteEvaluationContext],
+            MiniQMTKernelProductIngressResult,
+        ]
+        | None
+    ):
+        return self._projection_sink.get_observation_sink(
+            consumer_id=consumer_id,
+            symbols=symbols,
+        )
+
+    @staticmethod
+    def _lease_identity_payload(lease: PhaseOneQuoteLease) -> dict[str, Any]:
+        return {
+            "lease_id": lease.lease_id,
+            "data_session_key": lease.data_session_key,
+            "owner": lease.owner,
+            "consumer_id": lease.consumer_id,
+            "symbols": list(lease.symbols),
+            "generation": lease.generation,
+            "status": lease.status,
+            "physical_subscription_id": lease.physical_subscription_id,
+        }
+
+    @classmethod
+    def _lease_owner_identity_sha256(
+        cls,
+        *,
+        lease: PhaseOneQuoteLease,
+        registration_generation: int,
+    ) -> str:
+        payload = cls._lease_identity_payload(lease)
+        components = (
+            "miniqmt_quote_consumer_lease_owner_v1",
+            str(registration_generation),
+            str(payload["lease_id"]),
+            str(payload["data_session_key"]),
+            str(payload["owner"]),
+            str(payload["consumer_id"]),
+            str(len(lease.symbols)),
+            *lease.symbols,
+            str(payload["generation"]),
+            str(payload["status"]),
+            str(payload["physical_subscription_id"]),
+        )
+        hasher = hashlib.sha256()
+        for component in components:
+            encoded = component.encode("utf-8")
+            hasher.update(len(encoded).to_bytes(8, byteorder="big", signed=False))
+            hasher.update(encoded)
+        return hasher.hexdigest()
+
+    @staticmethod
+    def _is_exact_active_lease(
+        lease: object,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+        data_session_key: str,
+        owner: str,
+    ) -> bool:
+        return bool(
+            type(lease) is PhaseOneQuoteLease
+            and lease.lease_id
+            and lease.lease_id == lease.lease_id.strip()
+            and lease.data_session_key == data_session_key
+            and lease.owner == owner
+            and lease.consumer_id == consumer_id
+            and lease.symbols == symbols
+            and type(lease.generation) is int
+            and lease.generation > 0
+            and lease.status == "ACTIVE"
+            and type(lease.physical_subscription_id) is int
+            and lease.physical_subscription_id > 0
+        )
+
+    def _publish_consumer_lease_owner_locked(
+        self,
+        *,
+        consumer: QuoteIngressConsumer,
+        local_state: str,
+    ) -> _QuoteIngressConsumerLeaseOwner:
+        if consumer.lease is None:
+            raise RuntimeError("quote consumer cannot publish ownership without an immutable lease")
+        with self._consumer_lease_owner_lock:
+            current = self._consumer_lease_owners.get(consumer.consumer_id)
+            if current is None:
+                self._consumer_lease_owner_generation += 1
+                registration_generation = self._consumer_lease_owner_generation
+            else:
+                registration_generation = current.registration_generation
+                if current.lease.lease_id != consumer.lease.lease_id:
+                    raise RuntimeError("quote consumer lease identity changed within one registration generation")
+                if current.lease.generation > consumer.lease.generation:
+                    consumer.lease = current.lease
+                elif (
+                    current.lease.generation == consumer.lease.generation
+                    and current.lease.physical_subscription_id != consumer.lease.physical_subscription_id
+                ):
+                    raise RuntimeError("quote consumer physical identity changed within one lease generation")
+            owner = _QuoteIngressConsumerLeaseOwner(
+                consumer_id=consumer.consumer_id,
+                symbols=consumer.symbols,
+                lease=consumer.lease,
+                registration_generation=registration_generation,
+                local_state=local_state,
+                owner_identity_sha256=self._lease_owner_identity_sha256(
+                    lease=consumer.lease,
+                    registration_generation=registration_generation,
+                ),
+            )
+            updated = dict(self._consumer_lease_owners)
+            updated[consumer.consumer_id] = owner
+            self._consumer_lease_owners = updated
+            return owner
+
+    def _drop_consumer_lease_owner_locked(self, consumer_id: str) -> None:
+        with self._consumer_lease_owner_lock:
+            if consumer_id not in self._consumer_lease_owners:
+                return
+            updated = dict(self._consumer_lease_owners)
+            updated.pop(consumer_id, None)
+            self._consumer_lease_owners = updated
+
+    def consumer_lease_owner_snapshot(
+        self,
+        *,
+        consumer_id: str,
+        symbols: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Read exact physical ownership without taking the supervisor lifecycle lock."""
+
+        exact_consumer_id = PhaseOneQuoteProjectionSink._exact_consumer_id(consumer_id)
+        exact_symbols = PhaseOneQuoteProjectionSink._exact_symbol_ownership(symbols, allow_empty=False)
+        for _attempt in range(3):
+            owner = self._consumer_lease_owners.get(exact_consumer_id)
+            base: dict[str, Any] = {
+                "schema_version": "miniqmt_quote_consumer_lease_owner_snapshot_v1",
+                "consumer_id": exact_consumer_id,
+                "requested_symbols": list(exact_symbols),
+                "readback_current": True,
+                "exact_owner": False,
+                "state": "ABSENT",
+                "reason_code": "MINIQMT_QUOTE_CONSUMER_LEASE_OWNER_ABSENT",
+                "registration_generation": None,
+                "expected_owner_identity_sha256": None,
+                "actual_owner_identity_sha256": None,
+                "expected_lease": None,
+                "actual_lease": None,
+            }
+            if owner is None:
+                return base
+            expected_lease = self._lease_identity_payload(owner.lease)
+            base.update(
+                {
+                    "registration_generation": owner.registration_generation,
+                    "expected_owner_identity_sha256": owner.owner_identity_sha256,
+                    "expected_lease": expected_lease,
+                }
+            )
+            if owner.consumer_id != exact_consumer_id or owner.symbols != exact_symbols:
+                base.update(
+                    {
+                        "state": "REQUEST_OWNER_DRIFT",
+                        "reason_code": "MINIQMT_QUOTE_CONSUMER_LEASE_REQUEST_OWNER_DRIFT",
+                    }
+                )
+                return base
+            try:
+                actual_lease = self._subscriber.get_phase_one_lease(
+                    data_session_key=self._data_session_key,
+                    lease_id=owner.lease.lease_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - exact readback failure is a typed owner state.
+                base.update(
+                    {
+                        "readback_current": False,
+                        "state": "READBACK_FAILED",
+                        "reason_code": "MINIQMT_QUOTE_CONSUMER_LEASE_READBACK_FAILED",
+                        "exception_type": type(exc).__qualname__,
+                    }
+                )
+                return base
+            if type(actual_lease) is PhaseOneQuoteLease:
+                base["actual_lease"] = self._lease_identity_payload(actual_lease)
+                base["actual_owner_identity_sha256"] = self._lease_owner_identity_sha256(
+                    lease=actual_lease,
+                    registration_generation=owner.registration_generation,
+                )
+            elif actual_lease is not None:
+                base.update(
+                    {
+                        "state": "LEASE_CARRIER_INVALID",
+                        "reason_code": "MINIQMT_QUOTE_CONSUMER_LEASE_CARRIER_INVALID",
+                        "actual_lease_type": type(actual_lease).__qualname__,
+                    }
+                )
+                return base
+            if owner.local_state != "ACTIVE":
+                base.update(
+                    {
+                        "state": owner.local_state,
+                        "reason_code": "MINIQMT_QUOTE_CONSUMER_LEASE_RELEASE_IN_PROGRESS",
+                    }
+                )
+                return base
+            if actual_lease is None:
+                base.update(
+                    {
+                        "state": "LEASE_MISSING",
+                        "reason_code": "MINIQMT_QUOTE_CONSUMER_LEASE_MISSING",
+                    }
+                )
+                return base
+            if actual_lease.status != "ACTIVE":
+                base.update(
+                    {
+                        "state": "LEASE_NOT_ACTIVE",
+                        "reason_code": "MINIQMT_QUOTE_CONSUMER_LEASE_NOT_ACTIVE",
+                    }
+                )
+                return base
+            legal_successor = bool(
+                self._is_exact_active_lease(
+                    actual_lease,
+                    consumer_id=exact_consumer_id,
+                    symbols=exact_symbols,
+                    data_session_key=self._data_session_key,
+                    owner=self._owner,
+                )
+                and actual_lease.lease_id == owner.lease.lease_id
+                and actual_lease.generation > owner.lease.generation
+                and actual_lease.physical_subscription_id != owner.lease.physical_subscription_id
+            )
+            if base["actual_owner_identity_sha256"] != owner.owner_identity_sha256 and legal_successor:
+                refreshed_owner = _QuoteIngressConsumerLeaseOwner(
+                    consumer_id=owner.consumer_id,
+                    symbols=owner.symbols,
+                    lease=actual_lease,
+                    registration_generation=owner.registration_generation,
+                    local_state=owner.local_state,
+                    owner_identity_sha256=str(base["actual_owner_identity_sha256"]),
+                )
+                with self._consumer_lease_owner_lock:
+                    if self._consumer_lease_owners.get(exact_consumer_id) is not owner:
+                        continue
+                    updated = dict(self._consumer_lease_owners)
+                    updated[exact_consumer_id] = refreshed_owner
+                    self._consumer_lease_owners = updated
+                owner = refreshed_owner
+                base["expected_lease"] = dict(base["actual_lease"])
+                base["expected_owner_identity_sha256"] = owner.owner_identity_sha256
+            if base["actual_owner_identity_sha256"] != owner.owner_identity_sha256:
+                base.update(
+                    {
+                        "state": "LEASE_OWNER_DRIFT",
+                        "reason_code": "MINIQMT_QUOTE_CONSUMER_LEASE_OWNER_DRIFT",
+                    }
+                )
+                return base
+            base.update(
+                {
+                    "exact_owner": True,
+                    "state": "ACTIVE",
+                    "reason_code": None,
+                }
+            )
+            return base
+        return {
+            "schema_version": "miniqmt_quote_consumer_lease_owner_snapshot_v1",
+            "consumer_id": exact_consumer_id,
+            "requested_symbols": list(exact_symbols),
+            "readback_current": False,
+            "exact_owner": False,
+            "state": "OWNER_CHANGED_DURING_READBACK",
+            "reason_code": "MINIQMT_QUOTE_CONSUMER_LEASE_OWNER_CHANGED_DURING_READBACK",
+            "registration_generation": None,
+            "expected_owner_identity_sha256": None,
+            "actual_owner_identity_sha256": None,
+            "expected_lease": None,
+            "actual_lease": None,
+        }
 
     def acquire_consumer(self, *, consumer_id: str, symbols: list[str]) -> PhaseOneQuoteLease:
         with self._lock:
@@ -1090,8 +2638,67 @@ class QuoteIngressSupervisor:
                 )
                 self._worker.record_loud_failure(error)
                 raise error from exc
+            if not self._is_exact_active_lease(
+                lease,
+                consumer_id=consumer_id,
+                symbols=normalized,
+                data_session_key=self._data_session_key,
+                owner=self._owner,
+            ):
+                self._worker.replace_admitted_symbols(previous_symbols)
+                self._projection_sink.replace_admitted(previous_symbols)
+                rollback_released: bool | None = None
+                rollback_exception_type: str | None = None
+                if type(lease) is PhaseOneQuoteLease and lease.lease_id:
+                    try:
+                        rollback_released = self._subscriber.release_phase_one_lease(
+                            data_session_key=self._data_session_key,
+                            lease_id=lease.lease_id,
+                            max_symbols=self._config.max_symbols,
+                        )
+                    except Exception as rollback_error:  # noqa: BLE001 - preserve invalid owner and cleanup state.
+                        rollback_exception_type = type(rollback_error).__qualname__
+                consumer_lease_retained = bool(
+                    type(lease) is PhaseOneQuoteLease
+                    and bool(lease.lease_id)
+                    and rollback_released is not True
+                )
+                if consumer_lease_retained:
+                    consumer.lease = lease
+                    self._consumers[consumer_id] = consumer
+                    self._publish_consumer_lease_owner_locked(
+                        consumer=consumer,
+                        local_state="ACQUIRE_ROLLBACK_UNKNOWN",
+                    )
+                error = quote_contract_error(
+                    QuoteContractReasonCode.LEASE_REBUILD_FAILED,
+                    "Phase 1 quote consumer acquisition returned a non-exact active physical lease",
+                    context={
+                        "consumer_id": consumer_id,
+                        "data_session_key": self._data_session_key,
+                        "expected_symbols": list(normalized),
+                        "lease_type": type(lease).__qualname__,
+                        "actual_lease": (
+                            self._lease_identity_payload(lease) if type(lease) is PhaseOneQuoteLease else None
+                        ),
+                        "rollback_released": rollback_released,
+                        "rollback_exception_type": rollback_exception_type,
+                        "release_outcome": (
+                            "UNKNOWN"
+                            if consumer_lease_retained
+                            else ("RELEASED" if rollback_released is True else "NOT_APPLICABLE")
+                        ),
+                        "consumer_lease_retained": consumer_lease_retained,
+                        "retained_owner_state": (
+                            "ACQUIRE_ROLLBACK_UNKNOWN" if consumer_lease_retained else None
+                        ),
+                    },
+                )
+                self._worker.record_loud_failure(error)
+                raise error
             consumer.lease = lease
             self._consumers[consumer_id] = consumer
+            self._publish_consumer_lease_owner_locked(consumer=consumer, local_state="ACTIVE")
         return lease
 
     def release_consumer(self, *, consumer_id: str) -> bool:
@@ -1099,18 +2706,215 @@ class QuoteIngressSupervisor:
             consumer = self._consumers.get(consumer_id)
             if consumer is None or consumer.lease is None:
                 return False
-            released = self._subscriber.release_phase_one_lease(
-                data_session_key=self._data_session_key,
-                lease_id=consumer.lease.lease_id,
-                max_symbols=self._config.max_symbols,
+            if (
+                self._projection_sink.get_observation_sink(
+                    consumer_id=consumer_id,
+                    symbols=consumer.symbols,
+                )
+                is not None
+            ):
+                raise quote_contract_error(
+                    QuoteContractReasonCode.LEASE_REBUILD_FAILED,
+                    "Phase 1 consumer lease cannot be released while its observation sink remains active",
+                    context={
+                        "consumer_id": consumer_id,
+                        "lease_id": consumer.lease.lease_id,
+                        "release_outcome": "ACTIVE",
+                    },
+                )
+            lease_id = consumer.lease.lease_id
+            self._publish_consumer_lease_owner_locked(
+                consumer=consumer,
+                local_state="RELEASE_IN_FLIGHT",
             )
+            try:
+                released = self._subscriber.release_phase_one_lease(
+                    data_session_key=self._data_session_key,
+                    lease_id=lease_id,
+                    max_symbols=self._config.max_symbols,
+                )
+            except Exception as primary:  # noqa: BLE001 - reconcile the exact process-local lease authority.
+                current_lease = self._release_consumer_lease_readback(
+                    consumer_id=consumer_id,
+                    lease_id=lease_id,
+                    primary=primary,
+                )
+                if current_lease is None:
+                    self._record_release_reconciliation_locked(
+                        consumer_id=consumer_id,
+                        lease_id=lease_id,
+                        disposition="POST_MUTATION_EXCEPTION_RECONCILED",
+                        primary=primary,
+                    )
+                    self._finalize_released_consumer_locked(consumer_id)
+                    return True
+                if current_lease.status == "ACTIVE":
+                    self._publish_consumer_lease_owner_locked(
+                        consumer=consumer,
+                        local_state="ACTIVE",
+                    )
+                    raise quote_contract_error(
+                        QuoteContractReasonCode.LEASE_REBUILD_FAILED,
+                        "Phase 1 consumer release failed before the exact active lease was removed",
+                        context={
+                            "consumer_id": consumer_id,
+                            "lease_id": lease_id,
+                            "lease_status": current_lease.status,
+                            "release_outcome": "ACTIVE",
+                            "exception_type": type(primary).__qualname__,
+                        },
+                    ) from primary
+                self._publish_consumer_lease_owner_locked(
+                    consumer=consumer,
+                    local_state="RELEASE_UNKNOWN",
+                )
+                raise quote_contract_error(
+                    QuoteContractReasonCode.LEASE_REBUILD_FAILED,
+                    "Phase 1 consumer release outcome remains unknown after lease readback",
+                    context={
+                        "consumer_id": consumer_id,
+                        "lease_id": lease_id,
+                        "lease_status": current_lease.status,
+                        "release_outcome": "UNKNOWN",
+                        "exception_type": type(primary).__qualname__,
+                    },
+                ) from primary
             if not released:
+                current_lease = self._release_consumer_lease_readback(
+                    consumer_id=consumer_id,
+                    lease_id=lease_id,
+                    primary=None,
+                )
+                if current_lease is None:
+                    self._record_release_reconciliation_locked(
+                        consumer_id=consumer_id,
+                        lease_id=lease_id,
+                        disposition="FALSE_RETURN_ABSENT_LEASE_RECONCILED",
+                        primary=None,
+                    )
+                    self._finalize_released_consumer_locked(consumer_id)
+                    return True
+                if current_lease.status != "ACTIVE":
+                    self._publish_consumer_lease_owner_locked(
+                        consumer=consumer,
+                        local_state="RELEASE_UNKNOWN",
+                    )
+                    raise quote_contract_error(
+                        QuoteContractReasonCode.LEASE_REBUILD_FAILED,
+                        "Phase 1 consumer release returned false without an exact active lease",
+                        context={
+                            "consumer_id": consumer_id,
+                            "lease_id": lease_id,
+                            "lease_status": current_lease.status,
+                            "release_outcome": "UNKNOWN",
+                        },
+                    )
+                self._publish_consumer_lease_owner_locked(
+                    consumer=consumer,
+                    local_state="ACTIVE",
+                )
                 return False
-            self._consumers.pop(consumer_id, None)
-            admitted = self._union_consumer_symbols((*self._consumers.values(),))
+            self._finalize_released_consumer_locked(consumer_id)
+        return released
+
+    def _release_consumer_lease_readback(
+        self,
+        *,
+        consumer_id: str,
+        lease_id: str,
+        primary: Exception | None,
+    ) -> PhaseOneQuoteLease | None:
+        try:
+            return self._subscriber.get_phase_one_lease(
+                data_session_key=self._data_session_key,
+                lease_id=lease_id,
+            )
+        except Exception as readback:  # noqa: BLE001 - return a typed UNKNOWN outcome, never a guessed bool.
+            consumer = self._consumers.get(consumer_id)
+            if consumer is not None and consumer.lease is not None and consumer.lease.lease_id == lease_id:
+                self._publish_consumer_lease_owner_locked(
+                    consumer=consumer,
+                    local_state="RELEASE_UNKNOWN",
+                )
+            raise quote_contract_error(
+                QuoteContractReasonCode.LEASE_REBUILD_FAILED,
+                "Phase 1 consumer release readback failed",
+                context={
+                    "consumer_id": consumer_id,
+                    "lease_id": lease_id,
+                    "release_outcome": "UNKNOWN",
+                    "release_exception_type": type(primary).__qualname__ if primary is not None else None,
+                    "readback_exception_type": type(readback).__qualname__,
+                },
+            ) from (primary or readback)
+
+    def _finalize_released_consumer_locked(self, consumer_id: str) -> None:
+        consumer = self._consumers.get(consumer_id)
+        if consumer is None:
+            return
+        previous_admitted = self._union_consumer_symbols((*self._consumers.values(),))
+        remaining_consumers = tuple(
+            owned_consumer
+            for owned_consumer_id, owned_consumer in self._consumers.items()
+            if owned_consumer_id != consumer_id
+        )
+        admitted = self._union_consumer_symbols(remaining_consumers)
+        try:
             self._worker.replace_admitted_symbols(admitted)
             self._projection_sink.replace_admitted(admitted)
-        return released
+        except Exception as primary:  # noqa: BLE001 - retain the local owner until exact cleanup can retry.
+            rollback_failures: list[dict[str, str]] = []
+            for component, rollback in (
+                ("worker", lambda: self._worker.replace_admitted_symbols(previous_admitted)),
+                ("projection", lambda: self._projection_sink.replace_admitted(previous_admitted)),
+            ):
+                try:
+                    rollback()
+                except Exception as rollback_error:  # noqa: BLE001 - aggregate rollback evidence.
+                    rollback_failures.append(
+                        {
+                            "component": component,
+                            "exception_type": type(rollback_error).__qualname__,
+                        }
+                    )
+            error = quote_contract_error(
+                QuoteContractReasonCode.LEASE_REBUILD_FAILED,
+                "Phase 1 released consumer local cleanup failed and remains retryable",
+                context={
+                    "consumer_id": consumer_id,
+                    "lease_id": consumer.lease.lease_id if consumer.lease is not None else None,
+                    "release_outcome": "UNKNOWN",
+                    "exception_type": type(primary).__qualname__,
+                    "rollback_failures": rollback_failures,
+                },
+            )
+            self._publish_consumer_lease_owner_locked(
+                consumer=consumer,
+                local_state="LOCAL_CLEANUP_UNKNOWN",
+            )
+            self._worker.record_loud_failure(error)
+            raise error from primary
+        self._consumers.pop(consumer_id, None)
+        self._drop_consumer_lease_owner_locked(consumer_id)
+
+    def _record_release_reconciliation_locked(
+        self,
+        *,
+        consumer_id: str,
+        lease_id: str,
+        disposition: str,
+        primary: Exception | None,
+    ) -> None:
+        evidence = {
+            "schema_version": "miniqmt_quote_release_reconciliation_v1",
+            "consumer_id": consumer_id,
+            "lease_id": lease_id,
+            "disposition": disposition,
+            "observed_at_utc": datetime.now(UTC).isoformat(),
+            "exception_type": type(primary).__qualname__ if primary is not None else None,
+        }
+        self._last_release_reconciliation = evidence
+        logger.warning("Phase 1 quote lease release required exact reconciliation: %s", evidence)
 
     def watchdog_tick(self) -> dict[str, Any]:
         """Run from the scheduler lifecycle; it never restarts the scheduler itself."""
@@ -1134,23 +2938,34 @@ class QuoteIngressSupervisor:
         return self.watchdog_tick()
 
     def health(self) -> dict[str, Any]:
-        with self._lock:
-            consumers: dict[str, dict[str, Any]] = {}
-            for consumer_id, consumer in self._consumers.items():
-                current_lease = (
-                    self._subscriber.get_phase_one_lease(
-                        data_session_key=self._data_session_key,
-                        lease_id=consumer.lease.lease_id,
-                    )
-                    if consumer.lease is not None
-                    else None
-                )
-                consumers[consumer_id] = {
-                    "lease_id": current_lease.lease_id if current_lease is not None else None,
-                    "symbols": list(consumer.symbols),
-                    "lease_generation": current_lease.generation if current_lease is not None else None,
-                    "lease_status": current_lease.status if current_lease is not None else "RELEASED",
-                }
+        owner_snapshot = self._consumer_lease_owners
+        consumers: dict[str, dict[str, Any]] = {}
+        for consumer_id, owner in sorted(owner_snapshot.items()):
+            snapshot = self.consumer_lease_owner_snapshot(
+                consumer_id=consumer_id,
+                symbols=owner.symbols,
+            )
+            actual_lease = snapshot.get("actual_lease")
+            consumers[consumer_id] = {
+                "lease_id": actual_lease.get("lease_id") if isinstance(actual_lease, Mapping) else None,
+                "symbols": (
+                    list(actual_lease.get("symbols") or ()) if isinstance(actual_lease, Mapping) else []
+                ),
+                "expected_symbols": list(owner.symbols),
+                "lease_generation": (
+                    actual_lease.get("generation") if isinstance(actual_lease, Mapping) else None
+                ),
+                "lease_status": actual_lease.get("status") if isinstance(actual_lease, Mapping) else None,
+                "physical_subscription_id": (
+                    actual_lease.get("physical_subscription_id") if isinstance(actual_lease, Mapping) else None
+                ),
+                "owner_state": snapshot["state"],
+                "owner_reason_code": snapshot["reason_code"],
+                "owner_registration_generation": snapshot["registration_generation"],
+                "owner_identity_sha256": snapshot["expected_owner_identity_sha256"],
+                "readback_current": snapshot["readback_current"],
+                "exact_owner": snapshot["exact_owner"],
+            }
         return {
             "data_session_key": self._data_session_key,
             "owner": self._owner,
@@ -1158,15 +2973,48 @@ class QuoteIngressSupervisor:
             "writer": self._worker.health(),
             **self._projection_sink.health(),
             "consumers": consumers,
+            "last_release_reconciliation": (
+                dict(self._last_release_reconciliation) if self._last_release_reconciliation is not None else None
+            ),
         }
 
     def shutdown(self) -> None:
+        self._subscriber.shutdown_phase_one_leases(data_session_key=self._data_session_key)
+        subscription_health = self._subscriber.phase_one_health(data_session_key=self._data_session_key)
+        if (
+            not isinstance(subscription_health, dict)
+            or subscription_health.get("status") != "INACTIVE"
+            or int(subscription_health.get("lease_count") or 0) != 0
+            or int(subscription_health.get("pending_lease_count") or 0) != 0
+        ):
+            raise quote_contract_error(
+                QuoteContractReasonCode.LEASE_REBUILD_FAILED,
+                "Phase 1 shutdown did not close the exact logical lease registry",
+                context={
+                    "data_session_key": self._data_session_key,
+                    "status": (
+                        subscription_health.get("status")
+                        if isinstance(subscription_health, dict)
+                        else type(subscription_health).__qualname__
+                    ),
+                    "lease_count": (
+                        subscription_health.get("lease_count") if isinstance(subscription_health, dict) else None
+                    ),
+                    "pending_lease_count": (
+                        subscription_health.get("pending_lease_count")
+                        if isinstance(subscription_health, dict)
+                        else None
+                    ),
+                },
+            )
+        self._worker.shutdown()
         with self._lock:
             self._consumers.clear()
-        self._subscriber.shutdown_phase_one_leases(data_session_key=self._data_session_key)
+            with self._consumer_lease_owner_lock:
+                self._consumer_lease_owners = {}
+        self._projection_sink.shutdown_observation_sinks()
         self._worker.replace_admitted_symbols(())
         self._projection_sink.replace_admitted(())
-        self._worker.shutdown()
 
     def _callbacks(self) -> PhaseOneLeaseCallbacks:
         return PhaseOneLeaseCallbacks(

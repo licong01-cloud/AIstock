@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -22,6 +23,131 @@ K2C_ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k2c_timer_reclaim_2026
 K2D_PREFLIGHT = MIGRATION_ROOT / "miniqmt_execution_kernel_k2d_reconcile_history_20260727.preflight.sql"
 K2D_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k2d_reconcile_history_20260727.sql"
 K2D_ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_k2d_reconcile_history_20260727.rollback.sql"
+K6_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k6_20260801.sql"
+K6C_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k6c_20260802.sql"
+K6B_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_k6b_20260803.sql"
+EVENT_CONTRACT_REPAIR_PREFLIGHT = (
+    MIGRATION_ROOT / "miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql"
+)
+EVENT_CONTRACT_REPAIR_FORWARD = MIGRATION_ROOT / "miniqmt_execution_kernel_event_contract_repair_20260811.sql"
+EVENT_CONTRACT_REPAIR_ROLLBACK = MIGRATION_ROOT / "miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql"
+
+
+def test_event_contract_repair_registry_closes_p1d_and_kernel_v2_without_parallel_authority() -> None:
+    from backend.services.miniqmt_execution_runtime import quote_event_schema
+    from backend.services.miniqmt_execution_runtime.plugin_contracts import EventSourceV2, EventTypeV2
+
+    assert len(quote_event_schema.TARGET_EVENT_TYPES) == 36
+    assert len(quote_event_schema.TARGET_EVENT_SOURCES) == 14
+    assert {item.value for item in EventTypeV2} <= quote_event_schema.TARGET_EVENT_TYPES
+    assert {item.value for item in EventSourceV2} <= quote_event_schema.TARGET_EVENT_SOURCES
+    assert len(quote_event_schema.TARGET_KERNEL_EVENT_COMPOSITES) == 12
+    assert (
+        "ALGO_START",
+        "MINIQMT_EXECUTION_KERNEL",
+        "miniqmt_algo_start_v1",
+    ) in quote_event_schema.TARGET_KERNEL_EVENT_COMPOSITES
+    assert (
+        "ALGO_START",
+        "MINIQMT_EXECUTION_KERNEL",
+        "miniqmt_algo_start_v2",
+    ) in quote_event_schema.TARGET_KERNEL_EVENT_COMPOSITES
+    assert (
+        "COMMAND_OUTCOME",
+        "MINIQMT_EXECUTION_KERNEL",
+        "miniqmt_command_outcome_v1",
+    ) in quote_event_schema.TARGET_KERNEL_EVENT_COMPOSITES
+
+
+def test_event_contract_repair_artifacts_are_atomic_idempotent_and_guarded() -> None:
+    from backend.services.miniqmt_execution_runtime.quote_event_schema import (
+        EXPECTED_MIGRATION_FILE_SHA256,
+        EXPECTED_PREFLIGHT_FILE_SHA256,
+        EXPECTED_ROLLBACK_FILE_SHA256,
+    )
+
+    preflight = EVENT_CONTRACT_REPAIR_PREFLIGHT.read_text(encoding="utf-8")
+    forward = EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8")
+    rollback = EVENT_CONTRACT_REPAIR_ROLLBACK.read_text(encoding="utf-8")
+    canonical_preflight = preflight.replace("\r\n", "\n").replace("\r", "\n")
+    canonical_forward = forward.replace("\r\n", "\n").replace("\r", "\n")
+    canonical_rollback = rollback.replace("\r\n", "\n").replace("\r", "\n")
+    expected_preflight_sha256 = hashlib.sha256(canonical_preflight.encode("utf-8")).hexdigest()
+    expected_forward_sha256 = hashlib.sha256(canonical_forward.encode("utf-8")).hexdigest()
+    expected_rollback_sha256 = hashlib.sha256(canonical_rollback.encode("utf-8")).hexdigest()
+
+    assert "REPEATABLE READ, READ ONLY" in preflight
+    assert expected_preflight_sha256 == EXPECTED_PREFLIGHT_FILE_SHA256
+    assert expected_forward_sha256 == EXPECTED_MIGRATION_FILE_SHA256
+    assert expected_rollback_sha256 == EXPECTED_ROLLBACK_FILE_SHA256
+    assert f"'{expected_forward_sha256}'::TEXT AS expected_sha256" in preflight
+    assert f"'{expected_rollback_sha256}'::TEXT" in preflight
+    assert "LOCK TABLE qmt_strategy.execution_runtime_event IN SHARE ROW EXCLUSIVE MODE" in forward
+    assert preflight.index("LOCK TABLE") < preflight.index("DO $$")
+    for relation in (
+        "execution_runtime",
+        "execution_runtime_event",
+        "execution_algo_instance",
+        "execution_child_order",
+        "execution_kernel_worker_epoch",
+        "execution_kernel_worker_incarnation",
+        "execution_algo_event_delivery",
+        "execution_algo_transition",
+        "execution_algo_command_outbox",
+        "execution_algo_command_dispatch_attempt",
+        "execution_algo_timer_schedule",
+        "execution_algo_timer_occurrence",
+        "execution_exchange_session_authority",
+        "execution_algo_diagnostic_observation",
+        "execution_broker_reconciliation_attempt",
+        "execution_dependent_buy_coordination",
+        "execution_dependent_buy_dependency",
+        "execution_dependent_buy_decision",
+        "execution_product_command_authority",
+        "execution_product_command_authority_item",
+        "execution_product_route_cutover",
+        "execution_product_route_owner",
+    ):
+        assert f"qmt_strategy.{relation}" in rollback[: rollback.index("DO $$")]
+    assert "IN SHARE ROW EXCLUSIVE MODE" in rollback[: rollback.index("DO $$")]
+    assert "predecessor_constraint_names" in preflight
+    assert "target_constraint_names" in preflight
+    assert "table_class.relname='execution_runtime_event' AND constraint_record.contype='c'" in forward
+    assert "b5cceba58ef9646e441d1fcb346a47cd4648397ac4425a956d1b83b2fc81d473" in forward
+    assert forward.count("DROP CONSTRAINT ck_miniqmt_event_type") == 1
+    assert forward.count("DROP CONSTRAINT ck_miniqmt_event_source") == 1
+    assert forward.count("DROP CONSTRAINT ck_miniqmt_k2_event_composite") == 1
+    assert forward.count("DROP CONSTRAINT ck_miniqmt_k2_event_contract") == 1
+    assert forward.count("NOT VALID") >= 6
+    assert forward.count("VALIDATE CONSTRAINT") >= 6
+    assert "COMMAND_OUTCOME" in forward
+    assert "miniqmt_algo_start_v2" in forward
+    assert ") IS TRUE) NOT VALID" in forward
+    assert "IS NOT TRUE" in preflight and "IS NOT TRUE" in forward and "IS NOT TRUE" in rollback
+    assert preflight.count("SET LOCAL search_path = pg_catalog, qmt_strategy, pg_temp;") == 1
+    assert forward.count("SET LOCAL search_path = pg_catalog, qmt_strategy, pg_temp;") == 2
+    assert rollback.count("SET LOCAL search_path = pg_catalog, qmt_strategy, pg_temp;") == 2
+    for artifact in (preflight, forward, rollback):
+        assert "SET LOCAL search_path = pg_catalog, qmt_strategy;" not in artifact
+        assert "AS k2d_independent_catalog_sha256" in artifact
+        assert "AS k2d_code_owned_catalog_sha256" in artifact
+        assert "AS k2d_catalog_authority_verified" in artifact
+    assert "EXECUTE function_body INTO STRICT independent_catalog_sha256" in preflight
+    assert "EXECUTE function_body INTO STRICT independent_catalog_sha256" in forward
+    assert "EXECUTE function_body INTO STRICT independent_catalog_sha256" in rollback
+    for artifact in (preflight, forward, rollback):
+        assert "k2d_function_oid" in artifact
+        assert "k2d_function_configuration IS NOT NULL" in artifact
+        assert "EXECUTE k2d_function_body INTO STRICT k2d_independent_catalog_sha256" in artifact
+        assert "independent K2-D catalog drift" in artifact
+        assert "2d5fcbf0151d9e5d2a9d8537f834aabfd056a42cc0eeb8c079add68c8964f59f" in artifact
+    assert "post-DDL exact constraint readback drift" in forward
+    assert "post-commit exact constraint readback drift" in forward
+    assert "post-commit exact constraint readback drift" in rollback
+    assert "destructive rollback refused" in rollback
+    assert "DELETE FROM" not in rollback.upper()
+    assert "UPDATE " not in rollback.upper()
+    assert "KERNEL_V2" in rollback
 
 
 def test_k2_migration_public_artifacts_encode_required_stages_and_guards() -> None:
@@ -120,6 +246,7 @@ def test_k2c_timer_reclaim_migration_preflight_forward_second_apply_and_rollback
             k2c_forward = K2C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
             cur.execute(k2c_forward)
             cur.execute(k2c_forward)
+            cur.execute("BEGIN")
             cur.execute(
                 "SELECT pg_get_constraintdef(oid,true) FROM pg_constraint "
                 "WHERE conrelid=%s::regclass AND conname='ck_miniqmt_k2_timer_occurrence_initial'",
@@ -370,6 +497,877 @@ def _apply_base_forward(cur: object, forward: str) -> None:
         if "CREATE UNIQUE INDEX CONCURRENTLY" in statement:
             cur.execute(statement)  # type: ignore[attr-defined]
     cur.execute(stage3)  # type: ignore[attr-defined]
+
+
+def _install_event_contract_predecessor(cur: object, schema: str) -> None:
+    cur.execute(  # type: ignore[attr-defined]
+        f"""
+        ALTER TABLE {schema}.execution_runtime_event
+          ADD CONSTRAINT ck_miniqmt_event_id CHECK (btrim(event_id) <> ''),
+          ADD CONSTRAINT ck_miniqmt_event_sequence CHECK (sequence > 0),
+          ADD CONSTRAINT ck_miniqmt_event_type CHECK (event_type IN (
+            'RUNTIME_CREATED','GATEWAY_CONNECTED','GATEWAY_DISCONNECTED','BROKER_SYNC_STARTED','BROKER_SYNCED',
+            'ALGO_INSTANCE_CREATED','TIMER','TICK','ALGO_ACTION_EMITTED','CHILD_ORDER_SUBMITTED',
+            'CHILD_ORDER_REJECTED','CHILD_ORDER_CANCEL_REQUESTED','ORDER_EVENT','TRADE_EVENT','ACCOUNT_EVENT',
+            'RISK_KILL_SWITCH_TRIGGERED','RECONCILE_STARTED','RECONCILE_COMPLETED','OPERATOR_COMMAND_RECEIVED',
+            'OPERATOR_COMMAND_EXECUTED','OPERATOR_COMMAND_REJECTED','RUNTIME_STOPPED','QUOTE_OBSERVED',
+            'QUOTE_REJECTED','QUOTE_ELIGIBILITY_EVALUATED','QUOTE_MARK_CAPTURED','QUOTE_INGRESS_HEALTH'
+          )),
+          ADD CONSTRAINT ck_miniqmt_event_source CHECK (source IN (
+            'runtime','gateway','oms','algo','operator','recovery','quote_ingress'
+          ))
+        """
+    )
+
+
+def _apply_current_k6_predecessor(cur: object, schema: str) -> None:
+    _apply_base_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+    cur.execute(K2C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))  # type: ignore[attr-defined]
+    cur.execute(K2D_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))  # type: ignore[attr-defined]
+    k6_forward = K6_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    cur.execute(k6_forward)  # type: ignore[attr-defined]
+    cur.execute(K6C_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))  # type: ignore[attr-defined]
+    cur.execute(K6B_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))  # type: ignore[attr-defined]
+
+
+def test_event_contract_repair_preflight_apply_matrix_rollback_and_drift_on_dev_postgres() -> None:
+    schema = _fixture_schema().replace("k2a_", "bug1019_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    sha = "a" * 64
+    target_composites = (
+        ("ALGO_START", "MINIQMT_EXECUTION_KERNEL", "miniqmt_algo_start_v1"),
+        ("ALGO_START", "MINIQMT_EXECUTION_KERNEL", "miniqmt_algo_start_v2"),
+        ("COMMAND_OUTCOME", "MINIQMT_EXECUTION_KERNEL", "miniqmt_command_outcome_v1"),
+        ("TICK", "B0_QUOTE_V2", "miniqmt_market_data_view_v2"),
+        ("TIMER", "EXCHANGE_SESSION_CLOCK", "miniqmt_timer_due_v1"),
+        ("SESSION", "EXCHANGE_SESSION_CLOCK", "miniqmt_session_event_v1"),
+        ("EOD", "EXCHANGE_SESSION_CLOCK", "miniqmt_eod_event_v1"),
+        ("ORDER", "QMT_GATEWAY_CALLBACK", "miniqmt_order_event_v1"),
+        ("TRADE", "QMT_GATEWAY_CALLBACK", "miniqmt_trade_fact_v1"),
+        ("ACCOUNT", "QMT_OMS_PROJECTION", "miniqmt_account_projection_v1"),
+        ("RECONCILE", "QMT_OMS_RECONCILIATION", "miniqmt_reconciliation_receipt_v1"),
+        ("OPERATOR", "SIMULATION_RUNTIME_OPERATOR", "miniqmt_operator_command_v1"),
+    )
+    preflight = EVENT_CONTRACT_REPAIR_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    forward = EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    rollback = EVENT_CONTRACT_REPAIR_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            cur.execute(f"SELECT {schema}.miniqmt_k2_catalog_fingerprint()")
+            assert cur.fetchone()[0] == "673ac852d725941112752d2eb63c46342e1b53169fadfacd4664fcbb4c27634e"
+            cur.execute(
+                f"INSERT INTO {schema}.execution_runtime(runtime_id,trade_date) VALUES ('runtime_bug1019','2026-08-11')"
+            )
+            with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_event_(type|source)"):
+                cur.execute(
+                    f"""
+                    INSERT INTO {schema}.execution_runtime_event(
+                        event_id,runtime_id,sequence,event_type,event_time,source,payload,event_contract_version,
+                        event_schema_version,payload_schema_version,event_key_sha256,payload_sha256,observed_at_utc,
+                        logical_at_utc,source_identity_json,correlation_json,ingress_receipt_json,
+                        ingress_receipt_sha256,routing_rule_version,transaction_commit_identity
+                    ) VALUES (
+                        'event_predecessor_repro','runtime_bug1019',1,'SESSION',now(),'EXCHANGE_SESSION_CLOCK',
+                        '{{}}'::jsonb,'KERNEL_V2','miniqmt_runtime_event_envelope_v2','miniqmt_session_event_v1',
+                        %s,%s,now(),now(),'{{}}'::jsonb,'{{}}'::jsonb,'{{}}'::jsonb,%s,
+                        'miniqmt_event_routing_v1','tx_predecessor_repro'
+                    )
+                    """,
+                    (sha, sha, sha),
+                )
+
+            cur.execute(preflight)
+            cur.execute(forward)
+            cur.execute(
+                "SELECT oid::text,xmin::text,prosrc,proconfig FROM pg_proc WHERE oid=%s::regprocedure",
+                (f"{schema}.miniqmt_k2_catalog_fingerprint()",),
+            )
+            target_function_authority = tuple(cur.fetchone())
+            cur.execute(
+                "SELECT oid::text,xmin::text,prosrc,proconfig FROM pg_proc WHERE oid=%s::regprocedure",
+                (f"{schema}.miniqmt_k2d_catalog_fingerprint()",),
+            )
+            target_k2d_function_authority = tuple(cur.fetchone())
+            cur.execute(
+                "SELECT conname,oid::text FROM pg_constraint "
+                "WHERE conrelid=%s::regclass AND contype='c' "
+                'ORDER BY conname COLLATE "C"',
+                (f"{schema}.execution_runtime_event",),
+            )
+            target_constraint_authority = tuple(tuple(row) for row in cur.fetchall())
+            cur.execute(forward)
+            cur.execute(
+                "SELECT oid::text,xmin::text,prosrc,proconfig FROM pg_proc WHERE oid=%s::regprocedure",
+                (f"{schema}.miniqmt_k2_catalog_fingerprint()",),
+            )
+            assert tuple(cur.fetchone()) == target_function_authority
+            cur.execute(
+                "SELECT oid::text,xmin::text,prosrc,proconfig FROM pg_proc WHERE oid=%s::regprocedure",
+                (f"{schema}.miniqmt_k2d_catalog_fingerprint()",),
+            )
+            assert tuple(cur.fetchone()) == target_k2d_function_authority
+            cur.execute(
+                "SELECT conname,oid::text FROM pg_constraint "
+                "WHERE conrelid=%s::regclass AND contype='c' "
+                'ORDER BY conname COLLATE "C"',
+                (f"{schema}.execution_runtime_event",),
+            )
+            assert tuple(tuple(row) for row in cur.fetchall()) == target_constraint_authority
+            cur.execute(preflight)
+            cur.execute(f"SELECT {schema}.miniqmt_k2_catalog_fingerprint()")
+            assert cur.fetchone()[0] == "b5cceba58ef9646e441d1fcb346a47cd4648397ac4425a956d1b83b2fc81d473"
+            cur.execute(
+                "SELECT conname FROM pg_constraint WHERE conrelid=%s::regclass AND contype='c' "
+                'ORDER BY conname COLLATE "C"',
+                (f"{schema}.execution_runtime_event",),
+            )
+            assert tuple(row[0] for row in cur.fetchall()) == (
+                "ck_miniqmt_event_id",
+                "ck_miniqmt_event_sequence",
+                "ck_miniqmt_event_source",
+                "ck_miniqmt_event_type",
+                "ck_miniqmt_k2_event_composite",
+                "ck_miniqmt_k2_event_contract",
+            )
+            from backend.services.miniqmt_execution_runtime.kernel_repository import (
+                KernelRepositorySchemaError,
+                PostgresMiniQMTKernelRepository,
+            )
+            from backend.tests.miniqmt_execution_runtime.test_kernel_repository_postgres import (
+                _conn_factory,
+            )
+
+            base_conn_factory = _conn_factory(schema)
+            connection_contract: list[tuple[bool, bool]] = []
+
+            @contextmanager
+            def counted_conn_factory(*, autocommit: bool = False, manage_transaction: bool = False):
+                connection_contract.append((autocommit, manage_transaction))
+                with base_conn_factory(autocommit=autocommit, manage_transaction=manage_transaction) as proxy:
+                    yield proxy
+
+            repository_readback = PostgresMiniQMTKernelRepository(conn_factory=counted_conn_factory).preflight_schema()
+            assert repository_readback["event_contract_schema"] is True
+            assert repository_readback["schema_catalog_fingerprint"] is True
+            assert connection_contract == [(False, True)]
+
+            nullable_envelope_fields = (
+                "event_schema_version",
+                "event_key_sha256",
+                "payload_sha256",
+                "ingress_receipt_sha256",
+                "routing_rule_version",
+            )
+            for offset, nullable_field in enumerate(nullable_envelope_fields, start=70):
+                values = {
+                    "event_schema_version": "'miniqmt_runtime_event_envelope_v2'",
+                    "event_key_sha256": f"'{offset:064x}'",
+                    "payload_sha256": f"'{offset + 100:064x}'",
+                    "ingress_receipt_sha256": f"'{offset + 200:064x}'",
+                    "routing_rule_version": "'miniqmt_event_routing_v1'",
+                }
+                values[nullable_field] = "NULL"
+                cur.execute("BEGIN")
+                with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_k2_event_contract"):
+                    cur.execute(
+                        f"""
+                        INSERT INTO {schema}.execution_runtime_event(
+                            event_id,runtime_id,sequence,event_type,event_time,source,payload,event_contract_version,
+                            event_schema_version,payload_schema_version,event_key_sha256,payload_sha256,observed_at_utc,
+                            logical_at_utc,source_identity_json,correlation_json,ingress_receipt_json,
+                            ingress_receipt_sha256,routing_rule_version,transaction_commit_identity
+                        ) VALUES (
+                            'event_null_{nullable_field}','runtime_bug1019',{offset},'SESSION',now(),
+                            'EXCHANGE_SESSION_CLOCK','{{}}'::jsonb,'KERNEL_V2',
+                            {values["event_schema_version"]},'miniqmt_session_event_v1',
+                            {values["event_key_sha256"]},{values["payload_sha256"]},now(),now(),
+                            '{{}}'::jsonb,'{{}}'::jsonb,'{{}}'::jsonb,
+                            {values["ingress_receipt_sha256"]},{values["routing_rule_version"]},
+                            'tx_null_{nullable_field}'
+                        )
+                        """
+                    )
+                cur.execute("ROLLBACK")
+
+            with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_k2_event_composite"):
+                cur.execute(
+                    f"INSERT INTO {schema}.execution_runtime_event("
+                    "event_id,runtime_id,sequence,event_type,event_time,source,payload) VALUES "
+                    "('event_bad_legacy_k2_identity','runtime_bug1019',90,'SESSION',now(),"
+                    "'EXCHANGE_SESSION_CLOCK','{}'::jsonb)"
+                )
+
+            cur.execute("BEGIN")
+            cur.execute(f"ALTER TABLE {schema}.execution_runtime_event DROP CONSTRAINT ck_miniqmt_k2_event_contract")
+            with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_k2_event_composite"):
+                cur.execute(
+                    f"""
+                    INSERT INTO {schema}.execution_runtime_event(
+                        event_id,runtime_id,sequence,event_type,event_time,source,payload,event_contract_version,
+                        event_schema_version,payload_schema_version,event_key_sha256,payload_sha256,observed_at_utc,
+                        logical_at_utc,source_identity_json,correlation_json,ingress_receipt_json,
+                        ingress_receipt_sha256,routing_rule_version,transaction_commit_identity
+                    ) VALUES (
+                        'event_null_kernel_schema','runtime_bug1019',91,'SESSION',now(),'EXCHANGE_SESSION_CLOCK',
+                        '{{}}'::jsonb,'KERNEL_V2','miniqmt_runtime_event_envelope_v2',NULL,
+                        %s,%s,now(),now(),'{{}}'::jsonb,'{{}}'::jsonb,'{{}}'::jsonb,%s,
+                        'miniqmt_event_routing_v1','tx_null_kernel_schema'
+                    )
+                    """,
+                    (sha, sha, sha),
+                )
+            cur.execute("ROLLBACK")
+
+            for sequence, (event_type, source, payload_schema) in enumerate(target_composites, start=1):
+                cur.execute(
+                    f"""
+                    INSERT INTO {schema}.execution_runtime_event(
+                        event_id,runtime_id,sequence,event_type,event_time,source,payload,event_contract_version,
+                        event_schema_version,payload_schema_version,event_key_sha256,payload_sha256,observed_at_utc,
+                        logical_at_utc,source_identity_json,correlation_json,ingress_receipt_json,
+                        ingress_receipt_sha256,routing_rule_version,transaction_commit_identity
+                    ) VALUES (
+                        %s,'runtime_bug1019',%s,%s,now(),%s,'{{}}'::jsonb,'KERNEL_V2',
+                        'miniqmt_runtime_event_envelope_v2',%s,%s,%s,now(),now(),'{{}}'::jsonb,
+                        '{{}}'::jsonb,'{{}}'::jsonb,%s,'miniqmt_event_routing_v1',%s
+                    )
+                    """,
+                    (
+                        f"event_target_{sequence}",
+                        sequence,
+                        event_type,
+                        source,
+                        payload_schema,
+                        f"{sequence:064x}",
+                        f"{sequence + 20:064x}",
+                        f"{sequence + 40:064x}",
+                        f"tx_target_{sequence}",
+                    ),
+                )
+            for sequence, (event_type, _source, payload_schema) in enumerate(target_composites, start=101):
+                with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_k2_event_composite"):
+                    cur.execute(
+                        f"""
+                        INSERT INTO {schema}.execution_runtime_event(
+                            event_id,runtime_id,sequence,event_type,event_time,source,payload,event_contract_version,
+                            event_schema_version,payload_schema_version,event_key_sha256,payload_sha256,observed_at_utc,
+                            logical_at_utc,source_identity_json,correlation_json,ingress_receipt_json,
+                            ingress_receipt_sha256,routing_rule_version,transaction_commit_identity
+                        ) VALUES (
+                            %s,'runtime_bug1019',%s,%s,now(),'runtime','{{}}'::jsonb,'KERNEL_V2',
+                            'miniqmt_runtime_event_envelope_v2',%s,%s,%s,now(),now(),'{{}}'::jsonb,
+                            '{{}}'::jsonb,'{{}}'::jsonb,%s,'miniqmt_event_routing_v1',%s
+                        )
+                        """,
+                        (
+                            f"event_bad_{sequence}",
+                            sequence,
+                            event_type,
+                            payload_schema,
+                            f"{sequence:064x}",
+                            f"{sequence + 20:064x}",
+                            f"{sequence + 40:064x}",
+                            f"tx_bad_{sequence}",
+                        ),
+                    )
+
+            nullable_identity_cases = (
+                ("sequence", "NULL", "'QUOTE_OBSERVED'", "'quote_ingress'", "ck_miniqmt_event_sequence"),
+                ("event_type", "1201", "NULL", "'quote_ingress'", "ck_miniqmt_event_type"),
+                ("source", "1202", "'QUOTE_OBSERVED'", "NULL", "ck_miniqmt_event_source"),
+            )
+            for nullable_column, sequence_sql, event_type_sql, source_sql, constraint_name in nullable_identity_cases:
+                cur.execute("BEGIN")
+                cur.execute(
+                    f"ALTER TABLE {schema}.execution_runtime_event ALTER COLUMN {nullable_column} DROP NOT NULL"
+                )
+                with pytest.raises(psycopg2.errors.CheckViolation, match=constraint_name):
+                    cur.execute(
+                        f"""
+                        INSERT INTO {schema}.execution_runtime_event(
+                            event_id,runtime_id,sequence,event_type,event_time,source,payload
+                        ) VALUES (
+                            'event_null_{nullable_column}','runtime_bug1019',{sequence_sql},{event_type_sql},
+                            now(),{source_sql},'{{}}'::jsonb
+                        )
+                        """
+                    )
+                cur.execute("ROLLBACK")
+
+            cur.execute("BEGIN")
+            cur.execute(
+                f"ALTER TABLE {schema}.execution_runtime_event DROP CONSTRAINT execution_runtime_event_pkey CASCADE"
+            )
+            cur.execute(f"ALTER TABLE {schema}.execution_runtime_event ALTER COLUMN event_id DROP NOT NULL")
+            with pytest.raises(psycopg2.errors.CheckViolation, match="ck_miniqmt_event_id"):
+                cur.execute(
+                    f"""
+                    INSERT INTO {schema}.execution_runtime_event(
+                        event_id,runtime_id,sequence,event_type,event_time,source,payload
+                    ) VALUES (
+                        NULL,'runtime_bug1019',1203,'QUOTE_OBSERVED',now(),'quote_ingress','{{}}'::jsonb
+                    )
+                    """
+                )
+            cur.execute("ROLLBACK")
+
+            cur.execute(
+                f"INSERT INTO {schema}.execution_runtime_event("
+                "event_id,runtime_id,sequence,event_type,event_time,source,payload) VALUES "
+                "('event_legacy_quote','runtime_bug1019',1000,'QUOTE_OBSERVED',now(),'quote_ingress','{}'::jsonb)"
+            )
+            with pytest.raises(psycopg2.Error, match="destructive rollback refused"):
+                cur.execute(rollback)
+            cur.execute("ROLLBACK")
+            cur.execute(f"DELETE FROM {schema}.execution_runtime_event WHERE event_contract_version='KERNEL_V2'")
+
+            cur.execute("BEGIN")
+            cur.execute(
+                f"""
+                INSERT INTO {schema}.execution_algo_instance(
+                    algo_instance_id,runtime_id,parent_intent_id,strategy_slot_id,symbol,side,target_quantity,
+                    remaining_quantity,algo_code,status,kernel_contract_version,traded_quantity,plugin_id,
+                    plugin_version,plugin_manifest_sha256,plugin_config_json,plugin_config_sha256,
+                    compatibility_receipt_sha256,state_schema_version,state_json,state_sha256,
+                    transition_sequence,last_applied_delivery_sequence,last_closed_delivery_sequence,
+                    active_child_closure_status,active_child_count,row_version,kernel_carrier_json
+                ) VALUES (
+                    'algo_rollback_guard','runtime_bug1019','intent_guard','slot_guard','600000.SH','BUY',100,100,
+                    'TWAP','ACTIVE','KERNEL_V2',0,'aistock.twap','1.0.0',%s,'{{}}'::jsonb,%s,%s,
+                    'twap_state_v1','{{}}'::jsonb,%s,0,0,0,'NOT_APPLICABLE',0,1,'{{}}'::jsonb
+                )
+                """,
+                (sha, sha, sha, sha),
+            )
+            with pytest.raises(psycopg2.Error, match="destructive rollback refused"):
+                cur.execute(rollback)
+            cur.execute("ROLLBACK")
+
+            cur.execute("BEGIN")
+            cur.execute(f"ALTER TABLE {schema}.execution_broker_reconciliation_attempt DISABLE TRIGGER ALL")
+            cur.execute(
+                f"""
+                INSERT INTO {schema}.execution_broker_reconciliation_attempt(
+                    receipt_sha256,command_id,runtime_id,reconcile_attempt,callback_watermark,
+                    outcome,observed_at_utc,receipt_json
+                ) VALUES (%s,'orphan_k2d_command','runtime_bug1019',1,'watermark_k2d',
+                          'NOT_FOUND',now(),'{{}}'::jsonb)
+                """,
+                ("c" * 64,),
+            )
+            cur.execute(f"ALTER TABLE {schema}.execution_broker_reconciliation_attempt ENABLE TRIGGER ALL")
+            with pytest.raises(psycopg2.Error, match="destructive rollback refused"):
+                cur.execute(rollback)
+            cur.execute("ROLLBACK")
+
+            cur.execute("BEGIN")
+            cur.execute(
+                f"INSERT INTO {schema}.execution_kernel_worker_epoch(worker_id,process_role) "
+                "VALUES ('worker_rollback_guard','DISPATCH')"
+            )
+            with pytest.raises(psycopg2.Error, match="destructive rollback refused"):
+                cur.execute(rollback)
+            cur.execute("ROLLBACK")
+
+            cur.execute("BEGIN")
+            cur.execute(
+                f"""
+                INSERT INTO {schema}.execution_product_route_cutover(
+                    runtime_id,binding_id,trade_date,route_epoch,route_owner,effective_new_instance_sequence,
+                    legacy_active_instance_count,kernel_active_instance_count,catalog_sha256,
+                    gateway_capability_catalog_sha256,exchange_session_authority_sha256,
+                    migration_readback_sha256,product_authority_schema_sha256,created_at_utc,carrier_json,
+                    receipt_sha256
+                ) VALUES (
+                    'runtime_bug1019','binding_rollback_guard','2026-08-11',1,'KERNEL_V2',1,0,0,
+                    %s,%s,%s,%s,%s,now(),'{{}}'::jsonb,%s
+                )
+                """,
+                (sha, sha, sha, sha, sha, "b" * 64),
+            )
+            with pytest.raises(psycopg2.Error, match="destructive rollback refused"):
+                cur.execute(rollback)
+            cur.execute("ROLLBACK")
+
+            cur.execute(rollback)
+            cur.execute(
+                "SELECT oid::text,xmin::text,prosrc,proconfig FROM pg_proc WHERE oid=%s::regprocedure",
+                (f"{schema}.miniqmt_k2_catalog_fingerprint()",),
+            )
+            predecessor_function_authority = tuple(cur.fetchone())
+            cur.execute(
+                "SELECT oid::text,xmin::text,prosrc,proconfig FROM pg_proc WHERE oid=%s::regprocedure",
+                (f"{schema}.miniqmt_k2d_catalog_fingerprint()",),
+            )
+            predecessor_k2d_function_authority = tuple(cur.fetchone())
+            assert predecessor_k2d_function_authority == target_k2d_function_authority
+            cur.execute(
+                "SELECT conname,oid::text FROM pg_constraint "
+                "WHERE conrelid=%s::regclass AND contype='c' "
+                'ORDER BY conname COLLATE "C"',
+                (f"{schema}.execution_runtime_event",),
+            )
+            predecessor_constraint_authority = tuple(tuple(row) for row in cur.fetchall())
+            cur.execute(rollback)
+            cur.execute(
+                "SELECT oid::text,xmin::text,prosrc,proconfig FROM pg_proc WHERE oid=%s::regprocedure",
+                (f"{schema}.miniqmt_k2_catalog_fingerprint()",),
+            )
+            assert tuple(cur.fetchone()) == predecessor_function_authority
+            cur.execute(
+                "SELECT oid::text,xmin::text,prosrc,proconfig FROM pg_proc WHERE oid=%s::regprocedure",
+                (f"{schema}.miniqmt_k2d_catalog_fingerprint()",),
+            )
+            assert tuple(cur.fetchone()) == predecessor_k2d_function_authority
+            cur.execute(
+                "SELECT conname,oid::text FROM pg_constraint "
+                "WHERE conrelid=%s::regclass AND contype='c' "
+                'ORDER BY conname COLLATE "C"',
+                (f"{schema}.execution_runtime_event",),
+            )
+            assert tuple(tuple(row) for row in cur.fetchall()) == predecessor_constraint_authority
+            with pytest.raises(KernelRepositorySchemaError, match="not the exact successor"):
+                PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema)).preflight_schema()
+            cur.execute(forward)
+            cur.execute(f"SELECT pg_get_functiondef('{schema}.miniqmt_k2_catalog_fingerprint()'::regprocedure)")
+            genuine_catalog_function = str(cur.fetchone()[0])
+            for artifact in (preflight, forward, rollback):
+                cur.execute(
+                    f"""
+                    CREATE OR REPLACE FUNCTION {schema}.miniqmt_k2_catalog_fingerprint()
+                    RETURNS TEXT LANGUAGE SQL STABLE
+                    AS $forged$ SELECT 'b5cceba58ef9646e441d1fcb346a47cd4648397ac4425a956d1b83b2fc81d473'::TEXT $forged$
+                    """
+                )
+                with pytest.raises(psycopg2.Error, match="catalog function definition drift"):
+                    cur.execute(artifact)
+                cur.execute("ROLLBACK")
+                cur.execute(genuine_catalog_function)
+            cur.execute(
+                f"ALTER TABLE {schema}.execution_runtime_event DROP CONSTRAINT ck_miniqmt_event_source; "
+                f"ALTER TABLE {schema}.execution_runtime_event ADD CONSTRAINT ck_miniqmt_event_source "
+                "CHECK (source IN ('runtime')) NOT VALID"
+            )
+            with pytest.raises(psycopg2.Error, match="exact validated predecessor/target CHECK names"):
+                cur.execute(preflight)
+            cur.execute("ROLLBACK")
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_event_contract_artifacts_reject_forged_k2d_body_config_and_result_on_dev_postgres() -> None:
+    schema = _fixture_schema().replace("k2a_", "bug1019_k2d_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    artifacts = {
+        "preflight": EVENT_CONTRACT_REPAIR_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema),
+        "forward": EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema),
+        "rollback": EVENT_CONTRACT_REPAIR_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema),
+    }
+    expected_body_sha256 = "9e5236fdc17b79888c864871e71ed6613b12759bbe87e070bd5c1c1db0b95451"
+    wrong_catalog_sha256 = "0" * 64
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            cur.execute(f"SELECT pg_get_functiondef('{schema}.miniqmt_k2d_catalog_fingerprint()'::regprocedure)")
+            genuine_k2d_function = str(cur.fetchone()[0])
+
+            def restore_genuine_k2d() -> None:
+                cur.execute(genuine_k2d_function)
+                cur.execute(f"ALTER FUNCTION {schema}.miniqmt_k2d_catalog_fingerprint() RESET ALL")
+
+            for artifact_name, artifact in artifacts.items():
+                cur.execute(
+                    f"""
+                    CREATE OR REPLACE FUNCTION {schema}.miniqmt_k2d_catalog_fingerprint()
+                    RETURNS TEXT LANGUAGE SQL STABLE
+                    AS $forged_body$ SELECT '2d5fcbf0151d9e5d2a9d8537f834aabfd056a42cc0eeb8c079add68c8964f59f'::TEXT $forged_body$
+                    """
+                )
+                with pytest.raises(psycopg2.Error, match="K2-D catalog function definition drift"):
+                    cur.execute(artifact)
+                cur.execute("ROLLBACK")
+                restore_genuine_k2d()
+
+                cur.execute(
+                    f"ALTER FUNCTION {schema}.miniqmt_k2d_catalog_fingerprint() "
+                    f"SET search_path = pg_catalog, {schema}"
+                )
+                with pytest.raises(psycopg2.Error, match="K2-D catalog function definition drift"):
+                    cur.execute(artifact)
+                cur.execute("ROLLBACK")
+                restore_genuine_k2d()
+
+                cur.execute(
+                    f"""
+                    CREATE OR REPLACE FUNCTION {schema}.miniqmt_k2d_catalog_fingerprint()
+                    RETURNS TEXT LANGUAGE SQL STABLE
+                    AS $forged_result$ SELECT '{wrong_catalog_sha256}'::TEXT $forged_result$
+                    """
+                )
+                cur.execute(
+                    """
+                    SELECT encode(sha256(convert_to(
+                        btrim(replace(function_record.prosrc,function_schema.nspname,'<schema>'),E' \n\r\t;'),
+                        'UTF8'
+                    )),'hex')
+                    FROM pg_proc AS function_record
+                    JOIN pg_namespace AS function_schema ON function_schema.oid=function_record.pronamespace
+                    WHERE function_record.oid=%s::regprocedure
+                    """,
+                    (f"{schema}.miniqmt_k2d_catalog_fingerprint()",),
+                )
+                forged_body_sha256 = str(cur.fetchone()[0])
+                result_gate_artifact = artifact.replace(expected_body_sha256, forged_body_sha256)
+                assert result_gate_artifact != artifact, artifact_name
+                with pytest.raises(psycopg2.Error, match="independent K2-D catalog drift"):
+                    cur.execute(result_gate_artifact)
+                cur.execute("ROLLBACK")
+                restore_genuine_k2d()
+
+            cur.execute(artifacts["preflight"])
+            cur.execute(artifacts["forward"])
+            cur.execute(artifacts["preflight"])
+            cur.execute(artifacts["rollback"])
+            cur.execute(artifacts["preflight"])
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_event_contract_public_artifacts_resist_pg_temp_catalog_shadow_and_emit_independent_receipts() -> None:
+    schema = _fixture_schema().replace("k2a_", "bug1019_temp_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    artifacts = {
+        "preflight": EVENT_CONTRACT_REPAIR_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema),
+        "forward": EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema),
+        "rollback": EVENT_CONTRACT_REPAIR_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema),
+    }
+    expected_k2d_catalog_sha256 = "2d5fcbf0151d9e5d2a9d8537f834aabfd056a42cc0eeb8c079add68c8964f59f"
+
+    def execute_and_read_receipt(cur: object, artifact: str) -> dict[str, object]:
+        receipt_sql, marker, trailing = artifact.rpartition("COMMIT;")
+        assert marker == "COMMIT;" and not trailing.strip()
+        cur.execute(receipt_sql)  # type: ignore[attr-defined]
+        description = cur.description  # type: ignore[attr-defined]
+        assert description is not None
+        columns = tuple(str(item[0]) for item in description)
+        row = tuple(cur.fetchone())  # type: ignore[attr-defined]
+        cur.execute("COMMIT")  # type: ignore[attr-defined]
+        return dict(zip(columns, row, strict=True))
+
+    def assert_independent_receipt(receipt: dict[str, object]) -> None:
+        assert receipt["k2_catalog_sha256"] == receipt["k2_independent_catalog_sha256"]
+        assert receipt["k2_independent_catalog_sha256"] == receipt["k2_code_owned_catalog_sha256"]
+        assert receipt["k2_catalog_authority_verified"] is True
+        assert receipt["k2d_catalog_sha256"] == expected_k2d_catalog_sha256
+        assert receipt["k2d_independent_catalog_sha256"] == expected_k2d_catalog_sha256
+        assert receipt["k2d_code_owned_catalog_sha256"] == expected_k2d_catalog_sha256
+        assert receipt["k2d_catalog_authority_verified"] is True
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            cur.execute("CREATE TEMP TABLE pg_proc(marker TEXT)")
+
+            cur.execute(f"SET search_path = pg_catalog, {schema}")
+            cur.execute(
+                "SELECT 'pg_proc'::regclass::oid='pg_temp.pg_proc'::regclass::oid"
+            )
+            assert cur.fetchone() == (True,)
+
+            cur.execute(f"SET search_path = pg_catalog, {schema}, pg_temp")
+            cur.execute(
+                "SELECT 'pg_proc'::regclass::oid='pg_catalog.pg_proc'::regclass::oid, "
+                f"{schema}.miniqmt_k2d_catalog_fingerprint()"
+            )
+            catalog_resolves_first, exact_catalog_sha256 = cur.fetchone()
+            assert catalog_resolves_first is True
+            assert exact_catalog_sha256 == expected_k2d_catalog_sha256
+
+            for artifact_name in ("preflight", "forward", "rollback"):
+                cur.execute(f"SET search_path = pg_catalog, {schema}")
+                receipt = execute_and_read_receipt(cur, artifacts[artifact_name])
+                assert_independent_receipt(receipt)
+
+            # Exercise each byte-identical public entry too; the state transitions are
+            # genuine no-op/apply/rollback operations after the receipt-bearing pass.
+            cur.execute(f"SET search_path = pg_catalog, {schema}")
+            cur.execute(artifacts["preflight"])
+            cur.execute(artifacts["forward"])
+            cur.execute(artifacts["rollback"])
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute("DROP TABLE IF EXISTS pg_temp.pg_proc")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_event_contract_repair_accepts_complete_six_check_predecessor_and_preserves_identity_checks() -> None:
+    schema = _fixture_schema().replace("k2a_", "bug1019_six_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    preflight = EVENT_CONTRACT_REPAIR_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    forward = EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    rollback = EVENT_CONTRACT_REPAIR_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    expected_names = (
+        "ck_miniqmt_event_id",
+        "ck_miniqmt_event_sequence",
+        "ck_miniqmt_event_source",
+        "ck_miniqmt_event_type",
+        "ck_miniqmt_k2_event_composite",
+        "ck_miniqmt_k2_event_contract",
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            cur.execute(f"ALTER TABLE {schema}.execution_runtime_event DROP CONSTRAINT ck_miniqmt_event_sequence")
+            with pytest.raises(psycopg2.Error, match="exact validated predecessor/target CHECK names"):
+                cur.execute(preflight)
+            cur.execute("ROLLBACK")
+            cur.execute(
+                f"ALTER TABLE {schema}.execution_runtime_event "
+                "ADD CONSTRAINT ck_miniqmt_event_sequence CHECK (sequence > 0)"
+            )
+            cur.execute(preflight)
+            cur.execute(forward)
+            cur.execute(preflight)
+            cur.execute(rollback)
+            cur.execute(
+                "SELECT conname FROM pg_constraint WHERE conrelid=%s::regclass AND contype='c' "
+                'ORDER BY conname COLLATE "C"',
+                (f"{schema}.execution_runtime_event",),
+            )
+            assert tuple(row[0] for row in cur.fetchall()) == expected_names
+            cur.execute(forward)
+            cur.execute(preflight)
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_event_contract_rollback_post_commit_ignores_legal_legacy_shared_facts_on_dev_postgres() -> None:
+    schema = _fixture_schema().replace("k2a_", "bug1019_legacy_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    forward = EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    rollback = EVENT_CONTRACT_REPAIR_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            cur.execute(forward)
+            cur.execute(
+                f"INSERT INTO {schema}.execution_runtime(runtime_id,trade_date) "
+                "VALUES ('runtime_legacy_rollback','2026-08-11')"
+            )
+            cur.execute(
+                f"""
+                INSERT INTO {schema}.execution_algo_instance(
+                    algo_instance_id,runtime_id,parent_intent_id,strategy_slot_id,symbol,side,
+                    target_quantity,remaining_quantity,algo_code,status,kernel_contract_version
+                ) VALUES (
+                    'algo_legacy_rollback','runtime_legacy_rollback','intent_legacy_rollback',
+                    'slot_legacy_rollback','600000.SH','BUY',100,100,'TWAP','ACTIVE','LEGACY_V1'
+                )
+                """
+            )
+            cur.execute(
+                f"""
+                INSERT INTO {schema}.execution_child_order(
+                    child_order_id,runtime_id,algo_instance_id,parent_intent_id,strategy_slot_id,
+                    symbol,side,quantity,price,price_type,status,kernel_contract_version
+                ) VALUES (
+                    'child_legacy_rollback','runtime_legacy_rollback','algo_legacy_rollback',
+                    'intent_legacy_rollback','slot_legacy_rollback','600000.SH','BUY',100,
+                    10.000000,2,'SUBMITTING','LEGACY_V1'
+                )
+                """
+            )
+
+            cur.execute(rollback)
+            cur.execute(
+                f"SELECT count(*),count(*) FILTER (WHERE kernel_contract_version='KERNEL_V2') "
+                f"FROM {schema}.execution_algo_instance"
+            )
+            assert cur.fetchone() == (1, 0)
+            cur.execute(
+                f"SELECT count(*),count(*) FILTER (WHERE kernel_contract_version='KERNEL_V2') "
+                f"FROM {schema}.execution_child_order"
+            )
+            assert cur.fetchone() == (1, 0)
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_event_contract_repair_post_commit_assertion_fails_nonzero_and_exact_rerun_recovers() -> None:
+    schema = _fixture_schema().replace("k2a_", "bug1019_commit_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    target_composite_sha256 = "4a2d33d3fc75a4b468661e1bdbf2ecce9cd13aaab491c7c4d7605a1df3af3857"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            forward = EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            prefix, separator, suffix = forward.rpartition(target_composite_sha256)
+            assert separator == target_composite_sha256
+            tampered_post_commit = prefix + ("0" * 64) + suffix
+            with pytest.raises(psycopg2.Error, match="post-commit exact constraint readback drift"):
+                cur.execute(tampered_post_commit)
+            cur.execute("ROLLBACK")
+            cur.execute(
+                f"SELECT encode(sha256(convert_to(pg_get_constraintdef(oid,true),'UTF8')),'hex') "
+                f"FROM pg_constraint WHERE conrelid='{schema}.execution_runtime_event'::regclass "
+                "AND conname='ck_miniqmt_k2_event_composite'"
+            )
+            assert cur.fetchone()[0] == target_composite_sha256
+            cur.execute(forward)
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_event_contract_artifacts_reject_unregistered_event_check_in_both_states() -> None:
+    schema = _fixture_schema().replace("k2a_", "bug1019_extra_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            preflight = EVENT_CONTRACT_REPAIR_PREFLIGHT.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            forward = EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            rollback = EVENT_CONTRACT_REPAIR_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+
+            for state in ("predecessor", "target"):
+                cur.execute(
+                    f"ALTER TABLE {schema}.execution_runtime_event "
+                    "ADD CONSTRAINT ck_blocks_legal_tick CHECK (event_type <> 'TICK')"
+                )
+                for artifact in (preflight, forward, rollback):
+                    with pytest.raises(psycopg2.Error, match="exact validated predecessor/target CHECK names"):
+                        cur.execute(artifact)
+                    cur.execute("ROLLBACK")
+                cur.execute(f"ALTER TABLE {schema}.execution_runtime_event DROP CONSTRAINT ck_blocks_legal_tick")
+                if state == "predecessor":
+                    cur.execute(forward)
+
+            cur.execute(forward)
+            cur.execute(preflight)
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_event_contract_forward_post_commit_rejects_raced_extra_event_check() -> None:
+    schema = _fixture_schema().replace("k2a_", "bug1019_race_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            forward = EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            marker = "-- Independent post-commit assertion.  Any mismatch exits non-zero."
+            prefix, separator, suffix = forward.partition(marker)
+            assert separator == marker
+            cur.execute(prefix)
+            cur.execute(
+                f"ALTER TABLE {schema}.execution_runtime_event "
+                "ADD CONSTRAINT ck_blocks_legal_tick CHECK (event_type <> 'TICK')"
+            )
+            with pytest.raises(psycopg2.Error, match="post-commit exact constraint readback drift"):
+                cur.execute(marker + suffix)
+            cur.execute("ROLLBACK")
+            cur.execute(
+                "SELECT conname FROM pg_constraint WHERE conrelid=%s::regclass AND conname='ck_blocks_legal_tick'",
+                (f"{schema}.execution_runtime_event",),
+            )
+            assert cur.fetchone() == ("ck_blocks_legal_tick",)
+            cur.execute(f"ALTER TABLE {schema}.execution_runtime_event DROP CONSTRAINT ck_blocks_legal_tick")
+            cur.execute(forward)
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
+
+def test_event_contract_rollback_post_commit_rejects_raced_extra_event_check() -> None:
+    schema = _fixture_schema().replace("k2a_", "bug1019_rollback_race_", 1)
+    conn = psycopg2.connect(**_dev_dsn())
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            forward = EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            rollback = EVENT_CONTRACT_REPAIR_ROLLBACK.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+            cur.execute(forward)
+            marker = "-- Independent post-commit predecessor assertion.  Any mismatch exits non-zero."
+            prefix, separator, suffix = rollback.partition(marker)
+            assert separator == marker
+            cur.execute(prefix)
+            cur.execute(
+                f"ALTER TABLE {schema}.execution_runtime_event "
+                "ADD CONSTRAINT ck_blocks_legal_tick CHECK (event_type <> 'TICK')"
+            )
+            with pytest.raises(psycopg2.Error, match="rollback post-commit exact constraint readback drift"):
+                cur.execute(marker + suffix)
+            cur.execute("ROLLBACK")
+            cur.execute(
+                "SELECT conname FROM pg_constraint WHERE conrelid=%s::regclass AND conname='ck_blocks_legal_tick'",
+                (f"{schema}.execution_runtime_event",),
+            )
+            assert cur.fetchone() == ("ck_blocks_legal_tick",)
+            cur.execute(f"ALTER TABLE {schema}.execution_runtime_event DROP CONSTRAINT ck_blocks_legal_tick")
+            cur.execute(forward)
+    finally:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
 
 
 def _apply_forward(cur: object, forward: str) -> None:
