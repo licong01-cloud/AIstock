@@ -2324,6 +2324,11 @@ def test_runtime_close_sync_preserves_source_fixed_time_and_uses_verification_cl
     assert updated["fixed_at"] == "2026-07-31T10:00:00Z"
     assert updated["closed_at"] == "2026-08-01T02:00:00Z"
     assert updated["runtime_contract"]["runtime_identity_match"] is True
+    summary = updated["runtime_contract"]["post_restart_receipt_summary"]
+    assert summary["schema_version"] == workflow.RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA
+    assert summary["receipt_sha256"]
+    assert summary["post_restart_effective_gate"] == "passed"
+    assert summary["response_content_persisted"] is False
 
 
 def test_runtime_pending_sync_reopens_issue_and_aligns_status_label(
@@ -8672,6 +8677,537 @@ def test_cleanup_after_merge_dry_run_ready_for_merged_branch(
     assert {item["action"] for item in payload["actions"]} >= {"sync_root_main", "delete_local_branch", "delete_remote_branch"}
 
 
+def test_worktree_transient_artifact_profile_and_purge_are_manifest_bound(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    temporary = worktree / "tmp" / "issue_workflow" / "BUG-199" / "context.json"
+    cache = worktree / "frontend" / "node_modules" / "pkg" / "index.js"
+    local_config = worktree / "proxy_config.json"
+    canonical_config = isolated_workflow_root / "proxy_config.json"
+    for path in (temporary, cache, local_config, canonical_config):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("same" if path.name == "proxy_config.json" else "artifact", encoding="utf-8")
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            paths = [
+                rel
+                for rel in (
+                    "tmp/issue_workflow/BUG-199/context.json",
+                    "frontend/node_modules/pkg/index.js",
+                    "proxy_config.json",
+                )
+                if (worktree / rel).exists()
+            ]
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(paths), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(
+        worktree,
+        canonical_root=isolated_workflow_root,
+    )
+
+    assert profile["ignored_count"] == 3
+    assert profile["transient_count"] == 3
+    assert profile["protected_count"] == 0
+    assert profile["unknown_count"] == 0
+    assert set(profile["transient_roots"]) == {"tmp/issue_workflow", "frontend/node_modules", "proxy_config.json"}
+
+    purge = workflow._purge_worktree_transient_artifacts(
+        worktree,
+        canonical_root=isolated_workflow_root,
+        expected_profile=profile,
+    )
+
+    assert purge["ignored_count_before"] == 3
+    assert purge["ignored_count_after"] == 0
+    assert not temporary.exists()
+    assert not cache.exists()
+    assert not local_config.exists()
+    assert canonical_config.exists()
+
+
+def test_worktree_transient_purge_stops_on_manifest_drift(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    first = worktree / "tmp" / "validation" / "first.json"
+    second = worktree / "tmp" / "validation" / "second.json"
+    first.parent.mkdir(parents=True)
+    first.write_text("first", encoding="utf-8")
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            paths = [rel for rel in ("tmp/validation/first.json", "tmp/validation/second.json") if (worktree / rel).exists()]
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(paths), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+    second.write_text("second", encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError, match="manifest changed"):
+        workflow._purge_worktree_transient_artifacts(
+            worktree,
+            canonical_root=isolated_workflow_root,
+            expected_profile=profile,
+        )
+    assert first.exists()
+    assert second.exists()
+
+
+def test_worktree_ignored_artifact_profile_blocks_unknown_and_unfinalized_receipt(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    worktree.mkdir(parents=True)
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "notes/local-only.txt\0tmp/issue_workflow/BUG-199/post-restart-verify.json",
+                "stderr": "",
+            }
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(
+        worktree,
+        canonical_root=isolated_workflow_root,
+        protected_paths={"tmp/issue_workflow/BUG-199/post-restart-verify.json"},
+    )
+
+    assert profile["unknown_count"] == 1
+    assert profile["unknown_samples"] == [
+        {"path": "notes/local-only.txt", "reason": "unknown_ignored_artifact"}
+    ]
+    assert profile["protected_count"] == 1
+    assert profile["protected_samples"] == ["tmp/issue_workflow/BUG-199/post-restart-verify.json"]
+
+
+def test_worktree_transient_classifier_rejects_parent_escape(
+    isolated_workflow_root: Path,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    worktree.mkdir(parents=True)
+
+    root, reason = workflow._worktree_transient_root(
+        "../tmp/issue_workflow/escape.json",
+        worktree_path=worktree,
+        canonical_root=isolated_workflow_root,
+    )
+
+    assert root is None
+    assert reason == "invalid_path"
+
+    nested_root, nested_reason = workflow._worktree_transient_root(
+        "tmp/../outside.txt",
+        worktree_path=worktree,
+        canonical_root=isolated_workflow_root,
+    )
+    assert nested_root is None
+    assert nested_reason == "invalid_path"
+
+
+def test_worktree_transient_cleanup_unlinks_external_symlink_without_following(
+    isolated_workflow_root: Path,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    external = isolated_workflow_root / "outside-cache"
+    link = worktree / "tmp" / "external-cache"
+    external.mkdir(parents=True)
+    (external / "keep.txt").write_text("keep", encoding="utf-8")
+    link.parent.mkdir(parents=True)
+    try:
+        link.symlink_to(external, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+
+    workflow._remove_exact_transient_root(worktree, "tmp/external-cache")
+
+    assert not link.exists()
+    assert (external / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_worktree_transient_cleanup_rejects_intermediate_reparse_before_deleting(
+    isolated_workflow_root: Path,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    external = isolated_workflow_root / "outside-cache"
+    link = worktree / "tmp"
+    external.mkdir(parents=True)
+    (external / "keep.txt").write_text("keep", encoding="utf-8")
+    worktree.mkdir(parents=True)
+    try:
+        link.symlink_to(external, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+
+    with pytest.raises(workflow.WorkflowError, match="crosses reparse point"):
+        workflow._validated_transient_root_target(worktree, "tmp/keep.txt")
+    assert (external / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_cleanup_evidence_finalization_requires_structured_receipt(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = isolated_workflow_root / "bug.json"
+    monkeypatch.setattr(
+        workflow,
+        "find_bug_record",
+        lambda **_kwargs: (
+            {
+                "bug_id": "BUG-199",
+                "validation_evidence": [
+                    {
+                        "schema_version": "aistock_validation_receipt_v1",
+                        "receipt_id": "0123456789abcdef",
+                        "commit": "abc1234",
+                        "evidence_kind": "pytest",
+                        "status": "passed",
+                        "command": "pytest backend/tests/test_example.py -q",
+                        "result": "1 passed",
+                    }
+                ],
+            },
+            issue,
+        ),
+    )
+
+    finalized = workflow._cleanup_evidence_finalization("BUG-199")
+    assert finalized["status"] == "finalized_structured_receipt"
+    assert finalized["durable_receipt_present"] is True
+
+    monkeypatch.setattr(
+        workflow,
+        "find_bug_record",
+        lambda **_kwargs: ({"bug_id": "BUG-199", "validation_evidence": ["pytest -> passed"]}, issue),
+    )
+    missing = workflow._cleanup_evidence_finalization("BUG-199")
+    assert missing["status"] == "missing_durable_receipt"
+    assert missing["durable_receipt_present"] is False
+
+    monkeypatch.setattr(
+        workflow,
+        "find_bug_record",
+        lambda **_kwargs: (
+            {
+                "bug_id": "BUG-199",
+                "status": "fixed",
+                "fix_commit": "abc1234",
+                "pr_url": "https://github.example/pull/199",
+                "validation_evidence": ["legacy targeted test -> passed"],
+            },
+            issue,
+        ),
+    )
+    legacy = workflow._cleanup_evidence_finalization("BUG-199")
+    assert legacy["status"] == "finalized_legacy_closed_bug"
+    assert legacy["legacy_closure_present"] is True
+
+
+def test_merged_pr_validation_receipt_profile_is_compact(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = (
+        "Validation\n"
+        "validation-receipt: id=0123456789abcdef commit=abcdef1 kind=pytest "
+        "plan=focused status=passed command=`pytest backend/tests/test_example.py -q` "
+        "result=`1 passed`"
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(
+                {
+                    "state": "MERGED",
+                    "mergedAt": "2026-08-12T00:00:00Z",
+                    "url": "https://github.example/pull/199",
+                    "headRefOid": "abcdef1" + "0" * 33,
+                    "body": body,
+                }
+            ),
+            "stderr": "",
+        },
+    )
+
+    profile = workflow._merged_pr_validation_receipt_profile("https://github.example/pull/199")
+
+    assert profile["status"] == "finalized_merged_pr_receipt"
+    assert profile["durable_receipt_present"] is True
+    assert profile["receipt_commit"] == "abcdef1"
+    assert "body" not in profile
+
+
+def test_merged_pr_validation_receipt_rejects_stale_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = (
+        "validation-receipt: id=0123456789abcdef commit=abcdef1 kind=pytest "
+        "plan=focused status=passed command=`pytest backend/tests/test_example.py -q` result=`1 passed`"
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps(
+                {
+                    "state": "MERGED",
+                    "mergedAt": "2026-08-12T00:00:00Z",
+                    "url": "https://github.example/pull/199",
+                    "headRefOid": "1234567" + "0" * 33,
+                    "body": body,
+                }
+            ),
+            "stderr": "",
+        },
+    )
+
+    profile = workflow._merged_pr_validation_receipt_profile("https://github.example/pull/199")
+
+    assert profile["status"] == "receipt_commit_mismatch"
+    assert profile["durable_receipt_present"] is False
+    assert profile["receipt_commit"] is None
+
+
+def test_cleanup_uses_merged_pr_receipt_before_close_sync(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    artifact = worktree / "tmp" / "validation" / "focused.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("receipt detail", encoding="utf-8")
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main" if cwd == isolated_workflow_root else branch
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:2] == ["git", "status"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        if args[:3] == ["git", "ls-files", "--others"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "tmp/validation/focused.json",
+                "stderr": "",
+            }
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_registered_worktree_paths", lambda cwd=None: {worktree.resolve()})
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_evidence_finalization",
+        lambda bug_id: {
+            "schema_version": "aistock_cleanup_evidence_finalization_v1",
+            "status": "missing_durable_receipt",
+            "durable_receipt_present": False,
+        },
+    )
+    monkeypatch.setattr(workflow, "_cleanup_protected_receipt_paths", lambda bug_id: set())
+    monkeypatch.setattr(
+        workflow,
+        "_merged_pr_validation_receipt_profile",
+        lambda pr_url: {
+            "schema_version": "aistock_merged_pr_validation_receipt_v1",
+            "pr_url": pr_url,
+            "checked": True,
+            "merged": True,
+            "durable_receipt_present": True,
+            "status": "finalized_merged_pr_receipt",
+        },
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        worktree=str(worktree),
+        pr_url="https://github.example/pull/199",
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert payload["evidence_finalization"]["status"] == "finalized_merged_pr_receipt"
+    assert payload["evidence_finalization"]["durable_receipt_present"] is True
+
+
+def test_cleanup_protects_absolute_runtime_receipt_until_durable_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    receipt_ref = "/tmp/pytest-run/tmp/issue_workflow/BUG-199/post-restart-verify.json"
+    record = {
+        "bug_id": "BUG-199",
+        "runtime_contract": {"post_restart_receipt_ref": receipt_ref},
+    }
+    monkeypatch.setattr(workflow, "find_bug_record", lambda **_kwargs: (record, tmp_path / "bug.json"))
+
+    assert workflow._cleanup_protected_receipt_paths("BUG-199") == {
+        "tmp/issue_workflow/BUG-199/post-restart-verify.json"
+    }
+
+    record["runtime_contract"]["post_restart_receipt_summary"] = {
+        "schema_version": workflow.RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA,
+        "receipt_sha256": "a" * 64,
+        "expected_identity": "abc1234",
+        "observed_identity": "abc1234",
+        "runtime_identity_proof_digest": "b" * 64,
+        "contract_digest": "c" * 64,
+        "catalog_sha256": "d" * 64,
+        "probe_evidence_digest": "e" * 64,
+        "post_restart_effective_gate": "passed",
+        "response_content_persisted": False,
+    }
+    assert workflow._cleanup_protected_receipt_paths("BUG-199") == set()
+
+
+def test_cleanup_after_merge_blocks_active_process_reference(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    worktree.mkdir(parents=True)
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main" if cwd == isolated_workflow_root else branch
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda *args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
+    monkeypatch.setattr(workflow, "_registered_worktree_paths", lambda cwd=None: {worktree.resolve()})
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin", lambda root, apply: _fetched_origin_payload())
+    monkeypatch.setattr(
+        workflow,
+        "_worktree_active_process_profile",
+        lambda path: {
+            "schema_version": "aistock_worktree_process_reference_v1",
+            "scan_status": "complete",
+            "reference_count": 1,
+            "references": [{"ProcessId": 123, "Name": "python.exe"}],
+        },
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="active processes"):
+        workflow.build_cleanup_after_merge_plan(
+            branch=branch,
+            worktree=str(worktree),
+            apply=True,
+            canonical_root=str(isolated_workflow_root),
+        )
+
+
+def test_remote_branch_delete_is_sha_lease_bound(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    sha = "a" * 40
+    remote_ref = f"{sha}\trefs/heads/{branch}"
+    executed: list[list[str]] = []
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: remote_ref)
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda args, **kwargs: executed.append(args) or {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
+
+    result = workflow._delete_remote_branch_with_lease(
+        root=isolated_workflow_root,
+        branch=branch,
+        expected_remote_ref=remote_ref,
+    )
+
+    assert result["expected_sha"] == sha
+    assert executed == [
+        [
+            "git",
+            "push",
+            "origin",
+            "--delete",
+            f"--force-with-lease=refs/heads/{branch}:{sha}",
+            branch,
+        ]
+    ]
+
+
+def test_remote_branch_delete_stops_on_sha_drift(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    expected = f"{'a' * 40}\trefs/heads/{branch}"
+    observed = f"{'b' * 40}\trefs/heads/{branch}"
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: observed)
+    monkeypatch.setattr(
+        workflow,
+        "_execute_checked",
+        lambda *args, **kwargs: pytest.fail("remote delete must not execute after SHA drift"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="changed after cleanup preflight"):
+        workflow._delete_remote_branch_with_lease(
+            root=isolated_workflow_root,
+            branch=branch,
+            expected_remote_ref=expected,
+        )
+
+
 def test_cleanup_after_merge_apply_refreshes_origin_before_merge_check(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8788,12 +9324,13 @@ def test_cleanup_after_merge_apply_ignores_untracked_root_files(
 ) -> None:
     branch = "bug/BUG-199-workflow"
     executed: list[list[str]] = []
+    branch_deleted = False
 
     def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
         if args[:2] == ["branch", "--show-current"]:
             return "feature/current"
         if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
-            return branch
+            return "" if branch_deleted else branch
         if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
             return branch
         if args[:2] == ["ls-remote", "--heads"]:
@@ -8801,7 +9338,10 @@ def test_cleanup_after_merge_apply_ignores_untracked_root_files(
         return ""
 
     def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        nonlocal branch_deleted
         executed.append(args)
+        if args[:2] == ["git", "branch"]:
+            branch_deleted = True
         return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
 
     monkeypatch.setattr(workflow, "_git", fake_git)
@@ -8832,13 +9372,14 @@ def test_cleanup_after_merge_uses_canonical_root_when_called_from_task_worktree(
     task_worktree.mkdir(parents=True)
     calls: list[tuple[tuple[str, ...], Path | None]] = []
     executed: list[tuple[tuple[str, ...], Path | None]] = []
+    branch_deleted = False
 
     def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
         calls.append((tuple(args), cwd))
         if args[:2] == ["branch", "--show-current"]:
             return "main" if cwd == isolated_workflow_root else branch
         if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
-            return branch
+            return "" if branch_deleted else branch
         if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
             return branch
         if args[:2] == ["ls-remote", "--heads"]:
@@ -8848,10 +9389,16 @@ def test_cleanup_after_merge_uses_canonical_root_when_called_from_task_worktree(
     def fake_run(args: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
         if args[:3] == ["git", "status", "--porcelain=v1"]:
             return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+        if args[:3] == ["git", "worktree", "remove"]:
+            task_worktree.rmdir()
+            return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
         return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
 
     def fake_execute(args: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
+        nonlocal branch_deleted
         executed.append((tuple(args), cwd))
+        if args[:2] == ["git", "branch"]:
+            branch_deleted = True
         return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
 
     monkeypatch.chdir(task_worktree)
@@ -8959,12 +9506,13 @@ def test_cleanup_after_merge_apply_can_mark_bug_complete(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     branch = "bug/BUG-199-workflow"
+    branch_deleted = False
 
     def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
         if args[:2] == ["branch", "--show-current"]:
             return "feature/current"
         if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
-            return branch
+            return "" if branch_deleted else branch
         if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
             return branch
         if args[:2] == ["ls-remote", "--heads"]:
@@ -8978,7 +9526,13 @@ def test_cleanup_after_merge_apply_can_mark_bug_complete(
         "_git_snapshot",
         lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
     )
-    monkeypatch.setattr(workflow, "_execute_checked", lambda *args, **kwargs: {"ok": True, "stdout": "", "stderr": "", "returncode": 0})
+    def fake_execute(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        nonlocal branch_deleted
+        if args[:2] == ["git", "branch"]:
+            branch_deleted = True
+        return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
     monkeypatch.setattr(workflow, "_cleanup_preflight_fetch_origin", lambda root, apply: _fetched_origin_payload())
 
     assert workflow.main(["cleanup-after-merge", "--branch", branch, "--bug-id", "BUG-199", "--apply"]) == 0
@@ -9125,9 +9679,11 @@ def test_cleanup_after_merge_defers_locked_empty_orphan_dir(
         canonical_root=str(isolated_workflow_root),
     )
 
-    assert payload["workflow_gate"] == "cleanup_done"
+    assert payload["workflow_gate"] == "cleanup_deferred"
     assert payload["deferred_cleanup"]["reason"] == "empty_directory_locked_by_windows_handle"
     assert payload["deferred_cleanup"]["safe_to_retry"] is True
+    assert payload["cleanup_verification"]["path_absent"] is False
+    assert payload["cleanup_verification"]["all_clear"] is False
     assert any("deferred empty worktree directory cleanup" in item for item in payload["warnings"])
 
 
@@ -9226,12 +9782,13 @@ def test_cleanup_after_merge_falls_back_when_git_worktree_remove_leaves_reparse(
     worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
     junction_like = worktree / "frontend" / "node_modules"
     junction_like.mkdir(parents=True)
+    branch_deleted = False
 
     def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
         if args[:2] == ["branch", "--show-current"]:
             return "main" if cwd == isolated_workflow_root else branch
         if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
-            return branch
+            return "" if branch_deleted else branch
         if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
             return branch
         if args[:2] == ["ls-remote", "--heads"]:
@@ -9239,15 +9796,22 @@ def test_cleanup_after_merge_falls_back_when_git_worktree_remove_leaves_reparse(
         return ""
 
     def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        nonlocal branch_deleted
         if args[:3] == ["git", "status", "--porcelain=v1"]:
             return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         if args[:3] == ["git", "worktree", "remove"]:
             return {"ok": False, "returncode": 128, "stdout": "", "stderr": "Invalid argument: frontend/node_modules"}
+        if args[:2] == ["git", "branch"]:
+            branch_deleted = True
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(workflow, "_run_command", fake_run)
-    monkeypatch.setattr(workflow, "_registered_worktree_paths", lambda cwd=None: {worktree.resolve()})
+    monkeypatch.setattr(
+        workflow,
+        "_registered_worktree_paths",
+        lambda cwd=None: {worktree.resolve()} if worktree.exists() else set(),
+    )
     monkeypatch.setattr(workflow, "_is_reparse_or_symlink", lambda path: path == junction_like)
     monkeypatch.setattr(workflow, "_dirty_files", lambda root: [])
     monkeypatch.setattr(
