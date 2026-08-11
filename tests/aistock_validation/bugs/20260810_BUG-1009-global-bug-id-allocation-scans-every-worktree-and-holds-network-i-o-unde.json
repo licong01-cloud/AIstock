@@ -1,0 +1,388 @@
+{
+  "actual": "Allocation cost grows with worktree_count multiplied by registry_size; the current host has hundreds of worktrees and registrations can take minutes per attempt.",
+  "allowed_write_scope": [
+    "scripts/aistock_bug_id_allocator.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "scripts/aistock_mcp_server.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    ".github/workflows/test.yml",
+    "tests/aistock_validation/bugs/20260810_BUG-1009-global-bug-id-allocation-scans-every-worktree-and-holds-network-i-o-unde.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1009",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-10T05:02:08.354559Z",
+  "description": "Allocation cost grows with worktree_count multiplied by registry_size; the current host has hundreds of worktrees and registrations can take minutes per attempt.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260810-01af545846cd",
+      "timestamp": "2026-08-10T05:02:08.354559Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex_app",
+      "note": "Bounded CLI/MCP allocation, lock recovery, concurrency, exact GitHub lookup, EOF outcome preservation, local-first MCP creation, and CI routing validated; 293 workflow/MCP plus 53 classifier tests passed.",
+      "timestamp": "2026-08-10T07:16:15.732032Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex_app",
+      "note": "Added the CI changed-file classifier and its direct tests after CI correctly rejected the newly in-scope MCP workflow files as unmapped executable code.",
+      "timestamp": "2026-08-10T07:23:00Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex_app",
+      "note": "Added one shared allocator module so CLI and MCP use the same token-owned cross-thread/cross-process lock, reservation deduplication, and bounded terminal compaction instead of duplicated PID-only implementations.",
+      "timestamp": "2026-08-10T18:15:00Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex_app",
+      "note": "Windows-focused final audit passed: 91 workflow/MCP/classifier tests, py_compile, git diff --check, changed-file guardrail with 0 blocking findings, and Module Registry L0 with 14/14 mapped paths. No business runtime or database was touched.",
+      "timestamp": "2026-08-10T19:05:00Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex_app",
+      "note": "Hot-path audit passed: steady-state CLI/MCP allocation uses one host-wide state read, one exact fingerprint-index lookup, and one exact candidate path; full worktree, registry, reservation-inventory, and GitHub scans are absent. A missing state/index performs one bounded current/canonical migration. Direct suites passed 301 workflow/MCP tests and 53 classifier tests; py_compile, diff check, guardrail (0 blocking), and Module Registry L0 (14/14 mapped) passed.",
+      "timestamp": "2026-08-11T03:13:48.705068Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex_app",
+      "note": "Final finish audit passed after classifying the MCP server as client runtime and the shared allocator as a non-runtime workflow utility: runtime regression passed, closure_ready=true, pre_pr_gate=passed, workflow_gate=ready_for_pr. No backend restart or production action is required.",
+      "timestamp": "2026-08-11T03:35:19.681572Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "BUG ID allocation uses a bounded authoritative allocator/reservation set, keeps network I/O outside the critical section, and recovers idempotently when GitHub creation succeeds but transport confirmation fails.",
+  "file_scope_contract": {
+    "added_files": [
+      "scripts/aistock_bug_id_allocator.py"
+    ],
+    "changed_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_mcp_server.py",
+      "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      ".github/workflows/test.yml"
+    ],
+    "ownership": {
+      "changed_files": [
+        "scripts/aistock_bug_id_allocator.py",
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "scripts/aistock_mcp_server.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        ".github/workflows/test.yml"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.center",
+        "validation.runner",
+        "validation.module_quality",
+        "tests.backend",
+        "validation.coverage",
+        "scripts",
+        "platform.config"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/aistock_bug_id_allocator.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "scripts/aistock_mcp_server.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "scripts/ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/test.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/aistock_bug_id_allocator.py",
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "scripts/aistock_mcp_server.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        ".github/workflows/test.yml"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/aistock_bug_id_allocator.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_mcp_server.py",
+      "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      ".github/workflows/test.yml"
+    ]
+  },
+  "first_seen_at": "2026-08-10T05:02:08.354559Z",
+  "fix_branch": "bug/BUG-1009-global-bug-id-allocation-scans-every-worktree-an-20260810",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3246,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3246",
+  "last_seen_at": "2026-08-11T03:35:19.681572Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "pytest backend/tests/scripts/test_aistock_issue_workflow.py::test_allocator_steady_state_does_not_scan_registries_or_reservation_inventory backend/tests/scripts/test_aistock_mcp_github_issue_tools.py::test_mcp_allocator_steady_state_uses_state_and_exact_candidate_only -q",
+  "required_verification": [
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "runtime_impact": "client",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "global BUG ID allocation scans every worktree and holds network I/O under allocator lock",
+  "trigger_condition": {
+    "fingerprint": "01af545846cd13bc3a208887",
+    "source_event_id": "FE-20260810-01af545846cd"
+  },
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: BUG intake and GitHub linkage semantics remain source-of-truth and fail closed",
+    "no_silent_error": "passed: preflight and create transport uncertainty preserve durable state and block automatic recreate",
+    "no_simplified_delivery": "passed: both CLI and MCP allocation paths, state/index migration, steady-state no-scan behavior, concurrency, stale locks, retry recovery, and tests are covered",
+    "no_unrequested_gate_or_approval": "passed: no process, database, dependency, runtime, or new approval gate was added",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
+  "performance_evidence": {
+    "bootstrap_scope": "current invocation registry, canonical registry, and shared reservations once when state/index is missing; no worktree or GitHub inventory",
+    "steady_state_github_list_calls": 0,
+    "steady_state_registry_scan_calls": 0,
+    "steady_state_reservation_inventory_scan_calls": 0,
+    "source": "direct no-scan and one-time-bootstrap regressions on 2026-08-11"
+  },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -> 293 passed",
+    "pytest backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q after CI secret-placeholder correction -> 27 passed",
+    "pytest backend/tests/scripts/test_ci_change_classifier.py -q -> 53 passed",
+    "GitHub workflow-validation first run exposed missing httpx in the fast-lane dependency closure; .github/workflows/test.yml now installs httpx before importing scripts/aistock_mcp_server.py",
+    "ci_change_classifier.py on the nine final PR paths -> workflow_validation_only, unmapped_code_files=[], three direct workflow test targets",
+    "nox -s l0 on the nine final PR paths -> feature quality findings=0, development guardrail blocking=0",
+    "nox -s guardrail_changed_files -- --changed-only -> blocking=0, mapped=9/9",
+    "nox -s validation_module_registry_l0 -> 8 passed, mapped=14/14",
+    "ruff check six changed Python/test files -> no issues",
+    "git diff --check -> passed",
+    "rtk pytest -q backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -> 301 passed",
+    "rtk pytest -q backend/tests/scripts/test_ci_change_classifier.py -> 53 passed",
+    "steady-state no-scan regressions -> CLI/MCP registry scan calls=0, reservation inventory scans=0, GitHub list calls=0",
+    "rtk nox -s guardrail_changed_files -- --changed-only -> blocking=0, mapped=56/56 (stale-branch scope inflation tracked separately)",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed, mapped=14/14",
+    "runtime classification regression -> MCP server=client, shared allocator=none",
+    "finish --plan-only -> closure_ready=true, pre_pr_gate=passed, workflow_gate=ready_for_pr"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": "local-bug1009-allocator-audit-20260811",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
