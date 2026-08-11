@@ -1721,6 +1721,40 @@ def _p6_series() -> dict[str, object]:
     return {f"L2-{index:03d}": object() for index in range(subject.B3_P6_EXPECTED_SECTOR_COUNT)}
 
 
+def _p6_accepted_selection(*, policy_sha256: str, codes: tuple[str, ...] | None = None) -> dict:
+    canonical_codes = tuple(sorted(_p6_series())) if codes is None else codes
+    evidence = {
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "feature_domain_policy_sha256": policy_sha256,
+        "canonical_sector_codes": list(canonical_codes),
+        "canonical_sector_set_sha256": subject.canonical_sha256(list(canonical_codes)),
+        "schedule": list(subject.RESTART_SCHEDULE),
+        "feature_count": len(subject.ALL_CORE_FEATURES),
+        "repeat_entries_sha256": "4" * 64,
+        "candidates": [],
+        "lexicographic_filters": [],
+        "selected_seed": 43,
+        "selected_schedule_index": subject.RESTART_SCHEDULE.index(43),
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "semantic_labelability_accessed": False,
+        "d6_status_accessed": False,
+        "selection_followed_by_refit": False,
+    }
+    body = {
+        "contract_version": subject.D5_SELECTION_VERSION,
+        "failure_reason_codes": [],
+        "blocking_reason_codes": [],
+        "warning_reason_codes": [],
+        "primary_reason_code": None,
+        "evidence": evidence,
+        "level_selection_status": "accepted",
+        "level_selection_valid": True,
+    }
+    return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+
 def _p6_repeat(process_identity: str) -> dict:
     codes = tuple(sorted(_p6_series()))
     return {
@@ -2276,9 +2310,380 @@ def test_p6_cli_execution_failure_writes_parent_failure_with_unknown_states(monk
     assert failure["selection_status"] == "unknown_due_parent_failure"
     assert failure["d6_performed_after_selection"] is None
     assert failure["selected_level_artifact_write_performed"] is None
+    assert failure["d5_checkpoint_status"] == "missing"
     assert failure["phase2_ready"] is False
     assert failure["ready_artifact_write_performed"] is False
     assert not output_path.exists()
+
+
+def test_p6_d5_checkpoint_is_durable_before_semantic_failure_and_recovers_authority(monkeypatch, tmp_path) -> None:
+    request, policy, inputs, args = _p6_parent_setup(monkeypatch, tmp_path)
+    payloads = [
+        _p6_child_payload("fresh_process_1", inputs=inputs, policy=policy),
+        _p6_child_payload("fresh_process_2", inputs=inputs, policy=policy),
+    ]
+    call_index = 0
+
+    def fake_run(command, *, check, capture_output, env, timeout):
+        nonlocal call_index
+        payload = payloads[call_index]
+        call_index += 1
+        return SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    selection = _p6_accepted_selection(policy_sha256=policy["receipt_sha256"])
+    training_body = {
+        "schema_version": subject.B3_P6_D5_TRAINING_ARTIFACT_SCHEMA,
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "selected_seed": 43,
+        "selection_receipt_sha256": selection["receipt_sha256"],
+        "entry_count": subject.B3_P6_EXPECTED_SECTOR_COUNT,
+        "entries": [],
+        "selection_reexecuted": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "ready": False,
+    }
+    training_artifact = {**training_body, "artifact_sha256": subject.canonical_sha256(training_body)}
+    monkeypatch.setattr(subject, "select_level_restart", lambda *args, **kwargs: selection)
+    monkeypatch.setattr(
+        subject,
+        "_build_b3_p6_selected_training_artifact",
+        lambda frozen_selection, repeat: training_artifact,
+    )
+    monkeypatch.setattr(subject, "_p6_zero_refit_training_authority", lambda report: ({}, {}, {}, ()))
+    monkeypatch.setattr(
+        subject,
+        "_load_verified_formal_semantic_inputs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            StateModelSetError("causal posterior normalization failed at row 0")
+        ),
+    )
+
+    with pytest.raises(StateModelSetError, match="causal posterior normalization failed") as excinfo:
+        subject.run_b3_p6_autocycle_l2_repeated(args, request)
+
+    checkpoint_path = subject._b3_p6_d5_checkpoint_path(args)
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["selection"]["receipt_sha256"] == selection["receipt_sha256"]
+    assert checkpoint["semantic_source_accessed_after_selection"] is False
+    assert checkpoint["d6_performed_after_selection"] is False
+    assert checkpoint["ready_artifact_write_performed"] is False
+
+    failure = subject._build_b3_p6_parent_failure(args, excinfo.value)
+    assert failure["d5_checkpoint_status"] == "verified"
+    assert failure["d5_checkpoint_receipt_sha256"] == checkpoint["receipt_sha256"]
+    assert failure["selection_performed"] is True
+    assert failure["selection_status"] == "accepted"
+    assert failure["d6_performed_after_selection"] is None
+    assert failure["ready_artifact_write_performed"] is False
+    assert subject._resolve_p6_zero_refit_training_authority(failure) == checkpoint
+    drifted_body = {
+        **{key: value for key, value in failure.items() if key != "receipt_sha256"},
+        "d5_checkpoint_receipt_sha256": "0" * 64,
+    }
+    drifted = {**drifted_body, "receipt_sha256": subject.canonical_sha256(drifted_body)}
+    with pytest.raises(StateModelSetError, match="checkpoint receipt differs"):
+        subject._resolve_p6_zero_refit_training_authority(drifted)
+
+    drifted_checkpoint = {**checkpoint, "fresh_process_receipt_hashes": ["f" * 64, "e" * 64]}
+    monkeypatch.setattr(subject, "_load_b3_p6_d5_checkpoint", lambda path: drifted_checkpoint)
+    invalid_failure = subject._build_b3_p6_parent_failure(args, excinfo.value)
+    assert invalid_failure["d5_checkpoint_status"] == "invalid"
+    assert invalid_failure["d5_checkpoint_receipt_sha256"] is None
+    assert invalid_failure["selection_performed"] is None
+    assert invalid_failure["selection_status"] == "unknown_due_parent_failure"
+
+
+def test_p6_zero_refit_historical_failure_without_d5_checkpoint_fails_closed() -> None:
+    body = {
+        "schema_version": subject.B3_P6_FAILURE_SCHEMA,
+        "status": "failed",
+        "selection_status": "unknown_due_parent_failure",
+        "ready_artifact_write_performed": False,
+    }
+    failure = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    with pytest.raises(StateModelSetError, match="D5 checkpoint is missing; D5 re-execution is prohibited"):
+        subject._resolve_p6_zero_refit_training_authority(failure)
+
+
+def test_p6_zero_refit_accepts_complete_d5_checkpoint_without_reselection(monkeypatch, tmp_path) -> None:
+    codes = tuple(sorted(_p6_series()))
+    selection = _p6_accepted_selection(policy_sha256="3" * 64, codes=codes)
+    entries = []
+    for code in codes:
+        model_body = {
+            "family": subject.B3_P6_FAMILY,
+            "level": subject.B3_P6_LEVEL,
+            "seed": 43,
+            "sector_code": code,
+        }
+        model = {**model_body, "model_payload_sha256": subject.canonical_sha256(model_body)}
+        training_body = {
+            "seed": 43,
+            "sector_code": code,
+            "model_entry_status": "accepted",
+            "model_entry_valid": True,
+            "model_payload_sha256": model["model_payload_sha256"],
+        }
+        training = {**training_body, "entry_receipt_sha256": subject.canonical_sha256(training_body)}
+        entry_body = {**model, "training_receipt": training}
+        entries.append({**entry_body, "selected_entry_sha256": subject.canonical_sha256(entry_body)})
+    training_artifact_body = {
+        "schema_version": subject.B3_P6_D5_TRAINING_ARTIFACT_SCHEMA,
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "selected_seed": 43,
+        "selection_receipt_sha256": selection["receipt_sha256"],
+        "entry_count": len(entries),
+        "entries": entries,
+        "selection_reexecuted": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "ready": False,
+    }
+    training_artifact = {
+        **training_artifact_body,
+        "artifact_sha256": subject.canonical_sha256(training_artifact_body),
+    }
+    checkpoint_body = {
+        "schema_version": subject.B3_P6_D5_CHECKPOINT_SCHEMA,
+        "status": "selected",
+        "producer_commit": "a" * 40,
+        "target_family": subject.B3_P6_FAMILY,
+        "target_level": subject.B3_P6_LEVEL,
+        "planned_fit_count": 2096,
+        "terminal_entry_count": 2096,
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "d" * 64,
+        "semantic_dataset_manifest_hash": "e" * 64,
+        "semantic_mapping_manifest_hash": "f" * 64,
+        "semantic_calendar_manifest_hash": "1" * 64,
+        "semantic_l2_stock_fact_manifest_hash": "2" * 64,
+        "feature_domain_policy_sha256": "3" * 64,
+        "formula_version": subject.C010_FORMULA_VERSION,
+        "fresh_process_receipt_hashes": ["1" * 64, "2" * 64],
+        "fresh_process_receipt_paths": [
+            str((tmp_path / "fresh_process_1.json").resolve()),
+            str((tmp_path / "fresh_process_2.json").resolve()),
+        ],
+        "selection": selection,
+        "selected_training_artifact": training_artifact,
+        "selection_performed": True,
+        "selection_used_validation": False,
+        "selection_used_future_utility": False,
+        "selection_followed_by_refit": False,
+        "semantic_source_accessed_after_selection": False,
+        "d6_performed_after_selection": False,
+        "selected_level_artifact_write_performed": False,
+        "family_model_set_status": "blocked",
+        "phase2_ready": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    checkpoint = {**checkpoint_body, "receipt_sha256": subject.canonical_sha256(checkpoint_body)}
+    fitted = {
+        (43, code): SimpleNamespace(model_payload_sha256=entries[index]["model_payload_sha256"])
+        for index, code in enumerate(codes)
+    }
+    monkeypatch.setattr(subject, "models_from_repeat", lambda repeat: fitted)
+    monkeypatch.setattr(
+        subject,
+        "select_level_restart",
+        lambda *args, **kwargs: pytest.fail("D5 must not be re-executed while reading its checkpoint"),
+    )
+
+    checkpoint_path = tmp_path / "p6.d5.checkpoint.json"
+    subject._write_diagnostic_report(checkpoint_path, checkpoint)
+    assert subject._load_b3_p6_d5_checkpoint(checkpoint_path) == checkpoint
+
+    frozen_selection, frozen_models, repeat, frozen_codes = subject._p6_zero_refit_training_authority(checkpoint)
+
+    assert frozen_selection == selection
+    assert frozen_models == fitted
+    assert frozen_codes == codes
+    expected_models = [
+        {key: entry[key] for key in ("family", "level", "seed", "sector_code", "model_payload_sha256")}
+        for entry in entries
+    ]
+    assert repeat["model_payload_sha256"] == subject.canonical_sha256(expected_models)
+
+    incomplete_training_body = {
+        **training_artifact_body,
+        "entries": entries[:-1],
+    }
+    incomplete_training = {
+        **incomplete_training_body,
+        "artifact_sha256": subject.canonical_sha256(incomplete_training_body),
+    }
+    incomplete_checkpoint_body = {
+        **checkpoint_body,
+        "selected_training_artifact": incomplete_training,
+    }
+    incomplete_checkpoint = {
+        **incomplete_checkpoint_body,
+        "receipt_sha256": subject.canonical_sha256(incomplete_checkpoint_body),
+    }
+    incomplete_path = tmp_path / "p6.incomplete.d5.checkpoint.json"
+    subject._write_diagnostic_report(incomplete_path, incomplete_checkpoint)
+    with pytest.raises(StateModelSetError, match="exactly 131 selected entries"):
+        subject._load_b3_p6_d5_checkpoint(incomplete_path)
+
+    for field in ("phase2_ready", "database_write_performed", "runtime_action_performed"):
+        forbidden_body = {**checkpoint_body, field: True}
+        forbidden = {**forbidden_body, "receipt_sha256": subject.canonical_sha256(forbidden_body)}
+        forbidden_path = tmp_path / f"p6.{field}.d5.checkpoint.json"
+        subject._write_diagnostic_report(forbidden_path, forbidden)
+        with pytest.raises(StateModelSetError, match="checkpoint authority is invalid"):
+            subject._load_b3_p6_d5_checkpoint(forbidden_path)
+        with pytest.raises(StateModelSetError, match="checkpoint authority is invalid"):
+            subject._resolve_p6_zero_refit_training_authority(forbidden)
+
+    training_ready_body = {**training_artifact_body, "ready": True}
+    training_ready = {
+        **training_ready_body,
+        "artifact_sha256": subject.canonical_sha256(training_ready_body),
+    }
+    training_ready_checkpoint_body = {
+        **checkpoint_body,
+        "selected_training_artifact": training_ready,
+    }
+    training_ready_checkpoint = {
+        **training_ready_checkpoint_body,
+        "receipt_sha256": subject.canonical_sha256(training_ready_checkpoint_body),
+    }
+    training_ready_path = tmp_path / "p6.training-ready.d5.checkpoint.json"
+    subject._write_diagnostic_report(training_ready_path, training_ready_checkpoint)
+    with pytest.raises(StateModelSetError, match="checkpoint authority is invalid"):
+        subject._load_b3_p6_d5_checkpoint(training_ready_path)
+
+    drifted_training_receipt_body = {
+        **{key: value for key, value in entries[0]["training_receipt"].items() if key != "entry_receipt_sha256"},
+        "model_entry_status": "failed",
+        "model_entry_valid": False,
+    }
+    drifted_training_receipt = {
+        **drifted_training_receipt_body,
+        "entry_receipt_sha256": subject.canonical_sha256(drifted_training_receipt_body),
+    }
+    drifted_entry_body = {
+        **{key: value for key, value in entries[0].items() if key != "selected_entry_sha256"},
+        "training_receipt": drifted_training_receipt,
+    }
+    drifted_entry = {
+        **drifted_entry_body,
+        "selected_entry_sha256": subject.canonical_sha256(drifted_entry_body),
+    }
+    drifted_training_body = {
+        **training_artifact_body,
+        "entries": [drifted_entry, *entries[1:]],
+    }
+    drifted_training = {
+        **drifted_training_body,
+        "artifact_sha256": subject.canonical_sha256(drifted_training_body),
+    }
+    drifted_checkpoint_body = {
+        **checkpoint_body,
+        "selected_training_artifact": drifted_training,
+    }
+    drifted_checkpoint = {
+        **drifted_checkpoint_body,
+        "receipt_sha256": subject.canonical_sha256(drifted_checkpoint_body),
+    }
+    drifted_checkpoint_path = tmp_path / "p6.failed-training-receipt.d5.checkpoint.json"
+    subject._write_diagnostic_report(drifted_checkpoint_path, drifted_checkpoint)
+    with pytest.raises(StateModelSetError, match="training receipt readback failed"):
+        subject._load_b3_p6_d5_checkpoint(drifted_checkpoint_path)
+    with pytest.raises(StateModelSetError, match="training receipt readback failed"):
+        subject._resolve_p6_zero_refit_training_authority(drifted_checkpoint)
+
+    validation_evidence = {**selection["evidence"], "validation_accessed": True}
+    validation_selection_body = {
+        **{key: value for key, value in selection.items() if key != "receipt_sha256"},
+        "evidence": validation_evidence,
+    }
+    validation_selection = {
+        **validation_selection_body,
+        "receipt_sha256": subject.canonical_sha256(validation_selection_body),
+    }
+    validation_training_body = {
+        **training_artifact_body,
+        "selection_receipt_sha256": validation_selection["receipt_sha256"],
+    }
+    validation_training = {
+        **validation_training_body,
+        "artifact_sha256": subject.canonical_sha256(validation_training_body),
+    }
+    validation_checkpoint_body = {
+        **checkpoint_body,
+        "selection": validation_selection,
+        "selected_training_artifact": validation_training,
+    }
+    validation_checkpoint = {
+        **validation_checkpoint_body,
+        "receipt_sha256": subject.canonical_sha256(validation_checkpoint_body),
+    }
+    validation_checkpoint_path = tmp_path / "p6.validation-accessed.d5.checkpoint.json"
+    subject._write_diagnostic_report(validation_checkpoint_path, validation_checkpoint)
+    with pytest.raises(StateModelSetError, match="checkpoint authority is invalid"):
+        subject._load_b3_p6_d5_checkpoint(validation_checkpoint_path)
+
+
+def test_p6_selected_training_checkpoint_builder_freezes_exact_d5_models_without_d6(monkeypatch) -> None:
+    codes = tuple(sorted(_p6_series()))
+    selection = _p6_accepted_selection(policy_sha256="9" * 64, codes=codes)
+    entries = []
+    fitted = {}
+    for code in codes:
+        model_body = {
+            "family": subject.B3_P6_FAMILY,
+            "level": subject.B3_P6_LEVEL,
+            "seed": 43,
+            "sector_code": code,
+        }
+        model = {**model_body, "model_payload_sha256": subject.canonical_sha256(model_body)}
+        training_body = {
+            "seed": 43,
+            "sector_code": code,
+            "model_entry_status": "accepted",
+            "model_entry_valid": True,
+            "model_payload_sha256": model["model_payload_sha256"],
+        }
+        entries.append({**training_body, "entry_receipt_sha256": subject.canonical_sha256(training_body)})
+        fitted[(43, code)] = SimpleNamespace(
+            model_payload_sha256=model["model_payload_sha256"],
+            payload=lambda value=model: value,
+        )
+    repeat = {
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "schedule": list(subject.RESTART_SCHEDULE),
+        "canonical_sector_codes": list(codes),
+        "entries": entries,
+    }
+    monkeypatch.setattr(subject, "models_from_repeat", lambda value: fitted)
+    monkeypatch.setattr(
+        subject,
+        "_load_verified_formal_semantic_inputs",
+        lambda *args, **kwargs: pytest.fail("D5 checkpoint builder must not access D6 inputs"),
+    )
+
+    artifact = subject._build_b3_p6_selected_training_artifact(selection, repeat)
+
+    assert artifact["schema_version"] == subject.B3_P6_D5_TRAINING_ARTIFACT_SCHEMA
+    assert artifact["entry_count"] == subject.B3_P6_EXPECTED_SECTOR_COUNT
+    assert artifact["selected_seed"] == 43
+    assert artifact["validation_accessed"] is False
+    assert artifact["future_utility_accessed"] is False
+    assert artifact["ready"] is False
+    assert artifact["artifact_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in artifact.items() if key != "artifact_sha256"}
+    )
 
 
 def test_p6_parent_runs_two_exact_children_and_blocks_without_d5_candidate(monkeypatch, tmp_path) -> None:
@@ -2359,11 +2764,33 @@ def test_p6_parent_persists_only_accepted_selected_level_and_never_ready(monkeyp
         return SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
 
     monkeypatch.setattr(subject.subprocess, "run", fake_run)
-    selection_body = {"level_selection_valid": True, "level_selection_status": "accepted", "evidence": {}}
-    selection = {**selection_body, "receipt_sha256": subject.canonical_sha256(selection_body)}
+    selection = _p6_accepted_selection(policy_sha256=policy["receipt_sha256"])
+    training_body = {
+        "schema_version": subject.B3_P6_D5_TRAINING_ARTIFACT_SCHEMA,
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "selected_seed": 43,
+        "selection_receipt_sha256": selection["receipt_sha256"],
+        "entry_count": subject.B3_P6_EXPECTED_SECTOR_COUNT,
+        "entries": [],
+        "selection_reexecuted": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "ready": False,
+    }
+    training_artifact = {
+        **training_body,
+        "artifact_sha256": subject.canonical_sha256(training_body),
+    }
     artifact_body = {"schema_version": "test", "status": "accepted", "family": "autocycle_all_core", "level": "L2"}
     artifact = {**artifact_body, "artifact_sha256": subject.canonical_sha256(artifact_body)}
     monkeypatch.setattr(subject, "select_level_restart", lambda *args, **kwargs: selection)
+    monkeypatch.setattr(
+        subject,
+        "_build_b3_p6_selected_training_artifact",
+        lambda frozen_selection, repeat: training_artifact,
+    )
+    monkeypatch.setattr(subject, "_p6_zero_refit_training_authority", lambda report: ({}, {}, {}, ()))
     monkeypatch.setattr(subject, "models_from_repeat", lambda repeat: {})
     monkeypatch.setattr(subject, "build_selected_level_artifact", lambda *args, **kwargs: artifact)
     monkeypatch.setattr(subject, "read_b3_selected_level_artifact", lambda path, **kwargs: artifact)
@@ -2371,7 +2798,15 @@ def test_p6_parent_persists_only_accepted_selected_level_and_never_ready(monkeyp
     report = subject.run_b3_p6_autocycle_l2_repeated(args, request)
 
     artifact_path = Path(report["selected_level_artifact_path"])
+    checkpoint_path = Path(report["d5_checkpoint_path"])
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert report["status"] == "accepted"
+    assert report["d5_checkpoint_write_performed"] is True
+    assert checkpoint["status"] == "selected"
+    assert checkpoint["selection"]["receipt_sha256"] == selection["receipt_sha256"]
+    assert checkpoint["d6_performed_after_selection"] is False
+    assert checkpoint["selected_level_artifact_write_performed"] is False
+    assert checkpoint["ready_artifact_write_performed"] is False
     assert semantic_load_count == 1
     assert report["semantic_source_accessed_after_selection"] is True
     assert report["d6_performed_after_selection"] is True
@@ -2457,6 +2892,8 @@ def test_p6_d6_zero_refit_replay_preserves_model_and_selection_lineage(monkeypat
         child_paths.append(str(child_path))
         child_hashes.append(child_hash)
     parent_report = {
+        "schema_version": subject.B3_P6_REPORT_SCHEMA,
+        "receipt_sha256": "e" * 64,
         "fresh_process_receipt_paths": child_paths,
         "fresh_process_receipt_hashes": child_hashes,
         **train_identities,
