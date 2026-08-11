@@ -82,6 +82,7 @@ rules:
       - backend/services/quantevolver/config_composer.py
       - backend/tests/quantevolver/test_*sector_risk_overlay*.py
       - backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py
+      - backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py
       - backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py
       - backend/tests/unified_engine/test_score_weighted_capacity_registration.py
       - backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py

@@ -465,6 +465,20 @@ def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_
     assert payload["backend_sessions"] == ["simulation_core_l2"]
 
 
+def test_qrun_mlflow_retry_test_uses_qe_sector_risk_overlay_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_plan_keys"] == ["l0", "qe_sector_risk_overlay_backend"]
+    assert payload["backend_sessions"] == ["qe_sector_risk_overlay_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_ci_changed_file_resolver_uses_its_direct_workflow_target(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["scripts/ci_changed_files.py"],
