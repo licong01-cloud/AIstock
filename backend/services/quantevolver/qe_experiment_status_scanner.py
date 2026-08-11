@@ -124,7 +124,7 @@ class QEExperimentStatusScanner:
         from ...routers.quantevolver import (
             _run_experiment_unified,
             _run_multi_alpha_experiment,
-            get_experiment_run_status,
+            reconcile_experiment_run_status,
         )
 
         for row in pending_rows:
@@ -185,7 +185,7 @@ class QEExperimentStatusScanner:
                     continue
 
                 stats["checked"] += 1
-                result = await get_experiment_run_status(experiment_id)
+                result = await reconcile_experiment_run_status(experiment_id)
                 status = result.get("status")
                 if status == "running":
                     stats["still_running"] += 1
