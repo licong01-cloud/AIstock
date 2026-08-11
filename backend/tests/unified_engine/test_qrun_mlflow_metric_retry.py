@@ -107,8 +107,11 @@ def test_qrun_industry_provider_injection_only_for_industry_requested(tmp_path, 
     ) is None
     assert calls[-1] == {"config": config_embedding, "cwd": tmp_path}
 
-def test_qrun_record_check_retries_empty_mlflow_metric_once(tmp_path, monkeypatch, capsys) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_check_retries_empty_mlflow_metric_once(
+    tmp_path, monkeypatch, capsys, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV, "0")
 
     class FlakyRecordTemp:
@@ -143,8 +146,11 @@ def test_qrun_record_check_retries_empty_mlflow_metric_once(tmp_path, monkeypatc
     assert str(run_dir / "metrics" / "Rank IC") in out
 
 
-def test_qrun_record_check_keeps_true_missing_artifact_loud(tmp_path, monkeypatch, capsys) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_check_keeps_true_missing_artifact_loud(
+    tmp_path, monkeypatch, capsys, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV, "0")
 
     class MissingArtifactRecordTemp:
@@ -173,8 +179,11 @@ def test_qrun_record_check_keeps_true_missing_artifact_loud(tmp_path, monkeypatc
     assert "transient MLflow empty metric read" not in capsys.readouterr().out
 
 
-def test_qrun_record_check_retry_exhaustion_reports_metric_and_path(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_check_retry_exhaustion_reports_metric_and_path(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS_ENV, "1")
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV, "0")
 
@@ -207,8 +216,11 @@ def test_qrun_record_check_retry_exhaustion_reports_metric_and_path(tmp_path, mo
     assert str(run_dir / "metrics" / "Rank IC") in message
 
 
-def test_qrun_record_load_drains_prior_async_metric_writes_before_artifact_read(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_drains_prior_async_metric_writes_before_artifact_read(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
 
     class OrderedAsyncRecorder(_FakeRecorder):
         def __init__(self, run_dir: Path) -> None:
@@ -250,8 +262,11 @@ def test_qrun_record_load_drains_prior_async_metric_writes_before_artifact_read(
     assert record.load_calls == 1
 
 
-def test_qrun_record_load_retries_wrapped_load_object_empty_metric(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_retries_wrapped_load_object_empty_metric(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV, "0")
 
     class LoadObjectError(Exception):
@@ -286,8 +301,11 @@ def test_qrun_record_load_retries_wrapped_load_object_empty_metric(tmp_path, mon
     assert record.load_calls == 2
 
 
-def test_qrun_record_load_does_not_retry_unrelated_load_object_error(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_does_not_retry_unrelated_load_object_error(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
 
     class LoadObjectError(Exception):
         pass
@@ -317,8 +335,11 @@ def test_qrun_record_load_does_not_retry_unrelated_load_object_error(tmp_path, m
     assert record.load_calls == 1
 
 
-def test_qrun_record_load_fails_before_read_when_async_barrier_times_out(tmp_path, monkeypatch) -> None:
-    runner, record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_fails_before_read_when_async_barrier_times_out(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
     monkeypatch.setenv(runner.MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC_ENV, "0")
 
     class StalledRecorder(_FakeRecorder):
@@ -349,3 +370,65 @@ def test_qrun_record_load_fails_before_read_when_async_barrier_times_out(tmp_pat
     with pytest.raises(runner.QEMlflowAsyncDrainError, match="barrier timed out"):
         record.load("pred.pkl")
     assert record.load_calls == 0
+
+
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_record_load_fails_before_enqueue_when_async_writer_is_dead(
+    tmp_path, monkeypatch, runner_path
+) -> None:
+    runner, record_temp = _load_runner(monkeypatch, runner_path)
+
+    class DeadWorker:
+        @staticmethod
+        def is_alive() -> bool:
+            return False
+
+    class DeadAsyncLog:
+        def __init__(self) -> None:
+            self._t = DeadWorker()
+            self.enqueue_calls = 0
+
+        def __call__(self, _operation) -> None:
+            self.enqueue_calls += 1
+
+    class DeadWriterRecorder(_FakeRecorder):
+        def __init__(self, run_dir: Path) -> None:
+            super().__init__(run_dir)
+            self.async_log = DeadAsyncLog()
+
+    class NeverReadRecordTemp:
+        def __init__(self, recorder) -> None:
+            self._recorder = recorder
+            self.load_calls = 0
+
+        @property
+        def recorder(self):
+            return self._recorder
+
+        def load(self, name: str, parents: bool = True):
+            self.load_calls += 1
+            return name
+
+        def check(self, include_self: bool = False, parents: bool = True):
+            return True
+
+    record_temp.RecordTemp = NeverReadRecordTemp
+    runner._install_mlflow_metric_read_retry()
+    recorder = DeadWriterRecorder(tmp_path / "run")
+    record = record_temp.RecordTemp(recorder)
+
+    with pytest.raises(runner.QEMlflowAsyncDrainError, match="not alive"):
+        record.load("pred.pkl")
+    assert recorder.async_log.enqueue_calls == 0
+    assert record.load_calls == 0
+
+
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_installs_mlflow_retry_after_init_before_task_train(runner_path: Path) -> None:
+    source = runner_path.read_text(encoding="utf-8")
+    run_main = source[source.index("def _run_main") :]
+
+    init_index = run_main.index("qlib.init(")
+    install_index = run_main.index("_install_mlflow_metric_read_retry()")
+    train_index = run_main.index("recorder = _task_train_with_gats_industry_provider(")
+    assert init_index < install_index < train_index
