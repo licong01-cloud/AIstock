@@ -45,11 +45,14 @@ def test_catalog_loads_and_compiles_regex_rules() -> None:
     rules = scanner.compile_rules(catalog)
 
     rule_ids = {rule.rule_id for rule in rules}
+    rules_by_id = {rule.rule_id: rule for rule in rules}
     assert "ARCH-WSL-001" in rule_ids
     assert "ERR-FALLBACK-001" in rule_ids
     assert "MEMORY-DATAFRAME-001" in rule_ids
     assert "BACKEND-RESTART-OWNERSHIP-001" in rule_ids
     assert "DB-COMMENT-001" not in rule_ids  # external checker, not regex scanner scope
+    assert rules_by_id["ROOT-POLLUTION-001"].effect == "block"
+    assert rules_by_id["DOC-LOCATION-001"].effect == "warn"
 
 
 def test_catalog_references_current_human_readable_standard() -> None:
@@ -93,7 +96,7 @@ def test_catalog_references_current_human_readable_standard() -> None:
         "STD-SYNC-001",
     }
     effect_counts = {effect: sum(item["effect"] == effect for item in controls.values()) for effect in effects}
-    assert effect_counts == {"block": 21, "warn": 5, "advisory": 3}
+    assert effect_counts == {"block": 19, "warn": 8, "advisory": 2}
 
 
 def test_rdagent_release_identity_control_is_fail_closed() -> None:
@@ -230,6 +233,20 @@ def test_scanner_detects_root_pollution_by_path(tmp_path: Path) -> None:
     findings = scanner.scan_files([root_script], rules=rules, root=tmp_path)
 
     assert any(finding.rule_id == "ROOT-POLLUTION-001" for finding in findings)
+
+
+def test_scanner_allows_root_agents_authority_file(tmp_path: Path) -> None:
+    scanner = _load_module()
+    agents_file = tmp_path / "AGENTS.md"
+    agents_file.write_text("# Repository instructions\n", encoding="utf-8")
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    findings = scanner.scan_files([agents_file], rules=scanner.compile_rules(catalog), root=tmp_path)
+
+    assert not any(
+        finding.rule_id in {"ROOT-POLLUTION-001", "DOC-LOCATION-001"}
+        for finding in findings
+    )
 
 
 def test_scanner_allows_debug_tools_one_off_scripts(tmp_path: Path) -> None:
@@ -389,6 +406,27 @@ def test_baseline_status_and_new_only_blocking(tmp_path: Path) -> None:
     assert scanner.blocking_findings(classified, "P1", fail_new_only=False) == classified
 
 
+def test_only_block_effect_can_fail_the_gate() -> None:
+    scanner = _load_module()
+    common = {
+        "title": "Repository placement finding",
+        "severity": "P1",
+        "category": "repository_hygiene",
+        "file": "AGENTS.md",
+        "line": 1,
+        "message": "Repository placement finding",
+        "remediation": "Review placement.",
+        "baseline_policy": "block_new_only",
+        "baseline_status": "new",
+    }
+    block = scanner.Finding(rule_id="BLOCK-001", fingerprint="block", effect="block", **common)
+    warn = scanner.Finding(rule_id="WARN-001", fingerprint="warn", effect="warn", **common)
+    advisory = scanner.Finding(rule_id="ADVISORY-001", fingerprint="advisory", effect="advisory", **common)
+
+    assert scanner.blocking_findings([block, warn, advisory], "P1", fail_new_only=True) == [block]
+    assert warn.to_dict()["effect"] == "warn"
+
+
 def test_missing_baseline_marks_findings_as_new() -> None:
     scanner = _load_module()
     finding = scanner.Finding(
@@ -454,6 +492,7 @@ def test_guardrail_summarize_includes_scope_visibility_without_changing_blocking
 
     summary = scanner.summarize(findings)
 
+    assert summary["by_effect"] == {"block": 2}
     assert summary["by_scope"] == {"docs_or_historical": 1, "runtime_or_pipeline": 1}
     assert summary["by_scope_and_severity"]["runtime_or_pipeline"]["P0"] == 1
     assert summary["top_runtime_or_pipeline_rules"] == [{"rule_id": "ERR-FALLBACK-001", "count": 1}]
@@ -494,10 +533,12 @@ def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
     assert payload["schema_version"] == "aistock_guardrail_scan_result_v1"
     assert payload["gate"]["status"] == "failed"
     assert payload["summary"]["by_baseline_status"]["new"] >= 1
+    assert payload["summary"]["by_effect"]["block"] >= 1
     assert payload["summary"]["by_scope"]["runtime_or_pipeline"] >= 1
     assert payload["summary"]["total_findings"] >= 1
     assert "AIstock Guardrail Baseline Scan" in summary
     assert "Summary By Baseline Status" in summary
+    assert "Summary By Effect" in summary
     assert "Summary By Scope" in summary
     assert "Top Runtime Or Pipeline Rules" in summary
     assert "ERR-FALLBACK-001" in summary

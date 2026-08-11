@@ -11,7 +11,7 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 
 ## Context
 
-- Prefer RTK for supported high-output interactive commands; capability fallback is allowed, RTK is not a gate, and no window may run `rtk trust` on its own.
+- Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK; direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure, with one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a task/PR/CI gate.
 - Read project rules once, then use this skill, `task-card.md`, the compact Context Pack and direct code references.
 - After compaction/restart, run `resume` and use the Context Resume Digest hashes.
 - Machine JSON supports failure diagnosis and state recovery; normal execution uses compact Markdown/stdout artifacts.
@@ -19,7 +19,7 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 
 ## Start
 
-1. Run `python scripts/aistock_issue_workflow.py doctor`.
+1. Run `doctor` only for unknown client/bootstrap readiness, workflow/client changes, stale/conflicting resume state, or an explicit diagnostic request; otherwise start with `run`, `resume`, or `submit-bug`.
 2. Existing BUG: `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`.
 3. New BUG: `python scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-fix-worktree --apply`.
 4. Existing workflow state resumes through the returned `next_command`.
@@ -31,7 +31,7 @@ Use this lane for AIstock BUG/GitHub Issue work. The sole development authority 
 - User backend start/stop/restart is never authorized by this skill or any workflow stage. Only the user may perform it unless the user separately authorizes this window for the current target.
 - BUG metadata and GitHub linkage use the workflow. A required scope expansion updates the issue record in the task worktree before implementation continues.
 - Ordinary BUGs use targeted snippets and ownership/catalog data; cited designs and T3 tasks add the relevant design acceptance items.
-- Production merge, services, DB writes and DDL execute only under explicit user authorization and report separately from source completion.
+- Production merge, services, DB writes and DDL execute only under explicit action-scoped user authorization and report separately from source completion. One instruction may bundle merge with exact cleanup and/or a named production target/migration; a complete bundle needs no second prompt, while bare merge implies none of those actions.
 - Before completion, apply the four `DESIGN-COMPLIANCE-001` checks from the sole development standard.
 
 ## Verify

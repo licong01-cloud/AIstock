@@ -1,6 +1,6 @@
 # AIstock Standards Index
 
-Last updated: 2026-07-18
+Last updated: 2026-08-11
 
 ## Operating Model
 
@@ -21,7 +21,7 @@ AIstock has one human-readable development standard:
 - BUG / GitHub Issue work: Codex `fix-aistock-issue`; Claude `.claude/commands/fix-aistock-issue.md`.
 - New feature delivery: Codex `verify-aistock-feature`; Claude `.claude/commands/aistock-feature-workflow.md`.
 - Docs / handoff / small cleanup: Codex `aistock-docs-handoff`; Claude `.claude/commands/aistock-docs-handoff.md`.
-- Merge / close-sync / DDL or dependency gates / cleanup after merge: Codex `aistock-merge-aftercare`; Claude `.claude/commands/aistock-merge-aftercare.md`.
+- Merge / close-sync / action-scoped DDL, dependency, or exact cleanup authorizations (which may be bundled in one user instruction): Codex `aistock-merge-aftercare`; Claude `.claude/commands/aistock-merge-aftercare.md`.
 - Read-only triage / nightly or CI status / inventory checks: Codex `aistock-readonly-triage`; Claude `.claude/commands/aistock-readonly-triage.md`.
 - Delegated deep validation: Codex `aistock-validation-delegation`; Claude `.claude/commands/aistock-validation-delegation.md`.
 
