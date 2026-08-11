@@ -4,12 +4,13 @@
     "backend/services/quantevolver/qe_workspace_client.py",
     "backend/services/quantevolver/qe_evolution_service.py",
     "backend/routers/quantevolver_evolution.py",
+    "backend/routers/quantevolver.py",
     "frontend/src/app/quantevolver/evolution/page.tsx",
     "backend/services/quantevolver/qe_log_broker.py",
     "backend/services/quantevolver/qe_log_store.py",
     "backend/tests/unified_engine/test_qe_log_broker.py",
     "backend/tests/unified_engine/test_qe_log_store.py",
-    "frontend/src/app/quantevolver/evolution/qe-log-lifecycle.test.tsx",
+    "backend/tests/unified_engine/test_qe_log_stream_lifecycle.py",
     "tests/aistock_validation/bugs/20260811_BUG-1031-qe-live-log-consumers-duplicate-upstream-streams-and-grow-unbounded-loca.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -29,6 +30,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260811-45c23f850326",
       "timestamp": "2026-08-11T20:28:50.691160Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added backend/routers/quantevolver.py so all AIstock QE workspace log consumers, including experiment and multi-node routes, use the same task/node broker; replaced the unavailable frontend unit-test placeholder with the existing lifecycle characterization test. Ownership remains qe.core with no unmapped files.",
+      "timestamp": "2026-08-11T21:11:32Z"
+    },
+    {
+      "action": "implementation_review_completed",
+      "actor": "codex",
+      "note": "Three review rounds removed the legacy evolution.log append path, added task lifecycle wakeup, dynamic node-plan expansion, process/task history byte bounds, subscriber count+byte backpressure, inactive session cache limits, source-cursor reconnect, 410 fail-closed handling, and loud mirror-write errors. Focused backend and lifecycle matrix passed; frontend local compiler was unavailable and no dependency install was attempted, so frontend type/lint remains a CI requirement.",
+      "timestamp": "2026-08-11T21:11:32Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "codex",
+      "note": "DESIGN-COMPLIANCE-001: full system-wide QE workspace log fan-out and bounded ring are implemented rather than a subset; cursor, storage, capacity and source errors remain explicit; QE execution, result and terminal business semantics are unchanged; no new approval or release gate was added. Existing historical logs remain untouched pending merge, user restart, runtime verification and separate exact-file cleanup authorization.",
+      "timestamp": "2026-08-11T21:11:32Z"
     }
   ],
   "evidence_uris": [],
@@ -38,26 +57,28 @@
       "backend/services/quantevolver/qe_log_broker.py",
       "backend/services/quantevolver/qe_log_store.py",
       "backend/tests/unified_engine/test_qe_log_broker.py",
-      "backend/tests/unified_engine/test_qe_log_store.py",
-      "frontend/src/app/quantevolver/evolution/qe-log-lifecycle.test.tsx"
+      "backend/tests/unified_engine/test_qe_log_store.py"
     ],
     "changed_files": [
       "backend/services/quantevolver/qe_workspace_client.py",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/routers/quantevolver_evolution.py",
-      "frontend/src/app/quantevolver/evolution/page.tsx"
+      "backend/routers/quantevolver.py",
+      "frontend/src/app/quantevolver/evolution/page.tsx",
+      "backend/tests/unified_engine/test_qe_log_stream_lifecycle.py"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_workspace_client.py",
         "backend/services/quantevolver/qe_evolution_service.py",
         "backend/routers/quantevolver_evolution.py",
+        "backend/routers/quantevolver.py",
         "frontend/src/app/quantevolver/evolution/page.tsx",
         "backend/services/quantevolver/qe_log_broker.py",
         "backend/services/quantevolver/qe_log_store.py",
         "backend/tests/unified_engine/test_qe_log_broker.py",
         "backend/tests/unified_engine/test_qe_log_store.py",
-        "frontend/src/app/quantevolver/evolution/qe-log-lifecycle.test.tsx"
+        "backend/tests/unified_engine/test_qe_log_stream_lifecycle.py"
       ],
       "impacted_modules": [
         "qe.core",
@@ -98,6 +119,19 @@
         },
         {
           "file": "backend/routers/quantevolver_evolution.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/routers/quantevolver.py",
           "impact_modules": [
             "qe.single_experiment",
             "qe.custom_evolution",
@@ -173,15 +207,17 @@
           "rule_id": "qe_services"
         },
         {
-          "file": "frontend/src/app/quantevolver/evolution/qe-log-lifecycle.test.tsx",
+          "file": "backend/tests/unified_engine/test_qe_log_stream_lifecycle.py",
           "impact_modules": [
-            "qe.archive",
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
             "qe.enhanced_metrics",
-            "validation.center"
+            "qe.data_completeness"
           ],
-          "primary_module": "qe.single_experiment",
+          "primary_module": "qe.core",
           "risk_level": "high",
-          "rule_id": "qe_frontend"
+          "rule_id": "qe_services"
         }
       ],
       "risk_levels": [
@@ -191,12 +227,13 @@
         "backend/services/quantevolver/qe_workspace_client.py",
         "backend/services/quantevolver/qe_evolution_service.py",
         "backend/routers/quantevolver_evolution.py",
+        "backend/routers/quantevolver.py",
         "frontend/src/app/quantevolver/evolution/page.tsx",
         "backend/services/quantevolver/qe_log_broker.py",
         "backend/services/quantevolver/qe_log_store.py",
         "backend/tests/unified_engine/test_qe_log_broker.py",
         "backend/tests/unified_engine/test_qe_log_store.py",
-        "frontend/src/app/quantevolver/evolution/qe-log-lifecycle.test.tsx"
+        "backend/tests/unified_engine/test_qe_log_stream_lifecycle.py"
       ],
       "unmatched_files": []
     },
@@ -205,12 +242,13 @@
       "backend/services/quantevolver/qe_workspace_client.py",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/routers/quantevolver_evolution.py",
+      "backend/routers/quantevolver.py",
       "frontend/src/app/quantevolver/evolution/page.tsx",
       "backend/services/quantevolver/qe_log_broker.py",
       "backend/services/quantevolver/qe_log_store.py",
       "backend/tests/unified_engine/test_qe_log_broker.py",
       "backend/tests/unified_engine/test_qe_log_store.py",
-      "frontend/src/app/quantevolver/evolution/qe-log-lifecycle.test.tsx"
+      "backend/tests/unified_engine/test_qe_log_stream_lifecycle.py"
     ]
   },
   "first_seen_at": "2026-08-11T20:28:50.691168Z",
@@ -222,7 +260,8 @@
   "last_seen_at": "2026-08-11T20:28:50.691168Z",
   "module": "quantevolver",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not delete existing historical or active log files before source merge and runtime verification."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -278,17 +317,18 @@
       "backend/services/quantevolver/qe_workspace_client.py",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/routers/quantevolver_evolution.py",
+      "backend/routers/quantevolver.py",
       "frontend/src/app/quantevolver/evolution/page.tsx",
       "backend/services/quantevolver/qe_log_broker.py",
       "backend/services/quantevolver/qe_log_store.py",
       "backend/tests/unified_engine/test_qe_log_broker.py",
       "backend/tests/unified_engine/test_qe_log_store.py",
-      "frontend/src/app/quantevolver/evolution/qe-log-lifecycle.test.tsx"
+      "backend/tests/unified_engine/test_qe_log_stream_lifecycle.py"
     ],
     "ui_issue": true,
-    "ui_route": "/file",
+    "ui_route": "/quantevolver/evolution",
     "ui_routes": [
-      "/file"
+      "/quantevolver/evolution"
     ],
     "visual_acceptance_required": true
   },

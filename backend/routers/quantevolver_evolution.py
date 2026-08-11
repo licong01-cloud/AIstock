@@ -57,6 +57,12 @@ from ..services.qe_archive.long_trend_repository import (
     QELongTrendResultRepositoryError,
 )
 from ..services.quantevolver.qe_workspace_client import QELongTrendWorkspaceError, QEWorkspaceClient
+from ..services.quantevolver.qe_log_broker import (
+    BROKER_CURSOR_CONFLICT,
+    QELogBrokerCursorError,
+    get_qe_log_broker,
+    resolve_broker_cursor,
+)
 from ..services.quantevolver.experiment_config import (
     LongTrendEvaluationOptIn,
     ensure_qe_risk_policy,
@@ -1991,7 +1997,11 @@ async def append_custom_evo_loops(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/tasks/{task_id}/logs", summary="获取实时的任务运行及 Agent 思考日志流 (SSE)")
-def stream_task_logs(task_id: str):
+async def stream_task_logs(
+    task_id: str,
+    request: Request,
+    after_cursor: str | None = Query(default=None, max_length=4096),
+):
     """
     通过 SSE (Server-Sent Events) 返回该任务当前 LOOP 的实时日志
     底层会调用 RDAgent 的日志 API 进行转发
@@ -2000,11 +2010,19 @@ def stream_task_logs(task_id: str):
         if not scheduler.task_exists(task_id):
             logger.info("Log stream requested for deleted/nonexistent task %s; returning 204", task_id)
             return Response(status_code=204)
+        cursor = resolve_broker_cursor(after_cursor, request.headers.get("last-event-id"))
+        get_qe_log_broker().validate_cursor(task_id, cursor)
         return StreamingResponse(
-            scheduler.stream_task_logs(task_id),
+            scheduler.stream_task_logs(task_id, after_cursor=cursor),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
         )
+    except QELogBrokerCursorError as exc:
+        status_code = 400 if exc.reason_code == BROKER_CURSOR_CONFLICT else 410
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason_code": exc.reason_code, "message": str(exc)},
+        ) from exc
     except Exception as e:
         logger.error(f"Failed to establish log stream for task {task_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
