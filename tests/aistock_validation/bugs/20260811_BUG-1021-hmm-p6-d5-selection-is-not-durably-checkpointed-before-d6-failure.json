@@ -2,7 +2,9 @@
   "actual": "The formal P6 run completed 2096 fits and computed the train-only D5 selection, but D6 failed before the parent report was constructed. The durable parent failure therefore records selection_status=unknown_due_parent_failure and omits the D5 selection receipt, while zero-refit recovery requires a normal parent report. Persist an immutable D5-selected parent checkpoint before any D6 semantic access, bind both child receipt hashes and selected model authority, preserve typed failure evidence, and fail closed for historical artifacts without that checkpoint. Do not refit, reselect, change D5/D6 thresholds, change hard semantic authority, or generate model/READY.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260811_BUG-1021-hmm-p6-d5-selection-is-not-durably-checkpointed-before-d6-failure.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1021",
@@ -26,17 +28,35 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        "hmm_risk_services"
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+    ]
   },
   "first_seen_at": "2026-08-11T06:10:07.641432Z",
   "fix_branch": null,
@@ -54,7 +74,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0",
+    "validation_module_registry_l0",
     "hmm_risk_backend"
   ],
   "risk_area": "bug",
@@ -183,5 +203,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "fix_ready"
 }
