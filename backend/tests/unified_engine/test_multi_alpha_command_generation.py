@@ -199,9 +199,10 @@ class TestConfigComposerCommandGeneration:
         assert all(not part.startswith("cd ") for part in core_parts)
         assert "python prepare_factors.py" in core_parts
         assert ". ./.factor_env" in core_parts
-        assert '[ -n "${QLIB_WSL_CONDA_SH:-}" ]' in core_parts[0]
-        assert '$HOME/miniconda3/etc/profile.d/conda.sh' in core_parts[0]
-        assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in core_parts[0]
+        command_parts = " && ".join(core_parts)
+        assert '[ -n "${QLIB_WSL_CONDA_SH:-}" ]' in command_parts
+        assert '$HOME/miniconda3/etc/profile.d/conda.sh' in command_parts
+        assert 'conda activate "${QLIB_WSL_CONDA_ENV:-rdagent-gpu}"' in command_parts
 
     def test_build_auto_wsl_command_parts_injects_prediction_store_env(self):
         composer = ConfigComposer()
@@ -336,7 +337,7 @@ class TestConfigComposerCommandGeneration:
                 composer._precompute_hmm_coefficients(strategy_params, data_split)
             mock_run.assert_not_called()
 
-    def test_generate_auto_wsl_command_keeps_legacy_cd_prefix(self):
+    def test_generate_auto_wsl_command_uses_option_safe_cd_prefix(self):
         composer = ConfigComposer()
         wsl_path = "/mnt/f/Dev/RD-Agent-main/qe_workspace/demo"
         command = composer._generate_wsl_command(
@@ -347,7 +348,7 @@ class TestConfigComposerCommandGeneration:
             backtest_freq="1min",
         )
 
-        assert command.startswith(f"cd {wsl_path} && ")
+        assert command.startswith(f"cd -- {wsl_path} && ")
         assert "python prepare_factors.py" in command
         assert "python qrun_limit_minute.py conf.yaml" in command
 
