@@ -132,12 +132,14 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh module loads of both scripts/qrun_limit.py and scripts/qrun_limit_minute.py passed the same 20-test barrier/retry matrix, including dead writer, timeout, unrelated error, exact-race exhaustion and qlib.init-before-install-before-task_train ordering; no user backend or experiment process was controlled"
+      "Fresh module loads of both scripts/qrun_limit.py and scripts/qrun_limit_minute.py passed the same 20-test barrier/retry matrix, including dead writer, timeout, unrelated error, exact-race exhaustion and qlib.init-before-install-before-task_train ordering; no user backend or experiment process was controlled",
+      "fresh imports of daily and minute qrun passed the same 20-test barrier/retry matrix with exact race, nonrace, exhaustion, timeout, dead writer and install-order coverage; no user backend or experiment process was controlled"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -156,6 +158,14 @@
     "fingerprint": "787ea901b56d416805316be4",
     "source_event_id": "FE-20260811-787ea901b56d"
   },
+  "validation_evidence": [
+    "rtk pytest -q backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 20 passed",
+    "python -m ruff check scripts/qrun_limit.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> passed",
+    "python -m py_compile scripts/qrun_limit.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> passed",
+    "python scripts/aistock_feature_workflow.py validate --design docs/analysis/sector_rotation_factors_develop_spec_20260710.md --tier F2 -> PASS 30/30 warnings=0",
+    "git diff --check -> passed",
+    "DESIGN-COMPLIANCE-001 second-round source review -> PASS all four items"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
@@ -259,13 +269,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "validation_evidence": [
-    "rtk pytest -q backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 20 passed",
-    "python -m ruff check scripts/qrun_limit.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> passed",
-    "python -m py_compile scripts/qrun_limit.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> passed",
-    "python scripts/aistock_feature_workflow.py validate --design docs/analysis/sector_rotation_factors_develop_spec_20260710.md --tier F2 -> PASS 30/30 warnings=0",
-    "git diff --check -> passed",
-    "DESIGN-COMPLIANCE-001 second-round source review -> PASS all four items"
-  ]
+  }
 }
