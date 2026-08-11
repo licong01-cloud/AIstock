@@ -259,27 +259,28 @@
     "external_runtime_dependencies": [
       {
         "backend_restart_owner": "user",
+        "deployment_restart": "pending_user",
         "merge_commit": "da3270f8eed82946cec63cd14ca6220e442380cf",
         "pr_number": 18,
         "repository": "licong01-cloud/RD-Agent",
         "runtime_identity_match": "pending",
         "runtime_target": "RD-Agent QE API",
-        "source_merge": "completed",
-        "deployment_restart": "pending_user"
+        "source_merge": "completed"
       }
     ],
     "fresh_process_evidence": [
       "Fresh Windows pytest processes verified 129 config-composer tests, 86 capacity/credential/remote-dispatch tests and 64 combine-backtest tests; local GeneralPTNN uses n_jobs=0 without prefetch, remote behavior remains n_jobs=2, unsafe local overrides fail closed, aliases cannot split the canonical WSL slot, forbidden remote_env values are rejected before serialization, and over-capacity reservations wait without terminating existing work",
       "A real WSL Bash process verified parent, conda/factor-env reinjected TDX_DB/POSTGRES/API/client-secret/token variables are absent at the qrun boundary while Prediction Store and frozen-file variables remain available; /bin/sh exits with reason_code=qe_subprocess_bash_required instead of continuing",
-      "RD-Agent companion fresh tests verified explicit no-profile Bash, pre-exec credential/startup/function/loader scrubbing, pipeline failure propagation, shell-quoted fallback workspaces, and atomic initial/overwrite mode-0600 resource-session secret files; no backend or experiment process control was performed"
+      "RD-Agent companion fresh tests verified explicit no-profile Bash, pre-exec credential/startup/function/loader scrubbing, pipeline failure propagation, shell-quoted fallback workspaces, and atomic initial/overwrite mode-0600 resource-session secret files; no backend or experiment process control was performed",
+      "fresh Windows/WSL processes verified canonical one-slot WSL capacity, single-process GeneralPTNN, complete PG*/secret/injection scrub, pre-serialization remote_env rejection, custom command isolation, explicit Bash fail-closed, and RD-Agent companion merge da3270f8; no user process was controlled"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "overall_runtime_activation_gate": "pending_backend_main_and_rdagent_runtime_verification",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
-    "overall_runtime_activation_gate": "pending_backend_main_and_rdagent_runtime_verification",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
