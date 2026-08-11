@@ -7,6 +7,7 @@
     "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     ".codex/skills/aistock-merge-aftercare/SKILL.md",
     ".claude/commands/aistock-merge-aftercare.md",
+    "backend/tests/test_aistock_guardrail_scan.py",
     "tests/aistock_validation/bugs/20260811_BUG-1028-cleanup-after-merge-retains-transient-evidence-and-cannot-safely-remove.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -38,7 +39,8 @@
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       ".codex/skills/aistock-merge-aftercare/SKILL.md",
-      ".claude/commands/aistock-merge-aftercare.md"
+      ".claude/commands/aistock-merge-aftercare.md",
+      "backend/tests/test_aistock_guardrail_scan.py"
     ],
     "ownership": {
       "changed_files": [
@@ -47,7 +49,8 @@
         "docs/standards/aistock_development_standard_v1.5_20260523.md",
         "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
         ".codex/skills/aistock-merge-aftercare/SKILL.md",
-        ".claude/commands/aistock-merge-aftercare.md"
+        ".claude/commands/aistock-merge-aftercare.md",
+        "backend/tests/test_aistock_guardrail_scan.py"
       ],
       "impacted_modules": [
         "validation.guardrails",
@@ -120,6 +123,16 @@
           "primary_module": "docs.standards",
           "risk_level": "medium",
           "rule_id": "codex_project_instructions"
+        },
+        {
+          "file": "backend/tests/test_aistock_guardrail_scan.py",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
         }
       ],
       "risk_levels": [
@@ -132,7 +145,8 @@
         "docs/standards/aistock_development_standard_v1.5_20260523.md",
         "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
         ".codex/skills/aistock-merge-aftercare/SKILL.md",
-        ".claude/commands/aistock-merge-aftercare.md"
+        ".claude/commands/aistock-merge-aftercare.md",
+        "backend/tests/test_aistock_guardrail_scan.py"
       ],
       "unmatched_files": []
     },
@@ -143,7 +157,8 @@
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       ".codex/skills/aistock-merge-aftercare/SKILL.md",
-      ".claude/commands/aistock-merge-aftercare.md"
+      ".claude/commands/aistock-merge-aftercare.md",
+      "backend/tests/test_aistock_guardrail_scan.py"
     ]
   },
   "first_seen_at": "2026-08-11T19:09:05.675901Z",

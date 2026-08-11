@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 07525b0aa864b4ab7313577b514a6b1ed31a07545e2f75cf2982399a6ce7ef0a
+source_sha256: e7f383eb8f57a547b5556ffc9e6e52eb6d8205784554597c61286838b36b6e71
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-11"
+updated_at: "2026-08-12"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -644,6 +644,29 @@ rules:
         - '(?i)(sc(?:\.exe)?|net(?:\.exe)?)\s+(?:start|stop)\s+[^\r\n]*(backend|uvicorn|8001|19080)'
     baseline_policy: block_new_only
     remediation: Reject user-backend process control in the workflow subprocess executor, emit an operator runbook reference, and wait for the user; validation, merge, close-sync, aftercare, and cleanup never authorize backend process control.
+
+  - rule_id: WORKTREE-CLEANUP-EVIDENCE-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-worktree-cleanup-evidence-001
+    title: Authorized worktree cleanup finalizes compact durable receipts and removes only manifest-classified transient artifacts
+    severity: P1
+    category: issue_workflow
+    enabled: true
+    effect: block
+    enforcement_phase: issue_lifecycle
+    failure_policy: block_cleanup_done_when_durable_or_unknown_artifacts_or_four_state_drift_remain
+    checker:
+      type: manual_review
+      required_evidence:
+        - compact_commit_bound_receipt_persisted
+        - runtime_post_restart_receipt_summary_durable_before_local_copy_cleanup
+        - ignored_artifact_manifest_classifies_transient_protected_unknown
+        - active_process_and_path_boundary_preflight
+        - exact_transient_roots_only_no_git_clean_or_wildcard
+        - manifest_unchanged_before_purge
+        - path_registration_local_remote_four_state_readback
+        - bare_merge_does_not_imply_cleanup
+    baseline_policy: block_incomplete_cleanup_claim_only
+    remediation: Finalize compact durable receipts, purge only exact manifest-classified transient roots under an explicitly authorized cleanup, fail closed on protected or unknown artifacts, then verify path, registration, local branch, and remote branch absence.
 
   - rule_id: BUG-RESTART-EFFECTIVE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-bug-restart-effective-001

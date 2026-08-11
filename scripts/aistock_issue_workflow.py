@@ -104,10 +104,26 @@ FAST_PATH_TIER_ORDER = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
 VALIDATION_RECEIPT_SCHEMA = "aistock_validation_receipt_v1"
 RUNTIME_CONTRACT_SCHEMA = "aistock_bug_runtime_contract_v1"
 RUNTIME_VERIFY_RECEIPT_SCHEMA = "aistock_post_restart_verify_receipt_v1"
+RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA = "aistock_post_restart_verify_receipt_summary_v1"
 RUNTIME_TARGET_CATALOG = REPO_ROOT / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
 RUNTIME_IMPACTS = {"none", "frontend", "client", "database", "backend", "worker_scheduler", "unknown"}
 VALIDATION_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
 VALIDATION_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
+VALIDATION_RECEIPT_COMMIT_RE = re.compile(
+    r"validation-receipt:\s+id=[0-9a-f]{16}\s+commit=([0-9a-f]{7,40})\b",
+    re.IGNORECASE,
+)
+WORKTREE_TRANSIENT_CACHE_DIRS = {
+    ".codex_tmp",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "catboost_info",
+    "node_modules",
+}
+WORKTREE_TRANSIENT_PREFIXES = ("tmp/", "var/research_assistant/")
+WORKTREE_TRANSIENT_EXACT_FILES = {".coverage", "debug.log"}
 RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
@@ -2251,6 +2267,25 @@ def _probe_evidence_digest(results: list[dict[str, Any]]) -> str:
     ]
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _post_restart_receipt_summary(receipt_path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA,
+        "receipt_sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        "bug_id": receipt.get("bug_id"),
+        "target_id": receipt.get("target_id"),
+        "generated_at": receipt.get("generated_at"),
+        "expected_identity": receipt.get("expected_identity"),
+        "observed_identity": receipt.get("observed_identity"),
+        "runtime_identity_proof_digest": receipt.get("runtime_identity_proof_digest"),
+        "contract_digest": receipt.get("contract_digest"),
+        "catalog_sha256": receipt.get("catalog_sha256"),
+        "probe_evidence_digest": receipt.get("probe_evidence_digest"),
+        "post_restart_effective_gate": receipt.get("post_restart_effective_gate"),
+        "mode": receipt.get("mode"),
+        "response_content_persisted": False,
+    }
 
 
 def build_post_restart_verify(
@@ -10548,6 +10583,443 @@ def _is_reparse_or_symlink(path: Path) -> bool:
         return False
 
 
+def _normalize_worktree_artifact_path(value: str) -> str:
+    normalized = str(value or "").replace("\\", "/").strip()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _worktree_transient_root(
+    relative_path: str,
+    *,
+    worktree_path: Path,
+    canonical_root: Path,
+) -> tuple[str | None, str]:
+    rel = _normalize_worktree_artifact_path(relative_path)
+    rel_path = Path(rel)
+    if not rel or rel_path.is_absolute() or ".." in rel_path.parts:
+        return None, "invalid_path"
+    parts = rel.split("/")
+    if rel.startswith(WORKTREE_TRANSIENT_PREFIXES):
+        if rel.startswith("var/research_assistant/"):
+            return "var/research_assistant", "task_local_runtime_artifact"
+        return "/".join(parts[:2]), "task_temporary_artifact"
+    for index, part in enumerate(parts):
+        if part in WORKTREE_TRANSIENT_CACHE_DIRS or part == ".next" or part.startswith(".next-"):
+            return "/".join(parts[: index + 1]), "reproducible_cache"
+    if rel in WORKTREE_TRANSIENT_EXACT_FILES or rel.startswith(".coverage.") or rel.endswith((".pyc", ".pyo")):
+        return rel, "reproducible_cache_file"
+    if rel == "proxy_config.json":
+        candidate = worktree_path / rel
+        canonical = canonical_root / rel
+        if candidate.is_file() and canonical.is_file() and hashlib.sha256(candidate.read_bytes()).digest() == hashlib.sha256(canonical.read_bytes()).digest():
+            return rel, "canonical_equivalent_local_config"
+        return None, "non_equivalent_local_config"
+    return None, "unknown_ignored_artifact"
+
+
+def _minimal_relative_roots(roots: Iterable[str]) -> list[str]:
+    ordered = sorted({_normalize_worktree_artifact_path(item) for item in roots if item}, key=lambda item: (item.count("/"), item))
+    minimal: list[str] = []
+    for item in ordered:
+        if any(item == parent or item.startswith(parent + "/") for parent in minimal):
+            continue
+        minimal.append(item)
+    return minimal
+
+
+def _cleanup_protected_receipt_paths(bug_id: str | None) -> set[str]:
+    if not bug_id:
+        return set()
+    try:
+        record, _source_path = find_bug_record(bug_id=bug_id, issue_json=None)
+    except Exception:
+        return set()
+    runtime = record.get("runtime_contract") if isinstance(record.get("runtime_contract"), dict) else {}
+    receipt_ref = _normalize_worktree_artifact_path(str(runtime.get("post_restart_receipt_ref") or ""))
+    for prefix in WORKTREE_TRANSIENT_PREFIXES:
+        marker_index = receipt_ref.find(prefix)
+        if marker_index > 0:
+            receipt_ref = receipt_ref[marker_index:]
+            break
+    summary = runtime.get("post_restart_receipt_summary")
+    required_summary_fields = (
+        "receipt_sha256",
+        "expected_identity",
+        "observed_identity",
+        "runtime_identity_proof_digest",
+        "contract_digest",
+        "catalog_sha256",
+        "probe_evidence_digest",
+    )
+    summary_durable = (
+        isinstance(summary, dict)
+        and summary.get("schema_version") == RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA
+        and all(bool(str(summary.get(field) or "").strip()) for field in required_summary_fields)
+        and summary.get("post_restart_effective_gate") == "passed"
+        and summary.get("response_content_persisted") is False
+    )
+    return {receipt_ref} if receipt_ref and not summary_durable else set()
+
+
+def _cleanup_evidence_finalization(bug_id: str | None) -> dict[str, Any]:
+    if not bug_id:
+        return {
+            "schema_version": "aistock_cleanup_evidence_finalization_v1",
+            "status": "not_required_without_bug_record",
+            "durable_receipt_present": True,
+        }
+    try:
+        record, source_path = find_bug_record(bug_id=bug_id, issue_json=None)
+    except Exception as exc:
+        return {
+            "schema_version": "aistock_cleanup_evidence_finalization_v1",
+            "status": "bug_record_unavailable",
+            "durable_receipt_present": False,
+            "error": str(exc),
+        }
+    evidence = [
+        *flow._as_list(record.get("validation_receipts")),
+        *flow._as_list(record.get("validation_evidence")),
+    ]
+    structured_receipt_present = any(flow._has_validation_receipt(item) for item in evidence)
+    legacy_closure_present = bool(
+        str(record.get("status") or "") in {"fixed", "verified"}
+        and str(record.get("fix_commit") or "").strip()
+        and str(record.get("pr_url") or "").strip()
+        and evidence
+    )
+    durable_receipt_present = structured_receipt_present or legacy_closure_present
+    return {
+        "schema_version": "aistock_cleanup_evidence_finalization_v1",
+        "status": (
+            "finalized_structured_receipt"
+            if structured_receipt_present
+            else ("finalized_legacy_closed_bug" if legacy_closure_present else "missing_durable_receipt")
+        ),
+        "durable_receipt_present": durable_receipt_present,
+        "structured_receipt_present": structured_receipt_present,
+        "legacy_closure_present": legacy_closure_present,
+        "bug_json": _repo_rel(source_path),
+        "evidence_item_count": len(evidence),
+    }
+
+
+def _worktree_active_process_profile(worktree_path: Path) -> dict[str, Any]:
+    resolved = str(worktree_path.resolve())
+    profile: dict[str, Any] = {
+        "schema_version": "aistock_worktree_process_reference_v1",
+        "target": resolved,
+        "scan_status": "complete",
+        "reference_count": 0,
+        "references": [],
+    }
+    if os.name == "nt":
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if not powershell:
+            profile.update({"scan_status": "unavailable", "error": "PowerShell unavailable"})
+            return profile
+        env = os.environ.copy()
+        env["AISTOCK_CLEANUP_TARGET"] = resolved
+        env["AISTOCK_CLEANUP_EXCLUDE_PIDS"] = ",".join(str(item) for item in {os.getpid(), os.getppid()})
+        script = (
+            "$target=$env:AISTOCK_CLEANUP_TARGET;"
+            "$forward=$target.Replace('\\','/');"
+            "$exclude=@($env:AISTOCK_CLEANUP_EXCLUDE_PIDS.Split(',')|ForEach-Object{[int]$_});"
+            "$hits=@(Get-CimInstance Win32_Process|Where-Object{$exclude -notcontains [int]$_.ProcessId}|"
+            "Where-Object{([string]$_.CommandLine).IndexOf($target,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or "
+            "([string]$_.CommandLine).IndexOf($forward,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or "
+            "([string]$_.ExecutablePath).IndexOf($target,[StringComparison]::OrdinalIgnoreCase)-ge 0}|"
+            "Select-Object ProcessId,Name);$hits|ConvertTo-Json -Compress"
+        )
+        try:
+            proc = subprocess.run(
+                [powershell, "-NoProfile", "-Command", script],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=30,
+                env=env,
+            )
+            if proc.returncode != 0:
+                profile.update({"scan_status": "failed", "error": (proc.stderr or proc.stdout).strip()})
+                return profile
+            raw = proc.stdout.strip()
+            parsed = json.loads(raw) if raw else []
+            references = parsed if isinstance(parsed, list) else [parsed]
+            profile["references"] = references[:20]
+            profile["reference_count"] = len(references)
+            return profile
+        except Exception as exc:
+            profile.update({"scan_status": "failed", "error": str(exc)})
+            return profile
+
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        profile.update({"scan_status": "unsupported"})
+        return profile
+    references: list[dict[str, Any]] = []
+    for item in proc_root.iterdir():
+        if not item.name.isdigit() or int(item.name) in {os.getpid(), os.getppid()}:
+            continue
+        try:
+            cwd = (item / "cwd").resolve()
+            executable = (item / "exe").resolve()
+            command_line = (item / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", errors="replace")
+            target = worktree_path.resolve()
+            matched = (
+                cwd == target
+                or target in cwd.parents
+                or executable == target
+                or target in executable.parents
+                or str(target) in command_line
+            )
+            if matched:
+                references.append({"process_id": int(item.name), "name": (item / "comm").read_text(encoding="utf-8").strip()})
+        except (OSError, PermissionError):
+            continue
+    profile["references"] = references[:20]
+    profile["reference_count"] = len(references)
+    return profile
+
+
+def _worktree_ignored_artifact_profile(
+    worktree_path: Path,
+    *,
+    canonical_root: Path,
+    protected_paths: set[str] | None = None,
+) -> dict[str, Any]:
+    protected = {_normalize_worktree_artifact_path(item) for item in (protected_paths or set()) if item}
+    result = _run_command(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
+        cwd=worktree_path,
+        timeout=120,
+    )
+    profile: dict[str, Any] = {
+        "schema_version": "aistock_worktree_ignored_artifact_profile_v1",
+        "scan_status": "complete" if result.get("ok") else "failed",
+        "ignored_count": 0,
+        "transient_count": 0,
+        "protected_count": 0,
+        "unknown_count": 0,
+        "transient_roots": [],
+        "transient_samples": [],
+        "protected_samples": [],
+        "unknown_samples": [],
+        "manifest_sha256": None,
+    }
+    if not result.get("ok"):
+        profile["error"] = result.get("stderr") or result.get("stdout") or "ignored artifact scan failed"
+        return profile
+    ignored = sorted({_normalize_worktree_artifact_path(item) for item in str(result.get("stdout") or "").split("\0") if item})
+    roots: list[str] = []
+    canonical_lines: list[str] = []
+    for rel in ignored:
+        if rel in protected:
+            category, reason, root = "protected", "durable_receipt_not_finalized", None
+            profile["protected_count"] += 1
+            if len(profile["protected_samples"]) < 20:
+                profile["protected_samples"].append(rel)
+        else:
+            root, reason = _worktree_transient_root(rel, worktree_path=worktree_path, canonical_root=canonical_root)
+            if root:
+                category = "transient"
+                roots.append(root)
+                profile["transient_count"] += 1
+                if len(profile["transient_samples"]) < 20:
+                    profile["transient_samples"].append(rel)
+            else:
+                category = "unknown"
+                profile["unknown_count"] += 1
+                if len(profile["unknown_samples"]) < 20:
+                    profile["unknown_samples"].append({"path": rel, "reason": reason})
+        canonical_lines.append(f"{rel}\t{category}\t{reason}\t{root or ''}")
+    minimal_roots = _minimal_relative_roots(roots)
+    tracked_conflicts: list[str] = []
+    for root in minimal_roots:
+        tracked = _run_command(["git", "ls-files", "-z", "--", root], cwd=worktree_path, timeout=60)
+        if not tracked.get("ok"):
+            tracked_conflicts.append(root)
+        elif str(tracked.get("stdout") or "").strip("\0"):
+            tracked_conflicts.append(root)
+    if tracked_conflicts:
+        profile["unknown_count"] += len(tracked_conflicts)
+        profile["unknown_samples"].extend(
+            {"path": item, "reason": "transient_root_contains_tracked_files"}
+            for item in tracked_conflicts[: max(0, 20 - len(profile["unknown_samples"]))]
+        )
+        minimal_roots = [item for item in minimal_roots if item not in set(tracked_conflicts)]
+    profile["ignored_count"] = len(ignored)
+    profile["transient_roots"] = minimal_roots
+    profile["transient_root_count"] = len(minimal_roots)
+    profile["manifest_sha256"] = hashlib.sha256("\n".join(canonical_lines).encode("utf-8")).hexdigest()
+    return profile
+
+
+def _validated_transient_root_target(worktree_path: Path, relative_root: str) -> Path:
+    normalized = _normalize_worktree_artifact_path(relative_root)
+    rel = Path(normalized)
+    if not normalized or rel.is_absolute() or ".." in rel.parts:
+        raise WorkflowError(f"invalid transient cleanup root: {relative_root}")
+    lexical_root = Path(os.path.abspath(worktree_path))
+    target = Path(os.path.abspath(lexical_root / rel))
+    try:
+        target.relative_to(lexical_root)
+    except ValueError as exc:
+        raise WorkflowError(f"transient cleanup escaped worktree: {target}") from exc
+    cursor = lexical_root
+    for part in rel.parts[:-1]:
+        cursor /= part
+        if _is_reparse_or_symlink(cursor):
+            raise WorkflowError(f"transient cleanup root crosses reparse point: {cursor}")
+    return target
+
+
+def _remove_exact_transient_root(worktree_path: Path, relative_root: str, *, target: Path | None = None) -> None:
+    target = target or _validated_transient_root_target(worktree_path, relative_root)
+    if not target.exists() and not _is_reparse_or_symlink(target):
+        return
+    if target.is_symlink():
+        target.unlink()
+    elif _is_reparse_or_symlink(target):
+        if target.is_dir():
+            target.rmdir()
+        else:
+            target.unlink()
+    elif target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+
+
+def _purge_worktree_transient_artifacts(
+    worktree_path: Path,
+    *,
+    canonical_root: Path,
+    expected_profile: dict[str, Any],
+    protected_paths: set[str] | None = None,
+) -> dict[str, Any]:
+    live = _worktree_ignored_artifact_profile(
+        worktree_path,
+        canonical_root=canonical_root,
+        protected_paths=protected_paths,
+    )
+    if live.get("scan_status") != "complete":
+        raise WorkflowError(str(live.get("error") or "ignored artifact rescan failed"))
+    if live.get("manifest_sha256") != expected_profile.get("manifest_sha256"):
+        raise WorkflowError("ignored artifact manifest changed after cleanup preflight")
+    if live.get("protected_count") or live.get("unknown_count"):
+        raise WorkflowError("ignored artifacts include protected or unknown files")
+    validated_roots = [
+        (str(relative_root), _validated_transient_root_target(worktree_path, str(relative_root)))
+        for relative_root in live.get("transient_roots") or []
+    ]
+    removed_roots: list[str] = []
+    for relative_root, target in validated_roots:
+        _remove_exact_transient_root(worktree_path, relative_root, target=target)
+        removed_roots.append(relative_root)
+    after = _worktree_ignored_artifact_profile(
+        worktree_path,
+        canonical_root=canonical_root,
+        protected_paths=protected_paths,
+    )
+    if after.get("scan_status") != "complete" or after.get("ignored_count"):
+        raise WorkflowError("transient artifact purge did not leave an empty ignored-artifact inventory")
+    return {
+        "ok": True,
+        "schema_version": "aistock_worktree_transient_purge_v1",
+        "manifest_sha256": live.get("manifest_sha256"),
+        "removed_root_count": len(removed_roots),
+        "removed_roots": removed_roots[:50],
+        "removed_roots_truncated": len(removed_roots) > 50,
+        "ignored_count_before": live.get("ignored_count"),
+        "ignored_count_after": after.get("ignored_count"),
+    }
+
+
+def _cleanup_post_removal_verification(
+    *,
+    root: Path,
+    worktree_path: Path | None,
+    branch: str,
+) -> dict[str, Any]:
+    local_refs = set(
+        _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
+    )
+    try:
+        remote_output = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=True)
+        remote_check_ok = True
+    except Exception:
+        remote_output = ""
+        remote_check_ok = False
+    local_absent = branch not in local_refs
+    remote_absent = remote_check_ok and not remote_output.strip()
+    path_absent = worktree_path is None or not worktree_path.exists()
+    registration_absent = worktree_path is None or not _path_is_registered_worktree(worktree_path, cwd=root)
+    all_clear = bool(path_absent and registration_absent and local_absent and remote_absent)
+    return {
+        "schema_version": "aistock_worktree_cleanup_verification_v1",
+        "path_absent": path_absent,
+        "registration_absent": registration_absent,
+        "local_branch_absent": local_absent,
+        "remote_branch_absent": remote_absent,
+        "remote_check_ok": remote_check_ok,
+        "all_clear": all_clear,
+    }
+
+
+def _remote_branch_sha(remote_ref: str, branch: str) -> str | None:
+    expected_name = f"refs/heads/{branch}"
+    for line in str(remote_ref or "").splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == expected_name and _FULL_GIT_COMMIT_RE.fullmatch(fields[0].lower()):
+            return fields[0].lower()
+    return None
+
+
+def _delete_remote_branch_with_lease(
+    *,
+    root: Path,
+    branch: str,
+    expected_remote_ref: str,
+) -> dict[str, Any]:
+    expected_sha = _remote_branch_sha(expected_remote_ref, branch)
+    if not expected_sha:
+        raise WorkflowError(f"remote branch preflight identity is invalid: {branch}")
+    live_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=True)
+    if not live_ref.strip():
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "remote branch already absent",
+            "stderr": "",
+            "expected_sha": expected_sha,
+            "already_absent": True,
+        }
+    live_sha = _remote_branch_sha(live_ref, branch)
+    if live_sha != expected_sha:
+        raise WorkflowError(
+            f"remote branch changed after cleanup preflight: {branch} "
+            f"expected={expected_sha} observed={live_sha or 'invalid'}"
+        )
+    result = _execute_checked(
+        [
+            "git",
+            "push",
+            "origin",
+            "--delete",
+            f"--force-with-lease=refs/heads/{branch}:{expected_sha}",
+            branch,
+        ],
+        cwd=root,
+        timeout=180,
+    )
+    return {**result, "expected_sha": expected_sha, "already_absent": False}
+
+
 def _orphan_worktree_dir_profile(path: Path) -> dict[str, Any]:
     sample_limit = 20
     profile: dict[str, Any] = {
@@ -11115,6 +11587,63 @@ def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[s
     return {"checked": True, "merged": True, "pr": payload}
 
 
+def _merged_pr_validation_receipt_profile(pr_url: str) -> dict[str, Any]:
+    """Confirm a merged PR carries a durable validation receipt without retaining its body."""
+
+    profile: dict[str, Any] = {
+        "schema_version": "aistock_merged_pr_validation_receipt_v1",
+        "pr_url": pr_url,
+        "checked": False,
+        "merged": False,
+        "durable_receipt_present": False,
+        "status": "check_failed",
+    }
+    result = _run_command(
+        ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,url,headRefOid,body"],
+        cwd=REPO_ROOT,
+        timeout=30,
+    )
+    if not result.get("ok"):
+        profile["error"] = result.get("stderr") or result.get("stdout") or "cannot inspect merged PR receipt"
+        return profile
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        profile["error"] = f"cannot parse merged PR receipt check: {exc}"
+        return profile
+    merged = payload.get("state") == "MERGED" or bool(payload.get("mergedAt"))
+    head_oid = str(payload.get("headRefOid") or "").strip().lower()
+    receipt_commits = sorted(
+        {item.lower() for item in VALIDATION_RECEIPT_COMMIT_RE.findall(str(payload.get("body") or ""))}
+    )
+    matching_commit = next(
+        (item for item in receipt_commits if _FULL_GIT_COMMIT_RE.fullmatch(head_oid) and head_oid.startswith(item)),
+        None,
+    )
+    structured_receipt_present = flow._has_validation_receipt(payload.get("body"))
+    receipt_present = bool(merged and structured_receipt_present and matching_commit)
+    profile.update(
+        {
+            "pr_url": str(payload.get("url") or pr_url),
+            "checked": True,
+            "merged": merged,
+            "durable_receipt_present": receipt_present,
+            "head_oid": head_oid or None,
+            "receipt_commit": matching_commit,
+            "status": (
+                "finalized_merged_pr_receipt"
+                if receipt_present
+                else (
+                    "receipt_commit_mismatch"
+                    if merged and structured_receipt_present
+                    else ("missing_structured_receipt" if merged else "pr_not_merged")
+                )
+            ),
+        }
+    )
+    return profile
+
+
 def _merge_commit_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
     pr = (pr_check or {}).get("pr") or {}
     merge_commit = pr.get("mergeCommit") if isinstance(pr, dict) else None
@@ -11469,7 +11998,14 @@ def build_registry_intake_cleanup_plan(
                 }
             )
         if branch and remote_ref:
-            actions.append({"action": "delete_remote_branch", "branch": branch, "safe": safe})
+            actions.append(
+                {
+                    "action": "delete_remote_branch",
+                    "branch": branch,
+                    "expected_remote_ref": remote_ref,
+                    "safe": safe,
+                }
+            )
         if not safe and reason:
             warnings.append(f"registry intake cleanup skipped for {worktree_path}: {reason}")
         candidates.append(
@@ -11523,8 +12059,12 @@ def build_registry_intake_cleanup_plan(
             elif action["action"] == "delete_remote_branch":
                 applied.append(
                     {
-                        "command": f"git push origin --delete {action['branch']}",
-                        "result": _execute_checked(["git", "push", "origin", "--delete", str(action["branch"])], cwd=REPO_ROOT, timeout=180),
+                        "command": f"git push origin --delete --force-with-lease {action['branch']}",
+                        "result": _delete_remote_branch_with_lease(
+                            root=REPO_ROOT,
+                            branch=str(action["branch"]),
+                            expected_remote_ref=str(action.get("expected_remote_ref") or ""),
+                        ),
                     }
                 )
     payload["applied"] = applied
@@ -13067,11 +13607,13 @@ def build_close_sync_plan(
     if apply and runtime_contract_errors:
         raise WorkflowError("runtime contract blocks close-sync: " + "; ".join(runtime_contract_errors))
     runtime_receipt: dict[str, Any] | None = None
+    runtime_receipt_path: Path | None = None
     runtime_receipt_errors: list[str] = []
     if post_restart_receipt:
         receipt_path = Path(post_restart_receipt)
         if not receipt_path.is_absolute():
             receipt_path = REPO_ROOT / receipt_path
+        runtime_receipt_path = receipt_path
         if not receipt_path.exists():
             runtime_receipt_errors.append(f"post-restart receipt not found: {receipt_path}")
         else:
@@ -13281,6 +13823,16 @@ def build_close_sync_plan(
                 "post_restart_receipt_ref": post_restart_receipt,
             }
         )
+        if (
+            runtime_contract.get("backend_restart_required")
+            and not runtime_pending
+            and runtime_receipt
+            and runtime_receipt_path
+        ):
+            updated_runtime["post_restart_receipt_summary"] = _post_restart_receipt_summary(
+                runtime_receipt_path,
+                runtime_receipt,
+            )
         updated["runtime_contract"] = updated_runtime
         _write_json(source_path, updated)
         evidence_payload = {
@@ -13545,6 +14097,8 @@ def build_cleanup_after_merge_plan(
     canonical_root: str | None = None,
 ) -> dict[str, Any]:
     root = Path(canonical_root) if canonical_root else _canonical_root()
+    branch_bug_match = BUG_ID_RE.search(branch)
+    evidence_bug_id = bug_id or (branch_bug_match.group(0).upper() if branch_bug_match else None)
     pre_cleanup_fetch = _cleanup_preflight_fetch_origin(root, apply=apply)
     current_branch = _git(["branch", "--show-current"], cwd=root, check=False)
     local_branches = set(
@@ -13565,6 +14119,11 @@ def build_cleanup_after_merge_plan(
     worktree_empty = False
     worktree_is_current_cwd = False
     worktree_orphan_profile: dict[str, Any] | None = None
+    worktree_ignored_artifacts: dict[str, Any] | None = None
+    worktree_process_references: dict[str, Any] | None = None
+    merged_pr_receipt_profile: dict[str, Any] | None = None
+    protected_receipt_paths = _cleanup_protected_receipt_paths(evidence_bug_id)
+    evidence_finalization = _cleanup_evidence_finalization(evidence_bug_id)
     if worktree_path and worktree_path.exists():
         try:
             current_cwd = Path.cwd().resolve()
@@ -13584,6 +14143,38 @@ def build_cleanup_after_merge_plan(
         worktree_clean = bool(status_result.get("ok")) and status_result.get("stdout") == ""
         if not worktree_registered:
             worktree_orphan_profile = _orphan_worktree_dir_profile(worktree_path)
+        elif worktree_clean:
+            worktree_ignored_artifacts = _worktree_ignored_artifact_profile(
+                worktree_path,
+                canonical_root=root,
+                protected_paths=protected_receipt_paths,
+            )
+            worktree_process_references = (
+                _worktree_active_process_profile(worktree_path)
+                if apply
+                else {
+                    "schema_version": "aistock_worktree_process_reference_v1",
+                    "target": str(worktree_path),
+                    "scan_status": "deferred_until_apply",
+                    "reference_count": 0,
+                    "references": [],
+                }
+            )
+    if (
+        worktree_ignored_artifacts
+        and worktree_ignored_artifacts.get("transient_count")
+        and not evidence_finalization.get("durable_receipt_present")
+        and pr_url
+    ):
+        merged_pr_receipt_profile = _merged_pr_validation_receipt_profile(pr_url)
+        if merged_pr_receipt_profile.get("durable_receipt_present"):
+            evidence_finalization = {
+                **evidence_finalization,
+                "status": "finalized_merged_pr_receipt",
+                "durable_receipt_present": True,
+                "merged_pr_receipt_present": True,
+                "pr_url": merged_pr_receipt_profile.get("pr_url") or pr_url,
+            }
     root_git = _git_snapshot(root) if root.exists() else {"ok": False, "error": "canonical root missing"}
     root_dirty_files = _dirty_files(root) if root.exists() else []
     origin_equivalent_dirty_files = _origin_equivalent_dirty_files(root, root_dirty_files) if root_dirty_files else []
@@ -13611,6 +14202,40 @@ def build_cleanup_after_merge_plan(
         blocking.append(f"worktree path exists but is not a registered git worktree: {worktree_path}")
     if worktree_path and worktree_registered and not worktree_clean:
         blocking.append(f"worktree is dirty: {worktree_path}")
+    if worktree_ignored_artifacts and worktree_ignored_artifacts.get("scan_status") != "complete":
+        blocking.append(
+            "ignored artifact scan failed: "
+            f"{worktree_ignored_artifacts.get('error') or worktree_path}"
+        )
+    if worktree_ignored_artifacts and worktree_ignored_artifacts.get("protected_count"):
+        blocking.append(
+            "worktree contains a durable receipt that has not been finalized: "
+            f"{worktree_ignored_artifacts.get('protected_samples') or []}"
+        )
+    if worktree_ignored_artifacts and worktree_ignored_artifacts.get("unknown_count"):
+        blocking.append(
+            "worktree contains unknown ignored artifacts: "
+            f"{worktree_ignored_artifacts.get('unknown_samples') or []}"
+        )
+    if (
+        worktree_ignored_artifacts
+        and worktree_ignored_artifacts.get("transient_count")
+        and not evidence_finalization.get("durable_receipt_present")
+    ):
+        blocking.append(
+            "transient evidence cannot be purged before compact durable receipt finalization: "
+            f"{evidence_finalization.get('status')}"
+        )
+    if worktree_process_references and worktree_process_references.get("scan_status") in {"failed", "unavailable", "unsupported"}:
+        blocking.append(
+            "active-process reference scan failed: "
+            f"{worktree_process_references.get('error') or worktree_process_references.get('scan_status')}"
+        )
+    if worktree_process_references and worktree_process_references.get("reference_count"):
+        blocking.append(
+            "worktree is referenced by active processes: "
+            f"{worktree_process_references.get('references') or []}"
+        )
     if sync_root:
         if not root.exists():
             blocking.append(f"canonical root missing: {root}")
@@ -13633,6 +14258,17 @@ def build_cleanup_after_merge_plan(
     if worktree_path and worktree_exists and worktree_registered:
         if worktree_is_current_cwd:
             actions.append({"action": "relocate_current_cwd", "root": str(root), "safe": root.exists()})
+        if worktree_ignored_artifacts and worktree_ignored_artifacts.get("transient_count"):
+            actions.append(
+                {
+                    "action": "purge_transient_worktree_artifacts",
+                    "worktree": str(worktree_path),
+                    "manifest_sha256": worktree_ignored_artifacts.get("manifest_sha256"),
+                    "ignored_count": worktree_ignored_artifacts.get("ignored_count"),
+                    "root_count": worktree_ignored_artifacts.get("transient_root_count"),
+                    "safe": not blocking,
+                }
+            )
         actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": merge_verified and worktree_clean})
     elif worktree_path and worktree_exists and (worktree_empty or (worktree_orphan_profile or {}).get("safe_reparse_or_empty_only")):
         if worktree_is_current_cwd:
@@ -13663,6 +14299,11 @@ def build_cleanup_after_merge_plan(
         "worktree_registered": worktree_registered,
         "worktree_empty": worktree_empty,
         "worktree_orphan_profile": worktree_orphan_profile,
+        "worktree_ignored_artifacts": worktree_ignored_artifacts,
+        "worktree_process_references": worktree_process_references,
+        "evidence_finalization": evidence_finalization,
+        "merged_pr_receipt_profile": merged_pr_receipt_profile,
+        "evidence_bug_id": evidence_bug_id,
         "worktree_is_current_cwd": worktree_is_current_cwd,
         "pre_cleanup_fetch": pre_cleanup_fetch,
         "root_git": root_git,
@@ -13728,6 +14369,24 @@ def build_cleanup_after_merge_plan(
                     "result": {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
                 }
             )
+        if (
+            worktree_path
+            and worktree_path.exists()
+            and worktree_registered
+            and worktree_ignored_artifacts
+            and worktree_ignored_artifacts.get("transient_count")
+        ):
+            applied.append(
+                {
+                    "command": f"purge finalized transient artifacts from {worktree_path}",
+                    "result": _purge_worktree_transient_artifacts(
+                        worktree_path,
+                        canonical_root=root,
+                        expected_profile=worktree_ignored_artifacts,
+                        protected_paths=protected_receipt_paths,
+                    ),
+                }
+            )
         if worktree_path and worktree_path.exists() and worktree_registered:
             applied.append({"command": f"git worktree remove {worktree_path}", "result": _remove_worktree_with_reparse_fallback(root=root, worktree_path=worktree_path)})
         elif worktree_path and worktree_path.exists() and (worktree_empty or (worktree_orphan_profile or {}).get("safe_reparse_or_empty_only")):
@@ -13753,7 +14412,36 @@ def build_cleanup_after_merge_plan(
             delete_flag = "-d" if merged else "-D"
             applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=root, timeout=120)})
         if remote_ref:
-            applied.append({"command": f"git push origin --delete {branch}", "result": _execute_checked(["git", "push", "origin", "--delete", branch], cwd=root, timeout=180)})
+            applied.append(
+                {
+                    "command": f"git push origin --delete --force-with-lease {branch}",
+                    "result": _delete_remote_branch_with_lease(
+                        root=root,
+                        branch=branch,
+                        expected_remote_ref=remote_ref,
+                    ),
+                }
+            )
+        cleanup_verification = _cleanup_post_removal_verification(
+            root=root,
+            worktree_path=worktree_path,
+            branch=branch,
+        )
+        payload["cleanup_verification"] = cleanup_verification
+        if not cleanup_verification.get("all_clear"):
+            payload["applied"] = applied
+            deferred_only = bool(
+                payload.get("deferred_cleanup")
+                and cleanup_verification.get("registration_absent")
+                and cleanup_verification.get("local_branch_absent")
+                and cleanup_verification.get("remote_branch_absent")
+            )
+            payload["workflow_gate"] = "cleanup_deferred" if deferred_only else "cleanup_incomplete"
+            payload["dry_run"] = False
+            _write_json(output_dir / f"{_slug(branch)}-cleanup-evidence.json", payload)
+            if deferred_only:
+                return payload
+            raise WorkflowError(f"post-cleanup verification failed: {cleanup_verification}")
         if bug_id:
             registry_cleanup = build_registry_intake_cleanup_plan(
                 bug_id=bug_id,
