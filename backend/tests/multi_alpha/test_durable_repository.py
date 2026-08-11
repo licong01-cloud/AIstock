@@ -108,6 +108,160 @@ class ScriptedProvider:
             self.commits += 1
 
 
+def test_idle_due_work_probe_is_one_select_and_omits_unready_optional_tables() -> None:
+    provider = ScriptedProvider(
+        [Step(contains="AS has_due_work", one={"has_due_work": False})]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    assert repository.has_due_orchestrator_work(
+        p0_2_schema_ready=False,
+        remote_poll_seconds=60,
+        archive_enabled=False,
+    ) is False
+
+    assert len(provider.cursor.executions) == 1
+    sql = provider.cursor.executions[0][0]
+    assert "SELECT (" in sql
+    assert "multi_alpha_combine_backtest_command" not in sql
+    assert "multi_alpha_combine_backtest_cancel_delivery" not in sql
+    assert "archive_enqueued" not in sql
+    assert "pause_run" not in sql
+    assert "execution_kind" not in sql
+    assert "attempt.run_id" not in sql
+    assert not any(keyword in sql for keyword in ("UPDATE ", "INSERT ", "DELETE "))
+
+
+def test_due_work_probe_includes_optional_control_and_archive_sources_when_ready() -> None:
+    provider = ScriptedProvider(
+        [Step(contains="AS has_due_work", one={"has_due_work": True})]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    assert repository.has_due_orchestrator_work(
+        p0_2_schema_ready=True,
+        remote_poll_seconds=60,
+        archive_enabled=True,
+        excluded_recent_attempt_ids=("macba_recent",),
+    ) is True
+
+    sql, params = provider.cursor.executions[0]
+    assert "multi_alpha_combine_backtest_command" in sql
+    assert "multi_alpha_combine_backtest_cancel_delivery" in sql
+    assert "archive_enqueued" in sql
+    assert params[0] == ["macba_recent"]
+
+
+def test_remote_observation_is_read_only_until_exact_snapshot_claim() -> None:
+    observed = {
+        "attempt_id": "macba_observed",
+        "child_id": "macbc_observed",
+        "run_id": "macb_observed",
+        "status": "running",
+        "row_version": 7,
+    }
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT attempt.*", one=observed),
+            Step(
+                contains="UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt",
+                one={
+                    **observed,
+                    "owner_id": "worker",
+                    "row_version": 8,
+                    "parent_run_id": "macb_observed",
+                },
+            ),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    assert repository.observe_next_reconcilable_attempt(
+        min_recheck_interval_seconds=60
+    ) == observed
+    first_sql = provider.cursor.executions[0][0]
+    assert "UPDATE " not in first_sql
+    assert "INSERT " not in first_sql
+
+    claimed = repository.claim_observed_attempt(
+        "macba_observed",
+        expected_row_version=7,
+        owner_id="worker",
+        lease_seconds=600,
+    )
+    assert claimed is not None and claimed["row_version"] == 8
+    claim_sql = provider.cursor.executions[1][0]
+    assert "attempt.row_version = %s" in claim_sql
+    assert "attempt.attempt_id = %s" in claim_sql
+
+
+def test_pre_p0_2_remote_observe_and_snapshot_claim_use_only_baseline_columns() -> None:
+    baseline_attempt = {
+        "attempt_id": "macba_pre_p0",
+        "child_id": "macbc_pre_p0",
+        "status": "running",
+        "row_version": 3,
+    }
+    observed = {**baseline_attempt, "run_id": "macb_pre_p0"}
+    provider = ScriptedProvider(
+        [
+            Step(contains="SELECT attempt.*", one=observed),
+            Step(
+                contains="UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt",
+                one={
+                    **baseline_attempt,
+                    "owner_id": "worker",
+                    "row_version": 4,
+                    "parent_run_id": "macb_pre_p0",
+                },
+            ),
+        ]
+    )
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    repository.observe_next_reconcilable_attempt(
+        p0_2_schema_ready=False,
+        min_recheck_interval_seconds=60,
+    )
+    claimed = repository.claim_observed_attempt(
+        "macba_pre_p0",
+        p0_2_schema_ready=False,
+        expected_row_version=3,
+        owner_id="worker",
+        lease_seconds=600,
+    )
+    assert claimed is not None and claimed["run_id"] == "macb_pre_p0"
+
+    observe_sql, claim_sql = (item[0] for item in provider.cursor.executions)
+    for sql in (observe_sql, claim_sql):
+        assert "execution_kind" not in sql
+        assert "attempt.run_id" not in sql
+    assert "child.child_id = attempt.child_id" in claim_sql
+
+
+def test_pre_p0_2_dispatch_claim_omits_execution_kind_column() -> None:
+    claimed = {
+        "attempt_id": "macba_pre_p0_dispatch",
+        "child_id": "macbc_pre_p0_dispatch",
+        "run_id": "macb_pre_p0_dispatch",
+        "status": "queued",
+    }
+    provider = ScriptedProvider([Step(contains="WITH candidate AS", one=claimed)])
+    repository = MultiAlphaDurableRepository(connection_provider=provider)
+
+    assert repository.claim_next_attempt(
+        owner_id="worker",
+        lease_seconds=600,
+        p0_2_schema_ready=False,
+        claim_kind="dispatch",
+        write_claim_event=False,
+    ) == claimed
+
+    sql = provider.cursor.executions[0][0]
+    assert "execution_kind" not in sql
+    assert "child.run_id" in sql
+
+
 def _claimed_run() -> dict[str, Any]:
     return {
         "id": "macb_test",

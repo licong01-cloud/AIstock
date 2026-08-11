@@ -24,6 +24,7 @@ from backend.services.multi_alpha.durable_repository import (
     MultiAlphaDurableRepository,
     MultiAlphaDurableRepositoryError,
 )
+from backend.services.multi_alpha.durable_wakeup import notify_durable_orchestrator
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,8 @@ class DurableMultiAlphaControlService:
             scope_hash=scope_hash,
         )
         command = self._repository.create_or_get_command(spec)
+        # Wake only after the durable command transaction has committed.
+        notify_durable_orchestrator()
         return DurableControlResult(
             command=command,
             idempotent_identity_confirmed=str(command.get("command_id")) == spec.command_id,
@@ -216,7 +219,6 @@ class DurableMultiAlphaControlService:
         does not poll the event table every orchestrator cycle.
         """
 
-        self._repository.preflight_p0_2_schema(raise_on_error=True)
         command = self._repository.claim_next_command(
             owner_id=owner_id,
             lease_seconds=lease_seconds,

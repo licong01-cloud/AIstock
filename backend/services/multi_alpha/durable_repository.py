@@ -2595,6 +2595,216 @@ class MultiAlphaDurableRepository:
         )
         return row
 
+    def has_due_orchestrator_work(
+        self,
+        *,
+        p0_2_schema_ready: bool,
+        remote_poll_seconds: int,
+        archive_enabled: bool,
+        excluded_recent_attempt_ids: Sequence[str] = (),
+    ) -> bool:
+        """Return one aggregate, read-only due-work decision.
+
+        This is the only PostgreSQL operation performed by an idle worker on a
+        safety sweep.  Optional P0-2 tables are deliberately omitted from the
+        SQL text until their schema preflight succeeds, so staged deployments
+        keep the existing P0-1B path fail-closed without parser-time failures.
+        """
+
+        if not 60 <= int(remote_poll_seconds) <= 3600:
+            raise MultiAlphaDurableRepositoryError(
+                "durable due-work remote poll interval is invalid",
+                reason_code="multi_alpha_invalid_contract_value",
+                context={"remote_poll_seconds": remote_poll_seconds},
+            )
+        params: list[Any] = [
+            list(excluded_recent_attempt_ids),
+            int(remote_poll_seconds),
+            list(TERMINAL_CHILD_STATUSES),
+            int(remote_poll_seconds),
+        ]
+        attempt_execution_predicate = ""
+        p0_2_due_sql = ""
+        if p0_2_schema_ready:
+            attempt_execution_predicate = "AND attempt.execution_kind = 'remote_execution'"
+            p0_2_due_sql = """
+                OR EXISTS (
+                    SELECT 1
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run AS pause_run
+                    WHERE pause_run.status = 'pause_requested'
+                      AND (
+                          pause_run.owner_id IS NULL
+                          OR pause_run.lease_expires_at IS NULL
+                          OR pause_run.lease_expires_at < clock_timestamp()
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM strategy_pkg.multi_alpha_combine_backtest_child AS materializing_child
+                          WHERE materializing_child.run_id = pause_run.id
+                            AND materializing_child.status = 'materializing'
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS active_attempt
+                          WHERE active_attempt.run_id = pause_run.id
+                            AND active_attempt.status IN ('submitting', 'running', 'reconciling')
+                      )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM strategy_pkg.multi_alpha_combine_backtest_command AS command
+                    WHERE command.status IN ('accepted', 'applying', 'reconciling')
+                      AND command.next_delivery_at <= clock_timestamp()
+                      AND (
+                          command.status <> 'reconciling'
+                          OR command.updated_at <= clock_timestamp() - (%s::int * INTERVAL '1 second')
+                      )
+                      AND (
+                          command.owner_id IS NULL
+                          OR command.lease_expires_at IS NULL
+                          OR command.lease_expires_at < clock_timestamp()
+                      )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM strategy_pkg.multi_alpha_combine_backtest_cancel_delivery AS delivery
+                    WHERE delivery.status IN ('pending', 'sending', 'reconciling')
+                      AND delivery.next_delivery_at <= clock_timestamp()
+                      AND (
+                          delivery.owner_id IS NULL
+                          OR delivery.lease_expires_at IS NULL
+                          OR delivery.lease_expires_at < clock_timestamp()
+                      )
+                )
+            """
+            params.append(int(remote_poll_seconds))
+        archive_due_sql = ""
+        if archive_enabled:
+            archive_due_sql = """
+                OR EXISTS (
+                    SELECT 1
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run AS archive_run
+                    WHERE archive_run.status = ANY(%s)
+                      AND archive_run.task_id IS NOT NULL
+                      AND archive_run.request_hash IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM strategy_pkg.multi_alpha_combine_backtest_event AS archive_event
+                          WHERE archive_event.run_id = archive_run.id
+                            AND archive_event.phase IN (
+                                'archive_enqueued',
+                                'archive_duplicate',
+                                'archive_skipped_disabled'
+                            )
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM strategy_pkg.multi_alpha_combine_backtest_event AS archive_error
+                          WHERE archive_error.run_id = archive_run.id
+                            AND archive_error.phase = 'archive_error'
+                            AND archive_error.created_at > clock_timestamp() - (%s::int * INTERVAL '1 second')
+                      )
+                )
+            """
+            params.extend((list(TERMINAL_RUN_STATUSES), int(remote_poll_seconds)))
+        row = self._fetch_one(
+            f"""
+            SELECT (
+                EXISTS (
+                    SELECT 1
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run AS planner_run
+                    WHERE planner_run.status IN ('queued', 'preparing')
+                      AND planner_run.task_id IS NOT NULL
+                      AND planner_run.request_hash IS NOT NULL
+                      AND (
+                          planner_run.owner_id IS NULL
+                          OR planner_run.lease_expires_at IS NULL
+                          OR planner_run.lease_expires_at < clock_timestamp()
+                      )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                    JOIN strategy_pkg.multi_alpha_combine_backtest_child AS child
+                      ON child.child_id = attempt.child_id
+                    JOIN strategy_pkg.multi_alpha_combine_backtest_run AS run
+                      ON run.id = child.run_id
+                    WHERE NOT (attempt.attempt_id = ANY(%s))
+                      {attempt_execution_predicate}
+                      AND (
+                          (
+                              attempt.status = 'queued'
+                              AND run.status IN ('preparing', 'running')
+                          )
+                          OR (
+                              attempt.status IN ('submitting', 'running', 'reconciling')
+                              AND run.status IN (
+                                  'preparing', 'running', 'pause_requested',
+                                  'cancel_requested', 'cancelling'
+                              )
+                              AND (
+                                  attempt.status = 'submitting'
+                                  OR attempt.updated_at <= clock_timestamp() - (%s::int * INTERVAL '1 second')
+                              )
+                          )
+                      )
+                      AND (
+                          attempt.owner_id IS NULL
+                          OR attempt.lease_expires_at IS NULL
+                          OR attempt.lease_expires_at < clock_timestamp()
+                      )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run AS final_run
+                    WHERE final_run.status IN (
+                        'running', 'pause_requested', 'cancel_requested', 'cancelling'
+                    )
+                      AND final_run.task_id IS NOT NULL
+                      AND final_run.request_hash IS NOT NULL
+                      AND (
+                          final_run.owner_id IS NULL
+                          OR final_run.lease_expires_at IS NULL
+                          OR final_run.lease_expires_at < clock_timestamp()
+                      )
+                      AND (
+                          final_run.status IN ('cancel_requested', 'cancelling')
+                          OR EXISTS (
+                              SELECT 1
+                              FROM strategy_pkg.multi_alpha_combine_backtest_child AS any_child
+                              WHERE any_child.run_id = final_run.id
+                          )
+                      )
+                      AND (
+                          EXISTS (
+                              SELECT 1
+                              FROM strategy_pkg.multi_alpha_combine_backtest_child AS reconciling_child
+                              WHERE reconciling_child.run_id = final_run.id
+                                AND reconciling_child.status = 'reconciling'
+                          )
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM strategy_pkg.multi_alpha_combine_backtest_child AS active_child
+                              WHERE active_child.run_id = final_run.id
+                                AND active_child.status <> ALL(%s)
+                          )
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM strategy_pkg.multi_alpha_combine_backtest_event AS finalize_error
+                          WHERE finalize_error.run_id = final_run.id
+                            AND finalize_error.phase = 'business_finalize_error'
+                            AND finalize_error.created_at > clock_timestamp() - (%s::int * INTERVAL '1 second')
+                      )
+                )
+                {p0_2_due_sql}
+                {archive_due_sql}
+            ) AS has_due_work
+            """,
+            tuple(params),
+        )
+        return bool(row and row.get("has_due_work"))
+
     def claim_next_run(
         self,
         *,
@@ -2660,6 +2870,7 @@ class MultiAlphaDurableRepository:
         *,
         owner_id: str,
         lease_seconds: int,
+        p0_2_schema_ready: bool = True,
         claim_kind: str = "dispatch",
         node_id: str | None = None,
         excluded_attempt_ids: Sequence[str] = (),
@@ -2680,10 +2891,15 @@ class MultiAlphaDurableRepository:
             statuses=tuple(statuses),
             allowed=ATTEMPT_STATUSES,
         )
+        execution_predicate = (
+            "AND attempt.execution_kind = 'remote_execution'"
+            if p0_2_schema_ready
+            else ""
+        )
         with self._connection_provider() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    """
+                    f"""
                     WITH candidate AS (
                         SELECT attempt.attempt_id, child.run_id, run.status AS run_status
                         FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
@@ -2692,7 +2908,7 @@ class MultiAlphaDurableRepository:
                         JOIN strategy_pkg.multi_alpha_combine_backtest_run AS run
                           ON run.id = child.run_id
                         WHERE attempt.status = ANY(%s)
-                          AND attempt.execution_kind = 'remote_execution'
+                          {execution_predicate}
                           AND run.status = ANY(%s)
                           AND run.task_id IS NOT NULL
                           AND run.request_hash IS NOT NULL
@@ -2759,6 +2975,152 @@ class MultiAlphaDurableRepository:
                         "run_status": row.get("run_status"),
                     },
                 )
+                return row
+
+    def observe_next_reconcilable_attempt(
+        self,
+        *,
+        p0_2_schema_ready: bool = True,
+        excluded_attempt_ids: Sequence[str] = (),
+        min_recheck_interval_seconds: int = 60,
+    ) -> dict[str, Any] | None:
+        """Read one due remote attempt without acquiring or mutating it.
+
+        Remote inspection itself is read-only.  The orchestrator acquires an
+        exact row-version-fenced lease only after the observation requires a
+        durable state change.  This keeps unchanged observations at zero DML
+        while preserving single-writer semantics for every mutation.
+        """
+
+        bounded_interval = int(min_recheck_interval_seconds)
+        if not 60 <= bounded_interval <= 3600:
+            raise MultiAlphaDurableRepositoryError(
+                "remote observation interval is invalid",
+                reason_code="multi_alpha_invalid_contract_value",
+                context={"min_recheck_interval_seconds": min_recheck_interval_seconds},
+            )
+        execution_predicate = (
+            "AND attempt.execution_kind = 'remote_execution'"
+            if p0_2_schema_ready
+            else ""
+        )
+        return self._fetch_one(
+            f"""
+            SELECT attempt.*, child.run_id, run.status AS run_status
+            FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+            JOIN strategy_pkg.multi_alpha_combine_backtest_child AS child
+              ON child.child_id = attempt.child_id
+            JOIN strategy_pkg.multi_alpha_combine_backtest_run AS run
+              ON run.id = child.run_id
+            WHERE attempt.status IN ('submitting', 'running', 'reconciling')
+              {execution_predicate}
+              AND run.status IN (
+                  'preparing', 'running', 'pause_requested',
+                  'cancel_requested', 'cancelling'
+              )
+              AND NOT (attempt.attempt_id = ANY(%s))
+              AND (
+                  attempt.status = 'submitting'
+                  OR attempt.updated_at <= clock_timestamp() - (%s::int * INTERVAL '1 second')
+              )
+              AND (
+                  attempt.owner_id IS NULL
+                  OR attempt.lease_expires_at IS NULL
+                  OR attempt.lease_expires_at < clock_timestamp()
+              )
+            ORDER BY attempt.queued_at, attempt.attempt_id
+            LIMIT 1
+            """,
+            (list(excluded_attempt_ids), bounded_interval),
+        )
+
+    def claim_observed_attempt(
+        self,
+        attempt_id: str,
+        *,
+        p0_2_schema_ready: bool = True,
+        expected_row_version: int,
+        owner_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        """Acquire exactly the row that produced a read-only observation.
+
+        A concurrent worker changing or claiming the row makes this return
+        ``None``; the stale observation is then discarded without side effects.
+        """
+
+        self._validate_claim_inputs(
+            owner_id=owner_id,
+            lease_seconds=lease_seconds,
+            statuses=("submitting", "running", "reconciling"),
+            allowed=ATTEMPT_STATUSES,
+        )
+        execution_predicate = (
+            "AND attempt.execution_kind = 'remote_execution'"
+            if p0_2_schema_ready
+            else ""
+        )
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    WITH candidate AS (
+                        SELECT attempt.attempt_id, child.run_id
+                        FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                        JOIN strategy_pkg.multi_alpha_combine_backtest_child AS child
+                          ON child.child_id = attempt.child_id
+                        JOIN strategy_pkg.multi_alpha_combine_backtest_run AS run
+                          ON run.id = child.run_id
+                        WHERE attempt.attempt_id = %s
+                          AND attempt.row_version = %s
+                          AND attempt.status IN ('submitting', 'running', 'reconciling')
+                          {execution_predicate}
+                          AND (
+                              attempt.owner_id IS NULL
+                              OR attempt.lease_expires_at IS NULL
+                              OR attempt.lease_expires_at < clock_timestamp()
+                          )
+                          AND run.status IN (
+                              'preparing', 'running', 'pause_requested',
+                              'cancel_requested', 'cancelling'
+                          )
+                        FOR UPDATE OF attempt SKIP LOCKED
+                    )
+                    UPDATE strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                    SET owner_id = %s,
+                        fencing_token = attempt.fencing_token + 1,
+                        lease_expires_at = clock_timestamp() + (%s * INTERVAL '1 second'),
+                        heartbeat_at = clock_timestamp(),
+                        row_version = attempt.row_version + 1,
+                        updated_at = NOW()
+                    FROM candidate
+                    WHERE attempt.attempt_id = candidate.attempt_id
+                    RETURNING attempt.*, candidate.run_id AS parent_run_id
+                    """,
+                    (
+                        attempt_id,
+                        int(expected_row_version),
+                        owner_id,
+                        lease_seconds,
+                    ),
+                )
+                claimed = cur.fetchone()
+                if claimed is None:
+                    return None
+                row = dict(claimed)
+                parent_run_id = str(row.pop("parent_run_id"))
+                persisted_run_id = str(row.get("run_id") or "")
+                if persisted_run_id and persisted_run_id != parent_run_id:
+                    raise MultiAlphaDurableRepositoryError(
+                        "attempt parent run identity changed during snapshot claim",
+                        reason_code="multi_alpha_attempt_lineage_conflict",
+                        context={
+                            "attempt_id": attempt_id,
+                            "persisted_run_id": persisted_run_id,
+                            "parent_run_id": parent_run_id,
+                        },
+                    )
+                row["run_id"] = parent_run_id
                 return row
 
     def claim_next_command(
