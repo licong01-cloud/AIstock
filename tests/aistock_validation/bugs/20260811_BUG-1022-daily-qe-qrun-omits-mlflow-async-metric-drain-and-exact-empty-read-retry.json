@@ -3,7 +3,9 @@
   "allowed_write_scope": [
     "scripts/qrun_limit.py",
     "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260811_BUG-1022-daily-qe-qrun-omits-mlflow-async-metric-drain-and-exact-empty-read-retry.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -29,6 +31,12 @@
       "actor": "codex",
       "note": "Daily qrun now installs the byte-equivalent minute-runner MLflow async-write barrier and exact empty-metric retry immediately after qlib.init and before task_train. The shared dual-runner matrix covers transient exact race, unrelated/missing errors, exhaustion, barrier timeout, dead writer before enqueue, and install order. No experiment, retraining, process control, DDL/DML, dependency install, fixed unconditional sleep, error swallowing, or zero substitution occurred. Second-round review found P0/P1/P2=0 and all four DESIGN-COMPLIANCE-001 items passing.",
       "timestamp": "2026-08-11T09:45:00Z"
+    },
+    {
+      "action": "scope_expanded_for_ci_ownership_mapping",
+      "actor": "codex",
+      "note": "PR #3283 CI failed closed because the exact qrun MLflow retry test was not mapped by the CI ownership catalog. Scope expands only to the ownership catalog and its classifier regression test so the test follows the same qe_sector_risk_overlay plan as both qrun scripts; no broad wildcard, workflow gate bypass, runtime process control, or business logic change is authorized.",
+      "timestamp": "2026-08-11T10:15:00Z"
     }
   ],
   "evidence_uris": [
@@ -40,12 +48,16 @@
     "changed_files": [
       "scripts/qrun_limit.py",
       "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
       "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
     ],
     "ownership": {
       "changed_files": [
         "scripts/qrun_limit.py",
         "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
         "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
       ],
       "impacted_modules": [
@@ -95,6 +107,8 @@
       "suggested_scope": [
         "scripts/qrun_limit.py",
         "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
         "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
       ],
       "unmatched_files": []
@@ -103,6 +117,8 @@
     "scope_files": [
       "scripts/qrun_limit.py",
       "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
       "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
     ]
   },
@@ -162,6 +178,10 @@
     "rtk pytest -q backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 20 passed",
     "python -m ruff check scripts/qrun_limit.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> passed",
     "python -m py_compile scripts/qrun_limit.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> passed",
+    "rtk pytest -q backend/tests/scripts/test_ci_change_classifier.py -> 54 passed",
+    "python scripts/ci_change_classifier.py with the 6 actual changed files -> workflow_gate=passed unmapped_code_files=[] qe_sector_risk_overlay_backend selected",
+    "rtk nox -s validation_catalog_integrity -> 7 passed and catalog_integrity state=passed findings=0",
+    "rtk nox -s guardrail_changed_files on 3 staged CI-mapping files -> files=3 findings=0 blocking=0 mapped=3",
     "python scripts/aistock_feature_workflow.py validate --design docs/analysis/sector_rotation_factors_develop_spec_20260710.md --tier F2 -> PASS 30/30 warnings=0",
     "git diff --check -> passed",
     "DESIGN-COMPLIANCE-001 second-round source review -> PASS all four items"
