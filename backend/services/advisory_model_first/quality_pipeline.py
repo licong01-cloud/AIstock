@@ -190,7 +190,7 @@ def run_quality_stage_a(request_path: str | Path) -> QualityWinnerReceiptV1:
     peak_rss_bytes = _peak_rss_bytes()
     if peak_rss_bytes > request.resource_max_rss_bytes:
         raise AdvisoryModelFirstError(
-            "M5A tournament exceeded the approved RSS limit",
+            "M5A tournament exceeded the frozen RSS limit",
             reason_code="ADVISORY_MODEL_TRAINING_MEMORY_LIMIT_EXCEEDED",
             context={"peak_rss_bytes": peak_rss_bytes, "limit_bytes": request.resource_max_rss_bytes},
         )
@@ -773,7 +773,7 @@ def _peak_rss_bytes() -> int:
         import resource
     except ModuleNotFoundError as exc:
         raise AdvisoryModelFirstError(
-            "M5A resource accounting requires the approved WSL training environment",
+            "M5A resource accounting requires the frozen WSL training environment",
             reason_code="ADVISORY_MODEL_TRAINING_REQUIRES_WSL",
         ) from exc
     value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
