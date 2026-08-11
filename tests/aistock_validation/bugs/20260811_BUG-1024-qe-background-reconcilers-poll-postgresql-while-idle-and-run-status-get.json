@@ -409,7 +409,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/experiments?limit=1",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "python fresh process imported qe_reconciliation_coordinator at e78a1bd9 and asserted legacy disable flags, 123-second interval, batch size 17, and 60-second safety contract -> passed, exit 0"
+      "python fresh process imported qe_reconciliation_coordinator at e78a1bd9 and asserted legacy disable flags, 123-second interval, batch size 17, and 60-second safety contract -> passed, exit 0",
+      "Fresh Python process imported QEReconciliationConfig and QEReconciliationCoordinator on the final branch; all family intervals are at least 60 seconds and config construction passed; no user backend or experiment process was controlled"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
