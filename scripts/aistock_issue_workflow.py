@@ -24,6 +24,35 @@ from typing import Any, Iterable
 
 import yaml
 
+try:
+    from scripts.aistock_bug_id_allocator import (
+        FINGERPRINT_INDEX_VERSION,
+        BugIdLockError,
+        GlobalBugIdLock,
+        bootstrap_fingerprint_index,
+        compact_terminal_reservations as compact_terminal_reservations,
+        find_matching_reservation,
+        read_allocator_state,
+        read_reservations,
+        remove_fingerprint_index,
+        write_fingerprint_index,
+        write_allocator_state,
+    )
+except ModuleNotFoundError:  # Direct execution: python scripts/aistock_issue_workflow.py
+    from aistock_bug_id_allocator import (
+        FINGERPRINT_INDEX_VERSION,
+        BugIdLockError,
+        GlobalBugIdLock,
+        bootstrap_fingerprint_index,
+        compact_terminal_reservations as compact_terminal_reservations,
+        find_matching_reservation,
+        read_allocator_state,
+        read_reservations,
+        remove_fingerprint_index,
+        write_fingerprint_index,
+        write_allocator_state,
+    )
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUGS_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
@@ -1643,6 +1672,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/services/hmm_risk/b3_mixed_dimension.py",
         "backend/services/hmm_risk/b3_training.py",
         "scripts/advisory_short_rebound_batch_b.py",
+        "scripts/aistock_bug_id_allocator.py",
         "scripts/aistock_issue_workflow.py",
         "scripts/issue_flow.py",
         "scripts/aistock_guardrail_scan.py",
@@ -1654,9 +1684,12 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "scripts/hmm_risk/prepare_state_model_set.py",
         "noxfile.py",
     }
+    known_client_files = {
+        "scripts/aistock_mcp_server.py",
+    }
     for path in normalized:
         lower = path.lower()
-        if lower.startswith((".codex/", ".claude/")):
+        if path in known_client_files or lower.startswith((".codex/", ".claude/")):
             impacts.add("client")
             continue
         if path in known_non_runtime_files or lower.startswith(known_non_runtime_prefixes):
@@ -3048,6 +3081,11 @@ def _bug_id_reservation_root() -> Path:
     return Path(override) if override else _default_worktree_root() / ".locks" / "bug-id-reservations"
 
 
+def _bug_id_state_path() -> Path:
+    override = os.environ.get("AISTOCK_BUG_ID_STATE_PATH")
+    return Path(override) if override else _default_worktree_root() / ".locks" / "bug-id-state.json"
+
+
 def _scan_bug_id_reservations() -> list[dict[str, Any]]:
     reservation_root = _bug_id_reservation_root()
     if not reservation_root.exists():
@@ -3119,6 +3157,55 @@ def _scan_bug_registry_ids(
                     }
                 )
     return sources
+
+
+def _fast_bug_id_sources(
+    root: Path | None = None,
+    *,
+    tolerate_unrelated_allocator_errors: bool = True,
+    warnings: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Use one host-wide counter plus reservation filenames on the normal path.
+
+    A missing state file is a one-time migration case.  That bootstrap is
+    bounded to the invocation/current/canonical registries and never visits
+    every worktree or performs network I/O.
+    """
+
+    state_path = _bug_id_state_path()
+    try:
+        state = read_allocator_state(state_path)
+    except BugIdLockError as exc:
+        raise WorkflowError(str(exc)) from exc
+    sources: list[dict[str, Any]] = []
+    bootstrapped = state is None
+    fingerprint_index_bootstrap_required = (
+        state is None
+        or int(state.get("fingerprint_index_version") or 0) != FINGERPRINT_INDEX_VERSION
+    )
+    if state is None:
+        sources.extend(
+            _scan_bug_registry_ids(
+                root,
+                tolerate_unrelated_allocator_errors=tolerate_unrelated_allocator_errors,
+                warnings=warnings,
+            )
+        )
+        # Reservation filenames participate only in the one-time high-water
+        # bootstrap. They are not opened on the steady-state path.
+        sources.extend(_scan_bug_id_reservations())
+    else:
+        number = int(state.get("last_allocated") or 0)
+        if number > 0:
+            sources.append(
+                {
+                    "bug_id": f"BUG-{number:03d}",
+                    "number": number,
+                    "kind": "allocator_state",
+                    "source": str(state_path),
+                }
+            )
+    return sources, fingerprint_index_bootstrap_required or bootstrapped
 
 
 def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[dict[str, Any]], list[str]]:
@@ -3350,7 +3437,7 @@ def _build_bug_id_allocation_report(
         number = int(source.get("number") or 0)
         if number > max_by_kind.get(kind, 0):
             max_by_kind[kind] = number
-    allocator_max = max_by_kind.get("allocator", 0)
+    allocator_max = max(max_by_kind.get("allocator", 0), max_by_kind.get("allocator_state", 0))
     observed_max = max(
         max_by_kind.get("bug_json", 0),
         max_by_kind.get("reservation", 0),
@@ -3371,6 +3458,7 @@ def _build_bug_id_allocation_report(
         "github_scanned": github_scanned,
         "max_by_kind": max_by_kind,
         "allocator_max_number": allocator_max,
+        "allocator_state_max_number": max_by_kind.get("allocator_state", 0),
         "observed_max_number": observed_max,
         "github_max_number": max_by_kind.get("github_issue", 0),
     }
@@ -3384,12 +3472,11 @@ def _bug_id_allocation_report(
     tolerate_unrelated_allocator_errors: bool = True,
 ) -> dict[str, Any]:
     warnings: list[str] = []
-    sources = _scan_bug_registry_ids(
+    sources, bootstrapped = _fast_bug_id_sources(
         root,
         tolerate_unrelated_allocator_errors=tolerate_unrelated_allocator_errors,
         warnings=warnings,
     )
-    sources.extend(_scan_bug_id_reservations())
     github_lookup_mode = "not_requested"
     if include_github:
         local_report = _build_bug_id_allocation_report(sources, warnings, github_scanned=False)
@@ -3403,6 +3490,7 @@ def _bug_id_allocation_report(
         github_lookup_mode = "exact_candidate"
     report = _build_bug_id_allocation_report(sources, warnings, github_scanned=False)
     report["github_lookup_mode"] = github_lookup_mode
+    report["allocator_state_bootstrap_required"] = bootstrapped
     return report
 
 
@@ -3412,6 +3500,8 @@ def _bug_id_allocation_summary(report: dict[str, Any]) -> dict[str, Any]:
         "max_number": report.get("max_number"),
         "next_number": report.get("next_number"),
         "allocator_max_number": report.get("allocator_max_number"),
+        "allocator_state_max_number": report.get("allocator_state_max_number"),
+        "allocator_state_bootstrap_required": report.get("allocator_state_bootstrap_required"),
         "observed_max_number": report.get("observed_max_number"),
         "github_max_number": report.get("github_max_number"),
         "github_scanned": report.get("github_scanned"),
@@ -3473,6 +3563,10 @@ def _update_bug_id_reservation(path: Path | None, **updates: Any) -> None:
     payload.update({key: value for key, value in updates.items() if value is not None})
     payload["updated_at"] = _utc_now()
     _write_json(path, payload)
+    write_fingerprint_index(
+        _bug_id_reservation_root(),
+        {**payload, "reservation_path": str(path)},
+    )
 
 
 def _reservation_can_resume(
@@ -3506,37 +3600,41 @@ def _matching_automatic_reservation(
     *,
     reservation_title: str | None,
     reservation_fingerprint: str | None,
-    limit: int = 32,
 ) -> tuple[Path, dict[str, Any]] | None:
     if not reservation_fingerprint:
         return None
     root = _bug_id_reservation_root()
-    if not root.exists():
+    payload = find_matching_reservation(root, reservation_fingerprint)
+    if payload is None:
         return None
-    paths = sorted(
-        root.glob("BUG-*.json"),
-        key=lambda path: _bug_id_number(path.name) or 0,
-        reverse=True,
-    )[:limit]
     resumable_statuses = {
         "github_preflight_unknown",
         "github_create_outcome_unknown",
         "github_issue_confirmed",
         "github_issue_confirmed_local_incomplete",
     }
-    for path in paths:
-        try:
-            payload = _load_json(path)
-        except (OSError, json.JSONDecodeError, WorkflowError):
-            continue
-        if str(payload.get("status") or "") not in resumable_statuses:
-            continue
-        if str(payload.get("fingerprint") or "") != reservation_fingerprint:
-            continue
-        if _normalized_github_bug_subject(str(payload.get("title") or "")) != _normalized_github_bug_subject(reservation_title):
-            continue
-        return path, payload
-    return None
+    if str(payload.get("status") or "") not in resumable_statuses:
+        return None
+    if _normalized_github_bug_subject(str(payload.get("title") or "")) != _normalized_github_bug_subject(reservation_title):
+        return None
+    return Path(str(payload["reservation_path"])), payload
+
+
+def _fingerprint_bootstrap_records(root: Path | None) -> list[dict[str, Any]]:
+    """Read bounded current/canonical records for a one-time index migration."""
+
+    records: list[dict[str, Any]] = []
+    for bugs_root in _bug_id_scan_roots(root):
+        for path in bugs_root.glob("*.json"):
+            try:
+                payload = _load_json(path)
+            except (OSError, json.JSONDecodeError, WorkflowError):
+                continue
+            if not str(payload.get("fingerprint") or "").strip():
+                continue
+            records.append({**payload, "registry_path": str(path)})
+    records.extend(read_reservations(_bug_id_reservation_root()))
+    return records
 
 
 def _reserve_bug_id(
@@ -3573,14 +3671,14 @@ def _reserve_bug_id(
             )
 
     resumed_status: str | None = None
-    with _GlobalBugIdAllocatorLock():
+    allocation_lock = _GlobalBugIdAllocatorLock()
+    with allocation_lock:
         local_warnings: list[str] = []
-        sources = _scan_bug_registry_ids(
+        sources, allocator_bootstrap_required = _fast_bug_id_sources(
             root,
             tolerate_unrelated_allocator_errors=True,
             warnings=local_warnings,
         )
-        sources.extend(_scan_bug_id_reservations())
         if linked_issue is not None:
             sources.append(linked_issue)
         report = _build_bug_id_allocation_report(
@@ -3591,10 +3689,44 @@ def _reserve_bug_id(
         report["github_lookup_mode"] = "linked_issue_number" if direct_linked_issue else (
             "exact_candidate" if include_github else "not_requested"
         )
+        if allocator_bootstrap_required:
+            report["fingerprint_index_bootstrap_count"] = bootstrap_fingerprint_index(
+                _bug_id_reservation_root(),
+                _fingerprint_bootstrap_records(root),
+            )
+            try:
+                write_allocator_state(
+                    _bug_id_state_path(),
+                    last_allocated=int(report.get("max_number") or 0),
+                    updated_at=_utc_now(),
+                    updated_by="aistock_issue_workflow.py/bootstrap",
+                    fingerprint_index_version=FINGERPRINT_INDEX_VERSION,
+                )
+            except BugIdLockError as exc:
+                raise WorkflowError(str(exc)) from exc
+        try:
+            matching_reservation = find_matching_reservation(
+                _bug_id_reservation_root(),
+                reservation_fingerprint,
+            )
+        except BugIdLockError as exc:
+            raise WorkflowError(str(exc)) from exc
         resumed_automatic = None if bug_id else _matching_automatic_reservation(
             reservation_title=reservation_title,
             reservation_fingerprint=reservation_fingerprint,
         )
+        if not bug_id and matching_reservation is not None and resumed_automatic is None:
+            existing_title = _normalized_github_bug_subject(str(matching_reservation.get("title") or ""))
+            expected_title = _normalized_github_bug_subject(reservation_title)
+            if not expected_title or existing_title == expected_title:
+                existing_id = matching_reservation.get("bug_id") or Path(
+                    str(matching_reservation.get("reservation_path") or "")
+                ).stem
+                existing_status = matching_reservation.get("status") or "unknown"
+                raise WorkflowError(
+                    f"matching BUG registration already exists: {existing_id} status={existing_status}; "
+                    "resume the existing intake instead of allocating another id"
+                )
         if resumed_automatic is not None:
             reservation_path, existing_reservation = resumed_automatic
             canonical_bug_id = str(existing_reservation.get("bug_id") or reservation_path.stem).upper()
@@ -3609,6 +3741,12 @@ def _reserve_bug_id(
         assert number is not None
         reservation_root = _bug_id_reservation_root()
         reservation_path = reservation_root / f"{canonical_bug_id}.json"
+        if not bug_id and existing_reservation is None:
+            while reservation_path.exists():
+                number += 1
+                canonical_bug_id = f"BUG-{number:03d}"
+                reservation_path = reservation_root / f"{canonical_bug_id}.json"
+            report["next_number"] = number
         if existing_reservation is None and reservation_path.exists():
             existing_reservation = _load_json(reservation_path)
         reusable_reservation = bool(
@@ -3634,18 +3772,20 @@ def _reserve_bug_id(
         if existing_reservation is not None and not (reusable_reservation or automatic_resume):
             raise WorkflowError(f"{canonical_bug_id} is already reserved: {reservation_path}")
         if existing_reservation is None:
-            _write_json(
-                reservation_path,
-                {
-                    "schema_version": "aistock_bug_id_reservation_v1",
-                    "bug_id": canonical_bug_id,
-                    "reserved_at": _utc_now(),
-                    "reserved_by": "aistock_issue_workflow.py",
-                    "root": str((root or REPO_ROOT).resolve()),
-                    "status": "reserved",
-                    "title": reservation_title,
-                    "fingerprint": reservation_fingerprint,
-                },
+            reservation_payload = {
+                "schema_version": "aistock_bug_id_reservation_v1",
+                "bug_id": canonical_bug_id,
+                "reserved_at": _utc_now(),
+                "reserved_by": "aistock_issue_workflow.py",
+                "root": str((root or REPO_ROOT).resolve()),
+                "status": "reserved",
+                "title": reservation_title,
+                "fingerprint": reservation_fingerprint,
+            }
+            _write_json(reservation_path, reservation_payload)
+            write_fingerprint_index(
+                reservation_root,
+                {**reservation_payload, "reservation_path": str(reservation_path)},
             )
         elif not automatic_resume:
             _update_bug_id_reservation(
@@ -3655,6 +3795,21 @@ def _reserve_bug_id(
                 title=reservation_title,
                 fingerprint=reservation_fingerprint,
             )
+        try:
+            write_allocator_state(
+                _bug_id_state_path(),
+                last_allocated=max(int(report.get("max_number") or 0), int(number)),
+                updated_at=_utc_now(),
+                updated_by="aistock_issue_workflow.py",
+                fingerprint_index_version=FINGERPRINT_INDEX_VERSION,
+            )
+        except BugIdLockError as exc:
+            raise WorkflowError(str(exc)) from exc
+        report["allocator_state_bootstrap_required"] = allocator_bootstrap_required
+        report["allocator_state_path"] = str(_bug_id_state_path())
+
+    telemetry = getattr(allocation_lock, "telemetry", None)
+    report["allocator_lock"] = telemetry() if callable(telemetry) else {"wait_ms": None, "hold_ms": None}
 
     if direct_linked_issue or not include_github:
         return canonical_bug_id, number, report, reservation_path
@@ -3703,6 +3858,11 @@ def _reserve_bug_id(
             github_issue_url=github_issue.get("source"),
             remote_title=github_issue.get("title"),
         )
+        remove_fingerprint_index(
+            _bug_id_reservation_root(),
+            reservation_fingerprint,
+            bug_id=canonical_bug_id,
+        )
         if bug_id:
             raise WorkflowError(f"{canonical_bug_id} already exists on GitHub with a different title or state")
         return _reserve_bug_id(
@@ -3740,10 +3900,20 @@ def _reserve_bug_id(
 def _release_bug_id_reservation(path: Path | None) -> None:
     if not path:
         return
+    payload: dict[str, Any] = {}
+    try:
+        payload = _load_json(path)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, WorkflowError):
+        pass
     try:
         path.unlink()
     except FileNotFoundError:
         pass
+    remove_fingerprint_index(
+        _bug_id_reservation_root(),
+        payload.get("fingerprint"),
+        bug_id=str(payload.get("bug_id") or path.stem),
+    )
 
 
 def _process_id_is_alive(pid: int) -> bool | None:
@@ -3776,50 +3946,35 @@ def _process_id_is_alive(pid: int) -> bool | None:
     return True
 
 
-def _reclaim_stale_allocator_lock(path: Path, *, invalid_metadata_max_age_seconds: float = 1800.0) -> bool:
-    try:
-        original = path.read_text(encoding="ascii", errors="replace")
-        first_line = original.splitlines()[0].strip() if original.splitlines() else ""
-        pid = int(first_line) if first_line.isdigit() else None
-        alive = _process_id_is_alive(pid) if pid is not None else None
-        age_seconds = max(0.0, time.time() - path.stat().st_mtime)
-        stale = alive is False or (pid is None and age_seconds >= invalid_metadata_max_age_seconds)
-        if not stale or path.read_text(encoding="ascii", errors="replace") != original:
-            return False
-        path.unlink()
-        return True
-    except (FileNotFoundError, OSError, ValueError):
-        return False
-
-
 class _GlobalBugIdAllocatorLock:
     def __init__(self, *, timeout: float = 30.0) -> None:
         self.timeout = timeout
         self.path = Path(os.environ.get("AISTOCK_BUG_ID_LOCK_PATH") or (_default_worktree_root() / ".locks" / "bug-id-allocator.lock"))
-        self._fd: int | None = None
+        self._delegate: GlobalBugIdLock | None = None
 
     def __enter__(self) -> "_GlobalBugIdAllocatorLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + self.timeout
-        while True:
-            try:
-                self._fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(self._fd, f"{os.getpid()}\n{_utc_now()}\n".encode("ascii"))
-                return self
-            except FileExistsError as exc:
-                if _reclaim_stale_allocator_lock(self.path):
-                    continue
-                if time.monotonic() >= deadline:
-                    raise WorkflowError(f"timed out waiting for global BUG id allocator lock: {self.path}") from exc
-                time.sleep(0.1)
-
-    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
-        if self._fd is not None:
-            os.close(self._fd)
+        self._delegate = GlobalBugIdLock(
+            self.path,
+            timeout=self.timeout,
+            process_is_alive=_process_id_is_alive,
+        )
         try:
-            self.path.unlink()
-        except FileNotFoundError:
-            pass
+            self._delegate.__enter__()
+        except BugIdLockError as exc:
+            raise WorkflowError(str(exc)) from exc
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._delegate is None:
+            return
+        try:
+            self._delegate.__exit__(exc_type, exc, tb)
+        except BugIdLockError as lock_exc:
+            if exc_type is None:
+                raise WorkflowError(str(lock_exc)) from lock_exc
+
+    def telemetry(self) -> dict[str, float | None]:
+        return self._delegate.telemetry() if self._delegate is not None else {"wait_ms": None, "hold_ms": None}
 
 
 def _next_bug_id(

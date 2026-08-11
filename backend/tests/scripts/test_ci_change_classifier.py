@@ -406,6 +406,7 @@ def test_feature_workflow_files_use_focused_workflow_lane(tmp_path: Path) -> Non
 def test_validation_mcp_issue_files_use_focused_workflow_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
+            "scripts/aistock_bug_id_allocator.py",
             "scripts/aistock_issue_workflow.py",
             "backend/tests/scripts/test_aistock_issue_workflow.py",
             "scripts/aistock_mcp_server.py",

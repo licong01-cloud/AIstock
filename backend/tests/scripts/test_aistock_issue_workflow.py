@@ -570,6 +570,7 @@ def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("AISTOCK_CANONICAL_ROOT", str(tmp_path))
     monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
+    monkeypatch.setenv("AISTOCK_BUG_ID_STATE_PATH", str(tmp_path / "bug-id-state.json"))
     monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
     monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
     monkeypatch.setattr(workflow, "_github_bug_issue_by_number", lambda _issue_number, **_kwargs: (None, []))
@@ -1170,6 +1171,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
 
     dependency = workflow._classify_runtime_impact(["requirements-dev.txt"], root=isolated_workflow_root)
     client = workflow._classify_runtime_impact([".codex/skills/fix-aistock-issue/SKILL.md"], root=isolated_workflow_root)
+    mcp_client = workflow._classify_runtime_impact(["scripts/aistock_mcp_server.py"], root=isolated_workflow_root)
+    allocator_tool = workflow._classify_runtime_impact(["scripts/aistock_bug_id_allocator.py"], root=isolated_workflow_root)
     backend_test = workflow._classify_runtime_impact(
         ["backend/tests/scripts/test_aistock_issue_workflow.py"],
         root=isolated_workflow_root,
@@ -1222,6 +1225,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert dependency["runtime_impact"] == "backend"
     assert dependency["target_ids"] == ["backend-main"]
     assert client["runtime_impact"] == "client"
+    assert mcp_client["runtime_impact"] == "client"
+    assert allocator_tool["runtime_impact"] == "none"
     assert backend_test["runtime_impact"] == "none"
     assert offline_hmm_preparation["runtime_impact"] == "none"
     assert offline_hmm_preparation["runtime_files"] == []
@@ -5586,9 +5591,197 @@ def test_global_allocator_lock_reclaims_dead_owner(
 
     with workflow._GlobalBugIdAllocatorLock(timeout=0.1):
         assert lock_path.exists()
-        assert lock_path.read_text(encoding="ascii").splitlines()[0] == str(os.getpid())
+        owner = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert owner["schema_version"] == "aistock_bug_id_lock_v2"
+        assert owner["pid"] == os.getpid()
+        assert owner["thread_id"]
+        assert owner["token"]
 
     assert not lock_path.exists()
+
+
+def test_global_allocator_lock_cleans_failed_owner_write(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_path = isolated_workflow_root / "global-allocator.lock"
+    monkeypatch.setenv("AISTOCK_BUG_ID_LOCK_PATH", str(lock_path))
+    monkeypatch.setattr(workflow.os, "write", lambda _fd, _payload: 0)
+
+    with pytest.raises(workflow.WorkflowError, match="failed to initialize BUG id allocator lock"):
+        with workflow._GlobalBugIdAllocatorLock(timeout=0.1):
+            pass
+
+    assert not lock_path.exists()
+
+
+def test_reserve_bug_id_blocks_matching_active_fingerprint(
+    isolated_workflow_root: Path,
+) -> None:
+    reservation = isolated_workflow_root / "bug-id-reservations" / "BUG-133.json"
+    _write_json(
+        reservation,
+        {
+            "schema_version": "aistock_bug_id_reservation_v1",
+            "bug_id": "BUG-133",
+            "status": "reserved",
+            "title": "Concurrent logical bug",
+            "fingerprint": "same-fingerprint",
+        },
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="resume the existing intake"):
+        workflow._reserve_bug_id(
+            isolated_workflow_root,
+            bug_id=None,
+            include_github=False,
+            github_required=False,
+            allowed_github_issue_number=None,
+            reservation_title="Concurrent logical bug",
+            reservation_fingerprint="same-fingerprint",
+        )
+
+
+def test_terminal_reservation_compaction_preserves_unknown_outcome(
+    isolated_workflow_root: Path,
+) -> None:
+    root = isolated_workflow_root / "bug-id-reservations"
+    registered = root / "BUG-133.json"
+    unknown = root / "BUG-134.json"
+    _write_json(registered, {"bug_id": "BUG-133", "status": "registered"})
+    _write_json(unknown, {"bug_id": "BUG-134", "status": "github_create_outcome_unknown"})
+
+    assert workflow.compact_terminal_reservations(root, {"BUG-133", "BUG-134"}) == []
+    assert registered.exists()
+
+    removed = workflow.compact_terminal_reservations(
+        root,
+        {"BUG-133", "BUG-134"},
+        min_age_seconds=0,
+    )
+
+    assert removed == [str(registered)]
+    assert not registered.exists()
+    assert unknown.exists()
+
+
+def test_allocator_steady_state_does_not_scan_registries_or_reservation_inventory(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow.write_allocator_state(
+        Path(os.environ["AISTOCK_BUG_ID_STATE_PATH"]),
+        last_allocated=300,
+        updated_at="2026-08-11T00:00:00Z",
+        updated_by="pytest",
+        fingerprint_index_version=workflow.FINGERPRINT_INDEX_VERSION,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_scan_bug_registry_ids",
+        lambda *_args, **_kwargs: pytest.fail("steady-state allocation must not scan BUG registries"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_scan_bug_id_reservations",
+        lambda: pytest.fail("steady-state allocation must not enumerate all reservations"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_fingerprint_bootstrap_records",
+        lambda *_args, **_kwargs: pytest.fail("steady-state allocation must not rebuild the fingerprint index"),
+    )
+
+    bug_id, number, report, reservation = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id=None,
+        include_github=False,
+        github_required=False,
+        allowed_github_issue_number=None,
+        reservation_title="Steady-state allocator",
+        reservation_fingerprint="steady-state-fingerprint",
+    )
+    try:
+        assert (bug_id, number) == ("BUG-301", 301)
+        assert report["allocator_state_bootstrap_required"] is False
+        assert report["allocator_lock"]["wait_ms"] is not None
+        assert report["allocator_lock"]["hold_ms"] is not None
+    finally:
+        workflow._release_bug_id_reservation(reservation)
+
+
+def test_allocator_missing_state_bootstraps_once_then_uses_direct_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_json(
+        workflow.BUGS_ROOT / ".bug_id_allocator.json",
+        {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 140},
+    )
+    calls = {"registry": 0, "fingerprints": 0}
+    original_registry_scan = workflow._scan_bug_registry_ids
+    original_fingerprint_records = workflow._fingerprint_bootstrap_records
+
+    def registry_scan(*args: object, **kwargs: object):
+        calls["registry"] += 1
+        return original_registry_scan(*args, **kwargs)
+
+    def fingerprint_records(*args: object, **kwargs: object):
+        calls["fingerprints"] += 1
+        return original_fingerprint_records(*args, **kwargs)
+
+    monkeypatch.setattr(workflow, "_scan_bug_registry_ids", registry_scan)
+    monkeypatch.setattr(workflow, "_fingerprint_bootstrap_records", fingerprint_records)
+
+    first = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id=None,
+        include_github=False,
+        github_required=False,
+        allowed_github_issue_number=None,
+        reservation_title="Bootstrap once",
+        reservation_fingerprint="bootstrap-once-1",
+    )
+    workflow._release_bug_id_reservation(first[3])
+    assert calls == {"registry": 1, "fingerprints": 1}
+
+    second = workflow._reserve_bug_id(
+        isolated_workflow_root,
+        bug_id=None,
+        include_github=False,
+        github_required=False,
+        allowed_github_issue_number=None,
+        reservation_title="No second bootstrap",
+        reservation_fingerprint="bootstrap-once-2",
+    )
+    try:
+        assert second[0] == "BUG-142"
+        assert calls == {"registry": 1, "fingerprints": 1}
+    finally:
+        workflow._release_bug_id_reservation(second[3])
+
+
+def test_legacy_reservation_compaction_only_removes_durable_statusless_record(
+    isolated_workflow_root: Path,
+) -> None:
+    root = isolated_workflow_root / "bug-id-reservations"
+    durable = root / "BUG-150.json"
+    unmatched = root / "BUG-151.json"
+    unknown = root / "BUG-152.json"
+    _write_json(durable, {"bug_id": "BUG-150"})
+    _write_json(unmatched, {"bug_id": "BUG-151"})
+    _write_json(unknown, {"bug_id": "BUG-152", "status": "github_create_outcome_unknown"})
+
+    removed = workflow.compact_terminal_reservations(
+        root,
+        {"BUG-150", "BUG-152"},
+        min_age_seconds=0,
+    )
+
+    assert removed == [str(durable)]
+    assert not durable.exists()
+    assert unmatched.exists()
+    assert unknown.exists()
 
 
 def test_rdagent_release_aftercare_is_part_of_every_client_and_resume_digest() -> None:

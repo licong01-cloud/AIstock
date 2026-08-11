@@ -46,6 +46,7 @@ def mcp_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AISTOCK_CANONICAL_ROOT", str(tmp_path))
     monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
+    monkeypatch.setenv("AISTOCK_BUG_ID_STATE_PATH", str(tmp_path / "bug-id-state.json"))
     monkeypatch.setenv("AISTOCK_VALIDATION_BASE_URL", "http://127.0.0.1/api/v1/validation")
     monkeypatch.setenv("AISTOCK_GITHUB_SKIP_ENV_FILE", "1")
     monkeypatch.setenv("AISTOCK_GITHUB_DISABLE_GH_CLI_TOKEN", "1")
@@ -252,6 +253,59 @@ def test_mcp_allocator_is_unique_under_concurrent_threads(mcp_module):
     assert len(set(bug_ids)) == 8
 
 
+def test_mcp_allocator_steady_state_uses_state_and_exact_candidate_only(
+    mcp_module,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    mcp_module.write_allocator_state(
+        mcp_module._bug_id_state_path(),
+        last_allocated=40,
+        updated_at="2026-08-11T00:00:00Z",
+        updated_by="pytest",
+        fingerprint_index_version=mcp_module.FINGERPRINT_INDEX_VERSION,
+    )
+    monkeypatch.setattr(
+        mcp_module,
+        "_scan_global_bug_ids",
+        lambda **_kwargs: pytest.fail("steady-state MCP allocation must not scan registries"),
+    )
+    monkeypatch.setattr(
+        mcp_module,
+        "_fingerprint_bootstrap_records",
+        lambda: pytest.fail("steady-state MCP allocation must not rebuild the fingerprint index"),
+    )
+
+    assert mcp_module._next_bug_id(
+        reservation_title="MCP steady state",
+        reservation_fingerprint="mcp-steady-state",
+    ) == "BUG-041"
+
+
+def test_mcp_same_fingerprint_concurrent_report_is_deduplicated(mcp_module):
+    def report(_index: int) -> dict[str, Any]:
+        return mcp_module.report_bug(
+            title="Concurrent logical bug",
+            severity="P1",
+            module="validation_mcp",
+            files=["scripts/aistock_mcp_server.py"],
+            reproduce_command="same concurrent reproduce command",
+            expected="one logical BUG",
+            actual="two windows submitted together",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(report, range(8)))
+
+    assert sorted(result["deduplicated"] for result in results) == [False, *([True] * 7)]
+    registry_files = [path for path in mcp_module.BUG_ROOT.glob("*.json") if not path.name.startswith(".")]
+    assert len(registry_files) == 1
+    ids = {
+        result.get("bug_id") or (result.get("existing") or {}).get("bug_id")
+        for result in results
+    }
+    assert ids == {"BUG-001"}
+
+
 def test_mcp_allocator_lock_reclaims_dead_owner(
     mcp_module,
     tmp_path: Path,
@@ -263,7 +317,11 @@ def test_mcp_allocator_lock_reclaims_dead_owner(
     monkeypatch.setattr(mcp_module, "_process_id_is_alive", lambda _pid: False)
 
     with mcp_module._BugIdAllocatorLock():
-        assert lock_path.read_text(encoding="ascii").splitlines()[0] == str(mcp_module.os.getpid())
+        owner = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert owner["schema_version"] == "aistock_bug_id_lock_v2"
+        assert owner["pid"] == mcp_module.os.getpid()
+        assert owner["thread_id"]
+        assert owner["token"]
 
     assert not lock_path.exists()
 
@@ -333,7 +391,7 @@ def test_github_issue_create_blocks_canonical_root_before_allocation_or_github(
 
     monkeypatch.setattr(mcp_module, "_git_toplevel", lambda _path: Path(mcp_module.REPO_ROOT))
     monkeypatch.setattr(mcp_module, "_canonical_root", lambda: Path(mcp_module.REPO_ROOT))
-    monkeypatch.setattr(mcp_module, "_git_branch", lambda _root: "main")
+    monkeypatch.setattr(mcp_module, "_git_branch_from_metadata", lambda _root: "main")
     monkeypatch.setenv("GH_TOKEN", "pytest-token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setattr(mcp_module, "_github_client_factory", FakeGitHubClient)
@@ -728,7 +786,7 @@ def test_update_bug_status_blocks_canonical_root_main(
     path = _write_bug(tmp_path, "BUG-405", status="open")
     monkeypatch.setattr(mcp_module, "_git_toplevel", lambda _path: Path(mcp_module.REPO_ROOT))
     monkeypatch.setattr(mcp_module, "_canonical_root", lambda: Path(mcp_module.REPO_ROOT))
-    monkeypatch.setattr(mcp_module, "_git_branch", lambda _root: "main")
+    monkeypatch.setattr(mcp_module, "_git_branch_from_metadata", lambda _root: "main")
 
     with pytest.raises(RuntimeError, match="canonical root main"):
         mcp_module.update_bug_status("BUG-405", "verified", actor="pytest")
