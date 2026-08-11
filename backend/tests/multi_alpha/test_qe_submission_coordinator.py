@@ -270,6 +270,11 @@ def _source(
 def test_capacity_contract_is_wsl_one_remote_four_and_request_can_only_lower() -> None:
     service = QEActiveExecutionCapacityService()
     assert service.resolve_node_capacity("wsl2-5080") == 1
+    assert service.resolve_node_capacity("WSL2-5080") == 1
+    for alias in ("wsl", "LOCAL"):
+        with pytest.raises(QEWorkspaceSubmissionCoordinatorError) as excinfo:
+            service.resolve_node_capacity(alias)
+        assert excinfo.value.reason_code == "qe_execution_capacity_node_alias_noncanonical"
     assert service.resolve_node_capacity("wsl2-5080", 1) == 1
     assert service.resolve_node_capacity("wsl2-5080", 8) == 1
     assert service.resolve_node_capacity("rdagent-node1") == 4
@@ -277,6 +282,21 @@ def test_capacity_contract_is_wsl_one_remote_four_and_request_can_only_lower() -
     assert service.resolve_node_capacity("rdagent-node1", 8) == 4
     with pytest.raises(QEWorkspaceSubmissionCoordinatorError):
         service.resolve_node_capacity("rdagent-node1", 0)
+
+
+def test_wsl_capacity_identity_is_canonicalized_before_reservation() -> None:
+    payload = _payload()
+    source, _evidence = _source(payload)
+    source = replace(source, node_id="WSL2-5080")
+    repository = FakeReservationRepository()
+    client = FakeWorkspaceClient(payload, source.submission_intent_hash)
+    coordinator = QEWorkspaceSubmissionCoordinator(reservation_repository=repository)
+
+    outcome = asyncio.run(coordinator.submit(client=client, source=source, payload=payload))
+
+    assert outcome.submitted is True
+    assert repository.reserve_calls[0]["spec"].node_id == "wsl2-5080"
+    assert repository.reserve_calls[0]["node_capacity"] == 1
 
 
 def test_full_capacity_persists_waiting_and_never_posts() -> None:

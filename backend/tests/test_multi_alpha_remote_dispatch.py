@@ -298,7 +298,7 @@ def test_remote_pred_backtest_executor_posts_loop_and_ingests_metrics(tmp_path: 
     assert small_sync_calls[0]["loop_index"] == 1
     assert "combined_prediction.pkl.b64" not in small_sync_calls[0]["files"]
     assert "qe_sector_risk_overlay.parquet.b64" not in small_sync_calls[0]["files"]
-    assert "bash -lc" in payload["wsl_command"]
+    assert "bash --noprofile --norc -c" in payload["wsl_command"]
     assert "/remote/artifacts/" + "a" * 64 in payload["wsl_command"]
     assert "/remote/artifacts/" + "b" * 64 in payload["wsl_command"]
     assert payload["wsl_command"].count("ln -sfn") == 3
@@ -1132,3 +1132,37 @@ def test_remote_wsl_command_rejects_invalid_env_key() -> None:
         )
 
     assert excinfo.value.reason_code == "remote_env_invalid"
+
+
+@pytest.mark.parametrize(
+    "forbidden_key",
+    [
+        "TDX_DB_PASSWORD",
+        "database_url",
+        "PgServiceFile",
+        "OPENAI_API_KEY",
+        "service_auth_token",
+        "BASH_ENV",
+        "ld_preload",
+    ],
+)
+def test_remote_wsl_command_rejects_credential_env_before_serializing_value(
+    forbidden_key: str,
+) -> None:
+    sensitive_value = "must-never-appear-in-command-or-error"
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        _remote_wsl_command(
+            workspace=Path("/mnt/f/local/workspace"),
+            remote_paths={
+                "artifact_path": "/remote/artifacts/abc",
+                "prediction_artifact_path": "/remote/artifacts/pred",
+                "qlib_data_path": "/home/node/qlib",
+                "factor_cache_dir": "/home/node/factor_values",
+            },
+            backtest_config={"remote_env": {forbidden_key: sensitive_value}},
+        )
+
+    assert excinfo.value.reason_code == "remote_env_credential_forbidden"
+    assert excinfo.value.context == {"key": forbidden_key}
+    assert sensitive_value not in str(excinfo.value)
+    assert sensitive_value not in repr(excinfo.value.context)

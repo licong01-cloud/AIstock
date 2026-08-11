@@ -24,7 +24,7 @@ from typing import Mapping
 
 #: Environment variable prefixes that can directly establish a PostgreSQL
 #: connection and must never reach a QE data-plane subprocess.
-DB_CREDENTIAL_PREFIXES: tuple[str, ...] = ("TDX_DB_", "POSTGRES_")
+DB_CREDENTIAL_PREFIXES: tuple[str, ...] = ("TDX_DB_", "POSTGRES_", "PG")
 
 #: Explicit libpq / psycopg2 / SQLAlchemy connection variables that must never
 #: reach a QE data-plane subprocess.
@@ -82,12 +82,17 @@ QE_SECRET_CREDENTIAL_SUFFIXES: tuple[str, ...] = (
     "_SECRET",
     "_TOKEN",
 )
+QE_SHELL_INJECTION_KEYS: frozenset[str] = frozenset(
+    {"BASH_ENV", "ENV", "BASHOPTS", "SHELLOPTS", "LD_AUDIT", "LD_PRELOAD"}
+)
+QE_SHELL_INJECTION_PREFIXES: tuple[str, ...] = ("BASH_FUNC_",)
+QE_BASH_READONLY_ENV_KEYS: frozenset[str] = frozenset({"BASHOPTS", "SHELLOPTS"})
 
 
 def is_db_credential_key(key: str) -> bool:
     """True when an environment key could directly establish a PostgreSQL
     connection and must be scrubbed from a QE data-plane subprocess."""
-    name = str(key or "")
+    name = str(key or "").upper()
     return name in DB_CREDENTIAL_KEYS or name.startswith(DB_CREDENTIAL_PREFIXES)
 
 
@@ -102,6 +107,8 @@ def is_qe_subprocess_credential_key(key: str) -> bool:
     name = str(key or "").upper()
     return (
         is_db_credential_key(name)
+        or name in QE_SHELL_INJECTION_KEYS
+        or name.startswith(QE_SHELL_INJECTION_PREFIXES)
         or name in QE_SECRET_CREDENTIAL_KEYS
         or name.endswith(QE_SECRET_CREDENTIAL_SUFFIXES)
     )
@@ -124,23 +131,43 @@ def scrubbed_qe_subprocess_env(
 
 
 def qe_subprocess_credential_scrub_command() -> str:
-    """Return a Bash fragment that removes all QE-forbidden credentials.
+    """Return a fail-closed Bash fragment that removes QE credentials.
 
     ``compgen -e`` enumerates names only.  The fragment never expands or prints
     credential values, and it leaves Prediction Store routing, task identity
-    and frozen-file path variables intact.
+    and frozen-file path variables intact.  The explicit Bash guard is
+    intentional: executing the fragment through ``/bin/sh`` must stop before
+    qrun rather than silently skipping wildcard credential removal.
     """
 
-    prefix_patterns = tuple(f"{prefix}*" for prefix in DB_CREDENTIAL_PREFIXES)
+    prefix_patterns = tuple(
+        f"{prefix}*" for prefix in (*DB_CREDENTIAL_PREFIXES, *QE_SHELL_INJECTION_PREFIXES)
+    )
     suffix_patterns = tuple(f"*{suffix}" for suffix in QE_SECRET_CREDENTIAL_SUFFIXES)
     case_patterns = "|".join(
-        (*prefix_patterns, *suffix_patterns, *sorted(DB_CREDENTIAL_KEYS | QE_SECRET_CREDENTIAL_KEYS))
+        (
+            *prefix_patterns,
+            *suffix_patterns,
+            *sorted(DB_CREDENTIAL_KEYS | QE_SECRET_CREDENTIAL_KEYS | QE_SHELL_INJECTION_KEYS),
+        )
     )
-    explicit_names = " ".join(sorted(DB_CREDENTIAL_KEYS | QE_SECRET_CREDENTIAL_KEYS))
+    explicit_names = " ".join(
+        sorted(
+            (DB_CREDENTIAL_KEYS | QE_SECRET_CREDENTIAL_KEYS | QE_SHELL_INJECTION_KEYS)
+            - QE_BASH_READONLY_ENV_KEYS
+        )
+    )
     return (
-        'for __qe_credvar in $(compgen -e); do case "$__qe_credvar" in '
+        'if [ -z "${BASH_VERSION:-}" ]; then '
+        'echo "reason_code=qe_subprocess_bash_required" >&2; exit 70; fi; '
+        'if ! command -V compgen >/dev/null 2>&1 || ! compgen -e >/dev/null 2>&1; then '
+        'echo "reason_code=qe_subprocess_bash_compgen_missing" >&2; exit 70; fi; '
+        'for __qe_credvar in $(compgen -e); do '
+        '__qe_credvar_upper=${__qe_credvar^^}; '
+        'case "$__qe_credvar_upper" in '
+        'BASHOPTS|SHELLOPTS) ;; '
         f'{case_patterns}) unset "$__qe_credvar" ;; esac; done; '
-        f"unset {explicit_names}; "
+        f"unset {explicit_names}; :"
     )
 
 

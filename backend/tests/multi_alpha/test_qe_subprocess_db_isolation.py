@@ -34,6 +34,11 @@ DB_VARS = [
     "PGDATABASE",
     "PGSERVICE",
     "PGPASSFILE",
+    "PGHOSTADDR",
+    "PGSERVICEFILE",
+    "PGSSLKEY",
+    "PGSSLCERT",
+    "PGOPTIONS",
     "POSTGRES_PASSWORD",
     "DB_PASSWORD",
     "SQLALCHEMY_DATABASE_URL",
@@ -86,6 +91,11 @@ def test_is_db_credential_key() -> None:
     assert is_db_credential_key("DATABASE_URL")
     assert is_db_credential_key("PGHOST")
     assert is_db_credential_key("PGPASSWORD")
+    assert is_db_credential_key("PGHOSTADDR")
+    assert is_db_credential_key("PGSERVICEFILE")
+    assert is_db_credential_key("PGSSLKEY")
+    assert is_db_credential_key("pgsslcert")
+    assert is_db_credential_key("pgoptions")
     assert is_db_credential_key("POSTGRES_PASSWORD")
     assert is_db_credential_key("DB_PASSWORD")
     assert is_db_credential_key("SQLALCHEMY_DATABASE_URL")
@@ -101,6 +111,9 @@ def test_is_qe_subprocess_credential_key_covers_non_database_secrets() -> None:
     assert is_qe_subprocess_credential_key("AWS_ACCESS_KEY_ID")
     assert is_qe_subprocess_credential_key("AZURE_CLIENT_SECRET")
     assert is_qe_subprocess_credential_key("SERVICE_ACCESS_KEY_ID")
+    assert is_qe_subprocess_credential_key("BASH_ENV")
+    assert is_qe_subprocess_credential_key("BASH_FUNC_evil%%")
+    assert is_qe_subprocess_credential_key("LD_PRELOAD")
     assert not is_qe_subprocess_credential_key("AISTOCK_PREDICTION_STORE_BASE_URL")
     assert not is_qe_subprocess_credential_key("QE_RESOURCE_SESSION_ID")
     assert not is_qe_subprocess_credential_key("FACTOR_CACHE_DIR")
@@ -188,7 +201,7 @@ def test_db_connect_poison_fails_with_scrubbed_env(_poison_db_env: None) -> None
 def test_local_qrun_read_env_is_scrubbed_on_windows(_poison_db_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(combine_backtest_module, "_is_windows_host", lambda: True)
     workspace = Path(__file__).resolve().parent
-    _qrun_command, _read_command, read_env = combine_backtest_module._default_local_pred_backtest_commands(
+    qrun_command, read_command, read_env = combine_backtest_module._default_local_pred_backtest_commands(
         workspace=workspace,
         pred_name="combined_prediction.pkl",
         backtest_config={
@@ -201,6 +214,11 @@ def test_local_qrun_read_env_is_scrubbed_on_windows(_poison_db_env: None, monkey
     for name in DB_VARS:
         assert name not in read_env
     assert read_env.get("AISTOCK_PREDICTION_STORE_BASE_URL") == "http://prediction-store:9000"
+    for command in (qrun_command, read_command):
+        assert command[3:7] == ["bash", "--noprofile", "--norc", "-c"]
+        script = command[-1]
+        assert script.index(". ./.factor_env") < script.index("reason_code=qe_subprocess_bash_required")
+        assert "for __qe_credvar in $(compgen -e)" in script
 
 
 def test_local_qrun_read_env_is_scrubbed_on_posix(_poison_db_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -221,7 +239,7 @@ def test_local_qrun_read_env_is_scrubbed_on_posix(_poison_db_env: None, monkeypa
 
 def test_remote_wsl_command_scrubs_db_credentials(_poison_db_env: None) -> None:
     """The remote/WSL QE workspace command construction path unsets the database
-    credential variables before qrun/read_exp_res run inside bash -lc."""
+    credential variables at the final qrun/read boundaries in a clean Bash."""
     command = remote_dispatch_module._remote_wsl_command(
         workspace=Path(__file__).resolve().parent,
         remote_paths={
@@ -233,6 +251,7 @@ def test_remote_wsl_command_scrubs_db_credentials(_poison_db_env: None) -> None:
         backtest_config={"node_id": "wsl2-5080"},
         runtime_artifact_bindings=(),
     )
+    assert command.startswith("bash --noprofile --norc -c ")
     assert "unset" in command
     for prefix in DB_CREDENTIAL_PREFIXES:
         assert f"${{{prefix}*}}" in command or prefix in command
@@ -240,6 +259,7 @@ def test_remote_wsl_command_scrubs_db_credentials(_poison_db_env: None) -> None:
         assert name in command
     assert "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl" in command
     assert "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py" in command
+    assert command.count("reason_code=qe_subprocess_bash_required") >= 4
 
 
 def test_db_credential_scrub_command_runs_in_bash(_poison_db_env: None) -> None:
@@ -250,12 +270,12 @@ def test_db_credential_scrub_command_runs_in_bash(_poison_db_env: None) -> None:
     probe = (
         "export TDX_DB_HOST=fake PGHOST=fake DATABASE_URL=postgresql://fake OPENAI_API_KEY=fake GITHUB_TOKEN=fake; "
         + db_credential_scrub_command()
-        + 'test -z "${TDX_DB_HOST+x}" && test -z "${PGHOST+x}" '
+        + '; test -z "${TDX_DB_HOST+x}" && test -z "${PGHOST+x}" '
         + '&& test -z "${DATABASE_URL+x}" && test -z "${OPENAI_API_KEY+x}" '
         + '&& test -z "${GITHUB_TOKEN+x}" && echo SCRUBBED'
     )
     child = subprocess.run(
-        ["bash", "-c", probe],
+        [*_shell_command("bash"), "--noprofile", "--norc", "-c", probe],
         capture_output=True,
         text=True,
         check=False,
@@ -264,12 +284,144 @@ def test_db_credential_scrub_command_runs_in_bash(_poison_db_env: None) -> None:
     assert "SCRUBBED" in child.stdout
 
 
+def test_db_credential_scrub_command_is_errexit_safe_with_bash_readonly_vars() -> None:
+    """Bash creates readonly BASHOPTS/SHELLOPTS itself; defense-in-depth
+    scrubbing must not try to unset them and abort the qrun command chain."""
+
+    if not _bash_available():
+        pytest.skip("bash is unavailable on this host")
+    probe = "set -e; " + db_credential_scrub_command() + "; echo QRUN_CAN_START"
+    child = subprocess.run(
+        [*_shell_command("bash"), "--noprofile", "--norc", "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert child.returncode == 0, child.stderr
+    assert child.stdout.strip() == "QRUN_CAN_START"
+
+
+def test_db_credential_scrub_command_removes_mixed_case_exports() -> None:
+    """Shell-side defense matches Python's case-insensitive classifier."""
+
+    if not _bash_available():
+        pytest.skip("bash is unavailable on this host")
+    probe = (
+        "export tdx_db_password=fake pgsslkey=fake PgServiceFile=fake OpenAI_Api_Key=fake ld_preload=fake; "
+        + db_credential_scrub_command()
+        + '; test -z "${tdx_db_password+x}"; '
+        + 'test -z "${pgsslkey+x}"; test -z "${PgServiceFile+x}"; '
+        + 'test -z "${OpenAI_Api_Key+x}"; test -z "${ld_preload+x}"; '
+        + "echo MIXED_CASE_SCRUBBED"
+    )
+    child = subprocess.run(
+        [*_shell_command("bash"), "--noprofile", "--norc", "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert child.returncode == 0, child.stderr
+    assert child.stdout.strip() == "MIXED_CASE_SCRUBBED"
+
+
+def test_db_credential_scrub_command_fails_closed_under_posix_sh(_poison_db_env: None) -> None:
+    """The real RD-Agent legacy /bin/sh boundary must stop, never skip scrub."""
+
+    if not _shell_available("sh"):
+        pytest.skip("sh is unavailable on this host")
+    probe = (
+        "export TDX_DB_PASSWORD=fake OPENAI_API_KEY=fake; "
+        + db_credential_scrub_command()
+        + "; echo SHOULD_NOT_RUN"
+    )
+    child = subprocess.run(
+        [*_shell_command("sh"), "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert child.returncode == 70
+    assert "reason_code=qe_subprocess_bash_required" in child.stderr
+    assert "SHOULD_NOT_RUN" not in child.stdout
+
+
+def test_db_credential_scrub_command_fails_closed_when_compgen_is_unusable() -> None:
+    if not _bash_available():
+        pytest.skip("bash is unavailable on this host")
+    probe = (
+        "compgen() { return 127; }; set -e; "
+        + db_credential_scrub_command()
+        + "; echo SHOULD_NOT_RUN"
+    )
+    child = subprocess.run(
+        [*_shell_command("bash"), "--noprofile", "--norc", "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert child.returncode == 70
+    assert "reason_code=qe_subprocess_bash_compgen_missing" in child.stderr
+    assert "SHOULD_NOT_RUN" not in child.stdout
+
+
+def test_final_bash_scrub_removes_credentials_reinjected_by_sourced_env(tmp_path: Path) -> None:
+    if not _bash_available():
+        pytest.skip("bash is unavailable on this host")
+    factor_env = tmp_path / ".factor_env"
+    factor_env.write_text(
+        "export TDX_DB_PASSWORD=factor-poison\nexport OPENAI_API_KEY=factor-secret\n",
+        encoding="utf-8",
+    )
+    script = (
+        "export TDX_DB_PASSWORD=parent-poison OPENAI_API_KEY=parent-secret; "
+        "export TDX_DB_PASSWORD=conda-poison OPENAI_API_KEY=conda-secret; "
+        f". {_shell_path(factor_env)!r}; "
+        + db_credential_scrub_command()
+        + "; test -z \"${TDX_DB_PASSWORD+x}\"; "
+        "test -z \"${OPENAI_API_KEY+x}\"; echo FINAL_SCRUB_OK"
+    )
+    child = subprocess.run(
+        [*_shell_command("bash"), "--noprofile", "--norc", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert child.returncode == 0, child.stderr
+    assert child.stdout.strip() == "FINAL_SCRUB_OK"
+
+
 def _bash_available() -> bool:
     try:
-        subprocess.run(["bash", "-c", "true"], capture_output=True, check=False, timeout=10)
+        subprocess.run(
+            [*_shell_command("bash"), "--noprofile", "--norc", "-c", "true"],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
         return True
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+def _shell_available(name: str) -> bool:
+    try:
+        subprocess.run([*_shell_command(name), "-c", "true"], capture_output=True, check=False, timeout=10)
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _shell_command(name: str) -> list[str]:
+    if sys.platform == "win32":
+        return ["wsl.exe", "--exec", name]
+    return [name]
+
+
+def _shell_path(path: Path) -> str:
+    resolved = path.resolve().as_posix()
+    if sys.platform == "win32" and len(resolved) >= 3 and resolved[1:3] == ":/":
+        return f"/mnt/{resolved[0].lower()}{resolved[2:]}"
+    return resolved
 
 
 def test_qe_subprocess_env_never_emits_values(_poison_db_env: None) -> None:

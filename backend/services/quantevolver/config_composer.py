@@ -122,6 +122,18 @@ def _is_local_wsl_qe_node(node_id: Optional[str]) -> bool:
     return not normalized or normalized in _LOCAL_WSL_QE_NODE_IDS
 
 
+def _quote_qe_shell_path(value: Any, *, field_name: str) -> str:
+    """Quote one Linux path and reject control characters before shell use."""
+
+    text = str(value or "")
+    if not text or any(char in text for char in ("\x00", "\r", "\n")):
+        raise ValueError(
+            "reason_code=qe_shell_path_invalid: "
+            f"{field_name} must be a non-empty single-line path"
+        )
+    return shlex.quote(text)
+
+
 def _qe_subprocess_credential_scrub_command() -> str:
     """Load the shared scrub helper after ConfigComposer initialization.
 
@@ -697,7 +709,7 @@ class ConfigComposer:
                 node_id=node_id,
             )
 
-        remote_node = bool(node_id and node_id != "wsl2-5080")
+        remote_node = not _is_local_wsl_qe_node(node_id)
         callback_base_configured = any(
             (os.getenv(name) or "").strip()
             for name in (
@@ -5454,7 +5466,10 @@ class ConfigComposer:
         # Every generated workspace may contain QE-owned runtime modules such as
         # the long-horizon label maturity processor.  Keep the workspace import
         # path explicit instead of relying on the launcher's current directory.
-        env_lines.append(f'export PYTHONPATH="{wsl_path}:${{QLIB_RDAGENT_ROOT_WSL:-.}}:$PYTHONPATH"')
+        quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
+        env_lines.append(
+            f'export PYTHONPATH={quoted_wsl_path}:"${{QLIB_RDAGENT_ROOT_WSL:-.}}:${{PYTHONPATH:-}}"'
+        )
 
         if use_custom_model and model_type_tag:
             if model_type_tag == "TimeSeries":
@@ -5511,13 +5526,17 @@ class ConfigComposer:
                     "QE backtest factor_cache_dir must point to official factor_values cache root or its single subdirectory"
                 )
             # 远端节点：直接使用配置的绝对路径
-            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_dir}"')
+            env_lines.append(
+                f"export FACTOR_CACHE_DIR={_quote_qe_shell_path(factor_cache_dir, field_name='factor_cache_dir')}"
+            )
         else:
             # 本地节点：强制使用 Windows 路径转换后的 QE 回测缓存，覆盖任何继承环境变量。
             factor_cache_wsl = self._windows_to_wsl_path(str(FACTOR_CACHE_ROOT_WIN))
             if not _is_official_factor_cache_path_shape(factor_cache_wsl):
                 raise RuntimeError("QE backtest FACTOR_CACHE_ROOT_WIN must resolve to official factor_values cache root")
-            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_wsl}"')
+            env_lines.append(
+                f"export FACTOR_CACHE_DIR={_quote_qe_shell_path(factor_cache_wsl, field_name='factor_cache_dir')}"
+            )
         env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 
         link_data_cmd = (
@@ -5528,9 +5547,11 @@ class ConfigComposer:
 
         runner = "qrun_limit_minute.py" if seed_ensemble_enabled or backtest_freq != "day" else "qrun_limit.py"
 
+        scrub_credentials = _qe_subprocess_credential_scrub_command()
         core_parts = [
-            f"{_qe_subprocess_credential_scrub_command()}true",
+            scrub_credentials,
             self._build_conda_activate_chain(),
+            scrub_credentials,
             "export MALLOC_ARENA_MAX=4",
             "export PYTHONUNBUFFERED=1",
         ]
@@ -5545,14 +5566,19 @@ class ConfigComposer:
             core_parts.append("chmod 600 qe_resource_session_secret.json")
         core_parts.append(link_data_cmd)
         if has_custom_factors:
+            core_parts.append(scrub_credentials)
             core_parts.append("python prepare_factors.py")
             core_parts.append(". ./.factor_env")
+            core_parts.append(scrub_credentials)
         runner_cmd = f"python {runner} conf.yaml"
         if train_only:
             runner_cmd += " --train-only"
+        core_parts.append(scrub_credentials)
         core_parts.append(runner_cmd)
         if long_trend_postprocess_enabled:
+            core_parts.append(scrub_credentials)
             core_parts.append("python long_trend_postprocess_adapter.py")
+        core_parts.append(scrub_credentials)
         core_parts.append("QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py")
         return env_lines, core_parts
 
@@ -5606,14 +5632,22 @@ class ConfigComposer:
             long_trend_postprocess_enabled=long_trend_postprocess_enabled,
         )
         env_block = "\n".join(env_lines)
-        manual_runtime_guard_lines = [_qe_subprocess_credential_scrub_command()]
+        scrub_credentials = _qe_subprocess_credential_scrub_command()
+        quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
+        manual_conda_chain = self._build_conda_activate_chain()
+        manual_runtime_guard_lines = ["set -euo pipefail", scrub_credentials]
         if _is_local_wsl_qe_node(node_id):
             manual_runtime_guard_lines.extend(_LOCAL_WSL_THREAD_ENV)
         manual_runtime_guard_block = "\n".join(manual_runtime_guard_lines)
+        manual_factor_data_default = _quote_qe_shell_path(
+            str(factor_data_dir or RDAGENT_FACTOR_DATA_WSL or "."),
+            field_name="factor_data_dir",
+        )
 
         # 手动模式的数据链接步骤（可读格式）
         _link_data_manual = f"""# 链接策略所需数据文件到实验目录（幂等）
-_FDD="${{RDAGENT_FACTOR_DATA_WSL:-{RDAGENT_FACTOR_DATA_WSL}}}"
+_FDD="${{RDAGENT_FACTOR_DATA_WSL:-}}"
+[ -n "$_FDD" ] || _FDD={manual_factor_data_default}
 for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do
   [ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .
 done"""
@@ -5623,7 +5657,7 @@ done"""
 
         # ── auto 模式：纯净命令链，供子进程直接执行 ──
         if mode == "auto":
-            return " && ".join([f"cd {wsl_path}", *core_parts])
+            return " && ".join([f"cd -- {quoted_wsl_path}", *core_parts])
 
         # ── manual 模式：面向用户手动复制执行 ──
         train_only_flag = " --train-only" if train_only else ""
@@ -5632,24 +5666,28 @@ done"""
 # 请在WSL终端中执行以下命令：
 
 (
-cd {wsl_path}
+cd -- {quoted_wsl_path}
 {manual_runtime_guard_block}
-conda activate rdagent-gpu
+{manual_conda_chain}
+{scrub_credentials}
 
 {_link_data_manual}
 
 # 步骤1: 预计算因子 -> 生成 combined_factors_df.parquet
+{scrub_credentials}
 python prepare_factors.py
 
 # 步骤2: 设置环境变量
 {env_block}
 # 加载因子预处理输出的 num_features（由 prepare_factors.py 自动计算）
 . .factor_env
+{scrub_credentials}
 
 # 步骤3: 运行QLib回测
 python {runner} conf.yaml{train_only_flag}
 
 # 步骤4: 读取结果
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 )
 
@@ -5659,9 +5697,10 @@ QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 # 请在WSL终端中执行以下命令：
 
 (
-cd {wsl_path}
+cd -- {quoted_wsl_path}
 {manual_runtime_guard_block}
-conda activate rdagent-gpu
+{manual_conda_chain}
+{scrub_credentials}
 
 # 设置环境变量
 {env_block}
@@ -5669,9 +5708,11 @@ conda activate rdagent-gpu
 {_link_data_manual}
 
 # 运行QLib回测
+{scrub_credentials}
 python {runner} conf.yaml{train_only_flag}
 
 # 读取结果
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 )
 
@@ -5681,16 +5722,19 @@ QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 # 请在WSL终端中执行以下命令：
 
 (
-cd {wsl_path}
+cd -- {quoted_wsl_path}
 {manual_runtime_guard_block}
-conda activate rdagent-gpu
+{manual_conda_chain}
+{scrub_credentials}
 
 # 设置环境变量
 {env_block}
 
 {_link_data_manual}
 
+{scrub_credentials}
 python {runner} conf.yaml{train_only_flag}
+{scrub_credentials}
 QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 )
 

@@ -3,10 +3,14 @@
   "allowed_write_scope": [
     "backend/services/quantevolver/config_composer.py",
     "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/services/multi_alpha/combine_backtest.py",
     "backend/services/multi_alpha/qe_subprocess_env.py",
+    "backend/services/multi_alpha/remote_dispatch.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
     "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
+    "backend/tests/test_multi_alpha_remote_dispatch.py",
     "docs/analysis/sector_rotation_factors_develop_spec_20260710.md",
     "tests/aistock_validation/bugs/20260810_BUG-1014-qe-custom-evo-wsl-launch-envelope-permits-host-paging-freeze-and-credent.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -17,6 +21,7 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
+    "Keep RD-Agent companion source merge, deployment/restart, runtime identity, and AIstock backend-main restart verification as separate required states; overall activation requires both runtime boundaries.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-08-10T20:25:28.493067Z",
@@ -45,31 +50,57 @@
       "actor": "codex",
       "note": "Normalized backend-main identity and business probes to executable absolute HTTP URLs and declared database readback not required because BUG-1014 has no DDL or DML. This metadata-only correction enables fail-closed post-restart verification without changing runtime behavior.",
       "timestamp": "2026-08-10T21:52:00Z"
+    },
+    {
+      "action": "formal_review_production_shell_and_secret_boundary_repair",
+      "actor": "codex",
+      "note": "Formal review reproduced that the original compgen scrub ran under RD-Agent /bin/sh and failed open. The corrected delivery uses a fail-closed Bash contract, repeated final-boundary scrub after conda and factor env sourcing, shell-quoted paths, and an RD-Agent companion change that removes credentials and startup/loader injection before exec and atomically creates qe_resource_session_secret.json with mode 0600. MA-E16 is terminal 10 completed/2 failed; no process control or experiment retry occurred.",
+      "timestamp": "2026-08-11T06:41:11Z"
+    },
+    {
+      "action": "scope_expanded_for_production_custom_command_boundary",
+      "actor": "codex",
+      "note": "Third-round review found the production backtest_config.command branch inherited the backend environment because run_command received env=None. The fix now supplies scrubbed_qe_subprocess_env and adds a real poisoned-child regression test. The shared Bash scrub also skips Bash readonly option variables, normalizes exported names case-insensitively, and fails closed with a stable reason if compgen is unavailable. Scope was expanded only for the exact regression test; no process control, DDL/DML, dependency install, or experiment execution occurred.",
+      "timestamp": "2026-08-11T07:06:42Z"
+    },
+    {
+      "action": "complete_qe_environment_and_capacity_boundary_repair",
+      "actor": "codex",
+      "note": "Final review expanded PostgreSQL isolation to the full PG* libpq namespace, rejects credential or process-injection remote_env keys before values can be serialized, and canonicalizes case variants of wsl2-5080 before reservation while rejecting ambiguous local/wsl aliases so they cannot create independent slots. RD-Agent companion PR #18 was independently reviewed and merge-committed as da3270f8; its deployment/restart/identity remains pending and separate from backend-main. No runtime process control or experiment execution occurred.",
+      "timestamp": "2026-08-11T07:40:00Z"
     }
   ],
   "evidence_uris": [
     "docs/analysis/sector_rotation_factors_develop_spec_20260710.md#993-strategy-priority-contract; runtime tasks qe_20260810_221723_14ab and qe_20260810_224522_b0d9"
   ],
-  "expected": "One global WSL training slot; host-safe single-process GeneralPTNN data loading; bounded CPU threads; generated prepare/qrun/read shells scrub database and non-control secret variables while preserving frozen file inputs and required control-plane access; unsafe overrides fail closed; remote node remains parallel.",
+  "expected": "One global WSL training slot; host-safe single-process GeneralPTNN data loading; bounded CPU threads; generated prepare/qrun/read shells run under an explicit fail-closed Bash contract and scrub database, shell-injection and non-control secret variables at every final Python boundary while preserving frozen file inputs and required control-plane access; resource-session secret files are private from initial creation; shell paths are quoted; unsafe overrides fail closed; remote node remains parallel.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/config_composer.py",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/multi_alpha/combine_backtest.py",
       "backend/services/multi_alpha/qe_subprocess_env.py",
+      "backend/services/multi_alpha/remote_dispatch.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
       "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
+      "backend/tests/test_multi_alpha_combine_backtest.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
       "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
     ],
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/config_composer.py",
         "backend/services/quantevolver/qe_active_execution_capacity.py",
+        "backend/services/multi_alpha/combine_backtest.py",
         "backend/services/multi_alpha/qe_subprocess_env.py",
+        "backend/services/multi_alpha/remote_dispatch.py",
         "backend/tests/unified_engine/test_qe_config_truth.py",
         "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
         "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
+        "backend/tests/test_multi_alpha_combine_backtest.py",
+        "backend/tests/test_multi_alpha_remote_dispatch.py",
         "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
       ],
       "impacted_modules": [
@@ -179,6 +210,7 @@
         "backend/tests/unified_engine/test_qe_config_truth.py",
         "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
         "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
+        "backend/tests/test_multi_alpha_combine_backtest.py",
         "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
       ],
       "unmatched_files": []
@@ -187,10 +219,14 @@
     "scope_files": [
       "backend/services/quantevolver/config_composer.py",
       "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/services/multi_alpha/combine_backtest.py",
       "backend/services/multi_alpha/qe_subprocess_env.py",
+      "backend/services/multi_alpha/remote_dispatch.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
       "backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py",
+      "backend/tests/test_multi_alpha_combine_backtest.py",
+      "backend/tests/test_multi_alpha_remote_dispatch.py",
       "docs/analysis/sector_rotation_factors_develop_spec_20260710.md"
     ]
   },
@@ -220,10 +256,22 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
     "database_readback_ref": "not_required",
+    "external_runtime_dependencies": [
+      {
+        "backend_restart_owner": "user",
+        "merge_commit": "da3270f8eed82946cec63cd14ca6220e442380cf",
+        "pr_number": 18,
+        "repository": "licong01-cloud/RD-Agent",
+        "runtime_identity_match": "pending",
+        "runtime_target": "RD-Agent QE API",
+        "source_merge": "completed",
+        "deployment_restart": "pending_user"
+      }
+    ],
     "fresh_process_evidence": [
-      "fresh Windows pytest processes verified 123 config-composer tests plus 26 capacity/credential tests; local GeneralPTNN uses n_jobs=0 without prefetch, remote behavior remains n_jobs=2, unsafe local override fails closed, and over-capacity reservations wait without terminating existing work",
-      "fresh WSL bash process verified TDX_DB, POSTGRES, API key, client secret and token names are absent while AISTOCK_PREDICTION_STORE_BASE_URL remains available; output contained no credential values",
-      "Fresh Windows pytest processes loaded the changed QE resource and credential code, and a real WSL bash process returned QE_SCRUB_OK without exposing credential values; no backend or experiment process control was performed"
+      "Fresh Windows pytest processes verified 129 config-composer tests, 86 capacity/credential/remote-dispatch tests and 64 combine-backtest tests; local GeneralPTNN uses n_jobs=0 without prefetch, remote behavior remains n_jobs=2, unsafe local overrides fail closed, aliases cannot split the canonical WSL slot, forbidden remote_env values are rejected before serialization, and over-capacity reservations wait without terminating existing work",
+      "A real WSL Bash process verified parent, conda/factor-env reinjected TDX_DB/POSTGRES/API/client-secret/token variables are absent at the qrun boundary while Prediction Store and frozen-file variables remain available; /bin/sh exits with reason_code=qe_subprocess_bash_required instead of continuing",
+      "RD-Agent companion fresh tests verified explicit no-profile Bash, pre-exec credential/startup/function/loader scrubbing, pipeline failure propagation, shell-quoted fallback workspaces, and atomic initial/overwrite mode-0600 resource-session secret files; no backend or experiment process control was performed"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
@@ -231,6 +279,7 @@
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
+    "overall_runtime_activation_gate": "pending_backend_main_and_rdagent_runtime_verification",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -250,16 +299,18 @@
     "source_event_id": "FE-20260810-56d0e8bc1f2b"
   },
   "validation_evidence": [
-    "python -m pytest -q backend/tests/unified_engine/test_qe_config_truth.py -> 123 passed, 38 skipped",
-    "python -m pytest -q backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -> 26 passed, 1 skipped",
+    "python -m pytest -q backend/tests/unified_engine/test_qe_config_truth.py -> 129 passed, 38 skipped",
+    "python -m pytest -q backend/tests/test_multi_alpha_remote_dispatch.py backend/tests/multi_alpha/test_qe_subprocess_db_isolation.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -> 86 passed, 1 skipped",
+    "python -m pytest -q backend/tests/test_multi_alpha_combine_backtest.py -> 64 passed",
+    "RD-Agent: python -m pytest -q test/app/test_qe_evolution_runtime_boundary.py test/app/test_qe_evolution_submission_receipt.py -> 37 passed, 4 skipped; POSIX-only cases separately passed in real WSL",
     "python -m nox -s validation_module_registry_l0 -> 8 passed; files=14 mapped=14",
     "python -m nox -s qe_sector_risk_overlay_backend -> 74 passed",
     "python -m nox -s qe_read_backend -> 34 passed",
-    "python scripts/aistock_feature_workflow.py validate --design docs/analysis/sector_rotation_factors_develop_spec_20260710.md --tier F2 -> PASS, 29/29, warnings=0",
+    "python scripts/aistock_feature_workflow.py validate --design docs/analysis/sector_rotation_factors_develop_spec_20260710.md --tier F2 -> PASS, 30/30, warnings=0",
     "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1014 with actual changed files -> PASS, unexpected_dirty_paths=0",
-    "real WSL bash credential scrub smoke -> QE_SCRUB_OK",
-    "low-frequency live readback -> MA-E16 9 completed, 2 failed, Loop12 running; host CPU 28.7%-34.6%, available memory about 2.0 GB, paging 3.4k-9.0k pages/sec; current Loop remains on old loader contract",
-    "DESIGN-COMPLIANCE-001 item review -> all four items have direct source, test, runtime-boundary and blueprint evidence"
+    "real WSL production-shell credential scrub smoke -> Bash final-boundary scrub PASS and /bin/sh fail-closed PASS",
+    "low-frequency live readback -> MA-E16 terminal failed with 10 completed and 2 failed; no task submitted after 05:45 +08:00",
+    "DESIGN-COMPLIANCE-001 item review -> PASS all four items on final pre-sync source review; final commit/safe-sync receipts remain separate"
   ],
   "verification_budget": {
     "budget": "standard",

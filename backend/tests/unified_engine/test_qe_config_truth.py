@@ -4337,7 +4337,8 @@ def test_auto_wsl_command_scrubs_credentials_and_bounds_local_threads(monkeypatc
     )
     command = " && ".join(core_parts)
 
-    assert core_parts[0].startswith("for __qe_credvar in $(compgen -e)")
+    assert core_parts[0].startswith('if [ -z "${BASH_VERSION:-}" ]')
+    assert "for __qe_credvar in $(compgen -e)" in core_parts[0]
     assert "TDX_DB_*" in command
     assert "*_API_KEY" in command
     assert credential_marker not in command
@@ -4356,12 +4357,19 @@ def test_auto_wsl_command_scrubs_credentials_and_bounds_local_threads(monkeypatc
         node_id="wsl2-5080",
         prediction_store_base_url="http://prediction-store:9000",
     )
-    scrub_pos = full_command.index("for __qe_credvar in $(compgen -e)")
+    scrub_marker = "for __qe_credvar in $(compgen -e)"
+    scrub_positions = [
+        index for index in range(len(full_command)) if full_command.startswith(scrub_marker, index)
+    ]
     conda_pos = full_command.index("conda activate")
     prepare_pos = full_command.index("python prepare_factors.py")
+    factor_env_pos = full_command.index(". ./.factor_env")
     qrun_pos = full_command.index("python qrun_limit_minute.py conf.yaml")
     read_pos = full_command.index("QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py")
-    assert scrub_pos < conda_pos < prepare_pos < qrun_pos < read_pos
+    assert len(scrub_positions) >= 6
+    assert scrub_positions[0] < conda_pos < scrub_positions[1]
+    assert prepare_pos < factor_env_pos < scrub_positions[-3] < qrun_pos
+    assert qrun_pos < scrub_positions[-1] < read_pos
 
     manual_command = composer._generate_wsl_command(
         "/tmp/qe-host-safe",
@@ -4372,7 +4380,9 @@ def test_auto_wsl_command_scrubs_credentials_and_bounds_local_threads(monkeypatc
         node_id="wsl2-5080",
         prediction_store_base_url="http://prediction-store:9000",
     )
-    assert "\n(\ncd /tmp/qe-host-safe" in manual_command
+    assert "\n(\ncd -- /tmp/qe-host-safe" in manual_command
+    assert "set -euo pipefail" in manual_command
+    assert manual_command.count("reason_code=qe_subprocess_bash_required") >= 5
     assert "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py\n)" in manual_command
 
 
@@ -4385,7 +4395,38 @@ def test_auto_remote_command_does_not_apply_local_wsl_thread_cap():
     )
 
     assert "export OMP_NUM_THREADS=4" not in core_parts
-    assert core_parts[0].startswith("for __qe_credvar in $(compgen -e)")
+    assert core_parts[0].startswith('if [ -z "${BASH_VERSION:-}" ]')
+
+
+@pytest.mark.parametrize(
+    "workspace_path",
+    [
+        "/tmp/qe workspace",
+        "/tmp/qe'quoted",
+        '/tmp/qe"double',
+        "/tmp/qe;touch SHOULD_NOT_RUN",
+        "/tmp/qe$(touch SHOULD_NOT_RUN)",
+    ],
+)
+def test_qe_wsl_command_shell_quotes_workspace_path(workspace_path: str):
+    command = ConfigComposer()._generate_wsl_command(
+        workspace_path,
+        mode="auto",
+        node_id="wsl2-5080",
+    )
+
+    assert command.startswith("cd -- ")
+    assert f"cd -- {workspace_path}" not in command
+    assert " && if [ -z \"${BASH_VERSION:-}\" ]" in command
+
+
+def test_qe_wsl_command_rejects_multiline_workspace_path():
+    with pytest.raises(ValueError, match="reason_code=qe_shell_path_invalid"):
+        ConfigComposer()._generate_wsl_command(
+            "/tmp/qe\nmalicious",
+            mode="auto",
+            node_id="wsl2-5080",
+        )
 
 
 def test_seed_ensemble_day_backtest_packages_minute_runner(monkeypatch):
