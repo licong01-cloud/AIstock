@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.7
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.8
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-10
+> 修订日期：2026-08-11
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M4B_SOURCE_IMPLEMENTED_DEPLOYMENT_PENDING`
-> 当前用户可见功能进度：短反弹真实功能 `3/4`；长期趋势真实功能 `0/1`；M0/M1 离线训练、M2 Top5、M3 收益/周期和当前页面展示均已贯通
-> 规划进度：M0-M3 已完成；M4A 四头日线价格模型已真实训练并发布 bundle；M4B 数据库只读价格投影和现有 API/UI 源码已实现，dividend 迁移/同步、exact binding、合入、用户重启和真实 readback 尚未执行
+> 当前状态：`MODEL_FIRST_M4_RUNTIME_API_VERIFIED_M5_DESIGN_READY`
+> 当前用户可见功能进度：短反弹真实功能 `4/4`；长期趋势真实功能 `0/1`；M2 Top5、M3 收益/周期和 M4 买入/止盈/止损范围已由真实运行时 API 输出，页面可视化验收因当前验证窗口无可用浏览器单独保留
+> 规划进度：M0-M4 已完成训练、源码、数据库窄依赖、exact binding、用户重启和真实多 Alpha API readback；当前进入 M5 模型质量迭代，第一目标是纠正 M1 Top5 留出集质量低于原始 selection rank 的问题
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -59,14 +59,14 @@
 
 长期趋势策略另行完成长期重排、生存、time-to-hit 和大行情捕获模型，不阻断短反弹主线。
 
-截至 2026-08-10：
+截至 2026-08-11：
 
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
 | SHORT_REBOUND Top20→Top5 | `EXPERIMENTAL_SHADOW_RUNTIME_VERIFIED` | WSL 真实训练、数据库影子推理、API 和页面源码已贯通；真实 test 质量仍低于主要对照 |
 | 预期收益与持股周期 | `COMPLETED_RUNTIME_VERIFIED` | M3 outcome binding 已激活；运行时对真实 20 个候选输出 1/3/5/10/20 日收益分位数、正收益/存活概率、MFE/MAE 和持股周期范围 |
-| 买入/止盈/止损区间 | `M4B_SOURCE_IMPLEMENTED_DEPLOYMENT_PENDING` | 四头真实模型、decision-cutoff 未复权投影、风险边界和 API/UI 源码已实现；必要 dividend 数据迁移/同步、exact binding 和部署 readback 待分步完成 |
-| 荐股页面模型展示 | `M2_M3_RUNTIME_VERIFIED` | 页面源码和真实 API 已贯通 Top5、五期限收益、概率、MFE/MAE 与持股范围；M4 价格区间完成后补齐最后一项展示 |
+| 买入/止盈/止损区间 | `M4_RUNTIME_API_VERIFIED` | 四头真实模型、decision-cutoff 未复权投影、dividend PIT 输入、exact binding 和风险边界已贯通；真实原生多 Alpha Program 20/20 候选均返回完整价格范围 |
+| 荐股页面模型展示 | `M2_M3_M4_SOURCE_COMPLETE_RUNTIME_HTTP_VERIFIED` | 页面源码已展示 Top5、五期限收益、概率、MFE/MAE、持股与价格范围；运行页面 HTTP 200，真实浏览器可视化验收因当前窗口无浏览器单独保留，不冒充截图验收 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
@@ -357,7 +357,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW`。
 
-状态：`COMPLETED_EXPERIMENTAL_SHADOW`。WSL 真实训练生成 bundle `9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629`，80 日 test 均有 Top5，峰值 RSS 约 2.11GB，总耗时约 129 秒。真实 test 平均超额收益低于原始排名与随机对照，因此 bundle 未激活；该负面质量结论不回溯否定训练功能完成，也不得被隐藏或描述为优化成功。
+状态：`COMPLETED_EXPERIMENTAL_SHADOW`。WSL 真实训练生成 bundle `9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629`，80 日 test 均有 Top5，峰值 RSS 约 2.11GB，总耗时约 129 秒。真实 test 平均超额收益低于原始排名与随机对照，因此 M1 完成时未激活；M2 随后为验证完整真实链路发布了该 exact shadow binding。运行时可用不改变其负面质量结论，也不得被隐藏或描述为优化成功。
 
 - 实现QE文件reader、共享FeatureBuilder和WSL launcher/trainer。
 - 使用当前文件数据从头训练HMM，固定状态映射并生成可从文件 cutoff 连续追加数据库观测的 posterior；旧HMM结果只进入对照报告。
@@ -393,7 +393,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P1`。
 
-状态：`M4B_SOURCE_IMPLEMENTED_DEPLOYMENT_PENDING`。详细设计为 `docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`。M4A request `advprreq_2d826a7b2704137bf3a60d9d` 在 WSL `rdagent-gpu` 生成 bundle `1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3`：4 个真实 LightGBM heads、1600 行/80 日 test 预测、总耗时 13.85 秒、峰值 RSS 491,802,624 bytes。三个开盘缺口分位数零单调违例，q10-q90 test coverage 为 0.72795。可执行标签共 8120 行但只有 4 个权威负例，test 仅 1 个负例，因此 binary 输出保持 `UNCALIBRATED/EXPERIMENTAL_SHADOW`，不得解释为已校准强区分概率或用于隐藏筛选。M4B 源码已实现但尚未完成数据库迁移/同步、exact binding、合入、用户重启和真实 readback，短反弹用户可见进度仍为 `3/4`。
+状态：`M4_RUNTIME_API_VERIFIED`。详细设计为 `docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`。M4A request `advprreq_2d826a7b2704137bf3a60d9d` 在 WSL `rdagent-gpu` 生成 bundle `1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3`：4 个真实 LightGBM heads、1600 行/80 日 test 预测、总耗时 13.85 秒、峰值 RSS 491,802,624 bytes。三个开盘缺口分位数零单调违例，q10-q90 test coverage 为 0.72795。可执行标签共 8120 行但只有 4 个权威负例，test 仅 1 个负例，因此 binary 输出保持 `UNCALIBRATED/EXPERIMENTAL_SHADOW`，不得解释为已校准强区分概率或用于隐藏筛选。M4B 源码、`market.dividend` 迁移与日调度、目标日同步、exact binding 和用户重启均已完成。2026-08-11 对原生多 Alpha Program `advp_3126dd77f9774d94850f37ad012f640f` 执行 `decision=2026-07-15 / target=2026-07-16` 只读 readback：20 个候选与 M2/M3 顺序完全一致，20/20 均返回买入、止盈、止损和移动保护范围，Top5 保持 5 只；单 Alpha 无对应 bundle 时返回 typed unavailable 且不阻断原荐股。页面运行地址 HTTP 200，但当前验证窗口无可用浏览器，因此视觉验收保持独立 pending。
 
 - 先使用日线Bin完成真实日线级价格范围模型。
 - 盘中路径模型作为后续独立增量，只在用户确认需要时读取现有分钟Bin。
@@ -401,11 +401,14 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 ### M5：模型质量迭代
 
-优先级：`P2_AFTER_FUNCTION`。
+优先级：`P0_NOW`。
 
-- 在当前约两年的各腿预测覆盖内比较滚动、扩展和不同起点窗口；3/5年只有在同一目标父包的合法历史预测确实存在时才执行，不能用其它实验或新模型回填。
-- 增加额外种子、消融、bootstrap和概率校准。
-- 它们影响模型质量结论，不回溯阻断M1/M2真实功能。
+状态：`DETAILED_DESIGN_REVIEWED_READY_FOR_IMPLEMENTATION`。详细设计为 `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`；父蓝图与详细设计已分别通过F2 validator，验收矩阵26/26与12/12完整、0 warnings。
+
+- M5A 首先改善 Top20→Top5：当前 M1 test `mean_excess_return_5=-0.0002833`，明显低于 `selection_rank_top5=0.0085591`，不得把“模型已运行”误写为“模型排序有效”。
+- M5A 在现有 406 日/8120 候选、103 特征和冻结 test 上做有限窗口、种子、模型配置及 selection-prior 混合比较；所有选择只使用 train/validation，test 只做一次最终报告。
+- M5B 再处理 M3 概率校准与 quantile coverage；M5C 处理 M4 entry-gap quantile coverage。M4 executable 负例仅 4 条，禁止伪造二分类校准。
+- 3/5 年实验只有在同一目标父包的合法既有预测确实存在时才执行，不能用其它实验或新模型回填；不得为 M5 新建历史证据、缓存或 ModelOps 平台。
 
 ### M6：长期趋势专家
 
@@ -448,32 +451,42 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-119 | 分钟Bin不阻断Top5、收益、周期或首版日线价格范围；只有盘中路径模型明确需要时才消费 |
 | F-120 | 首模只要求沪深300；其它宽基指数在模型合同明确需要前不补充、不阻断 |
 | F-121 | WSL训练峰值内存低于8GB并以小时级完成首模；采用列/日期/候选分批与临时Parquet，不建设新缓存或证据平台 |
+| F-122 | M5A 所有窗口、种子、模型配置和融合权重只由 train/validation 选择；冻结 80 日 test 仅在 winner 固定后评价一次 |
+| F-123 | M5A 必须同时报告模型、selection rank、HMM、随机和 Top20 等权基线；质量差如实保留，不用 hidden fallback 或 test 调参 |
+| F-124 | selection-prior 混合是显式模型合同并保存权重，不把规则基线冒充模型；多个 Program 仍按 exact package/style binding 隔离 |
+| F-125 | M3 概率校准只使用 validation 拟合并独立报告 discrimination 与 calibration；M4 二分类负例不足时保持 `UNCALIBRATED` |
+| F-126 | M3/M4 quantile 校准不得读取 test 标签或实时未来行情；模型发布、binding、重启和 deployed readback继续分开报告 |
 
 ## 11. Design Acceptance Matrix
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-101 | planned: `backend/services/advisory_model_first/qe_file_source.py` | planned: `backend/tests/advisory_modeling/test_qe_file_source.py` | design_ready | none |
-| F-102 | planned: `backend/services/advisory_model_first/wsl_training.py` | planned: `backend/tests/advisory_modeling/test_wsl_training.py` | design_ready | none |
-| F-103 | planned: `backend/services/advisory_model_first/short_rebound_trainer.py` | planned: `backend/tests/advisory_modeling/test_short_rebound_training.py` | design_ready | none |
-| F-104 | planned: `backend/services/advisory_model_first/time_split.py` | planned: `backend/tests/advisory_modeling/test_time_split.py` | design_ready | none |
-| F-105 | planned: `backend/services/advisory_model_first/shared_feature_builder.py` | planned: `backend/tests/advisory_modeling/test_feature_source_parity.py` | design_ready | none |
-| F-106 | planned: `backend/services/advisory_model_first/realtime_feature_source.py` | planned: `backend/tests/advisory_modeling/test_database_realtime_source.py` | design_ready | none |
-| F-107 | planned: `backend/services/advisory_model_first/reranker_evaluation.py` | planned: `backend/tests/advisory_modeling/test_reranker_evaluation.py` | design_ready | none |
-| F-108 | planned: `backend/routers/advisory.py`、`frontend/src/app/paper-v2/advisory/page.tsx` | planned: `frontend/tests/advisory-model-shadow.spec.ts` | design_ready | none |
-| F-109 | planned: `backend/services/advisory_model_first/model_inference.py` | planned: `backend/tests/advisory_modeling/test_inference_failures.py` | design_ready | none |
-| F-110 | planned: Program级推理composition | planned: `backend/tests/advisory_modeling/test_program_isolation.py` | design_ready | none |
-| F-111 | planned: M3/M4模型头 | planned: `backend/tests/advisory_modeling/test_outcome_and_price_models.py` | design_ready | none |
-| F-112 | planned: Advisory消费层边界 | planned: `backend/tests/advisory_modeling/test_protected_module_isolation.py` | design_ready | none |
-| F-113 | 本蓝图§3、§12.4、§14 | planned: `backend/tests/advisory_modeling/test_no_unapproved_gates.py` | design_ready | none |
-| F-114 | 本蓝图§0、§3、§9 | planned: `backend/tests/advisory_modeling/test_no_historical_dependencies.py` | design_ready | none |
-| F-115 | 本蓝图§1、§9 | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` | design_ready | none |
-| F-116 | planned: `backend/services/advisory_model_first/qe_file_source.py` + existing `ModelStoreService` | planned: `backend/tests/advisory_modeling/test_qe_exact_roster_prediction_source.py` | design_ready | none |
-| F-117 | existing Qlib Bin fields + planned file source | planned: `backend/tests/advisory_modeling/test_qe_limit_bin_source.py` | design_ready | none |
-| F-118 | existing `backend/quant_models/hmm/sector_hmm.py` + planned file adapter | planned: `backend/tests/advisory_modeling/test_hmm_fresh_file_fit.py` | design_ready | none |
-| F-119 | planned: M1/M3/M4 model inputs | planned: `backend/tests/advisory_modeling/test_minute_data_phase_boundary.py` | design_ready | none |
-| F-120 | existing `000300.SH` Qlib day Bin | planned: `backend/tests/advisory_modeling/test_benchmark_index_minimum.py` | design_ready | none |
-| F-121 | planned: WSL launcher/reader/trainer | planned: `backend/tests/advisory_modeling/test_training_resource_budget.py` | design_ready | none |
+| F-101 | `backend/services/advisory_model_first/qe_file_source.py` | `backend/tests/advisory_model_first/test_qe_file_source.py`; M1/M3/M4 frozen artifacts | implemented_verified | none |
+| F-102 | Windows launcher + `scripts/wsl/advisory_*_train.py` | artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/training_log.json`; M3/M4同类receipt | implemented_verified | none |
+| F-103 | `reranker_training.py`, `outcome_training.py`, `price_range_training.py` | `backend/tests/advisory_model_first/test_price_range_training.py`; `backend/tests/advisory_model_first/test_outcome_training.py`; artifact: M1 `model.txt` | implemented_verified | none |
+| F-104 | `time_split.py`, `outcome_split.py` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; `backend/tests/advisory_model_first/test_outcome_split.py`; artifact: M1/M3/M4 `split.json` | implemented_verified | none |
+| F-105 | `shared_feature_builder.py`, `feature_schema_v1.py` | `backend/tests/advisory_model_first/test_shared_feature_builder.py`; `backend/tests/advisory_model_first/test_realtime_feature_source.py` | implemented_verified | none |
+| F-106 | `realtime_feature_source.py` | `backend/tests/advisory_model_first/test_realtime_feature_source.py`; artifact: deployed model-shadow readback for decision `2026-07-15`, target `2026-07-16` | implemented_verified | none |
+| F-107 | `reranker_training.py` baseline comparison | artifact: `F:/Dev/AIstock_model_artifacts/advisory_model_first/bundles/9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629/baseline_comparison.json`; `backend/tests/advisory_model_first/test_candidate_and_contracts.py` | implemented_verified | none |
+| F-108 | `backend/routers/advisory.py`; `frontend/src/app/paper-v2/advisory/page.tsx` | `backend/tests/advisory_model_first/test_model_shadow_api.py`; `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts`; runtime route HTTP 200 | implemented_verified | none |
+| F-109 | `model_inference.py`, exact binding loaders | `backend/tests/advisory_model_first/test_model_inference.py`; `backend/tests/advisory_model_first/test_model_shadow_api.py`; artifact: typed single Alpha unavailable readback | implemented_verified | none |
+| F-110 | Program-level Advisory composition | `backend/tests/advisory_model_first/test_model_inference.py`; artifact: real single Alpha typed unavailable and native multi Alpha 20-candidate readback | implemented_verified | none |
+| F-111 | M3 46 heads; M4 4 heads | `backend/tests/advisory_model_first/test_outcome_training.py`; `backend/tests/advisory_model_first/test_price_range_training.py`; M3/M4 `metrics.json` artifacts | implemented_verified | none |
+| F-112 | Advisory-only model-first modules | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `backend/tests/advisory_model_first/test_price_range_boundaries.py` | implemented_verified | none |
+| F-113 | blueprint §§3,14 and model-first error contracts | artifact: `docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`; F2 validator receipts | implemented_verified | none |
+| F-114 | model-first import and changed-file boundaries | `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `backend/tests/advisory_model_first/test_price_range_boundaries.py` | implemented_verified | none |
+| F-115 | blueprint feature ledger | artifact: `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`; deployed M2/M3/M4 readbacks | implemented_verified | none |
+| F-116 | `candidate_group.py`, `prediction_source.py`, `qe_file_source.py` | `backend/tests/advisory_model_first/test_candidate_and_contracts.py`; artifact: M1 406-date/8120-row request | implemented_verified | none |
+| F-117 | Qlib daily/limit fields and price-range labels | `backend/tests/advisory_model_first/test_labels.py`; `backend/tests/advisory_model_first/test_price_range_labels.py` | implemented_verified | none |
+| F-118 | `fresh_hmm.py` | `backend/tests/advisory_model_first/test_fresh_hmm.py`; artifact: M1 `fresh_hmm_models.json` | implemented_verified | none |
+| F-119 | M1/M3/M4 daily input contracts | `backend/tests/advisory_model_first/test_qe_file_source.py`; `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `backend/tests/advisory_model_first/test_price_range_boundaries.py` | implemented_verified | none |
+| F-120 | QE `000300.SH` daily Bin | `backend/tests/advisory_model_first/test_qe_file_source.py`; artifact: M1 `training_request.json` benchmark identity | implemented_verified | none |
+| F-121 | WSL pipelines and receipts | artifact: M1/M3/M4 bundle `training_log.json`; M1 peak ~2.11GB/129s, M3 ~0.66GB/108s, M4 ~0.49GB/13.85s | implemented_verified | none |
+| F-122 | M5A train/test dual request and winner policy | `backend/tests/advisory_model_first/test_quality_contracts.py`; `test_quality_pipeline.py` | design_ready | none |
+| F-123 | M5A shared baseline evaluator | `backend/tests/advisory_model_first/test_quality_evaluation.py` | design_ready | none |
+| F-124 | M5A ensemble and selection-prior policy | `backend/tests/advisory_model_first/test_quality_scoring.py`; `test_quality_runtime_bundle.py` | design_ready | none |
+| F-125 | M5B validation-only probability calibration | artifact: `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md` §11.1 | design_ready | none |
+| F-126 | M5B/M5C validation-only quantile calibration | artifact: `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md` §§11.2-11.3 | design_ready | none |
 
 ## 12. Verification Plan
 
@@ -579,14 +592,15 @@ runtime_activation = separate user-confirmed action
 
 ## 16. 当前下一步
 
-下一项任务完成 M4B 部署前闭环，详细设计为：
+下一项主线任务是 M5A Top20→Top5 质量迭代，详细设计为：
 
-`docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`
+`docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`
 
 执行顺序固定为：
 
-1. 完成源码最终审核；经明确授权后先在 DEV 应用并验证 `market.dividend` 迁移，再分别授权生产 DDL、默认 schedule DML 和目标日首次同步。
-2. 合入 M4B 源码后单独发布 exact M4 binding，由用户重启后端。
-3. 重启后对真实单/原生多 Alpha Program 执行只读 model-shadow API/UI readback；M4 不可用时只关闭价格区间子信封，M2/M3 和规则荐股继续运行。
+1. 冻结现有 M1 输入、split、基线和 test，不重新构建历史数据。
+2. 在 WSL `rdagent-gpu` 执行有限 M5A train/validation tournament，先解决 M1 排序显著弱于 selection rank 的问题。
+3. winner 固定后只运行一次冻结 test，发布新的实验 bundle 和完整比较；不得根据 test 结果回改参数。
+4. M5A 完成后依次进入 M5B 概率/收益区间校准和 M5C entry-gap 区间校准。
 
-M4 完成前禁止插入 Historical Range、历史证据、旧 batch/root 清理、通用缓存、ModelOps、角色审批或额外门禁。M5 模型质量迭代继续排在 M4 真实功能之后。
+M4 页面视觉验收可在具备浏览器的窗口独立完成，不阻断已可运行的 M5 训练主线；若发现真实 UI 缺陷则按 BUG 流程修复。M5 期间继续禁止插入 Historical Range、历史证据、旧 batch/root 清理、通用缓存、ModelOps、角色审批或额外门禁。
