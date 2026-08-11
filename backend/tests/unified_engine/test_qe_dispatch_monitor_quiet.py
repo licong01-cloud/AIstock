@@ -142,3 +142,22 @@ def test_direct_correlation_path_consumes_observations_not_global_sync() -> None
     assert "sync_running_tasks" not in source
     assert ".get_task(" not in source
     assert "sleep(2)" not in source
+
+
+def test_factor_metrics_invalid_remote_numbers_are_explicit_not_silent(caplog) -> None:
+    task = {
+        "task_id": "dispatch-invalid",
+        "status": "success",
+        "progress_pct": "not-a-number",
+    }
+    summary = FactorMetricsScheduler._build_terminal_summary(
+        task,
+        {"db_result": {"inserted": {"unexpected": "shape"}}},
+        "success",
+    )
+
+    assert summary["inserted_rows_error"] == "invalid_inserted_count"
+    assert "inserted_rows" not in summary
+    assert FactorMetricsScheduler._coerce_progress("not-a-number") == 0
+    assert "invalid inserted count" in caplog.text
+    assert "invalid progress" in caplog.text

@@ -13,7 +13,9 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import math
 import os
+import re
 import threading
 import time
 import uuid
@@ -32,6 +34,7 @@ logger = logging.getLogger("aistock.factor_metrics_scheduler")
 
 _DEFAULT_DISPATCH_NODE_ID = os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080")
 _TERMINAL_DISPATCH_STATUSES = {"success", "failed", "canceled"}
+_NUMERIC_TEXT_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
 
 
 def _now() -> dt.datetime:
@@ -447,18 +450,41 @@ class FactorMetricsScheduler:
         }
         if db_result is not None:
             summary["db_result"] = db_result
-            try:
-                summary["inserted_rows"] = int(db_result.get("inserted") or 0)
-            except Exception:
-                pass
+            inserted = db_result.get("inserted")
+            if inserted is None or inserted == "":
+                summary["inserted_rows"] = 0
+            elif isinstance(inserted, int) and not isinstance(inserted, bool):
+                summary["inserted_rows"] = int(inserted)
+            elif isinstance(inserted, float) and math.isfinite(inserted):
+                summary["inserted_rows"] = int(inserted)
+            elif isinstance(inserted, str) and _NUMERIC_TEXT_RE.fullmatch(inserted.strip()):
+                numeric_inserted = float(inserted)
+                if math.isfinite(numeric_inserted):
+                    summary["inserted_rows"] = int(numeric_inserted)
+                else:
+                    summary["inserted_rows_error"] = "invalid_inserted_count"
+                    logger.warning("dispatch result returned non-finite inserted count")
+            else:
+                summary["inserted_rows_error"] = "invalid_inserted_count"
+                logger.warning("dispatch result returned invalid inserted count type=%s", type(inserted).__name__)
         return summary
 
     @staticmethod
     def _coerce_progress(value: Any) -> int:
-        try:
-            return max(0, min(100, int(float(value or 0))))
-        except Exception:
+        if value is None or value == "":
             return 0
+        numeric: Optional[float]
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+        elif isinstance(value, str) and _NUMERIC_TEXT_RE.fullmatch(value.strip()):
+            numeric = float(value)
+        else:
+            logger.warning("dispatch task returned invalid progress type=%s", type(value).__name__)
+            return 0
+        if not math.isfinite(numeric):
+            logger.warning("dispatch task returned non-finite progress")
+            return 0
+        return max(0, min(100, int(numeric)))
 
     @staticmethod
     def _build_counters(status: str, progress: int) -> Dict[str, int]:
