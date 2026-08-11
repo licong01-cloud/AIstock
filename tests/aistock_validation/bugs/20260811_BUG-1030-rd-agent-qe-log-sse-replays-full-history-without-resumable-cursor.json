@@ -20,9 +20,23 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260811-1cfa454f8429",
       "timestamp": "2026-08-11T19:49:19.362252Z"
+    },
+    {
+      "action": "cross_repo_source_pr_ready",
+      "actor": "codex",
+      "note": "RD-Agent PR #19 at commit 9f7f8086430f83e23aca34733394074e24021731 is OPEN, CLEAN, and MERGEABLE. Opaque resumable cursor, bounded initial tail and append reads, SSE id/Last-Event-ID, terminal replay suppression, disconnect handling, and loud stale-cursor failure are implemented. Focused cursor tests 13 passed; related API matrix 57 passed/5 environment skips; ruff, py_compile, and diff-check passed. No database access, process control, dependency install, DDL/DML, deployment, restart, or log cleanup was performed.",
+      "timestamp": "2026-08-11T20:23:47Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "codex",
+      "note": "DESIGN-COMPLIANCE-001: complete resumable cursor delivery rather than a subset; malformed, conflicting, truncated, replaced, and wrong-stream cursors fail loudly; QE execution and terminal semantics are unchanged; no new approval or release gate was added. Cross-repository source readiness remains separate from user-owned RD-Agent deployment and runtime verification.",
+      "timestamp": "2026-08-11T20:23:47Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/RD-Agent/pull/19"
+  ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
@@ -39,15 +53,16 @@
     "scope_files": []
   },
   "first_seen_at": "2026-08-11T19:49:19.362263Z",
-  "fix_branch": null,
-  "fix_commit": null,
+  "fix_branch": "bug/BUG-1030-qe-log-cursor-20260812",
+  "fix_commit": "9f7f8086430f83e23aca34733394074e24021731",
   "fixed_at": null,
   "github_issue_number": 3297,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3297",
   "last_seen_at": "2026-08-11T19:49:19.362263Z",
   "module": "quantevolver",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not deploy RD-Agent or delete historical logs as part of the source fix."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -59,7 +74,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "external_runtime_dependencies": [
+      {
+        "backend_restart_owner": "user",
+        "deployment_restart": "pending_user",
+        "pr_number": 19,
+        "repository": "licong01-cloud/RD-Agent",
+        "runtime_identity_match": "pending",
+        "runtime_target": "RD-Agent QE API",
+        "source_merge": "pending_user_authorization"
+      }
+    ],
     "fresh_process_evidence": [],
+    "overall_runtime_activation_gate": "pending_rdagent_source_merge_and_runtime_verification",
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
     "runtime_impact": "none",
