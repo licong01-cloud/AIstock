@@ -43,17 +43,15 @@ def main() -> int:
         print(json.dumps(exc.as_dict(), ensure_ascii=True, sort_keys=True), file=sys.stderr, flush=True)
         return 2
     except Exception as exc:
+        payload = {
+            "status": "failed",
+            "reason_code": "ADVISORY_M5_UNEXPECTED_ERROR",
+            "message": str(exc),
+            "context": {"error_type": type(exc).__name__, "stage": args.command},
+        }
+        _write_failure_receipt(args, payload)
         print(
-            json.dumps(
-                {
-                    "status": "failed",
-                    "reason_code": "ADVISORY_M5_UNEXPECTED_ERROR",
-                    "message": str(exc),
-                    "context": {"error_type": type(exc).__name__, "stage": args.command},
-                },
-                ensure_ascii=True,
-                sort_keys=True,
-            ),
+            json.dumps(payload, ensure_ascii=True, sort_keys=True),
             file=sys.stderr,
             flush=True,
         )
