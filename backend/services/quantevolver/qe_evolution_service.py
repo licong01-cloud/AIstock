@@ -6625,39 +6625,86 @@ class AutoEvolutionScheduler:
                     if slot and not slot.get("available", True):
                         if insert_if_missing:
                             cur.execute(
-                                """
-                                INSERT INTO qe_evolution_loops
-                                (loop_id, task_id, loop_index, status, action_type, node_id)
-                                VALUES (%s, %s, %s, 'pending', %s, %s)
-                                ON CONFLICT (loop_id) DO UPDATE SET
-                                    status = CASE
-                                        WHEN qe_evolution_loops.status IN ('running', 'processing', 'completed')
-                                        THEN qe_evolution_loops.status
-                                        ELSE 'pending'
-                                    END,
-                                    node_id = COALESCE(qe_evolution_loops.node_id, EXCLUDED.node_id),
-                                    updated_at = NOW()
-                                WHERE (
-                                    qe_evolution_loops.status NOT IN ('running', 'processing', 'completed')
-                                    AND qe_evolution_loops.status IS DISTINCT FROM 'pending'
-                                ) OR (
-                                    qe_evolution_loops.node_id IS NULL
-                                    AND EXCLUDED.node_id IS NOT NULL
-                                )
-                                """,
-                                (loop_db_id, task_id, loop_index, action_type, target_node_id),
-                            )
-                        else:
-                            cur.execute(
-                                """
-                                UPDATE qe_evolution_loops
-                                SET status = 'pending', updated_at = NOW()
-                                WHERE loop_id = %s
-                                  AND status NOT IN ('running', 'processing', 'completed')
-                                  AND status IS DISTINCT FROM 'pending'
-                                """,
+                                "SELECT status, node_id FROM qe_evolution_loops WHERE loop_id = %s",
                                 (loop_db_id,),
                             )
+                            existing = cur.fetchone()
+                            existing_status = (
+                                str(existing.get("status") or "")
+                                if isinstance(existing, dict)
+                                else str(existing[0] or "") if existing else ""
+                            )
+                            existing_node_id = (
+                                existing.get("node_id")
+                                if isinstance(existing, dict)
+                                else existing[1] if existing and len(existing) > 1 else None
+                            )
+                            already_pending = (
+                                existing_status
+                                in {"pending", "running", "processing", "completed"}
+                                and not (
+                                    existing_node_id is None
+                                    and target_node_id is not None
+                                )
+                            )
+                            if not already_pending:
+                                cur.execute(
+                                    """
+                                    INSERT INTO qe_evolution_loops
+                                    (loop_id, task_id, loop_index, status, action_type, node_id)
+                                    VALUES (%s, %s, %s, 'pending', %s, %s)
+                                    ON CONFLICT (loop_id) DO UPDATE SET
+                                        status = CASE
+                                            WHEN qe_evolution_loops.status IN ('running', 'processing', 'completed')
+                                            THEN qe_evolution_loops.status
+                                            ELSE 'pending'
+                                        END,
+                                        node_id = COALESCE(qe_evolution_loops.node_id, EXCLUDED.node_id),
+                                        updated_at = NOW()
+                                    WHERE (
+                                        qe_evolution_loops.status NOT IN ('running', 'processing', 'completed')
+                                        AND qe_evolution_loops.status IS DISTINCT FROM 'pending'
+                                    ) OR (
+                                        qe_evolution_loops.node_id IS NULL
+                                        AND EXCLUDED.node_id IS NOT NULL
+                                    )
+                                    """,
+                                    (
+                                        loop_db_id,
+                                        task_id,
+                                        loop_index,
+                                        action_type,
+                                        target_node_id,
+                                    ),
+                                )
+                        else:
+                            cur.execute(
+                                "SELECT status FROM qe_evolution_loops WHERE loop_id = %s",
+                                (loop_db_id,),
+                            )
+                            existing = cur.fetchone()
+                            existing_status = (
+                                str(existing.get("status") or "")
+                                if isinstance(existing, dict)
+                                else str(existing[0] or "") if existing else ""
+                            )
+                            if existing_status not in {
+                                "pending",
+                                "running",
+                                "processing",
+                                "completed",
+                                "",
+                            }:
+                                cur.execute(
+                                    """
+                                    UPDATE qe_evolution_loops
+                                    SET status = 'pending', updated_at = NOW()
+                                    WHERE loop_id = %s
+                                      AND status NOT IN ('running', 'processing', 'completed')
+                                      AND status IS DISTINCT FROM 'pending'
+                                    """,
+                                    (loop_db_id,),
+                                )
                         conn.commit()
                     else:
                         if insert_if_missing:

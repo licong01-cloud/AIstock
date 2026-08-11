@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from backend.services.quantevolver import config_composer as config_composer_module
+from backend.services.quantevolver import qe_reconciliation_coordinator as qerc
 from backend.services.quantevolver.config_composer import ConfigComposer
 from backend.services.quantevolver.meta_model import MetaModelCombiner
 from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
@@ -20,6 +21,59 @@ from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient
 from backend.services.quantevolver.callback_urls import build_aistock_callback_base_url, build_aistock_callback_url
 from backend.routers import quantevolver as quantevolver_router
 from backend.routers.quantevolver import _build_multi_alpha_group_command
+
+
+def test_mixed_multi_alpha_parent_100x_steady_state_has_zero_dml_and_wakes(monkeypatch):
+    statements: list[str] = []
+    notifications: list[tuple[object, object]] = []
+    started_at = object()
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params=None):  # type: ignore[no-untyped-def]
+            normalized = " ".join(str(sql).split())
+            statements.append(normalized)
+            assert normalized.startswith("SELECT ")
+
+        def fetchone(self):
+            return ("running", "qe-task", "Loop1", started_at)
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(quantevolver_router, "get_conn", lambda: Connection())
+    monkeypatch.setattr(
+        qerc,
+        "notify_qe_reconciliation",
+        lambda scope, **kwargs: notifications.append((scope, kwargs)),
+    )
+
+    for _ in range(100):
+        changed = quantevolver_router._persist_multi_alpha_parent_running_state(
+            experiment_id="exp-mixed",
+            qe_task_id="qe-task",
+            primary_loop_id="Loop1",
+        )
+        assert changed is False
+
+    assert len(statements) == 100
+    assert all(statement.startswith("SELECT ") for statement in statements)
+    assert notifications == []
 
 
 class TestQrunLimitMinutePredBacktest:

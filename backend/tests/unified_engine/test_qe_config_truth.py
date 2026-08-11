@@ -82,6 +82,16 @@ DATA_SPLIT = {
 }
 
 
+def test_backend_lifespan_has_one_qe_coordinator_and_no_legacy_poll_loops() -> None:
+    source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+    assert source.count("run_qe_reconciliation_coordinator(shutdown_event)") == 1
+    assert "_timer_scan_loop" not in source
+    assert "_qe_experiment_scan_loop" not in source
+    assert "_qe_reservation_reconcile_loop" not in source
+    assert "_qe_long_trend_reconcile_loop" not in source
+
+
 def _load_qrun_minute_module(monkeypatch):
     qlib = types.ModuleType("qlib")
     qlib_model = types.ModuleType("qlib.model")
@@ -1165,6 +1175,11 @@ class _CustomEvoQueueCursor:
         self.state["params"].append(params)
 
     def fetchone(self):
+        if self.sql.startswith("SELECT status, node_id FROM qe_evolution_loops"):
+            return self.state.get("existing_loop")
+        if self.sql.startswith("SELECT status FROM qe_evolution_loops"):
+            existing = self.state.get("existing_loop")
+            return (existing[0],) if existing else None
         if "RETURNING status" in self.sql and self.state.get("transitioned", True):
             return ("running",)
         return None
@@ -1313,6 +1328,57 @@ def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
     assert state["enters"] == state["exits"] == 2
     assert any("VALUES (%s, %s, %s, 'pending', %s, %s)" in sql for sql in state["sql"])
     assert any("VALUES (%s, %s, %s, 'running', %s, %s)" in sql for sql in state["sql"])
+
+
+def test_custom_evo_100_unchanged_pending_wakes_execute_select_only(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    state = {
+        "sql": [],
+        "params": [],
+        "commits": 0,
+        "enters": 0,
+        "exits": 0,
+        "existing_loop": ("pending", "node-a"),
+    }
+    waits = 0
+
+    def fake_enforce(cur, *, task, loop_index, target_node_id, loop_db_id):
+        return {
+            "task_id": task["task_id"],
+            "node_id": target_node_id,
+            "active_count": 1,
+            "limit": 1,
+            "available": False,
+        }
+
+    async def stop_after_100(*_args, **_kwargs):
+        nonlocal waits
+        waits += 1
+        if waits == 100:
+            raise asyncio.CancelledError
+        return waits
+
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", fake_enforce)
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", stop_after_100)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            scheduler._mark_custom_evo_loop_running_when_slot_available(
+                task=_custom_evo_task_for_parallelism(limit=1),
+                loop_index=2,
+                target_node_id="node-a",
+                loop_db_id="qe_parallel_task_Loop2",
+                action_type="retry",
+                insert_if_missing=True,
+            )
+        )
+
+    statements = [sql.upper() for sql in state["sql"]]
+    assert waits == 100
+    assert len(statements) == 100
+    assert all(sql.startswith("SELECT ") for sql in statements)
+    assert not any(sql.startswith(("UPDATE ", "INSERT ", "DELETE ")) for sql in statements)
 
 
 def test_custom_evo_parallelism_queue_helper_does_not_resubmit_active_loop(monkeypatch):

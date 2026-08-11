@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from collections import OrderedDict
@@ -23,6 +24,55 @@ class QEReconciliationScope(StrEnum):
     EVOLUTION = "evolution"
     LONG_TREND = "long_trend"
     RESOURCE_SESSION = "resource_session"
+
+
+_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "y", "on"})
+_MIN_SCAN_INTERVAL_SECONDS = 60.0
+
+
+def _env_disabled(name: str) -> bool:
+    return str(os.getenv(name) or "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _env_scan_interval(name: str, default: int) -> float:
+    raw = str(os.getenv(name) or str(default)).strip() or str(default)
+    return max(_MIN_SCAN_INTERVAL_SECONDS, float(raw))
+
+
+@dataclass(frozen=True)
+class QEReconciliationConfig:
+    """Runtime configuration preserving the pre-coordinator environment API."""
+
+    enabled_scopes: frozenset[QEReconciliationScope]
+    family_intervals: Mapping[QEReconciliationScope, float]
+    experiment_batch_size: int
+
+    @classmethod
+    def from_environment(cls) -> "QEReconciliationConfig":
+        enabled = set(QEReconciliationScope)
+        if _env_disabled("DISABLE_EVOLUTION_SCANNER"):
+            enabled.discard(QEReconciliationScope.EVOLUTION)
+        if _env_disabled("DISABLE_QE_EXPERIMENT_SCANNER"):
+            enabled.discard(QEReconciliationScope.EXPERIMENT)
+        intervals = {
+            QEReconciliationScope.RESERVATION: _env_scan_interval(
+                "QE_EXECUTION_RESERVATION_SCAN_INTERVAL_SEC", 15
+            ),
+            QEReconciliationScope.EXPERIMENT: _env_scan_interval(
+                "QE_EXPERIMENT_SCAN_INTERVAL_SEC", 30
+            ),
+            QEReconciliationScope.EVOLUTION: _env_scan_interval(
+                "QE_EVOLUTION_SCAN_INTERVAL_SEC", 60
+            ),
+            QEReconciliationScope.LONG_TREND: _MIN_SCAN_INTERVAL_SECONDS,
+            QEReconciliationScope.RESOURCE_SESSION: _MIN_SCAN_INTERVAL_SECONDS,
+        }
+        batch_raw = str(os.getenv("QE_EXPERIMENT_SCAN_BATCH_SIZE") or "50").strip() or "50"
+        return cls(
+            enabled_scopes=frozenset(enabled),
+            family_intervals=intervals,
+            experiment_batch_size=max(1, int(batch_raw)),
+        )
 
 
 @dataclass(frozen=True)
@@ -59,6 +109,9 @@ class QEReconciliationWakeBus:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pending_work: dict[QEReconciliationScope, dict[str, bool]] = {}
+        self._pending_order: OrderedDict[
+            tuple[QEReconciliationScope, str], None
+        ] = OrderedDict()
         self._snapshot_requests: dict[QEReconciliationScope, set[str]] = {}
         self._coordinator_subscribers: set[
             tuple[asyncio.AbstractEventLoop, asyncio.Event]
@@ -71,9 +124,11 @@ class QEReconciliationWakeBus:
             tuple[QEReconciliationScope, str], object
         ] = OrderedDict()
         self._state_generations: dict[tuple[QEReconciliationScope, str], int] = {}
+        self._generation_clock = -1
 
     _MISSING = object()
     _STATE_CACHE_LIMIT = 10_000
+    _PENDING_WORK_LIMIT = 10_000
 
     def register_coordinator(
         self,
@@ -111,6 +166,23 @@ class QEReconciliationWakeBus:
         with self._lock:
             work = self._pending_work.setdefault(normalized, {})
             work[normalized_key] = bool(work.get(normalized_key)) or bool(force)
+            pending_key = (normalized, normalized_key)
+            self._pending_order[pending_key] = None
+            self._pending_order.move_to_end(pending_key)
+            while len(self._pending_order) > self._PENDING_WORK_LIMIT:
+                evicted, _ = self._pending_order.popitem(last=False)
+                evicted_scope, evicted_key = evicted
+                evicted_work = self._pending_work.get(evicted_scope)
+                if evicted_work is not None:
+                    evicted_work.pop(evicted_key, None)
+                    if not evicted_work:
+                        self._pending_work.pop(evicted_scope, None)
+            subscribers = tuple(self._coordinator_subscribers)
+        self._schedule(subscribers)
+
+    def wake_coordinators(self) -> None:
+        """Wake coordinators without manufacturing external business work."""
+        with self._lock:
             subscribers = tuple(self._coordinator_subscribers)
         self._schedule(subscribers)
 
@@ -144,6 +216,7 @@ class QEReconciliationWakeBus:
                 for scope, work in self._pending_work.items()
             }
             self._pending_work.clear()
+            self._pending_order.clear()
         return pending
 
     def drain_snapshot_requests(
@@ -246,7 +319,8 @@ class QEReconciliationWakeBus:
                     previous = self._state_values.get(waiter_key)
                     if previous_exists and previous == value:
                         continue
-                    generation = self._state_generations.get(waiter_key, -1) + 1
+                    self._generation_clock += 1
+                    generation = self._generation_clock
                     self._state_values[waiter_key] = value
                     self._state_values.move_to_end(waiter_key)
                     self._state_generations[waiter_key] = generation
@@ -336,10 +410,13 @@ AsyncScanner = Callable[[], Awaitable[Any]]
 
 
 class QEReconciliationCoordinator:
+    _THROTTLE_CACHE_LIMIT = 10_000
+
     def __init__(
         self,
         *,
         safety_sweep_seconds: float = 60.0,
+        config: QEReconciliationConfig | None = None,
         due_probe: DueProbe | None = None,
         reservation_scanner: AsyncScanner | None = None,
         experiment_scanner: AsyncScanner | None = None,
@@ -349,6 +426,7 @@ class QEReconciliationCoordinator:
         wake_bus: QEReconciliationWakeBus = qe_reconciliation_wakeup,
     ) -> None:
         self._safety_sweep_seconds = max(60.0, float(safety_sweep_seconds))
+        self._config = config or QEReconciliationConfig.from_environment()
         self._due_probe = due_probe or self._load_due_work
         self._reservation_scanner = reservation_scanner
         self._experiment_scanner = experiment_scanner
@@ -357,29 +435,54 @@ class QEReconciliationCoordinator:
         self._resource_scanner = resource_scanner
         self._wake_bus = wake_bus
         self._initialized = False
-        self._last_business_scan_at: dict[tuple[QEReconciliationScope, str], float] = {}
-        self._last_forced_scan_at: dict[tuple[QEReconciliationScope, str], float] = {}
+        self._last_business_scan_at: OrderedDict[
+            tuple[QEReconciliationScope, str], float
+        ] = OrderedDict()
+        self._last_forced_scan_at: OrderedDict[
+            tuple[QEReconciliationScope, str], float
+        ] = OrderedDict()
+        self._last_family_scan_at: dict[QEReconciliationScope, float] = {}
+        self._last_safety_probe_at: float | None = None
+        self._last_event_probe_at: float | None = None
         self._inflight: dict[QEReconciliationScope, asyncio.Task[None]] = {}
+        self._inflight_dirty: set[QEReconciliationScope] = set()
+        self._replay_ready: set[QEReconciliationScope] = set()
+        self._shutting_down = False
+
+    @property
+    def config(self) -> QEReconciliationConfig:
+        return self._config
+
+    def _scope_enabled(self, scope: QEReconciliationScope) -> bool:
+        return scope in self._config.enabled_scopes
+
+    def _family_interval(self, scope: QEReconciliationScope) -> float:
+        return max(
+            _MIN_SCAN_INTERVAL_SECONDS,
+            float(self._config.family_intervals.get(scope, _MIN_SCAN_INTERVAL_SECONDS)),
+        )
 
     def _initialize_default_scanners(self) -> None:
         if self._initialized:
             return
-        if self._reservation_scanner is None:
+        if self._scope_enabled(QEReconciliationScope.RESERVATION) and self._reservation_scanner is None:
             from .qe_active_execution_capacity import QEExecutionReservationReconciler
 
             reconciler = QEExecutionReservationReconciler()
             self._reservation_scanner = reconciler.scan_once
-        if self._experiment_scanner is None:
+        if self._scope_enabled(QEReconciliationScope.EXPERIMENT) and self._experiment_scanner is None:
             from .qe_experiment_status_scanner import QEExperimentStatusScanner
 
-            scanner = QEExperimentStatusScanner()
+            scanner = QEExperimentStatusScanner(
+                batch_size=self._config.experiment_batch_size
+            )
             self._experiment_scanner = scanner.scan_once
-        if self._evolution_scanner is None:
+        if self._scope_enabled(QEReconciliationScope.EVOLUTION) and self._evolution_scanner is None:
             from .qe_evolution_service import AutoEvolutionScheduler
 
             scheduler = AutoEvolutionScheduler()
             self._evolution_scanner = scheduler.scan_running_loops
-        if self._long_trend_scanner is None:
+        if self._scope_enabled(QEReconciliationScope.LONG_TREND) and self._long_trend_scanner is None:
             from backend.services.qe_archive.long_trend_repository import (
                 QELongTrendEvaluationResultRepository,
             )
@@ -390,7 +493,7 @@ class QEReconciliationCoordinator:
                 result_repository=QELongTrendEvaluationResultRepository()
             )
             self._long_trend_scanner = lambda: service.reconcile_nonterminal(limit=100)
-        if self._resource_scanner is None:
+        if self._scope_enabled(QEReconciliationScope.RESOURCE_SESSION) and self._resource_scanner is None:
             from .qe_resource_phase_service import QEResourcePhaseService
 
             resource_service = QEResourcePhaseService()
@@ -399,6 +502,7 @@ class QEReconciliationCoordinator:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         self._initialize_default_scanners()
+        self._shutting_down = False
         loop = asyncio.get_running_loop()
         wake_event = asyncio.Event()
         self._wake_bus.register_coordinator(loop=loop, event=wake_event)
@@ -429,18 +533,22 @@ class QEReconciliationCoordinator:
                 wake_event.clear()
                 pending = self._wake_bus.drain_pending_work()
                 snapshot_requests = self._wake_bus.drain_snapshot_requests()
+                replay_scopes = frozenset(self._replay_ready)
+                self._replay_ready.difference_update(replay_scopes)
                 try:
                     await self.reconcile_once(
                         pending=pending,
                         snapshot_requests=snapshot_requests,
                         is_safety_sweep=is_safety_sweep,
                         dispatch_background=True,
+                        replay_scopes=replay_scopes,
                     )
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     logger.exception("QE reconciliation coordinator cycle failed")
         finally:
+            self._shutting_down = True
             self._wake_bus.unregister_coordinator(loop=loop, event=wake_event)
             inflight = tuple(self._inflight.values())
             self._inflight.clear()
@@ -457,10 +565,38 @@ class QEReconciliationCoordinator:
         snapshot_requests: Mapping[QEReconciliationScope, Sequence[str]] | None = None,
         is_safety_sweep: bool = False,
         dispatch_background: bool = False,
+        replay_scopes: frozenset[QEReconciliationScope] = frozenset(),
     ) -> QEReconciliationDue:
         """Execute one deterministic aggregate-read reconciliation cycle."""
-        pending = pending or {}
+        now = time.monotonic()
+        pending = self._filter_pending_before_probe(
+            pending or {},
+            now=now,
+            replay_scopes=replay_scopes,
+        )
         snapshot_requests = snapshot_requests or {}
+        has_snapshots = any(snapshot_requests.values())
+        has_replay = any(
+            self._scope_enabled(scope) for scope in replay_scopes
+        )
+        safety_probe_due = (
+            self._last_safety_probe_at is None
+            or now - self._last_safety_probe_at >= self._safety_sweep_seconds
+        )
+        event_probe_due = (
+            self._last_event_probe_at is None
+            or now - self._last_event_probe_at >= self._safety_sweep_seconds
+        )
+        force_probe_due = any(
+            force for work in pending.values() for force in work.values()
+        ) or has_replay
+        if not (
+            has_snapshots
+            or force_probe_due
+            or (is_safety_sweep and safety_probe_due)
+            or (bool(pending) and event_probe_due)
+        ):
+            return QEReconciliationDue()
         resource_ids = tuple(
             sorted(
                 set(
@@ -481,11 +617,16 @@ class QEReconciliationCoordinator:
                 | set(pending.get(QEReconciliationScope.EVOLUTION, {}))
             )
         )
-        due = await asyncio.to_thread(
+        due = await self._run_blocking_shutdown_safe(
             self._due_probe,
             resource_session_ids=resource_ids,
             loop_ids=loop_ids,
         )
+        completed_at = time.monotonic()
+        if is_safety_sweep and safety_probe_due:
+            self._last_safety_probe_at = completed_at
+        if pending or has_replay:
+            self._last_event_probe_at = completed_at
         self._wake_bus.publish_states(
             due,
             resource_session_ids=resource_ids,
@@ -496,8 +637,92 @@ class QEReconciliationCoordinator:
             pending=pending,
             is_safety_sweep=is_safety_sweep,
             dispatch_background=dispatch_background,
+            replay_scopes=replay_scopes,
         )
         return due
+
+    async def _run_blocking_shutdown_safe(
+        self,
+        call: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Wait for a worker thread before propagating task cancellation.
+
+        ``asyncio.to_thread`` cancellation does not stop the underlying thread.
+        Waiting here prevents lifespan shutdown from closing the PostgreSQL pool
+        while an aggregate probe or synchronous scanner is still using it.
+        """
+
+        task = asyncio.create_task(asyncio.to_thread(call, *args, **kwargs))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            try:
+                await task
+            except Exception:
+                logger.exception("QE blocking reconciliation failed during shutdown")
+            raise
+
+    def _remember_throttle(
+        self,
+        cache: OrderedDict[tuple[QEReconciliationScope, str], float],
+        key: tuple[QEReconciliationScope, str],
+        value: float,
+    ) -> None:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > self._THROTTLE_CACHE_LIMIT:
+            cache.popitem(last=False)
+
+    def _filter_pending_before_probe(
+        self,
+        pending: Mapping[QEReconciliationScope, Mapping[str, bool]],
+        *,
+        now: float,
+        replay_scopes: frozenset[QEReconciliationScope],
+    ) -> dict[QEReconciliationScope, dict[str, bool]]:
+        """Drop duplicate wakes before they can execute the aggregate SELECT."""
+
+        filtered: dict[QEReconciliationScope, dict[str, bool]] = {}
+        for raw_scope, work in pending.items():
+            scope = QEReconciliationScope(str(raw_scope))
+            if not self._scope_enabled(scope) or not work:
+                continue
+            allowed: dict[str, bool] = {}
+            for raw_key, force in work.items():
+                key = str(raw_key or "*")
+                throttle_key = (scope, key)
+                previous = self._last_business_scan_at.get(throttle_key)
+                forced_previous = self._last_forced_scan_at.get(throttle_key)
+                if force:
+                    if (
+                        forced_previous is not None
+                        and now - forced_previous < self._safety_sweep_seconds
+                    ):
+                        continue
+                    self._remember_throttle(
+                        self._last_forced_scan_at,
+                        throttle_key,
+                        now,
+                    )
+                elif (
+                    previous is not None
+                    and now - previous < self._family_interval(scope)
+                ):
+                    continue
+                self._remember_throttle(
+                    self._last_business_scan_at,
+                    throttle_key,
+                    now,
+                )
+                allowed[key] = bool(force)
+            if allowed:
+                filtered[scope] = allowed
+        for scope in replay_scopes:
+            if self._scope_enabled(scope):
+                filtered.setdefault(scope, {})["__inflight_replay__"] = True
+        return filtered
 
     async def _run_due_scanners(
         self,
@@ -506,12 +731,14 @@ class QEReconciliationCoordinator:
         pending: Mapping[QEReconciliationScope, Mapping[str, bool]],
         is_safety_sweep: bool,
         dispatch_background: bool,
+        replay_scopes: frozenset[QEReconciliationScope],
     ) -> None:
         if self._scanner_is_due(
             QEReconciliationScope.RESERVATION,
             due=due.reservation,
             pending=pending,
             is_safety_sweep=is_safety_sweep,
+            replay_scopes=replay_scopes,
         ) and self._reservation_scanner is not None:
             await self._dispatch_async_scanner(
                 QEReconciliationScope.RESERVATION,
@@ -524,6 +751,7 @@ class QEReconciliationCoordinator:
             due=due.experiment,
             pending=pending,
             is_safety_sweep=is_safety_sweep,
+            replay_scopes=replay_scopes,
         ) and self._experiment_scanner is not None:
             await self._dispatch_async_scanner(
                 QEReconciliationScope.EXPERIMENT,
@@ -536,6 +764,7 @@ class QEReconciliationCoordinator:
             due=due.evolution,
             pending=pending,
             is_safety_sweep=is_safety_sweep,
+            replay_scopes=replay_scopes,
         ) and self._evolution_scanner is not None:
             await self._dispatch_async_scanner(
                 QEReconciliationScope.EVOLUTION,
@@ -548,6 +777,7 @@ class QEReconciliationCoordinator:
             due=due.long_trend,
             pending=pending,
             is_safety_sweep=is_safety_sweep,
+            replay_scopes=replay_scopes,
         ) and self._long_trend_scanner is not None:
             await self._dispatch_async_scanner(
                 QEReconciliationScope.LONG_TREND,
@@ -560,10 +790,13 @@ class QEReconciliationCoordinator:
             due=due.terminal_resource_session,
             pending=pending,
             is_safety_sweep=is_safety_sweep,
+            replay_scopes=replay_scopes,
         ) and self._resource_scanner is not None:
             async def resource_scanner() -> None:
                 try:
-                    await asyncio.to_thread(self._resource_scanner)
+                    await self._run_blocking_shutdown_safe(self._resource_scanner)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     logger.exception("QE resource-session reconciliation failed")
 
@@ -600,6 +833,7 @@ class QEReconciliationCoordinator:
         existing = self._inflight.get(scope)
         if existing is not None and not existing.done():
             coroutine.close()  # type: ignore[attr-defined]
+            self._inflight_dirty.add(scope)
             return
         task = asyncio.create_task(coroutine, name=f"qe-reconcile-{scope.value}")
         self._inflight[scope] = task
@@ -607,6 +841,11 @@ class QEReconciliationCoordinator:
         def clear(done: asyncio.Task[None]) -> None:
             if self._inflight.get(scope) is done:
                 self._inflight.pop(scope, None)
+            if scope in self._inflight_dirty:
+                self._inflight_dirty.discard(scope)
+                if not self._shutting_down:
+                    self._replay_ready.add(scope)
+                    self._wake_bus.wake_coordinators()
 
         task.add_done_callback(clear)
 
@@ -626,79 +865,96 @@ class QEReconciliationCoordinator:
         due: bool,
         pending: Mapping[QEReconciliationScope, Mapping[str, bool]],
         is_safety_sweep: bool,
+        replay_scopes: frozenset[QEReconciliationScope],
     ) -> bool:
-        if not due:
+        if not self._scope_enabled(scope) or not due:
             return False
-        if is_safety_sweep:
-            self._last_business_scan_at[(scope, "*")] = time.monotonic()
-            return True
-        work = pending.get(scope)
-        if not work:
+        if not is_safety_sweep and scope not in pending and scope not in replay_scopes:
             return False
         now = time.monotonic()
-        allowed = False
-        for key, force in work.items():
-            throttle_key = (scope, str(key or "*"))
-            previous = self._last_business_scan_at.get(throttle_key)
-            forced_previous = self._last_forced_scan_at.get(throttle_key)
-            force_allowed = force and (
-                forced_previous is None
-                or now - forced_previous >= self._safety_sweep_seconds
-            )
-            if force_allowed or previous is None or now - previous >= self._safety_sweep_seconds:
-                allowed = True
-                self._last_business_scan_at[throttle_key] = now
-                if force_allowed:
-                    self._last_forced_scan_at[throttle_key] = now
-        return allowed
+        force = scope in replay_scopes or any(pending.get(scope, {}).values())
+        previous = self._last_family_scan_at.get(scope)
+        if (
+            not force
+            and previous is not None
+            and now - previous < self._family_interval(scope)
+        ):
+            return False
+        self._last_family_scan_at[scope] = now
+        return True
 
-    @staticmethod
     def _load_due_work(
+        self,
         *,
         resource_session_ids: Sequence[str] = (),
         loop_ids: Sequence[str] = (),
     ) -> QEReconciliationDue:
+        reservation_due = (
+            """EXISTS (
+                SELECT 1 FROM infra.qe_execution_reservation
+                WHERE status IN ('reserved', 'submitting', 'running', 'reconciling')
+            )"""
+            if self._scope_enabled(QEReconciliationScope.RESERVATION)
+            else "FALSE"
+        )
+        experiment_due = (
+            """EXISTS (
+                SELECT 1 FROM qe_experiments e
+                WHERE e.status = 'running'
+                   OR (
+                       e.status = 'pending'
+                       AND e.qe_task_id IS NOT NULL
+                       AND e.qe_loop_id IS NOT NULL
+                   )
+            )"""
+            if self._scope_enabled(QEReconciliationScope.EXPERIMENT)
+            else "FALSE"
+        )
+        evolution_due = (
+            """EXISTS (
+                SELECT 1 FROM qe_evolution_loops l
+                JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                WHERE t.status = 'running'
+                  AND l.status IN ('pending', 'running', 'processing')
+            )"""
+            if self._scope_enabled(QEReconciliationScope.EVOLUTION)
+            else "FALSE"
+        )
+        long_trend_due = (
+            """EXISTS (
+                SELECT 1 FROM qe_archive.run_evaluation
+                WHERE status NOT IN ('succeeded', 'partial', 'failed', 'cancelled')
+                  AND (owner_id IS NULL OR lease_expires_at < clock_timestamp())
+            )"""
+            if self._scope_enabled(QEReconciliationScope.LONG_TREND)
+            else "FALSE"
+        )
+        resource_due = (
+            """EXISTS (
+                SELECT 1
+                FROM qe_archive.run_resource_session s
+                JOIN qe_evolution_loops l
+                  ON l.task_id = s.task_id AND l.loop_index = s.loop_index
+                WHERE s.status IN ('reserved', 'running')
+                  AND s.source_run_key NOT LIKE 'qelt:%'
+                  AND l.status IN (
+                      'completed', 'failed', 'cancelled', 'canceled',
+                      'interrupted', 'timeout', 'stopped'
+                  )
+            )"""
+            if self._scope_enabled(QEReconciliationScope.RESOURCE_SESSION)
+            else "FALSE"
+        )
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT
-                        EXISTS (
-                            SELECT 1 FROM infra.qe_execution_reservation
-                            WHERE status IN ('reserved', 'submitting', 'running', 'reconciling')
-                        ) AS reservation,
-                        EXISTS (
-                            SELECT 1 FROM qe_experiments e
-                            WHERE e.status = 'running'
-                               OR (
-                                   e.status = 'pending'
-                                   AND e.qe_task_id IS NOT NULL
-                                   AND e.qe_loop_id IS NOT NULL
-                               )
-                        ) AS experiment,
-                        EXISTS (
-                            SELECT 1 FROM qe_evolution_loops l
-                            JOIN qe_evolution_tasks t ON t.task_id = l.task_id
-                            WHERE t.status = 'running'
-                              AND l.status IN ('pending', 'running', 'processing')
-                        ) AS evolution,
-                        EXISTS (
-                            SELECT 1 FROM qe_archive.run_evaluation
-                            WHERE status NOT IN ('succeeded', 'partial', 'failed', 'cancelled')
-                              AND (owner_id IS NULL OR lease_expires_at < clock_timestamp())
-                        ) AS long_trend,
-                        EXISTS (
-                            SELECT 1
-                            FROM qe_archive.run_resource_session s
-                            JOIN qe_evolution_loops l
-                              ON l.task_id = s.task_id AND l.loop_index = s.loop_index
-                            WHERE s.status IN ('reserved', 'running')
-                              AND s.source_run_key NOT LIKE 'qelt:%'
-                              AND l.status IN (
-                                  'completed', 'failed', 'cancelled', 'canceled',
-                                  'interrupted', 'timeout', 'stopped'
-                              )
-                        ) AS terminal_resource_session,
+                        {reservation_due} AS reservation,
+                        {experiment_due} AS experiment,
+                        {evolution_due} AS evolution,
+                        {long_trend_due} AS long_trend,
+                        {resource_due} AS terminal_resource_session,
                         COALESCE((
                             SELECT jsonb_object_agg(
                                 s.session_id,
@@ -714,12 +970,12 @@ class QEReconciliationCoordinator:
                             LEFT JOIN qe_evolution_loops l
                               ON l.task_id = s.task_id AND l.loop_index = s.loop_index
                             WHERE s.session_id = ANY(%s)
-                        ), '{}'::jsonb) AS resource_states,
+                        ), '{{}}'::jsonb) AS resource_states,
                         COALESCE((
                             SELECT jsonb_object_agg(l.loop_id, l.status)
                             FROM qe_evolution_loops l
                             WHERE l.loop_id = ANY(%s)
-                        ), '{}'::jsonb) AS loop_states
+                        ), '{{}}'::jsonb) AS loop_states
                     """,
                     (list(resource_session_ids), list(loop_ids)),
                 )

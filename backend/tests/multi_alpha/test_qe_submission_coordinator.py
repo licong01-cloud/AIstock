@@ -8,6 +8,7 @@ from typing import Any, Mapping
 import pytest
 
 from backend.services.quantevolver.qe_active_execution_capacity import (
+    MAX_RESTART_SAFE_LEASE_SECONDS,
     QEActiveExecutionCapacityService,
     QEExecutionReservationReconciler,
     QEWorkspaceSubmissionCoordinator,
@@ -282,6 +283,15 @@ def test_capacity_contract_is_wsl_one_remote_four_and_request_can_only_lower() -
     assert service.resolve_node_capacity("rdagent-node1", 8) == 4
     with pytest.raises(QEWorkspaceSubmissionCoordinatorError):
         service.resolve_node_capacity("rdagent-node1", 0)
+
+
+def test_submission_lease_is_bounded_for_first_minute_restart_takeover() -> None:
+    source, _evidence = _source(_payload())
+
+    assert source.lease_seconds == MAX_RESTART_SAFE_LEASE_SECONDS == 45
+    with pytest.raises(QEWorkspaceSubmissionCoordinatorError) as excinfo:
+        replace(source, lease_seconds=46)
+    assert excinfo.value.reason_code == "qe_execution_reservation_lease_not_restart_safe"
 
 
 def test_wsl_capacity_identity_is_canonicalized_before_reservation() -> None:

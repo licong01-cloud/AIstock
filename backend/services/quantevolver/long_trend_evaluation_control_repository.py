@@ -12,6 +12,7 @@ from backend.services.quantevolver.long_trend_evaluation_contract import QELongT
 
 TABLE_NAME = "qe_archive.run_evaluation"
 TERMINAL_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
+MAX_RESTART_SAFE_LEASE_SECONDS = 45
 QE_SOURCE_SYSTEMS = frozenset({"qe", "qe_evolution", "quantevolver"})
 QE_RUN_TYPES = frozenset({"evolution_loop", "single_experiment", "qe_experiment"})
 MUTABLE_COLUMNS = frozenset(
@@ -504,9 +505,19 @@ class QELongTrendEvaluationControlRepository:
             )
         return self.bind_archive_run(evaluation_id=evaluation_id, run_id=matches[0])
 
-    def claim_next(self, *, owner_id: str, lease_seconds: int = 120) -> dict[str, Any] | None:
-        if not str(owner_id or "").strip() or int(lease_seconds) < 10:
-            raise ValueError("claim requires owner_id and lease_seconds >= 10")
+    def claim_next(
+        self,
+        *,
+        owner_id: str,
+        lease_seconds: int = MAX_RESTART_SAFE_LEASE_SECONDS,
+    ) -> dict[str, Any] | None:
+        if (
+            not str(owner_id or "").strip()
+            or not 10 <= int(lease_seconds) <= MAX_RESTART_SAFE_LEASE_SECONDS
+        ):
+            raise ValueError(
+                "claim requires owner_id and restart-safe lease_seconds in [10, 45]"
+            )
         self.ensure_schema_ready()
         with self._connection(transactional=True) as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -544,12 +555,12 @@ class QELongTrendEvaluationControlRepository:
         self,
         lease: QELongTrendControlLease,
         *,
-        lease_seconds: int = 300,
+        lease_seconds: int = MAX_RESTART_SAFE_LEASE_SECONDS,
     ) -> None:
         """Extend one active fenced lease without invalidating its row-version CAS."""
 
-        if int(lease_seconds) < 10:
-            raise ValueError("renew_lease requires lease_seconds >= 10")
+        if not 10 <= int(lease_seconds) <= MAX_RESTART_SAFE_LEASE_SECONDS:
+            raise ValueError("renew_lease requires restart-safe lease_seconds in [10, 45]")
         with self._connection(transactional=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -584,11 +595,16 @@ class QELongTrendEvaluationControlRepository:
         evaluation_id: str,
         *,
         owner_id: str,
-        lease_seconds: int = 120,
+        lease_seconds: int = MAX_RESTART_SAFE_LEASE_SECONDS,
         expected_row_version: int | None = None,
     ) -> dict[str, Any] | None:
-        if not str(owner_id or "").strip() or int(lease_seconds) < 10:
-            raise ValueError("claim requires owner_id and lease_seconds >= 10")
+        if (
+            not str(owner_id or "").strip()
+            or not 10 <= int(lease_seconds) <= MAX_RESTART_SAFE_LEASE_SECONDS
+        ):
+            raise ValueError(
+                "claim requires owner_id and restart-safe lease_seconds in [10, 45]"
+            )
         self.ensure_schema_ready()
         with self._connection(transactional=True) as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:

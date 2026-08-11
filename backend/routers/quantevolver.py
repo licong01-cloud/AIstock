@@ -6483,6 +6483,76 @@ async def run_experiment(experiment_id: str, engine_mode: Optional[str] = "unifi
     return await _run_experiment_unified(experiment_id, node_id=node_id)
 
 
+def _persist_multi_alpha_parent_running_state(
+    *,
+    experiment_id: str,
+    qe_task_id: str,
+    primary_loop_id: str,
+) -> bool:
+    """Persist and notify one parent only when its durable state changes."""
+
+    parent_changed = False
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status, qe_task_id, qe_loop_id, started_at
+                FROM qe_experiments
+                WHERE experiment_id = %s
+                """,
+                (experiment_id,),
+            )
+            current = cur.fetchone()
+            if current is None:
+                raise RuntimeError(
+                    f"QE experiment disappeared before parent transition: {experiment_id}"
+                )
+            current_status, current_task_id, current_loop_id, current_started_at = current
+            if (
+                current_status != "running"
+                or current_task_id != qe_task_id
+                or current_loop_id != primary_loop_id
+                or current_started_at is None
+            ):
+                cur.execute(
+                    """
+                    UPDATE qe_experiments
+                    SET status = 'running',
+                        qe_task_id = %s,
+                        qe_loop_id = %s,
+                        started_at = COALESCE(started_at, NOW())
+                    WHERE experiment_id = %s
+                      AND status IS NOT DISTINCT FROM %s
+                      AND qe_task_id IS NOT DISTINCT FROM %s
+                      AND qe_loop_id IS NOT DISTINCT FROM %s
+                      AND started_at IS NOT DISTINCT FROM %s
+                    RETURNING experiment_id
+                    """,
+                    (
+                        qe_task_id,
+                        primary_loop_id,
+                        experiment_id,
+                        current_status,
+                        current_task_id,
+                        current_loop_id,
+                        current_started_at,
+                    ),
+                )
+                parent_changed = cur.fetchone() is not None
+        conn.commit()
+    if parent_changed:
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.EXPERIMENT,
+            key=experiment_id,
+        )
+    return parent_changed
+
+
 async def _run_multi_alpha_experiment(
     experiment_id: str,
     node_id: str = None,
@@ -6889,24 +6959,11 @@ async def _run_multi_alpha_experiment(
         })
 
     # 更新 qe_experiments
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE qe_experiments
-                SET status = 'running',
-                    qe_task_id = %s,
-                    qe_loop_id = %s,
-                    started_at = NOW()
-                WHERE experiment_id = %s
-            """, (qe_task_id, primary_loop_id, experiment_id))
-        conn.commit()
-
-    from ..services.quantevolver.qe_reconciliation_coordinator import (
-        QEReconciliationScope,
-        notify_qe_reconciliation,
+    _persist_multi_alpha_parent_running_state(
+        experiment_id=experiment_id,
+        qe_task_id=qe_task_id,
+        primary_loop_id=primary_loop_id,
     )
-
-    notify_qe_reconciliation(QEReconciliationScope.EXPERIMENT, key=experiment_id)
 
     return {
         "ok": True,

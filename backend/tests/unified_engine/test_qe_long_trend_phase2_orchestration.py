@@ -435,7 +435,7 @@ def test_artifact_stream_uses_bounded_client_timeout_and_cleans_partial(tmp_path
     assert not (tmp_path / "terminal.json.partial").exists()
 
 
-def test_collection_renews_fenced_lease_until_publish_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_collection_uses_zero_periodic_database_lease_heartbeats() -> None:
     renewals: list[tuple[QELongTrendControlLease, int]] = []
 
     class Repository:
@@ -449,28 +449,21 @@ def test_collection_renews_fenced_lease_until_publish_finishes(monkeypatch: pyte
         fencing_token=3,
         row_version=7,
     )
-    monkeypatch.setattr(phase2_module, "COLLECT_LEASE_HEARTBEAT_SECONDS", 0.01)
-
     async def work() -> str:
-        for _attempt in range(100):
-            if len(renewals) >= 2:
-                return "published"
-            await asyncio.sleep(0.005)
-        pytest.fail("lease heartbeat did not run twice before the deterministic test deadline")
+        await asyncio.sleep(0.02)
+        return "published"
 
-    assert asyncio.run(service._await_with_lease_heartbeat(lease=lease, awaitable=work())) == "published"
-    assert len(renewals) >= 2
-    assert all(seconds == phase2_module.COLLECT_LEASE_SECONDS for _lease, seconds in renewals)
+    assert asyncio.run(service._await_with_fenced_lease(lease=lease, awaitable=work())) == "published"
+    assert renewals == []
 
 
-def test_collection_aborts_when_fenced_lease_heartbeat_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_collection_cancellation_propagates_without_detached_heartbeat_task() -> None:
     cancelled = False
 
     class Repository:
         @staticmethod
         def renew_lease(_lease, *, lease_seconds):  # type: ignore[no-untyped-def]
-            assert lease_seconds == phase2_module.COLLECT_LEASE_SECONDS
-            raise RuntimeError("lease owner changed")
+            pytest.fail("periodic database lease renewal is forbidden")
 
     service = QELongTrendPhase2Service(control_repository=Repository(), owner_id="owner")  # type: ignore[arg-type]
     lease = QELongTrendControlLease(
@@ -479,8 +472,6 @@ def test_collection_aborts_when_fenced_lease_heartbeat_fails(monkeypatch: pytest
         fencing_token=8,
         row_version=13,
     )
-    monkeypatch.setattr(phase2_module, "COLLECT_LEASE_HEARTBEAT_SECONDS", 0.01)
-
     async def work() -> None:
         nonlocal cancelled
         try:
@@ -488,8 +479,16 @@ def test_collection_aborts_when_fenced_lease_heartbeat_fails(monkeypatch: pytest
         finally:
             cancelled = True
 
-    with pytest.raises(QELongTrendPhase2Error, match="heartbeat failed"):
-        asyncio.run(service._await_with_lease_heartbeat(lease=lease, awaitable=work()))
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            service._await_with_fenced_lease(lease=lease, awaitable=work())
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
     assert cancelled is True
 
 

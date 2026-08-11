@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from backend.services.quantevolver.long_trend_evaluation_control_repository import (
+    MAX_RESTART_SAFE_LEASE_SECONDS,
     QELongTrendControlLease,
     QELongTrendControlRepositoryError,
     QELongTrendEvaluationControlRepository,
@@ -114,7 +115,7 @@ def test_conditional_claim_stale_row_version_performs_no_update() -> None:
     claimed = repository.claim(
         str(state["row"]["evaluation_id"]),  # type: ignore[index]
         owner_id="owner-2",
-        lease_seconds=60,
+        lease_seconds=45,
         expected_row_version=999,
     )
 
@@ -227,7 +228,7 @@ def test_lease_heartbeat_preserves_row_version_cas() -> None:
         row_version=11,
     )
 
-    repository.renew_lease(lease, lease_seconds=300)
+    repository.renew_lease(lease, lease_seconds=45)
 
     update_sql = next(
         sql
@@ -237,6 +238,21 @@ def test_lease_heartbeat_preserves_row_version_cas() -> None:
     assert "row_version = %s" in update_sql
     assert "fencing_token = %s" in update_sql
     assert "row_version = row_version + 1" not in update_sql
+
+
+def test_long_trend_repository_rejects_lease_beyond_first_minute_recovery() -> None:
+    state = _state()
+    repository = QELongTrendEvaluationControlRepository(
+        connection_provider=lambda: _Connection(state)
+    )
+
+    assert MAX_RESTART_SAFE_LEASE_SECONDS == 45
+    with pytest.raises(ValueError, match="restart-safe"):
+        repository.claim(
+            str(state["row"]["evaluation_id"]),  # type: ignore[index]
+            owner_id="owner-2",
+            lease_seconds=46,
+        )
 
 
 def test_definitive_prejob_failure_requeues_control_and_unused_resource_atomically() -> None:

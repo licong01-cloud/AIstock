@@ -45,7 +45,12 @@ NONCANONICAL_LOCAL_WSL_NODE_ALIASES = frozenset({"wsl", "local"})
 # CPU execution remains independently parallel.
 WSL_HARD_CAPACITY = 1
 REMOTE_HARD_CAPACITY = 4
-DEFAULT_RESERVATION_LEASE_SECONDS = 120
+# The coordinator starts immediately and performs a safety sweep at most every
+# 60 seconds.  Keeping durable execution leases below that bound guarantees a
+# replacement backend can take over by its first post-start safety sweep while
+# fencing still prevents a live owner from being overwritten.
+MAX_RESTART_SAFE_LEASE_SECONDS = 45
+DEFAULT_RESERVATION_LEASE_SECONDS = MAX_RESTART_SAFE_LEASE_SECONDS
 _PROCESS_SUBMISSION_OWNER_ID = (
     f"qe_submit_{socket.gethostname()}_{os.getpid()}_{uuid.uuid4().hex[:12]}"
 )
@@ -97,6 +102,18 @@ class QEWorkspaceSubmissionSource:
     record_waiting_capacity: CapacityWaitRecorder
     requested_node_capacity: int | None = None
     lease_seconds: int = DEFAULT_RESERVATION_LEASE_SECONDS
+
+    def __post_init__(self) -> None:
+        lease_seconds = int(self.lease_seconds)
+        if not 1 <= lease_seconds <= MAX_RESTART_SAFE_LEASE_SECONDS:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE submission lease exceeds the restart-safe recovery bound",
+                reason_code="qe_execution_reservation_lease_not_restart_safe",
+                context={
+                    "lease_seconds": lease_seconds,
+                    "maximum_seconds": MAX_RESTART_SAFE_LEASE_SECONDS,
+                },
+            )
 
 
 @dataclass(frozen=True)
@@ -1134,6 +1151,15 @@ class QEWorkspaceSubmissionCoordinator:
         lease_seconds: int = DEFAULT_RESERVATION_LEASE_SECONDS,
         expected_reservation_id: str | None = None,
     ) -> Mapping[str, Any]:
+        if not 1 <= int(lease_seconds) <= MAX_RESTART_SAFE_LEASE_SECONDS:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE reconciliation lease exceeds the restart-safe recovery bound",
+                reason_code="qe_execution_reservation_lease_not_restart_safe",
+                context={
+                    "lease_seconds": int(lease_seconds),
+                    "maximum_seconds": MAX_RESTART_SAFE_LEASE_SECONDS,
+                },
+            )
         normalized_owner_id = str(owner_id or qe_submission_owner_id()).strip()
         reservation = self._repository.get_reservation_for_source(
             source_kind=source_kind,
@@ -1679,7 +1705,16 @@ class QEExecutionReservationReconciler:
     ) -> None:
         self._repository = repository or QEExecutionReservationRepository()
         self._owner_id = str(owner_id or qe_submission_owner_id()).strip()
-        self._lease_seconds = max(1, int(lease_seconds))
+        if not 1 <= int(lease_seconds) <= MAX_RESTART_SAFE_LEASE_SECONDS:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE reservation reconciler lease exceeds the restart-safe recovery bound",
+                reason_code="qe_execution_reservation_lease_not_restart_safe",
+                context={
+                    "lease_seconds": int(lease_seconds),
+                    "maximum_seconds": MAX_RESTART_SAFE_LEASE_SECONDS,
+                },
+            )
+        self._lease_seconds = int(lease_seconds)
         self._post_grace_seconds = max(1, int(post_grace_seconds))
         self._initialized = False
 

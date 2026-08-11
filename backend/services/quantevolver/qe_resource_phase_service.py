@@ -459,6 +459,7 @@ class QEResourcePhaseService:
             notify_qe_reconciliation(
                 QEReconciliationScope.RESOURCE_SESSION,
                 key=session_id,
+                force=True,
             )
 
     def has_unreleased_gpu_session(
