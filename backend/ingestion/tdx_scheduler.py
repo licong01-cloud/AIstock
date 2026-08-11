@@ -50,7 +50,8 @@ from ..services.data_health_alerter import DataHealthAlerter, classify_retry_ale
 from ..services.data_sync_targets import DataSyncAttemptRecord, DataSyncTargetRecord, DataSyncTargetRepository
 
 _logger = logging.getLogger(__name__)
-_CN_TZ = ZoneInfo("Asia/Shanghai")
+_SCHEDULE_TZ_NAME = "Asia/Shanghai"
+_CN_TZ = ZoneInfo(_SCHEDULE_TZ_NAME)
 
 # Datasets that the unified engine handles (bypass subprocess scripts)
 _ENGINE_DATASETS = frozenset(DATASET_REGISTRY.keys())
@@ -238,7 +239,7 @@ def _build_frequency_job(scheduler: schedule.Scheduler, frequency: str, options:
         at_time = options.get("at")
         job = scheduler.every().day
         if at_time:
-            job = job.at(str(at_time))
+            job = job.at(str(at_time), _SCHEDULE_TZ_NAME)
     elif freq in {"weekly", "week", "1w"}:
         day_of_week = (options.get("day_of_week") or "").strip().lower()
         day_map = {
@@ -253,7 +254,7 @@ def _build_frequency_job(scheduler: schedule.Scheduler, frequency: str, options:
         job = day_map.get(day_of_week, scheduler.every().week)
         at_time = options.get("at")
         if at_time:
-            job = job.at(str(at_time))
+            job = job.at(str(at_time), _SCHEDULE_TZ_NAME)
     else:
         raise ValueError(f"Unsupported frequency: {frequency}")
     return job
