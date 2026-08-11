@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1009",
-  "closed_at": null,
+  "closed_at": "2026-08-11T04:16:54Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -22,6 +22,13 @@
   ],
   "created_at": "2026-08-10T05:02:08.354559Z",
   "description": "Allocation cost grows with worktree_count multiplied by registry_size; the current host has hundreds of worktrees and registrations can take minutes per attempt.",
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: BUG intake and GitHub linkage semantics remain source-of-truth and fail closed",
+    "no_silent_error": "passed: preflight and create transport uncertainty preserve durable state and block automatic recreate",
+    "no_simplified_delivery": "passed: both CLI and MCP allocation paths, state/index migration, steady-state no-scan behavior, concurrency, stale locks, retry recovery, and tests are covered",
+    "no_unrequested_gate_or_approval": "passed: no process, database, dependency, runtime, or new approval gate was added",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -216,8 +223,8 @@
   },
   "first_seen_at": "2026-08-10T05:02:08.354559Z",
   "fix_branch": "bug/BUG-1009-global-bug-id-allocation-scans-every-worktree-an-20260810",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7e0b39a01de26112052bd7343cd931892dc51f2e",
+  "fixed_at": "2026-08-11T04:16:54Z",
   "github_issue_number": 3246,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3246",
   "last_seen_at": "2026-08-11T03:35:19.681572Z",
@@ -225,6 +232,14 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "performance_evidence": {
+    "bootstrap_scope": "current invocation registry, canonical registry, and shared reservations once when state/index is missing; no worktree or GitHub inventory",
+    "source": "direct no-scan and one-time-bootstrap regressions on 2026-08-11",
+    "steady_state_github_list_calls": 0,
+    "steady_state_registry_scan_calls": 0,
+    "steady_state_reservation_inventory_scan_calls": 0
+  },
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3250",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -239,6 +254,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "client",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -246,7 +263,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -254,20 +271,6 @@
   "trigger_condition": {
     "fingerprint": "01af545846cd13bc3a208887",
     "source_event_id": "FE-20260810-01af545846cd"
-  },
-  "design_compliance_review": {
-    "no_business_semantic_drift": "passed: BUG intake and GitHub linkage semantics remain source-of-truth and fail closed",
-    "no_silent_error": "passed: preflight and create transport uncertainty preserve durable state and block automatic recreate",
-    "no_simplified_delivery": "passed: both CLI and MCP allocation paths, state/index migration, steady-state no-scan behavior, concurrency, stale locks, retry recovery, and tests are covered",
-    "no_unrequested_gate_or_approval": "passed: no process, database, dependency, runtime, or new approval gate was added",
-    "schema_version": "aistock_design_compliance_review_v1"
-  },
-  "performance_evidence": {
-    "bootstrap_scope": "current invocation registry, canonical registry, and shared reservations once when state/index is missing; no worktree or GitHub inventory",
-    "steady_state_github_list_calls": 0,
-    "steady_state_registry_scan_calls": 0,
-    "steady_state_reservation_inventory_scan_calls": 0,
-    "source": "direct no-scan and one-time-bootstrap regressions on 2026-08-11"
   },
   "validation_evidence": [
     "pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -> 293 passed",
@@ -286,7 +289,11 @@
     "rtk nox -s guardrail_changed_files -- --changed-only -> blocking=0, mapped=56/56 (stale-branch scope inflation tracked separately)",
     "rtk nox -s validation_module_registry_l0 -> 8 passed, mapped=14/14",
     "runtime classification regression -> MCP server=client, shared allocator=none",
-    "finish --plan-only -> closure_ready=true, pre_pr_gate=passed, workflow_gate=ready_for_pr"
+    "finish --plan-only -> closure_ready=true, pre_pr_gate=passed, workflow_gate=ready_for_pr",
+    "rtk pytest backend/tests/scripts/test_aistock_issue_workflow.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_ci_change_classifier.py -q -> 354 passed",
+    "ruff check changed Python files -> passed",
+    "rtk nox -s guardrail_changed_files -- --changed-only -> passed; blocking=0; ownership=9/9",
+    "GitHub PR #3250 CI verdict -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
