@@ -273,6 +273,7 @@ M5A允许修改：
 - `scripts/advisory_model_quality_prepare_request.py`
 - `scripts/advisory_model_quality_train_wsl.py`
 - `scripts/wsl/advisory_model_quality_train.py`
+- `tests/aistock_validation/catalog/file_ownership.yaml` 中 `advisory_model_first_training` 的三个精确 CLI 路径登记
 - 对应 `backend/tests/advisory_model_first/test_quality_*.py`
 - 现有 model inference/runtime bundle直接依赖测试。
 
