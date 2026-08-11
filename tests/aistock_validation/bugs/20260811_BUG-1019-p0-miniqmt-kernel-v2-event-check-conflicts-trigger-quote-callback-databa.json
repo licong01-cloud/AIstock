@@ -274,10 +274,11 @@
     "fresh_process_evidence": [
       "rtk pytest backend/tests/simulation_runtime/test_miniqmt_quote_activation.py::test_fresh_process_imports_current_activation_source_with_empty_process_local_retry_state -q -> 1 passed; independent Python subprocess explicitly disabled global runtime activation, imported tracked miniqmt_quote_activation.py SHA-256 1802202b0ab81175f595717165a5ab28a85039cb6e59d553161fb92106782366 without database access, and read back empty process-local runtime/retry state with status DRAINING"
     ],
-    "persistence_basis": "git_tracked_source",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/miniqmt_quote_evidence_runbook.md",
+    "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
