@@ -21,7 +21,7 @@ P0-C 已基于目标多 Alpha 父包真实文件数据产出：
 
 P0-D 的唯一目标是训练首个真实 take/skip/confidence meta-label challenger，并以同一 policy portfolio 口径评价。它不再优化5日 NDCG，也不建设额外基础设施。
 
-截至 2026-08-13，最终源码提交 `e0b189293c581d36c96d2941352e3e52927bb862` 已完成真实 WSL 训练。权威 request 为 `advmetareq_cf90fa2c84d77352c5f8898b`，权威 experimental bundle 为 `20d662860e053c70fb817fe7d0a3f28d09790d2a17cb6b9a8a51c41b492713c8`。bundle 未激活、未写 descriptor、未进入生产前向发布。
+截至 2026-08-13，最终训练源码提交 `3033ff3385715e6b971d822589528751ab66baad` 已完成真实 WSL 训练。权威 frozen request v2 为 `advmetareq_79e5762652462ae5855b3be7`，标准 root experimental bundle 为 `86bdda151dd0a0b631cc400a074ec9481042482bace0df4d5e45eb243c376317`。bundle 未激活、未写 descriptor、未进入生产前向发布。
 
 ## 2. Scope / 交付范围
 
@@ -369,9 +369,9 @@ scripts/wsl/advisory_meta_label_train.py
 
 | item | result |
 |---|---|
-| repository commit | `e0b189293c581d36c96d2941352e3e52927bb862` |
-| request | `advmetareq_cf90fa2c84d77352c5f8898b` / `cf90fa2c84d77352c5f8898b35bd5d7d9ac19dae1a81be752b73920c2d879a5a` |
-| bundle | `20d662860e053c70fb817fe7d0a3f28d09790d2a17cb6b9a8a51c41b492713c8` |
+| repository commit | `3033ff3385715e6b971d822589528751ab66baad` |
+| request | `advmetareq_79e5762652462ae5855b3be7` / `79e5762652462ae5855b3be707ef2c2a368acac78a589edcda8668b21021e16f` |
+| bundle | `86bdda151dd0a0b631cc400a074ec9481042482bace0df4d5e45eb243c376317` |
 | input | 7,720 labels；7,651 modelable feature rows；386/386 decision dates；28 READY CPCV paths |
 | trial matrix | 2 families × 3 seeds × 28 paths = 168 rows；6 trials × 8 blocks = 48 block rows |
 | winner | `FAMILY_CORE_HMM` / seed `20260817` / 5 boost rounds |
@@ -380,8 +380,10 @@ scripts/wsl/advisory_meta_label_train.py
 | winner lift | versus Selection `+3.6556249586 bps`；28-path win rate `0.6428571429` |
 | candidate classification | ROC AUC `0.5142260421`；Brier `0.2506001180` |
 | PBO | `0.40`，8 blocks / 70 partitions / 6 trials |
-| resource | 312.222 秒；peak RSS 2,804,068,352 bytes，低于 8GB |
-| exact retry | 4.578 秒；同一 bundle；`EXISTING_BUNDLE`；`activated=false` |
+| resource | 标准 root 317.812 秒；peak RSS 2,862,182,400 bytes，低于 8GB |
+| exact retry | 4.067 秒；同一 bundle；`EXISTING_BUNDLE`；`activated=false` |
+| independent recompute | 两个不同 output root 各自从零训练，均产出 bundle `86bdda151...`；12/12 identity file hashes 相同 |
+| loader/scorer | WSL LightGBM reload 成功；smoke take `0.5535642729`、skip `0.4464357271`、confidence `0.1071285459`，全部有限 |
 
 结论必须同时保留两面：policy-aligned meta-label 在冻结 CPCV 口径下相对 Selection Top5 有正增量，方向值得进入前向 challenger；但 AUC 接近随机且 PBO 为 0.40，选择偏差风险仍高，因此只能保持 `EXPERIMENTAL_MODEL / UNCALIBRATED / NOT_ACTIVATED`。该结论不是审批或收益门禁，也不得被改写为已验证 champion。
 
@@ -404,7 +406,7 @@ scripts/wsl/advisory_meta_label_train.py
 | DEV/生产DDL/DML | none | 不适用 |
 | backend restart | none | 不适用 |
 | descriptor写入/模型激活 | out of scope | 后续单独授权 |
-| 正式WSL训练 | complete；bundle `20d66286...`；未激活 | 只写repo-external model artifacts |
+| 正式WSL训练 | complete；bundle `86bdda15...`；未激活 | 只写repo-external model artifacts |
 
 ## 22. Completion Definition
 
