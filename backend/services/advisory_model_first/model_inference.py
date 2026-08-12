@@ -343,13 +343,16 @@ class AdvisoryModelShadowService:
                 review_policy_sha256=review_policy_sha256,
             )
             outcome_bundle_id = str(outcome.get("outcome_bundle_id") or "")
+            price_range_outcome_bundle_id = str(
+                outcome.get("parent_outcome_bundle_id") or outcome_bundle_id
+            )
             price_bundle = self._price_range_bundle_loader(
                 model_root=model_root,
                 package_id=PACKAGE_ID,
                 manifest_sha256=MANIFEST_SHA256,
                 style_profile_hash=STYLE_PROFILE_HASH,
                 parent_bundle_id=parent_bundle.bundle_id,
-                outcome_bundle_id=outcome_bundle_id,
+                outcome_bundle_id=price_range_outcome_bundle_id,
             )
             candidates = self._price_range_scorer(
                 price_bundle,
@@ -407,7 +410,7 @@ class AdvisoryModelShadowService:
             "calibration_state": "UNCALIBRATED",
             "price_range_bundle_id": price_bundle.price_range_bundle_id,
             "parent_bundle_id": parent_bundle.bundle_id,
-            "outcome_bundle_id": outcome_bundle_id,
+            "outcome_bundle_id": price_range_outcome_bundle_id,
             "model_version": price_bundle.manifest["request_id"],
             "price_basis": "UNADJUSTED_CNY_DECISION_CLOSE",
             "candidates": candidates,
@@ -483,7 +486,21 @@ class AdvisoryModelShadowService:
         )
         return {
             "status": "EXPERIMENTAL_SHADOW",
-            "calibration_state": "UNCALIBRATED",
+            "calibration_state": outcome_bundle.manifest.get("calibration_state", "UNCALIBRATED"),
+            "calibration_policy_version": outcome_bundle.manifest.get("calibration_policy_version"),
+            "parent_outcome_bundle_id": outcome_bundle.manifest.get("parent_outcome_bundle_id"),
+            "binary_calibration_state": outcome_bundle.manifest.get(
+                "binary_calibration_state", "UNCALIBRATED"
+            ),
+            "return_interval_calibration_state": outcome_bundle.manifest.get(
+                "return_interval_calibration_state", "UNCALIBRATED"
+            ),
+            "path_upper_calibration_state": outcome_bundle.manifest.get(
+                "path_upper_calibration_state", "UNCALIBRATED"
+            ),
+            "holding_calibration_state": outcome_bundle.manifest.get(
+                "holding_calibration_state", "UNCALIBRATED"
+            ),
             "outcome_bundle_id": outcome_bundle.outcome_bundle_id,
             "parent_bundle_id": parent_bundle.bundle_id,
             "model_version": outcome_bundle.manifest["request_id"],

@@ -304,12 +304,27 @@ export type AdvisoryOutcomeHorizonPrediction = {
   path_mfe_q90: number;
   path_mae_loss_q50: number;
   path_mae_loss_q90: number;
+  excess_return_calibrated_q10?: number | null;
+  excess_return_calibrated_q50?: number | null;
+  excess_return_calibrated_q90?: number | null;
+  positive_probability_calibrated?: number | null;
+  signal_survival_probability_calibrated?: number | null;
+  path_mfe_calibrated_q50?: number | null;
+  path_mfe_calibrated_q90?: number | null;
+  path_mae_loss_calibrated_q50?: number | null;
+  path_mae_loss_calibrated_q90?: number | null;
+  positive_probability_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  signal_survival_probability_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  return_interval_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  path_mfe_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  path_mae_loss_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
 };
 
 export type AdvisoryOutcomeCandidate = {
   symbol: string;
   horizons: AdvisoryOutcomeHorizonPrediction[];
   holding_period: {
+    calibration_state?: "UNCALIBRATED";
     probabilities: Record<string, number>;
     mode_days: number;
     range_low_days: number;
@@ -319,7 +334,13 @@ export type AdvisoryOutcomeCandidate = {
 
 export type AdvisoryOutcomeShadow = {
   status: "EXPERIMENTAL_SHADOW" | "OUTCOME_UNAVAILABLE";
-  calibration_state: "UNCALIBRATED";
+  calibration_state: "UNCALIBRATED" | "PARTIAL";
+  calibration_policy_version?: string | null;
+  parent_outcome_bundle_id?: string | null;
+  binary_calibration_state?: "CALIBRATED" | "PARTIAL" | "UNCALIBRATED";
+  return_interval_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  path_upper_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  holding_calibration_state?: "UNCALIBRATED";
   outcome_bundle_id: string | null;
   parent_bundle_id: string | null;
   model_version: string | null;
