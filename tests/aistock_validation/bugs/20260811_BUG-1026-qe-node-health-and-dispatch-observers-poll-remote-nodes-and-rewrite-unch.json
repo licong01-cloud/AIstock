@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1026",
-  "closed_at": null,
+  "closed_at": "2026-08-12T05:46:37.893895Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -246,8 +246,8 @@
   },
   "first_seen_at": "2026-08-11T18:29:52.107103Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e2fdaaabf0736ec95bc8cafb8e45eb7b81f54432",
+  "fixed_at": "2026-08-12T02:12:44Z",
   "github_issue_number": 3292,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3292",
   "last_seen_at": "2026-08-11T18:29:52.107103Z",
@@ -255,6 +255,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3296",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -277,8 +278,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1026/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1026",
+      "catalog_sha256": "504a7920630201f685ff5c7bf97480655cacd1b10da766418373a47974e32c80",
+      "contract_digest": "ec4d459bbdf1e005e194dffa557c930419806f70022306b7cfc8cbc1f0c060d7",
+      "expected_identity": "e2fdaaabf0736ec95bc8cafb8e45eb7b81f54432",
+      "generated_at": "2026-08-12T05:36:31.863914Z",
+      "mode": "read_only",
+      "observed_identity": "0e0afed26732ea5eb61988b516bd0b49becfead5",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "70f47ea8b15c635030a1c49295ed9606bcfa09f7bd696d62e3787fbe75d6d05c",
+      "receipt_sha256": "243f371941ebf45e95eba70c90bcebca09b8766018a1a288d35b8851c4d588fe",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "99d265a3d51eaa78e3b0de489f75bc320693e9863662289e373ce62d5a155667",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -288,7 +306,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -297,6 +315,9 @@
     "fingerprint": "89336b760d4edc1a5161a2b3",
     "source_event_id": "FE-20260811-89336b760d4e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=097742ee9c344850 commit=0e0afed26732ea5eb61988b516bd0b49becfead5 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/test_dispatch_observer_quiet.py backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py` result=`15 passed in 13.29s`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
