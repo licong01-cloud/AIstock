@@ -2,7 +2,7 @@
 
 > 日期：2026-08-12  
 > Feature tier：F2  
-> 状态：DESIGN_REVIEWED  
+> 状态：SOURCE_MERGED_PENDING_REAL_WSL_CALIBRATION
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`  
 > 前序设计：`docs/architecture/advisory_model_first_m3_outcome_holding_period_f2_design_20260809.md`、`docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`
 
@@ -475,4 +475,4 @@ backend_restart = user-owned，仅在 runtime 源码合入且 binding 激活后�
 | 未经确认门禁/审批 | PASS | 无角色、审批、二次准入或收益阈值；metrics 只报告，不阻断研究 bundle |
 | F2 文档合同 | PASS | `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md --tier F2`：13 rows，0 warnings |
 
-审核未发现剩余设计阻断。该结论只表示详细设计可进入实现，不代表源码、真实校准 bundle、binding、重启或 deployed readback 已完成。
+审核未发现设计或源码阻断。完整源码已随 PR #3315、merge commit `ae9401b1229e66b139d3bb61c9d3306ca55f0ef3` 合入；该结论不代表真实校准 bundle、binding、重启或 deployed readback 已完成。当前下一步严格限定为使用合入后源码执行一次真实 WSL calibration，并按 §13.3 审核 receipt。

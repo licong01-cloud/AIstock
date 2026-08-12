@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.8
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v2.9
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-11
+> 修订日期：2026-08-12
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M4_RUNTIME_API_VERIFIED_M5_DESIGN_READY`
+> 当前状态：`MODEL_FIRST_M5A_TRAINED_M5B_SOURCE_MERGED_PENDING_CALIBRATION`
 > 当前用户可见功能进度：短反弹真实功能 `4/4`；长期趋势真实功能 `0/1`；M2 Top5、M3 收益/周期和 M4 买入/止盈/止损范围已由真实运行时 API 输出，页面可视化验收因当前验证窗口无可用浏览器单独保留
-> 规划进度：M0-M4 已完成训练、源码、数据库窄依赖、exact binding、用户重启和真实多 Alpha API readback；当前进入 M5 模型质量迭代，第一目标是纠正 M1 Top5 留出集质量低于原始 selection rank 的问题
+> 规划进度：M0-M4 已完成训练、源码、数据库窄依赖、exact binding、用户重启和真实多 Alpha API readback；M5A 已完成真实 WSL tournament/test 与实验 bundle，但冻结 test 仍未超过原始 selection rank，故现行 M1 binding 未被替换；M5B 完整源码已随 PR #3315 合入，下一步只执行真实 WSL calibration、指标审核和后续独立激活
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -59,12 +59,12 @@
 
 长期趋势策略另行完成长期重排、生存、time-to-hit 和大行情捕获模型，不阻断短反弹主线。
 
-截至 2026-08-11：
+截至 2026-08-12：
 
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
-| SHORT_REBOUND Top20→Top5 | `EXPERIMENTAL_SHADOW_RUNTIME_VERIFIED` | WSL 真实训练、数据库影子推理、API 和页面源码已贯通；真实 test 质量仍低于主要对照 |
-| 预期收益与持股周期 | `COMPLETED_RUNTIME_VERIFIED` | M3 outcome binding 已激活；运行时对真实 20 个候选输出 1/3/5/10/20 日收益分位数、正收益/存活概率、MFE/MAE 和持股周期范围 |
+| SHORT_REBOUND Top20→Top5 | `M5A_TRAINED_NOT_ACTIVATED` | M5A 已完成 45 个 booster 的 validation-only 选择和一次冻结 test；winner 平均 5 日超额收益 `0.0071894`，高于 M1 的 `-0.0002833`，但低于原始 selection rank 的 `0.0085591`，95% block-bootstrap lift 区间跨 0，因此不冒充已改善并保持现行 M1 shadow binding |
+| 预期收益与持股周期 | `M5B_SOURCE_MERGED_PENDING_REAL_CALIBRATION` | M3 v1 outcome binding 仍真实可用；PR #3315 已合入 M5B Platt/CQR/upper-conformal、v2 bundle、runtime/API/UI 完整源码，但尚未生成真实 v2 calibration bundle，当前仍输出 v1 raw/UNCALIBRATED 语义 |
 | 买入/止盈/止损区间 | `M4_RUNTIME_API_VERIFIED` | 四头真实模型、decision-cutoff 未复权投影、dividend PIT 输入、exact binding 和风险边界已贯通；真实原生多 Alpha Program 20/20 候选均返回完整价格范围 |
 | 荐股页面模型展示 | `M2_M3_M4_SOURCE_COMPLETE_RUNTIME_HTTP_VERIFIED` | 页面源码已展示 Top5、五期限收益、概率、MFE/MAE、持股与价格范围；运行页面 HTTP 200，真实浏览器可视化验收因当前窗口无浏览器单独保留，不冒充截图验收 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
@@ -403,10 +403,11 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW`。
 
-状态：`DETAILED_DESIGN_REVIEWED_READY_FOR_IMPLEMENTATION`。详细设计为 `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`；父蓝图与详细设计已分别通过F2 validator，验收矩阵26/26与12/12完整、0 warnings。
+状态：`M5A_TRAINED_M5B_SOURCE_MERGED_PENDING_REAL_CALIBRATION`。M5A 详细设计为 `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`，真实 request 为 `advm5train_a64594d6f22f618a4afef84a`，winner 为 `EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`，实验 bundle 为 `1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb`。M5B 详细设计为 `docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md`，完整源码已随 PR #3315、merge commit `ae9401b1229e66b139d3bb61c9d3306ca55f0ef3` 合入；真实 WSL calibration、v2 bundle、binding、用户重启和 deployed readback 尚未执行。
 
 - M5A 首先改善 Top20→Top5：当前 M1 test `mean_excess_return_5=-0.0002833`，明显低于 `selection_rank_top5=0.0085591`，不得把“模型已运行”误写为“模型排序有效”。
 - M5A 在现有 406 日/8120 候选、103 特征和冻结 test 上做有限窗口、种子、模型配置及 selection-prior 混合比较；所有选择只使用 train/validation，test 只做一次最终报告。
+- M5A 真实冻结 test 的 winner 平均 5 日超额收益为 `0.0071894`，原始 selection rank 为 `0.0085591`，lift 为 `-0.0013696`，95% moving-block bootstrap 区间为 `[-0.0093061, 0.0053392]`。结果说明 M5A 修复了 M1 明显为负的问题，但没有证明优于原始 selection，当前不替换已激活 binding，也不得围绕 test 继续调参。
 - M5B 再处理 M3 概率校准与 quantile coverage；M5C 处理 M4 entry-gap quantile coverage。M4 executable 负例仅 4 条，禁止伪造二分类校准。
 - 3/5 年实验只有在同一目标父包的合法既有预测确实存在时才执行，不能用其它实验或新模型回填；不得为 M5 新建历史证据、缓存或 ModelOps 平台。
 
@@ -482,11 +483,11 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-119 | M1/M3/M4 daily input contracts | `backend/tests/advisory_model_first/test_qe_file_source.py`; `backend/tests/advisory_model_first/test_outcome_boundaries.py`; `backend/tests/advisory_model_first/test_price_range_boundaries.py` | implemented_verified | none |
 | F-120 | QE `000300.SH` daily Bin | `backend/tests/advisory_model_first/test_qe_file_source.py`; artifact: M1 `training_request.json` benchmark identity | implemented_verified | none |
 | F-121 | WSL pipelines and receipts | artifact: M1/M3/M4 bundle `training_log.json`; M1 peak ~2.11GB/129s, M3 ~0.66GB/108s, M4 ~0.49GB/13.85s | implemented_verified | none |
-| F-122 | M5A train/test dual request and winner policy | `backend/tests/advisory_model_first/test_quality_contracts.py`; `test_quality_pipeline.py` | design_ready | none |
-| F-123 | M5A shared baseline evaluator | `backend/tests/advisory_model_first/test_quality_evaluation.py` | design_ready | none |
-| F-124 | M5A ensemble and selection-prior policy | `backend/tests/advisory_model_first/test_quality_scoring.py`; `test_quality_runtime_bundle.py` | design_ready | none |
-| F-125 | M5B validation-only probability calibration | artifact: `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md` §11.1 | design_ready | none |
-| F-126 | M5B/M5C validation-only quantile calibration | artifact: `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md` §§11.2-11.3 | design_ready | none |
+| F-122 | M5A train/test dual request and winner policy | `backend/tests/advisory_model_first/test_quality_contracts.py`; artifact: `quality_runs/advm5train_a64594d6f22f618a4afef84a/winner_receipt.json`; `quality_evaluations/advm5test_818fe5a6c8ee323d2fbf25d4/test_once_receipt.json` | implemented_real_trained_verified | none |
+| F-123 | M5A shared baseline evaluator；冻结 test 结果低于 selection rank 的事实见 §9 | `backend/tests/advisory_model_first/test_quality_evaluation.py`; artifact: `quality_evaluations/advm5test_818fe5a6c8ee323d2fbf25d4/test_report.json` | implemented_real_evaluated_verified | none |
+| F-124 | M5A ensemble and selection-prior policy；现行 M1 binding 保留的运行状态见 §9 | `backend/tests/advisory_model_first/test_quality_scoring.py`; `test_quality_runtime_bundle.py`; artifact: bundle `1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb` | implemented_bundle_verified | none |
+| F-125 | M5B validation-only probability calibration 源码；真实运行作为当前 §16 执行任务单独报告 | `backend/services/advisory_model_first/outcome_calibration.py`; `outcome_calibration_pipeline.py`; `backend/tests/advisory_model_first/test_outcome_calibration.py` | source_merged_verified | none |
+| F-126 | M5B quantile calibration 源码；M5C 是 §9 明确的后续独立阶段，不属于本次 M5B 源码验收 | `backend/services/advisory_model_first/outcome_calibration.py`; `outcome_calibration_bundle.py`; `backend/tests/advisory_model_first/test_outcome_calibration.py` | m5b_source_merged_verified | none |
 
 ## 12. Verification Plan
 
@@ -592,15 +593,15 @@ runtime_activation = separate user-confirmed action
 
 ## 16. 当前下一步
 
-下一项主线任务是 M5A Top20→Top5 质量迭代，详细设计为：
+下一项主线任务是执行 M5B 真实 WSL outcome calibration，详细设计为：
 
-`docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`
+`docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md`
 
 执行顺序固定为：
 
-1. 冻结现有 M1 输入、split、基线和 test，不重新构建历史数据。
-2. 在 WSL `rdagent-gpu` 执行有限 M5A train/validation tournament，先解决 M1 排序显著弱于 selection rank 的问题。
-3. winner 固定后只运行一次冻结 test，发布新的实验 bundle 和完整比较；不得根据 test 结果回改参数。
-4. M5A 完成后依次进入 M5B 概率/收益区间校准和 M5C entry-gap 区间校准。
+1. 复用已冻结 M3 bundle、feature、label 和 split，准备唯一 M5B request，不重训 46 个 base head，不读取生产数据库历史数据。
+2. 在 WSL `rdagent-gpu` 执行 validation-only Platt/CQR/upper-conformal，先冻结并读回 calibration spec，再一次性读取 test 评价。
+3. 发布自包含 outcome bundle v2，如实报告 10 个 binary head、5 个 return 区间和 10 个 MFE/MAE upper 区间的 raw/calibrated 指标、耗时、RSS 和 exact retry；指标方向不构成额外门禁。
+4. 真实 bundle 审核完成后，outcome binding 激活、用户后端重启和 deployed API/UI readback 作为独立动作分别执行；完成后进入 M5C entry-gap 区间校准。
 
 M4 页面视觉验收可在具备浏览器的窗口独立完成，不阻断已可运行的 M5 训练主线；若发现真实 UI 缺陷则按 BUG 流程修复。M5 期间继续禁止插入 Historical Range、历史证据、旧 batch/root 清理、通用缓存、ModelOps、角色审批或额外门禁。
