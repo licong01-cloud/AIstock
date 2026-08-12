@@ -2,7 +2,7 @@
 
 > 日期：2026-08-12  
 > Feature tier：F2  
-> 状态：DESIGN_READY_IMPLEMENTATION_PENDING  
+> 状态：IMPLEMENTED_REAL_WSL_VERIFIED_NOT_ACTIVATED
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`  
 > 前序设计：`docs/architecture/advisory_model_first_m4_price_ranges_f2_design_20260810.md`、`docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md`
 
@@ -11,6 +11,10 @@
 M4 已在 WSL `rdagent-gpu` 训练四个真实 LightGBM heads，并通过 exact binding 接入 Advisory model-shadow。父 request 为 `advprreq_2d826a7b2704137bf3a60d9d`，父 bundle 为 `1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3`。冻结 test 的 entry-gap q10-q90 empirical coverage 为 `0.72795`，低于名义中央 80%。
 
 M5C 只修正这个已经观察到的真实 coverage 偏差。它不重训 M4 base heads，不处理只有 4 条权威负例的 `entry_executable` binary，不改变买入、止盈、止损或法规边界算法。校准输出继续属于 `EXPERIMENTAL_SHADOW` 学术研究结果，不构成收益保证、实时投资建议或交易执行输入。
+
+真实执行使用 request `advprcal_7cb766fe38898e12a008a328`，在 WSL `rdagent-gpu` 对父 M4 的完整冻结输入重放。父 M4 正式合同中的 validation 标签有 1000 个 `gap_modelable` 候选，其中 940 行具有冻结 M1 features、60 行无 features；M5C 精确复用同一 feature-covered cohort，并要求缺失计数与父 bundle `metrics.json` 一致。test 的 1599 个 executable rows 全部有 features，仍保持零缺失要求。
+
+validation 原始 coverage 已为 `0.810638`，因此有限样本中央 80% CQR 得到 `delta=0`；冻结 test raw/calibrated coverage 均为 `0.727955`，区间宽度也完全不变。真实 bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead` 已发布并通过 exact retry，但 `activation_recommended=false`、`price_range_binding_activated=false`。这证明当前全局常数 adjustment 无法修正 validation 到 test 的分布漂移；现行 M4 v1 binding 必须保持不变。
 
 ## 2. Scope / 范围
 
@@ -198,19 +202,19 @@ ADVISORY_PRICE_RANGE_CALIBRATION_BUNDLE_INVALID
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-385 | `backend/services/advisory_model_first/price_range_calibration_contracts.py`; `price_range_calibration_pipeline.py` | `backend/tests/advisory_model_first/test_price_range_calibration_contracts.py`; `test_price_range_calibration_pipeline.py` | design_ready | none |
-| F-386 | `backend/services/advisory_model_first/price_range_calibration.py` | `backend/tests/advisory_model_first/test_price_range_calibration.py`; `test_price_range_calibration_pipeline.py` | design_ready | none |
-| F-387 | `backend/services/advisory_model_first/price_range_calibration.py`; pipeline metrics | `backend/tests/advisory_model_first/test_price_range_calibration.py` | design_ready | none |
-| F-388 | `backend/services/advisory_model_first/price_range_calibration_bundle.py`; runtime state | `backend/tests/advisory_model_first/test_price_range_calibration_bundle.py`; `test_price_range_inference.py` | design_ready | none |
-| F-389 | `backend/services/advisory_model_first/price_range_calibration_bundle.py` | `backend/tests/advisory_model_first/test_price_range_calibration_bundle.py` | design_ready | none |
-| F-390 | `backend/services/advisory_model_first/price_range_runtime_bundle.py`; `price_range_inference.py`; Advisory API/UI | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py`; `test_price_range_inference.py`; `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | design_ready | none |
-| F-391 | `backend/services/advisory_model_first/price_range_runtime_bundle.py` exact loader | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py` | design_ready | none |
-| F-392 | `backend/services/advisory_model_first/model_inference.py` price-range isolation | `backend/tests/advisory_model_first/test_model_inference.py` | design_ready | none |
-| F-393 | `scripts/advisory_price_range_calibration_train_wsl.py`; `scripts/wsl/advisory_price_range_calibration_train.py` | artifact: `price_range_calibration_runs/<request_id>/price_range_calibration_receipt.json`; exact retry receipt | design_ready | none |
-| F-394 | real frozen test report | artifact: `price_range_bundles/<bundle_id>/metrics.json`; artifact: `price_range_calibration_runs/<request_id>/price_range_calibration_receipt.json` | design_ready | none |
-| F-395 | protected-module scan | `backend/tests/advisory_model_first/test_price_range_calibration_boundaries.py`; ownership scan | design_ready | none |
-| F-396 | no approval/admission implementation | `backend/tests/advisory_model_first/test_price_range_calibration_boundaries.py` | design_ready | none |
-| F-397 | final compliance and F2 validation | `backend/tests/advisory_model_first/test_price_range_calibration_boundaries.py`; command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_model_first_m5c_entry_gap_calibration_f2_design_20260812.md --tier F2` | design_ready | none |
+| F-385 | `backend/services/advisory_model_first/price_range_calibration_contracts.py`; `price_range_calibration_pipeline.py` | `backend/tests/advisory_model_first/test_price_range_calibration_contracts.py`; real request `advprcal_7cb766fe38898e12a008a328` | implemented_verified | none |
+| F-386 | `backend/services/advisory_model_first/price_range_calibration.py` | `backend/tests/advisory_model_first/test_price_range_calibration.py`; artifact: `price_range_calibration_runs/advprcal_7cb766fe38898e12a008a328/calibration_spec.json` | implemented_real_verified | none |
+| F-387 | `backend/services/advisory_model_first/price_range_calibration.py`; pipeline metrics | `backend/tests/advisory_model_first/test_price_range_calibration.py`; artifact: `price_range_bundles/5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead/metrics.json` | implemented_real_negative_quality_verified | none |
+| F-388 | `backend/services/advisory_model_first/price_range_calibration_bundle.py`; runtime state | `backend/tests/advisory_model_first/test_price_range_calibration_bundle.py`; artifact: `price_range_bundles/5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead/manifest.json` | implemented_verified | none |
+| F-389 | `backend/services/advisory_model_first/price_range_calibration_bundle.py` | `backend/tests/advisory_model_first/test_price_range_calibration_bundle.py`; artifact: `price_range_bundles/5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead/manifest.json` | implemented_real_verified | none |
+| F-390 | `backend/services/advisory_model_first/price_range_runtime_bundle.py`; `price_range_inference.py`; Advisory API/UI | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py`; `backend/tests/advisory_model_first/test_price_range_inference.py`; `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | implemented_verified_not_activated | none |
+| F-391 | `backend/services/advisory_model_first/price_range_runtime_bundle.py` exact loader | `backend/tests/advisory_model_first/test_price_range_runtime_bundle.py`; `backend/tests/advisory_model_first/test_price_range_calibration_boundaries.py` | implemented_verified | none |
+| F-392 | `backend/services/advisory_model_first/model_inference.py` price-range isolation | `backend/tests/advisory_model_first/test_model_inference.py`; `backend/tests/advisory_model_first/test_price_range_calibration_boundaries.py` | implemented_verified | none |
+| F-393 | `scripts/advisory_price_range_calibration_train_wsl.py`; `scripts/wsl/advisory_price_range_calibration_train.py` | artifact: `price_range_calibration_runs/advprcal_7cb766fe38898e12a008a328/price_range_calibration_receipt.json`; exact retry same bundle ID | implemented_real_verified | none |
+| F-394 | real frozen test report | artifact: `price_range_bundles/5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead/metrics.json`; artifact: `price_range_calibration_runs/advprcal_7cb766fe38898e12a008a328/price_range_calibration_receipt.json` | implemented_negative_quality_verified | none |
+| F-395 | protected-module scan | `backend/tests/advisory_model_first/test_price_range_calibration_boundaries.py`; command: `python scripts/aistock_module_ownership_scan.py --changed-only --include-untracked --fail-on-unmapped --fail-on-ambiguous` | implemented_verified | none |
+| F-396 | no approval/admission implementation | `backend/tests/advisory_model_first/test_price_range_calibration_boundaries.py`; command: `python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1` | implemented_verified | none |
+| F-397 | final compliance and F2 validation | `backend/tests/advisory_model_first/test_price_range_calibration_boundaries.py`; command: `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_model_first_m5c_entry_gap_calibration_f2_design_20260812.md --tier F2` | implemented_verified | none |
 
 ## 16. DESIGN-COMPLIANCE-001
 

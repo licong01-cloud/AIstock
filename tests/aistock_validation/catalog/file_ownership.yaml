@@ -13,12 +13,15 @@ rules:
       - scripts/advisory_outcome_calibration_train_wsl.py
       - scripts/advisory_outcome_prepare_request.py
       - scripts/advisory_outcome_train_wsl.py
+      - scripts/advisory_price_range_calibration_prepare_request.py
+      - scripts/advisory_price_range_calibration_train_wsl.py
       - scripts/advisory_price_range_prepare_request.py
       - scripts/advisory_price_range_train_wsl.py
       - scripts/wsl/advisory_model_train.py
       - scripts/wsl/advisory_model_quality_train.py
       - scripts/wsl/advisory_outcome_calibration_train.py
       - scripts/wsl/advisory_outcome_train.py
+      - scripts/wsl/advisory_price_range_calibration_train.py
       - scripts/wsl/advisory_price_range_train.py
       - docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_*.md
     primary_module: advisory.model_first
