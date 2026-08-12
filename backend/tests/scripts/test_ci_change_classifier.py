@@ -45,6 +45,21 @@ def test_close_sync_bug_json_skips_backend_matrix(tmp_path: Path) -> None:
     assert payload["pr_quality_required"] is True
 
 
+def test_runtime_pending_restart_close_sync_uses_registry_fast_lane(tmp_path: Path) -> None:
+    bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-runtime.json"
+    _write_bug(bug, status="fixed_source_pending_user_restart", module="qlib_data")
+
+    payload = classifier.classify_changed_files(
+        ["tests/aistock_validation/bugs/20260601_BUG-191-runtime.json"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "close_sync_metadata_only"
+    assert payload["close_sync_metadata_only"] is True
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is False
+
+
 def test_open_bug_registry_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
     bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-example.json"
     _write_bug(bug, status="open")
@@ -331,6 +346,19 @@ def test_minute_execution_changes_select_focused_paper_v2_session(tmp_path: Path
     assert payload["classification"] == "targeted_ci_required"
     assert payload["backend_required"] is True
     assert payload["backend_sessions"] == ["paper_v2_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
+def test_qlib_exporter_tests_select_qlib_data_backend(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/tests/qlib_exporter/test_db_reader_minute_query.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["qlib_data_backend"]
     assert payload["unmapped_code_files"] == []
 
 

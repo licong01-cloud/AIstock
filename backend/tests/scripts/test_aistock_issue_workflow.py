@@ -1967,6 +1967,22 @@ def test_export_suspend_d_candidate_classified_as_non_runtime_offline_tool(
     assert contract["backend_restart_required"] is False
 
 
+def test_export_qe_qlib_candidate_classified_as_non_runtime_offline_tool(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    inference = workflow._classify_runtime_impact(
+        ["scripts/export_qe_qlib_candidate.py"],
+        root=isolated_workflow_root,
+    )
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+
+
 def test_mixed_backend_main_file_and_exporter_infers_backend_main_only(
     isolated_workflow_root: Path,
 ) -> None:
