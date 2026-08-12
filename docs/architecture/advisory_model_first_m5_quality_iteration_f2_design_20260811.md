@@ -2,8 +2,8 @@
 
 > 日期：2026-08-11
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
-> 当前阶段：`M5A_SOURCE_IMPLEMENTED_PENDING_POST_MERGE_TRAINING`
-> 当前实施范围：`M5A_TOP5_QUALITY_ONLY`
+> 当前阶段：`M5A_REAL_TRAINING_COMPLETE_NOT_ACTIVATED`
+> 当前实施范围：`M5A_TOP5_QUALITY_COMPLETE`
 > 训练环境：WSL Conda `rdagent-gpu`
 
 ## 1. Background / 当前真实问题
@@ -339,6 +339,17 @@ M5A允许修改：
 | F-369 | Advisory-only changed files; no protected module or DB diff | `backend/tests/advisory_model_first/test_quality_boundaries.py`; command `python scripts/aistock_module_ownership_scan.py --changed-only --fail-on-unmapped --fail-on-ambiguous` | verified | none |
 | F-370 | DESIGN-COMPLIANCE-001 source review | command `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md --tier F2`; command `python -m nox -s advisory_modeling_backend` | implemented_local_verified | none |
 | F-371 | M5A-only source; no M5B/M5C implementation/import | `backend/tests/advisory_model_first/test_quality_boundaries.py`; command `python scripts/aistock_module_ownership_scan.py --changed-only --fail-on-unmapped --fail-on-ambiguous` | verified | none |
+
+### 17.1 真实训练与冻结 test 结果
+
+2026-08-12 已在 WSL Conda `rdagent-gpu` 完成完整 M5A 流程：
+
+- train request：`advm5train_a64594d6f22f618a4afef84a`；45 个 booster 全部执行。
+- validation winner：`EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`，五种子 ensemble，`model_weight=0.75`。
+- test evaluation：`advm5test_818fe5a6c8ee323d2fbf25d4`，冻结 test 80 日、1599 行，只在 winner 固定后评价一次。
+- 实验 bundle：`1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb`。
+- winner test 平均 5 日超额收益 `0.0071894`，M1 为 `-0.0002833`，原始 selection rank 为 `0.0085591`；winner 相对 selection 的 lift 为 `-0.0013696`，95% moving-block bootstrap 区间为 `[-0.0093061, 0.0053392]`。
+- 结论：M5A 显著修复 M1 的负向结果，但没有证明优于原始 selection。实验 bundle 如实保留，现行 M1 binding 不替换，不根据 test 追加 trial 或调参。
 
 ## 18. Risks / 风险与处置
 

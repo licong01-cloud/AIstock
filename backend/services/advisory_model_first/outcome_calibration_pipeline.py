@@ -67,26 +67,11 @@ def run_outcome_calibration_pipeline(request_path: str | Path) -> dict[str, Any]
     )
     if validation_labels.empty or set(validation_labels["split"].astype(str)) != {"validation"}:
         raise _pipeline_error("M5B validation label projection is empty or contaminated")
-    try:
-        validation_merged = features.merge(
-            validation_labels,
-            on=list(KEYS),
-            how="inner",
-            validate="one_to_one",
-        )
-    except pd.errors.MergeError as exc:
-        raise _pipeline_error(
-            "M5B feature and label identities are not one-to-one",
-            error_type=type(exc).__name__,
-        ) from exc
-    if validation_merged.empty:
-        raise _pipeline_error("M5B validation feature and label projection has no common rows")
-    if len(validation_merged) != len(validation_labels):
-        raise _pipeline_error(
-            "M5B validation features do not cover the complete label projection",
-            label_row_count=len(validation_labels),
-            merged_row_count=len(validation_merged),
-        )
+    validation_merged, validation_projection_counts = _feature_covered_projection(
+        features=features,
+        labels=validation_labels,
+        projection_name="validation",
+    )
     validation_matrix = _prepare_matrix_from_schema(validation_merged, feature_schema=feature_schema)
     models = _load_parent_models(parent_root)
 
@@ -112,21 +97,11 @@ def run_outcome_calibration_pipeline(request_path: str | Path) -> dict[str, Any]
     )
     if test_labels.empty or set(test_labels["split"].astype(str)) != {"test"}:
         raise _pipeline_error("M5B test label projection is empty or contaminated")
-    try:
-        test_merged = features.merge(test_labels, on=list(KEYS), how="inner", validate="one_to_one")
-    except pd.errors.MergeError as exc:
-        raise _pipeline_error(
-            "M5B test feature and label identities are not one-to-one",
-            error_type=type(exc).__name__,
-        ) from exc
-    if test_merged.empty:
-        raise _pipeline_error("M5B test feature and label projection has no common rows")
-    if len(test_merged) != len(test_labels):
-        raise _pipeline_error(
-            "M5B test features do not cover the complete label projection",
-            label_row_count=len(test_labels),
-            merged_row_count=len(test_merged),
-        )
+    test_merged, test_projection_counts = _feature_covered_projection(
+        features=features,
+        labels=test_labels,
+        projection_name="test",
+    )
     test_matrix = _prepare_matrix_from_schema(test_merged, feature_schema=feature_schema)
     test_metrics, test_predictions = _evaluate_projection(
         models=models,
@@ -145,6 +120,10 @@ def run_outcome_calibration_pipeline(request_path: str | Path) -> dict[str, Any]
     metrics = {
         "schema_version": "advisory_outcome_calibration_metrics_v1",
         "calibration_spec_sha256": spec_sha256,
+        "projection_counts": {
+            "validation": validation_projection_counts,
+            "test": test_projection_counts,
+        },
         "validation": validation_metrics,
         "test": test_metrics,
     }
@@ -205,6 +184,36 @@ def run_outcome_calibration_pipeline(request_path: str | Path) -> dict[str, Any]
     }
     _write_json_atomic(run_root / "outcome_calibration_receipt.json", receipt)
     return receipt
+
+
+def _feature_covered_projection(
+    *,
+    features: pd.DataFrame,
+    labels: pd.DataFrame,
+    projection_name: str,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    try:
+        merged = features.merge(labels, on=list(KEYS), how="inner", validate="one_to_one")
+    except pd.errors.MergeError as exc:
+        raise _pipeline_error(
+            f"M5B {projection_name} feature and label identities are not one-to-one",
+            error_type=type(exc).__name__,
+        ) from exc
+    if merged.empty:
+        raise _pipeline_error(
+            f"M5B {projection_name} feature and label projection has no common rows"
+        )
+    if set(merged["split"].astype(str)) != {projection_name}:
+        raise _pipeline_error(
+            f"M5B {projection_name} feature-covered projection has the wrong split"
+        )
+    label_row_count = len(labels)
+    feature_covered_row_count = len(merged)
+    return merged, {
+        "label_row_count": label_row_count,
+        "feature_covered_row_count": feature_covered_row_count,
+        "missing_feature_row_count": label_row_count - feature_covered_row_count,
+    }
 
 
 def _fit_validation(

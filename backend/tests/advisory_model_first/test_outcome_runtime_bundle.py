@@ -16,6 +16,7 @@ from backend.services.advisory_model_first.outcome_contracts import (
     build_frozen_outcome_training_request,
 )
 from backend.services.advisory_model_first.outcome_runtime_bundle import (
+    _validate_runtime_calibration,
     _validate_outcome_runtime_manifest,
     expected_outcome_model_names,
     load_exact_outcome_bundle,
@@ -155,4 +156,116 @@ def test_outcome_runtime_manifest_rejects_wrong_horizon_contract() -> None:
     }
     with pytest.raises(AdvisoryModelFirstError) as error:
         _validate_outcome_runtime_manifest(manifest)
+    assert error.value.reason_code == "ADVISORY_OUTCOME_BUNDLE_INVALID"
+
+
+def _runtime_calibration_spec() -> dict:
+    solver = {
+        "library": "scikit-learn",
+        "estimator": "LogisticRegression",
+        "penalty": None,
+        "solver": "lbfgs",
+        "fit_intercept": True,
+        "max_iter": 1000,
+        "random_state": 20260812,
+        "library_version": "1.7.2",
+    }
+    return {
+        "schema_version": "advisory_outcome_calibration_spec_v1",
+        "calibration_policy_version": "advisory_outcome_calibration_policy_v1",
+        "request_id": "advoutcal_test",
+        "request_sha256": "a" * 64,
+        "validation_projection_hash": "b" * 64,
+        "holding_calibration_state": "UNCALIBRATED",
+        "binary_heads": {
+            f"{family}_h{horizon}": {
+                "state": "CALIBRATED",
+                "head": f"{family}_h{horizon}",
+                "row_count": 20,
+                "positive_count": 8,
+                "negative_count": 12,
+                "coefficient": 1.0,
+                "intercept": 0.0,
+                "reason_code": None,
+                "solver": solver,
+                "iteration_count": 4,
+                "convergence_state": "CONVERGED",
+                "validation_metrics": {"raw": {}, "calibrated": {}},
+            }
+            for horizon in (1, 3, 5, 10, 20)
+            for family in ("positive_excess", "signal_survival")
+        },
+        "return_intervals": {
+            f"excess_return_h{horizon}": {
+                "state": "CALIBRATED",
+                "method": "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
+                "nominal_coverage": 0.8,
+                "delta": 0.0,
+            }
+            for horizon in (1, 3, 5, 10, 20)
+        },
+        "path_upper": {
+            f"{family}_h{horizon}": {
+                "state": "CALIBRATED",
+                "method": "CONFORMAL_UPPER_90_NONNEGATIVE_EXPANSION",
+                "nominal_coverage": 0.9,
+                "delta": 0.0,
+            }
+            for horizon in (1, 3, 5, 10, 20)
+            for family in ("path_mfe", "path_mae_loss")
+        },
+    }
+
+
+def test_runtime_calibration_rejects_non_positive_platt_slope() -> None:
+    spec = _runtime_calibration_spec()
+    spec["binary_heads"]["positive_excess_h5"]["coefficient"] = 0.0
+    manifest = {
+        "request_id": "advoutcal_test",
+        "request_sha256": "a" * 64,
+        "binary_calibration_state": "CALIBRATED",
+    }
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        _validate_runtime_calibration(spec, manifest=manifest)
+
+    assert error.value.reason_code == "ADVISORY_OUTCOME_BUNDLE_INVALID"
+
+
+def test_runtime_calibration_accepts_order_reversal_as_explicit_uncalibrated() -> None:
+    spec = _runtime_calibration_spec()
+    spec["binary_heads"]["positive_excess_h5"] = {
+        "state": "UNCALIBRATED",
+        "head": "positive_excess_h5",
+        "row_count": 20,
+        "positive_count": 8,
+        "negative_count": 12,
+        "coefficient": None,
+        "intercept": None,
+        "reason_code": "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL",
+        "solver": spec["binary_heads"]["positive_excess_h1"]["solver"],
+        "iteration_count": 4,
+        "convergence_state": "CONVERGED_ORDER_REVERSAL",
+        "validation_metrics": {"raw": {}, "calibrated": None},
+    }
+    manifest = {
+        "request_id": "advoutcal_test",
+        "request_sha256": "a" * 64,
+        "binary_calibration_state": "PARTIAL",
+    }
+
+    _validate_runtime_calibration(spec, manifest=manifest)
+
+
+def test_runtime_calibration_rejects_manifest_binary_state_drift() -> None:
+    spec = _runtime_calibration_spec()
+    manifest = {
+        "request_id": "advoutcal_test",
+        "request_sha256": "a" * 64,
+        "binary_calibration_state": "PARTIAL",
+    }
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        _validate_runtime_calibration(spec, manifest=manifest)
+
     assert error.value.reason_code == "ADVISORY_OUTCOME_BUNDLE_INVALID"

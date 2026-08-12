@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib.metadata import version
 from pathlib import Path
 
 import pandas as pd
@@ -126,6 +127,16 @@ def _calibration_request(tmp_path: Path, parent_id: str, parent_path: Path, pare
 
 
 def _spec(request_id: str, request_sha256: str) -> dict:
+    solver = {
+        "library": "scikit-learn",
+        "estimator": "LogisticRegression",
+        "penalty": None,
+        "solver": "lbfgs",
+        "fit_intercept": True,
+        "max_iter": 1000,
+        "random_state": 20260812,
+        "library_version": version("scikit-learn"),
+    }
     return {
         "schema_version": "advisory_outcome_calibration_spec_v1",
         "request_id": request_id,
@@ -135,8 +146,17 @@ def _spec(request_id: str, request_sha256: str) -> dict:
         "binary_heads": {
             f"{family}_h{horizon}": {
                 "state": "CALIBRATED",
+                "head": f"{family}_h{horizon}",
+                "row_count": 20,
+                "positive_count": 8,
+                "negative_count": 12,
                 "coefficient": 1.0,
                 "intercept": 0.0,
+                "reason_code": None,
+                "solver": solver,
+                "iteration_count": 4,
+                "convergence_state": "CONVERGED",
+                "validation_metrics": {"raw": {}, "calibrated": {}},
             }
             for horizon in (1, 3, 5, 10, 20)
             for family in ("positive_excess", "signal_survival")
@@ -204,6 +224,127 @@ def test_v2_bundle_is_self_contained_exact_retry_and_tamper_evident(tmp_path: Pa
     with pytest.raises(AdvisoryModelFirstError) as error:
         read_outcome_bundle_manifest(bundle_path, expected_bundle_id=bundle_id)
     assert error.value.reason_code == "ADVISORY_OUTCOME_BUNDLE_INVALID"
+
+
+def test_v2_bundle_accepts_explicit_order_reversal_uncalibrated_head(tmp_path: Path) -> None:
+    parent_id, parent_path, parent_manifest = _parent_bundle(tmp_path)
+    request = _calibration_request(tmp_path, parent_id, parent_path, parent_manifest)
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    spec = _spec(request.request_id, request.request_sha256)
+    spec["binary_heads"]["positive_excess_h5"] = {
+        "state": "UNCALIBRATED",
+        "head": "positive_excess_h5",
+        "row_count": 20,
+        "positive_count": 8,
+        "negative_count": 12,
+        "coefficient": None,
+        "intercept": None,
+        "reason_code": "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL",
+        "solver": spec["binary_heads"]["positive_excess_h1"]["solver"],
+        "iteration_count": 4,
+        "convergence_state": "CONVERGED_ORDER_REVERSAL",
+        "validation_metrics": {"raw": {}, "calibrated": None},
+    }
+    spec_path = run_root / "calibration.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    predictions = pd.DataFrame({"instrument": ["000001.SZ"], "split": ["validation"]})
+
+    bundle_id, bundle_path, manifest = publish_calibrated_outcome_bundle(
+        request=request,
+        calibration_spec_path=spec_path,
+        metrics={"validation": {}, "test": {}},
+        validation_predictions=predictions,
+        test_predictions=predictions.assign(split="test"),
+        calibration_log={"environment": {"conda_environment": "rdagent-gpu"}},
+    )
+
+    assert manifest["calibration_state"] == "PARTIAL"
+    loaded = json.loads((bundle_path / "calibration.json").read_text(encoding="utf-8"))
+    assert loaded["binary_heads"]["positive_excess_h5"]["reason_code"] == (
+        "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL"
+    )
+    assert read_outcome_bundle_manifest(bundle_path, expected_bundle_id=bundle_id) == manifest
+
+
+@pytest.mark.parametrize("coefficient", [0.0, -0.25])
+def test_v2_bundle_rejects_calibrated_non_positive_platt_slope(
+    tmp_path: Path,
+    coefficient: float,
+) -> None:
+    parent_id, parent_path, parent_manifest = _parent_bundle(tmp_path)
+    request = _calibration_request(tmp_path, parent_id, parent_path, parent_manifest)
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    spec = _spec(request.request_id, request.request_sha256)
+    spec["binary_heads"]["positive_excess_h5"]["coefficient"] = coefficient
+    spec_path = run_root / "calibration.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    predictions = pd.DataFrame({"instrument": ["000001.SZ"], "split": ["validation"]})
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        publish_calibrated_outcome_bundle(
+            request=request,
+            calibration_spec_path=spec_path,
+            metrics={"validation": {}, "test": {}},
+            validation_predictions=predictions,
+            test_predictions=predictions.assign(split="test"),
+            calibration_log={"environment": {"conda_environment": "rdagent-gpu"}},
+        )
+
+    assert error.value.reason_code == "ADVISORY_OUTCOME_CALIBRATION_BUNDLE_INVALID"
+    assert "invalid Platt parameters" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("solver", None),
+        (
+            "solver",
+            {
+                "library": "scikit-learn",
+                "estimator": "LogisticRegression",
+                "penalty": None,
+                "solver": "lbfgs",
+                "fit_intercept": True,
+                "max_iter": 1000,
+                "random_state": 20260812,
+                "library_version": "0.0.0-tampered",
+            },
+        ),
+        ("iteration_count", 0),
+        ("convergence_state", "UNKNOWN"),
+        ("head", "signal_survival_h5"),
+        ("row_count", 19),
+    ],
+)
+def test_v2_bundle_rejects_incomplete_or_inconsistent_platt_evidence(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    parent_id, parent_path, parent_manifest = _parent_bundle(tmp_path)
+    request = _calibration_request(tmp_path, parent_id, parent_path, parent_manifest)
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    spec = _spec(request.request_id, request.request_sha256)
+    spec["binary_heads"]["positive_excess_h5"][field] = value
+    spec_path = run_root / "calibration.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    predictions = pd.DataFrame({"instrument": ["000001.SZ"], "split": ["validation"]})
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        publish_calibrated_outcome_bundle(
+            request=request,
+            calibration_spec_path=spec_path,
+            metrics={"validation": {}, "test": {}},
+            validation_predictions=predictions,
+            test_predictions=predictions.assign(split="test"),
+            calibration_log={"environment": {"conda_environment": "rdagent-gpu"}},
+        )
+
+    assert error.value.reason_code == "ADVISORY_OUTCOME_CALIBRATION_BUNDLE_INVALID"
 
 
 def test_v2_bundle_publishes_exact_binding_and_loads_calibration(tmp_path: Path) -> None:

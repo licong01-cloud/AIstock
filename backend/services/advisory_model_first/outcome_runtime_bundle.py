@@ -358,10 +358,19 @@ def _validate_runtime_calibration(
         for family in ("path_mfe", "path_mae_loss")
     }
     binary = calibration.get("binary_heads") or {}
+    binary_states = {
+        str(value.get("state"))
+        for value in binary.values()
+        if isinstance(value, dict)
+    }
+    expected_binary_state = "CALIBRATED" if binary_states == {"CALIBRATED"} else "PARTIAL"
     if (
         calibration.get("schema_version") != "advisory_outcome_calibration_spec_v1"
         or calibration.get("request_id") != manifest.get("request_id")
         or calibration.get("request_sha256") != manifest.get("request_sha256")
+        or calibration.get("calibration_policy_version")
+        != "advisory_outcome_calibration_policy_v1"
+        or manifest.get("binary_calibration_state") != expected_binary_state
         or set(binary) != expected_binary
         or set(calibration.get("return_intervals") or {}) != expected_returns
         or set(calibration.get("path_upper") or {}) != expected_path
@@ -379,8 +388,32 @@ def _validate_runtime_calibration(
                 reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
                 context={"head": head},
             )
-        if value["state"] == "CALIBRATED" and not all(
-            _is_finite_number(value.get(field)) for field in ("coefficient", "intercept")
+        solver = value.get("solver")
+        if (
+            value.get("head") != head
+            or not _valid_runtime_platt_solver(solver)
+            or not _is_positive_int(value.get("row_count"))
+            or not _is_nonnegative_int(value.get("positive_count"))
+            or not _is_nonnegative_int(value.get("negative_count"))
+            or value["positive_count"] + value["negative_count"] != value["row_count"]
+            or not isinstance(value.get("validation_metrics"), dict)
+            or set(value["validation_metrics"]) != {"raw", "calibrated"}
+        ):
+            raise AdvisoryModelFirstError(
+                "outcome runtime binary calibration evidence is incomplete",
+                reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
+                context={"head": head},
+            )
+        if value["state"] == "CALIBRATED" and (
+            not all(
+                _is_finite_number(value.get(field))
+                for field in ("coefficient", "intercept")
+            )
+            or float(value["coefficient"]) <= 0.0
+            or value.get("reason_code") is not None
+            or not _is_positive_int(value.get("iteration_count"))
+            or value.get("convergence_state") != "CONVERGED"
+            or not isinstance(value["validation_metrics"].get("calibrated"), dict)
         ):
             raise AdvisoryModelFirstError(
                 "outcome runtime calibrated binary parameters are invalid",
@@ -388,7 +421,10 @@ def _validate_runtime_calibration(
                 context={"head": head},
             )
         if value["state"] == "UNCALIBRATED" and (
-            value.get("coefficient") is not None or value.get("intercept") is not None
+            value.get("coefficient") is not None
+            or value.get("intercept") is not None
+            or not _valid_runtime_uncalibrated_state(value)
+            or value["validation_metrics"].get("calibrated") is not None
         ):
             raise AdvisoryModelFirstError(
                 "outcome runtime uncalibrated binary head contains parameters",
@@ -413,6 +449,36 @@ def _validate_runtime_calibration(
                     reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
                     context={"head": head},
                 )
+
+
+def _valid_runtime_platt_solver(value: Any) -> bool:
+    return isinstance(value, dict) and value == {
+        "library": "scikit-learn",
+        "estimator": "LogisticRegression",
+        "penalty": None,
+        "solver": "lbfgs",
+        "fit_intercept": True,
+        "max_iter": 1000,
+        "random_state": 20260812,
+        "library_version": value.get("library_version"),
+    } and isinstance(value.get("library_version"), str) and bool(
+        value["library_version"].strip()
+    )
+
+
+def _valid_runtime_uncalibrated_state(value: dict[str, Any]) -> bool:
+    reason_code = value.get("reason_code")
+    if reason_code == "ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING":
+        return (
+            value.get("iteration_count") == 0
+            and value.get("convergence_state") == "NOT_FITTED_CLASS_VARIATION_MISSING"
+        )
+    if reason_code == "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL":
+        return (
+            _is_positive_int(value.get("iteration_count"))
+            and value.get("convergence_state") == "CONVERGED_ORDER_REVERSAL"
+        )
+    return False
 
 
 def _load_lightgbm_booster(path: Path) -> Any:
@@ -480,3 +546,11 @@ def _is_finite_number(value: Any) -> bool:
         and not isinstance(value, bool)
         and math.isfinite(float(value))
     )
+
+
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_positive_int(value: Any) -> bool:
+    return _is_nonnegative_int(value) and value > 0
