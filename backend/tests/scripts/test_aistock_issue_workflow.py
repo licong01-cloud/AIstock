@@ -1255,6 +1255,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["backend/services/hmm_risk/b3_training.py"],
         root=isolated_workflow_root,
     )
+    offline_hmm_state_model_set = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/state_model_set.py"],
+        root=isolated_workflow_root,
+    )
     offline_advisory_phase0b = workflow._classify_runtime_impact(
         ["backend/services/advisory_phase0b/audit_service.py"],
         root=isolated_workflow_root,
@@ -1298,6 +1302,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_hmm_mixed_dimension["runtime_files"] == []
     assert offline_hmm_training["runtime_impact"] == "none"
     assert offline_hmm_training["runtime_files"] == []
+    assert offline_hmm_state_model_set["runtime_impact"] == "none"
+    assert offline_hmm_state_model_set["runtime_files"] == []
     assert offline_advisory_phase0b["runtime_impact"] == "none"
     assert offline_advisory_phase0b["runtime_files"] == []
     assert offline_advisory_batch_b["runtime_impact"] == "none"
@@ -1331,6 +1337,54 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_contract["backend_restart_required"] is False
     assert offline_contract["pre_pr_ready"] is True
     assert offline_contract["blocking"] == []
+
+
+def test_bug_1032_offline_hmm_state_model_set_preserves_real_backend_detection(
+    isolated_workflow_root: Path,
+) -> None:
+    _write_runtime_catalog(isolated_workflow_root)
+    changed_files = [
+        "backend/services/hmm_risk/state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+    ]
+
+    record = _bug(
+        allowed_write_scope=[*changed_files, "backend/services/example.py"],
+        file_scope_contract={"changed_files": changed_files},
+        runtime_contract={
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "runtime_impact": "none",
+        },
+    )
+    authoritative_files = workflow.resolve_record_runtime_changed_files(record)
+    inference = workflow._classify_runtime_impact(authoritative_files, root=isolated_workflow_root)
+    contract = workflow.build_runtime_contract(
+        record=record,
+        changed_files=authoritative_files,
+        root=isolated_workflow_root,
+    )
+    mixed = workflow._classify_runtime_impact(
+        [*changed_files, "backend/services/example.py"],
+        root=isolated_workflow_root,
+    )
+
+    assert authoritative_files == changed_files
+    assert inference == {
+        "runtime_impact": "none",
+        "observed_impacts": ["none"],
+        "runtime_files": [],
+        "target_ids": [],
+    }
+    assert contract["runtime_impact"] == "none"
+    assert contract["backend_restart_required"] is False
+    assert contract["target_ids"] == []
+    assert contract["pre_pr_ready"] is True
+    assert contract["blocking"] == []
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["runtime_files"] == ["backend/services/example.py"]
+    assert mixed["target_ids"] == ["backend-main"]
 
 
 def test_runtime_contract_requires_schema_real_runbook_and_known_persistence_basis(
