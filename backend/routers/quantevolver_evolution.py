@@ -2897,13 +2897,22 @@ def _run_correlation_compute_via_dispatch(
             _active_dispatch_task_id = task_id
             deadline = _time.time() + _MATRIX_TIMEOUT_SEC
             last_task = created
+            dispatch_service = _get_dispatch_service()
+            observation_generation, initial_observation = dispatch_service.get_task_observation(task_id)
+            if initial_observation is not None:
+                last_task = initial_observation
             while _time.time() < deadline:
-                asyncio.run(_get_dispatch_service().sync_running_tasks())
-                last_task = _get_dispatch_service().get_task(task_id) or last_task
+                remaining = max(0.0, deadline - _time.time())
+                observation_generation, observed_task = dispatch_service.wait_for_task_observation(
+                    task_id,
+                    after_generation=observation_generation,
+                    timeout=min(65.0, remaining),
+                )
+                if observed_task is not None:
+                    last_task = observed_task
                 status = last_task.get("status")
                 if status in {"success", "failed", "canceled"}:
                     break
-                _time.sleep(2)
             else:
                 raise TimeoutError(f"correlation dispatch task timeout: {task_id}")
 

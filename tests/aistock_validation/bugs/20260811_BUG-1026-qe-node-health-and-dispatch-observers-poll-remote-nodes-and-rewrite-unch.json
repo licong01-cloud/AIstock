@@ -1,0 +1,412 @@
+{
+  "actual": "Background loops perform recurring SELECT, remote HTTP and UPDATE work even when no UI is open and all observed state is unchanged.",
+  "allowed_write_scope": [
+    "backend/services/dispatch_service.py",
+    "backend/routers/dispatch.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/correlation_scheduler.py",
+    "backend/services/quantevolver/factor_metrics_scheduler.py",
+    "backend/schedulers/node_health_scheduler.py",
+    "backend/tests/test_dispatch_observer_quiet.py",
+    "backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/bugs/20260811_BUG-1026-qe-node-health-and-dispatch-observers-poll-remote-nodes-and-rewrite-unch.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1026",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-11T18:29:52.107103Z",
+  "description": "Background loops perform recurring SELECT, remote HTTP and UPDATE work even when no UI is open and all observed state is unchanged.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260811-89336b760d4e",
+      "timestamp": "2026-08-11T18:29:52.107085Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added the exact node-health scheduler and two focused quiet-observer tests after registering qe_node_health_scheduler ownership (primary qe.core, impact platform.api); ownership scan mapped 3/3 with no ambiguity.",
+      "timestamp": "2026-08-11T18:39:00Z"
+    },
+    {
+      "action": "implementation_review_completed",
+      "actor": "codex",
+      "note": "Three review rounds completed. Fixed stale persisted node reads with memory-only observation overlay, prevented older create responses from overwriting complete observations, minimized aggregate snapshots to explicit non-secret fields, and mapped the focused observer test exactly. Targeted regression 92 passed; required platform_api_backend 13 and qe_read_backend 34 passed; runtime restart remains user-owned.",
+      "timestamp": "2026-08-11T19:37:13Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "codex",
+      "note": "DESIGN-COMPLIANCE-001: complete single-observer delivery rather than a subset; remote and observer errors remain loud and thresholded; lifecycle controls, fencing, result and terminal semantics are preserved while only the user-requested automatic polling/discovery behavior changes; no new approval or release gate was added.",
+      "timestamp": "2026-08-11T19:37:13Z"
+    }
+  ],
+  "evidence_uris": [
+    "read-only source audit of node_health_scheduler, dispatch_service and quantevolver legacy 2-second monitors",
+    "pytest focused and related matrix: 92 passed",
+    "nox platform_api_backend: 13 passed",
+    "nox qe_read_backend: 34 passed",
+    "nox validation_module_registry_l0: 8 passed and ownership 14/14 mapped"
+  ],
+  "expected": "No UI and unchanged state: each node and active task is remotely observed at most once per minute, normal health stays in memory, database writes and events are zero, manual discovery is never automatic, and correlation/factor mirrors do not query or rewrite unchanged dispatch state. Real lifecycle actions and terminal transitions remain immediate and exactly once.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/tests/test_dispatch_observer_quiet.py",
+      "backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py"
+    ],
+    "changed_files": [
+      "backend/services/dispatch_service.py",
+      "backend/routers/dispatch.py",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/correlation_scheduler.py",
+      "backend/services/quantevolver/factor_metrics_scheduler.py",
+      "backend/schedulers/node_health_scheduler.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ],
+    "ownership": {
+      "changed_files": [
+        "backend/services/dispatch_service.py",
+        "backend/routers/dispatch.py",
+        "backend/routers/quantevolver_evolution.py",
+        "backend/services/quantevolver/correlation_scheduler.py",
+        "backend/services/quantevolver/factor_metrics_scheduler.py",
+        "backend/schedulers/node_health_scheduler.py",
+        "backend/tests/test_dispatch_observer_quiet.py",
+        "backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "validation.runner",
+        "validation.center",
+        "platform.config"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dispatch_service.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/routers/dispatch.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/routers/quantevolver_evolution.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/correlation_scheduler.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/factor_metrics_scheduler.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/schedulers/node_health_scheduler.py",
+          "impact_modules": [
+            "platform.api"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_node_health_scheduler"
+        },
+        {
+          "file": "backend/tests/test_dispatch_observer_quiet.py",
+          "impact_modules": [
+            "platform.api"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_node_health_scheduler"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/dispatch_service.py",
+        "backend/routers/dispatch.py",
+        "backend/routers/quantevolver_evolution.py",
+        "backend/services/quantevolver/correlation_scheduler.py",
+        "backend/services/quantevolver/factor_metrics_scheduler.py",
+        "backend/schedulers/node_health_scheduler.py",
+        "backend/tests/test_dispatch_observer_quiet.py",
+        "backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_ci_change_classifier.py"
+      ],
+      "unmatched_files": []
+    },
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dispatch_service.py",
+      "backend/routers/dispatch.py",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/correlation_scheduler.py",
+      "backend/services/quantevolver/factor_metrics_scheduler.py",
+      "backend/schedulers/node_health_scheduler.py",
+      "backend/tests/test_dispatch_observer_quiet.py",
+      "backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ]
+  },
+  "first_seen_at": "2026-08-11T18:29:52.107103Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 3292,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3292",
+  "last_seen_at": "2026-08-11T18:29:52.107103Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "pytest -q backend/tests/test_dispatch_observer_quiet.py backend/tests/unified_engine/test_qe_dispatch_monitor_quiet.py",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "platform_api_backend",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/dispatch/nodes",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process imported NodeHealthScheduler and DispatchService from the BUG-1026 worktree, asserted observer interval >=60 seconds and load/wait observation contracts, and exited 0; no backend or experiment process was controlled"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE node-health and dispatch observers poll remote nodes and rewrite unchanged state without UI",
+  "trigger_condition": {
+    "fingerprint": "89336b760d4edc1a5161a2b3",
+    "source_event_id": "FE-20260811-89336b760d4e"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "platform_api",
+        "qe_read"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "platform_api",
+          "qe_read"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
