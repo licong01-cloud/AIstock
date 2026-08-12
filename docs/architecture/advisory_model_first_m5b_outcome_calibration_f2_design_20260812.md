@@ -2,7 +2,7 @@
 
 > 日期：2026-08-12  
 > Feature tier：F2  
-> 状态：REAL_WSL_CALIBRATION_COMPLETE_SOURCE_FIX_PENDING_MERGE_NOT_ACTIVATED
+> 状态：SOURCE_AND_RUNTIME_VERIFIED_QUALITY_NOT_ACTIVATED
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`  
 > 前序设计：`docs/architecture/advisory_model_first_m3_outcome_holding_period_f2_design_20260809.md`、`docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`
 
@@ -492,3 +492,13 @@ backend_restart = user-owned，仅在 runtime 源码合入且 binding 激活后�
 - receipt SHA256：`ccdae88f25bb9741a50548643c3edfe40d702000ff2fcae170ebadd030ceea01`；calibration spec SHA256：`14ec26427eb9df25214905a1080da763e4571faa09216ef29fe86aed487d3f81`。
 
 冻结 test 的质量结论必须与执行成功分开：8 个实际 calibrated binary head 的 Brier、logloss 和 10-bin ECE 均未优于 raw；5 个收益区间相对名义 80% 的平均绝对偏差由 `0.00984` 增至 `0.03129`；10 个 path upper 相对名义 90% 的平均绝对偏差由 `0.01432` 小幅降至 `0.01394`。因此本 bundle 是完整、可复现的真实研究产物，但当前**不建议激活 outcome binding**。该结论不是新增审批或运行门禁，只是按蓝图要求如实保留质量结果；现行 M3 v1 outcome 继续可用。
+
+## 22. 源码合入、重启后验证与最终状态
+
+2026-08-12 已完成 M5B 源码和运行时收敛，且未改变 §21 的负面质量结论：
+
+- BUG-1038、BUG-1039、BUG-1040 修复随 PR #3326 合入，merge commit 为 `546b8d47360ee577dc470742ce2c50cda7f7e89a`。修复范围仅覆盖父 M3 feature-covered 投影、负斜率排序反转处理和逐 head solver/版本/迭代/收敛 artifact 合同。
+- 用户完成 `backend-main` 重启后，三份独立 post-restart receipt 均验证健康、runtime identity 和真实多 Alpha model-shadow 业务 probe 为 HTTP 200；观测运行时 commit `eb8cc21ebf2c52f61eca15fbd4709cca635961a3` 是上述修复 merge commit 的 `origin/main` 后代。
+- 三项 verifier 均记录 `process_control_performed=false`、`tracked_files_written=false`，未执行数据库写入、训练、binding 激活或其它业务副作用。BUG-1038、BUG-1039、BUG-1040 最终均为 `verified`，对应 GitHub Issue 已关闭。
+- outcome v2 bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533` 继续作为未激活研究产物保留；现行 M3 v1 outcome binding 不变。源码生效不能替代冻结 test 质量结论，也不构成激活理由。
+- M5B 已完成，不再是后续主线阻断。下一阶段严格进入父蓝图规定的 M5C entry-gap q10/q90 validation-only coverage 校准；不得重复 M5B、处理历史固化或扩建通用模型平台。
