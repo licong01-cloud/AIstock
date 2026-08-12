@@ -22,6 +22,7 @@ from .errors import DatasetReleaseError
 from .log_store import read_log_page
 from .profile import DatasetProfile
 from .resolution import ResolutionService
+from .retention import DatasetReferenceState, classify_dataset_retention
 from .state_machine import RUN_TRANSITIONS, TERMINAL_RUN_STATES
 from .worker_identity import WorkerHeartbeatStore
 
@@ -265,6 +266,13 @@ class DatasetReleaseControlService:
         run = None
         if submission.get("run_id"):
             run = self.get_run(profile_id, str(submission["run_id"]))
+        run_state = str((run or {}).get("state") or "")
+        retention = classify_dataset_retention(
+            DatasetReferenceState(
+                published=run_state == "SUCCEEDED",
+                terminal_failure=bool(run_state in TERMINAL_RUN_STATES and run_state != "SUCCEEDED"),
+            )
+        )
         return {
             "schema_version": "dataset_release_status_v1",
             "profile": profile_id,
@@ -277,6 +285,7 @@ class DatasetReleaseControlService:
             "db_repair": "not_requested",
             "restart": "not_requested",
             "cleanup": "not_requested",
+            "retention": retention.as_dict(),
         }
 
     def submit_reattest_latest(

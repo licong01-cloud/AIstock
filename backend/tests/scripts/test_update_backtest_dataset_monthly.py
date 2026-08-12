@@ -38,6 +38,23 @@ def _service(tmp_path) -> tuple[DatasetReleaseControlService, ControlStore]:
     return service, store
 
 
+def _dual_profile_service(tmp_path) -> tuple[DatasetReleaseControlService, ControlStore]:
+    store = ControlStore.initialize(tmp_path / "control")
+    bindings = tuple(
+        DatasetReleaseProfileBinding(
+            profile_id=profile_id,
+            semantic_profile_digest=_digest(profile_id),
+            cutoff_policy="previous_month_last_completed_trading_day",
+            store=store,
+            cas=CASStore(store.root),
+            cutoff_resolver=lambda _: date(2026, 7, 31),
+            candidate_root_id="aistock-x-candidate-v1",
+        )
+        for profile_id in ("qe_hmm_full_v1", "qe_hmm_full_v2")
+    )
+    return DatasetReleaseControlService(bindings), store
+
+
 def _output(capsys) -> dict:
     captured = capsys.readouterr()
     assert captured.err == ""
@@ -103,6 +120,19 @@ def test_monthly_explicit_idempotency_key_replays_exact_submission(tmp_path, cap
     assert store._many("SELECT * FROM runs", ()) == []
 
 
+def test_monthly_can_explicitly_select_canonical_v2_without_changing_legacy_default(tmp_path, capsys) -> None:
+    service, store = _dual_profile_service(tmp_path)
+    observed = datetime(2026, 8, 11, tzinfo=UTC)
+
+    assert cli.main(["--profile", "qe_hmm_full_v2", "monthly", "--candidate-only"], service=service, observed_at=observed) == 0
+    canonical = _output(capsys)
+    request = store.get_submission(canonical["submission_id"])
+    assert request is not None
+    assert cli.main(["monthly", "--candidate-only"], service=service, observed_at=observed) == 0
+    legacy = _output(capsys)
+    assert canonical["logical_request_key"] != legacy["logical_request_key"]
+
+
 def test_status_latest_is_bounded_and_does_not_execute(tmp_path, capsys) -> None:
     service, _ = _service(tmp_path)
     observed = datetime(2026, 8, 11, tzinfo=UTC)
@@ -123,6 +153,15 @@ def test_status_latest_is_bounded_and_does_not_execute(tmp_path, capsys) -> None
         "outcome": None,
         "production_activation": "not_requested",
         "profile": "qe_hmm_full_v1",
+        "retention": {
+            "automatic_deletion_allowed": False,
+            "reason_codes": ["reference_state_unsettled"],
+            "retain_all_txt": True,
+            "retain_complete_dataset": True,
+            "retain_manifests_and_receipts": True,
+            "retain_pit_snapshot": True,
+            "retention_class": "FULL_IMMUTABLE",
+        },
         "run_id": None,
         "run_state": None,
         "submission_id": submitted["submission_id"],

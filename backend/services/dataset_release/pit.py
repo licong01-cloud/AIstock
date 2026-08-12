@@ -20,6 +20,17 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SNAPSHOT_PREFIX,
+    CANONICAL_PIT_UNIVERSE_KEY,
+    PitAuthorityStatus,
+    PitConsumerBinding,
+    canonical_rule_parameters_digest,
+    require_canonical_consumer_binding,
+)
+
 from .errors import DatasetReleaseError
 
 
@@ -51,6 +62,56 @@ class PitSpanInvalid(PitSnapshotError):
     """Raised when PIT rows are ambiguous, overlapping, or malformed."""
 
     code = "DATASET_RELEASE_PIT_SPAN_INVALID"
+
+
+def require_canonical_source_snapshot(snapshot: "FrozenPitSnapshot") -> PitConsumerBinding:
+    """Validate the sealed cutoff view before a release identity exists."""
+
+    binding = PitConsumerBinding(
+        authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key=snapshot.universe_key,
+        rule_version=snapshot.rule_version,
+        rule_parameters_digest=canonical_rule_parameters_digest(),
+        snapshot_digest=snapshot.spans_sha256,
+        cutoff=snapshot.cutoff,
+    )
+    try:
+        return require_canonical_consumer_binding(binding, consumer="dataset_release_source")
+    except ValueError as exc:
+        raise PitSnapshotError(str(exc)) from exc
+
+
+def require_canonical_frozen_snapshot(
+    snapshot: "FrozenPitSnapshot",
+    *,
+    release_id: str,
+    rolling_cutoff_spans_sha256: str,
+    consumer: str = "qe",
+) -> PitConsumerBinding:
+    """Prove a frozen release is the rolling canonical rule at its cutoff."""
+
+    if snapshot.universe_key != CANONICAL_PIT_UNIVERSE_KEY:
+        raise PitSnapshotError("frozen PIT source is not the active canonical rolling universe")
+    if snapshot.rule_version != CANONICAL_PIT_RULE_VERSION:
+        raise PitSnapshotError("frozen PIT rule version differs from canonical authority")
+    _require_sha256(rolling_cutoff_spans_sha256, field="rolling_cutoff_spans_sha256")
+    if snapshot.spans_sha256 != rolling_cutoff_spans_sha256:
+        raise PitSnapshotError("frozen PIT digest differs from rolling canonical digest at cutoff")
+    binding = PitConsumerBinding(
+        authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key=f"{CANONICAL_PIT_SNAPSHOT_PREFIX}{str(release_id).strip()}",
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        rule_parameters_digest=canonical_rule_parameters_digest(),
+        snapshot_digest=snapshot.spans_sha256,
+        cutoff=snapshot.cutoff,
+        release_id=str(release_id).strip(),
+    )
+    try:
+        return require_canonical_consumer_binding(binding, consumer=consumer, immutable_snapshot_required=True)
+    except ValueError as exc:
+        raise PitSnapshotError(str(exc)) from exc
 
 
 @dataclass(frozen=True, slots=True)

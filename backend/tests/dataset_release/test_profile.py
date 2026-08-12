@@ -19,10 +19,36 @@ from backend.services.dataset_release.stock_schema import (
     QLIB_STOCK_SCHEMA_VERSION,
     qlib_stock_schema_digest,
 )
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_UNIVERSE_KEY,
+    PitAuthorityStatus,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
 PROFILE_PATH = ROOT / "configs" / "datasets" / "qe_backtest_monthly_v1.yaml"
+CANONICAL_PROFILE_PATH = ROOT / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml"
+
+
+def test_legacy_profile_identity_remains_byte_semantic_compatible_for_reproduction() -> None:
+    profile = load_dataset_profile(PROFILE_PATH)
+    assert profile.config_digest == "aef6dff42371e0891cec0d73e8495551119f4601a614e85acfb4f8f43aed139c"
+    assert profile.semantic_profile_digest == "fa75a5bec2251d9a39146789fd5c898caeb72c8400d02b4bb92037fdc8a100d5"
+    assert profile.pit_authority_status == PitAuthorityStatus.DEPLOYED_LEGACY_PENDING_MIGRATION.value
+
+
+def test_canonical_profile_is_an_explicit_overlay_with_the_same_resource_limits() -> None:
+    legacy = load_dataset_profile(PROFILE_PATH)
+    canonical = load_dataset_profile(CANONICAL_PROFILE_PATH)
+    assert canonical.profile == "qe_hmm_full_v2"
+    assert canonical.universe_key == CANONICAL_PIT_UNIVERSE_KEY
+    assert canonical.universe_rule_version == CANONICAL_PIT_RULE_VERSION
+    assert canonical.pit_authority_status == PitAuthorityStatus.ACTIVE_CANONICAL.value
+    assert canonical.pit_scope == "canonical_all_listed"
+    assert legacy.pit_scope == "st_only_active"
+    assert canonical.resource_policy == legacy.resource_policy
+    assert canonical.semantic_profile_digest != legacy.semantic_profile_digest
 
 
 def test_profile_yaml_parser_failure_is_typed_and_path_safe(tmp_path: Path) -> None:

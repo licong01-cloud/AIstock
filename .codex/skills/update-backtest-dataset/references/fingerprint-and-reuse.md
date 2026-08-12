@@ -72,6 +72,7 @@ Never replace an undefined dependency edge with a guessed small update. Fail clo
 - Minute stores each stock’s basis window, QFQ denominator and ordered adjustment-factor digest. Denominator changes invalidate that stock’s necessary full history; numerator-only changes invalidate exact dates and dependent windows.
 - `stk_limit`, `suspend_d` and daily close/pre-close reference are minute dependencies.
 - PIT changes invalidate affected stock/date ranges.
+- Canonical v2 historical D/P daily gaps are sealed as per-partition Tushare `pro_bar` missing-only overlays; provider receipts and effective partition roots participate in artifact-ready identity, and overlap never overrides DB rows.
 - Moneyflow 5/20 and `PriceStrength_10D` propagate by valid observations, not calendar-day guesses.
 - Slow-static forward-fill propagates until the next real observation; sector membership follows its effective interval.
 - Index code/role/start/weight mapping changes require a new universe/semantic version and full index-context invalidation.

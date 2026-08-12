@@ -47,6 +47,19 @@ def score_price_range_bundle(
         name: _predict_head(model, matrix, head=name)
         for name, model in bundle.models.items()
     }
+    calibration_spec = bundle.calibration_spec
+    calibrated_predictions: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+    if calibration_spec is not None:
+        from backend.services.advisory_model_first.price_range_calibration import (
+            apply_entry_gap_interval_adjustment,
+        )
+
+        calibrated_predictions = apply_entry_gap_interval_adjustment(
+            q10=predictions["entry_gap_q10"],
+            q50=predictions["entry_gap_q50"],
+            q90=predictions["entry_gap_q90"],
+            delta=float(calibration_spec["delta"]),
+        )
     outcomes = {str(item.get("symbol")): item for item in outcome_candidates}
     if len(outcomes) != len(outcome_candidates):
         raise AdvisoryModelFirstError(
@@ -97,6 +110,12 @@ def score_price_range_bundle(
                         float(predictions[name][row_index])
                         for name in ("entry_gap_q10", "entry_gap_q50", "entry_gap_q90")
                     ),
+                    calibrated_entry_gaps=(
+                        tuple(float(values[row_index]) for values in calibrated_predictions)
+                        if calibrated_predictions is not None
+                        else None
+                    ),
+                    calibration_spec=calibration_spec,
                     outcome=outcome,
                     review_policy=review_policy,
                     review_policy_sha256=review_policy_sha256,
@@ -157,6 +176,8 @@ def _project_candidate(
     context: PriceRangeRealtimeContext,
     executable_probability: float,
     entry_gaps: tuple[float, float, float],
+    calibrated_entry_gaps: tuple[float, float, float] | None,
+    calibration_spec: Mapping[str, Any] | None,
     outcome: Mapping[str, Any],
     review_policy: Mapping[str, Any],
     review_policy_sha256: str,
@@ -168,38 +189,27 @@ def _project_candidate(
             reason_code="ADVISORY_PRICE_RANGE_INFERENCE_FAILED",
             context={"symbol": symbol},
         )
-    gaps = sorted(entry_gaps)
-    if not all(np.isfinite(value) and value > -1 for value in gaps):
-        raise AdvisoryModelFirstError(
-            "entry-gap quantiles are invalid",
-            reason_code="ADVISORY_PRICE_RANGE_PROJECTION_INVALID",
-            context={"symbol": symbol},
-        )
     regulatory = resolve_regulatory_price_range(
         context,
         target_trade_date=target_trade_date,
     )
-    reference = context.decision_raw_close * context.target_raw_price_multiplier
-    raw_entry = [reference * (1.0 + value) for value in gaps]
-    if regulatory.status == "LIMITED":
-        assert regulatory.low is not None and regulatory.high is not None
-        raw_entry = [
-            min(regulatory.high, max(regulatory.low, value)) for value in raw_entry
-        ]
-    entry_low = _round_tick(raw_entry[0], context.tick_size, ROUND_FLOOR)
-    entry_mid = _round_tick(raw_entry[1], context.tick_size, ROUND_HALF_UP)
-    entry_high = _round_tick(raw_entry[2], context.tick_size, ROUND_CEILING)
-    if regulatory.status == "LIMITED":
-        assert regulatory.low is not None and regulatory.high is not None
-        entry_low = max(entry_low, regulatory.low)
-        entry_mid = min(regulatory.high, max(regulatory.low, entry_mid))
-        entry_high = min(entry_high, regulatory.high)
-    if not (0 < entry_low <= entry_mid <= entry_high):
-        raise AdvisoryModelFirstError(
-            "entry price range is invalid after clipping and tick rounding",
-            reason_code="ADVISORY_PRICE_RANGE_PROJECTION_INVALID",
-            context={"symbol": symbol},
+    entry_low, entry_mid, entry_high = _entry_band(
+        symbol=symbol, context=context, regulatory=regulatory, entry_gaps=entry_gaps
+    )
+    calibrated_entry_price = None
+    if calibrated_entry_gaps is not None:
+        calibrated_low, calibrated_mid, calibrated_high = _entry_band(
+            symbol=symbol,
+            context=context,
+            regulatory=regulatory,
+            entry_gaps=calibrated_entry_gaps,
         )
+        calibrated_entry_price = {
+            "condition": "ENTRY_EXECUTABLE",
+            "low": calibrated_low,
+            "mid": calibrated_mid,
+            "high": calibrated_high,
+        }
 
     holding = outcome.get("holding_period")
     if not isinstance(holding, Mapping):
@@ -324,6 +334,17 @@ def _project_candidate(
             "mid": entry_mid,
             "high": entry_high,
         },
+        "calibrated_entry_price": calibrated_entry_price,
+        "entry_gap_calibration_state": (
+            "CALIBRATED" if calibration_spec is not None else "UNCALIBRATED"
+        ),
+        "entry_gap_calibration_method": (
+            calibration_spec.get("method") if calibration_spec is not None else None
+        ),
+        "entry_gap_calibration_delta": (
+            calibration_spec.get("delta") if calibration_spec is not None else None
+        ),
+        "entry_executable_calibration_state": "UNCALIBRATED",
         "take_profit_price": {
             "low": take_profit_low,
             "high": take_profit_high,
@@ -348,6 +369,36 @@ def _project_candidate(
         "reason_code": None,
         "message": None,
     }
+
+
+def _entry_band(*, symbol: str, context, regulatory, entry_gaps) -> tuple[float, float, float]:
+    gaps = sorted(entry_gaps)
+    if not all(np.isfinite(value) and value > -1 for value in gaps):
+        raise AdvisoryModelFirstError(
+            "entry-gap quantiles are invalid",
+            reason_code="ADVISORY_PRICE_RANGE_PROJECTION_INVALID",
+            context={"symbol": symbol},
+        )
+    reference = context.decision_raw_close * context.target_raw_price_multiplier
+    raw_entry = [reference * (1.0 + value) for value in gaps]
+    if regulatory.status == "LIMITED":
+        assert regulatory.low is not None and regulatory.high is not None
+        raw_entry = [min(regulatory.high, max(regulatory.low, value)) for value in raw_entry]
+    low = _round_tick(raw_entry[0], context.tick_size, ROUND_FLOOR)
+    mid = _round_tick(raw_entry[1], context.tick_size, ROUND_HALF_UP)
+    high = _round_tick(raw_entry[2], context.tick_size, ROUND_CEILING)
+    if regulatory.status == "LIMITED":
+        assert regulatory.low is not None and regulatory.high is not None
+        low = max(low, regulatory.low)
+        mid = min(regulatory.high, max(regulatory.low, mid))
+        high = min(high, regulatory.high)
+    if not (0 < low <= mid <= high):
+        raise AdvisoryModelFirstError(
+            "entry price range is invalid after clipping and tick rounding",
+            reason_code="ADVISORY_PRICE_RANGE_PROJECTION_INVALID",
+            context={"symbol": symbol},
+        )
+    return low, mid, high
 
 
 def _protective_price(

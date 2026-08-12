@@ -43,7 +43,7 @@ Do not label `REUSE`, `INCREMENTAL` or `SELECTIVE_REBUILD` as the whole run unle
 
 ## Required validation
 
-Full `qe_hmm_full_v1` signoff requires all applicable checks PASS; no WARN/SKIP substitutes for a required component:
+Full `qe_hmm_full_v2` canonical candidate signoff requires all applicable checks PASS; no WARN/SKIP substitutes for a required component. `qe_hmm_full_v1` retains the same checks only for historical reproduction/re-attestation:
 
 1. artifact inventory, hashes, schema/dtype/index ordering and date/cutoff coverage;
 2. frozen PIT snapshot/digest, multi-span application and zero out-of-span stock rows;

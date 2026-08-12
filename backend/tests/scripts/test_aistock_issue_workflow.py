@@ -98,7 +98,20 @@ def _write_runtime_catalog(root: Path) -> Path:
                             "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
                             "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
                         },
-                    }
+                    },
+                    "worker-scheduler": {
+                        "runtime_kind": "worker_scheduler",
+                        "source_globs": ["scripts/dataset_release_worker.py"],
+                        "probe_origins": ["http://127.0.0.1:8001"],
+                        "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
+                        "expected_identity_ref": "merged_commit",
+                        "probes": {
+                            "health_ref": "bug_record.runtime_contract.health_ref",
+                            "identity_ref": "bug_record.runtime_contract.identity_ref",
+                            "business_smoke_ref": "bug_record.runtime_contract.business_smoke_ref",
+                            "database_readback_ref": "bug_record.runtime_contract.database_readback_ref",
+                        },
+                    },
                 },
             },
             sort_keys=False,
@@ -1271,6 +1284,18 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["scripts/advisory_short_rebound_batch_b.py"],
         root=isolated_workflow_root,
     )
+    dataset_offline_tools = workflow._classify_runtime_impact(
+        [
+            "scripts/build_stock_universe_pit_spans.py",
+            "scripts/dataset_release_control_store.py",
+            "scripts/update_backtest_dataset_monthly.py",
+        ],
+        root=isolated_workflow_root,
+    )
+    dataset_worker = workflow._classify_runtime_impact(
+        ["scripts/dataset_release_worker.py"],
+        root=isolated_workflow_root,
+    )
     mixed_advisory_and_backend = workflow._classify_runtime_impact(
         [
             "backend/services/advisory_phase0b/audit_service.py",
@@ -1314,6 +1339,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert offline_advisory_phase0b["runtime_files"] == []
     assert offline_advisory_batch_b["runtime_impact"] == "none"
     assert offline_advisory_batch_b["runtime_files"] == []
+    assert dataset_offline_tools["runtime_impact"] == "none"
+    assert dataset_offline_tools["runtime_files"] == []
+    assert dataset_worker["runtime_impact"] == "worker_scheduler"
+    assert dataset_worker["target_ids"] == ["worker-scheduler"]
     assert mixed_advisory_and_backend["runtime_impact"] == "backend"
     assert mixed_advisory_and_backend["runtime_files"] == ["backend/services/example.py"]
     assert mixed_advisory_and_backend["target_ids"] == ["backend-main"]

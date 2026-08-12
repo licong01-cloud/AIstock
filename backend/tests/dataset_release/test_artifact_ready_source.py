@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +20,7 @@ from backend.services.dataset_release.artifact_ready_source import (
     ArtifactReadySourceError,
     load_artifact_ready_contract,
     load_artifact_ready_recheck_expectations,
+    _normalize_tushare_daily_row,
 )
 from backend.services.dataset_release.artifact_ready_build_source import (
     ArtifactReadyBuildSource,
@@ -52,6 +53,13 @@ from backend.services.dataset_release.source_rows_codec import (
     SOURCE_ROWS_CODEC_VERSION,
     SOURCE_ROWS_FORMAT,
     compression_ratio_text,
+)
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_UNIVERSE_KEY,
+    PitAuthorityStatus,
+    canonical_rule_parameters_digest,
 )
 
 
@@ -151,6 +159,32 @@ class _TrackingFrame:
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def test_tushare_daily_units_are_normalized_to_database_li_and_hand_contract() -> None:
+    row = _normalize_tushare_daily_row(
+        {
+            "ts_code": CODE,
+            "trade_date": "20260731",
+            "open": 10.001,
+            "high": 11.002,
+            "low": 9.003,
+            "close": 10.504,
+            "vol": 100.0,
+            "amount": 123.456,
+        },
+        expected_code=CODE,
+    )
+    assert row == {
+        "ts_code": CODE,
+        "trade_date": DAY.isoformat(),
+        "open_li": 10001,
+        "high_li": 11002,
+        "low_li": 9003,
+        "close_li": 10504,
+        "volume_hand": 100,
+        "amount_li": 123456000,
+    }
 
 
 def _minute_rows(*, count: int = 240, open_li: int = 10_000):
@@ -364,6 +398,59 @@ def _minute_coverage(cas: CASStore, bundle) -> Mapping[str, Any]:
     minute_manifest = cas.get_json(contract["component_manifests"]["minute_bin"])
     entry = next(item for item in minute_manifest["partitions"] if item["dataset"] == "minute_coverage")
     return cas.get_json(entry["rows_ref"])
+
+
+def test_canonical_historical_delisted_daily_gap_uses_tushare_candidate_overlay(
+    dataset_profile,
+    tmp_path,
+) -> None:
+    profile = replace(
+        dataset_profile,
+        profile="qe_hmm_full_v2",
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        universe_rule_version=CANONICAL_PIT_RULE_VERSION,
+        pit_authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        pit_authority_status=PitAuthorityStatus.ACTIVE_CANONICAL.value,
+        pit_rule_parameters_digest=canonical_rule_parameters_digest(),
+        pit_ipo_trading_sessions=252,
+        pit_scope="canonical_all_listed",
+    )
+    cas, view, snapshot = _fixture(profile, tmp_path, minute_rows=_minute_rows())
+    daily_identity = f"kline_daily_raw:{DAY.isoformat()}_{DAY.isoformat()}"
+    view.rows[daily_identity] = []
+    view.values["kline_daily_raw"][0]["row_count"] = 0
+    view.rows["stock_basic:fixture"] = [
+        {
+            "ts_code": CODE,
+            "list_status": "D",
+            "list_date": "2000-01-01",
+            "exchange": "SZSE",
+            "market": "主板",
+        }
+    ]
+    provider_row = {
+        "ts_code": CODE,
+        "trade_date": DAY.isoformat(),
+        "open_li": 10_000,
+        "high_li": 11_000,
+        "low_li": 9_000,
+        "close_li": 10_500,
+        "volume_hand": 100,
+        "amount_li": 100_000,
+    }
+    bundle = ArtifactReadySourceBuilder(
+        profile,
+        cas,
+        fetch_tushare_daily_rows=lambda code, start, end: [provider_row],
+    ).build(snapshot, source_view=view)
+    contract = cas.get_json(bundle.artifact_ready_contract_ref)
+    manifest = cas.get_json(contract["component_manifests"]["daily_bin"])
+    entry = next(item for item in manifest["partitions"] if item["dataset"] == "daily_coverage")
+    receipt = cas.get_json(entry["rows_ref"])
+    assert receipt["provider_fill_rows"] == 1
+    assert receipt["provider_override_rows"] == 0
+    assert receipt["overlay_rows"] == [provider_row]
+    assert contract["daily_provider_summary"]["unresolved_keys"] == 0
 
 
 def _component_baseline_from_artifact_ready(

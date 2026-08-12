@@ -6,6 +6,9 @@ from backend.services.dataset_release.artifact_ready_build_source import (
     ArtifactReadyBuildSource,
     _minute_bucket,
 )
+from backend.services.dataset_release.artifact_ready_source import ARTIFACT_READY_DAILY_COVERAGE_SCHEMA
+from backend.services.dataset_release.cas_store import CASStore
+from backend.services.dataset_release.control_store import ControlStore
 from backend.services.dataset_release.contracts import Component
 
 
@@ -62,3 +65,47 @@ def test_single_code_minute_selection_opens_only_its_stable_hash_bucket() -> Non
     assert partitions[0].identity.endswith(f"bucket-{selected:04d}")
     assert source._reader.partition_keys == [f"2026-07-01_2026-07-31_bucket-{selected:04d}"]
     assert [row["ts_code"] for row in rows] == [code]
+
+
+def test_effective_daily_rows_stream_database_then_missing_only_overlay(tmp_path) -> None:
+    store = ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(store.root)
+    overlay = {
+        "ts_code": "600001.SH",
+        "trade_date": "2026-07-31",
+        "open_li": 10000,
+        "high_li": 11000,
+        "low_li": 9000,
+        "close_li": 10500,
+        "volume_hand": 100,
+        "amount_li": 100000,
+    }
+    reference = cas.put_json(
+        {
+            "schema_version": ARTIFACT_READY_DAILY_COVERAGE_SCHEMA,
+            "overlay_rows": [overlay],
+        }
+    )
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source.cas = cas
+    source.component_manifests = {
+        Component.DAILY_BIN: {
+            "partitions": [
+                {
+                    "dataset": "daily_coverage",
+                    "partition_key": "2026-07-01_2026-07-31",
+                    "rows_ref": reference.as_dict(),
+                }
+            ]
+        }
+    }
+    database = [{**overlay, "ts_code": "000001.SZ"}]
+
+    rows = list(
+        source._effective_daily_rows(
+            Component.DAILY_BIN,
+            {"partition_key": "2026-07-01_2026-07-31"},
+            database,
+        )
+    )
+    assert [row["ts_code"] for row in rows] == ["000001.SZ", "600001.SH"]
