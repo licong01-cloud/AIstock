@@ -5,6 +5,8 @@
     "scripts/export_qe_qlib_candidate.py",
     "backend/tests/scripts/test_export_qe_qlib_candidate.py",
     "backend/tests/qlib_exporter/test_db_reader_minute_query.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
     "tests/aistock_validation/bugs/20260812_BUG-1033-qe-dataset-micro-validation-minute-query-timeout-and-stale-legacy-static.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -37,14 +39,18 @@
     "changed_files": [
       "backend/qlib_exporter/db_reader.py",
       "scripts/export_qe_qlib_candidate.py",
-      "backend/tests/scripts/test_export_qe_qlib_candidate.py"
+      "backend/tests/scripts/test_export_qe_qlib_candidate.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
     ],
     "ownership": {
       "changed_files": [
         "backend/qlib_exporter/db_reader.py",
         "scripts/export_qe_qlib_candidate.py",
         "backend/tests/scripts/test_export_qe_qlib_candidate.py",
-        "backend/tests/qlib_exporter/test_db_reader_minute_query.py"
+        "backend/tests/qlib_exporter/test_db_reader_minute_query.py",
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
       ],
       "impacted_modules": [
         "qlib_data",
@@ -53,7 +59,12 @@
         "paper_v2",
         "local_data",
         "platform.api",
-        "tests.backend"
+        "tests.backend",
+        "validation.guardrails",
+        "validation.center",
+        "validation.runner",
+        "validation.module_quality",
+        "validation.coverage"
       ],
       "matched_rules": [
         {
@@ -95,17 +106,44 @@
           "primary_module": "tests.backend",
           "risk_level": "medium",
           "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "validation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
         }
       ],
       "risk_levels": [
         "critical",
+        "high",
         "medium"
       ],
       "suggested_scope": [
         "backend/qlib_exporter/db_reader.py",
         "scripts/export_qe_qlib_candidate.py",
         "backend/tests/scripts/test_export_qe_qlib_candidate.py",
-        "backend/tests/qlib_exporter/test_db_reader_minute_query.py"
+        "backend/tests/qlib_exporter/test_db_reader_minute_query.py",
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py"
       ],
       "unmatched_files": []
     },
@@ -114,7 +152,9 @@
       "backend/qlib_exporter/db_reader.py",
       "scripts/export_qe_qlib_candidate.py",
       "backend/tests/scripts/test_export_qe_qlib_candidate.py",
-      "backend/tests/qlib_exporter/test_db_reader_minute_query.py"
+      "backend/tests/qlib_exporter/test_db_reader_minute_query.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
     ]
   },
   "first_seen_at": "2026-08-12T06:12:57.363605Z",
@@ -139,10 +179,16 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "unknown",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/config",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "2026-08-12 fresh Python process loaded the task-worktree backend.qlib_exporter.db_reader and a read-only 000001.SZ/2026-07-31 DB micro read returned 240 minute rows with zero duplicates in 1.193 seconds; no candidate or database writes were performed."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
