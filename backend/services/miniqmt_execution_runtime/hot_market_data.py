@@ -13,6 +13,7 @@ from backend.execution_algos.hot_market_contracts import (
     HotMarketDataTargetV1,
     HotMarketDataViewV1,
 )
+from backend.services.miniqmt_execution_runtime.plugin_canonical import hash_hex_v1
 
 
 def _aware_utc(value: datetime, *, field_name: str) -> datetime:
@@ -244,14 +245,23 @@ class HotMarketDataIngressV1:
                 self._pending_by_algo.pop(algo_instance_id, None)
                 committed += 1
         if failures:
+            retained_failures = failures[:64]
+            omitted_failures = failures[64:]
             raise HotMarketDataIngressError(
                 "MINIQMT_HOT_MARKET_EFFECT_RETRY_FAILED",
                 "one or more pending economic effects remain uncommitted after bounded scheduler retry",
                 context={
                     "runtime_id": self.runtime_id,
                     "broker_called": False,
-                    "failures": failures[:64],
-                    "failures_truncated": len(failures) > 64,
+                    "failures": retained_failures,
+                    "failure_count": len(failures),
+                    "failures_truncated": bool(omitted_failures),
+                    "omitted_failure_count": len(omitted_failures),
+                    "omitted_failure_set_sha256": (
+                        hash_hex_v1("miniqmt_hot_market_omitted_failure_set_v1", omitted_failures)
+                        if omitted_failures
+                        else None
+                    ),
                 },
             )
         return HotMarketDataIngressReceiptV1(

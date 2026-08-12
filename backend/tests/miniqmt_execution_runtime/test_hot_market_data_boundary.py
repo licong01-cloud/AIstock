@@ -31,6 +31,7 @@ from backend.services.miniqmt_execution_runtime.hot_market_data import (
     HotMarketDataDispositionV1,
     HotMarketDataIngressError,
     HotMarketDataIngressV1,
+    _PendingHotMarketEffectV1,
 )
 from backend.services.miniqmt_execution_runtime.full_five_catalog_authority import (
     build_hot_full_five_catalog_authority_v1,
@@ -643,6 +644,59 @@ def test_failed_scheduler_retry_uses_bounded_backoff_and_intervening_ticks_never
     assert attempts == [effect.effect_identity, effect.effect_identity]
     ingress.retry_pending_v1(observed_at_utc=datetime(2026, 8, 12, 1, 30, 2, tzinfo=UTC))
     assert attempts == [effect.effect_identity, effect.effect_identity]
+
+
+def test_scheduler_retry_failure_evidence_has_bounded_omitted_set_hash_closure() -> None:
+    effects: dict[str, HotMarketDataEconomicEffectV1] = {}
+
+    class Target:
+        def __init__(self, ordinal: int) -> None:
+            self.runtime_id = "runtime_hot_tick"
+            self.algo_instance_id = f"algo_hot_tick_{ordinal:03d}"
+            self.symbol = "600000.SH"
+            effects[self.algo_instance_id] = HotMarketDataEconomicEffectV1(
+                runtime_id=self.runtime_id,
+                algo_instance_id=self.algo_instance_id,
+                expected_algo_row_version=1,
+                effect_identity=f"mqhoteffect_{ordinal:03d}",
+                economic_payload={
+                    "action": "CANCEL_ORDER",
+                    "action_time_utc": "2026-08-12T01:30:00Z",
+                    "exchange_trade_date": "2026-08-12",
+                    "session_epoch": "session_hot_tick",
+                    "session_phase": "CONTINUOUS_AM",
+                    "reason_code": "price_changed",
+                },
+            )
+
+        def evaluate_hot_market_data_v1(self, _view):
+            return effects[self.algo_instance_id]
+
+        @staticmethod
+        def accept_committed_effect_v1(_effect, _readback):
+            return None
+
+    def fail(_effect):
+        raise ConnectionError("database unavailable")
+
+    ingress = HotMarketDataIngressV1(runtime_id="runtime_hot_tick", effect_committer=fail)
+    targets = tuple(Target(ordinal) for ordinal in range(66))
+    ingress.replace_targets_v1(targets)
+    for target in targets:
+        ingress._pending_by_algo[target.algo_instance_id] = _PendingHotMarketEffectV1(
+            effect=effects[target.algo_instance_id],
+            target=target,
+            failure_count=1,
+            next_retry_at_utc=datetime(2026, 8, 12, 1, 30, tzinfo=UTC),
+        )
+    with pytest.raises(HotMarketDataIngressError) as exc_info:
+        ingress.retry_pending_v1(observed_at_utc=datetime(2026, 8, 12, 1, 30, 1, tzinfo=UTC))
+    evidence = exc_info.value.context
+    assert evidence["failure_count"] == 66
+    assert len(evidence["failures"]) == 64
+    assert evidence["failures_truncated"] is True
+    assert evidence["omitted_failure_count"] == 2
+    assert len(evidence["omitted_failure_set_sha256"]) == 64
 
 
 @pytest.mark.parametrize(
