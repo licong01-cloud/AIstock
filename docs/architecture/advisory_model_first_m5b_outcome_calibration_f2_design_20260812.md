@@ -482,13 +482,13 @@ backend_restart = user-owned，仅在 runtime 源码合入且 binding 激活后�
 
 2026-08-12 在 WSL Conda `rdagent-gpu` 使用冻结 M3 输入完成最终权威运行：
 
-- request：`advoutcal_20c72aec313fae683cfc2d84`，request SHA256 `20c72aec313fae683cfc2d8456baa59a7d3b153418e4224ea00ccdb56309db3d`。
-- source commit：`03b8a1775ccc0a2c283f6ff528d7acd88524fd1a`；父 M3 bundle：`17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0`。
-- v2 bundle：`ed5a02a414262218a88bfacd2aaa658f8ca9ee60c340a4a05dfec8ce0aa6f329`；同 request exact retry 返回相同 bundle ID。该 bundle 的 10 个 binary head 均保存固定 solver 合同、scikit-learn `1.7.2`、实际迭代次数和明确收敛状态；bundle 发布入口同时验证 head 身份、计数守恒、状态/参数组合和正斜率不变量。
+- request：`advoutcal_ec16422ad1a97040583e5273`，request SHA256 `ec16422ad1a97040583e5273e632adaea77921c4dddd60228cb422e6c6db1ffa`。
+- source commit：`0892eaa0aafbb7bfa69f5e91d17f9b5e2ceb4455`；父 M3 bundle：`17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0`。
+- v2 bundle：`a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533`；同 request exact retry 返回相同 bundle ID。该 bundle 的 10 个 binary head 均保存固定 solver 合同、scikit-learn `1.7.2`、实际迭代次数和明确收敛状态；bundle 发布与 exact runtime load 均验证 head 身份、计数守恒、状态/参数组合和正斜率不变量。
 - validation：1000 条 labels 中 940 条属于父 M3 feature-covered 投影，60 条缺少父 feature；test 为 1600/1600。计数已进入正式 receipt，不静默丢行。
-- 资源：15.172 秒，峰值 RSS 404,230,144 bytes，低于 8 GiB；无数据库、服务或 binding 写入。
+- 资源：11.659 秒，峰值 RSS 399,200,256 bytes，低于 8 GiB；无数据库、服务或 binding 写入。
 - binary：8 个正斜率 head 为 `CALIBRATED`；`positive_excess_h5` 和 `signal_survival_h5` 因负斜率会反转 raw 排序，明确为 `UNCALIBRATED/ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL`。
 - quantile：5 个收益中央区间和 10 个 MFE/MAE upper 区间完整产出，holding 继续独立 `UNCALIBRATED`。
-- receipt SHA256：`5e45fa4c216d6c5749da4c464d57df084d4620b1011ec99f14a9ae378dfed021`；calibration spec SHA256：`401852152b04c74d66b7e60a59dab956bce0cf304fcbfb9b0206d5b889742a8e`。
+- receipt SHA256：`ccdae88f25bb9741a50548643c3edfe40d702000ff2fcae170ebadd030ceea01`；calibration spec SHA256：`14ec26427eb9df25214905a1080da763e4571faa09216ef29fe86aed487d3f81`。
 
 冻结 test 的质量结论必须与执行成功分开：8 个实际 calibrated binary head 的 Brier、logloss 和 10-bin ECE 均未优于 raw；5 个收益区间相对名义 80% 的平均绝对偏差由 `0.00984` 增至 `0.03129`；10 个 path upper 相对名义 90% 的平均绝对偏差由 `0.01432` 小幅降至 `0.01394`。因此本 bundle 是完整、可复现的真实研究产物，但当前**不建议激活 outcome binding**。该结论不是新增审批或运行门禁，只是按蓝图要求如实保留质量结果；现行 M3 v1 outcome 继续可用。

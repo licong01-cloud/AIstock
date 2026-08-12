@@ -64,7 +64,7 @@
 | 功能 | 状态 | 完成口径 |
 |---|---|---|
 | SHORT_REBOUND Top20→Top5 | `M5A_TRAINED_NOT_ACTIVATED` | M5A 已完成 45 个 booster 的 validation-only 选择和一次冻结 test；winner 平均 5 日超额收益 `0.0071894`，高于 M1 的 `-0.0002833`，但低于原始 selection rank 的 `0.0085591`，95% block-bootstrap lift 区间跨 0，因此不冒充已改善并保持现行 M1 shadow binding |
-| 预期收益与持股周期 | `M5B_REAL_CALIBRATION_COMPLETE_NOT_ACTIVATED` | 最终 request `advoutcal_20c72aec313fae683cfc2d84` 生成 v2 bundle `ed5a02a414262218a88bfacd2aaa658f8ca9ee60c340a4a05dfec8ce0aa6f329` 并通过 exact retry；8/10 binary head 可校准、2 个五日 head 因排序反转明确保持 `UNCALIBRATED`，逐 head solver/版本/迭代/收敛证据完整，holding 仍独立 `UNCALIBRATED`。冻结 test 未显示足以支持激活的校准改善，现行 M3 v1 binding 保持不变 |
+| 预期收益与持股周期 | `M5B_REAL_CALIBRATION_COMPLETE_NOT_ACTIVATED` | 最终 request `advoutcal_ec16422ad1a97040583e5273` 生成 v2 bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533` 并通过 exact retry；8/10 binary head 可校准、2 个五日 head 因排序反转明确保持 `UNCALIBRATED`，逐 head solver/版本/迭代/收敛证据完整，holding 仍独立 `UNCALIBRATED`。冻结 test 未显示足以支持激活的校准改善，现行 M3 v1 binding 保持不变 |
 | 买入/止盈/止损区间 | `M4_RUNTIME_API_VERIFIED` | 四头真实模型、decision-cutoff 未复权投影、dividend PIT 输入、exact binding 和风险边界已贯通；真实原生多 Alpha Program 20/20 候选均返回完整价格范围 |
 | 荐股页面模型展示 | `M2_M3_M4_SOURCE_COMPLETE_RUNTIME_HTTP_VERIFIED` | 页面源码已展示 Top5、五期限收益、概率、MFE/MAE、持股与价格范围；运行页面 HTTP 200，真实浏览器可视化验收因当前窗口无浏览器单独保留，不冒充截图验收 |
 | LONG_TREND 专家 | `DEFERRED_UNTIL_PACKAGE_READY` | 对应长期趋势包形成稳定输入后训练和接入 |
@@ -403,7 +403,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW`。
 
-状态：`M5A_AND_M5B_REAL_TRAINING_COMPLETE_M5B_NOT_ACTIVATED`。M5A 详细设计为 `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`，真实 request 为 `advm5train_a64594d6f22f618a4afef84a`，winner 为 `EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`，实验 bundle 为 `1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb`。M5B 详细设计为 `docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md`；最终 request `advoutcal_20c72aec313fae683cfc2d84` 在 WSL 生成 bundle `ed5a02a414262218a88bfacd2aaa658f8ca9ee60c340a4a05dfec8ce0aa6f329` 并 exact retry 一致。BUG-1038/BUG-1039/BUG-1040 修复源码待合入；outcome binding、用户重启和 deployed readback 均未执行。
+状态：`M5A_AND_M5B_REAL_TRAINING_COMPLETE_M5B_NOT_ACTIVATED`。M5A 详细设计为 `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`，真实 request 为 `advm5train_a64594d6f22f618a4afef84a`，winner 为 `EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`，实验 bundle 为 `1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb`。M5B 详细设计为 `docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md`；最终 request `advoutcal_ec16422ad1a97040583e5273` 在 WSL 生成 bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533` 并 exact retry 一致。BUG-1038/BUG-1039/BUG-1040 修复源码待合入；outcome binding、用户重启和 deployed readback 均未执行。
 
 - M5A 首先改善 Top20→Top5：当前 M1 test `mean_excess_return_5=-0.0002833`，明显低于 `selection_rank_top5=0.0085591`，不得把“模型已运行”误写为“模型排序有效”。
 - M5A 在现有 406 日/8120 候选、103 特征和冻结 test 上做有限窗口、种子、模型配置及 selection-prior 混合比较；所有选择只使用 train/validation，test 只做一次最终报告。
@@ -486,8 +486,8 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-122 | M5A train/test dual request and winner policy | `backend/tests/advisory_model_first/test_quality_contracts.py`; artifact: `quality_runs/advm5train_a64594d6f22f618a4afef84a/winner_receipt.json`; `quality_evaluations/advm5test_818fe5a6c8ee323d2fbf25d4/test_once_receipt.json` | implemented_real_trained_verified | none |
 | F-123 | M5A shared baseline evaluator；冻结 test 结果低于 selection rank 的事实见 §9 | `backend/tests/advisory_model_first/test_quality_evaluation.py`; artifact: `quality_evaluations/advm5test_818fe5a6c8ee323d2fbf25d4/test_report.json` | implemented_real_evaluated_verified | none |
 | F-124 | M5A ensemble and selection-prior policy；现行 M1 binding 保留的运行状态见 §9 | `backend/tests/advisory_model_first/test_quality_scoring.py`; `test_quality_runtime_bundle.py`; artifact: bundle `1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb` | implemented_bundle_verified | none |
-| F-125 | M5B validation-only probability calibration；8 个正斜率 head 发布 calibrated，2 个排序反转 head 明确 uncalibrated；逐 head solver/版本/迭代/收敛证据 fail-closed | `backend/services/advisory_model_first/outcome_calibration.py`; artifact: `outcome_calibration_runs/advoutcal_20c72aec313fae683cfc2d84/outcome_calibration_receipt.json`; `backend/tests/advisory_model_first/test_outcome_calibration.py` | real_calibration_verified | none |
-| F-126 | M5B quantile calibration真实运行；M5C 是 §9 明确的后续独立阶段，不属于本次 M5B 源码验收 | `backend/services/advisory_model_first/outcome_calibration.py`; `outcome_calibration_bundle.py`; artifact: bundle `ed5a02a414262218a88bfacd2aaa658f8ca9ee60c340a4a05dfec8ce0aa6f329`; `backend/tests/advisory_model_first/test_outcome_calibration_bundle.py` | m5b_real_calibration_verified | none |
+| F-125 | M5B validation-only probability calibration；8 个正斜率 head 发布 calibrated，2 个排序反转 head 明确 uncalibrated；逐 head solver/版本/迭代/收敛证据 fail-closed | `backend/services/advisory_model_first/outcome_calibration.py`; artifact: `outcome_calibration_runs/advoutcal_ec16422ad1a97040583e5273/outcome_calibration_receipt.json`; `backend/tests/advisory_model_first/test_outcome_calibration.py` | real_calibration_verified | none |
+| F-126 | M5B quantile calibration真实运行；M5C 是 §9 明确的后续独立阶段，不属于本次 M5B 源码验收 | `backend/services/advisory_model_first/outcome_calibration.py`; `outcome_calibration_bundle.py`; artifact: bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533`; `backend/tests/advisory_model_first/test_outcome_calibration_bundle.py` | m5b_real_calibration_verified | none |
 
 ## 12. Verification Plan
 
