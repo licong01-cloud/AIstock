@@ -171,14 +171,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_impact": "backend",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics?limit=100",
+    "fresh_process_evidence": [
+      "fresh Python process imported the V4 full-five catalog authority from tracked source; exact plugin_count=5, all plugin_version=4.0.0, catalog_sha256=c654dcc496fbd05cb1a3858b02957c812c712f8eed0129e3125108f51b417881; no installed/latest/previous fallback -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
