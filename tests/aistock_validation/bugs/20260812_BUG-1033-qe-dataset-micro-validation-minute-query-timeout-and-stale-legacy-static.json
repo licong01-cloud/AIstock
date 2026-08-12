@@ -182,12 +182,14 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/config",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "2026-08-12 fresh Python process loaded the task-worktree backend.qlib_exporter.db_reader and a read-only 000001.SZ/2026-07-31 DB micro read returned 240 minute rows with zero duplicates in 1.193 seconds; no candidate or database writes were performed."
+      "2026-08-12 fresh Python process loaded the task-worktree backend.qlib_exporter.db_reader and a read-only 000001.SZ/2026-07-31 DB micro read returned 240 minute rows with zero duplicates in 1.193 seconds; no candidate or database writes were performed.",
+      "fresh task-worktree process read 000001.SZ on 2026-07-31: 240 rows, duplicates=0, elapsed=1.193s, read-only"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
