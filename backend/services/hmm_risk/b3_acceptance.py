@@ -234,7 +234,11 @@ def evaluate_likelihood_acceptance(evidence: Mapping[str, Any] | None) -> dict[s
     blockers: list[str] = []
     warnings: list[str] = []
     try:
-        if evidence["authority"] != "covariance_prior_map_objective":
+        authority = str(evidence["authority"])
+        if authority not in {
+            "covariance_prior_map_objective",
+            "covariance_and_transition_prior_map_objective",
+        }:
             raise ValueError("MAP authority is invalid")
         if isinstance(evidence["maximum_iterations"], (bool, np.bool_)) or not isinstance(
             evidence["maximum_iterations"], (int, np.integer)
@@ -310,6 +314,34 @@ def evaluate_likelihood_acceptance(evidence: Mapping[str, Any] | None) -> dict[s
                 component_map = _strict_real(component["map_objective"])
                 component_log = _strict_real(component["prior_log_covariance_component"])
                 component_inverse = _strict_real(component["prior_inverse_covariance_component"])
+                covariance_adjustment = -0.5 * (component_log + component_inverse)
+                transition_adjustment = (
+                    _strict_real(component["transition_prior_adjustment"])
+                    if authority == "covariance_and_transition_prior_map_objective"
+                    else 0.0
+                )
+                covariance_component = (
+                    _strict_real(component["covariance_prior_adjustment"])
+                    if authority == "covariance_and_transition_prior_map_objective"
+                    else covariance_adjustment
+                )
+                if authority == "covariance_and_transition_prior_map_objective":
+                    raw_transmat = np.asarray(component["raw_transmat"], dtype=np.float64)
+                    transmat_prior = np.asarray(component["transmat_prior"], dtype=np.float64)
+                    raw_transmat_sha256 = str(component["raw_transmat_sha256"])
+                    transmat_prior_sha256 = str(component["transmat_prior_sha256"])
+                    transition_component_sha256 = str(component["transition_component_sha256"])
+                    dwell = _strict_real_vector(component["expected_dwell_diagnostic_only"])
+                    component_identity_body = {
+                        "contract_version": "hmm_risk_c008_b3_transition_dwell_b_v1",
+                        "raw_transmat": raw_transmat.tolist(),
+                        "raw_transmat_sha256": raw_transmat_sha256,
+                        "transmat_prior": transmat_prior.tolist(),
+                        "transmat_prior_sha256": transmat_prior_sha256,
+                        "transition_prior_adjustment": transition_adjustment,
+                        "maximum_transmat_row_sum_error": float(np.max(np.abs(raw_transmat.sum(axis=1) - 1.0))),
+                        "expected_dwell_diagnostic_only": dwell.tolist(),
+                    }
             except (KeyError, TypeError, ValueError):
                 failures.append("hmm_risk_model_map_objective_non_finite")
                 break
@@ -317,13 +349,39 @@ def evaluate_likelihood_acceptance(evidence: Mapping[str, Any] | None) -> dict[s
                 component_iteration != index + 1
                 or not all(
                     np.isfinite(value)
-                    for value in (component_raw, component_prior, component_map, component_log, component_inverse)
+                    for value in (
+                        component_raw,
+                        component_prior,
+                        component_map,
+                        component_log,
+                        component_inverse,
+                        covariance_component,
+                        transition_adjustment,
+                    )
                 )
                 or component_raw != float(raw_history[index])
                 or component_prior != float(prior_history[index])
                 or component_map != float(map_history[index])
                 or component_map != component_raw + component_prior
-                or component_prior != -0.5 * (component_log + component_inverse)
+                or covariance_component != covariance_adjustment
+                or component_prior != covariance_adjustment + transition_adjustment
+                or (
+                    authority == "covariance_and_transition_prior_map_objective"
+                    and (
+                        raw_transmat.shape != (3, 3)
+                        or transmat_prior.shape != (3, 3)
+                        or not np.isfinite(raw_transmat).all()
+                        or not np.isfinite(transmat_prior).all()
+                        or np.any(raw_transmat <= 0.0)
+                        or np.any(transmat_prior <= 1.0)
+                        or float(np.max(np.abs(raw_transmat.sum(axis=1) - 1.0))) > 1e-12
+                        or raw_transmat_sha256 != canonical_sha256(raw_transmat.tolist())
+                        or transmat_prior_sha256 != canonical_sha256(transmat_prior.tolist())
+                        or dwell.shape != (3,)
+                        or not np.isfinite(dwell).all()
+                        or transition_component_sha256 != canonical_sha256(component_identity_body)
+                    )
+                )
             ):
                 failures.append("hmm_risk_model_map_objective_non_finite")
                 break
