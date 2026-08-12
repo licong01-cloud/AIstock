@@ -776,6 +776,31 @@ rules:
     layer: data_pipeline
     risk_level: critical
     ownership_reason: Qlib datasets are authoritative inputs for research and backtests.
+  - rule_id: qlib_monthly_dataset_release
+    priority: 96
+    include:
+      - backend/services/dataset_release/**
+      - backend/routers/dataset_releases.py
+      - backend/deps.py
+      - backend/tests/dataset_release/**
+      - backend/tests/routers/test_dataset_releases.py
+      - backend/tests/scripts/test_dataset_release_*.py
+      - backend/tests/scripts/test_update_backtest_dataset_monthly.py
+      - backend/tests/scripts/test_export_qe_qlib_candidate.py
+      - backend/tests/test_deps_dataset_release.py
+      - scripts/dataset_release_*.py
+      - scripts/update_backtest_dataset_monthly.py
+      - scripts/export_qe_qlib_candidate.py
+      - tests/aistock_validation/dataset_release_platform_smoke.py
+      - configs/datasets/qe_backtest_monthly_v1.yaml
+      - .codex/skills/update-backtest-dataset/**
+      - .claude/skills/update-backtest-dataset/**
+      - docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md
+    primary_module: qlib_data
+    impact_modules: [qe.core, local_data, platform.api]
+    layer: data_pipeline
+    risk_level: critical
+    ownership_reason: The durable candidate-only monthly QE release control plane, source freeze and provider overlays, daily/minute/H5/index materializers, validators, publisher, resource supervisors, operator API/CLI, legacy-export quarantine, and their direct fixtures form one Qlib dataset delivery boundary.
   - rule_id: local_data_tushare_sync_engine
     priority: 97
     include:
