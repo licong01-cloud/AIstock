@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发与实验分析蓝图 / 历史批次 `Gate-0` 开发记录（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v6.3（策略演进最高优先级；MA-E16 已于 2026-08-11 05:45 终态为 10 completed/2 failed；BUG-1014 两仓源码已合入但两种运行态待用户处理，BUG-1022/Issue #3282 正独立修复日频 qrun 的 MLflow 空指标竞态；两个运行态修复均验证后才恢复 Loop3 并仅补跑 Loop7；本轮只更新蓝图和阻断性源码，不启动新演进实验；Multi-Alpha 基础架构继续 maintenance-only，2026-08-11）
+- 当前版本：v6.4（策略演进最高优先级；MA-E16 仍为 10 completed/2 failed，未启动新实验；BUG-1014/1022/1023/1024 源码已合入但运行态验证仍逐项 pending，BUG-1026、BUG-1030、BUG-1031 已完成源码修复并分别等待用户确认合入；这些工作只收口真实 trial 暴露的资源、空转查询和日志放大阻断，不恢复平台建设；合入、用户重启/部署和运行态验证后立即恢复 Loop3/7 与后续 Alpha 演进，2026-08-12）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 - 多 Alpha 基础研发详细设计：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
@@ -15,11 +15,13 @@
 >
 > 关联缺口（已解除，2026-08-06）：停牌输入不再依赖数据库——已构建版本化冻结候选数据集 `suspend_d_daily_candidate_20180801_20260630`（`suspend_d.parquet` + `manifest.json`，含逐交易日完整性回执，离线构建期只读导出自 `market.suspend_d`，`suspend_type='S'`，仅 sh/sz、剔除 BJ），作为冻结 bin 目录的同级 sidecar 同步至全部计算节点；新装配由 `qe_build_frozen_suspend_filter.py` 在计算节点按 `qe_frozen_build_spec.json` 的 suspend 钉（dataset_id/cutoff/universe key/SHA256）重建 `qe_suspend_filter.json`，钉/身份/日期覆盖/字段不符一律 fail closed，无数据库回退。原 `qe_suspend_filter_offline_dataset_gap` 阻断随之解除。
 
-> **v6.1 历史活动快照（2026-08-10，已由 v6.2/v6.3 取代）：**MA-E14 与 MA-E15 均已取得终态真实结果。MA-E14 的 H95/C85 regime overlay 在 full/early/late 三个窗口都降低 CAGR，当时阈值调优分支结束；MA-E15 的 9/9 Loop 显示压缩扩张三因子、增加 breadth 的四因子以及 LSTM 之间存在可继续研究的信号差异，但 `prepare_factors.py` 的 outer-union 令四因子实验额外纳入 1,511 行观测，不能据此归因 breadth 的真实增量。另经源码与任务配置复核，MA-E15 全部使用 V25_1 分钟执行，仍受开放 BUG-852（Issue #2692）的 10D 日频特征零填充问题影响，因此 IC/RankIC、Prediction Store 面板和 Top-K 信号诊断仍是有效证据，CAGR/Sharpe/MDD/Calmar/turnover 只能标记为 `EXECUTION_TRUTH_LIMITED_BY_BUG852`，不能作为新执行策略的真实对照。BUG-1006 是当时唯一阻断下一轮 matched 因子归因的 QE BUG；MA-E16 通过统一使用已验证的日频 `CLOSE_PRICE` 执行绕开 BUG-852，不等待或冒充修复 V25_1。该段只保留 v6.1 当时事实，不构成活动 backlog；当前状态与顺序以紧随其后的 v6.3、第 2.5、9.9.2～9.9.4、12、13、15、17 节为准。
+> **v6.1 历史活动快照（2026-08-10，已由 v6.2/v6.3/v6.4 取代）：**MA-E14 与 MA-E15 均已取得终态真实结果。MA-E14 的 H95/C85 regime overlay 在 full/early/late 三个窗口都降低 CAGR，当时阈值调优分支结束；MA-E15 的 9/9 Loop 显示压缩扩张三因子、增加 breadth 的四因子以及 LSTM 之间存在可继续研究的信号差异，但 `prepare_factors.py` 的 outer-union 令四因子实验额外纳入 1,511 行观测，不能据此归因 breadth 的真实增量。另经源码与任务配置复核，MA-E15 全部使用 V25_1 分钟执行，仍受开放 BUG-852（Issue #2692）的 10D 日频特征零填充问题影响，因此 IC/RankIC、Prediction Store 面板和 Top-K 信号诊断仍是有效证据，CAGR/Sharpe/MDD/Calmar/turnover 只能标记为 `EXECUTION_TRUTH_LIMITED_BY_BUG852`，不能作为新执行策略的真实对照。BUG-1006 是当时唯一阻断下一轮 matched 因子归因的 QE BUG；MA-E16 通过统一使用已验证的日频 `CLOSE_PRICE` 执行绕开 BUG-852，不等待或冒充修复 V25_1。该段只保留 v6.1 当时事实，不构成活动 backlog；当前状态与顺序以紧随其后的 v6.4、第 2.5、9.9.2～9.9.4、12、13、15、17 节为准。
 
 > **v6.2 历史活动快照（2026-08-11 05:30，已由 v6.3 取代）：**当时 MA-E16 为 9 completed、2 failed、Loop12 running；该段只保留任务重叠、Windows/WSL 换页根因与 BUG-1014 最小修复边界，不再表示当前实验状态。
 >
-> **v6.3 活动权威（2026-08-11）：**BUG-1006 已合入并由用户重启加载；MA-E16 权威 task `qe_20260810_224522_b0d9` 于 05:45 +08:00 终态为 `failed`，12 个 Loop 全部 terminal，其中 10 completed、2 failed，05:45 后未发现新的演进任务。10 个成功 arm 均使用相同 2026-06-30 冻结文件、`2,192,858` 行 matched panel、相同日期窗口与 label SHA256；四个可比较 matched pair 的 CE4-B 相对 CE3 CAGR 均为正，但 IC/RankIC 混合且 MDD 在 4 组中 3 组恶化，因此 breadth 当前主角色只能定位为 `CONDITIONING_STATE`，portfolio conversion 是待验证用途，不能写成已验证的 `DIRECT_ALPHA`，也不能在缺失两 arm 时做正式 blend/LOO。Loop3 已完成训练与预测，在日频 `qrun_limit.py` 读取 MLflow ICIR 时遇到空指标竞态；BUG-1022/Issue #3282 修复后必须显式以 `retry_mode=backtest_only` 复用完整模型参数重新执行预测/回测，禁止 `auto` 回退全量训练。Loop7 在训练中因 stop/SIGTERM `-15` 退出，不是 Alpha 失败；BUG-1014 新资源信封运行态验证后只对该 arm 显式执行 `retry_mode=full_train`，不得把中间参数当完成模型。重复 task `qe_20260810_221723_14ab` 保持停止，永不恢复。BUG-1014 的 RD-Agent PR #18 已以 `da3270f8…` 合入，AIstock PR #3273 已以 `49ccc1f3…` 合入并同步 root；RD immutable release/deploy/用户重启/identity 与 backend-main 用户重启/identity 均未执行。BUG-1022 已登记并进入 source fix，实验恢复继续等待对应 source merge 与用户运行态验证。本轮不启动新实验。
+> **v6.3 历史活动权威（2026-08-11，已由 v6.4 取代）：**BUG-1006 已合入并由用户重启加载；MA-E16 权威 task `qe_20260810_224522_b0d9` 于 05:45 +08:00 终态为 `failed`，12 个 Loop 全部 terminal，其中 10 completed、2 failed，05:45 后未发现新的演进任务。10 个成功 arm 均使用相同 2026-06-30 冻结文件、`2,192,858` 行 matched panel、相同日期窗口与 label SHA256；四个可比较 matched pair 的 CE4-B 相对 CE3 CAGR 均为正，但 IC/RankIC 混合且 MDD 在 4 组中 3 组恶化，因此 breadth 当前主角色只能定位为 `CONDITIONING_STATE`，portfolio conversion 是待验证用途，不能写成已验证的 `DIRECT_ALPHA`，也不能在缺失两 arm 时做正式 blend/LOO。Loop3 已完成训练与预测，在日频 `qrun_limit.py` 读取 MLflow ICIR 时遇到空指标竞态；BUG-1022/Issue #3282 修复后必须显式以 `retry_mode=backtest_only` 复用完整模型参数重新执行预测/回测，禁止 `auto` 回退全量训练。Loop7 在训练中因 stop/SIGTERM `-15` 退出，不是 Alpha 失败；BUG-1014 新资源信封运行态验证后只对该 arm 显式执行 `retry_mode=full_train`，不得把中间参数当完成模型。重复 task `qe_20260810_221723_14ab` 保持停止，永不恢复。BUG-1014 的 RD-Agent PR #18 已以 `da3270f8…` 合入，AIstock PR #3273 已以 `49ccc1f3…` 合入并同步 root；RD immutable release/deploy/用户重启/identity 与 backend-main 用户重启/identity 均未执行。BUG-1022 已登记并进入 source fix，实验恢复继续等待对应 source merge 与用户运行态验证。本轮不启动新实验。
+>
+> **v6.4 活动权威（2026-08-12）：**MA-E16 事实与 Alpha 解释不变，Loop3/7 尚未恢复。BUG-1022 日频 runner 修复已以 `a7bc06a3…` 合入，BUG-1023 durable orchestrator 空闲扫描修复已以 `d8e80b9f…` 合入，BUG-1024 background reconciler/GET 写状态修复已以 `3a6e3290…` 合入；三者连同 BUG-1014 均只确认源码状态，不能冒充当前 8001/RD-Agent 运行态已加载。BUG-1026 的单观察器、60 秒远端探测、变化才写状态修复位于 AIstock PR #3296；BUG-1030 的 RD-Agent 有界初始 tail、`Last-Event-ID/after_cursor` 和不重放 cursor 修复位于 RD-Agent PR #19，并由 AIstock 跨仓记录 PR #3300 跟踪；BUG-1031 的全 AIstock QE 日志消费者单上游 broker、游标续传、内存/订阅者背压、页面隐藏零流量及 `qe-live-0..4.jsonl` 五个 1 GiB 环形槽修复位于 PR #3303。上述四个 PR 的当前 head 均已通过适用检查并为 CLEAN/MERGEABLE，但均未合入。旧 `evolution.log` 未删除；唯一条件清理候选仍须在相关源码合入、用户部署/重启、identity/business smoke 通过、无订阅者且大小/mtime 未变后由用户另行授权精确删除。以上均是主机稳定性和无 UI 空转阻断的最小收口，不新增通用监控、日志平台或历史归档工程。
 >
 > **未来关系实验的数据边界：**任何 HIST、动态图、概念图、回撤 hazard 或新 Alpha trial 都只能消费实验启动前已经生成并钉住版本/cutoff/hash 的 H5/Parquet/bin/sidecar。实验、composer、worker 与 qrun 不得查询 `market.*`、连接数据库补齐关系或在缺文件时降级。专用数据集构建流程与 QE 实验运行严格分离；是否建设新的冻结数据集只按未来策略价值另行评估，不成为当前实验前置。
 
@@ -182,7 +184,7 @@ v6.1 将 MA-E14/MA-E15 纳入终态总账并修正活动顺序。MA-E14 结束�
 | BUG-1006 matched observation panel | `MERGED_RUNTIME_VERIFIED` | BUG-1006 / Issue #3239 / PR #3243；fix commit `c76068f6…`；`qe_observation_panel_v1`；用户重启后 MA-E16 已实际按该合同装配 | 新 trial 可声明预先指定的参考因子交集；`observation_panel` 只属于生成期 data-loader contract，不进入策略 kwargs；缺配置因子、缺参考列或空面板均以稳定 reason code fail closed。未声明的旧任务继续允许已成功因子的历史 partial concat。该最小阻断 BUG 已完成源码、合入和运行态验证，当前不再是 MA-E16 前置；不扩展 UI、Archive、schema 或历史工程。 |
 | MA-E16 matched CE3/CE4-B 复验 | `TERMINAL_10_COMPLETED_2_FAILED_RECOVERY_REQUIRED` | `qe_20260810_224522_b0d9`；2026-08-11 05:45 +08:00 终态；第 9.9.2～9.9.3 节矩阵 | 12 个 Loop 已全部 terminal：10 completed、Loop3/7 failed。成功 arm 均为 `2,192,858` 行相同 matched panel、相同窗口与 label SHA256，统一使用日频 `CLOSE_PRICE`、h20 裸收益、Top50/n_drop1、相同成本与 2026-06-30 文件快照。四个现有 matched pair 的 CE4-B 相对 CE3 CAGR 均提高，但 IC/RankIC 混合且 MDD 3/4 恶化；breadth 主角色暂归 `CONDITIONING_STATE`，portfolio conversion 为待验证用途。在 Loop3 `backtest_only`、Loop7 `full_train` 单 arm 恢复并完成三窗口、成本、相关性与 overlap 前，不形成独立 Alpha 或 blend/LOO 结论。 |
 | BUG-1014 WSL 主机响应与 qrun 隔离 | `RD_AND_AI_SOURCE_MERGED_RUNTIME_NOT_ACTIVE` | BUG-1014 / Issue #3266；AIstock PR #3273 / merge `49ccc1f3…`；RD-Agent PR #18 / merge `da3270f8…`；任务 `qe_20260810_221723_14ab` 与 `qe_20260810_224522_b0d9` 的 Loop7 重叠；Windows/WSL 原生资源快照 | 根因不是图模型：GeneralPTNN LSTM 的 `n_jobs=2 + pin_memory + prefetch_factor=2` 使单 Loop 形成主进程加两个约 3 GB worker；跨 task 的 WSL 全局容量 2 允许两个本地 Loop 重叠，叠加既有 WSL swap 后触发高频换页。修复保持 batch/标签/模型/策略语义，改为 canonical `wsl2-5080` 全局 1 槽、拒绝会分槽的 `wsl/local` alias、本地 GeneralPTNN `n_jobs=0`/无 prefetch/不 pin、四个 CPU thread env 上限，并在 prepare/qrun/read/custom-command 前清除完整 `PG*`/DB、Bash/loader injection 与非控制面 secret；危险 `remote_env` 在值序列化前 fail closed。远端容量 4 与两节点并行不变。两仓 source merge 已完成；RD immutable release/deploy/用户重启/identity、backend-main 用户重启/identity 与资源回读仍分别 pending，Issue 保持开放。 |
-| 日频 qrun MLflow 指标落盘竞态 | `BUG_1022_SOURCE_FIX_IN_PROGRESS_BACKTEST_ONLY_RECOVERY_PENDING` | BUG-1022 / Issue #3282；MA-E16 Loop3；`scripts/qrun_limit.py`；分钟 runner 的既有 BUG-605 修复合同 | Loop3 的训练、预测与 IC/RankIC 已完成；失败来自日频 runner 未安装分钟 runner 已有的 async metric drain barrier 与精确 empty-metric retry，导致成功计算的 ICIR 在 FileStore flush 前被读取为空。BUG 已独立登记；source 只复用既有 bounded barrier/exact retry，禁止 fixed sleep、吞错、把空值写零或重训整个 Loop。source merge 与用户 backend-main 重启验证后，使用重新装配的最新 runner 显式执行 `retry_mode=backtest_only`；完整 params 缺失则 fail loud，禁止 `auto` 回退 full train。 |
+| 日频 qrun MLflow 指标落盘竞态 | `BUG_1022_SOURCE_MERGED_RUNTIME_PENDING_BACKTEST_ONLY_RECOVERY_PENDING` | BUG-1022 / Issue #3282；merge `a7bc06a3…`；MA-E16 Loop3；`scripts/qrun_limit.py`；分钟 runner 的既有 BUG-605 修复合同 | Loop3 的训练、预测与 IC/RankIC 已完成；失败来自日频 runner 未安装分钟 runner 已有的 async metric drain barrier 与精确 empty-metric retry，导致成功计算的 ICIR 在 FileStore flush 前被读取为空。source 已复用既有 bounded barrier/exact retry 并合入；在用户 backend-main 重启与 identity/business smoke 逐项通过后，使用重新装配的最新 runner 显式执行 `retry_mode=backtest_only`。完整 params 缺失则 fail loud，禁止 fixed sleep、吞错、把空值写零、`auto` 回退 full train 或重训整个 Loop。 |
 | 多 Alpha QE 演进平台基础 | `P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY` | 第 4.11、9.9、Phase G0-H；已合入基础 PR 与后续阻断 BUG 修复 | 当前能力足以继续演进。只修真实 trial 暴露且无安全替代路径的阻断 BUG；禁止通用编排、UI、Archive、历史补账或 provenance 完整化研发抢占实验。 |
 | 两层板块 oracle / R8M / HIST / 概念超图 | `P2_CONDITIONAL_NON_BLOCKING` | 第 9.5～9.8 节；F-016/F-018/F-019 | 只在现有冻结文件与空闲资源足够、且不延迟 P0/P1 candidate 时运行；概念/事件数据缺失不触发前置平台建设或历史补算。 |
 
@@ -1065,7 +1067,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 详细设计和逐文件实施顺序见 `docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`。P0-1～P0-4 的完成标准是可靠性与 UI 生命周期能力，不是任何 Alpha 方向的 go/stop 条件。
 
-#### 9.9.2 v6.3 科研架构与方向优先级
+#### 9.9.2 v6.4 科研架构与方向优先级
 
 当前总体结构固定为：`冻结文件数据 -> DIRECT_ALPHA 专家 -> CONDITIONING_STATE/RELATION_PRIOR -> 条件化组合 -> PORTFOLIO_POLICY`。同一个因子或模型在一个 trial 中必须声明主角色，避免把风险状态硬塞成直接预测腿。
 
@@ -1077,7 +1079,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 | `PORTFOLIO_POLICY` | 权重、入场、减仓、退出、重入 | entry-gate、bounded de-risk、dynamic n-drop | 组合改善不反推基础预测 RankIC 已提高 |
 | `NEGATIVE_CONTROL` | 方向、冗余和 regime 互证 | 资金流加速、领导持续性原方向、失败新增腿 | 负结果不伪装为缺失，也不外推终止整个方向 |
 
-**v6.1 历史归因修正，v6.3 继续有效。**MA-E15 不是“breadth 已证伪”。CE4-B 比 CE3 多出的 `m_sector_volume_confirmed_breadth_5d_20d` 同时改变了 outer-union 观测总体；Qlib 后续 Fillna 又把缺失基线特征变成零。共同样本标签一致只能排除标签漂移，不能排除模型对额外零填充样本的排序响应。因此 CE3/CE4-B 的信号差异只能标记为 `CONFOUNDED_BY_PANEL`。同时，MA-E15 的九个 Loop 均使用 V25_1 分钟执行，开放 BUG-852 令其 10D 日频执行特征为零；这不使 Prediction Store 的标签、预测、IC/RankIC 和 Top-K 面板诊断失效，但使组合收益、风险和换手只能标记为 `EXECUTION_TRUTH_LIMITED_BY_BUG852`。MA-E16 使用 `qe_observation_panel_v1`，预先固定参考因子 `m_intraday_range_60d_min_ratio`、`m_turnover_acceleration`、`m_sector_mf_divergence_lg` 的非空交集；候选 breadth 可以在该固定索引内缺失并沿用既有 loader 填充，但不得新增观测行。为获得可解释的组合结果，MA-E16 全部改用既有日频 `CLOSE_PRICE` 执行，不等待或声称修复 BUG-852。
+**v6.1 历史归因修正，v6.4 继续有效。**MA-E15 不是“breadth 已证伪”。CE4-B 比 CE3 多出的 `m_sector_volume_confirmed_breadth_5d_20d` 同时改变了 outer-union 观测总体；Qlib 后续 Fillna 又把缺失基线特征变成零。共同样本标签一致只能排除标签漂移，不能排除模型对额外零填充样本的排序响应。因此 CE3/CE4-B 的信号差异只能标记为 `CONFOUNDED_BY_PANEL`。同时，MA-E15 的九个 Loop 均使用 V25_1 分钟执行，开放 BUG-852 令其 10D 日频执行特征为零；这不使 Prediction Store 的标签、预测、IC/RankIC 和 Top-K 面板诊断失效，但使组合收益、风险和换手只能标记为 `EXECUTION_TRUTH_LIMITED_BY_BUG852`。MA-E16 使用 `qe_observation_panel_v1`，预先固定参考因子 `m_intraday_range_60d_min_ratio`、`m_turnover_acceleration`、`m_sector_mf_divergence_lg` 的非空交集；候选 breadth 可以在该固定索引内缺失并沿用既有 loader 填充，但不得新增观测行。为获得可解释的组合结果，MA-E16 全部改用既有日频 `CLOSE_PRICE` 执行，不等待或声称修复 BUG-852。
 
 **P0-A：近期 regime 适配的三腿策略。**MA-E14 已完成 H95/C85 overlay 的 full/early/late 对照，三个窗口 CAGR 均下降，当前阈值 overlay 分支结束。regime、breadth、残差协同和资金背离仍保留为 `CONDITIONING_STATE`，但下一轮不继续搜索阈值；先补齐 MA-E16 两个缺失 arm 并完成完整归因，再判断 breadth 是否只用于风险正则或动态权重。
 
@@ -1099,7 +1101,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 **继续终止。**历史 Loop 总账补齐、Archive 补录、旧制品物化、F-014 Phase 5、通用 UI/schema/provenance 完整化及没有明确增量假设的 TCN/Transformer/更多腿扫描，不重新进入活动 backlog。
 
-#### 9.9.3 策略优先执行合同（v6.3）
+#### 9.9.3 策略优先执行合同（v6.4）
 
 1. 当前全窗口 Pareto 锚点为 MA-E07 四腿 soft de-risk 与 MA-E10 drop-TCN 三腿；近期 regime 锚点为 MA-E13R。R12P 继续是历史组合基线，不再是唯一活动比较入口。
 2. 每个候选并列记录 full（2024-07-01～2026-06-29）、early（2024-07-01～2025-06-30）和 late（2025-07-01～2026-06-29）窗口。窗口差异用于解释适用范围，不形成研究准入门禁；不得只用全窗口掩盖近期失效。
@@ -1113,14 +1115,16 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 10. 后端启动、停止、重启仍归用户所有。后端重启不应终止已启动的外部 QE worker；本蓝图及任何实验授权都不产生进程控制权限。
 11. matched 因子实验必须在 `model_params` 显式声明 `qe_observation_panel_v1`、稳定 `panel_id`、`reference_factor_intersection` 和参考因子列表，并使用 `disable_alpha158=true`。composer 必须把 `observation_panel` 解释为生成期 data-loader contract 并从策略 kwargs 中排除；public in-memory compose、CE3/CE4 两种因子数和缺失结果路径必须走同一合同。所有 trial 的参考索引定义必须相同；缺配置因子、缺参考列、空交集或声明拼写错误均 fail closed。未声明该契约的历史 task 不改写、不回填，并继续允许已成功因子的历史 partial concat。
 12. MA-E16 的 12 个 Loop 统一使用 `execution_algo=CLOSE_PRICE`、`runtime_mode=day`、`backtest_freq=day`、Top50/n_drop1 和同一成本设置；禁止混入 V25/V25_1 或分钟执行，以免开放 BUG-852 污染 matched Alpha 的组合归因。BUG-852 保持独立开放，不因本轮绕行而关闭。
-13. 下一执行顺序固定为：安全同步并合入 BUG-1014 -> 用户重启并验证新资源合同 -> 独立登记并修复日频 `qrun_limit.py` 的 MLflow 空指标竞态 -> Loop3 显式 `retry_mode=backtest_only`，复用完整 params 重新执行预测/回测且禁止 `auto` 回退训练 -> Loop7 显式 `retry_mode=full_train` 单 arm 重跑，禁止复用 SIGTERM 中间参数 -> 分析完整 12-arm 同面板 CE3/CE4-B 双模型三种子及 full/early/late、换手、成本、prediction rank correlation、Top50 overlap -> 存在互补证据时执行固定权重 blend + LOO -> `sector_participation_gap_v2` 与 `leadership_exhaustion_v1` 的 6 个 LGBM Loop -> 模型分歧调权 -> `sector_residual_cohesion_break_v1` / `dynamic_residual_flow_relation_v1` -> `pit_fundamental_diffusion_v1`。这 6 个新 Alpha Loop 只有在 dataset/panel/model/seed/config hash 与 MA-E16 CE3 基线完全一致时才复用原 CE3；否则必须增加 matched control。重复 task 永不恢复，成功 10 arm 不重训；本轮到源码与蓝图修复为止，不启动上述实验。P2 方向不得延迟前七项；BUG-852 只在未来需要分钟执行真实性时独立处理，不阻断日频归因。
+13. 下一执行顺序固定为：由用户按依赖顺序确认合入 BUG-1026 PR #3296、RD-Agent PR #19、AIstock BUG-1030 记录 PR #3300 与 BUG-1031 PR #3303 -> 用户分别部署/重启 RD-Agent、backend-main 与 frontend -> 对 BUG-1014/1022/1023/1024/1026/1030/1031 逐项执行 source/runtime identity 与 business smoke，禁止把合入、部署、重启和运行态验证合并成一个状态 -> Loop3 显式 `retry_mode=backtest_only`，复用完整 params 重新执行预测/回测且禁止 `auto` 回退训练 -> Loop7 显式 `retry_mode=full_train` 单 arm 重跑，禁止复用 SIGTERM 中间参数 -> 分析完整 12-arm 同面板 CE3/CE4-B 双模型三种子及 full/early/late、换手、成本、prediction rank correlation、Top50 overlap -> 存在互补证据时执行固定权重 blend + LOO -> `sector_participation_gap_v2` 与 `leadership_exhaustion_v1` 的 6 个 LGBM Loop -> 模型分歧调权 -> `sector_residual_cohesion_break_v1` / `dynamic_residual_flow_relation_v1` -> `pit_fundamental_diffusion_v1`。这 6 个新 Alpha Loop 只有在 dataset/panel/model/seed/config hash 与 MA-E16 CE3 基线完全一致时才复用原 CE3；否则必须增加 matched control。重复 task 永不恢复，成功 10 arm 不重训；本轮到源码与蓝图修复为止，不启动上述实验。P2 方向不得延迟前述 P0/P1；BUG-852 只在未来需要分钟执行真实性时独立处理，不阻断日频归因。
+14. 运行态静默验收只验证本轮已修阻断：无 UI/无订阅者时，上游 QE 日志连接、文件写入和数据库工作均为零；有活动 task 时，节点健康/派发观察器按变化写状态，正常探测最多按设计的 60 秒节流，心跳不落数据库；五个环形日志槽总上限为 5 GiB。该验收不是新监控平台、历史归档或实验准入阶段。
+15. 旧 `evolution.log` 保持只读且本轮不删除。仅在相关源码全部合入、用户部署/重启、identity/business smoke 通过、零订阅者、精确路径与 size/mtime 未变化后，才可由用户另行授权删除唯一候选文件；不得通配、递归或顺带清理其他日志。
 
-#### 9.9.4 v6.3 DESIGN-COMPLIANCE-001 文档审核
+#### 9.9.4 v6.4 DESIGN-COMPLIANCE-001 文档审核
 
-- `no_simplified_delivery`：MA-E16 的 12-Loop 双节点矩阵按真实终态写为 10 completed/2 failed；不以不平衡组均值、4 个 matched pair 或 10/12 结果冒充完整矩阵，不在缺少三窗口、成本、相关性、Top50 overlap 时宣布 breadth/组合结论。BUG-1014 覆盖全局容量、GeneralPTNN loader、CPU 线程封装与普通 composer 凭据隔离，不以“任务声明并发 1”冒充全局安全。
-- `no_silent_error`：Loop3 的日频 MLflow 空读竞态与 Loop7 的 SIGTERM `-15` 分开保留；额外 `1,511` 行、V25_1 限制、约 4.5万～5.5万 pages/sec、WSL swap 与重复 task 也不被抹平。unsafe loader override、文件漂移、DB/secret 数据面继承及持续 empty metric 均 fail closed。
-- `no_business_semantic_drift`：裸前向收益主标签、batch 4096、模型结构、种子、QE-only 文件数据面、Top50/n_drop1 和成功 10 arm 均不改写；Loop3 强制 `backtest_only` 且 params 缺失 fail loud，Loop7 强制 `full_train` 单 arm 重跑，重复 task 不恢复。BUG-1014 只收紧本地进程/线程/凭据边界，远端 4 槽与双节点并行保留。
-- `no_unrequested_gate_or_approval`：观测面板与 WSL 单槽是可归因和主机安全技术合同，不是人工审批；P0-1～P0-4、F-014、UI、Archive、BUG-852、历史完整度及本轮未执行的新 Alpha 方向均不成为无关平台建设门禁。
+- `no_simplified_delivery`：MA-E16 的 12-Loop 双节点矩阵按真实终态写为 10 completed/2 failed；不以不平衡组均值、4 个 matched pair 或 10/12 结果冒充完整矩阵，不在缺少三窗口、成本、相关性、Top50 overlap 时宣布 breadth/组合结论。BUG-1014/1022/1023/1024/1026/1030/1031 的 source、runtime、frontend 与 RD-Agent 状态逐项分离，不以源码已合入或 PR 可合入冒充运行态已生效。
+- `no_silent_error`：Loop3 的日频 MLflow 空读竞态与 Loop7 的 SIGTERM `-15` 分开保留；额外 `1,511` 行、V25_1 限制、约 4.5万～5.5万 pages/sec、WSL swap、重复 task、空转数据库访问、重复上游 SSE 与无界日志放大均不被抹平。unsafe loader override、文件漂移、DB/secret 数据面继承、持续 empty metric、无效/过期 cursor 和日志背压均 fail closed。
+- `no_business_semantic_drift`：裸前向收益主标签、batch 4096、模型结构、种子、QE-only 文件数据面、Top50/n_drop1 和成功 10 arm 均不改写；Loop3 强制 `backtest_only` 且 params 缺失 fail loud，Loop7 强制 `full_train` 单 arm 重跑，重复 task 不恢复。稳定性修复只降低无变化轮询、重复连接和重复日志，不改变节点状态、任务生命周期、训练、预测、回测或组合语义。
+- `no_unrequested_gate_or_approval`：观测面板、WSL 单槽、按变化写状态、单上游日志 broker 和 5×1 GiB 环形槽是可归因/主机安全技术合同，不是人工审批；运行态静默验证只确认阻断已解除，不恢复 P0-1～P0-4、F-014、UI、Archive、BUG-852、历史完整度或平台建设门禁。
 
 #### 9.9.5 v5.24 科研方向快照（历史，不代表当前排期）
 
@@ -1193,6 +1197,9 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 28. **参与差原始比值失真**：行业成交额与个股/板块小单 volume 的单位、规模和零分母可制造伪信号；新公式使用单位一致 share/rank、明确聚合层级并对异常 fail closed。
 29. **新关系数据面回退数据库**：HIST/动态图/概念关系缺文件时访问 `market.*` 会破坏可复现与节点一致性；DB-poison、静态扫描和 dataset identity/hash 随新 trial 验证。
 30. **新增腿稀释组合**：因子单项 IC、低预测相关或新模型名都不证明组合增量；MA-E12 作为失败对照，新候选保存独立腿、matched change 与固定风险预算 LOO。
+31. **空闲控制面数据库风暴**：无活动 task 或无状态变化时重复 claim、mirror、health/readback 会放大 PostgreSQL、WMI 与主机负载；后台观察器必须单实例、按变化写入，并把非紧急远端探测节流到至少 60 秒，正常心跳只保留在内存。
+32. **日志消费者扇出与隐藏页面空转**：多个 UI/API 消费者各自连接 RD-Agent、断线从零重放或页面隐藏后继续轮询会重复网络、CPU、内存与文件 I/O；每 task/node 只允许一个上游 broker，cursor 必须可续传，最后订阅者离开后立即停止上游工作。
+33. **日志文件无界增长与误清理**：重复写入单个 `evolution.log` 可耗尽磁盘，而通配清理会破坏运行证据；新日志只写五个 1 GiB 环形槽，旧文件保持只读，任何删除必须在运行态验证后由用户对精确文件另行授权。
 
 ## 11. 验收与交付物
 
@@ -1289,14 +1296,17 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 | F-024 | Alpha/状态/关系/策略角色分离 | 每个候选声明 `DIRECT_ALPHA`、`CONDITIONING_STATE`、`RELATION_PRIOR`、`PORTFOLIO_POLICY` 或 `NEGATIVE_CONTROL` 主角色；信号、关系和组合改善分别归因，不互相冒充。 |
 | F-025 | 多窗口与 matched-seed 真实性 | 活动候选并列报告 full/early/late；训练型候选默认使用 seeds 123/314/2718；单次回测、单因子 IC、单最好 seed 和全窗口结果不得覆盖近期失效或被外推为稳定结论。 |
 | F-026 | QE 数据面零数据库扩展 | 新 Alpha、HIST、动态图、hazard 与概念关系只消费钉住的 H5/Parquet/bin/sidecar；实验/composer/worker/qrun 不访问数据库、不在线补齐、不回退。 |
-| F-027 | v6.3 活动演进顺序 | BUG-1014 合入/用户重启/运行态验证 -> 独立修复日频 runner 竞态 -> Loop3 显式 `backtest_only` -> Loop7 显式 `full_train` 单 arm -> 完整 12-arm matched CE3/CE4-B 归因 -> 条件固定权重 blend/LOO -> `sector_participation_gap_v2` / `leadership_exhaustion_v1` -> 模型分歧 -> residual cohesion/dynamic relation -> PIT 基本面扩散；本轮不启动实验。P2 不延迟 P0/P1。 |
+| F-027 | v6.4 活动演进顺序 | 用户按依赖确认合入 BUG-1026、RD-Agent BUG-1030、AIstock BUG-1030/1031 -> 用户分别部署/重启 -> BUG-1014/1022/1023/1024/1026/1030/1031 逐项 identity/business smoke -> Loop3 显式 `backtest_only` -> Loop7 显式 `full_train` 单 arm -> 完整 12-arm matched CE3/CE4-B 归因 -> 条件固定权重 blend/LOO -> `sector_participation_gap_v2` / `leadership_exhaustion_v1` -> 模型分歧 -> residual cohesion/dynamic relation -> PIT 基本面扩散；本轮不启动实验。P2 不延迟 P0/P1。 |
 | F-028 | matched observation panel | 训练型因子归因 trial 在 `model_params` 预先声明 `qe_observation_panel_v1` 和参考因子交集；composer 将其作为生成期 loader contract，禁止透传策略 kwargs；同组 candidate 使用完全相同的观测索引。缺配置因子、缺参考列、空面板或无效声明 fail closed；历史无契约 task 不改写并保留成功因子 partial concat。 |
 | F-029 | QE WSL 主机安全封装 | 所有 task 共享一个本地 WSL 训练槽；本地 GeneralPTNN 使用 `n_jobs=0`、`pin_memory=false`、无 `prefetch_factor`、最多 4 个 BLAS/OpenMP 线程；普通 composer 与 multi-alpha 的 prepare/qrun/read 均清除数据库及非控制面 secret 环境变量。远端硬容量 4、Prediction Store 控制面、冻结文件路径和 batch/模型/策略语义保持不变；unsafe override fail closed。 |
 | F-030 | 日频 runner 可靠恢复 | 日频 `qrun_limit.py` 必须在 `qlib.init` 后、`task_train` 前安装与分钟 runner 同语义的 async metric drain barrier 和精确 empty-metric retry；只重试已知落盘竞态，writer 死亡、超时、真实缺制品或其他错误 fail loud。Loop3 使用新装配 runner 显式执行 `retry_mode=backtest_only`，完整 params 缺失 fail loud，禁止 `auto` 回退训练。 |
+| F-031 | 空闲控制面静默 | 无活动 task/状态变化时不得形成 2 秒级数据库、远端 API 或状态事件风暴；观察器单实例，正常探测至少 60 秒节流，状态/错误变化才持久化，正常心跳留在内存。 |
+| F-032 | QE 实时日志单上游与零 UI 空转 | 每 task/node 只有一个 RD-Agent 上游，由 AIstock broker 共享给 evolution/experiment/multi-node 消费者；cursor 续传且 stale/conflict fail closed；无订阅者、页面隐藏或面板折叠时上游、文件和 DB 工作为零。 |
+| F-033 | 五槽日志边界与精确清理 | 新实时日志仅写 `qe-live-0.jsonl`～`qe-live-4.jsonl`，每槽最大 1 GiB；旧 `evolution.log` 只读。历史文件删除不属于本变更，必须在 source/runtime/frontend 验证后由用户对精确路径另行授权。 |
 
 ## 13. Implementation Plan / 实施计划
 
-v6.3 当前执行顺序覆盖以下历史 Phase 顺序：MA-E16 已终态为 10 completed/2 failed；成功 arm 与重复 task 均不再运行。BUG-1014 源码合入后由用户重启并验证本地 WSL 单槽/单进程 loader/线程/凭据合同；随后独立修复日频 runner 竞态，以显式 `backtest_only` 恢复 Loop3，以显式 `full_train` 只补跑被 SIGTERM 中断的 Loop7，再执行完整 matched 归因与后续策略演进。全部继续使用日频 `CLOSE_PRICE`，不恢复 MA-E14 阈值 overlay，也不把 MA-E15 或未经逐 task 核验的旧 V25/V25_1 组合指标当作执行基线。本轮不启动新实验；F-014/UI/历史补账/物化和底座完整化继续不实施。
+v6.4 当前执行顺序覆盖以下历史 Phase 顺序：MA-E16 已终态为 10 completed/2 failed；成功 arm 与重复 task 均不再运行。BUG-1014/1022/1023/1024 源码已合入但运行态仍待用户逐项验证；BUG-1026、RD-Agent BUG-1030、AIstock BUG-1030/1031 的源码或跨仓记录进入待用户确认合入状态。完成各自合入、用户部署/重启及 identity/business smoke 后，以显式 `backtest_only` 恢复 Loop3，以显式 `full_train` 只补跑被 SIGTERM 中断的 Loop7，再执行完整 matched 归因与后续策略演进。全部继续使用日频 `CLOSE_PRICE`，不恢复 MA-E14 阈值 overlay，也不把 MA-E15 或未经逐 task 核验的旧 V25/V25_1 组合指标当作执行基线。本轮不启动新实验、不删除旧日志；F-014、通用 UI、历史补账/物化、监控/日志平台和底座完整化继续不实施。
 
 ### Phase G0-A：研究设计与证据记录
 
@@ -1407,7 +1417,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 ## 15. Design Acceptance Matrix / 设计验收矩阵
 
-v6.3 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设计和证据状态，不代表当前排期。F-024～F-030 定义当前角色、窗口、数据边界、顺序、matched observation panel、WSL 主机安全与日频 runner 恢复合同。实验未完成项保持设计或独立运行态状态，不冒充结果；它们也不是人工审批门禁。历史补账、UI 和平台完整化继续终止。
+v6.4 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设计和证据状态，不代表当前排期。F-024～F-033 定义当前角色、窗口、数据边界、顺序、matched observation panel、WSL 主机安全、日频 runner 恢复、空闲控制面静默、单上游实时日志与五槽存储合同。实验未完成项保持设计或独立运行态状态，不冒充结果；它们也不是人工审批门禁。历史补账、通用 UI、监控/日志平台和平台完整化继续终止。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -1437,10 +1447,13 @@ v6.3 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设�
 | F-024 | 本文 9.9.2 | validation-receipt: 角色表与逐候选 role/归因输出合同 | DESIGN_READY_ROLE_SEPARATION | 无 |
 | F-025 | 本文 2.5、9.9.3 | validation-receipt: MA-E13G matched-seed 先例与 full/early/late + seeds 123/314/2718 输出合同 | DESIGN_READY_MULTI_WINDOW_MATCHED_SEED | 无 |
 | F-026 | 本文顶部不变量、9.7、9.9.3、Phase G0-F/G | validation-receipt: DB-poison/静态扫描、dataset identity/hash、双节点文件一致性 | APPROVED_BY_USER: ZERO_DB_RUNTIME_INVARIANT_ACTIVE | BUG-989 已建立现有链路证据；所有新方向继承并在自身 trial 显式验证，不得回退数据库。 |
-| F-027 | 本文 2.5、9.9.2–9.9.3、Phase G0-E | validation-receipt: MA-E16 10/12 终态、两个失败原因、四组 matched pair 的收益/风险权衡、新 Alpha 命名与先恢复后演进顺序；PR/运行态/实验状态在第 17 节独立记录 | DESIGN_READY_NEXT_EVOLUTION_SEQUENCE_V6_3 | 无 |
+| F-027 | 本文 2.5、9.9.2–9.9.3、Phase G0-E | validation-receipt: MA-E16 10/12 终态、两个失败原因、四组 matched pair 的收益/风险权衡、新 Alpha 命名与先恢复后演进顺序；PR/运行态/实验状态在第 17 节独立记录 | DESIGN_READY_NEXT_EVOLUTION_SEQUENCE_V6_4 | 无 |
 | F-028 | `config_composer.py`、生成的 `prepare_factors.py`、BUG-1006、本文 9.9.2～9.9.3 | validation-receipt: canonical contract、matched CE3/CE4 同索引、public in-memory ScoreWeighted/CLOSE_PRICE compose、策略 kwargs 隔离、legacy partial concat、缺结果/缺列/空面板 fail-closed 聚焦测试；合入与运行态不属于设计验收状态 | VERIFIED | 无 |
 | F-029 | `config_composer.py`、`qe_active_execution_capacity.py`、`qe_subprocess_env.py`、`remote_dispatch.py`、`combine_backtest.py`、RD-Agent `qe_evolution_api.py`、BUG-1014、本文 2.5/9.9.3/17 | validation-receipt: 双 task Loop7 重叠时间、WSL 主进程+2 worker RSS、Windows pages/sec、WSL swap、canonical 全局容量 1/远端容量 4、GeneralPTNN 单进程 loader、线程 env、完整 PG*/secret/injection 清洗、remote_env pre-serialization reject、真实 WSL Bash 与私密文件 0600；AI merge `49ccc1f3…`；RD merge `da3270f8…`；两种运行态分离 | APPROVED_BY_USER: RD_AND_AI_SOURCE_MERGED_RUNTIME_PENDING | RD immutable release/deploy/用户重启/identity；backend-main 用户重启/identity 与资源合同回读均待完成 |
-| F-030 | `scripts/qrun_limit.py`、`test_qrun_mlflow_metric_retry.py`、分钟 runner 既有 BUG-605 合同、BUG-1022、本文 2.5/9.9.3 | validation-receipt: Loop3 训练/预测/IC/RankIC 已完成，empty ICIR 发生在异步 FileStore 读取；BUG-1022/Issue #3282 已登记，日频/分钟 runner 共用合同的双路径测试已建立 | APPROVED_BY_USER: SOURCE_FIX_IN_PROGRESS | source review/PR/merge、backend-main 用户重启验证与 Loop3 backtest-only receipt 待完成 |
+| F-030 | `scripts/qrun_limit.py`、`test_qrun_mlflow_metric_retry.py`、分钟 runner 既有 BUG-605 合同、BUG-1022、本文 2.5/9.9.3 | validation-receipt: Loop3 训练/预测/IC/RankIC 已完成，empty ICIR 发生在异步 FileStore 读取；BUG-1022 source 已以 `a7bc06a3…` 合入，日频/分钟 runner 共用合同的双路径测试已建立 | APPROVED_BY_USER: SOURCE_MERGED_RUNTIME_PENDING | backend-main 用户重启、identity/business smoke 与 Loop3 backtest-only receipt 待完成 |
+| F-031 | BUG-1023/1024/1026；durable orchestrator、reconcilers、node health/dispatch observers；本文 9.9.3/10/17 | validation-receipt: BUG-1023 merge `d8e80b9f…`、BUG-1024 merge `3a6e3290…`；BUG-1026 PR #3296 的单观察器、60 秒探测、变化才写状态测试与 CI | APPROVED_BY_USER: SOURCE_PARTIAL_MERGED_BUG1026_PR_READY_RUNTIME_PENDING | BUG-1026 待用户确认合入；三项 backend-main 运行态均须逐项验证 |
+| F-032 | RD-Agent BUG-1030 PR #19；AIstock BUG-1030 PR #3300；BUG-1031 PR #3303；QE log broker/client/routes/frontend lifecycle | validation-receipt: RD 初始 tail/续传 cursor/终态重连测试；AIstock 单上游、背压、最后订阅者关闭、页面隐藏/折叠零工作及 frontend CI | APPROVED_BY_USER: SOURCE_PR_READY_RUNTIME_PENDING | 待用户确认合入与分别部署 RD-Agent、backend-main、frontend；运行态逐项验证 |
+| F-033 | `qe_log_store.py`、BUG-1031、本文 9.9.3/10/17 | validation-receipt: 五个 1 GiB 环形槽、首事件前零文件写入、旧文件只读 tail 回退和精确清理前置条件 | APPROVED_BY_USER: SOURCE_PR_READY_CLEANUP_NOT_AUTHORIZED | PR #3303 待用户确认合入；旧日志未删除，后续精确清理需单独授权 |
 
 ## 16. Rollout / Rollback / 发布回滚
 
@@ -1473,6 +1486,7 @@ v6.3 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设�
 - v6.2 MA-E16 runtime-resource rollout：记录权威 task `qe_20260810_224522_b0d9` 的 9 completed/2 failed/Loop12 running 快照、重复 task 的暂停边界和 Loop7 重叠窗口；以 Windows 原生 pages/sec、WSL 进程树/RSS/swap 证明根因是 GeneralPTNN 多进程 loader 与跨 task 全局容量 2 共同放大的换页压力，不是图模型。BUG-1014/#3266 将 WSL 全局容量收紧为 1，本地 GeneralPTNN 改为单进程无 pin/prefetch 并设置线程上限，普通 composer prepare/qrun/read 复用统一凭据清洗；远端 4 槽、batch/标签/模型/策略和当前在途实验保持不变。源码合入、用户重启、运行态验证与失败 Loop 重试分别报告；本次无 DDL/DML、依赖安装、数据切换、历史补账或后端/实验进程控制。
 - v6.3 MA-E16 terminal-and-recovery rollout：把权威 task 更新为 05:45 终态 10 completed/2 failed，保留两个失败原因及成功 arm 的同面板/同窗口/同 label SHA 证据；记录四组现有 matched pair 的 CAGR 正增量、IC/RankIC 混合和 MDD 3/4 恶化，不把不完整结果写成 breadth 独立 Alpha 或 blend/LOO 结论。BUG-1014 PR #3273 先安全同步、CI 与合入，再由用户重启验证；日频 qrun MLflow 空指标竞态独立登记，Loop3 强制 `backtest_only`、Loop7 强制 `full_train` 单 arm。新增 `sector_participation_gap_v2`、`leadership_exhaustion_v1`、`sector_residual_cohesion_break_v1`、`dynamic_residual_flow_relation_v1`、`pit_fundamental_diffusion_v1` 的角色与顺序，但本轮不启动实验。无 DDL/DML、依赖安装、数据切换、历史补账或后端/实验进程控制。
 - v6.3 BUG-1014 source-merge / BUG-1022 source-fix rollout：RD-Agent PR #18 已以 `da3270f8…` 合入，AIstock PR #3273 已以 `49ccc1f3…` 合入并同步 root；两种运行态仍完全 pending。日频 runner 竞态登记为 BUG-1022/Issue #3282，只复用分钟 runner 已验证的 bounded async-write barrier 与 exact empty-metric retry，并要求两 runner 同一测试矩阵。本轮不执行 RD release/deploy、任何用户重启、Loop3/7 恢复或新演进实验。
+- v6.4 runtime-quieting / bounded-live-log rollout：BUG-1022/1023/1024 source 已分别以 `a7bc06a3…`/`d8e80b9f…`/`3a6e3290…` 合入，但与 BUG-1014 一样保持 runtime pending。BUG-1026 PR #3296 收口节点健康/派发观察器的重复实例、60 秒探测与无变化写入；RD-Agent BUG-1030 PR #19 提供有界初始 tail 和续传 cursor；AIstock BUG-1030 PR #3300 记录跨仓依赖；BUG-1031 PR #3303 提供单上游 broker、页面隐藏零工作、订阅者背压与五个 1 GiB 环形槽。以上仅是实际实验暴露的主机/数据库/日志阻断修复，不新增监控或日志平台。本轮未合入这些待确认 PR、未部署/重启、未恢复 Loop3/7、未启动新实验、未删除旧日志。
 - v5.6 多 Alpha foundation design audit：修正未经逐项确认的批准标记、stop/pause 语义、child `not_computable` 和聚合规则、跨 QE 路径容量统计、状态/event 原子性、Archive 静默初始化、schema 的 QE-scoped failure 以及规范 UI 入口/逐像素视觉验收。该修订仍只更新设计文档，不执行 DDL、不修改运行代码、不创建/恢复实验、不写 DB、不重启服务。
 - Schema rollout：现有 factor h20 指标已可用；F-014 Phase 2 control table 与 Phase 3 metric/artifact 表已在当前 runtime DB ready/readback，Loop4 已形成非空数据；未来目标特定 DDL 仍独立授权，依赖既有每日备份，不新增导出门禁。
 - Data rollout：R8–R12 当前继续冻结 2026-06-30 QE 快照；任何新快照另立 dataset identity 并保留上一版本回滚，不影响非 QE PIT/模拟盘数据。
@@ -1483,7 +1497,7 @@ v6.3 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设�
 
 | 项目 | 当前状态 | 说明 |
 |---|---|---|
-| source merge | BUG1014_BOTH_REPOS_MERGED_BUG1022_SOURCE_IN_PROGRESS | BUG-1006 已合入并由用户重启加载；BUG-1014 的 RD-Agent/AIstock source 已分别以 `da3270f8…` / `49ccc1f3…` 合入，运行态未激活；BUG-1022/Issue #3282 已登记并进入日频 runner source fix。BUG-1022 PR/merge、RD release/deploy/runtime、backend-main runtime、Loop 恢复和实验结论继续分别报告。 |
+| source merge | BUG1014_1022_1023_1024_MERGED_BUG1026_1030_1031_PR_READY | BUG-1006 已合入并由用户重启加载；BUG-1014 两仓 source 与 BUG-1022/1023/1024 source 已合入但运行态未逐项验证。BUG-1026 PR #3296、RD-Agent BUG-1030 PR #19、AIstock BUG-1030 PR #3300 与 BUG-1031 PR #3303 等待用户确认合入；跨仓 source、记录 PR、frontend/backend runtime 与实验恢复继续分别报告。 |
 | QE dataset | VERIFIED_20260630_FILE_ONLY | 当前 QE 快照与冻结 sidecar 已支持 R6～MA-E16，MA-E16 的 12 arm 均复用同一 identity；未来数据切换继续要求版本化 identity/hash 和上一版本回滚，实验运行期禁止数据库访问。 |
 | 唯一硬边界 | QE_ONLY_ZERO_NON_QE_IMPACT | 所有实验、评价、缓存、CAS、表、API/MCP/UI 和写入仅限 QE；不读取、修改、调用或影响任何非 QE 模块。 |
 | factor asset | RESEARCH_AVAILABLE_IN_QE | catalog 1525/1528/1532 可供 QE；本蓝图不接入荐股、模拟盘或生产交易。 |
@@ -1493,9 +1507,10 @@ v6.3 解释规则：F-001～F-023 的历史 `PLANNED/OPEN/PENDING` 只保留设�
 | production DDL/DML | noop | 本批无 migration、DDL、DML 或数据库写入。 |
 | candidate snapshot | VERIFIED_QE_20260630 | R6～MA-E16 使用该快照及对应冻结 sidecar；MA-E16 不覆盖数据集，其他快照必须另立 identity。 |
 | QE experiment | MA_E16_TERMINAL_10_COMPLETED_2_FAILED | MA-E14/MA-E15 已终态；MA-E16 于 05:45 终态为 10 completed、Loop3/7 failed。成功结果保留，05:45 后没有新演进 task；本轮不启动实验。 |
-| strategy evolution priority | RECOVER_MATCHED_MATRIX_THEN_COMPLEMENTARITY | P0 为合入并验证 BUG-1014、独立修复日频 runner、Loop3 强制 `backtest_only` 与 Loop7 强制 `full_train` 单 arm，再分析完整同面板 CE3/CE4-B 双模型三种子；其后才是固定 blend/LOO、participation gap/leadership exhaustion、模型分歧、residual/dynamic relation 与 PIT fundamental diffusion。 |
-| multi-alpha platform | P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY_BUG1014_MINIMAL_FIX | durable orchestration、控制/恢复、创建器、运行网格和重启 readback 已满足演进；BUG-1014 是真实 trial 暴露的最小主机安全修复，不恢复通用平台研发。 |
-| service/runtime restart | PENDING_USER_FOR_RDAGENT_AND_BACKEND_MAIN_AFTER_SOURCE_MERGES | 本批未启动、停止或重启 8001/3000/19080、RD-Agent QE API、WSL/远端 worker 或任何用户进程。RD-Agent immutable release/deploy 与对应用户重启/identity、BUG-1014/BUG-1022 source 合入后的 backend-main 用户重启/identity 均独立报告；两侧 BUG-1014 运行态都通过前不得写 overall runtime active，BUG-1022 也必须有自己的 post-restart receipt。MA-E16 已终态，本轮不创建或恢复实验。 |
+| strategy evolution priority | MERGE_AND_VERIFY_BLOCKERS_THEN_RECOVER_MATCHED_MATRIX_THEN_COMPLEMENTARITY | P0 为用户确认合入 BUG-1026/1030/1031、分别部署/重启并逐项验证 BUG-1014/1022/1023/1024/1026/1030/1031；随后 Loop3 强制 `backtest_only`、Loop7 强制 `full_train` 单 arm并分析完整同面板 CE3/CE4-B 双模型三种子。其后是固定 blend/LOO、participation gap/leadership exhaustion、模型分歧、residual/dynamic relation 与 PIT fundamental diffusion。 |
+| multi-alpha platform | P0_1_TO_P0_4_COMPLETE_MAINTENANCE_ONLY_RUNTIME_QUIETING | durable orchestration、控制/恢复、创建器、运行网格和重启 readback 已满足演进；BUG-1014/1023/1024/1026/1030/1031 只收口真实 trial 暴露的主机资源、空闲查询、重复日志连接与无界文件阻断，不恢复通用平台研发。 |
+| service/runtime restart | PENDING_USER_FOR_RDAGENT_BACKEND_MAIN_FRONTEND_AFTER_SOURCE_MERGES | 本批未启动、停止或重启 8001/3000/19080、RD-Agent QE API、WSL/远端 worker 或任何用户进程。RD-Agent immutable release/deploy、backend-main 重启与 frontend 部署/重启均归用户，并按 BUG 逐项 identity/business smoke；任何一项 source merge 不得冒充 overall runtime active。MA-E16 已终态，本轮不创建或恢复实验。 |
+| live log retention / cleanup | FIVE_BY_ONE_GIB_SOURCE_PENDING_OLD_LOG_UNTOUCHED | BUG-1031 source 定义五个 1 GiB 环形槽；旧 `evolution.log` 未删除。未来只允许在合入、用户部署/重启、identity/business smoke、零订阅者和 size/mtime 精确复核后，由用户另行授权删除单个精确候选文件。 |
 | F-014 CAS | R8B_6_OF_6_PUBLISHED_AND_HASH_VERIFIED | 根目录为 `F:\Dev\AIstock\rdagent_assets\long_trend_evaluation_store`，与 Prediction Store 分离且不在 `E:`；R8B 六个 manifest 及 required artifacts 已完成 hash/size/row-count 回读。 |
 | paper/live trading | NOT_ENABLED | 不属于本规格自动动作。 |
 
