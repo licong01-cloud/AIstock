@@ -160,6 +160,22 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
 
     assert qe_payload["backend_sessions"] == ["qe_read_backend"]
 
+    qe_node_health_payload = classifier.classify_changed_files(
+        [
+            "backend/schedulers/node_health_scheduler.py",
+            "backend/tests/test_dispatch_observer_quiet.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert qe_node_health_payload["classification"] == "targeted_ci_required"
+    assert qe_node_health_payload["backend_sessions"] == ["qe_read_backend"]
+    assert qe_node_health_payload["catalog_impacted_modules"] == [
+        "qe.core",
+        "platform.api",
+    ]
+    assert qe_node_health_payload["unmapped_code_files"] == []
+
     qe_mcp_payload = classifier.classify_changed_files(
         [
             "backend/mcp/modules/qe_experiment.py",

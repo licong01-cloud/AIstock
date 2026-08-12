@@ -447,6 +447,16 @@ rules:
     layer: database
     risk_level: high
     ownership_reason: Multi-Alpha P0-2 control and Archive recovery migrations jointly change durable orchestration and archive readback contracts.
+  - rule_id: qe_node_health_scheduler
+    priority: 130
+    include:
+      - backend/schedulers/node_health_scheduler.py
+      - backend/tests/test_dispatch_observer_quiet.py
+    primary_module: qe.core
+    impact_modules: [platform.api]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: The process-local QE node observer owns bounded remote health and dispatch-state reconciliation while Platform API consumes its snapshot.
   - rule_id: qe_services
     priority: 80
     include:
