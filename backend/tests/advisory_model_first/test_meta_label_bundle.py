@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -7,8 +8,11 @@ import pytest
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.meta_label_bundle import (
+    _stable_hmm_payload,
+    find_meta_label_bundle_for_request,
     load_meta_label_bundle,
     publish_meta_label_bundle,
+    score_meta_label_bundle,
 )
 from backend.tests.advisory_model_first.test_meta_label_contracts import _request
 
@@ -49,3 +53,55 @@ def test_meta_label_bundle_identity_ignores_dynamic_resource_report(tmp_path) ->
     (path / "model.txt").write_text("tampered", encoding="utf-8")
     with pytest.raises(AdvisoryModelFirstError):
         load_meta_label_bundle(path, expected_bundle_id=first_id, load_booster=False)
+
+
+def test_meta_label_bundle_exact_request_reuse_and_hmm_jitter_are_deterministic(tmp_path) -> None:
+    first_id, path, _ = _publish(tmp_path, 1)
+    request = _request(
+        policy_dataset_bundle_root=str(tmp_path / "policy"), output_root=str(tmp_path)
+    )
+    assert find_meta_label_bundle_for_request(request)[0] == first_id
+    assert _stable_hmm_payload({"x": -0.08011144564834183}) == _stable_hmm_payload(
+        {"x": -0.08011144590547303}
+    )
+    assert _stable_hmm_payload(
+        {"final_log_likelihood_delta": 7.871711386542302e-05}
+    ) == _stable_hmm_payload(
+        {"final_log_likelihood_delta": 7.87170770308876e-05}
+    )
+    assert path.is_dir()
+
+
+def test_meta_label_bundle_exact_request_rejects_multiple_claimants(tmp_path) -> None:
+    _, path, _ = _publish(tmp_path, 1)
+    shutil.copytree(path, path.parent / ("e" * 64))
+    request = _request(
+        policy_dataset_bundle_root=str(tmp_path / "policy"), output_root=str(tmp_path)
+    )
+    with pytest.raises(AdvisoryModelFirstError) as excinfo:
+        find_meta_label_bundle_for_request(request)
+    assert excinfo.value.reason_code == "ADVISORY_META_LABEL_BUNDLE_IDENTITY_CONFLICT"
+
+
+class _InvalidBooster:
+    def predict(self, _matrix):
+        return [float("nan")]
+
+
+def test_meta_label_scorer_rejects_non_finite_probability(tmp_path) -> None:
+    (tmp_path / "feature_schema.json").write_text(
+        '{"trained_feature_names":["x"],"categorical_vocabulary":{}}', encoding="utf-8"
+    )
+    bundle = {"bundle_path": tmp_path, "booster": _InvalidBooster()}
+    features = pd.DataFrame(
+        {
+            "decision_as_of_trade_date": ["2026-01-01"],
+            "target_trade_date": ["2026-01-02"],
+            "instrument": ["000001.SZ"],
+            "selection_effective_rank": [1],
+            "x": [1.0],
+        }
+    )
+    with pytest.raises(AdvisoryModelFirstError) as excinfo:
+        score_meta_label_bundle(bundle, features)
+    assert excinfo.value.reason_code == "ADVISORY_META_LABEL_SCORING_INVALID"

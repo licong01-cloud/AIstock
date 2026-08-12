@@ -20,7 +20,10 @@ except ModuleNotFoundError:
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.feature_schema_v1 import FEATURE_SCHEMA_HASH, FEATURE_SCHEMA_PAYLOAD
-from backend.services.advisory_model_first.meta_label_bundle import publish_meta_label_bundle
+from backend.services.advisory_model_first.meta_label_bundle import (
+    find_meta_label_bundle_for_request,
+    publish_meta_label_bundle,
+)
 from backend.services.advisory_model_first.meta_label_contracts import FrozenAdvisoryMetaLabelTrainingRequestV1
 from backend.services.advisory_model_first.meta_label_evaluation import evaluate_meta_label_validation_blocks
 from backend.services.advisory_model_first.meta_label_features import build_meta_label_feature_matrix
@@ -74,6 +77,25 @@ def run_meta_label_pipeline(request_path: str | Path) -> dict[str, Any]:
     for key in ("program_id", "binding_version_id", "package_id", "manifest_sha256", "shadow_policy_sha256", "cost_policy_sha256", "split_policy_sha256"):
         if manifest.get(key) != getattr(request, key):
             raise AdvisoryModelFirstError("P0-C identity differs from meta-label request", reason_code="ADVISORY_META_LABEL_SOURCE_INVALID", context={"field": key})
+    existing = find_meta_label_bundle_for_request(request)
+    if existing is not None:
+        bundle_id, bundle_path, bundle_manifest = existing
+        winner = json.loads((bundle_path / "winner_receipt.json").read_text(encoding="utf-8"))
+        pbo = json.loads((bundle_path / "pbo_receipt.json").read_text(encoding="utf-8"))
+        resource = json.loads((bundle_path / "resource_report.json").read_text(encoding="utf-8"))
+        trial_metrics = pd.read_parquet(bundle_path / "cpcv_trial_metrics.parquet")
+        return {
+            "status": "EXISTING_BUNDLE",
+            "request_id": request.request_id,
+            "bundle_id": bundle_id,
+            "bundle_path": str(bundle_path),
+            "manifest": bundle_manifest,
+            "winner": winner,
+            "pbo": pbo,
+            "trial_path_count": len(trial_metrics),
+            "resource_report": resource,
+            "activated": False,
+        }
     root = Path(request.policy_dataset_bundle_root)
     rankings = pd.read_parquet(root / "candidate_rankings.parquet")
     labels = pd.read_parquet(root / "candidate_episode_labels.parquet")

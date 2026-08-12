@@ -5,9 +5,11 @@ import json
 import os
 import shutil
 import tempfile
+from math import isfinite
 from pathlib import Path
 from typing import Any, Mapping
 
+import numpy as np
 import pandas as pd
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
@@ -42,8 +44,8 @@ def publish_meta_label_bundle(
         source_manifest = Path(request.policy_dataset_bundle_root) / "manifest.json"
         shutil.copyfile(source_manifest, temp / "policy_dataset_manifest.json")
         _write_json(temp / "feature_schema.json", dict(feature_schema))
-        _write_json(temp / "fresh_hmm_models.json", dict(runtime_hmm_models))
-        _write_json(temp / "fresh_hmm_unavailable.json", runtime_hmm_unavailable)
+        _write_json(temp / "fresh_hmm_models.json", _stable_hmm_payload(dict(runtime_hmm_models)))
+        _write_json(temp / "fresh_hmm_unavailable.json", _stable_hmm_payload(runtime_hmm_unavailable))
         _write_json(temp / "walk_forward_hmm_receipt.json", dict(walk_forward_hmm_receipt))
         _write_json(temp / "family_specs.json", [item.model_dump(mode="json") for item in request.family_specs])
         trial_metrics.to_parquet(temp / "cpcv_trial_metrics.parquet", index=False)
@@ -105,6 +107,59 @@ def publish_meta_label_bundle(
     finally:
         if temp.exists():
             shutil.rmtree(temp)
+
+
+def find_meta_label_bundle_for_request(
+    request: FrozenAdvisoryMetaLabelTrainingRequestV1,
+) -> tuple[str, Path, dict[str, Any]] | None:
+    """Return the one complete bundle bound to this exact frozen request."""
+    target_root = Path(request.output_root).resolve() / "meta_label_bundles"
+    if not target_root.is_dir():
+        return None
+    matches: list[tuple[str, Path, dict[str, Any]]] = []
+    for candidate in sorted(target_root.iterdir()):
+        if not candidate.is_dir():
+            continue
+        manifest_path = candidate / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if manifest.get("request_sha256") != request.request_sha256:
+            continue
+        loaded = load_meta_label_bundle(
+            candidate,
+            expected_bundle_id=str(manifest.get("bundle_id", "")),
+            load_booster=False,
+        )
+        try:
+            frozen = FrozenAdvisoryMetaLabelTrainingRequestV1.model_validate_json(
+                (candidate / "training_request.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            raise AdvisoryModelFirstError(
+                "meta-label bundle request cannot be read",
+                reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+                context={"bundle_path": str(candidate)},
+            ) from exc
+        if (
+            frozen.request_id != request.request_id
+            or frozen.request_sha256 != request.request_sha256
+            or frozen.functional_payload() != request.functional_payload()
+        ):
+            raise AdvisoryModelFirstError(
+                "meta-label bundle request differs from the exact retry request",
+                reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+                context={"bundle_path": str(candidate)},
+            )
+        matches.append((str(manifest["bundle_id"]), candidate, loaded["manifest"]))
+    if len(matches) > 1:
+        raise AdvisoryModelFirstError(
+            "multiple meta-label bundles claim the same frozen request",
+            reason_code="ADVISORY_META_LABEL_BUNDLE_IDENTITY_CONFLICT",
+            context={"request_id": request.request_id, "bundle_ids": [item[0] for item in matches]},
+        )
+    return matches[0] if matches else None
 
 
 def load_meta_label_bundle(
@@ -173,6 +228,18 @@ def score_meta_label_bundle(bundle: Mapping[str, Any], features: pd.DataFrame) -
     for column, values in vocabulary.items():
         matrix[column] = pd.Categorical(matrix[column], categories=values)
     probability = bundle["booster"].predict(matrix)
+    probability = np.asarray(probability, dtype=float)
+    if probability.ndim != 1 or len(probability) != len(features):
+        raise AdvisoryModelFirstError(
+            "meta-label model returned an invalid probability shape",
+            reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
+            context={"expected_rows": len(features), "actual_shape": list(probability.shape)},
+        )
+    if not np.isfinite(probability).all() or ((probability < 0.0) | (probability > 1.0)).any():
+        raise AdvisoryModelFirstError(
+            "meta-label model returned an invalid probability",
+            reason_code="ADVISORY_META_LABEL_SCORING_INVALID",
+        )
     output = features[["decision_as_of_trade_date", "target_trade_date", "instrument", "selection_effective_rank"]].copy()
     output["take_probability"] = probability
     output["skip_probability"] = 1.0 - probability
@@ -199,6 +266,30 @@ def _write_json(path: Path, payload: Any) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _stable_hmm_payload(payload: Any) -> Any:
+    """Canonicalize harmless BLAS-scale float jitter in serialized HMM evidence."""
+    if isinstance(payload, Mapping):
+        result = {str(key): _stable_hmm_payload(value) for key, value in payload.items()}
+        if isinstance(result.get("final_log_likelihood_delta"), float):
+            result["final_log_likelihood_delta"] = float(
+                f"{result['final_log_likelihood_delta']:.4g}"
+            )
+        return result
+    if isinstance(payload, (list, tuple)):
+        return [_stable_hmm_payload(value) for value in payload]
+    if isinstance(payload, (float, np.floating)):
+        value = float(payload)
+        if not isfinite(value):
+            raise AdvisoryModelFirstError(
+                "fresh HMM evidence contains a non-finite value",
+                reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
+            )
+        return float(f"{value:.8g}")
+    if isinstance(payload, np.integer):
+        return int(payload)
+    return payload
 
 
 def _sha256(path: Path) -> str:
