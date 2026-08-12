@@ -14,7 +14,7 @@ from .quote_event_schema import (
 )
 
 
-_K2_SCHEMA_CATALOG_SHA256_EVENT_CONTRACT_V2 = "b5cceba58ef9646e441d1fcb346a47cd4648397ac4425a956d1b83b2fc81d473"
+_K2_SCHEMA_CATALOG_SHA256_EVENT_CONTRACT_V3 = "87725c53a3789c4ecf92d6f86de424d3b84c35cbfa6a9e85e47532ac4d978f54"
 _K2D_SCHEMA_CATALOG_SHA256 = "2d5fcbf0151d9e5d2a9d8537f834aabfd056a42cc0eeb8c079add68c8964f59f"
 _K2D_CATALOG_FUNCTION_BODY_SHA256 = "69bf9ce6268522052ca6ce97d9769f7377b69e130f25cb143159f7fe1109d708"
 
@@ -261,9 +261,9 @@ class KernelRepositorySchemaMixin:
                 # already-active transaction; use the private prelocked seam
                 # so every K2 catalog fact remains in the same snapshot.
                 event_contract_receipt = _read_quote_event_schema_in_snapshot(conn)
-                if event_contract_receipt.schema_state != "target_verified":
+                if event_contract_receipt.schema_state != "successor_verified":
                     raise KernelRepositorySchemaError(
-                        "K2 runtime-event CHECK authority is not the exact successor: "
+                        "K2 runtime-event CHECK authority does not include the exact no-new-TICK successor: "
                         f"state={event_contract_receipt.state}, schema_state={event_contract_receipt.schema_state}"
                     )
                 result["event_contract_schema"] = True
@@ -315,10 +315,10 @@ class KernelRepositorySchemaMixin:
                         raise KernelRepositorySchemaError("K2 catalog function drift")
                     cur.execute(f"SELECT * FROM ({_K2_CATALOG_QUERY}) AS catalog(catalog_sha256)")
                     catalog_sha256 = str(cur.fetchone()["catalog_sha256"])
-                    if catalog_sha256 != _K2_SCHEMA_CATALOG_SHA256_EVENT_CONTRACT_V2:
+                    if catalog_sha256 != _K2_SCHEMA_CATALOG_SHA256_EVENT_CONTRACT_V3:
                         raise KernelRepositorySchemaError(
                             "K2 schema catalog drift: expected "
-                            f"{_K2_SCHEMA_CATALOG_SHA256_EVENT_CONTRACT_V2}, got {catalog_sha256}"
+                            f"{_K2_SCHEMA_CATALOG_SHA256_EVENT_CONTRACT_V3}, got {catalog_sha256}"
                         )
                     cur.execute(
                         """

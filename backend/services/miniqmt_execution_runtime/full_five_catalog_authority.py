@@ -15,8 +15,10 @@ from backend.execution_algos.vnpy_compat.facade_characterization import (
     build_vnpy_facade_characterization_requirements_v1,
     build_vnpy_facade_contract_v1,
     build_vnpy_facade_full_five_conformance_set_v2,
+    build_vnpy_facade_product_full_five_conformance_set_v2,
     build_vnpy_facade_source_manifest_v1,
     validate_vnpy_facade_full_five_conformance_set_against_authority_v2,
+    validate_vnpy_facade_product_full_five_conformance_set_against_authority_v2,
 )
 from backend.execution_algos.vnpy_compat.k5_binding_authority import k5_facade_algorithm_bindings_v2
 from backend.execution_algos.vnpy_compat.k5_plugin_factories import k5_process_bindings_v1
@@ -30,6 +32,18 @@ from backend.execution_algos.vnpy_compat.receipts import (
     build_vnpy_compatibility_receipt_v1,
 )
 from backend.execution_algos.vnpy_style.plugin_factories import current_three_process_bindings_v3
+from backend.execution_algos.vnpy_style.hot_plugin_factories import current_three_hot_process_bindings_v4
+from backend.execution_algos.vnpy_style.hot_plugin_manifests import (
+    current_three_hot_creation_bindings_v4,
+    current_three_hot_descriptors_v4,
+    current_three_hot_manifests_v4,
+)
+from backend.execution_algos.vnpy_compat.hot_facade_adapter import hot_facade_process_bindings_v4
+from backend.execution_algos.vnpy_compat.hot_facade_contracts import (
+    hot_facade_creation_bindings_v4,
+    hot_facade_descriptors_v4,
+    hot_facade_manifests_v4,
+)
 from backend.execution_algos.vnpy_style.plugin_manifests import (
     current_three_creation_bindings_v3,
     current_three_descriptors_v3,
@@ -78,6 +92,24 @@ def _combine_process_bindings_v1() -> PluginProcessBindingsV2:
             context={"overlap": overlap},
         )
     return PluginProcessBindingsV2({**current, **facade})
+
+
+def _combine_hot_process_bindings_v1() -> PluginProcessBindingsV2:
+    groups = (
+        current_three_hot_process_bindings_v4().copy_bindings_v1(),
+        hot_facade_process_bindings_v4().copy_bindings_v1(),
+    )
+    result: dict[str, object] = {}
+    for group in groups:
+        overlap = sorted(set(result) & set(group))
+        if overlap:
+            raise VnpyFacadeContractError(
+                "MINIQMT_VNPY_FACADE_CONFORMANCE_RECEIPT_INVALID",
+                "hot full-five process binding identities overlap",
+                context={"overlap": overlap},
+            )
+        result.update(group)
+    return PluginProcessBindingsV2(result)
 
 
 def _current_three_catalog_runtime_v1() -> PluginCatalogRuntimeV2:
@@ -183,4 +215,90 @@ def build_full_five_catalog_authority_v1(
     )
 
 
-__all__ = ["FULL_FIVE_ALGO_CODES_V1", "FullFiveCatalogAuthorityV1", "build_full_five_catalog_authority_v1"]
+def build_hot_full_five_catalog_authority_v1(
+    *, gateway_catalog: GatewayCapabilityCatalogV1
+) -> FullFiveCatalogAuthorityV1:
+    """Build one V4 product catalog from the pinned source authority.
+
+    The product path deliberately does not build and retain a complete K5
+    catalog/conformance set first.  K5 remains independently available for
+    historical shadow readback; V4 reconstructs the shared pinned-source
+    characterization once and then publishes exactly one product catalog.
+    """
+
+    if not isinstance(gateway_catalog, GatewayCapabilityCatalogV1):
+        raise TypeError("gateway_catalog must be GatewayCapabilityCatalogV1")
+    gateway_catalog = GatewayCapabilityCatalogV1.model_validate(gateway_catalog.model_dump(mode="python"), strict=True)
+    current_runtime = _current_three_catalog_runtime_v1()
+    source_manifest = build_vnpy_facade_source_manifest_v1()
+    facade_contract = build_vnpy_facade_contract_v1(
+        compatibility_requirements=tuple(item.compatibility_requirement for item in current_three_manifests_v3())
+    )
+    requirements = build_vnpy_facade_characterization_requirements_v1(
+        catalog_runtime=current_runtime,
+        source_manifest=source_manifest,
+    )
+    characterization = build_vnpy_facade_characterization_authority_fresh_process_v2(
+        source_manifest=source_manifest,
+        facade_contract=facade_contract,
+        requirements=requirements,
+    )
+    new_descriptors = (*current_three_hot_descriptors_v4(), *hot_facade_descriptors_v4())
+    new_manifests = (*current_three_hot_manifests_v4(), *hot_facade_manifests_v4())
+    runtime = build_plugin_catalog_v2(
+        descriptors=new_descriptors,
+        creation_bindings=(*current_three_hot_creation_bindings_v4(), *hot_facade_creation_bindings_v4()),
+        process_bindings=_combine_hot_process_bindings_v1(),
+        pinned_compatibility_receipts=tuple(
+            build_vnpy_compatibility_receipt_v1(manifest=item) for item in new_manifests
+        ),
+    )
+    creation_algos = tuple(item.algo_code for item in runtime.snapshot.creation_bindings)
+    creation_versions = tuple(
+        runtime.descriptor_for_restore(item.plugin_key).manifest.plugin_version
+        for item in runtime.snapshot.creation_bindings
+    )
+    if creation_algos != FULL_FIVE_ALGO_CODES_V1 or creation_versions != ("4.0.0",) * len(FULL_FIVE_ALGO_CODES_V1):
+        raise VnpyFacadeContractError(
+            "MINIQMT_VNPY_FACADE_CONFORMANCE_RECEIPT_INVALID",
+            "hot catalog creation authority is not the exact five V4 set",
+            context={"creation_algo_codes": creation_algos, "creation_versions": creation_versions},
+        )
+    algorithm_bindings = build_vnpy_facade_algorithm_bindings_v2(
+        characterization_authority_v2=characterization,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+    )
+    conformance = build_vnpy_facade_product_full_five_conformance_set_v2(
+        catalog_runtime=runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization,
+        algorithm_bindings_v2=algorithm_bindings,
+    )
+    authority = validate_vnpy_facade_product_full_five_conformance_set_against_authority_v2(
+        conformance_set=conformance,
+        catalog_runtime=runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization,
+    )
+    return FullFiveCatalogAuthorityV1(
+        catalog_runtime=runtime,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority=characterization,
+        facade_algorithm_bindings=algorithm_bindings,
+        conformance_set=conformance,
+        conformance_authority=authority,
+    )
+
+
+__all__ = [
+    "FULL_FIVE_ALGO_CODES_V1",
+    "FullFiveCatalogAuthorityV1",
+    "build_full_five_catalog_authority_v1",
+    "build_hot_full_five_catalog_authority_v1",
+]

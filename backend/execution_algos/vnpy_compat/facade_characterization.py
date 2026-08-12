@@ -2483,6 +2483,29 @@ def build_vnpy_facade_full_five_conformance_set_v2(
     )
 
 
+def build_vnpy_facade_product_full_five_conformance_set_v2(
+    *,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+    algorithm_bindings_v2: tuple[VnpyFacadeAlgorithmBindingV2, ...],
+) -> VnpyFacadeConformanceSetV2:
+    """Product writer: all five V4 implementations are pure runtime plugins."""
+
+    return _build_vnpy_facade_conformance_set_v2(
+        catalog_runtime=catalog_runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization_authority_v2,
+        algorithm_bindings_v2=algorithm_bindings_v2,
+        expected_algo_codes=("BEST_LIMIT_MINIQMT", "ICEBERG", "SNIPER_MINIQMT", "STOP", "TWAP_LITE_MINIQMT"),
+        facade_backed_algo_codes=frozenset(),
+    )
+
+
 def _validate_vnpy_facade_conformance_set_against_authority_v2(
     *,
     conformance_set: VnpyFacadeConformanceSetV2,
@@ -2601,6 +2624,29 @@ def validate_vnpy_facade_full_five_conformance_set_against_authority_v2(
     )
 
 
+def validate_vnpy_facade_product_full_five_conformance_set_against_authority_v2(
+    *,
+    conformance_set: VnpyFacadeConformanceSetV2,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+) -> VnpyFacadeConformanceAuthorityV2:
+    """Product readback: rebuild the exact all-pure V4 five-algorithm set."""
+
+    return _validate_vnpy_facade_conformance_set_against_authority_v2(
+        conformance_set=conformance_set,
+        catalog_runtime=catalog_runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization_authority_v2,
+        expected_algo_codes=("BEST_LIMIT_MINIQMT", "ICEBERG", "SNIPER_MINIQMT", "STOP", "TWAP_LITE_MINIQMT"),
+        facade_backed_algo_codes=frozenset(),
+    )
+
+
 __all__ = [
     "VnpyFacadeCharacterizationAuthorityV2",
     "VnpyFacadeDeterministicUniformV1",
@@ -2614,6 +2660,7 @@ __all__ = [
     "build_vnpy_facade_conformance_set_v1",
     "build_vnpy_facade_conformance_set_v2",
     "build_vnpy_facade_full_five_conformance_set_v2",
+    "build_vnpy_facade_product_full_five_conformance_set_v2",
     "build_vnpy_facade_isolated_module_bindings_v1",
     "build_vnpy_facade_contract_v1",
     "build_vnpy_facade_implementation_bindings_v1",
@@ -2634,4 +2681,5 @@ __all__ = [
     "validate_vnpy_facade_characterization_authority_v2",
     "validate_vnpy_facade_conformance_set_against_authority_v2",
     "validate_vnpy_facade_full_five_conformance_set_against_authority_v2",
+    "validate_vnpy_facade_product_full_five_conformance_set_against_authority_v2",
 ]

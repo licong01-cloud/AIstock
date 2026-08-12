@@ -94,6 +94,7 @@ class _Cursor:
         nullable_kernel_accept_count: int,
         invalid_envelope_contract_count: int,
         extra_check: bool,
+        hot_guard: bool,
     ) -> None:
         self.connection = connection
         self.sql = ""
@@ -101,6 +102,7 @@ class _Cursor:
         self.nullable_kernel_accept_count = nullable_kernel_accept_count
         self.invalid_envelope_contract_count = invalid_envelope_contract_count
         self.extra_check = extra_check
+        self.hot_guard = hot_guard
 
     def __enter__(self) -> "_Cursor":
         return self
@@ -161,6 +163,17 @@ class _Cursor:
             ]
             if self.extra_check:
                 rows.append((14, "ck_blocks_tick", True, "CHECK (event_type <> 'TICK'::text)", ""))
+            if self.hot_guard:
+                rows.append(
+                    (
+                        17,
+                        "ck_miniqmt_no_new_kernel_tick",
+                        False,
+                        "CHECK ((event_contract_version <> 'KERNEL_V2'::text OR "
+                        "event_type <> 'TICK'::text) IS TRUE) NOT VALID",
+                        "",
+                    )
+                )
             return rows
         if "SELECT event_type, source, payload_schema_version" in self.sql:
             return sorted(TARGET_KERNEL_EVENT_COMPOSITES)
@@ -179,6 +192,7 @@ class _Connection:
         nullable_kernel_accept_count: int = 0,
         invalid_envelope_contract_count: int = 0,
         extra_check: bool = False,
+        hot_guard: bool = False,
         transaction_isolation: str = "repeatable read",
         transaction_read_only: str = "on",
     ) -> None:
@@ -191,6 +205,7 @@ class _Connection:
         self.nullable_kernel_accept_count = nullable_kernel_accept_count
         self.invalid_envelope_contract_count = invalid_envelope_contract_count
         self.extra_check = extra_check
+        self.hot_guard = hot_guard
 
     def cursor(self) -> _Cursor:
         return _Cursor(
@@ -199,6 +214,7 @@ class _Connection:
             nullable_kernel_accept_count=self.nullable_kernel_accept_count,
             invalid_envelope_contract_count=self.invalid_envelope_contract_count,
             extra_check=self.extra_check,
+            hot_guard=self.hot_guard,
         )
 
     def get_transaction_status(self) -> int:
@@ -245,6 +261,16 @@ def test_read_only_schema_readback_reports_exact_target_and_file_hashes() -> Non
     assert receipt.migration_file_sha256 == EXPECTED_MIGRATION_FILE_SHA256
     assert receipt.preflight_file_sha256 == EXPECTED_PREFLIGHT_FILE_SHA256
     assert receipt.rollback_file_sha256 == EXPECTED_ROLLBACK_FILE_SHA256
+
+
+def test_read_only_schema_readback_reports_exact_no_new_tick_successor() -> None:
+    receipt = read_quote_event_schema(_Connection(hot_guard=True))
+    assert receipt.state == "target"
+    assert receipt.schema_state == "successor_verified"
+    assert receipt.hot_market_tick_guard is not None
+    assert receipt.hot_market_tick_guard.constraint_name == "ck_miniqmt_no_new_kernel_tick"
+    assert receipt.hot_market_tick_guard.validated is False
+    assert receipt.production_ddl_gate == "pending_full_kernel_readback"
 
 
 def test_schema_readback_rejects_legacy_widening_and_nullable_kernel_acceptance() -> None:

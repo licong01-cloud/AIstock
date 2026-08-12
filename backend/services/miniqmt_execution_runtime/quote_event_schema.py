@@ -25,6 +25,9 @@ from .plugin_contracts import EventSourceV2, EventTypeV2, _EVENT_COMPOSITE
 MIGRATION_FILENAME = "miniqmt_execution_kernel_event_contract_repair_20260811.sql"
 PREFLIGHT_FILENAME = "miniqmt_execution_kernel_event_contract_repair_20260811.preflight.sql"
 ROLLBACK_FILENAME = "miniqmt_execution_kernel_event_contract_repair_20260811.rollback.sql"
+HOT_MARKET_MIGRATION_FILENAME = "miniqmt_hot_market_data_zero_persistence_20260812.sql"
+HOT_MARKET_PREFLIGHT_FILENAME = "miniqmt_hot_market_data_zero_persistence_20260812.preflight.sql"
+HOT_MARKET_ROLLBACK_FILENAME = "miniqmt_hot_market_data_zero_persistence_20260812.rollback.sql"
 
 OLD_EVENT_TYPES = frozenset(
     {
@@ -92,6 +95,9 @@ TARGET_LEGACY_EVENT_PAIRS = frozenset(
 EXPECTED_MIGRATION_FILE_SHA256 = "b1cf49270234af5034461fc6c6c30e6ee56c2278defb922fb3b4d879cd9c3e9a"
 EXPECTED_PREFLIGHT_FILE_SHA256 = "013ca9838ff0f88bdd3c30682895114adc5a2c7d9d07832516cb63bf6f5f1217"
 EXPECTED_ROLLBACK_FILE_SHA256 = "741d6cd667600d2ae09be15da28a5b928f86a4248706ff2c3a65e235ff170c96"
+EXPECTED_HOT_MARKET_MIGRATION_FILE_SHA256 = "6b807e70ed23850261b32e7390e5eb403510b78bd60af38881ebcdbcd02d1682"
+EXPECTED_HOT_MARKET_PREFLIGHT_FILE_SHA256 = "0a3a796d0d89e0e63d4609727a6dcea0e66fd319d66c717f9d49d1e327af30bc"
+EXPECTED_HOT_MARKET_ROLLBACK_FILE_SHA256 = "9624d8dbc39607b7f8d11cce0bb21e797ec01f4806359bd4bec9ec1edc72ac3e"
 
 _PREDECESSOR_CONSTRAINT_NAMES = frozenset(
     {
@@ -110,6 +116,10 @@ _EVENT_IDENTITY_CONSTRAINT_NAMES = frozenset(
     }
 )
 _TARGET_CONSTRAINT_NAMES = _PREDECESSOR_CONSTRAINT_NAMES
+_HOT_MARKET_SUCCESSOR_CONSTRAINT_NAMES = _TARGET_CONSTRAINT_NAMES | {"ck_miniqmt_no_new_kernel_tick"}
+_HOT_MARKET_GUARD_DEFINITION = (
+    "CHECK ((event_contract_version <> 'KERNEL_V2'::text OR event_type <> 'TICK'::text) IS TRUE) NOT VALID"
+)
 _PREDECESSOR_EVENT_IDENTITY_CONSTRAINT_SHA256 = {
     "ck_miniqmt_event_id": "55f2f3dd015fc42bed99754d426d434e62a3456295263bbbf42c3358d8257608",
     "ck_miniqmt_event_sequence": "ddfd70c30577468691d352ae838281ec74c56efd9d5ec1c3e32967cf9ef5c6ed",
@@ -222,6 +232,10 @@ class QuoteEventSchemaReceipt:
     migration_file_sha256: str
     preflight_file_sha256: str
     rollback_file_sha256: str
+    hot_market_tick_guard: KernelEventContractReadback | None
+    hot_market_migration_file_sha256: str
+    hot_market_preflight_file_sha256: str
+    hot_market_rollback_file_sha256: str
     state: str
     schema_state: str
 
@@ -235,7 +249,11 @@ class QuoteEventSchemaReceipt:
         full same-snapshot preflight.
         """
 
-        return "pending_full_kernel_readback" if self.schema_state == "target_verified" else "pending"
+        return (
+            "pending_full_kernel_readback"
+            if self.schema_state in {"target_verified", "successor_verified"}
+            else "pending"
+        )
 
 
 def migration_path() -> Path:
@@ -248,6 +266,18 @@ def preflight_path() -> Path:
 
 def rollback_path() -> Path:
     return Path(__file__).resolve().parents[2] / "migrations" / ROLLBACK_FILENAME
+
+
+def hot_market_migration_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "migrations" / HOT_MARKET_MIGRATION_FILENAME
+
+
+def hot_market_preflight_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "migrations" / HOT_MARKET_PREFLIGHT_FILENAME
+
+
+def hot_market_rollback_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "migrations" / HOT_MARKET_ROLLBACK_FILENAME
 
 
 def _canonical_lf_sha256(path: Path) -> str:
@@ -297,6 +327,45 @@ def rollback_file_sha256(path: Path | None = None) -> str:
             target,
             expected=EXPECTED_ROLLBACK_FILE_SHA256,
             artifact=ROLLBACK_FILENAME,
+        )
+        if path is None
+        else _canonical_lf_sha256(target)
+    )
+
+
+def hot_market_migration_file_sha256(path: Path | None = None) -> str:
+    target = path or hot_market_migration_path()
+    return (
+        _frozen_artifact_sha256(
+            target,
+            expected=EXPECTED_HOT_MARKET_MIGRATION_FILE_SHA256,
+            artifact=HOT_MARKET_MIGRATION_FILENAME,
+        )
+        if path is None
+        else _canonical_lf_sha256(target)
+    )
+
+
+def hot_market_preflight_file_sha256(path: Path | None = None) -> str:
+    target = path or hot_market_preflight_path()
+    return (
+        _frozen_artifact_sha256(
+            target,
+            expected=EXPECTED_HOT_MARKET_PREFLIGHT_FILE_SHA256,
+            artifact=HOT_MARKET_PREFLIGHT_FILENAME,
+        )
+        if path is None
+        else _canonical_lf_sha256(target)
+    )
+
+
+def hot_market_rollback_file_sha256(path: Path | None = None) -> str:
+    target = path or hot_market_rollback_path()
+    return (
+        _frozen_artifact_sha256(
+            target,
+            expected=EXPECTED_HOT_MARKET_ROLLBACK_FILE_SHA256,
+            artifact=HOT_MARKET_ROLLBACK_FILENAME,
         )
         if path is None
         else _canonical_lf_sha256(target)
@@ -448,6 +517,9 @@ def _read_quote_event_schema_in_snapshot(connection: Any) -> QuoteEventSchemaRec
     migration_sha256 = migration_file_sha256()
     preflight_sha256 = preflight_file_sha256()
     rollback_sha256 = rollback_file_sha256()
+    hot_market_migration_sha256 = hot_market_migration_file_sha256()
+    hot_market_preflight_sha256 = hot_market_preflight_file_sha256()
+    hot_market_rollback_sha256 = hot_market_rollback_file_sha256()
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -490,10 +562,25 @@ def _read_quote_event_schema_in_snapshot(connection: Any) -> QuoteEventSchemaRec
         rows = cursor.fetchall()
         constraints = {str(item[1]): item for item in rows}
         constraint_names = set(constraints)
-        if constraint_names != _TARGET_CONSTRAINT_NAMES:
+        if constraint_names not in {_TARGET_CONSTRAINT_NAMES, _HOT_MARKET_SUCCESSOR_CONSTRAINT_NAMES}:
             raise QuoteEventSchemaPreflightError("runtime-event CHECK constraint names drift")
-        if len(rows) != len(constraints) or any(not bool(item[2]) for item in rows):
-            raise QuoteEventSchemaPreflightError("runtime-event CHECK constraints are duplicated or not validated")
+        if len(rows) != len(constraints):
+            raise QuoteEventSchemaPreflightError("runtime-event CHECK constraints are duplicated")
+        base_rows = [item for item in rows if str(item[1]) != "ck_miniqmt_no_new_kernel_tick"]
+        if any(not bool(item[2]) for item in base_rows):
+            raise QuoteEventSchemaPreflightError("runtime-event base CHECK constraints are not validated")
+        guard_readback = None
+        if constraint_names == _HOT_MARKET_SUCCESSOR_CONSTRAINT_NAMES:
+            guard_row = constraints["ck_miniqmt_no_new_kernel_tick"]
+            if bool(guard_row[2]) or str(guard_row[3]) != _HOT_MARKET_GUARD_DEFINITION:
+                raise QuoteEventSchemaPreflightError("runtime-event no-new-TICK successor guard identity drift")
+            guard_readback = KernelEventContractReadback(
+                constraint_name=str(guard_row[1]),
+                constraint_oid=int(guard_row[0]),
+                validated=False,
+                definition=str(guard_row[3]),
+                definition_sha256=sha256(str(guard_row[3]).encode("utf-8")).hexdigest(),
+            )
         event_id_readback = _contract_readback(constraints["ck_miniqmt_event_id"])
         event_sequence_readback = _contract_readback(constraints["ck_miniqmt_event_sequence"])
         type_readback = _constraint_readback(constraints["ck_miniqmt_event_type"], column="event_type")
@@ -511,7 +598,9 @@ def _read_quote_event_schema_in_snapshot(connection: Any) -> QuoteEventSchemaRec
                 "runtime-event CHECK constraints are at mixed migration states: "
                 f"event_type={type_state}, source={source_state}, composite={composite_readback.state}"
             )
-        observed_definition_hashes = {str(item[1]): sha256(str(item[3]).encode("utf-8")).hexdigest() for item in rows}
+        observed_definition_hashes = {
+            str(item[1]): sha256(str(item[3]).encode("utf-8")).hexdigest() for item in base_rows
+        }
         expected_definition_hashes = _EXACT_CONSTRAINT_DEFINITION_SHA256[state]
         if observed_definition_hashes != expected_definition_hashes:
             raise QuoteEventSchemaPreflightError(
@@ -602,7 +691,13 @@ def _read_quote_event_schema_in_snapshot(connection: Any) -> QuoteEventSchemaRec
         + invalid_envelope_contract_count
     )
     unknown_value_count = int(count_row[6] or 0)
-    schema_state = f"{state}_verified" if unknown_value_count == 0 and invalid_event_contract_count == 0 else "invalid"
+    schema_state = (
+        "successor_verified"
+        if guard_readback is not None and unknown_value_count == 0 and invalid_event_contract_count == 0
+        else f"{state}_verified"
+        if unknown_value_count == 0 and invalid_event_contract_count == 0
+        else "invalid"
+    )
     return QuoteEventSchemaReceipt(
         schema_version="miniqmt_quote_event_schema_readback_v2",
         table_oid=_table_oid(connection),
@@ -631,6 +726,10 @@ def _read_quote_event_schema_in_snapshot(connection: Any) -> QuoteEventSchemaRec
         migration_file_sha256=migration_sha256,
         preflight_file_sha256=preflight_sha256,
         rollback_file_sha256=rollback_sha256,
+        hot_market_tick_guard=guard_readback,
+        hot_market_migration_file_sha256=hot_market_migration_sha256,
+        hot_market_preflight_file_sha256=hot_market_preflight_sha256,
+        hot_market_rollback_file_sha256=hot_market_rollback_sha256,
         state=state,
         schema_state=schema_state,
     )
