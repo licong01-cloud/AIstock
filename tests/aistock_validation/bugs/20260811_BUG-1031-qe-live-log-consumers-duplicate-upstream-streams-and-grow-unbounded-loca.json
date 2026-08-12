@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1031",
-  "closed_at": null,
+  "closed_at": "2026-08-12T05:53:53.184193Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -253,8 +253,8 @@
   },
   "first_seen_at": "2026-08-11T20:28:50.691168Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "573e53802eeadce70edb24496fe7e6288dd7eae5",
+  "fixed_at": "2026-08-12T02:24:01Z",
   "github_issue_number": 3301,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3301",
   "last_seen_at": "2026-08-11T20:28:50.691168Z",
@@ -263,6 +263,7 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval.",
     "Do not delete existing historical or active log files before source merge and runtime verification."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3303",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -284,8 +285,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1031/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1031",
+      "catalog_sha256": "504a7920630201f685ff5c7bf97480655cacd1b10da766418373a47974e32c80",
+      "contract_digest": "d183c6e90d56ec402672f49dbc0cb53442da39ab18a3b444e55c5eef8fec3b96",
+      "expected_identity": "573e53802eeadce70edb24496fe7e6288dd7eae5",
+      "generated_at": "2026-08-12T05:36:31.897604Z",
+      "mode": "read_only",
+      "observed_identity": "0e0afed26732ea5eb61988b516bd0b49becfead5",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "24bbd8ef2821dba7dc407dee81464650bcfc777db9da524fe0f42340e3360601",
+      "receipt_sha256": "3e1f833f81b4b8f4bbfaa041e222a8d236eeb9b1b1320505c35522c2420b44ae",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "93b4240bf83b7d07a0022e18a0b41f34f8fdb71b843d2bf05b1fc066f9ffc910",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -295,7 +313,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -341,6 +359,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "validation-receipt: id=3b4f7ccccb55a8c7 commit=0e0afed26732ea5eb61988b516bd0b49becfead5 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/unified_engine/test_qe_log_broker.py backend/tests/unified_engine/test_qe_log_store.py backend/tests/unified_engine/test_qe_log_stream_lifecycle.py` result=`20 passed in 9.46s`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
