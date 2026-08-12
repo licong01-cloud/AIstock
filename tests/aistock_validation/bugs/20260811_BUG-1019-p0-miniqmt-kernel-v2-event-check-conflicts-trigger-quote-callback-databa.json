@@ -258,7 +258,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3298",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Read production pg_constraint for qmt_strategy.execution_runtime_event, then ingest RuntimeEventEnvelopeV2(event_type=SESSION, source=EXCHANGE_SESSION_CLOCK, payload_schema_version=miniqmt_session_event_v1) through KernelIngressCoordinatorV1.",
   "required_verification": [
@@ -279,7 +279,7 @@
     "operator_runbook_ref": "docs/operations/miniqmt_quote_evidence_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1019-production-migration-20260812\\tmp\\issue_workflow\\BUG-1019\\post-restart-verify.json",
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -312,7 +312,10 @@
     "rtk nox -s miniqmt_execution_runtime_l2 -> passed; 1434 passed; 81 skipped",
     "rtk nox -s simulation_core_l2 -> passed; 590 passed; 1 skipped",
     "rtk nox -s l0 -> passed; blocking=0",
-    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2 -> passed; 112/112; warnings=0"
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2 -> passed; 112/112; warnings=0",
+    "AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 rtk pytest backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py -k event_contract -q -> passed; 11 passed on guarded disposable DEV PostgreSQL",
+    "production migration preflight forward post-commit and repository readback -> passed; six successor checks validated; schema catalog fingerprints verified",
+    "20 second production database storm observation -> passed; target active observations=0; rollback delta=0; target PostgreSQL log matches=0"
   ],
   "verification_budget": {
     "budget": "deep",
