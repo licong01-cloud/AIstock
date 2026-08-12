@@ -132,7 +132,7 @@ exact QE H5/Parquet/Qlib Bin
 
 - categorical `l2_code_id` vocabulary只从当前 path train 拟合；validation未知类别为missing，不扩词表。
 - optional missing indicators沿用 feature schema。
-- required feature缺失导致对应日期不可用并有coverage receipt，不能填0。
+- required feature缺失只排除该候选并写coverage；同日可模型候选少于5则该日/path不可用。被排除候选不以selection score或默认概率回填，不进入模型Top5；不足5槽时保留现金。
 - 连续 `confidence_target` 的 winsor边界只从path train的1%/99%分位拟合；分类模型标签保持原始take 0/1。
 - LightGBM原生处理NaN，不做全局 scaler或全数据插补。
 
@@ -357,6 +357,7 @@ scripts/wsl/advisory_meta_label_train.py
 - Source Round 3：文件读取起点早于HMM训练起点至少60个交易日，保证20日sector observation与60日个股特征warmup；warmup不进入labels或HMM fit日期。
 - Source Round 4：传给fresh HMM的inference calendar从HMM history start开始，warmup行情只用于构造首日observations；避免warmup前空日期被误判为continuation gap。
 - Source Round 5：不以宽泛catch把失败trial降级后继续选winner；已声明6×28矩阵任一异常整体fail closed，修复后重跑完整矩阵。
+- Real WSL Round 1：旧reranker的group-level required-feature策略使任一候选缺值时整日删除（仅328/386日）；增加meta-label显式candidate-level排除模式，旧默认行为不变。缺特征候选不回退selection priority，少于5只时保留现金并typed不可计算。
 
 ## 20. Implementation Plan / 实施方案
 

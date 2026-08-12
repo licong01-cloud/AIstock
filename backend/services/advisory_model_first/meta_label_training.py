@@ -77,6 +77,13 @@ def train_meta_label_trial(
             "meta-label path has no train or validation rows",
             reason_code="ADVISORY_META_LABEL_PATH_NOT_COMPUTABLE",
         )
+    validation_group_sizes = merged.loc[validation_mask].groupby("decision_as_of_trade_date").size()
+    if validation_group_sizes.empty or int(validation_group_sizes.min()) < 5:
+        raise AdvisoryModelFirstError(
+            "meta-label validation date has fewer than five modelable candidates",
+            reason_code="ADVISORY_META_LABEL_PATH_NOT_COMPUTABLE",
+            context={"minimum_modelable_candidates": int(validation_group_sizes.min()) if len(validation_group_sizes) else 0},
+        )
     if merged.loc[train_mask, "take_label"].nunique() < 2 or merged.loc[validation_mask, "take_label"].nunique() < 2:
         raise AdvisoryModelFirstError(
             "meta-label path contains a single class",

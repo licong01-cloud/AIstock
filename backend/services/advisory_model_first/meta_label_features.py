@@ -133,6 +133,7 @@ def build_meta_label_feature_matrix(
         benchmark_daily=benchmark_daily,
         suspend_rows=suspend_rows,
         hmm_states=walk_forward_states,
+        incomplete_candidate_policy="drop_candidate",
     )
     return MetaLabelFeatureResult(
         features=built.features,

@@ -80,6 +80,7 @@ def replay_shadow_portfolio(
     last_candidate_decision = max(candidate_decision_set)
     first_candidate_decision = min(candidate_decision_set)
     priority_by_key = _entry_priority_map(entry_priorities)
+    explicit_priority = entry_priorities is not None
     if any(len(group) != rank_depth for group in groups.values()):
         raise AdvisoryModelFirstError(
             "shadow portfolio requires an exact Top40 for every decision",
@@ -148,7 +149,12 @@ def replay_shadow_portfolio(
                     rank=(
                         int(row.selection_effective_rank)
                         if symbol in active_symbols
-                        else priority_by_key.get((decision, symbol), int(row.selection_effective_rank))
+                        else priority_by_key.get(
+                            (decision, symbol),
+                            rank_depth + int(row.selection_effective_rank)
+                            if explicit_priority
+                            else int(row.selection_effective_rank),
+                        )
                     ),
                     score=float(row.combined_score),
                     entry_mark=open_price if entry_available else None,
