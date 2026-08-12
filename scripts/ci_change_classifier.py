@@ -14,12 +14,16 @@ if str(ROOT) not in sys.path:
 from scripts import issue_flow as flow  # noqa: E402
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
-CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
+CLOSE_SYNC_STATUSES = {
+    "fixed",
+    "fixed_source_pending_user_restart",
+    "closed",
+    "verified",
+}
 WORKFLOW_BUG_METADATA_STATUSES = {
     "open",
     "in_progress",
     "triaged",
-    "fixed_source_pending_user_restart",
     *CLOSE_SYNC_STATUSES,
 }
 DOCS_ONLY_PREFIXES = ("docs/",)
@@ -492,7 +496,7 @@ def classify_changed_files(
             workflow_bug_metadata_files.append(rel_path)
 
     if close_sync_metadata_only:
-        reasons.append("only fixed/closed/verified BUG JSON metadata changed; backend matrix can be skipped")
+        reasons.append("only close-sync BUG JSON metadata changed; backend matrix can be skipped")
 
     workflow_fast_files = [
         path
