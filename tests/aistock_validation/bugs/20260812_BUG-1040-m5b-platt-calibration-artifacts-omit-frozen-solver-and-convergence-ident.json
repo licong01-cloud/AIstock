@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1040",
-  "closed_at": null,
+  "closed_at": "2026-08-12T10:32:31.996340Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -161,9 +161,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1040/post-restart-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1040",
+      "catalog_sha256": "504a7920630201f685ff5c7bf97480655cacd1b10da766418373a47974e32c80",
+      "contract_digest": "77b2ff1ec8168a26b11ab43416c6feb22866a8bb4838566beebb4b1cb794e5e1",
+      "expected_identity": "546b8d47360ee577dc470742ce2c50cda7f7e89a",
+      "generated_at": "2026-08-12T10:24:28.493750Z",
+      "mode": "read_only",
+      "observed_identity": "eb8cc21ebf2c52f61eca15fbd4709cca635961a3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e1e057c9b693fd9776a4d96dbeae8cdd988562e34911bf4ef6128d503d57ee52",
+      "receipt_sha256": "01ec9c052f7c33dc0fae35af0bbbb490c937efd0899e4009b4f2a926fb6a6d95",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6198d000075d79b3abdbfa04dbc76f929c49ce83d47752f0f4ee24b48fb2a89b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -173,7 +189,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -183,7 +199,8 @@
     "source_event_id": "FE-20260812-832f0f305ea4"
   },
   "validation_evidence": [
-    "python -m nox -s advisory_modeling_backend -> 202 passed, 1 skipped"
+    "python -m nox -s advisory_modeling_backend -> 202 passed, 1 skipped",
+    "python -m nox -s advisory_modeling_backend -> passed: 202 tests, 1 skipped"
   ],
   "verification_budget": {
     "budget": "standard",
