@@ -28,7 +28,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1019",
-  "closed_at": null,
+  "closed_at": "2026-08-12T04:58:56.133340Z",
   "closure_requirements": [
     "Replace the contradictory predecessor with one atomic exact six-CHECK successor and close K2/K2-D helper, catalog, post-COMMIT and guarded rollback authority without widening LEGACY or deleting durable facts.",
     "Use one persistent callback actor per runtime generation, exact consumer/symbol/sink ownership, bounded schema backoff, explicit ASYNC_IN_FLIGHT and RETRY_READY evidence, and complete drop telemetry without per-tick threads or cross-runtime broadcast.",
@@ -278,9 +278,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/miniqmt_quote_evidence_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1019-production-migration-20260812\\tmp\\issue_workflow\\BUG-1019\\post-restart-verify.json",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1019-production-migration-20260812\\tmp\\issue_workflow\\BUG-1019\\post-restart-verify-source-merge.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1019",
+      "catalog_sha256": "504a7920630201f685ff5c7bf97480655cacd1b10da766418373a47974e32c80",
+      "contract_digest": "bfd902d746d95d1fed12b83833d5e32471e9fda5af4db5814c1b266fd2b45d16",
+      "expected_identity": "4b2105e3908a999c403e3bc454f77cc01c66d5b0",
+      "generated_at": "2026-08-12T04:57:16.652092Z",
+      "mode": "read_only",
+      "observed_identity": "7b9ab5142ed84525c36fd578d26c9c77d6790224",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a40c710f9340673738cb0887463168898cfa3b5c284cd2f383f37c8edcf5abc0",
+      "receipt_sha256": "beeedc549a2f9fe23497c0793ee7e697877c38de86b9f7d2ef91d24a18621209",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f11f4bba4f039d19b94cae1e37c69c834bf989252ca07747ae0d2dde19c113ce",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -290,7 +306,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -315,7 +331,9 @@
     "python scripts/aistock_feature_workflow.py validate --design docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md --tier F2 -> passed; 112/112; warnings=0",
     "AISTOCK_RUN_MINIQMT_K2_DEV_DB=1 rtk pytest backend/tests/miniqmt_execution_runtime/test_kernel_migration_postgres.py -k event_contract -q -> passed; 11 passed on guarded disposable DEV PostgreSQL",
     "production migration preflight forward post-commit and repository readback -> passed; six successor checks validated; schema catalog fingerprints verified",
-    "20 second production database storm observation -> passed; target active observations=0; rollback delta=0; target PostgreSQL log matches=0"
+    "20 second production database storm observation -> passed; target active observations=0; rollback delta=0; target PostgreSQL log matches=0",
+    "production migration preflight, canonical-LF forward DDL, independent post-COMMIT catalog and repository readback -> passed; six successor checks and K2/K2-D fingerprints verified",
+    "post-restart verify -> passed; expected source merge 4b2105e3 is ancestor of observed runtime 7b9ab514; health, identity, business smoke and database readback passed"
   ],
   "verification_budget": {
     "budget": "deep",
