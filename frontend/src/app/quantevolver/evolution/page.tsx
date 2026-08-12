@@ -860,6 +860,7 @@ function SingleAlphaEvolutionDashboard() {
     "[System] 等待连接至 AIstock 演进调度引擎..."
   ]);
   const [logsCollapsed, setLogsCollapsed] = useState(true);
+  const [pageVisible, setPageVisible] = useState(true);
 
   // 后端日志面板
   const [backendLogsOpen, setBackendLogsOpen] = useState(false);
@@ -875,6 +876,7 @@ function SingleAlphaEvolutionDashboard() {
   const [resolving, setResolving] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const lastLogCursorRef = useRef<string | null>(null);
   const autoSelectLoopRef = useRef(true); // 是否需要自动选中 loop
 
   // ── 性能优化: SSE 日志节流 ──
@@ -964,16 +966,23 @@ function SingleAlphaEvolutionDashboard() {
   }, [tasks]);
 
   useEffect(() => {
+    const updateVisibility = () => setPageVisible(document.visibilityState === "visible");
+    updateVisibility();
+    document.addEventListener("visibilitychange", updateVisibility);
+    return () => document.removeEventListener("visibilitychange", updateVisibility);
+  }, []);
+
+  useEffect(() => {
     fetchTasks();
   }, [fetchTasks]);
 
   useEffect(() => {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     pollIntervalRef.current = null;
-    if (!hasRunningTask) return;
+    if (!pageVisible || !hasRunningTask) return;
     pollIntervalRef.current = setInterval(fetchTasks, 10_000);
     return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
-  }, [hasRunningTask, fetchTasks]);
+  }, [pageVisible, hasRunningTask, fetchTasks]);
 
   useEffect(() => {
     fetch(`${API}/quantevolver/strategies?limit=100`)
@@ -1108,17 +1117,18 @@ function SingleAlphaEvolutionDashboard() {
     if (taskChanged) {
       autoSelectLoopRef.current = true;
       setActiveLoopIndex(null);
+      lastLogCursorRef.current = null;
     }
     fetchTaskDetail(activeTaskId);
   }, [activeTaskId, fetchTaskDetail]);
 
   useEffect(() => {
-    if (!activeTaskId || !selectedTaskStatus || !ACTIVE_POLL_STATUSES.has(selectedTaskStatus)) {
+    if (!pageVisible || !activeTaskId || !selectedTaskStatus || !ACTIVE_POLL_STATUSES.has(selectedTaskStatus)) {
       return;
     }
     const detailInterval = setInterval(() => fetchTaskDetail(activeTaskId), 15000);
     return () => clearInterval(detailInterval);
-  }, [activeTaskId, selectedTaskStatus, fetchTaskDetail]);
+  }, [pageVisible, activeTaskId, selectedTaskStatus, fetchTaskDetail]);
 
   // Log files are touched only after the operator expands the log panel.
   useEffect(() => {
@@ -1133,6 +1143,10 @@ function SingleAlphaEvolutionDashboard() {
     closeCurrentLogStream();
 
     if (!activeTaskId || logsCollapsed) {
+      if (logsCollapsed) lastLogCursorRef.current = null;
+      return closeCurrentLogStream;
+    }
+    if (!pageVisible) {
       return closeCurrentLogStream;
     }
 
@@ -1173,13 +1187,19 @@ function SingleAlphaEvolutionDashboard() {
     const boundTaskId = activeTaskId;
 
     function createSSE(taskId: string) {
-      const sse = new EventSource(`${API}/quantevolver/evolution/tasks/${taskId}/logs`);
+      const resumeCursor = lastLogCursorRef.current;
+      const cursorQuery = resumeCursor ? `?after_cursor=${encodeURIComponent(resumeCursor)}` : "";
+      const sse = new EventSource(`${API}/quantevolver/evolution/tasks/${taskId}/logs${cursorQuery}`);
       sse.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          if (event.lastEventId) lastLogCursorRef.current = event.lastEventId;
           const terminalLogEvent =
             data.status === "deleted" ||
             data.status === "missing" ||
+            data.status === "completed" ||
+            data.status === "failed" ||
+            data.status === "cancelled" ||
             data.event === "task_deleted" ||
             data.event === "task_log_workspace_missing" ||
             data.event === "task_log_terminal";
@@ -1229,6 +1249,11 @@ function SingleAlphaEvolutionDashboard() {
       sse.onerror = async () => {
         sse.close();
         if (activeTaskIdRef.current !== boundTaskId) return;
+        if (resumeCursor) {
+          appendLogs(["[Error] 日志游标续传失败或已过期；已停止自动回放。请折叠后重新展开日志面板以显式读取新的有界尾部。"]);
+          if (eventSourceRef.current === sse) eventSourceRef.current = null;
+          return;
+        }
         try {
           const taskRes = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}`);
           if (taskRes.status === 404 || taskRes.status === 204) {
@@ -1265,7 +1290,7 @@ function SingleAlphaEvolutionDashboard() {
       closeCurrentLogStream();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTaskId, selectedTaskStatus, logsCollapsed]);
+  }, [activeTaskId, selectedTaskStatus, logsCollapsed, pageVisible]);
 
   // 获取可用的 RDAgent source tasks
   const fetchSourceTasks = useCallback(async () => {
@@ -2051,7 +2076,7 @@ function SingleAlphaEvolutionDashboard() {
 
   // 后端日志轮询（仅面板展开时运行）
   useEffect(() => {
-    if (!backendLogsOpen) return;
+    if (!backendLogsOpen || !pageVisible) return;
     const fetchLogs = async () => {
       try {
         const res = await fetch(`${API}/quantevolver/evolution/system/logs?tail=150&level=${backendLogLevel}`);
@@ -2065,7 +2090,7 @@ function SingleAlphaEvolutionDashboard() {
     fetchLogs();
     const timer = setInterval(fetchLogs, 5000);
     return () => clearInterval(timer);
-  }, [backendLogsOpen, backendLogLevel]);
+  }, [backendLogsOpen, backendLogLevel, pageVisible]);
 
   const configDiffLines = useMemo(() => {
     if (!activeLoopData?.config_json || !prevLoopData?.config_json) return [] as string[];

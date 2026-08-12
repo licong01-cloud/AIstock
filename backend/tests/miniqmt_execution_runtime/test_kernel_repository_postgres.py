@@ -6,7 +6,7 @@ from datetime import date
 import inspect
 import json
 import os
-from threading import Barrier
+from threading import Barrier, Event
 
 import psycopg2
 import psycopg2.extras
@@ -19,6 +19,7 @@ from backend.services.miniqmt_execution_runtime.kernel_repository import (
     PostgresMiniQMTKernelRepository,
 )
 from backend.services.miniqmt_execution_runtime.kernel_delivery import (
+    KernelAlgoCreationRequestV1,
     KernelAlgoStartWriteBundleV1,
     KernelTransitionWriteBundleV1,
 )
@@ -64,6 +65,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     KernelProjectionTypeV1,
     KernelErrorEvidenceV1,
     KernelCallbackMappingUpdateV1,
+    KernelCommandLifecycleProjectionV1,
     OrderTypeV1,
     RuntimeEventEnvelopeV2,
     RuntimeEventIngressReceiptV1,
@@ -80,17 +82,21 @@ from backend.services.miniqmt_execution_runtime.kernel_repository_projection imp
     _delivery_creation_matches,
     _event_scalar_projection,
 )
+from backend.services.miniqmt_execution_runtime.quote_event_schema import read_quote_event_schema
 from backend.tests.miniqmt_execution_runtime.test_kernel_contracts import (
     _calendar_authority_values,
     _tick_event,
 )
 from backend.tests.miniqmt_execution_runtime.test_kernel_migration_postgres import (
+    EVENT_CONTRACT_REPAIR_FORWARD,
     FORWARD,
     K2C_ROLLBACK,
+    _apply_current_k6_predecessor,
     _apply_forward,
     _base_fixture_sql,
     _dev_dsn,
     _fixture_schema,
+    _install_event_contract_predecessor,
 )
 from backend.tests.miniqmt_execution_runtime.test_kernel_creation import _request
 from backend.tests.miniqmt_execution_runtime.test_kernel_ingress import _catalog as _ingress_catalog
@@ -101,6 +107,93 @@ def _current_test_descriptor():
         item
         for item in _ingress_catalog().snapshot.registration_descriptors
         if item.manifest.algo_code == "SNIPER_MINIQMT"
+    )
+
+
+def _apply_event_contract_successor(cur: object, schema: str) -> None:
+    cur.execute(  # type: ignore[attr-defined]
+        EVENT_CONTRACT_REPAIR_FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema)
+    )
+
+
+def _align_execution_runtime_route_fixture(cur: object, schema: str) -> None:
+    cur.execute(  # type: ignore[attr-defined]
+        f"""
+        ALTER TABLE {schema}.execution_runtime
+            ADD COLUMN account_group_id TEXT NOT NULL,
+            ADD COLUMN mode TEXT NOT NULL,
+            ADD CONSTRAINT ck_miniqmt_runtime_account_group CHECK (btrim(account_group_id) <> ''),
+            ADD CONSTRAINT ck_miniqmt_runtime_mode
+                CHECK (mode IN ('SIM', 'LIVE_PENDING_APPROVAL', 'LIVE'))
+        """
+    )
+
+
+def _create_algo_start_authority_fixture(cur: object, schema: str) -> None:
+    cur.execute(  # type: ignore[attr-defined]
+        f"""
+        CREATE TABLE {schema}.execution_parent_benchmark(
+            parent_intent_id TEXT NOT NULL,
+            parent_revision INTEGER NOT NULL,
+            runtime_id TEXT NOT NULL,
+            execution_plan_id TEXT NOT NULL,
+            execution_plan_hash TEXT NOT NULL,
+            release_id TEXT NOT NULL,
+            binding_id TEXT NOT NULL,
+            trade_date DATE NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            emitted_parent_quantity BIGINT NOT NULL,
+            execution_policy_id TEXT NOT NULL,
+            execution_policy_sha256 TEXT NOT NULL,
+            PRIMARY KEY(parent_intent_id,parent_revision)
+        );
+        CREATE TABLE {schema}.strategy_runtime_release(
+            release_id TEXT PRIMARY KEY,
+            release_hash TEXT NOT NULL,
+            execution_policy_version_id TEXT NOT NULL,
+            execution_policy_sha256 TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _insert_algo_start_authority_fixture(
+    cur: object,
+    schema: str,
+    authority: KernelAlgoCreationRequestV1,
+) -> None:
+    cur.execute(  # type: ignore[attr-defined]
+        f"""
+        INSERT INTO {schema}.execution_parent_benchmark(
+            parent_intent_id,parent_revision,runtime_id,execution_plan_id,execution_plan_hash,
+            release_id,binding_id,trade_date,symbol,side,emitted_parent_quantity,
+            execution_policy_id,execution_policy_sha256
+        ) VALUES (%s,1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """,
+        (
+            authority.parent_intent_id,
+            authority.runtime_id,
+            authority.execution_plan_id,
+            authority.execution_plan_sha256,
+            authority.release_id,
+            f"binding_{authority.strategy_slot_id}",
+            date.fromisoformat(authority.exchange_trade_date),
+            authority.symbol,
+            authority.side.value,
+            authority.parent_quantity,
+            authority.policy_id,
+            authority.policy_sha256,
+        ),
+    )
+    cur.execute(  # type: ignore[attr-defined]
+        f"INSERT INTO {schema}.strategy_runtime_release VALUES (%s,%s,%s,%s)",
+        (
+            authority.release_id,
+            authority.release_sha256,
+            authority.policy_id,
+            authority.policy_sha256,
+        ),
     )
 
 
@@ -119,6 +212,220 @@ def _algo_id() -> str:
         plugin_version=descriptor.manifest.plugin_version,
         plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
         plugin_config_sha256=config_hash,
+    )
+
+
+def _build_shadow_algo_start_fixture(
+    *,
+    sequence: int,
+    creation_authority: KernelAlgoCreationRequestV1,
+    algo_id: str,
+    state: dict[str, object],
+) -> KernelAlgoStartWriteBundleV1:
+    descriptor = _current_test_descriptor()
+    event = RuntimeEventEnvelopeV2.create(
+        runtime_id=creation_authority.runtime_id,
+        sequence=sequence,
+        event_type=EventTypeV2.ALGO_START,
+        event_time_utc=creation_authority.logical_time_utc,
+        monotonic_ns=None,
+        source=EventSourceV2.MINIQMT_EXECUTION_KERNEL,
+        symbol=creation_authority.symbol,
+        payload_schema_version="miniqmt_algo_start_v1",
+        payload={
+            "execution_plan_id": creation_authority.execution_plan_id,
+            "target_quantity": creation_authority.parent_quantity,
+        },
+        source_identity={
+            "algo_instance_id": algo_id,
+            "runtime_id": creation_authority.runtime_id,
+            "parent_intent_id": creation_authority.parent_intent_id,
+            "strategy_slot_id": creation_authority.strategy_slot_id,
+            "algo_code": descriptor.manifest.algo_code,
+            "plugin_id": descriptor.manifest.plugin_id,
+            "plugin_version": descriptor.manifest.plugin_version,
+            "plugin_manifest_sha256": descriptor.manifest.manifest_sha256,
+            "plugin_config_sha256": creation_authority.plugin_config_sha256,
+        },
+        correlation={"execution_plan_id": creation_authority.execution_plan_id},
+    )
+    initial_carrier = AlgoEventDeliveryV1.create(
+        event=event,
+        algo_instance_id=algo_id,
+        plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
+        algo_delivery_sequence=1,
+        previous_delivery_id=None,
+        status=DeliveryStatusV1.PENDING,
+        attempt_count=0,
+        lease_owner=None,
+        lease_expires_at=None,
+        transition_id=None,
+        last_error_json=None,
+        created_at_utc=event.event_time_utc,
+        updated_at_utc=event.event_time_utc,
+    )
+    initial_delivery = AlgoDeliveryPersistenceV1.create(
+        delivery=initial_carrier,
+        lease_epoch=0,
+        lease_fence_token=None,
+        row_version=1,
+        next_attempt_at_utc=None,
+        failure_receipt_id=None,
+        skip_receipt_id=None,
+        closed_at_utc=None,
+    )
+    after_state = AlgoStateSnapshotV2.model_validate(
+        {
+            "schema_version": "execution_algo_state_snapshot_v2",
+            "algo_instance_id": algo_id,
+            "plugin_id": descriptor.manifest.plugin_id,
+            "plugin_version": descriptor.manifest.plugin_version,
+            "plugin_manifest_sha256": descriptor.manifest.manifest_sha256,
+            "state_schema_version": "sniper_state_v2",
+            "transition_sequence": 1,
+            "last_applied_delivery_sequence": 1,
+            "last_applied_delivery_id": initial_delivery.delivery_id,
+            "last_closed_delivery_sequence": 1,
+            "state": state,
+            "state_sha256": hash_hex_v1("execution_algo_state_v2", state),
+            "last_applied_event_id": event.event_id,
+            "updated_at_utc": event.event_time_utc,
+        }
+    )
+    projection_set = ExecutionProjectionSetV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo_id,
+        event_id=event.event_id,
+        delivery_id=initial_delivery.delivery_id,
+        projection_refs=(),
+    )
+    provisional_transition = AlgoTransitionReceiptV1.create(
+        delivery_id=initial_delivery.delivery_id,
+        event_id=event.event_id,
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo_id,
+        plugin_id=descriptor.manifest.plugin_id,
+        plugin_version=descriptor.manifest.plugin_version,
+        plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
+        transition_sequence=1,
+        before_state_sha256_or_INIT="INIT",
+        after_state_sha256=after_state.state_sha256,
+        ordered_command_ids=(),
+        ordered_timer_mutation_ids=(),
+        ordered_diagnostic_observation_ids=(),
+        ordered_consumed_lineage_refs=(
+            ConsumedLineageRefV1.create(
+                lineage_type=ConsumedLineageTypeV1.EVENT,
+                identity=event.event_id,
+                payload_sha256=event.payload_sha256,
+            ),
+        ),
+        execution_projection_set_sha256=projection_set.projection_set_sha256,
+        effect_set_sha256="9" * 64,
+        terminal_outcome=None,
+        logical_applied_at_utc=event.event_time_utc,
+        transaction_commit_identity="mqtx_pending_init",
+    )
+    provisional_ingress = RuntimeEventIngressReceiptV1.create(
+        runtime_id=event.runtime_id,
+        event_id=event.event_id,
+        event_key_sha256=event.event_key_sha256,
+        runtime_sequence=event.sequence,
+        ordered_target_algo_instance_ids=(algo_id,),
+        ordered_delivery_ids=(initial_delivery.delivery_id,),
+        transaction_commit_identity="mqtx_pending_init",
+    )
+    lifecycle_projection = KernelCommandLifecycleProjectionV1.create(
+        runtime_id=event.runtime_id,
+        algo_instance_id=algo_id,
+        event_id=event.event_id,
+        delivery_id=initial_delivery.delivery_id,
+        ordered_items=(),
+    )
+    transaction_identity = transaction_commit_identity_v1(
+        operation="INITIALIZE_ALGO_ATOMIC_APPLIED",
+        owner_identities=(event.runtime_id, algo_id, event.event_id, initial_delivery.delivery_id),
+        input_hashes=(
+            event.event_key_sha256,
+            event.payload_sha256,
+            projection_set.projection_set_sha256,
+            lifecycle_projection.projection_sha256,
+            after_state.state_sha256,
+        ),
+        output_identities=(
+            event.event_id,
+            provisional_ingress.ingress_receipt_id,
+            initial_delivery.delivery_id,
+            provisional_transition.transition_id,
+        ),
+    )
+    receipt = AlgoTransitionReceiptV1.create(
+        **provisional_transition.canonical_payload_v1(
+            exclude={
+                "schema_version",
+                "transition_id",
+                "ordered_consumed_lineage_refs",
+                "transaction_commit_identity",
+                "receipt_sha256",
+            }
+        ),
+        ordered_consumed_lineage_refs=provisional_transition.ordered_consumed_lineage_refs,
+        transaction_commit_identity=transaction_identity,
+    )
+    final_delivery_payload = initial_delivery.model_dump(mode="python")
+    final_delivery_payload.update(
+        status=DeliveryStatusV1.APPLIED,
+        transition_id=receipt.transition_id,
+        row_version=2,
+        updated_at_utc=event.event_time_utc,
+        closed_at_utc=event.event_time_utc,
+    )
+    final_delivery = AlgoDeliveryPersistenceV1.model_validate(final_delivery_payload)
+    algo = ExecutionAlgoInstancePersistenceV2.create(
+        algo_instance_id=algo_id,
+        runtime_id=event.runtime_id,
+        parent_intent_id=creation_authority.parent_intent_id,
+        strategy_slot_id=creation_authority.strategy_slot_id,
+        symbol=creation_authority.symbol,
+        side=creation_authority.side,
+        target_quantity=creation_authority.parent_quantity,
+        traded_quantity=0,
+        remaining_quantity=creation_authority.parent_quantity,
+        algo_code=descriptor.manifest.algo_code,
+        plugin_id=descriptor.manifest.plugin_id,
+        plugin_version=descriptor.manifest.plugin_version,
+        plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
+        plugin_config_json=thaw_json_v1(creation_authority.plugin_config),
+        plugin_config_sha256=creation_authority.plugin_config_sha256,
+        compatibility_receipt_sha256="2" * 64,
+        state_schema_version="sniper_state_v2",
+        state_json=state,
+        state_sha256=after_state.state_sha256,
+        transition_sequence=1,
+        last_applied_delivery_sequence=1,
+        last_applied_delivery_id=initial_delivery.delivery_id,
+        last_closed_delivery_sequence=1,
+        terminal_delivery_sequence=None,
+        status=ExecutionAlgoPersistenceStatusV2.ACTIVE,
+        failure_receipt_id=None,
+        active_child_closure_status=ActiveChildClosureStatusV1.NOT_APPLICABLE,
+        active_child_count=0,
+        row_version=1,
+        created_at_utc=event.event_time_utc,
+        updated_at_utc=event.event_time_utc,
+        terminal_at_utc=None,
+        archived_at_utc=None,
+    )
+    return KernelAlgoStartWriteBundleV1(
+        event=event,
+        initial_delivery=initial_delivery,
+        transition_bundle=KernelTransitionWriteBundleV1.create(
+            algo_instance=algo,
+            delivery=final_delivery,
+            receipt=receipt,
+            projection_set=projection_set,
+            after_state=after_state,
+        ),
     )
 
 
@@ -327,8 +634,66 @@ class _SchemaConnection:
     def cursor(self, *args: object, **kwargs: object) -> _SchemaCursor:
         return _SchemaCursor(self._connection.cursor(*args, **kwargs), self._schema)  # type: ignore[attr-defined]
 
+    @property
+    def autocommit(self) -> bool:
+        return bool(self._connection.autocommit)  # type: ignore[attr-defined]
+
+    @autocommit.setter
+    def autocommit(self, value: bool) -> None:
+        self._connection.autocommit = value  # type: ignore[attr-defined]
+
     def __getattr__(self, name: str) -> object:
         return getattr(self._connection, name)
+
+
+class _PreflightLockPauseCursor(_SchemaCursor):
+    def __init__(
+        self,
+        cursor: object,
+        schema: str,
+        lock_acquired: Event,
+        release_lock: Event,
+        statements: list[str],
+    ) -> None:
+        super().__init__(cursor, schema)
+        self._lock_acquired = lock_acquired
+        self._release_lock = release_lock
+        self._statements = statements
+
+    def execute(self, query: object, parameters: object = None) -> object:
+        if isinstance(query, str):
+            normalized = " ".join(query.split())
+            self._statements.append(normalized)
+        result = super().execute(query, parameters)
+        if isinstance(query, str) and query.lstrip().startswith("LOCK TABLE"):
+            self._lock_acquired.set()
+            if not self._release_lock.wait(timeout=10):
+                raise AssertionError("preflight catalog lock test was not released")
+        return result
+
+
+class _PreflightLockPauseConnection(_SchemaConnection):
+    def __init__(
+        self,
+        connection: object,
+        schema: str,
+        lock_acquired: Event,
+        release_lock: Event,
+        statements: list[str],
+    ) -> None:
+        super().__init__(connection, schema)
+        self._lock_acquired = lock_acquired
+        self._release_lock = release_lock
+        self._statements = statements
+
+    def cursor(self, *args: object, **kwargs: object) -> _PreflightLockPauseCursor:
+        return _PreflightLockPauseCursor(
+            self._connection.cursor(*args, **kwargs),  # type: ignore[attr-defined]
+            self._schema,
+            self._lock_acquired,
+            self._release_lock,
+            self._statements,
+        )
 
 
 class _FirstWriteBarrierCursor(_SchemaCursor):
@@ -489,6 +854,37 @@ def _conn_factory_without_keywords(schema: str):
     def factory():
         with managed(autocommit=True) as connection:
             yield connection
+
+    return factory
+
+
+def _preflight_lock_pause_factory(
+    schema: str,
+    lock_acquired: Event,
+    release_lock: Event,
+    statements: list[str],
+):
+    @contextmanager
+    def factory(*, autocommit: bool = False, manage_transaction: bool = False):
+        connection = psycopg2.connect(**_dev_dsn())
+        connection.autocommit = autocommit
+        proxy = _PreflightLockPauseConnection(
+            connection,
+            schema,
+            lock_acquired,
+            release_lock,
+            statements,
+        )
+        try:
+            yield proxy
+            if manage_transaction and not autocommit:
+                connection.commit()
+        except Exception:
+            if not autocommit:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     return factory
 
@@ -862,7 +1258,9 @@ def test_repository_preflight_rejects_forged_constant_catalog_function_on_dev_po
     try:
         with raw.cursor() as cur:
             cur.execute(_base_fixture_sql(schema))
-            _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            _apply_event_contract_successor(cur, schema)
             if with_schema_drift:
                 cur.execute(
                     f"ALTER TABLE {schema}.execution_kernel_worker_epoch ALTER COLUMN incarnation_sequence DROP DEFAULT"
@@ -880,6 +1278,7 @@ def test_repository_preflight_rejects_forged_constant_catalog_function_on_dev_po
     finally:
         raw.autocommit = True
         with raw.cursor() as cur:
+            cur.execute("ROLLBACK")
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         raw.close()
 
@@ -893,7 +1292,9 @@ def test_repository_preflight_rejects_forged_k2d_catalog_function_on_dev_postgre
     try:
         with raw.cursor() as cur:
             cur.execute(_base_fixture_sql(schema))
-            _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            _apply_event_contract_successor(cur, schema)
             cur.execute(
                 f"""
                 CREATE OR REPLACE FUNCTION {schema}.miniqmt_k2d_catalog_fingerprint()
@@ -905,6 +1306,177 @@ def test_repository_preflight_rejects_forged_k2d_catalog_function_on_dev_postgre
             PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema)).preflight_schema()
     finally:
         with raw.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        raw.close()
+
+
+def test_repository_preflight_rejects_k2d_catalog_function_search_path_drift_on_dev_postgres() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
+    schema = _fixture_schema()
+    raw = psycopg2.connect(**_dev_dsn())
+    raw.autocommit = True
+    try:
+        with raw.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            _apply_event_contract_successor(cur, schema)
+            cur.execute(
+                f"ALTER FUNCTION {schema}.miniqmt_k2d_catalog_fingerprint() SET search_path = pg_catalog, {schema}"
+            )
+        with pytest.raises(KernelRepositorySchemaError, match="K2-D catalog function drift"):
+            PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema)).preflight_schema()
+    finally:
+        with raw.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        raw.close()
+
+
+def test_repository_preflight_locks_full_gate_before_read_and_rejects_extra_event_check() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
+    schema = _fixture_schema()
+    raw = psycopg2.connect(**_dev_dsn())
+    raw.autocommit = True
+    lock_acquired = Event()
+    release_lock = Event()
+    statements: list[str] = []
+    try:
+        with raw.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            _apply_event_contract_successor(cur, schema)
+
+        repository = PostgresMiniQMTKernelRepository(
+            conn_factory=_preflight_lock_pause_factory(schema, lock_acquired, release_lock, statements)
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(repository.preflight_schema)
+            try:
+                assert lock_acquired.wait(timeout=10)
+                racer = psycopg2.connect(**_dev_dsn())
+                racer.autocommit = True
+                try:
+                    with racer.cursor() as cur:
+                        cur.execute("SET lock_timeout = '500ms'")
+                        with pytest.raises(psycopg2.errors.LockNotAvailable):
+                            cur.execute(
+                                f"ALTER TABLE {schema}.execution_runtime_event "
+                                "ADD CONSTRAINT ck_blocks_legal_tick CHECK (event_type <> 'TICK')"
+                            )
+                finally:
+                    racer.close()
+            finally:
+                release_lock.set()
+            assert all(future.result(timeout=10).values())
+
+        assert statements[0] == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+        assert statements[1] == "SET LOCAL search_path = pg_catalog, qmt_strategy"
+        assert statements[2].startswith("LOCK TABLE ")
+        for relation in (
+            "execution_runtime",
+            "execution_runtime_event",
+            "execution_algo_instance",
+            "execution_child_order",
+            "execution_kernel_worker_epoch",
+            "execution_kernel_worker_incarnation",
+            "execution_algo_event_delivery",
+            "execution_algo_transition",
+            "execution_algo_command_outbox",
+            "execution_algo_command_dispatch_attempt",
+            "execution_algo_timer_schedule",
+            "execution_algo_timer_occurrence",
+            "execution_exchange_session_authority",
+            "execution_algo_diagnostic_observation",
+            "execution_broker_reconciliation_attempt",
+        ):
+            assert f"qmt_strategy.{relation}" in statements[2]
+        assert "SELECT" not in statements[1]
+
+        with raw.cursor() as cur:
+            cur.execute(
+                f"ALTER TABLE {schema}.execution_runtime_event "
+                "ADD CONSTRAINT ck_blocks_legal_tick CHECK (event_type <> 'TICK')"
+            )
+        with pytest.raises(KernelRepositorySchemaError, match="runtime-event CHECK authority is invalid"):
+            PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema)).preflight_schema()
+    finally:
+        release_lock.set()
+        raw.autocommit = True
+        with raw.cursor() as cur:
+            cur.execute("ROLLBACK")
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        raw.close()
+
+
+def test_standalone_event_schema_readback_owns_one_locked_snapshot_on_dev_postgres() -> None:
+    if os.getenv("AISTOCK_RUN_MINIQMT_K2_DEV_DB") != "1":
+        pytest.skip("requires explicitly authorized disposable K2 DEV PostgreSQL fixture")
+    schema = _fixture_schema()
+    raw = psycopg2.connect(**_dev_dsn())
+    raw.autocommit = True
+    lock_acquired = Event()
+    release_lock = Event()
+    statements: list[str] = []
+    try:
+        with raw.cursor() as cur:
+            cur.execute(_base_fixture_sql(schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
+            _apply_event_contract_successor(cur, schema)
+
+        def readback():  # type: ignore[no-untyped-def]
+            connection = psycopg2.connect(**_dev_dsn())
+            connection.autocommit = True
+            proxy = _PreflightLockPauseConnection(
+                connection,
+                schema,
+                lock_acquired,
+                release_lock,
+                statements,
+            )
+            try:
+                receipt = read_quote_event_schema(proxy)
+                assert connection.autocommit is True
+                return receipt
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(readback)
+            try:
+                assert lock_acquired.wait(timeout=10)
+                racer = psycopg2.connect(**_dev_dsn())
+                racer.autocommit = True
+                try:
+                    with racer.cursor() as cur:
+                        cur.execute("SET lock_timeout = '500ms'")
+                        with pytest.raises(psycopg2.errors.LockNotAvailable):
+                            cur.execute(
+                                f"ALTER TABLE {schema}.execution_runtime_event "
+                                "ADD CONSTRAINT ck_blocks_standalone_readback CHECK (event_type <> 'SESSION')"
+                            )
+                finally:
+                    racer.close()
+            finally:
+                release_lock.set()
+            receipt = future.result(timeout=10)
+        assert receipt.schema_state == "target_verified"
+        assert receipt.production_ddl_gate == "pending_full_kernel_readback"
+        assert statements[0] == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+        assert statements[1] == "SET LOCAL search_path = pg_catalog, qmt_strategy"
+        assert statements[2] == "SHOW transaction_isolation"
+        assert statements[3] == "SHOW transaction_read_only"
+        assert statements[4].startswith("LOCK TABLE ")
+    finally:
+        release_lock.set()
+        raw.autocommit = True
+        with raw.cursor() as cur:
+            cur.execute("ROLLBACK")
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         raw.close()
 
@@ -1047,7 +1619,8 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
         with raw.cursor() as cur:
             cur.execute(f"CREATE SCHEMA {incomplete_schema}")
             cur.execute(_base_fixture_sql(schema))
-            _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            _install_event_contract_predecessor(cur, schema)
+            _apply_current_k6_predecessor(cur, schema)
             cur.execute(
                 f"INSERT INTO {schema}.execution_runtime(runtime_id,trade_date) VALUES (%s,%s),(%s,%s)",
                 ("runtime_repo_k2", date(2026, 7, 25), "runtime_k2", date(2026, 7, 25)),
@@ -1061,6 +1634,10 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
             )
 
         repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
+        with pytest.raises(KernelRepositorySchemaError, match="not the exact successor"):
+            repository.preflight_schema()
+        with raw.cursor() as cur:
+            _apply_event_contract_successor(cur, schema)
         assert all(repository.preflight_schema().values())
         assert all(
             PostgresMiniQMTKernelRepository(conn_factory=_conn_factory_without_keywords(schema))
@@ -1096,7 +1673,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
                 "execution_broker_reconciliation_attempt",
             ):
                 cur.execute(f"CREATE TABLE {incomplete_schema}.{table_name}(id INTEGER)")
-        with pytest.raises(KernelRepositorySchemaError, match="fingerprint authority is unavailable"):
+        with pytest.raises(KernelRepositorySchemaError, match="incomplete"):
             PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(incomplete_schema)).preflight_schema()
         not_applied_diagnostics = PostgresMiniQMTKernelRepository(
             conn_factory=_conn_factory(incomplete_schema)
@@ -3112,6 +3689,7 @@ def test_repository_real_postgres_startup_event_readback_conflict_rollback_and_b
     finally:
         raw.autocommit = True
         with raw.cursor() as cur:
+            cur.execute("ROLLBACK")
             for callback_schema in callback_schemas:
                 cur.execute(f"DROP SCHEMA IF EXISTS {callback_schema} CASCADE")
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
@@ -3395,64 +3973,99 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
         with raw.cursor() as cur:
             cur.execute(_base_fixture_sql(schema))
             _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
-            cur.execute(
-                f"INSERT INTO {schema}.execution_runtime(runtime_id,trade_date) VALUES (%s,%s)",
-                ("runtime_k2", date(2026, 7, 25)),
-            )
+            _align_execution_runtime_route_fixture(cur, schema)
+            _create_algo_start_authority_fixture(cur, schema)
         repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
         descriptor = _current_test_descriptor()
-        config = {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
-        initial_state = {"next_slice": 0}
-        algo_id = _algo_id()
-        algo_v1 = ExecutionAlgoInstancePersistenceV2.create(
-            algo_instance_id=algo_id,
-            runtime_id="runtime_k2",
-            parent_intent_id="intent_k2",
-            strategy_slot_id="slot_k2",
-            symbol="600000.SH",
-            side=SideV1.BUY,
-            target_quantity=100,
-            traded_quantity=0,
-            remaining_quantity=100,
-            algo_code=descriptor.manifest.algo_code,
-            plugin_id=descriptor.manifest.plugin_id,
-            plugin_version=descriptor.manifest.plugin_version,
-            plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
-            plugin_config_json=config,
-            plugin_config_sha256=hash_hex_v1("miniqmt_plugin_config_v2", config),
-            compatibility_receipt_sha256="2" * 64,
-            state_schema_version="sniper_state_v2",
-            state_json=initial_state,
-            state_sha256=hash_hex_v1("execution_algo_state_v2", initial_state),
-            transition_sequence=0,
-            last_applied_delivery_sequence=0,
-            last_applied_delivery_id=None,
-            last_closed_delivery_sequence=0,
-            terminal_delivery_sequence=None,
-            status=ExecutionAlgoPersistenceStatusV2.ACTIVE,
-            failure_receipt_id=None,
-            active_child_closure_status=ActiveChildClosureStatusV1.NOT_APPLICABLE,
-            active_child_count=0,
-            row_version=1,
-            created_at_utc="2026-07-25T01:20:00Z",
-            updated_at_utc="2026-07-25T01:20:00Z",
-            terminal_at_utc=None,
-            archived_at_utc=None,
+        creation_authority = _request().model_copy(
+            update={
+                "runtime_id": "runtime_k2",
+                "parent_intent_id": "intent_k2",
+                "strategy_slot_id": "slot_k2",
+                "symbol": "600000.SH",
+                "side": SideV1.BUY,
+                "parent_quantity": 100,
+                "execution_plan_id": "plan_ingress_k2",
+                "execution_plan_sha256": "3" * 64,
+                "release_id": "release_ingress_k2",
+                "release_sha256": "4" * 64,
+                "policy_id": "policy_ingress_k2",
+                "policy_sha256": "5" * 64,
+                "logical_time_utc": "2026-07-25T01:20:00Z",
+                "exchange_trade_date": "2026-07-25",
+            }
         )
-        repository.compare_and_swap_algo_instance(algo_instance=algo_v1, expected_row_version=0)
+        with raw.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {schema}.execution_runtime(runtime_id,account_group_id,trade_date,mode)
+                VALUES (%s,%s,%s,%s)
+                """,
+                ("runtime_k2", "account_group_ingress_k2", date(2026, 7, 25), "SIM"),
+            )
+            _insert_algo_start_authority_fixture(cur, schema, creation_authority)
+        algo_id = _algo_id()
+
+        def start_builder(sequence: int) -> KernelAlgoStartWriteBundleV1:
+            return _build_shadow_algo_start_fixture(
+                sequence=sequence,
+                creation_authority=creation_authority,
+                algo_id=algo_id,
+                state={"next_slice": 0, "active_orders": []},
+            )
+
+        start_probe = start_builder(1).event
+        start_readback = repository.initialize_algo_atomic(
+            runtime_id="runtime_k2",
+            event_key_sha256=start_probe.event_key_sha256,
+            creation_authority=creation_authority,
+            bundle_builder=start_builder,
+        )
+        algo_v1 = start_readback["algo"]
+        start_delivery = repository.read_delivery(algo_v1.last_applied_delivery_id)
+        assert start_readback["event"].event_type is EventTypeV2.ALGO_START
+        assert start_delivery.status is DeliveryStatusV1.APPLIED
+        assert start_delivery.algo_delivery_sequence == 1
+        assert start_delivery.previous_delivery_id is None
+        assert start_readback["receipt"].before_state_sha256_or_INIT == "INIT"
+        assert start_readback["after_state"].last_applied_delivery_id == start_delivery.delivery_id
+        assert algo_v1.state_sha256 == start_readback["after_state"].state_sha256
+
         start = repository.start_worker_incarnation(
             worker_id="worker_ingress_k2",
             process_role="delivery",
             source_revision="revision_ingress_k2",
             started_at_utc="2026-07-25T01:20:00Z",
         )
-        event1 = _tick_event()
+        event1 = RuntimeEventEnvelopeV2.create(
+            runtime_id="runtime_k2",
+            sequence=2,
+            event_type=EventTypeV2.TICK,
+            event_time_utc="2026-07-25T01:30:00Z",
+            monotonic_ns=None,
+            source=EventSourceV2.B0_QUOTE_V2,
+            symbol="600000.SH",
+            payload_schema_version="miniqmt_market_data_view_v2",
+            payload={"last_price": "10.000000"},
+            source_identity={"market_data_id": "market_data_k2"},
+            correlation={"trace_id": "trace_k2"},
+        )
         delivery1 = _delivery(
             event1,
             algo_instance_id=algo_id,
             plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
+            algo_delivery_sequence=2,
+            previous_delivery_id=start_delivery.delivery_id,
         )
-        _seed_event_receipt_deliveries(repository, event=event1, deliveries=(delivery1,))
+        tick_ingress = repository.ingest_routed_event_atomic(
+            event=event1,
+            catalog_runtime=_ingress_catalog(),
+            correlated_algo_instance_ids=(),
+        )
+        assert tick_ingress.ordered_delivery_ids == (delivery1.delivery_id,)
+        delivery1 = repository.read_delivery(delivery1.delivery_id)
+        assert delivery1.algo_delivery_sequence == 2
+        assert delivery1.previous_delivery_id == start_delivery.delivery_id
         lease_owner = f"worker_ingress_k2:{start.process_incarnation_id}"
         fence = kernel_lease_fence_token_v1(
             owner_type="DELIVERY", owner_id=delivery1.delivery_id, lease_epoch=1, lease_owner=lease_owner
@@ -3466,25 +4079,6 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             updated_at_utc="2026-07-25T01:30:30Z",
             expected_row_version=1,
         )
-        applied_state = {"next_slice": 1}
-        after_state = AlgoStateSnapshotV2.model_validate(
-            {
-                "schema_version": "execution_algo_state_snapshot_v2",
-                "algo_instance_id": algo_id,
-                "plugin_id": algo_v1.plugin_id,
-                "plugin_version": algo_v1.plugin_version,
-                "plugin_manifest_sha256": algo_v1.plugin_manifest_sha256,
-                "state_schema_version": algo_v1.state_schema_version,
-                "transition_sequence": 1,
-                "last_applied_delivery_sequence": 1,
-                "last_applied_delivery_id": delivery1.delivery_id,
-                "last_closed_delivery_sequence": 1,
-                "state": applied_state,
-                "state_sha256": hash_hex_v1("execution_algo_state_v2", applied_state),
-                "last_applied_event_id": event1.event_id,
-                "updated_at_utc": "2026-07-25T01:31:00Z",
-            }
-        )
         market_data_id = thaw_json_v1(event1.source_identity)["market_data_id"]
         market_ref = ExecutionProjectionRefV1.create(
             projection_type=KernelProjectionTypeV1.MARKET_DATA,
@@ -3493,6 +4087,28 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             payload_sha256="8" * 64,
             source_event_id=event1.event_id,
             logical_at_utc=event1.event_time_utc,
+        )
+        applied_state = {
+            "next_slice": 1,
+            "active_orders": [],
+        }
+        after_state = AlgoStateSnapshotV2.model_validate(
+            {
+                "schema_version": "execution_algo_state_snapshot_v2",
+                "algo_instance_id": algo_id,
+                "plugin_id": algo_v1.plugin_id,
+                "plugin_version": algo_v1.plugin_version,
+                "plugin_manifest_sha256": algo_v1.plugin_manifest_sha256,
+                "state_schema_version": algo_v1.state_schema_version,
+                "transition_sequence": 2,
+                "last_applied_delivery_sequence": 2,
+                "last_applied_delivery_id": delivery1.delivery_id,
+                "last_closed_delivery_sequence": 2,
+                "state": applied_state,
+                "state_sha256": hash_hex_v1("execution_algo_state_v2", applied_state),
+                "last_applied_event_id": event1.event_id,
+                "updated_at_utc": "2026-07-25T01:31:00Z",
+            }
         )
         projection_set = ExecutionProjectionSetV1.create(
             runtime_id="runtime_k2",
@@ -3509,7 +4125,7 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             plugin_id=algo_v1.plugin_id,
             plugin_version=algo_v1.plugin_version,
             plugin_manifest_sha256=algo_v1.plugin_manifest_sha256,
-            transition_sequence=1,
+            transition_sequence=2,
             before_state_sha256_or_INIT=algo_v1.state_sha256,
             after_state_sha256=after_state.state_sha256,
             ordered_command_ids=(),
@@ -3533,10 +4149,21 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             logical_applied_at_utc="2026-07-25T01:31:00Z",
             transaction_commit_identity="mqtx_pending_ingress_seed",
         )
+        lifecycle_projection = KernelCommandLifecycleProjectionV1.create(
+            runtime_id="runtime_k2",
+            algo_instance_id=algo_id,
+            event_id=event1.event_id,
+            delivery_id=delivery1.delivery_id,
+            ordered_items=(),
+        )
         transition_tx = transaction_commit_identity_v1(
             operation="APPLY_CLAIMED_DELIVERY_ATOMIC_APPLIED",
             owner_identities=("runtime_k2", algo_id, event1.event_id, delivery1.delivery_id),
-            input_hashes=(projection_set.projection_set_sha256, after_state.state_sha256),
+            input_hashes=(
+                projection_set.projection_set_sha256,
+                lifecycle_projection.projection_sha256,
+                after_state.state_sha256,
+            ),
             output_identities=(provisional.transition_id,),
         )
         receipt = AlgoTransitionReceiptV1.create(
@@ -3556,10 +4183,10 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
         algo_payload.update(
             state_json=applied_state,
             state_sha256=after_state.state_sha256,
-            transition_sequence=1,
-            last_applied_delivery_sequence=1,
+            transition_sequence=2,
+            last_applied_delivery_sequence=2,
             last_applied_delivery_id=delivery1.delivery_id,
-            last_closed_delivery_sequence=1,
+            last_closed_delivery_sequence=2,
             row_version=2,
             updated_at_utc="2026-07-25T01:31:00Z",
         )
@@ -3595,32 +4222,10 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             ),
         )
         assert applied_readback["receipt"] == receipt
-        reserved_mapping, pending_submit_outbox = _submit_chain(receipt.transition_id)
-        with repository._connection(transaction=True) as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                repository._write_transition_commands_with_cursor(
-                    cur,
-                    transition_id=receipt.transition_id,
-                    mappings=(reserved_mapping,),
-                    outboxes=(pending_submit_outbox,),
-                    child_price_type=2,
-                )
-        algo_with_child_payload = applied_readback["algo"].model_dump(mode="python")
-        algo_with_child_payload.update(
-            active_child_count=1,
-            row_version=applied_readback["algo"].row_version + 1,
-            updated_at_utc="2026-07-25T01:31:01Z",
-        )
-        algo_with_child = ExecutionAlgoInstancePersistenceV2.model_validate(algo_with_child_payload)
-        repository.compare_and_swap_algo_instance(
-            algo_instance=algo_with_child,
-            expected_row_version=applied_readback["algo"].row_version,
-        )
-        with raw.cursor() as cur:
-            cur.execute(f"UPDATE {schema}.execution_runtime SET last_event_sequence=1 WHERE runtime_id='runtime_k2'")
+        assert applied_readback["algo"].active_child_count == 0
         event2 = RuntimeEventEnvelopeV2.create(
             runtime_id="runtime_k2",
-            sequence=2,
+            sequence=3,
             event_type=EventTypeV2.TICK,
             event_time_utc="2026-07-25T01:32:00Z",
             monotonic_ns=None,
@@ -3635,7 +4240,7 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             event2,
             algo_instance_id=algo_id,
             plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
-            algo_delivery_sequence=2,
+            algo_delivery_sequence=3,
             previous_delivery_id=delivery1.delivery_id,
         )
         ingress_receipt = repository.ingest_routed_event_atomic(
@@ -3652,7 +4257,7 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             == ingress_receipt
         )
         with raw.cursor() as cur:
-            cur.execute(f"UPDATE {schema}.execution_runtime SET last_event_sequence=1 WHERE runtime_id='runtime_k2'")
+            cur.execute(f"UPDATE {schema}.execution_runtime SET last_event_sequence=2 WHERE runtime_id='runtime_k2'")
         with pytest.raises(KernelRepositoryConflict, match="regressed behind"):
             repository.ingest_routed_event_atomic(
                 event=event2,
@@ -3660,7 +4265,7 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
                 correlated_algo_instance_ids=(),
             )
         with raw.cursor() as cur:
-            cur.execute(f"UPDATE {schema}.execution_runtime SET last_event_sequence=2 WHERE runtime_id='runtime_k2'")
+            cur.execute(f"UPDATE {schema}.execution_runtime SET last_event_sequence=3 WHERE runtime_id='runtime_k2'")
         retry_payload = event2.model_dump(mode="python")
         retry_payload["sequence"] = 99
         retry_event = RuntimeEventEnvelopeV2.model_validate(retry_payload)
@@ -3672,7 +4277,7 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             )
         with raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"SELECT last_event_sequence FROM {schema}.execution_runtime WHERE runtime_id='runtime_k2'")
-            assert cur.fetchone()["last_event_sequence"] == 2
+            assert cur.fetchone()["last_event_sequence"] == 3
         retry_fence = kernel_lease_fence_token_v1(
             owner_type="DELIVERY", owner_id=delivery2.delivery_id, lease_epoch=1, lease_owner=lease_owner
         )
@@ -3768,7 +4373,7 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
 
         event3 = RuntimeEventEnvelopeV2.create(
             runtime_id="runtime_k2",
-            sequence=3,
+            sequence=4,
             event_type=EventTypeV2.TICK,
             event_time_utc="2026-07-25T01:42:00Z",
             monotonic_ns=None,
@@ -3783,7 +4388,7 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
             event3,
             algo_instance_id=algo_id,
             plugin_manifest_sha256=descriptor.manifest.manifest_sha256,
-            algo_delivery_sequence=3,
+            algo_delivery_sequence=4,
             previous_delivery_id=reclaimed.delivery_id,
         )
         repository.ingest_routed_event_atomic(
@@ -3833,10 +4438,6 @@ def test_repository_routed_event_owns_runtime_sequence_and_predecessor_on_dev_po
         )
         assert failed["receipt"].stable_reason_code == "MINIQMT_ALGO_DELIVERY_RETRY_EXHAUSTED"
         assert failed["algo"].status is ExecutionAlgoPersistenceStatusV2.FAILED
-        terminal_chain = repository.read_command_identity_chain(pending_submit_outbox.command_id)
-        assert terminal_chain["mapping"].mapping_status is CommandChildMappingStatusV1.TERMINAL
-        assert terminal_chain["outbox"].status is BrokerCommandOutboxStatusV1.FAILED_TERMINAL
-        assert terminal_chain["outbox"].broker_called is False
         assert failed["algo"].active_child_count == 0
         assert failed["algo"].active_child_closure_status is ActiveChildClosureStatusV1.CLEAN
 
@@ -3886,33 +4487,14 @@ def test_repository_algo_start_is_one_atomic_idempotent_transaction_on_dev_postg
         with raw.cursor() as cur:
             cur.execute(_base_fixture_sql(schema))
             _apply_forward(cur, FORWARD.read_text(encoding="utf-8").replace("qmt_strategy", schema))
+            _align_execution_runtime_route_fixture(cur, schema)
+            _create_algo_start_authority_fixture(cur, schema)
             cur.execute(
                 f"""
-                CREATE TABLE {schema}.execution_parent_benchmark(
-                    parent_intent_id TEXT NOT NULL,
-                    parent_revision INTEGER NOT NULL,
-                    runtime_id TEXT NOT NULL,
-                    execution_plan_id TEXT NOT NULL,
-                    execution_plan_hash TEXT NOT NULL,
-                    release_id TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    emitted_parent_quantity BIGINT NOT NULL,
-                    execution_policy_id TEXT NOT NULL,
-                    execution_policy_sha256 TEXT NOT NULL,
-                    PRIMARY KEY(parent_intent_id,parent_revision)
-                );
-                CREATE TABLE {schema}.strategy_runtime_release(
-                    release_id TEXT PRIMARY KEY,
-                    release_hash TEXT NOT NULL,
-                    execution_policy_version_id TEXT NOT NULL,
-                    execution_policy_sha256 TEXT NOT NULL
-                )
-                """
-            )
-            cur.execute(
-                f"INSERT INTO {schema}.execution_runtime(runtime_id,trade_date) VALUES (%s,%s)",
-                ("runtime_init_k2", date(2026, 7, 25)),
+                INSERT INTO {schema}.execution_runtime(runtime_id,account_group_id,trade_date,mode)
+                VALUES (%s,%s,%s,%s)
+                """,
+                ("runtime_init_k2", "account_group_init_k2", date(2026, 7, 25), "SIM"),
             )
         repository = PostgresMiniQMTKernelRepository(conn_factory=_conn_factory(schema))
         descriptor = _current_test_descriptor()
@@ -3932,38 +4514,12 @@ def test_repository_algo_start_is_one_atomic_idempotent_transaction_on_dev_postg
                 "release_sha256": "4" * 64,
                 "policy_id": "policy_init_k2",
                 "policy_sha256": "5" * 64,
+                "logical_time_utc": "2026-07-25T01:20:00Z",
+                "exchange_trade_date": "2026-07-25",
             }
         )
         with raw.cursor() as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {schema}.execution_parent_benchmark(
-                    parent_intent_id,parent_revision,runtime_id,execution_plan_id,execution_plan_hash,
-                    release_id,symbol,side,emitted_parent_quantity,execution_policy_id,execution_policy_sha256
-                ) VALUES (%s,1,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """,
-                (
-                    creation_authority.parent_intent_id,
-                    creation_authority.runtime_id,
-                    creation_authority.execution_plan_id,
-                    creation_authority.execution_plan_sha256,
-                    creation_authority.release_id,
-                    creation_authority.symbol,
-                    creation_authority.side.value,
-                    creation_authority.parent_quantity,
-                    creation_authority.policy_id,
-                    creation_authority.policy_sha256,
-                ),
-            )
-            cur.execute(
-                f"INSERT INTO {schema}.strategy_runtime_release VALUES (%s,%s,%s,%s)",
-                (
-                    creation_authority.release_id,
-                    creation_authority.release_sha256,
-                    creation_authority.policy_id,
-                    creation_authority.policy_sha256,
-                ),
-            )
+            _insert_algo_start_authority_fixture(cur, schema, creation_authority)
         algo_id = _algo_instance_id_v2(
             runtime_id="runtime_init_k2",
             parent_intent_id="intent_init_k2",
@@ -4086,6 +4642,13 @@ def test_repository_algo_start_is_one_atomic_idempotent_transaction_on_dev_postg
                 ordered_delivery_ids=(initial.delivery_id,),
                 transaction_commit_identity="mqtx_pending_init",
             )
+            lifecycle_projection = KernelCommandLifecycleProjectionV1.create(
+                runtime_id=event.runtime_id,
+                algo_instance_id=algo_id,
+                event_id=event.event_id,
+                delivery_id=initial.delivery_id,
+                ordered_items=(),
+            )
             tx_identity = transaction_commit_identity_v1(
                 operation="INITIALIZE_ALGO_ATOMIC_APPLIED",
                 owner_identities=(event.runtime_id, algo_id, event.event_id, initial.delivery_id),
@@ -4093,6 +4656,7 @@ def test_repository_algo_start_is_one_atomic_idempotent_transaction_on_dev_postg
                     event.event_key_sha256,
                     event.payload_sha256,
                     projection_set.projection_set_sha256,
+                    lifecycle_projection.projection_sha256,
                     after_state.state_sha256,
                 ),
                 output_identities=(

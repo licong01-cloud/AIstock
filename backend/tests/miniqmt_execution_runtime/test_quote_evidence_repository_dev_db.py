@@ -62,8 +62,8 @@ def _conn_factory(*, autocommit: bool = False, manage_transaction: bool = False)
 def _repo() -> PostgresMiniQMTExecutionRuntimeRepository:
     with _conn_factory(autocommit=True) as connection:
         receipt = read_quote_event_schema(connection)
-    if receipt.production_ddl_gate != "applied_and_verified":
-        pytest.skip("P1-D CHECK migration is not applied to the explicitly selected dev DB")
+    if receipt.schema_state != "target_verified":
+        pytest.skip("BUG-1019 successor CHECK schema is not verified on the explicitly selected dev DB")
     return PostgresMiniQMTExecutionRuntimeRepository(conn_factory=_conn_factory)
 
 
@@ -75,7 +75,8 @@ def _candidate(*, runtime_id: str, action_id: str = "action-dev-db") -> QuoteEvi
         source_input_sha256=None,
     )
     return QuoteEvidenceEventCandidate(
-        event_id="mqrtevt_" + canonical_sha256({"schema": "miniqmt_quote_event_v1", "evidence_id": evidence.evidence_id}),
+        event_id="mqrtevt_"
+        + canonical_sha256({"schema": "miniqmt_quote_event_v1", "evidence_id": evidence.evidence_id}),
         runtime_id=runtime_id,
         event_type=MiniQMTExecutionEventType.QUOTE_ELIGIBILITY_EVALUATED,
         event_time=evidence.event_time_utc,
@@ -164,6 +165,9 @@ def test_dev_db_chain_pagination_diagnostics_and_retention_queries_are_executabl
     summary = repo.quote_diagnostics_summary(runtime_id, symbol="000001.SZ")
     assert summary["per_symbol"][0]["capture_count"] == 2
     assert action.evidence_id in repo.existing_evidence_ids(runtime_id, evidence_ids=(action.evidence_id,))
-    assert repo.list_events_by_ids(runtime_id, event_ids=(source_child_event.event_id,))[0].event_id == source_child_event.event_id
+    assert (
+        repo.list_events_by_ids(runtime_id, event_ids=(source_child_event.event_id,))[0].event_id
+        == source_child_event.event_id
+    )
     assert repo.quote_event_schema_gate() == "applied_and_verified"
     assert isinstance(repo.prune_runtime(runtime_id=runtime_id, reason="p1d_dev_db_query_validation"), dict)
