@@ -27,6 +27,7 @@ class LoadedAdvisoryPriceRangeBundle:
     manifest: dict[str, Any]
     feature_schema: dict[str, Any]
     models: dict[str, Any]
+    calibration_spec: dict[str, Any] | None = None
 
 
 def price_range_binding_path(
@@ -73,10 +74,7 @@ def publish_price_range_binding(
     root = Path(model_root).resolve()
     bundle_path = root / "price_range_bundles" / price_range_bundle_id
     manifest_path = bundle_path / "manifest.json"
-    manifest = read_price_range_bundle_manifest(
-        bundle_path,
-        expected_bundle_id=price_range_bundle_id,
-    )
+    manifest = _read_runtime_bundle_manifest(bundle_path, expected_bundle_id=price_range_bundle_id)
     _validate_runtime_manifest(manifest)
     payload = {
         "schema_version": "advisory_price_range_binding_v1",
@@ -204,10 +202,7 @@ def load_exact_price_range_bundle(
             "price-range bundle manifest differs from its exact binding",
             reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
         )
-    manifest = read_price_range_bundle_manifest(
-        bundle_path,
-        expected_bundle_id=bundle_id,
-    )
+    manifest = _read_runtime_bundle_manifest(bundle_path, expected_bundle_id=bundle_id)
     _validate_runtime_manifest(manifest)
     expected_manifest = {
         "package_id": package_id,
@@ -260,14 +255,18 @@ def load_exact_price_range_bundle(
         manifest=manifest,
         feature_schema=feature_schema,
         models=models,
+        calibration_spec=(
+            _read_json(bundle_path / "calibration_spec.json")
+            if manifest.get("schema_version") == "advisory_price_range_bundle_v2"
+            else None
+        ),
     )
 
 
 def _validate_runtime_manifest(manifest: dict[str, Any]) -> None:
+    schema_version = manifest.get("schema_version")
     expected = {
-        "schema_version": "advisory_price_range_bundle_v1",
         "status": "EXPERIMENTAL_SHADOW",
-        "calibration_state": "UNCALIBRATED",
         "feature_schema_version": "advisory_feature_schema_v1",
         "feature_schema_hash": FEATURE_SCHEMA_HASH,
         "label_policy_version": "advisory_price_range_label_policy_v1",
@@ -276,12 +275,39 @@ def _validate_runtime_manifest(manifest: dict[str, Any]) -> None:
         "model_count": len(PRICE_RANGE_MODEL_NAMES),
     }
     actual = {key: manifest.get(key) for key in expected}
-    if actual != expected:
+    valid_calibration = (
+        schema_version == "advisory_price_range_bundle_v1"
+        and manifest.get("calibration_state") == "UNCALIBRATED"
+    ) or (
+        schema_version == "advisory_price_range_bundle_v2"
+        and manifest.get("calibration_state") == "CALIBRATED_INTERVAL"
+        and manifest.get("entry_gap_calibration_state") == "CALIBRATED"
+        and manifest.get("entry_executable_calibration_state") == "UNCALIBRATED"
+    )
+    if actual != expected or not valid_calibration:
         raise AdvisoryModelFirstError(
             "price-range bundle runtime manifest is incompatible",
             reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
             context={"expected": expected, "actual": actual},
         )
+
+
+def _read_runtime_bundle_manifest(bundle_path: Path, *, expected_bundle_id: str) -> dict[str, Any]:
+    header = _read_json(bundle_path / "manifest.json")
+    schema = header.get("schema_version")
+    if schema in {None, "advisory_price_range_bundle_v1"}:
+        return read_price_range_bundle_manifest(bundle_path, expected_bundle_id=expected_bundle_id)
+    if schema == "advisory_price_range_bundle_v2":
+        from backend.services.advisory_model_first.price_range_calibration_bundle import (
+            validate_calibrated_price_range_bundle,
+        )
+
+        return validate_calibrated_price_range_bundle(bundle_path, expected_bundle_id=expected_bundle_id)
+    raise AdvisoryModelFirstError(
+        "price-range bundle schema is unsupported",
+        reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
+        context={"schema_version": schema},
+    )
 
 
 def _load_lightgbm_booster(path: Path) -> Any:
