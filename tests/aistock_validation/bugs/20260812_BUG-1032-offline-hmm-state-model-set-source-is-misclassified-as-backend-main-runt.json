@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1032",
-  "closed_at": null,
+  "closed_at": "2026-08-12T02:42:24Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -92,8 +92,8 @@
   },
   "first_seen_at": "2026-08-12T02:11:40.931416Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3fb31c285ce332d2d7af68d449b7a632d21ef3f5",
+  "fixed_at": "2026-08-12T02:42:24Z",
   "github_issue_number": 3305,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3305",
   "last_seen_at": "2026-08-12T02:11:40.931416Z",
@@ -101,6 +101,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3306",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -115,6 +116,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -122,7 +125,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -131,6 +134,11 @@
     "fingerprint": "5c74ea98166afa90103de086",
     "source_event_id": "FE-20260812-5c74ea98166a"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 292 passed, 2 skipped",
+    "rtk nox -s guardrail_changed_files -- --changed-only -> passed with 0 blocking findings, 4 of 4 mapped",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed, 14 of 14 mapped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

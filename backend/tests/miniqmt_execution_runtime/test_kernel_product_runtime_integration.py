@@ -17,6 +17,7 @@ from backend.execution_algos.adaptive_is.contracts import (
     SessionSegment,
     canonical_json_bytes,
 )
+from backend.execution_algos.adaptive_is.reasons import QuoteContractError
 from backend.execution_algos.vnpy_compat.facade_contracts import VnpyFacadeAuthorityInputV2
 from backend.services.miniqmt_execution_runtime import kernel_delivery, kernel_product_evidence
 from backend.services.miniqmt_execution_runtime.kernel_creation import KernelAlgoCreationCoordinatorV2
@@ -86,6 +87,10 @@ from backend.services.simulation_runtime.miniqmt_kernel_product import (
     _runtime_id,
     build_k6d_gateway_catalog_v1,
     build_simulation_miniqmt_product_runtime_v1,
+)
+from backend.services.simulation_runtime.miniqmt_quote_activation import (
+    MiniQMTKernelProductIngressSuppression,
+    build_miniqmt_quote_ingress_activation_from_env,
 )
 from backend.services.simulation_runtime.models import SimulationBrokerBackend
 from backend.services.strategy_package.execution_policy import compute_execution_policy_sha256
@@ -2224,6 +2229,104 @@ def test_product_runtime_quote_clock_callbacks_and_bounded_ingress_use_durable_s
         observed_at=datetime(2026, 8, 4, 1, 31, tzinfo=UTC),
     )
     assert (order_event, trade_event) == ("order_event", "trade_event")
+
+
+def test_real_product_quote_clock_schema_failure_is_backed_off_before_tick_ingress_repeats() -> None:
+    context = _context()
+    observation = _observation(context)
+    repository = _RuntimeRepository()
+    repository.reads = 1
+    runtime = _runtime(repository, _Dispatcher(), symbols=(observation.quote.symbol,))
+
+    class _Diag:
+        constraint_name = "ck_miniqmt_event_source"
+        schema_name = "qmt_strategy"
+        table_name = "execution_runtime_event"
+
+    class _CheckViolation(RuntimeError):
+        pgcode = "23514"
+        diag = _Diag()
+
+    class _Clock:
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        def wake(self, **_values: object) -> object:
+            self.attempts += 1
+            raise _CheckViolation("violates check constraint ck_miniqmt_event_source")
+
+    class _Supervisor:
+        sink = None
+
+        def register_observation_sink(self, *, consumer_id: str, symbols: tuple[str, ...], sink: object) -> None:
+            self.sink = sink
+
+        def get_observation_sink(self, *, consumer_id: str, symbols: tuple[str, ...]) -> object | None:
+            return self.sink
+
+        @staticmethod
+        def acquire_consumer(**_values: object) -> None:
+            return None
+
+        @staticmethod
+        def consumer_lease_owner_snapshot(
+            *,
+            consumer_id: str,
+            symbols: tuple[str, ...],
+        ) -> dict[str, object]:
+            lease = {
+                "lease_id": f"lease:{consumer_id}",
+                "data_session_key": "SIM:B0_QUOTE_V2:simulation_scheduler",
+                "owner": "simulation_scheduler",
+                "consumer_id": consumer_id,
+                "symbols": list(symbols),
+                "generation": 1,
+                "status": "ACTIVE",
+                "physical_subscription_id": 1001,
+            }
+            return {
+                "schema_version": "miniqmt_quote_consumer_lease_owner_snapshot_v1",
+                "readback_current": True,
+                "exact_owner": True,
+                "state": "ACTIVE",
+                "registration_generation": 1,
+                "expected_owner_identity_sha256": "a" * 64,
+                "actual_owner_identity_sha256": "a" * 64,
+                "expected_lease": dict(lease),
+                "actual_lease": dict(lease),
+            }
+
+        @staticmethod
+        def health() -> dict[str, object]:
+            return {"status": "READY"}
+
+    clock = _Clock()
+    object.__setattr__(runtime, "clock", clock)
+    activation = build_miniqmt_quote_ingress_activation_from_env(
+        environ={"MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED": "false"},
+        schema_gate_reader=lambda: "applied_and_verified",
+    )
+    supervisor = _Supervisor()
+    activation.controller_factory = None
+    activation.supervisor = supervisor  # type: ignore[assignment]
+    activation.register_kernel_product_runtime(runtime=runtime, symbols=runtime.symbols)
+    assert callable(supervisor.sink)
+
+    with pytest.raises(QuoteContractError):
+        supervisor.sink(observation, context)
+    suppression = supervisor.sink(observation, context)
+
+    assert clock.attempts == 1
+    assert isinstance(suppression, MiniQMTKernelProductIngressSuppression)
+    assert suppression.disposition == "RETRY_BACKOFF_SUPPRESSED"
+    assert suppression.consumer_id == f"k6d-kernel-v2:{runtime.runtime_id}"
+    assert suppression.runtime_id == runtime.runtime_id
+    assert suppression.symbol == observation.frame.symbol
+    assert suppression.ingress_generation == observation.frame.ingress_generation
+    assert suppression.ingress_sequence == observation.frame.ingress_sequence
+    assert suppression.market_data_id == observation.market_data_id
+    assert suppression.pending_identity_sha256 is not None
+    assert activation.health()["kernel_product_runtimes"][0]["ingress_retry"]["suppressed_callback_count"] == 1
 
 
 def test_product_runtime_outbox_and_reconcile_are_bounded_and_fail_loud() -> None:
