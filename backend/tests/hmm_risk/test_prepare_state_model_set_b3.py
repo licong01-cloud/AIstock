@@ -3056,6 +3056,80 @@ def test_p6_zero_refit_cli_rejects_hidden_diagnostic_child_before_dispatch(monke
     assert "cannot be combined with another child mode" in capsys.readouterr().err
 
 
+def test_train_stability_cli_requires_both_frozen_authorities(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_state_model_set.py",
+            "--request",
+            "ignored.json",
+            "--output-root",
+            ".",
+            "--env-file",
+            "ignored.env",
+            "--db-env-prefix",
+            "TEST_",
+            "--b3-train-stability-diagnostic-output",
+            "stability.json",
+            "--b3-p6-parent-report",
+            "parent.json",
+        ],
+    )
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: {})
+    monkeypatch.setattr(
+        subject,
+        "run_b3_train_stability_diagnostic",
+        lambda *args, **kwargs: pytest.fail("incomplete authority must fail before dispatch"),
+    )
+
+    assert subject.main() == 1
+    assert "--b3-p6-zero-refit-report" in capsys.readouterr().err
+
+
+def test_train_stability_cli_writes_and_reads_only_compact_report(monkeypatch, tmp_path, capsys) -> None:
+    output = tmp_path / "stability.json"
+    parent = tmp_path / "parent.json"
+    zero = tmp_path / "zero.json"
+    parent.write_text("{}", encoding="utf-8")
+    zero.write_text("{}", encoding="utf-8")
+    report = subject.build_b3_train_stability_source_drift(
+        error=StateModelSetError("source drift"),
+        diagnostic_producer_commit="f" * 40,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_state_model_set.py",
+            "--request",
+            "request.json",
+            "--output-root",
+            str(tmp_path),
+            "--env-file",
+            "ignored.env",
+            "--db-env-prefix",
+            "TEST_",
+            "--b3-train-stability-diagnostic-output",
+            str(output),
+            "--b3-p6-parent-report",
+            str(parent),
+            "--b3-p6-zero-refit-report",
+            str(zero),
+        ],
+    )
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: {})
+    monkeypatch.setattr(subject, "run_b3_train_stability_diagnostic", lambda *args: report)
+
+    assert subject.main() == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["profile_count"] == 0
+    assert receipt["fit_performed"] is False
+    assert receipt["selection_performed"] is False
+    assert receipt["d6_executed"] is False
+    assert output.read_bytes() == subject.canonical_json_bytes(report) + b"\n"
+
+
 @pytest.mark.parametrize("mode", ["c008", "c008_b1", "diag02", "diag04"])
 def test_historical_c008_entrypoints_use_dense_diagnostic_constructor(monkeypatch, mode) -> None:
     producer = "c" * 40
