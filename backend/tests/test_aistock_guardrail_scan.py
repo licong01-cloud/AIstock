@@ -88,7 +88,7 @@ def test_catalog_references_current_human_readable_standard() -> None:
         assert control.get("failure_policy")
 
     controls = _unified_controls(catalog)
-    assert len(controls) == 29
+    assert len(controls) == 30
     assert set(item["control_id"] for item in catalog["manual_review_controls"]) == {
         "DESIGN-COMPLIANCE-001",
         "ISSUE-GITHUB-SYNC-001",
@@ -96,7 +96,7 @@ def test_catalog_references_current_human_readable_standard() -> None:
         "STD-SYNC-001",
     }
     effect_counts = {effect: sum(item["effect"] == effect for item in controls.values()) for effect in effects}
-    assert effect_counts == {"block": 19, "warn": 8, "advisory": 2}
+    assert effect_counts == {"block": 20, "warn": 8, "advisory": 2}
 
 
 def test_rdagent_release_identity_control_is_fail_closed() -> None:
@@ -118,6 +118,27 @@ def test_rdagent_release_identity_control_is_fail_closed() -> None:
         "separate_source_deploy_restart_runtime_states",
         "rollback_target",
         "no_source_overlay",
+    } <= set(control["checker"]["required_evidence"])
+
+
+def test_worktree_cleanup_evidence_control_is_fail_closed() -> None:
+    scanner = _load_module()
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    control = _unified_controls(catalog)["WORKTREE-CLEANUP-EVIDENCE-001"]
+
+    assert control["effect"] == "block"
+    assert control["enforcement_phase"] == "issue_lifecycle"
+    assert control["failure_policy"] == (
+        "block_cleanup_done_when_durable_or_unknown_artifacts_or_four_state_drift_remain"
+    )
+    assert {
+        "compact_commit_bound_receipt_persisted",
+        "runtime_post_restart_receipt_summary_durable_before_local_copy_cleanup",
+        "ignored_artifact_manifest_classifies_transient_protected_unknown",
+        "active_process_and_path_boundary_preflight",
+        "manifest_unchanged_before_purge",
+        "path_registration_local_remote_four_state_readback",
     } <= set(control["checker"]["required_evidence"])
 
 

@@ -39,6 +39,7 @@ Use the RD-Agent section when source merge, immutable release, deployment, resta
 - Squash merge cleanup is allowed when GitHub PR state is `MERGED`, there is no open PR for the branch, and the task worktree is clean; do not require the source HEAD to be an ancestor of `main`.
 - Clean only task-owned worktrees/branches. Keep open-PR branches, dirty worktrees, and unrelated root files; classify backup/temp leftovers for janitor review instead of dumping full lists.
 - Prefer `python scripts/aistock_issue_workflow.py cleanup-after-merge --branch <branch> --pr-url <merged-pr-url> --worktree <task-worktree> --sync-root --apply` for safe cleanup. Never use `git reset --hard` or `git clean`.
+- Authorized cleanup uses `WORKTREE-CLEANUP-EVIDENCE-001`: the workflow first finalizes compact durable receipts, inventories ignored artifacts and active process references, removes only exact manifest-classified transient roots, then performs ordinary worktree/branch cleanup and four-state readback. Protected or unknown artifacts block cleanup; do not preserve full successful logs or caches after their receipt is durable.
 - Use HTTPS rewrite if Git SSH proxy fails under PowerShell.
 
 ## RD-Agent Release Aftercare
