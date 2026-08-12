@@ -292,7 +292,7 @@ def _stable_hmm_payload(payload: Any) -> Any:
                 "fresh HMM evidence contains a non-finite value",
                 reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
             )
-        return float(f"{value:.9g}")
+        return float(f"{value:.8g}")
     if isinstance(payload, np.integer):
         return int(payload)
     return payload

@@ -230,6 +230,19 @@ def _verify_environment(request: FrozenAdvisoryMetaLabelTrainingRequestV1) -> di
     commit = subprocess.run([*git, "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip().lower()
     if commit != request.repository_commit:
         raise AdvisoryModelFirstError("meta-label repository commit mismatch", reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH", context={"expected": request.repository_commit, "actual": commit})
+    tracked_changes = subprocess.run(
+        [*git, "status", "--porcelain", "--untracked-files=no"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if tracked_changes:
+        raise AdvisoryModelFirstError(
+            "meta-label repository has uncommitted tracked changes",
+            reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            context={"changed_file_count": len(tracked_changes.splitlines())},
+        )
     return {"conda_env": os.getenv("CONDA_DEFAULT_ENV"), "repository_commit": commit, "python": platform.python_version(), "lightgbm": importlib.metadata.version("lightgbm")}
 
 
