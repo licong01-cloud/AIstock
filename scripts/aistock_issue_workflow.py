@@ -1706,6 +1706,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/services/hmm_risk/state_model_set.py",
         "scripts/advisory_short_rebound_batch_b.py",
         "scripts/aistock_bug_id_allocator.py",
+        "scripts/bug_registry_metadata_check.py",
         "scripts/aistock_issue_workflow.py",
         "scripts/issue_flow.py",
         "scripts/aistock_guardrail_scan.py",

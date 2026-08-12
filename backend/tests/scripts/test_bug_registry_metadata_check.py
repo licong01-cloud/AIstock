@@ -37,6 +37,21 @@ def test_close_sync_registry_metadata_passes_with_linkage_and_gates(tmp_path: Pa
     assert payload["blocking"] == []
 
 
+def test_runtime_fixed_source_pending_restart_is_close_sync_metadata(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260616_BUG-392-example.json"
+    _write_bug(tmp_path / bug_rel, status="fixed_source_pending_user_restart")
+
+    payload = checker.check_bug_registry_metadata(
+        repo_root=tmp_path,
+        changed_files=[bug_rel],
+        close_sync_only=True,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["bug_ids"] == ["BUG-392"]
+    assert payload["blocking"] == []
+
+
 def test_open_bug_is_not_close_sync_metadata(tmp_path: Path) -> None:
     bug_rel = "tests/aistock_validation/bugs/20260616_BUG-392-example.json"
     _write_bug(tmp_path / bug_rel, status="open")
