@@ -42,6 +42,10 @@ from backend.qlib_exporter.db_reader import DBReader  # noqa: E402
 from backend.qlib_exporter.field_map_service import export_field_map_for_snapshot  # noqa: E402
 from backend.qlib_exporter.snapshot_writer import SnapshotWriter  # noqa: E402
 from backend.services.industry_code_map import UNKNOWN_L2_CODE_ID  # noqa: E402
+from backend.services.dataset_release.static_schema import (  # noqa: E402
+    STATIC_ORDERED_COLUMNS,
+    STATIC_SCHEMA_VERSION,
+)
 
 
 DEFAULT_START = "2018-08-01"
@@ -50,7 +54,6 @@ DEFAULT_SNAPSHOT_ID = "qlib_20260428_shsz_candidate"
 DEFAULT_BIN_ID = "qlib_bin_20260428_shsz_candidate"
 LEGACY_SAMPLE_MAX_INSTRUMENTS = 500
 DEFAULT_INDEX_CODES = ["000300.SH"]
-STATIC_SCHEMA_SOURCE = PROJECT_ROOT / "qlib_snapshots" / "qlib_test" / "static_factors.parquet"
 
 
 class LegacyUnboundedExportDisabled(RuntimeError):
@@ -96,8 +99,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--snapshot-root", default=str(PROJECT_ROOT / "qlib_snapshots"))
     parser.add_argument(
         "--static-schema-source",
-        default=os.getenv("QE_STATIC_SCHEMA_SOURCE", str(STATIC_SCHEMA_SOURCE)),
-        help="Parquet file whose ordered columns define the static factor schema.",
+        default=os.getenv("QE_STATIC_SCHEMA_SOURCE") or None,
+        help=(
+            "Optional Parquet file whose ordered columns define the static factor schema. "
+            "When omitted, use the version-controlled canonical 121-column schema."
+        ),
     )
     parser.add_argument("--bin-root", default=str(PROJECT_ROOT / "qlib_bin"))
     parser.add_argument("--csv-root", default=str(PROJECT_ROOT / "qlib_csv"))
@@ -300,7 +306,18 @@ def read_static_schema_columns(schema_source: Path) -> list[str]:
     ]
     if "l2_code_id" not in columns:
         raise ValueError(f"Static schema source is stale and lacks l2_code_id: {schema_source}")
+    if columns != list(STATIC_ORDERED_COLUMNS):
+        raise ValueError(
+            f"Static schema source does not match {STATIC_SCHEMA_VERSION} ordered 121-column contract: "
+            f"{schema_source}"
+        )
     return columns
+
+
+def resolve_static_schema_columns(schema_source: Path | None) -> list[str]:
+    if schema_source is None:
+        return list(STATIC_ORDERED_COLUMNS)
+    return read_static_schema_columns(schema_source)
 
 
 def align_static_schema(static: pd.DataFrame, expected_cols: list[str]) -> pd.DataFrame:
@@ -324,7 +341,7 @@ def build_aux_and_static(
     daily_norm: pd.DataFrame,
     start: date,
     end: date,
-    static_schema_source: Path,
+    expected_static_columns: list[str],
 ) -> dict:
     logging.info("Loading auxiliary H5 datasets for %s instruments", len(instruments))
     df_db = qe_data.load_daily_basic(instruments, start, end)
@@ -379,8 +396,7 @@ def build_aux_and_static(
             static = static.join(nxt, how="left")
     static = static.sort_index()
 
-    expected_cols = read_static_schema_columns(static_schema_source)
-    static = align_static_schema(static, expected_cols)
+    static = align_static_schema(static, expected_static_columns)
 
     # Fail before writing a candidate when alternate export paths drift in units.
     assert_moneyflow_frame_parity(df_mf, static)
@@ -865,11 +881,12 @@ def main() -> int:
     if "candidate" not in args.snapshot_id.lower() or "candidate" not in args.bin_id.lower():
         raise ValueError("snapshot-id and bin-id must contain 'candidate'")
 
-    static_schema_source = Path(args.static_schema_source)
-    schema_columns = read_static_schema_columns(static_schema_source)
+    static_schema_source = Path(args.static_schema_source) if args.static_schema_source else None
+    schema_columns = resolve_static_schema_columns(static_schema_source)
+    schema_authority = str(static_schema_source) if static_schema_source is not None else f"canonical:{STATIC_SCHEMA_VERSION}"
     logging.info(
         "Static schema preflight: source=%s columns=%s",
-        static_schema_source,
+        schema_authority,
         len(schema_columns),
     )
 
@@ -900,7 +917,7 @@ def main() -> int:
         daily_norm,
         start,
         end,
-        static_schema_source,
+        schema_columns,
     )
     meta_path = snapshot_dir / "meta.json"
     snapshot_meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}

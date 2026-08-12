@@ -772,6 +772,7 @@ rules:
     priority: 75
     include:
       - backend/qlib_exporter/**
+      - backend/tests/qlib_exporter/**
       - scripts/qlib_*.py
       - qlib_minute_validation/**
     primary_module: qlib_data
