@@ -19,6 +19,7 @@ from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_strategy_evo_loop,
     build_config_from_custom_evo_loop,
 )
+from backend.services.quantevolver.executors import backtest as backtest_module
 from backend.services.quantevolver.executors.base import ExecutionContext
 from backend.services.quantevolver.executors.backtest import (
     BacktestExecutor as ProductionBacktestExecutor,
@@ -247,6 +248,105 @@ class TestBacktestExecutorBasic:
         assert result.experiment_files["qe_resource_session_secret.json"] == "<redacted>"
         submitted_files = client.create_and_run_loop.await_args.args[3]
         assert submitted_files["qe_resource_session_secret.json"] == session_secret_payload
+
+    def test_retry_attempt_identity_is_distinct_from_evolution_loop_claim_id(self):
+        claim_source = MagicMock()
+        record_waiting = MagicMock()
+        ctx = ExecutionContext(
+            task_id="task_retry",
+            loop_index=7,
+            experiment_name="task_retry/Loop7",
+            node_id="wsl2-5080",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="task_retry_Loop7:retry:attempt-1",
+            submission_source_claim_id="task_retry_Loop7",
+        )
+
+        with patch.object(
+            backtest_module.QEExecutionSourceClaimFactory,
+            "evolution_loop",
+            return_value=(claim_source, record_waiting),
+        ) as evolution_loop:
+            source = ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        evolution_loop.assert_called_once_with(
+            loop_id="task_retry_Loop7",
+            node_id="wsl2-5080",
+        )
+        assert source.source_execution_id == "task_retry_Loop7:retry:attempt-1"
+        assert source.claim_source is claim_source
+        assert source.record_waiting_capacity is record_waiting
+
+    def test_evolution_loop_without_claim_id_uses_execution_id_for_claim(self):
+        claim_source = MagicMock()
+        record_waiting = MagicMock()
+        ctx = ExecutionContext(
+            task_id="task_normal",
+            loop_index=3,
+            experiment_name="task_normal/Loop3",
+            node_id="rdagent-node1",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="task_normal_Loop3",
+        )
+
+        with patch.object(
+            backtest_module.QEExecutionSourceClaimFactory,
+            "evolution_loop",
+            return_value=(claim_source, record_waiting),
+        ) as evolution_loop:
+            source = ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        evolution_loop.assert_called_once_with(
+            loop_id="task_normal_Loop3",
+            node_id="rdagent-node1",
+        )
+        assert source.source_execution_id == "task_normal_Loop3"
+
+    def test_qe_experiment_without_claim_id_uses_execution_id_for_claim(self):
+        claim_source = MagicMock()
+        record_waiting = MagicMock()
+        ctx = ExecutionContext(
+            task_id="task_experiment",
+            loop_index=2,
+            experiment_name="task_experiment/Loop2",
+            node_id="wsl2-5080",
+            submission_source_kind="qe_experiment",
+            submission_source_execution_id="experiment_42",
+        )
+
+        with patch.object(
+            backtest_module.QEExecutionSourceClaimFactory,
+            "experiment",
+            return_value=(claim_source, record_waiting),
+        ) as experiment:
+            source = ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        experiment.assert_called_once_with(
+            experiment_id="experiment_42",
+            node_id="wsl2-5080",
+            qe_task_id="task_experiment",
+            qe_loop_id="Loop2",
+        )
+        assert source.source_execution_id == "experiment_42"
+
+    def test_explicit_empty_claim_id_fails_closed(self):
+        ctx = ExecutionContext(
+            task_id="task_retry",
+            loop_index=7,
+            experiment_name="task_retry/Loop7",
+            node_id="wsl2-5080",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="task_retry_Loop7:retry:attempt-1",
+            submission_source_claim_id="",
+        )
+
+        with pytest.raises(
+            backtest_module.QEWorkspaceSubmissionCoordinatorError
+        ) as error:
+            ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        assert error.value.reason_code == "qe_execution_source_identity_missing"
+        assert error.value.context["source_claim_id"] is None
 
     def test_backtest_only_requires_model_source(self):
         executor = BacktestExecutor(make_mock_composer(), make_mock_client())

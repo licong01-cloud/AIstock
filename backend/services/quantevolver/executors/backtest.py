@@ -365,9 +365,16 @@ class BacktestExecutor(BaseExecutor):
         node_id = str(ctx.node_id or "").strip()
         source_kind = str(ctx.submission_source_kind or "").strip()
         source_execution_id = str(ctx.submission_source_execution_id or "").strip()
-        if not node_id or not source_kind or not source_execution_id:
+        # Normal submissions use one identity for both purposes. Retries keep
+        # a unique reservation identity but claim their canonical source row.
+        source_claim_id = (
+            source_execution_id
+            if ctx.submission_source_claim_id is None
+            else str(ctx.submission_source_claim_id).strip()
+        )
+        if not node_id or not source_kind or not source_execution_id or not source_claim_id:
             raise QEWorkspaceSubmissionCoordinatorError(
-                "BacktestExecutor requires explicit node and source execution identity",
+                "BacktestExecutor requires explicit node, source execution, and source claim identity",
                 reason_code="qe_execution_source_identity_missing",
                 context={
                     "task_id": ctx.task_id,
@@ -375,17 +382,18 @@ class BacktestExecutor(BaseExecutor):
                     "node_id": node_id or None,
                     "source_kind": source_kind or None,
                     "source_execution_id": source_execution_id or None,
+                    "source_claim_id": source_claim_id or None,
                 },
             )
         loop_id = f"Loop{ctx.loop_index}"
         if source_kind == "qe_evolution_loop":
             claim_source, record_waiting = QEExecutionSourceClaimFactory.evolution_loop(
-                loop_id=source_execution_id,
+                loop_id=source_claim_id,
                 node_id=node_id,
             )
         elif source_kind == "qe_experiment":
             claim_source, record_waiting = QEExecutionSourceClaimFactory.experiment(
-                experiment_id=source_execution_id,
+                experiment_id=source_claim_id,
                 node_id=node_id,
                 qe_task_id=ctx.task_id,
                 qe_loop_id=loop_id,
