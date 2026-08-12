@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.outcome_calibration_contracts import (
     OutcomeCalibrationArtifactV1,
     build_frozen_outcome_calibration_request,
@@ -51,8 +53,18 @@ def test_pipeline_freezes_validation_spec_before_test_labels_are_read(
         "instrument": ["000001.SZ", "000002.SZ"],
     }
     features = pd.DataFrame(keys)
-    validation_labels = pd.DataFrame({**{key: [value[0]] for key, value in keys.items()}, "split": ["validation"]})
-    test_labels = pd.DataFrame({**{key: [value[1]] for key, value in keys.items()}, "split": ["test"]})
+    validation_labels = pd.DataFrame(
+        {
+            **{key: [value[0], f"missing-{key}"] for key, value in keys.items()},
+            "split": ["validation", "validation"],
+        }
+    )
+    test_labels = pd.DataFrame(
+        {
+            **{key: [value[1], f"missing-{key}"] for key, value in keys.items()},
+            "split": ["test", "test"],
+        }
+    )
     frozen_path = (
         Path(request.output_root)
         / "outcome_calibration_runs"
@@ -92,7 +104,7 @@ def test_pipeline_freezes_validation_spec_before_test_labels_are_read(
     monkeypatch.setattr(
         pipeline,
         "_fit_validation",
-        lambda **_kwargs: (spec, validation_labels.loc[:, list(pipeline.KEYS)]),
+        lambda **kwargs: (spec, kwargs["merged"].loc[:, list(pipeline.KEYS)]),
     )
     monkeypatch.setattr(
         pipeline,
@@ -118,3 +130,67 @@ def test_pipeline_freezes_validation_spec_before_test_labels_are_read(
 
     assert receipt["status"] == "calibrated"
     assert read_order == ["validation", "test_after_frozen_spec"]
+    assert receipt["metrics"]["projection_counts"] == {
+        "validation": {
+            "label_row_count": 2,
+            "feature_covered_row_count": 1,
+            "missing_feature_row_count": 1,
+        },
+        "test": {
+            "label_row_count": 2,
+            "feature_covered_row_count": 1,
+            "missing_feature_row_count": 1,
+        },
+    }
+
+
+def test_feature_covered_projection_rejects_duplicate_feature_identity() -> None:
+    key = {
+        "decision_as_of_trade_date": "2026-01-02",
+        "target_trade_date": "2026-01-03",
+        "instrument": "000001.SZ",
+    }
+    features = pd.DataFrame([key, key])
+    labels = pd.DataFrame([{**key, "split": "validation"}])
+
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        pipeline._feature_covered_projection(
+            features=features,
+            labels=labels,
+            projection_name="validation",
+        )
+
+    assert exc_info.value.reason_code == "ADVISORY_OUTCOME_CALIBRATION_FAILED"
+    assert "not one-to-one" in str(exc_info.value)
+
+
+def test_feature_covered_projection_rejects_empty_authoritative_overlap() -> None:
+    features = pd.DataFrame(
+        [
+            {
+                "decision_as_of_trade_date": "2026-01-02",
+                "target_trade_date": "2026-01-03",
+                "instrument": "000001.SZ",
+            }
+        ]
+    )
+    labels = pd.DataFrame(
+        [
+            {
+                "decision_as_of_trade_date": "2026-01-04",
+                "target_trade_date": "2026-01-05",
+                "instrument": "000002.SZ",
+                "split": "validation",
+            }
+        ]
+    )
+
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        pipeline._feature_covered_projection(
+            features=features,
+            labels=labels,
+            projection_name="validation",
+        )
+
+    assert exc_info.value.reason_code == "ADVISORY_OUTCOME_CALIBRATION_FAILED"
+    assert "no common rows" in str(exc_info.value)

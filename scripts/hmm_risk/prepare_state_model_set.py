@@ -64,6 +64,12 @@ from backend.services.hmm_risk.b3_remediation_diagnostic import (  # noqa: E402
     validate_authorities as validate_b3_remediation_authorities,
     write_diagnostic_artifact as write_b3_remediation_artifact,
 )
+from backend.services.hmm_risk.b3_train_stability_diagnostic import (  # noqa: E402
+    REPORT_SCHEMA_VERSION as B3_TRAIN_STABILITY_REPORT_SCHEMA,
+    build_report as build_b3_train_stability_report,
+    source_drift_report as build_b3_train_stability_source_drift,
+    validate_report as validate_b3_train_stability_report,
+)
 from backend.services.hmm_risk.b3_training import (  # noqa: E402
     audit_train_only_coverage,
     build_train_only_series,
@@ -174,6 +180,7 @@ B3_P6_CLI_SCHEMA = "hmm_risk_b3_p6_autocycle_l2_cli_receipt_v1"
 B3_P6_OUTPUT_ARGUMENT = "b3_p6_autocycle_l2_output"
 B3_P6_D6_ZERO_REFIT_SCHEMA = "hmm_risk_b3_d6_zero_refit_replay_v1"
 B3_P6_D6_ZERO_REFIT_CLI_SCHEMA = "hmm_risk_b3_d6_zero_refit_replay_cli_receipt_v1"
+B3_TRAIN_STABILITY_CLI_SCHEMA = "hmm_risk_c008_b3_train_stability_diag01_cli_v1"
 B3_HIDDEN_CHILD_ARGUMENTS = (
     "_c008_b3_diag02_child",
     "_c008_b3_diag04_child",
@@ -5358,6 +5365,73 @@ def run_b3_p6_d6_zero_refit_replay(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
+def run_b3_train_stability_diagnostic(
+    args: argparse.Namespace,
+    request: dict[str, Any],
+    parent_report: Mapping[str, Any],
+    zero_refit_report: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Rebuild frozen train inputs once and evaluate all 8x131 models without fit or selection."""
+
+    diagnostic_commit = _git_commit()
+    try:
+        _require_approved_b3_windows(request)
+        _require_c010_policy_identity(request)
+        _require_formal_train_coverage_identity(request)
+        training_authority = _resolve_p6_zero_refit_training_authority(parent_report)
+        child_paths = tuple(str(value) for value in training_authority.get("fresh_process_receipt_paths") or ())
+        child_hashes = tuple(str(value) for value in training_authority.get("fresh_process_receipt_hashes") or ())
+        if len(child_paths) != 2 or len(child_hashes) != 2:
+            raise StateModelSetError("train-stability frozen child lineage is incomplete")
+        model_sets: list[dict[tuple[int, str], Any]] = []
+        training_producer = str(training_authority.get("producer_commit") or "")
+        for process_identity, path, expected_hash in zip(
+            ("fresh_process_1", "fresh_process_2"), child_paths, child_hashes, strict=True
+        ):
+            child = _load_json_mapping(Path(path).resolve(), label=f"train-stability {process_identity} receipt")
+            _validate_b3_p6_child_payload(
+                child,
+                process_identity=process_identity,
+                expected_producer_commit=training_producer,
+            )
+            if child.get("single_pass_receipt_sha256") != expected_hash:
+                raise StateModelSetError(f"train-stability {process_identity} receipt hash differs")
+            model_sets.append(models_from_repeat(child["level_repeat"]))
+            del child
+
+        train_inputs = _load_l1_source_inputs(request, db_prefix=str(args.db_env_prefix), c010_formal=True)
+        identity_fields = {
+            "dataset_manifest_hash": canonical_sha256(train_inputs["dataset_manifest"]),
+            "mapping_manifest_hash": canonical_sha256(train_inputs["mapping_manifest"]),
+            "calendar_manifest_hash": canonical_sha256(train_inputs["dataset_manifest"]["calendar_benchmark"]),
+            "l2_stock_fact_manifest_hash": canonical_sha256(train_inputs["l2_stock_fact_manifest"]),
+        }
+        if any(training_authority.get(field) != actual for field, actual in identity_fields.items()):
+            raise StateModelSetError("train-stability read-only source reload drifted from frozen authority")
+        policy = _c010_policy_manifest(train_inputs, request, producer_commit=training_producer)
+        if policy.get("receipt_sha256") != training_authority.get("feature_domain_policy_sha256"):
+            raise StateModelSetError("train-stability read-only policy reload drifted from frozen authority")
+        train_inputs["feature_domain_policy_sha256"] = policy["receipt_sha256"]
+        family_map = {str(value.get("family") or ""): value for value in request.get("families") or ()}
+        family = family_map.get(B3_P6_FAMILY)
+        if not isinstance(family, dict):
+            raise StateModelSetError("train-stability autocycle family is missing")
+        series = _direct_l2_train_series_for_family(train_inputs, family)
+        report = build_b3_train_stability_report(
+            training_authority=training_authority,
+            zero_refit_report=zero_refit_report,
+            first_models=model_sets[0],
+            second_models=model_sets[1],
+            series=series,
+            trading_dates=tuple(train_inputs.get("trading_dates") or ()),
+            diagnostic_producer_commit=diagnostic_commit,
+        )
+    except (StateModelSetError, OSError, ValueError) as exc:
+        report = build_b3_train_stability_source_drift(error=exc, diagnostic_producer_commit=diagnostic_commit)
+    validate_b3_train_stability_report(report)
+    return report
+
+
 def _write_diagnostic_report(path: Path, report: dict[str, Any]) -> str:
     payload = canonical_json_bytes(report) + b"\n"
     if path.exists():
@@ -5437,6 +5511,10 @@ def parse_args() -> argparse.Namespace:
         help="Replay only D6-NA-A from an immutable P6 parent report; never fit, reselect, or write READY.",
     )
     diagnostic_group.add_argument(
+        "--b3-train-stability-diagnostic-output",
+        help="Run the approved zero-refit 8x131 train-window stability diagnostic.",
+    )
+    diagnostic_group.add_argument(
         "--b3-blocker-diagnostic-output",
         help="Run the approved 174-pair x two-process blocker diagnostic and zero-refit D6 replay.",
     )
@@ -5473,7 +5551,14 @@ def parse_args() -> argparse.Namespace:
         help="Required canonical SHA-256 when replaying an existing REFIT-03 frozen input bundle.",
     )
     parser.add_argument("--b3-formal-report", help="Approved immutable formal B3 preparation report.")
-    parser.add_argument("--b3-p6-parent-report", help="Immutable original P6 parent report for D6 zero-refit replay.")
+    parser.add_argument(
+        "--b3-p6-parent-report",
+        help="Immutable P6 parent/checkpoint authority for zero-refit replay or train-stability diagnostic.",
+    )
+    parser.add_argument(
+        "--b3-p6-zero-refit-report",
+        help="Immutable BUG-1029 P6 zero-refit report; required only for train-stability diagnostic.",
+    )
     parser.add_argument("--b3-blocker-report", help="Approved immutable C-008-B3-FORMAL-BLOCKER-DIAG-01 report.")
     parser.add_argument("--b3-remediation-report", help="Approved immutable C-008-B3-REMEDIATION-DIAG-02 report.")
     parser.add_argument(
@@ -5506,7 +5591,9 @@ def main() -> int:
         d1_output = getattr(args, "b3_d1_controlled_refit_output", None)
         p6_output = getattr(args, "b3_p6_autocycle_l2_output", None)
         p6_zero_refit_output = getattr(args, "b3_p6_d6_zero_refit_output", None)
+        train_stability_output = getattr(args, "b3_train_stability_diagnostic_output", None)
         p6_parent_report = getattr(args, "b3_p6_parent_report", None)
+        p6_zero_refit_report = getattr(args, "b3_p6_zero_refit_report", None)
         blocker_formal_report = getattr(args, "b3_formal_report", None)
         remediation_blocker_report = getattr(args, "b3_blocker_report", None)
         d1_remediation_report = getattr(args, "b3_remediation_report", None)
@@ -5521,10 +5608,32 @@ def main() -> int:
         p6_parent = bool(p6_output)
         p6_child = bool(getattr(args, "_b3_p6_autocycle_l2_child", False))
         p6_zero_refit = bool(p6_zero_refit_output)
-        if p6_zero_refit:
+        train_stability = bool(train_stability_output)
+        if train_stability:
+            _require_b3_p6_zero_refit_mode_isolation(args)
+            if not p6_parent_report or not p6_zero_refit_report:
+                raise StateModelSetError(
+                    "--b3-p6-parent-report and --b3-p6-zero-refit-report are required for train-stability diagnostic"
+                )
+            if (
+                p6_parent
+                or p6_child
+                or p6_zero_refit
+                or blocker_formal_report
+                or remediation_blocker_report
+                or d1_remediation_report
+                or d1_c010_a5_report
+                or blocker_target_sha256
+                or d1_frozen_input_bundle
+                or d1_frozen_input_bundle_sha256
+            ):
+                raise StateModelSetError("train-stability diagnostic cannot be combined with another authority mode")
+        elif p6_zero_refit:
             _require_b3_p6_zero_refit_mode_isolation(args)
             if not p6_parent_report:
                 raise StateModelSetError("--b3-p6-parent-report is required for D6 zero-refit replay")
+            if p6_zero_refit_report:
+                raise StateModelSetError("--b3-p6-zero-refit-report is only valid with train-stability diagnostic")
             if (
                 p6_parent
                 or p6_child
@@ -5537,7 +5646,7 @@ def main() -> int:
                 or d1_frozen_input_bundle_sha256
             ):
                 raise StateModelSetError("B3 P6 D6 zero-refit replay cannot be combined with another authority mode")
-        elif p6_parent_report:
+        elif p6_parent_report or p6_zero_refit_report:
             raise StateModelSetError("--b3-p6-parent-report is only valid with D6 zero-refit replay")
         elif p6_parent or p6_child:
             _require_b3_p6_mode_isolation(args, p6_parent=p6_parent, p6_child=p6_child)
@@ -5830,6 +5939,33 @@ def main() -> int:
             }
             print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
             return 0 if report["status"] == "accepted" else 1
+        if train_stability:
+            parent_report = _load_json_mapping(Path(p6_parent_report).resolve(), label="B3 P6 parent report")
+            zero_refit = _load_json_mapping(Path(p6_zero_refit_report).resolve(), label="B3 P6 zero-refit report")
+            report = run_b3_train_stability_diagnostic(args, request, parent_report, zero_refit)
+            report_path = Path(train_stability_output).resolve()
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            readback = _load_json_mapping(report_path, label="B3 train-stability report")
+            validate_b3_train_stability_report(readback)
+            if readback != report:
+                raise StateModelSetError("B3 train-stability durable report readback differs")
+            receipt = {
+                "schema_version": B3_TRAIN_STABILITY_CLI_SCHEMA,
+                "report_schema_version": B3_TRAIN_STABILITY_REPORT_SCHEMA,
+                "status": report["status"],
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "profile_count": report["profile_count"],
+                "fit_performed": False,
+                "selection_performed": False,
+                "d6_executed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0 if report["status"] == "diagnostic_complete" else 1
         if args._b3_child:
             if args.b3_process_identity not in {"fresh_process_1", "fresh_process_2"}:
                 raise StateModelSetError("formal B3 child process identity is invalid")

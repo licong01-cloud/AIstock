@@ -108,6 +108,22 @@ function priceRangeCandidate(symbol: string) {
   };
 }
 
+function calibratedPriceRangeCandidate(symbol: string) {
+  return {
+    ...priceRangeCandidate(symbol),
+    calibrated_entry_price: {
+      condition: "ENTRY_EXECUTABLE",
+      low: 9.8,
+      mid: 10,
+      high: 10.2,
+    },
+    entry_gap_calibration_state: "CALIBRATED",
+    entry_gap_calibration_method: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
+    entry_gap_calibration_delta: 0.01,
+    entry_executable_calibration_state: "UNCALIBRATED",
+  };
+}
+
 const program = {
   program_id: PROGRAM_ID,
   program_name: "codex_smoke_20260604",
@@ -1181,6 +1197,60 @@ test("Advisory calibrated outcome shows calibrated and raw values without hiding
   await expect(row).toContainText("60.0%");
   await expect(row).toContainText("UNCALIBRATED");
   await expect(page.getByTestId("advisory-price-range-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+});
+
+
+test("Advisory calibrated entry interval keeps raw M4 visible and binary uncalibrated", async ({ page }) => {
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "EXPERIMENTAL_SHADOW",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 1,
+        shortlist_count: 1,
+        candidates: [],
+        baselines: {},
+        hmm_unavailable: [],
+        outcome: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: "outcome_bundle_ui",
+          parent_bundle_id: "bundle_ui",
+          model_version: "advoutreq_ui",
+          horizons: OUTCOME_HORIZONS,
+          candidates: [outcomeCandidate("000002.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        price_range: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "CALIBRATED_INTERVAL",
+          price_range_bundle_id: "price_range_bundle_v2_ui",
+          parent_bundle_id: "bundle_ui",
+          outcome_bundle_id: "outcome_bundle_ui",
+          model_version: "advprcal_ui",
+          price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          candidates: [calibratedPriceRangeCandidate("000002.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        reason_code: null,
+        message: null,
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+  const row = page.getByTestId("advisory-price-range-table").locator("tbody tr").first();
+  await expect(page.getByTestId("advisory-price-range-shadow")).toContainText(
+    "CALIBRATED_INTERVAL",
+  );
+  await expect(row).toContainText("9.80 - 10.20");
+  await expect(row).toContainText("9.90 - 10.10");
+  await expect(row).toContainText("UNCALIBRATED");
 });
 
 

@@ -2,7 +2,7 @@
 
 > 日期：2026-08-12  
 > Feature tier：F2  
-> 状态：DESIGN_REVIEWED  
+> 状态：SOURCE_AND_RUNTIME_VERIFIED_QUALITY_NOT_ACTIVATED
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`  
 > 前序设计：`docs/architecture/advisory_model_first_m3_outcome_holding_period_f2_design_20260809.md`、`docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`
 
@@ -126,14 +126,15 @@ signal_survival_h{1,3,5,10,20}
 4. 保存 `a`、`b`、样本数、正负样本数、solver、版本、收敛状态和 validation metrics。
 5. 不修改原 booster，不把 calibrated probability 回写成模型 raw prediction。
 
-若某 head validation 缺任一类别，则该 head 保存：
+若某 head validation 缺任一类别，或拟合得到非正斜率、会反转 raw probability 排序，则该 head 保存：
 
 ```text
 calibration_state = UNCALIBRATED
 reason_code = ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING
+           | ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL
 ```
 
-并继续返回 raw probability；禁止使用常数、其他 horizon、其他 family 或全局 calibrator 代替。当前权威 M3 的 10 个 head 均有双边样本，因此真实执行预期为 10/10 calibrated。若 optimizer 不收敛、系数非有限或运行异常，则整个 request typed failure，不把技术失败伪装成合法 `UNCALIBRATED`。
+两种情况均继续返回 raw probability；禁止使用常数、其他 horizon、其他 family 或全局 calibrator 代替，也禁止把 raw 值复制到 calibrated 字段。optimizer 不收敛、系数非有限或运行异常仍使整个 request typed failure，不把技术失败伪装成合法 `UNCALIBRATED`。
 
 ### 6.2 指标
 
@@ -475,4 +476,29 @@ backend_restart = user-owned，仅在 runtime 源码合入且 binding 激活后�
 | 未经确认门禁/审批 | PASS | 无角色、审批、二次准入或收益阈值；metrics 只报告，不阻断研究 bundle |
 | F2 文档合同 | PASS | `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md --tier F2`：13 rows，0 warnings |
 
-审核未发现剩余设计阻断。该结论只表示详细设计可进入实现，不代表源码、真实校准 bundle、binding、重启或 deployed readback 已完成。
+初始设计审核未发现设计阻断，完整首版源码已随 PR #3315、merge commit `ae9401b1229e66b139d3bb61c9d3306ca55f0ef3` 合入。真实运行随后发现 BUG-1038/BUG-1039，合入前复审又发现 BUG-1040（逐 head solver/版本/迭代与收敛证据未进入正式 artifact 合同）；修复与最终结果见 §21。首版源码合入不再代表 M5B 可激活。
+
+## 21. 真实 WSL 校准结果与激活结论
+
+2026-08-12 在 WSL Conda `rdagent-gpu` 使用冻结 M3 输入完成最终权威运行：
+
+- request：`advoutcal_ec16422ad1a97040583e5273`，request SHA256 `ec16422ad1a97040583e5273e632adaea77921c4dddd60228cb422e6c6db1ffa`。
+- source commit：`0892eaa0aafbb7bfa69f5e91d17f9b5e2ceb4455`；父 M3 bundle：`17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0`。
+- v2 bundle：`a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533`；同 request exact retry 返回相同 bundle ID。该 bundle 的 10 个 binary head 均保存固定 solver 合同、scikit-learn `1.7.2`、实际迭代次数和明确收敛状态；bundle 发布与 exact runtime load 均验证 head 身份、计数守恒、状态/参数组合和正斜率不变量。
+- validation：1000 条 labels 中 940 条属于父 M3 feature-covered 投影，60 条缺少父 feature；test 为 1600/1600。计数已进入正式 receipt，不静默丢行。
+- 资源：11.659 秒，峰值 RSS 399,200,256 bytes，低于 8 GiB；无数据库、服务或 binding 写入。
+- binary：8 个正斜率 head 为 `CALIBRATED`；`positive_excess_h5` 和 `signal_survival_h5` 因负斜率会反转 raw 排序，明确为 `UNCALIBRATED/ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL`。
+- quantile：5 个收益中央区间和 10 个 MFE/MAE upper 区间完整产出，holding 继续独立 `UNCALIBRATED`。
+- receipt SHA256：`ccdae88f25bb9741a50548643c3edfe40d702000ff2fcae170ebadd030ceea01`；calibration spec SHA256：`14ec26427eb9df25214905a1080da763e4571faa09216ef29fe86aed487d3f81`。
+
+冻结 test 的质量结论必须与执行成功分开：8 个实际 calibrated binary head 的 Brier、logloss 和 10-bin ECE 均未优于 raw；5 个收益区间相对名义 80% 的平均绝对偏差由 `0.00984` 增至 `0.03129`；10 个 path upper 相对名义 90% 的平均绝对偏差由 `0.01432` 小幅降至 `0.01394`。因此本 bundle 是完整、可复现的真实研究产物，但当前**不建议激活 outcome binding**。该结论不是新增审批或运行门禁，只是按蓝图要求如实保留质量结果；现行 M3 v1 outcome 继续可用。
+
+## 22. 源码合入、重启后验证与最终状态
+
+2026-08-12 已完成 M5B 源码和运行时收敛，且未改变 §21 的负面质量结论：
+
+- BUG-1038、BUG-1039、BUG-1040 修复随 PR #3326 合入，merge commit 为 `546b8d47360ee577dc470742ce2c50cda7f7e89a`。修复范围仅覆盖父 M3 feature-covered 投影、负斜率排序反转处理和逐 head solver/版本/迭代/收敛 artifact 合同。
+- 用户完成 `backend-main` 重启后，三份独立 post-restart receipt 均验证健康、runtime identity 和真实多 Alpha model-shadow 业务 probe 为 HTTP 200；观测运行时 commit `eb8cc21ebf2c52f61eca15fbd4709cca635961a3` 是上述修复 merge commit 的 `origin/main` 后代。
+- 三项 verifier 均记录 `process_control_performed=false`、`tracked_files_written=false`，未执行数据库写入、训练、binding 激活或其它业务副作用。BUG-1038、BUG-1039、BUG-1040 最终均为 `verified`，对应 GitHub Issue 已关闭。
+- outcome v2 bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533` 继续作为未激活研究产物保留；现行 M3 v1 outcome binding 不变。源码生效不能替代冻结 test 质量结论，也不构成激活理由。
+- M5B 已完成，不再是后续主线阻断。下一阶段严格进入父蓝图规定的 M5C entry-gap q10/q90 validation-only coverage 校准；不得重复 M5B、处理历史固化或扩建通用模型平台。

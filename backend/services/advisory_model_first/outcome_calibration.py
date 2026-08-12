@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-import warnings
+from importlib.metadata import version
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +10,16 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss, roc_auc_score
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
+
+PLATT_SOLVER_CONTRACT = {
+    "library": "scikit-learn",
+    "estimator": "LogisticRegression",
+    "penalty": None,
+    "solver": "lbfgs",
+    "fit_intercept": True,
+    "max_iter": 1000,
+    "random_state": 20260812,
+}
 
 
 @dataclass(frozen=True)
@@ -22,6 +32,9 @@ class PlattCalibrationResult:
     coefficient: float | None
     intercept: float | None
     reason_code: str | None
+    solver: dict[str, Any]
+    iteration_count: int
+    convergence_state: str
     validation_metrics: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
@@ -34,6 +47,9 @@ class PlattCalibrationResult:
             "coefficient": self.coefficient,
             "intercept": self.intercept,
             "reason_code": self.reason_code,
+            "solver": self.solver,
+            "iteration_count": self.iteration_count,
+            "convergence_state": self.convergence_state,
             "validation_metrics": self.validation_metrics,
         }
 
@@ -56,6 +72,10 @@ def fit_platt_calibrator(
     positive_count = int(actual.sum())
     negative_count = int(len(actual) - positive_count)
     raw_metrics = binary_metrics(actual, probability)
+    solver_identity = {
+        **PLATT_SOLVER_CONTRACT,
+        "library_version": version("scikit-learn"),
+    }
     if positive_count == 0 or negative_count == 0:
         return PlattCalibrationResult(
             state="UNCALIBRATED",
@@ -66,25 +86,20 @@ def fit_platt_calibrator(
             coefficient=None,
             intercept=None,
             reason_code="ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING",
+            solver=solver_identity,
+            iteration_count=0,
+            convergence_state="NOT_FITTED_CLASS_VARIATION_MISSING",
             validation_metrics={"raw": raw_metrics, "calibrated": None},
         )
     try:
         estimator = LogisticRegression(
-            C=np.inf,
-            l1_ratio=0.0,
-            solver="lbfgs",
-            fit_intercept=True,
-            max_iter=1000,
-            random_state=20260812,
+            **{
+                key: value
+                for key, value in PLATT_SOLVER_CONTRACT.items()
+                if key not in {"library", "estimator"}
+            }
         )
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Setting penalty=None will ignore the C and l1_ratio parameters",
-                category=UserWarning,
-                module=r"sklearn\.linear_model\._logistic",
-            )
-            estimator.fit(margin.reshape(-1, 1), actual)
+        estimator.fit(margin.reshape(-1, 1), actual)
     except Exception as exc:
         raise AdvisoryModelFirstError(
             "Platt probability calibration failed",
@@ -93,8 +108,28 @@ def fit_platt_calibrator(
         ) from exc
     coefficient = float(estimator.coef_[0, 0])
     intercept = float(estimator.intercept_[0])
-    if not math.isfinite(coefficient) or not math.isfinite(intercept) or int(estimator.n_iter_[0]) >= 1000:
+    iteration_count = int(estimator.n_iter_[0])
+    if (
+        not math.isfinite(coefficient)
+        or not math.isfinite(intercept)
+        or iteration_count >= PLATT_SOLVER_CONTRACT["max_iter"]
+    ):
         raise _calibration_error("Platt probability calibration did not converge", head=head)
+    if coefficient <= 0.0:
+        return PlattCalibrationResult(
+            state="UNCALIBRATED",
+            head=head,
+            row_count=len(actual),
+            positive_count=positive_count,
+            negative_count=negative_count,
+            coefficient=None,
+            intercept=None,
+            reason_code="ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL",
+            solver=solver_identity,
+            iteration_count=iteration_count,
+            convergence_state="CONVERGED_ORDER_REVERSAL",
+            validation_metrics={"raw": raw_metrics, "calibrated": None},
+        )
     calibrated = apply_platt_calibrator(
         raw_margin=margin,
         coefficient=coefficient,
@@ -109,6 +144,9 @@ def fit_platt_calibrator(
         coefficient=coefficient,
         intercept=intercept,
         reason_code=None,
+        solver=solver_identity,
+        iteration_count=iteration_count,
+        convergence_state="CONVERGED",
         validation_metrics={"raw": raw_metrics, "calibrated": binary_metrics(actual, calibrated)},
     )
 
@@ -117,8 +155,8 @@ def apply_platt_calibrator(
     *, raw_margin: np.ndarray, coefficient: float, intercept: float
 ) -> np.ndarray:
     margin = _finite_vector(raw_margin, name="raw_margin")
-    if not math.isfinite(coefficient) or not math.isfinite(intercept):
-        raise _calibration_error("Platt calibration parameters are not finite")
+    if not math.isfinite(coefficient) or not math.isfinite(intercept) or coefficient <= 0.0:
+        raise _calibration_error("Platt calibration parameters are invalid")
     linear = coefficient * margin + intercept
     output = np.empty_like(linear, dtype=float)
     positive = linear >= 0

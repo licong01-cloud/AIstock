@@ -118,3 +118,45 @@ def test_missing_binding_is_typed_unavailable(tmp_path) -> None:
             booster_factory=lambda path: path.name,
         )
     assert exc_info.value.reason_code == "ADVISORY_PRICE_RANGE_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE"
+
+
+def test_v2_exact_loader_exposes_calibration_spec_without_replacing_models(
+    monkeypatch, tmp_path
+) -> None:
+    parent_id = "d" * 64
+    outcome_id = "e" * 64
+    package_id, manifest_sha, style_hash, bundle_id, manifest = _write_exact_binding(
+        tmp_path, parent_id=parent_id, outcome_id=outcome_id
+    )
+    manifest.update(
+        {
+            "schema_version": "advisory_price_range_bundle_v2",
+            "calibration_state": "CALIBRATED_INTERVAL",
+            "entry_gap_calibration_state": "CALIBRATED",
+            "entry_executable_calibration_state": "UNCALIBRATED",
+        }
+    )
+    bundle_path = tmp_path / "price_range_bundles" / bundle_id
+    calibration = {
+        "schema_version": "advisory_price_range_calibration_spec_v1",
+        "state": "CALIBRATED",
+        "method": "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
+        "delta": 0.0125,
+    }
+    (bundle_path / "calibration_spec.json").write_text(
+        json.dumps(calibration), encoding="utf-8"
+    )
+    monkeypatch.setattr(runtime, "_read_runtime_bundle_manifest", lambda *_a, **_k: manifest)
+
+    loaded = runtime.load_exact_price_range_bundle(
+        model_root=tmp_path,
+        package_id=package_id,
+        manifest_sha256=manifest_sha,
+        style_profile_hash=style_hash,
+        parent_bundle_id=parent_id,
+        outcome_bundle_id=outcome_id,
+        booster_factory=lambda path: path.name,
+    )
+
+    assert loaded.calibration_spec == calibration
+    assert set(loaded.models) == set(PRICE_RANGE_MODEL_NAMES)

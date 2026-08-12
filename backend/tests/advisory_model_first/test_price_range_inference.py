@@ -59,6 +59,19 @@ def _bundle() -> LoadedAdvisoryPriceRangeBundle:
     )
 
 
+def _calibrated_bundle() -> LoadedAdvisoryPriceRangeBundle:
+    return LoadedAdvisoryPriceRangeBundle(
+        **{
+            **_bundle().__dict__,
+            "manifest": {"request_id": "advprcal_runtime", "calibration_state": "CALIBRATED_INTERVAL"},
+            "calibration_spec": {
+                "method": "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
+                "delta": 0.01,
+            },
+        }
+    )
+
+
 def _context(symbol: str, *, board_type: str = "MAIN", target_is_st: bool = False):
     return PriceRangeRealtimeContext(
         symbol=symbol,
@@ -127,6 +140,28 @@ def test_price_range_projects_real_heads_m3_paths_and_hard_stop() -> None:
     assert first["stop_loss_price"]["low"] >= 9.2
     assert first["protective_price"]["status"] == "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION"
     assert first["regulatory_price_range"]["rule_id"] == "MAIN_10PCT_V1"
+    assert first["calibrated_entry_price"] is None
+    assert first["entry_gap_calibration_state"] == "UNCALIBRATED"
+
+
+def test_m5c_calibrated_entry_band_is_additive_and_keeps_raw_risk_anchor() -> None:
+    result = score_price_range_bundle(
+        _calibrated_bundle(),
+        _features(),
+        contexts={symbol: _context(symbol) for symbol in ("000001.SZ", "000002.SZ")},
+        context_unavailable=(),
+        outcome_candidates=[_outcome("000001.SZ"), _outcome("000002.SZ")],
+        review_policy={"stop_loss_bps": 800, "take_profit_bps": 1800, "trailing_stop_bps": 700, "take_profit_mode": "trailing"},
+        review_policy_sha256="a" * 64,
+        target_trade_date=date(2026, 7, 21),
+    )
+
+    first = result[0]
+    assert first["entry_price"] == {"condition": "ENTRY_EXECUTABLE", "low": 9.9, "mid": 10.0, "high": 10.1}
+    assert first["calibrated_entry_price"] == {"condition": "ENTRY_EXECUTABLE", "low": 9.8, "mid": 10.0, "high": 10.2}
+    assert first["entry_gap_calibration_state"] == "CALIBRATED"
+    assert first["entry_executable_calibration_state"] == "UNCALIBRATED"
+    assert first["stop_loss_price"]["hard_stop_price"] == 9.2
 
 
 def test_context_failure_is_visible_per_candidate_without_removing_group() -> None:

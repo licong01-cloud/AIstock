@@ -363,6 +363,11 @@ export type AdvisoryPriceRangeCandidate = {
   decision_reference_price: number | null;
   target_raw_price_multiplier: number | null;
   entry_price: ({ condition: "ENTRY_EXECUTABLE"; mid: number } & AdvisoryPriceBand) | null;
+  calibrated_entry_price?: ({ condition: "ENTRY_EXECUTABLE"; mid: number } & AdvisoryPriceBand) | null;
+  entry_gap_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
+  entry_gap_calibration_method?: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION" | null;
+  entry_gap_calibration_delta?: number | null;
+  entry_executable_calibration_state?: "UNCALIBRATED";
   take_profit_price: (AdvisoryPriceBand & { horizon_trade_days: 1 | 3 | 5 | 10 | 20 }) | null;
   protective_price: {
     status: "NOT_APPLICABLE" | "MODEL_BELOW_POLICY_ACTIVATION" | "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION";
@@ -394,7 +399,7 @@ export type AdvisoryPriceRangeCandidate = {
 
 export type AdvisoryPriceRangeShadow = {
   status: "EXPERIMENTAL_SHADOW" | "PRICE_RANGE_UNAVAILABLE";
-  calibration_state: "UNCALIBRATED";
+  calibration_state: "UNCALIBRATED" | "CALIBRATED_INTERVAL";
   price_range_bundle_id: string | null;
   parent_bundle_id: string | null;
   outcome_bundle_id: string | null;

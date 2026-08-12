@@ -409,7 +409,7 @@ def test_model_shadow_attaches_exact_price_range_without_changing_m2_order() -> 
         price_loads.append(kwargs)
         return SimpleNamespace(
             price_range_bundle_id="price-1",
-            manifest={"request_id": "advprreq-runtime"},
+            manifest={"request_id": "advprreq-runtime", "calibration_state": "UNCALIBRATED"},
         )
 
     def price_scorer(_bundle, features, **_kwargs):
@@ -483,7 +483,7 @@ def test_calibrated_outcome_keeps_price_range_bound_to_parent_m3_bundle() -> Non
             price_loads.append(kwargs)
             or SimpleNamespace(
                 price_range_bundle_id="price-v1-m3",
-                manifest={"request_id": "advprreq-runtime"},
+                manifest={"request_id": "advprreq-runtime", "calibration_state": "UNCALIBRATED"},
             )
         ),
         price_range_scorer=lambda _bundle, features, **_kwargs: [

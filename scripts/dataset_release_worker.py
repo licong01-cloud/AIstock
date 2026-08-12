@@ -16,6 +16,12 @@ from typing import Mapping, Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ALLOWLISTED_PROFILE = (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v1.yaml").resolve()
+ALLOWLISTED_PROFILES = frozenset(
+    {
+        ALLOWLISTED_PROFILE,
+        (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml").resolve(),
+    }
+)
 WORKER_DEPENDENCY_PATHS = (
     "backend/services/dataset_release",
     "scripts/dataset_release_worker.py",
@@ -24,6 +30,7 @@ WORKER_DEPENDENCY_PATHS = (
     "scripts/dataset_release_source_recheck.py",
     "scripts/dataset_release_source_stage.py",
     "configs/datasets/qe_backtest_monthly_v1.yaml",
+    "configs/datasets/qe_backtest_monthly_v2.yaml",
 )
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
@@ -128,7 +135,7 @@ def build_default_registry(
         resolution=build_resolution_processor(profile, store, cas),
         build=ProductionBuildProcessor(
             profile=profile,
-            profile_path=ALLOWLISTED_PROFILE,
+            profile_path=profile.path,
             project_root=REPOSITORY_ROOT,
             store=store,
             cas=cas,
@@ -314,7 +321,7 @@ def main(
         _parser().error("--max-jobs is valid only with --drain")
     try:
         supplied_profile = args.profile.expanduser().resolve(strict=True)
-        if supplied_profile != ALLOWLISTED_PROFILE:
+        if supplied_profile not in ALLOWLISTED_PROFILES:
             raise WorkerError(
                 "profile path is not in the Worker allowlist",
                 code="BLOCKED_PROFILE_NOT_ALLOWLISTED",

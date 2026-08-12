@@ -2021,12 +2021,12 @@ function AdvisoryPageContent() {
                             <td>{candidate.symbol}</td>
                             <td>{fmtPct(candidate.entry_executable_probability)}</td>
                             <td>{fmtPrice(candidate.decision_reference_price)}</td>
-                            <td>{candidate.entry_price ? `${fmtPriceBand(candidate.entry_price)}（中位 ${fmtPrice(candidate.entry_price.mid)}）` : "-"}</td>
+                            <td>{candidate.calibrated_entry_price ? <>{fmtPriceBand(candidate.calibrated_entry_price)}（中位 {fmtPrice(candidate.calibrated_entry_price.mid)}）<br /><span className="pv2-muted">原始 {candidate.entry_price ? fmtPriceBand(candidate.entry_price) : "-"}</span></> : candidate.entry_price ? `${fmtPriceBand(candidate.entry_price)}（中位 ${fmtPrice(candidate.entry_price.mid)}）` : "-"}</td>
                             <td>{candidate.take_profit_price ? `${fmtPriceBand(candidate.take_profit_price)} / ${candidate.take_profit_price.horizon_trade_days}日` : "-"}</td>
                             <td>{candidate.protective_price?.status === "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION" ? `${fmtPriceBand({ low: candidate.protective_price.floor_low!, high: candidate.protective_price.floor_high! })}（激活 ${fmtPrice(candidate.protective_price.policy_activation_price)}）` : candidate.protective_price?.status || "-"}</td>
                             <td>{candidate.stop_loss_price ? `${fmtPriceBand(candidate.stop_loss_price)} / ${fmtPrice(candidate.stop_loss_price.hard_stop_price)}` : "-"}</td>
                             <td>{candidate.regulatory_price_range?.status === "LIMITED" ? `${fmtPrice(candidate.regulatory_price_range.low)} - ${fmtPrice(candidate.regulatory_price_range.high)} (${candidate.regulatory_price_range.rule_id})` : candidate.regulatory_price_range ? `${candidate.regulatory_price_range.status} (${candidate.regulatory_price_range.rule_id})` : "-"}</td>
-                            <td>{candidate.status === "EXPERIMENTAL_SHADOW" ? "实验影子" : <><strong>{candidate.reason_code || "PRICE_RANGE_UNAVAILABLE"}</strong><br /><span className="pv2-muted">{candidate.message || "-"}</span></>}</td>
+                            <td>{candidate.status === "EXPERIMENTAL_SHADOW" ? <>{candidate.entry_gap_calibration_state === "CALIBRATED" ? "校准区间" : "实验影子"}<br /><span className="pv2-muted">可执行概率 {candidate.entry_executable_calibration_state || "UNCALIBRATED"}</span></> : <><strong>{candidate.reason_code || "PRICE_RANGE_UNAVAILABLE"}</strong><br /><span className="pv2-muted">{candidate.message || "-"}</span></>}</td>
                           </tr>
                         ))}
                       </tbody>

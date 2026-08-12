@@ -18,7 +18,13 @@ from typing import Any, Mapping, Sequence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-PROFILE_PATH = (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v1.yaml").resolve()
+LEGACY_PROFILE_PATH = (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v1.yaml").resolve()
+CANONICAL_PROFILE_PATH = (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml").resolve()
+PROFILE_PATH = LEGACY_PROFILE_PATH
+PROFILE_PATHS = {
+    "qe_hmm_full_v1": LEGACY_PROFILE_PATH,
+    "qe_hmm_full_v2": CANONICAL_PROFILE_PATH,
+}
 CLI_PRINCIPAL = "dataset-release-local-cli"
 
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -49,6 +55,12 @@ def _parser() -> argparse.ArgumentParser:
         description=(
             "Submit or inspect candidate-only monthly QE dataset releases. This command never starts data execution."
         )
+    )
+    parser.add_argument(
+        "--profile",
+        choices=tuple(PROFILE_PATHS),
+        default="qe_hmm_full_v1",
+        help="v1 reproduces existing releases; v2 is the canonical candidate-only monthly profile",
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
 
@@ -116,8 +128,19 @@ def _parser() -> argparse.ArgumentParser:
 def build_control_service() -> DatasetReleaseControlService:
     """Open only the checked-in profile and its explicitly initialized control root."""
 
-    profile = load_dataset_profile(PROFILE_PATH)
-    return DatasetReleaseControlService((DatasetReleaseProfileBinding.from_profile(profile),))
+    profiles = tuple(load_dataset_profile(path) for path in PROFILE_PATHS.values())
+    return DatasetReleaseControlService(tuple(DatasetReleaseProfileBinding.from_profile(item) for item in profiles))
+
+
+def _selected_profile_id(service: DatasetReleaseControlService, args: argparse.Namespace) -> str:
+    requested = str(getattr(args, "profile", "") or "").strip()
+    if requested:
+        if requested not in service.profile_ids:
+            raise ValueError(f"profile is not allowlisted: {requested}")
+        return requested
+    if len(service.profile_ids) == 1:
+        return service.profile_ids[0]
+    return "qe_hmm_full_v1"
 
 
 def _monthly(
@@ -128,7 +151,7 @@ def _monthly(
 ) -> Mapping[str, Any]:
     if not args.candidate_only:
         raise ValueError("monthly requires --candidate-only")
-    profile_id = service.profile_ids[0]
+    profile_id = _selected_profile_id(service, args)
     preview = service.preview_monthly(
         profile_id=profile_id,
         cutoff_policy="auto-previous-month",
@@ -171,7 +194,7 @@ def _status(
 ) -> Mapping[str, Any]:
     if not args.latest:
         raise ValueError("status requires --latest")
-    status = service.latest_status(service.profile_ids[0])
+    status = service.latest_status(_selected_profile_id(service, args))
     submission = status["submission"]
     run = status["run"]
     return {
@@ -185,6 +208,7 @@ def _status(
         "outcome": run["outcome"] if run is not None else None,
         "updated_at": (run["updated_at"] if run is not None else submission["updated_at"]),
         "worker_health": status["worker_health"],
+        "retention": status["retention"],
         "bounded_read": True,
         "execution_started_by_cli": False,
         "production_activation": status["activation"],
@@ -198,7 +222,7 @@ def _events(
     if not 1 <= args.limit <= 200 or args.after_event_id < 0:
         raise ValueError("events bounds exceed 200 rows or use a negative cursor")
     rows = service.list_events(
-        service.profile_ids[0],
+        _selected_profile_id(service, args),
         submission_id=args.submission_id,
         run_id=args.run_id,
         after_event_id=args.after_event_id,
@@ -221,7 +245,7 @@ def _receipt(
     service: DatasetReleaseControlService,
     args: argparse.Namespace,
 ) -> Mapping[str, Any]:
-    profile_id = service.profile_ids[0]
+    profile_id = _selected_profile_id(service, args)
     receipt = (
         service.get_run_receipt(profile_id, args.run_id)
         if args.run_id
@@ -246,7 +270,7 @@ def _log(
     if not 1 <= args.max_bytes <= 1024**2 or not 1 <= args.max_lines <= 1000:
         raise ValueError("log read exceeds 1 MiB/1000-line contract")
     page = service.read_run_log(
-        service.profile_ids[0],
+        _selected_profile_id(service, args),
         args.run_id,
         stream=args.stream,
         log_id=args.log_id,
@@ -273,7 +297,7 @@ def _reattest(
 ) -> Mapping[str, Any]:
     if not args.latest:
         raise ValueError("reattest-existing requires --latest")
-    profile_id = service.profile_ids[0]
+    profile_id = _selected_profile_id(service, args)
     candidate = service.latest_candidate_registration(
         profile_id=profile_id,
         scope=args.scope,
@@ -331,7 +355,7 @@ def _command(
     service: DatasetReleaseControlService,
     args: argparse.Namespace,
 ) -> Mapping[str, Any]:
-    profile_id = service.profile_ids[0]
+    profile_id = _selected_profile_id(service, args)
     if args.action == "resume":
         target_type = "run"
         target_id = args.run_id
@@ -376,8 +400,7 @@ def main(
     args = _parser().parse_args(argv)
     try:
         control = service or build_control_service()
-        if len(control.profile_ids) != 1:
-            raise ValueError("monthly CLI requires exactly one allowlisted profile")
+        _selected_profile_id(control, args)
         if args.action == "monthly":
             result = _monthly(
                 control,
@@ -401,7 +424,7 @@ def main(
         elif args.action == "catalog-existing":
             selected_cataloger = cataloger
             if selected_cataloger is None:
-                profile = load_dataset_profile(PROFILE_PATH)
+                profile = load_dataset_profile(PROFILE_PATHS[_selected_profile_id(control, args)])
                 selected_cataloger = LegacyCandidateCataloger(
                     service=control,
                     profile=profile,

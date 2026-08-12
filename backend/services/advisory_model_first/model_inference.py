@@ -407,7 +407,7 @@ class AdvisoryModelShadowService:
         )
         return {
             "status": "EXPERIMENTAL_SHADOW",
-            "calibration_state": "UNCALIBRATED",
+            "calibration_state": price_bundle.manifest["calibration_state"],
             "price_range_bundle_id": price_bundle.price_range_bundle_id,
             "parent_bundle_id": parent_bundle.bundle_id,
             "outcome_bundle_id": price_range_outcome_bundle_id,
