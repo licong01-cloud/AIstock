@@ -362,6 +362,23 @@ def test_qlib_exporter_tests_select_qlib_data_backend(tmp_path: Path) -> None:
     assert payload["unmapped_code_files"] == []
 
 
+def test_canonical_equity_pit_selects_qlib_data_backend(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/services/canonical_equity_pit.py",
+            "backend/tests/test_canonical_equity_pit.py",
+            "configs/datasets/qe_backtest_monthly_v2.yaml",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["qlib_data_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
 def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_sessions(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [

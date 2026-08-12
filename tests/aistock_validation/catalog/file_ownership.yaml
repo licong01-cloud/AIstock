@@ -783,6 +783,7 @@ rules:
   - rule_id: qlib_monthly_dataset_release
     priority: 96
     include:
+      - backend/services/canonical_equity_pit.py
       - backend/services/dataset_release/**
       - backend/routers/dataset_releases.py
       - backend/deps.py
@@ -792,11 +793,13 @@ rules:
       - backend/tests/scripts/test_update_backtest_dataset_monthly.py
       - backend/tests/scripts/test_export_qe_qlib_candidate.py
       - backend/tests/test_deps_dataset_release.py
+      - backend/tests/test_canonical_equity_pit.py
       - scripts/dataset_release_*.py
       - scripts/update_backtest_dataset_monthly.py
       - scripts/export_qe_qlib_candidate.py
       - tests/aistock_validation/dataset_release_platform_smoke.py
       - configs/datasets/qe_backtest_monthly_v1.yaml
+      - configs/datasets/qe_backtest_monthly_v2.yaml
       - .codex/skills/update-backtest-dataset/**
       - .claude/skills/update-backtest-dataset/**
       - docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md

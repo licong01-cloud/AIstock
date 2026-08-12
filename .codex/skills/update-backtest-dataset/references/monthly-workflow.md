@@ -22,13 +22,13 @@ authorized Worker registration/start.
 Run once:
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py monthly --candidate-only
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
 ```
 
 Defaults come from the live profile:
 
 ```text
-profile=qe_hmm_full_v1
+profile=qe_hmm_full_v2
 cutoff=previous_month_last_completed_trading_day
 reuse=auto
 resume=auto
@@ -46,7 +46,7 @@ Its response returns a random invocation `idempotency_key`; explicitly reuse tha
 Then use bounded status:
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py status --latest
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
 ```
 
 Do not loop by resubmitting `monthly`. A later manual invocation intentionally creates a new submission/fresh probe;
@@ -56,9 +56,9 @@ Only the same explicit idempotency key replays the original response; the same k
 Bounded signoff/diagnostics:
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py events --run-id <run_id> --limit 50
-rtk python scripts/update_backtest_dataset_monthly.py receipt --run-id <run_id>
-rtk python scripts/update_backtest_dataset_monthly.py log --run-id <run_id> --max-bytes 262144 --max-lines 1000
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 events --run-id <run_id> --limit 50
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 receipt --run-id <run_id>
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 log --run-id <run_id> --max-bytes 262144 --max-lines 1000
 ```
 
 Continue a log page only with the returned `next_log_id/next_generation/next_byte_offset`. This is a real forward byte
@@ -94,7 +94,7 @@ Use cataloging to register an allowlisted immutable candidate identity. Registra
 For the latest eligible cataloged candidate:
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py reattest-existing --latest
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v1 reattest-existing --latest
 ```
 
 Re-attestation:

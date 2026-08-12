@@ -12,9 +12,12 @@ from backend.services.dataset_release.pit import (
     filter_frame_to_pit_spans,
     frozen_pit_snapshot_from_mapping,
     freeze_pit_snapshot,
+    require_canonical_frozen_snapshot,
+    require_canonical_source_snapshot,
     write_frozen_pit_snapshot,
     write_pit_all_txt,
 )
+from backend.services.canonical_equity_pit import CANONICAL_PIT_RULE_VERSION, CANONICAL_PIT_UNIVERSE_KEY
 
 
 SHA_A = "a" * 64
@@ -51,6 +54,34 @@ def _freeze(rows: pd.DataFrame):
         state_start=date(2018, 8, 1),
         state_end=date(2026, 7, 31),
     )
+
+
+def test_canonical_frozen_snapshot_must_equal_rolling_digest_at_cutoff() -> None:
+    snapshot = freeze_pit_snapshot(
+        _rows(),
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        scope_start=date(2026, 7, 1),
+        cutoff=date(2026, 7, 31),
+        state_identity="canonical-state",
+        source_fingerprint_sha256=SHA_A,
+        parameter_hash=SHA_B,
+        state_start=date(2018, 8, 1),
+        state_end=date(2026, 7, 31),
+    )
+    binding = require_canonical_frozen_snapshot(
+        snapshot,
+        release_id="release-20260731",
+        rolling_cutoff_spans_sha256=snapshot.spans_sha256,
+    )
+    assert binding.snapshot_digest == snapshot.spans_sha256
+    assert require_canonical_source_snapshot(snapshot).universe_key == CANONICAL_PIT_UNIVERSE_KEY
+    with pytest.raises(PitSnapshotError, match="differs from rolling"):
+        require_canonical_frozen_snapshot(
+            snapshot,
+            release_id="release-20260731",
+            rolling_cutoff_spans_sha256="c" * 64,
+        )
 
 
 def test_frozen_pit_is_order_independent_scope_clipped_and_canonical() -> None:

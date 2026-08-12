@@ -10,14 +10,18 @@
 在当前 AIstock repo root 执行：
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py monthly --candidate-only
-rtk python scripts/update_backtest_dataset_monthly.py status --latest
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
 ```
+
+`qe_hmm_full_v2` 是未来月更的唯一 canonical PIT 候选 profile。`qe_hmm_full_v1` 保持原语义，仅用于已生成
+release（包括 2026-07-31 候选）的历史复现、catalog 和只读 re-attestation；在 canonical v2 完成全量验证并获
+独立 production activation 授权前，源码合入不会自动切换现有 Selection/Paper/QE runtime。
 
 第一条成功响应会返回 `idempotency_key`。若命令在得到响应后需要重试，显式复用：
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py monthly --candidate-only --idempotency-key <原key>
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only --idempotency-key <原key>
 ```
 
 不显式给 key 的每次人工调用都是新的 submission，并要求新的 source probe；resolution 层仍会把等价
@@ -34,7 +38,7 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时，直接运�
 - source 已合入并在目标 runtime 可见；
 - X 盘 candidate root 与 control root 分离并在 allowlist；
 - control store 已由专用管理入口显式初始化/迁移并 readback；
-- `qe_hmm_full_v1` profile 已 allowlist；
+- `qe_hmm_full_v1`（历史复现）与 `qe_hmm_full_v2`（canonical candidate）profile 均已 allowlist；
 - 独立 Worker 已由 runtime owner 注册并处于兼容版本；
 - 如使用 API，backend route 和 operator token file 已由 runtime owner配置；
 - scheduler 是否启用有独立配置和授权，默认关闭。
@@ -44,7 +48,7 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时，直接运�
 仅在 runtime owner 已分别授权初始化/迁移和 Worker 运行时，使用以下可复制命令；它们不是每月操作，也不属于本轮源码验证授权：
 
 ```powershell
-$Profile = (Resolve-Path .\configs\datasets\qe_backtest_monthly_v1.yaml).Path
+$Profile = (Resolve-Path .\configs\datasets\qe_backtest_monthly_v2.yaml).Path
 $ControlRoot = 'X:\AIstock_dataset_release_control'
 
 # 新空 root 只执行一次；不会由 API/Worker 自动调用
@@ -85,12 +89,13 @@ API token 文件必须是绝对路径上的 plain local file，内容至少 32 �
 只有在本次真实数据更新已获授权时执行：
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py monthly --candidate-only
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
 ```
 
 默认由 live profile 决定：
 
-- profile：`qe_hmm_full_v1`；
+- profile：显式 `qe_hmm_full_v2`；不带 `--profile` 的 legacy 默认仅为迁移期兼容，不用于未来正式月更；
+- PIT authority：`aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`，IPO 暖机为 252 个交易所交易日并包含历史退市股生命周期；
 - cutoff：上一个月最后一个已完成交易日；
 - reuse/resume：自动；
 - sample：仅 contract 变化时；
@@ -109,7 +114,7 @@ CLI 只提交 durable intent。返回 `submission_id` 不代表已经有 `run_id
 ## 4. 查看进度
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py status --latest
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
 ```
 
 交互终端只看 summary 和 bounded event/log tail；完整 JSON、日志和 evidence 保存在 catalog/CAS。不要把数小时日志整体读取进内存。
@@ -137,10 +142,10 @@ profile/config/capability 兼容和 heartbeat fresh，不代表某个数据 run 
 读取 bounded events、terminal receipt 或一页日志：
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py events --submission-id <submission_id> --limit 50
-rtk python scripts/update_backtest_dataset_monthly.py events --run-id <run_id> --limit 50
-rtk python scripts/update_backtest_dataset_monthly.py receipt --run-id <run_id>
-rtk python scripts/update_backtest_dataset_monthly.py log --run-id <run_id> --stream stdout --max-bytes 262144 --max-lines 1000
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 events --submission-id <submission_id> --limit 50
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 events --run-id <run_id> --limit 50
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 receipt --run-id <run_id>
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 log --run-id <run_id> --stream stdout --max-bytes 262144 --max-lines 1000
 ```
 
 events 每页最多 200 条；log 每次最多 1 MiB/1000 行。使用返回的 `next_after_event_id`、
@@ -169,8 +174,13 @@ probe stale 时只创建/复用一个 `SOURCE_REVISION_PROBE`，不要提交 exp
 先使用 catalog 功能注册 allowlisted candidate identity；catalog 不等于发布或 source equivalent。然后对最新 eligible candidate：
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py reattest-existing --latest
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v1 reattest-existing --latest
 ```
+
+历史留存不是只保留 `all.txt`：凡被实验、训练、审计、正式发布或 production 引用的 release，必须完整、不可变地
+保留 Qlib daily/minute、H5/static、指数上下文、PIT snapshot、`all.txt`、manifest、source/artifact digest 和
+validation/attestation receipt。已有完整历史目录只登记 immutable path，不额外复制一份。仅从未发布且从未引用的
+terminal-failed 临时候选可被标记为 cleanup candidate；流程永不自动删除，精确清理仍需独立授权。
 
 复验必须保持 candidate 逐字节不变。attestation 写入独立 control CAS/catalog。结果可能是：
 
@@ -216,6 +226,9 @@ backend 重启不应丢任务；control catalog 和 Worker heartbeat 是 authori
   COW hardlink tree，baseline Merkle 必须保持不变；
 - minute source query 和 `dump_update` 在行物化前按 pressure rung 分批，hard max=20 codes，降压只能
   `20→10→5`；“先返回无界结果再切批”不合规；
+- canonical v2 只为历史 D/P 股票扫描/保留日线子集；缺口按股票以 Tushare `pro_bar` 一次有界窗口请求，
+  转换到 DB 的厘/手单位后只写 candidate CAS overlay。数据库重叠键逐字段不一致、overlay 仍缺键或单股票
+  返回超过 3,000 行均 fail closed；不会把八年全市场 panel 保留在内存；
 - 在没有可信 DB partition revision ledger 时，初次 source freeze 与 publish 前 DB-only recheck 仍可能分别做一次截止日内的全值扫描；MVCC/provenance watermark 不能替代内容一致性；
 - 因此“候选只重写新增/失效部分”不等于“整条月更只读取新增月份”；等待、DB read、provider、compute、validation 时间必须分项报告；
 - fixture/synthetic benchmark 只证明算法复杂度和内存上限，不能宣称真实全量耗时；真实 full/new-cutoff telemetry 只能在未来数据更新另获授权后产生；

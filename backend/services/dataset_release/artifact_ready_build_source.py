@@ -14,6 +14,7 @@ import pandas as pd
 from .artifact_ready_source import (
     ARTIFACT_READY_ADJ_COVERAGE_SCHEMA,
     ARTIFACT_READY_COMPONENT_SCHEMA,
+    ARTIFACT_READY_DAILY_COVERAGE_SCHEMA,
     ARTIFACT_READY_INDEX_CHUNK_SCHEMA,
     ARTIFACT_READY_MINUTE_COVERAGE_SCHEMA,
     load_artifact_ready_contract,
@@ -240,6 +241,8 @@ class ArtifactReadyBuildSource:
             )
             if effective and dataset == "adj_factor":
                 rows = self._effective_adj_rows(component, descriptor, rows)
+            elif effective and dataset == "kline_daily_raw" and self.profile.pit_authority_status == "ACTIVE_CANONICAL":
+                rows = self._effective_daily_rows(component, descriptor, rows)
             elif effective and dataset == "kline_minute_raw":
                 rows = self._effective_minute_rows(component, descriptor, rows)
             if ranges or selected_codes:
@@ -456,6 +459,28 @@ class ArtifactReadyBuildSource:
             cleaned,
             key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
             source="adj_factor",
+        )
+
+    def _effective_daily_rows(
+        self,
+        component: Component,
+        descriptor: Mapping[str, Any],
+        database_rows: Iterable[Mapping[str, Any]],
+    ) -> Iterator[Mapping[str, Any]]:
+        entry = self._derived_entry(
+            component,
+            dataset="daily_coverage",
+            partition_key=str(descriptor["partition_key"]),
+        )
+        receipt = self._derived_receipt(entry, ARTIFACT_READY_DAILY_COVERAGE_SCHEMA)
+        overlay = receipt.get("overlay_rows")
+        if not isinstance(overlay, list) or any(not isinstance(row, Mapping) for row in overlay):
+            raise ArtifactReadyBuildSourceError("daily overlay rows are invalid")
+        yield from _merge_missing_only(
+            database_rows,
+            (dict(row) for row in overlay),
+            key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
+            source="kline_daily_raw",
         )
 
     def _effective_minute_rows(

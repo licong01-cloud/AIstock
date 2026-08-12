@@ -11,6 +11,12 @@ from typing import Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ALLOWLISTED_PROFILE = (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v1.yaml").resolve()
+ALLOWLISTED_PROFILES = frozenset(
+    {
+        ALLOWLISTED_PROFILE,
+        (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml").resolve(),
+    }
+)
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
@@ -54,7 +60,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _load_profile(supplied: Path, override: DatasetProfile | None) -> DatasetProfile:
     resolved = supplied.expanduser().resolve(strict=True)
-    if resolved != ALLOWLISTED_PROFILE:
+    if resolved not in ALLOWLISTED_PROFILES:
         raise ControlStoreAdminError("profile path is not in the admin allowlist")
     return override or load_dataset_profile(resolved)
 

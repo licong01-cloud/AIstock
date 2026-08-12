@@ -18,7 +18,7 @@ from bisect import bisect_left, bisect_right
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence
 
 from .canonical import (
@@ -64,6 +64,7 @@ ARTIFACT_READY_MINUTE_COVERAGE_SCHEMA = "dataset_release_artifact_ready_minute_c
 ARTIFACT_READY_INDEX_CHUNK_SCHEMA = "dataset_release_artifact_ready_index_chunk_v1"
 ARTIFACT_READY_ADJ_COVERAGE_SCHEMA = "dataset_release_artifact_ready_adj_factor_coverage_v1"
 ARTIFACT_READY_FACTOR_OVERLAY_SCHEMA = "dataset_release_artifact_ready_factor_overlay_coverage_v1"
+ARTIFACT_READY_DAILY_COVERAGE_SCHEMA = "dataset_release_artifact_ready_daily_coverage_v1"
 ARTIFACT_READY_RECHECK_SCHEMA = "dataset_release_artifact_ready_recheck_v1"
 ARTIFACT_READY_EFFECTIVE_SCHEMA = "dataset_release_artifact_ready_effective_v1"
 ARTIFACT_READY_PROVENANCE_SCHEMA = "dataset_release_artifact_ready_provenance_v1"
@@ -76,6 +77,8 @@ MAX_TUSHARE_PROVIDER_FRAME_BYTES = 16 * 1024 * 1024
 MAX_TUSHARE_PROVIDER_RECEIPT_BYTES = 16 * 1024 * 1024
 MAX_TUSHARE_MINUTE_ROWS_PER_DAY = 241
 MAX_TUSHARE_ADJ_FACTOR_ROWS_PER_DAY = 20_000
+MAX_TUSHARE_DAILY_ROWS_PER_CODE = 3_000
+MAX_DAILY_OVERLAY_ROWS_PER_PARTITION = 50_000
 TDX_DEFAULT_PORT = 19080
 _MINUTE_PARTITION = re.compile(
     r"^(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})_"
@@ -169,6 +172,7 @@ MinuteTdxRows = Callable[[str, date, date], Sequence[Mapping[str, Any]]]
 MinuteTushareRows = Callable[[str, date], Sequence[Mapping[str, Any]]]
 IndexTushareRows = Callable[[IndexDefinition, date, date], Sequence[Mapping[str, Any]]]
 AdjFactorTushareRows = Callable[[date], Sequence[Mapping[str, Any]]]
+DailyTushareRows = Callable[[str, date, date], Sequence[Mapping[str, Any]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -587,6 +591,7 @@ class _FrozenProviderReplay:
         self.cas = cas
         self.minute: list[tuple[str, date, date, CASRef]] = []
         self.adj: dict[date, CASRef] = {}
+        self.daily: dict[str, CASRef] = {}
         self.index: list[tuple[str, date, date, CASRef]] = []
         for raw_ref in raw_refs:
             reference = _complete_ref(cas, raw_ref, field="provider replay ref")
@@ -608,6 +613,11 @@ class _FrozenProviderReplay:
                 if day in self.adj:
                     raise ArtifactReadySourceError("adj_factor replay date is duplicated")
                 self.adj[day] = reference
+            elif schema == "dataset_release_daily_provider_snapshot_v1":
+                code = str(payload.get("ts_code", "")).upper()
+                if not code or code in self.daily:
+                    raise ArtifactReadySourceError("daily provider replay code is invalid or duplicated")
+                self.daily[code] = reference
             elif schema == "dataset_release_index_provider_snapshot_v1":
                 self.index.append(
                     (
@@ -664,6 +674,20 @@ class _FrozenProviderReplay:
             raise ArtifactReadyProviderTerminal("immutable Tushare adj_factor observation is invalid")
         return tuple(row for row in rows if isinstance(row, Mapping))
 
+    def fetch_tushare_daily_rows(self, code: str, start: date, end: date) -> Sequence[Mapping[str, Any]]:
+        reference = self.daily.get(code)
+        if reference is None:
+            raise ArtifactReadyProviderTerminal("immutable Tushare daily observation is unavailable")
+        payload = self.cas.get_json_bounded(reference, max_bytes=MAX_CONTROL_RECEIPT_BYTES)
+        rows = payload.get("rows") if isinstance(payload, Mapping) else None
+        if not isinstance(rows, list):
+            raise ArtifactReadyProviderTerminal("immutable Tushare daily observation is invalid")
+        return tuple(
+            row
+            for row in rows
+            if isinstance(row, Mapping) and start <= _as_date(row.get("trade_date"), field="daily replay date") <= end
+        )
+
     def fetch_tushare_index_rows(
         self, definition: IndexDefinition, start: date, end: date
     ) -> Sequence[Mapping[str, Any]]:
@@ -691,6 +715,7 @@ class ArtifactReadySourceBuilder:
         fetch_tushare_minute_rows: MinuteTushareRows | None = None,
         fetch_tushare_index_rows: IndexTushareRows | None = None,
         fetch_tushare_adj_factor_rows: AdjFactorTushareRows | None = None,
+        fetch_tushare_daily_rows: DailyTushareRows | None = None,
     ) -> None:
         self.profile = profile
         self.cas = cas
@@ -699,6 +724,7 @@ class ArtifactReadySourceBuilder:
         self.fetch_tushare_minute_rows = fetch_tushare_minute_rows or self._fetch_tushare_minute_rows
         self.fetch_tushare_index_rows = fetch_tushare_index_rows or self._fetch_tushare_index_rows
         self.fetch_tushare_adj_factor_rows = fetch_tushare_adj_factor_rows or self._fetch_tushare_adj_factor_rows
+        self.fetch_tushare_daily_rows = fetch_tushare_daily_rows or self._fetch_tushare_daily_rows
         self._provider_lock = threading.Lock()
         self._active_provider_calls = 0
         self.peak_provider_calls = 0
@@ -721,6 +747,13 @@ class ArtifactReadySourceBuilder:
         checkpoint()
         trading_dates = self._trading_dates(view, snapshot.official_cutoff)
         suspended = self._full_day_suspensions(view)
+        daily_entries, daily_provider, daily_derived, daily_summary, daily_overlay_keys = self._daily_entries(
+            view,
+            snapshot=snapshot,
+            trading_dates=trading_dates,
+            suspended=suspended,
+            checkpoint=checkpoint,
+        )
         factor_overlay_entry, factor_overlay_ref, factor_overlay_summary = self._factor_overlay_coverage(view)
         (
             adj_entries,
@@ -732,6 +765,7 @@ class ArtifactReadySourceBuilder:
             view,
             snapshot=snapshot,
             checkpoint=checkpoint,
+            daily_overlay_keys=daily_overlay_keys,
         )
         minute_entries, minute_provider, minute_derived, minute_summary = self._minute_entries(
             view,
@@ -746,10 +780,11 @@ class ArtifactReadySourceBuilder:
             trading_dates=trading_dates,
             checkpoint=checkpoint,
         )
-        provider_refs = _dedupe_refs((*adj_provider, *minute_provider, *index_provider))
+        provider_refs = _dedupe_refs((*daily_provider, *adj_provider, *minute_provider, *index_provider))
         derived_refs = _dedupe_refs(
             (
                 *adj_derived,
+                *daily_derived,
                 *minute_derived,
                 *index_derived,
                 qfq_authority_ref,
@@ -766,10 +801,11 @@ class ArtifactReadySourceBuilder:
                 Component.MINUTE_BIN,
                 Component.FACTOR_H5_STATIC,
             }:
-                derived = adj_entries
+                derived = (*daily_entries, *adj_entries)
                 details = {
                     "qfq_source_summary": qfq_summary,
                     "qfq_denominator_authority_ref": qfq_authority_ref.as_dict(),
+                    "daily_provider_summary": daily_summary,
                 }
             if component is Component.DAILY_BIN:
                 derived = (*derived, *index_entries)
@@ -800,6 +836,7 @@ class ArtifactReadySourceBuilder:
             "qfq_denominator_authority_ref": qfq_authority_ref.as_dict(),
             "qfq_denominator_authority_digest": qfq_summary["qfq_denominator_authority_digest"],
             "qfq_source_summary": qfq_summary,
+            "daily_provider_summary": daily_summary,
             "factor_overlay_summary": factor_overlay_summary,
             "factor_overlay_coverage_ref": factor_overlay_ref.as_dict(),
             "component_manifests": {key: component_refs[key].as_dict() for key in sorted(component_refs)},
@@ -1012,6 +1049,7 @@ class ArtifactReadySourceBuilder:
             fetch_tushare_minute_rows=replay.fetch_tushare_minute_rows,
             fetch_tushare_index_rows=replay.fetch_tushare_index_rows,
             fetch_tushare_adj_factor_rows=replay.fetch_tushare_adj_factor_rows,
+            fetch_tushare_daily_rows=replay.fetch_tushare_daily_rows,
         )
         fresh_bundle = fresh_builder.build(
             fresh_snapshot,
@@ -1207,6 +1245,235 @@ class ArtifactReadySourceBuilder:
                         )
         return frozenset(suspended)
 
+    def _daily_entries(
+        self,
+        view: ArtifactSourceView,
+        *,
+        snapshot: ArtifactSnapshot,
+        trading_dates: Sequence[date],
+        suspended: frozenset[tuple[str, date]],
+        checkpoint: Callable[[], None],
+    ) -> tuple[
+        tuple[Mapping[str, Any], ...],
+        tuple[CASRef, ...],
+        tuple[CASRef, ...],
+        Mapping[str, Any],
+        frozenset[tuple[str, date]],
+    ]:
+        """Fill historical D/P daily bars candidate-locally from Tushare.
+
+        Only canonical v2 uses this path. The scan retains rows for historical
+        D/P codes only, so memory is bounded by that subset rather than the
+        full market panel. Provider rows may fill missing keys but can never
+        override a database key.
+        """
+
+        if self.profile.pit_authority_status != "ACTIVE_CANONICAL":
+            return (), (), (), {
+                "source_precedence": "legacy_database_only_v1",
+                "historical_terminal_codes": 0,
+                "provider_fill_rows": 0,
+                "provider_override_rows": 0,
+            }, frozenset()
+        terminal_codes: set[str] = set()
+        for descriptor in view.descriptors("stock_basic"):
+            with _managed_partition_rows(view, descriptor) as rows:
+                for row in rows:
+                    if str(row.get("list_status", "")).upper() in {"D", "P"}:
+                        terminal_codes.add(str(row.get("ts_code", "")).upper())
+        if not terminal_codes:
+            raise ArtifactReadyCoverageIncomplete("canonical daily overlay found no historical D/P securities")
+
+        descriptors = sorted(
+            view.descriptors("kline_daily_raw"),
+            key=lambda item: str(item.get("partition_key", "")),
+        )
+        partition_ranges: dict[str, tuple[date, date]] = {}
+        for descriptor in descriptors:
+            key = str(descriptor.get("partition_key", ""))
+            match = _DATE_PARTITION.fullmatch(key)
+            if match is None:
+                raise ArtifactReadyCoverageIncomplete("daily partition identity is invalid")
+            partition_ranges[key] = (
+                date.fromisoformat(match.group("start")),
+                min(snapshot.official_cutoff, date.fromisoformat(match.group("end"))),
+            )
+        expected_by_partition: dict[str, set[tuple[str, date]]] = {key: set() for key in partition_ranges}
+        trading = tuple(trading_dates)
+        partition_for_day: dict[date, str] = {}
+        for day in trading:
+            matches = [key for key, (start, end) in partition_ranges.items() if start <= day <= end]
+            if len(matches) != 1:
+                raise ArtifactReadyCoverageIncomplete("daily trading day has no unique source partition")
+            partition_for_day[day] = matches[0]
+        for span in snapshot.pit_snapshot.spans:
+            code = str(span.ts_code).upper()
+            if code not in terminal_codes:
+                continue
+            left = bisect_left(trading, span.eligible_start)
+            right = bisect_right(trading, span.eligible_end)
+            for day in trading[left:right]:
+                if (code, day) in suspended:
+                    continue
+                expected_by_partition[partition_for_day[day]].add((code, day))
+
+        database_by_code: dict[str, dict[date, dict[str, Any]]] = {code: {} for code in terminal_codes}
+        database_keys_by_partition: dict[str, set[tuple[str, date]]] = {key: set() for key in partition_ranges}
+        for descriptor in descriptors:
+            with _managed_partition_rows(view, descriptor) as rows:
+                for raw in rows:
+                    code = str(raw.get("ts_code", "")).upper()
+                    if code not in terminal_codes:
+                        continue
+                    day = _as_date(raw.get("trade_date"), field="daily database trade_date")
+                    if day in database_by_code[code]:
+                        raise ArtifactReadyCoverageIncomplete("historical D/P daily database key is duplicated")
+                    database_by_code[code][day] = _portable_daily_row(raw)
+                    partition_key = partition_for_day.get(day)
+                    if partition_key is not None:
+                        database_keys_by_partition[partition_key].add((code, day))
+
+        missing_by_partition = {
+            key: expected.difference(database_keys_by_partition[key])
+            for key, expected in expected_by_partition.items()
+        }
+        missing_codes = sorted({code for values in missing_by_partition.values() for code, _day in values})
+        overlay_by_partition: dict[str, list[dict[str, Any]]] = {key: [] for key in partition_ranges}
+        provider_refs: list[CASRef] = []
+        overlap_rows_verified = 0
+        provider_rows_observed = 0
+        for code in missing_codes:
+            required = sorted(
+                day
+                for values in missing_by_partition.values()
+                for missing_code, day in values
+                if missing_code == code
+            )
+            try:
+                rows = tuple(
+                    self._provider_call(
+                        self.fetch_tushare_daily_rows,
+                        code,
+                        min(required),
+                        max(required),
+                    )
+                )
+            except Exception as exc:
+                self._raise_provider_failure(
+                    exc,
+                    code=ArtifactReadyCoverageIncomplete.code,
+                    stage="daily_provider",
+                    subject=code,
+                )
+            normalized: dict[date, dict[str, Any]] = {}
+            for raw in rows:
+                row = _portable_daily_row(raw)
+                if row["ts_code"] != code:
+                    raise ArtifactReadyCoverageIncomplete("daily provider returned a different code")
+                day = _as_date(row["trade_date"], field="daily provider trade_date")
+                if day in normalized:
+                    raise ArtifactReadyCoverageIncomplete("daily provider key is duplicated")
+                normalized[day] = row
+                database_row = database_by_code[code].get(day)
+                if database_row is not None:
+                    if _daily_value_tuple(database_row) != _daily_value_tuple(row):
+                        self._raise_provider_failure(
+                            ArtifactReadyCoverageIncomplete("daily provider/database overlap differs"),
+                            code="BLOCKED_DAILY_PROVIDER_CONFLICT",
+                            stage="daily_overlap",
+                            subject=f"{code}:{day.isoformat()}",
+                        )
+                    overlap_rows_verified += 1
+            provider_rows_observed += len(normalized)
+            required_set = set(required)
+            relevant_rows = [
+                row
+                for day, row in sorted(normalized.items())
+                if day in required_set or day in database_by_code[code]
+            ]
+            provider_ref = self.cas.put_json(
+                {
+                    "schema_version": "dataset_release_daily_provider_snapshot_v1",
+                    "provider": "tushare_pro_bar",
+                    "ts_code": code,
+                    "start": min(required).isoformat(),
+                    "end": max(required).isoformat(),
+                    "rows": relevant_rows,
+                    "safety": dict(_ZERO_SAFETY),
+                }
+            )
+            provider_refs.append(provider_ref)
+            for partition_key, missing in missing_by_partition.items():
+                for missing_code, day in sorted(missing):
+                    if missing_code != code:
+                        continue
+                    row = normalized.get(day)
+                    if row is None:
+                        continue
+                    overlay_by_partition[partition_key].append(row)
+            checkpoint()
+
+        entries: list[Mapping[str, Any]] = []
+        derived_refs: list[CASRef] = []
+        unresolved: list[tuple[str, date]] = []
+        for descriptor in descriptors:
+            partition_key = str(descriptor["partition_key"])
+            overlay_rows = sorted(
+                overlay_by_partition[partition_key],
+                key=lambda row: (str(row["ts_code"]), str(row["trade_date"])),
+            )
+            if len(overlay_rows) > MAX_DAILY_OVERLAY_ROWS_PER_PARTITION:
+                raise ArtifactReadyCoverageIncomplete("daily provider overlay partition exceeds row bound")
+            overlay_keys = {(row["ts_code"], _as_date(row["trade_date"], field="daily overlay date")) for row in overlay_rows}
+            unresolved.extend(sorted(missing_by_partition[partition_key].difference(overlay_keys)))
+            body = {
+                "schema_version": ARTIFACT_READY_DAILY_COVERAGE_SCHEMA,
+                "raw_partition_identity": _identity(descriptor),
+                "partition_key": partition_key,
+                "overlay_rows": overlay_rows,
+                "expected_terminal_keys": len(expected_by_partition[partition_key]),
+                "provider_fill_rows": len(overlay_rows),
+                "provider_override_rows": 0,
+                "safety": dict(_ZERO_SAFETY),
+            }
+            content_root = digest_named_fields(ARTIFACT_READY_DAILY_COVERAGE_SCHEMA, body)
+            reference = self.cas.put_json({**body, "effective_content_root": content_root})
+            derived_refs.append(reference)
+            entries.append(
+                _derived_entry(
+                    dataset="daily_coverage",
+                    partition_key=partition_key,
+                    role="database_tushare_missing_only",
+                    row_count=len(overlay_rows),
+                    reference=reference,
+                    content_digest=content_root,
+                )
+            )
+        if unresolved:
+            sample = [(code, day.isoformat()) for code, day in unresolved[:20]]
+            self._raise_provider_failure(
+                ArtifactReadyCoverageIncomplete("Tushare daily left historical D/P keys missing"),
+                code=ArtifactReadyCoverageIncomplete.code,
+                stage="daily_coverage",
+                subject=json.dumps({"count": len(unresolved), "sample": sample}, sort_keys=True),
+            )
+        summary = {
+            "source_precedence": "database_then_tushare_pro_bar_missing_only_v1",
+            "historical_terminal_codes": len(terminal_codes),
+            "provider_requested_codes": len(missing_codes),
+            "provider_rows_observed": provider_rows_observed,
+            "provider_fill_rows": sum(len(rows) for rows in overlay_by_partition.values()),
+            "provider_override_rows": 0,
+            "overlap_rows_verified": overlap_rows_verified,
+            "unresolved_keys": 0,
+        }
+        overlay_keys = frozenset(
+            (str(row["ts_code"]), _as_date(row["trade_date"], field="daily overlay date"))
+            for rows in overlay_by_partition.values()
+            for row in rows
+        )
+        return tuple(entries), _dedupe_refs(provider_refs), _dedupe_refs(derived_refs), summary, overlay_keys
+
     def _factor_overlay_coverage(self, view: ArtifactSourceView) -> tuple[Mapping[str, Any], CASRef, Mapping[str, Any]]:
         """Prove sparse factor auxiliaries remain DB-authoritative and unmodified."""
 
@@ -1286,6 +1553,7 @@ class ArtifactReadySourceBuilder:
         *,
         snapshot: ArtifactSnapshot,
         checkpoint: Callable[[], None],
+        daily_overlay_keys: frozenset[tuple[str, date]] = frozenset(),
     ) -> tuple[
         tuple[Mapping[str, Any], ...],
         tuple[CASRef, ...],
@@ -1331,6 +1599,13 @@ class ArtifactReadySourceBuilder:
                 start=start,
                 end=end,
                 codes=frozenset(codes),
+            )
+            daily_keys = frozenset(
+                set(daily_keys).union(
+                    key
+                    for key in daily_overlay_keys
+                    if key[0] in codes and start <= key[1] <= end
+                )
             )
             expected_codes_by_day: dict[date, list[str]] = {}
             for code, day in sorted(daily_keys):
@@ -2302,6 +2577,39 @@ class ArtifactReadySourceBuilder:
                 raise ArtifactReadyProviderTerminal("Tushare adj_factor request reached terminal 40203") from exc
             raise ArtifactReadyProviderTerminal("Tushare adj_factor request failed") from exc
 
+    def _fetch_tushare_daily_rows(self, ts_code: str, start: date, end: date) -> Sequence[Mapping[str, Any]]:
+        provider = self._tushare.provider()
+        try:
+            import tushare as ts
+
+            frame = ts.pro_bar(
+                api=provider,
+                ts_code=ts_code,
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                freq="D",
+                asset="E",
+                adj=None,
+                factors=None,
+                fields="ts_code,trade_date,open,high,low,close,vol,amount",
+            )
+            records = _bounded_tushare_records(
+                frame.loc[:, ["ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"]],
+                dataset="daily_pro_bar",
+                expected_columns=("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"),
+                date_column="trade_date",
+                start=start,
+                end=end,
+                max_rows=MAX_TUSHARE_DAILY_ROWS_PER_CODE,
+            )
+            return tuple(_normalize_tushare_daily_row(row, expected_code=ts_code) for row in records)
+        except Exception as exc:
+            if _is_40203(exc):
+                raise ArtifactReadyProviderTerminal("Tushare daily request reached terminal 40203") from exc
+            if isinstance(exc, ArtifactReadyProviderTerminal):
+                raise
+            raise ArtifactReadyProviderTerminal("Tushare daily request failed") from exc
+
 
 def _bounded_tushare_records(
     frame: Any,
@@ -2380,6 +2688,73 @@ def _bounded_tushare_records(
             raise ArtifactReadyProviderTerminal(f"Tushare {dataset} response receipt exceeds bound")
         records.append(dict(row))
     return tuple(records)
+
+
+def _normalize_tushare_daily_row(row: Mapping[str, Any], *, expected_code: str) -> dict[str, Any]:
+    code = str(row.get("ts_code", "")).upper()
+    if code != expected_code.upper():
+        raise ArtifactReadyProviderTerminal("Tushare daily response code differs")
+
+    def scaled(name: str, multiplier: str, *, positive: bool) -> int:
+        try:
+            value = (Decimal(str(row.get(name))) * Decimal(multiplier)).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP
+            )
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ArtifactReadyProviderTerminal(f"Tushare daily {name} is invalid") from exc
+        integer = int(value)
+        if (positive and integer <= 0) or (not positive and integer < 0):
+            raise ArtifactReadyProviderTerminal(f"Tushare daily {name} is outside domain")
+        return integer
+
+    return {
+        "ts_code": code,
+        "trade_date": _as_date(row.get("trade_date"), field="Tushare daily trade_date").isoformat(),
+        "open_li": scaled("open", "1000", positive=True),
+        "high_li": scaled("high", "1000", positive=True),
+        "low_li": scaled("low", "1000", positive=True),
+        "close_li": scaled("close", "1000", positive=True),
+        "volume_hand": scaled("vol", "1", positive=False),
+        # Tushare daily amount is thousand CNY; DB amount_li is 0.001 CNY.
+        "amount_li": scaled("amount", "1000000", positive=False),
+    }
+
+
+def _portable_daily_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    code = str(row.get("ts_code", "")).upper()
+    if re.fullmatch(r"[0-9]{6}\.(?:SH|SZ)", code) is None:
+        raise ArtifactReadyCoverageIncomplete("daily row code is invalid")
+    output: dict[str, Any] = {
+        "ts_code": code,
+        "trade_date": _as_date(row.get("trade_date"), field="daily row trade_date").isoformat(),
+    }
+    for field in ("open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li"):
+        try:
+            value = Decimal(str(row.get(field)))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ArtifactReadyCoverageIncomplete(f"daily row {field} is invalid") from exc
+        integral = value.to_integral_value()
+        if value != integral:
+            raise ArtifactReadyCoverageIncomplete(f"daily row {field} is not integral")
+        integer = int(integral)
+        if (field in {"open_li", "high_li", "low_li", "close_li"} and integer <= 0) or (
+            field in {"volume_hand", "amount_li"} and integer < 0
+        ):
+            raise ArtifactReadyCoverageIncomplete(f"daily row {field} is outside domain")
+        output[field] = integer
+    if output["high_li"] < max(output["open_li"], output["close_li"]) or output["low_li"] > min(
+        output["open_li"], output["close_li"]
+    ):
+        raise ArtifactReadyCoverageIncomplete("daily row OHLC ordering is invalid")
+    return output
+
+
+def _daily_value_tuple(row: Mapping[str, Any]) -> tuple[int, ...]:
+    normalized = _portable_daily_row(row)
+    return tuple(
+        int(normalized[field])
+        for field in ("open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li")
+    )
 
 
 def _group_minute_rows(
