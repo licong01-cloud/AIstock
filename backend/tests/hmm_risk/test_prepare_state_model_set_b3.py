@@ -139,6 +139,8 @@ def test_transition_dwell_parent_never_selects_or_runs_d6_and_reports_zero_or_ma
         env_file=str(tmp_path / ".env"),
         db_env_prefix="TDX_DB_",
         b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
     )
 
     authority = {
@@ -165,6 +167,8 @@ def test_transition_dwell_parent_never_selects_or_runs_d6_and_reports_zero_or_ma
     payloads = iter(subject.canonical_json_bytes(value) for value in children)
     monkeypatch.setattr(subject, "_load_b3_formal_train_authority", lambda *args, **kwargs: authority)
     monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
+    control = {"control_authority_sha256": "a" * 64}
+    monkeypatch.setattr(subject, "_load_transition_dwell_control_authority", lambda *args, **kwargs: control)
     report = subject.run_b3_transition_dwell_repeated(args, _request())
 
     assert report["status"] == "diagnostic_complete_candidate_available"
@@ -175,6 +179,7 @@ def test_transition_dwell_parent_never_selects_or_runs_d6_and_reports_zero_or_ma
     assert report["d6_executed"] is False
     assert report["model_write_performed"] is False
     assert report["ready_artifact_write_performed"] is False
+    assert report["control_authority"] == control
 
     children = [
         _transition_dwell_child("fresh_process_1"),
@@ -216,6 +221,8 @@ def test_transition_dwell_parent_fails_closed_on_fresh_process_hash_mismatch(mon
         env_file=str(tmp_path / ".env"),
         db_env_prefix="TDX_DB_",
         b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
     )
 
     authority = {"feature_domain_policy": {"receipt_sha256": "p" * 64}, "inputs": {}}
@@ -239,12 +246,204 @@ def test_transition_dwell_parent_fails_closed_on_fresh_process_hash_mismatch(mon
     payloads = iter((subject.canonical_json_bytes(first), subject.canonical_json_bytes(second)))
     monkeypatch.setattr(subject, "_load_b3_formal_train_authority", lambda *args, **kwargs: authority)
     monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_control_authority",
+        lambda *args, **kwargs: {"control_authority_sha256": "a" * 64},
+    )
     report = subject.run_b3_transition_dwell_repeated(args, _request())
 
     assert report["status"] == "insufficient_evidence"
     assert report["canonical_payload_bitwise_equal"] is False
     assert report["diagnostic_complete_candidate_seeds"] == []
     assert report["selection_performed"] is False
+
+
+def _transition_dwell_control_fixture(tmp_path: Path) -> tuple[SimpleNamespace, dict, dict, dict, list[dict]]:
+    source = {
+        "dataset_manifest_hash": "1" * 64,
+        "mapping_manifest_hash": "2" * 64,
+        "calendar_manifest_hash": "3" * 64,
+        "l2_stock_fact_manifest_hash": "4" * 64,
+    }
+    child_hashes = ["5" * 64, "6" * 64]
+    selection = {"receipt_sha256": "7" * 64}
+    training = {
+        "receipt_sha256": "8" * 64,
+        "producer_commit": "9" * 40,
+        "fresh_process_receipt_paths": [str(tmp_path / "child-1.json"), str(tmp_path / "child-2.json")],
+        "fresh_process_receipt_hashes": child_hashes,
+        "selection": selection,
+        "feature_domain_policy_sha256": "a" * 64,
+        **source,
+    }
+    stability = {
+        "status": "diagnostic_complete",
+        "receipt_sha256": "b" * 64,
+        "authority": {
+            "training_authority_receipt_sha256": training["receipt_sha256"],
+            "fresh_process_receipt_hashes": child_hashes,
+            "d5_selection_receipt_sha256": selection["receipt_sha256"],
+            "feature_domain_policy_sha256": training["feature_domain_policy_sha256"],
+            "family": subject.B3_P6_FAMILY,
+            "level": subject.B3_P6_LEVEL,
+            "schedule": list(subject.RESTART_SCHEDULE),
+            **source,
+        },
+    }
+    codes = [f"S{index:03d}" for index in range(131)]
+    policy_payload = {"schema_version": "policy_v2", "formula_version": subject.C010_FORMULA_VERSION}
+    children: list[dict] = []
+    expected = {
+        "feature_names": tuple(ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "canonical_sector_codes": tuple(codes),
+        "canonical_sector_set_sha256": subject.canonical_sha256(codes),
+        "authority_keys": {
+            **source,
+            "feature_domain_policy_manifest": {
+                **policy_payload,
+                "control_payload_marker": subject.B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256,
+                "producer_commit": "d" * 40,
+                "receipt_sha256": "e" * 64,
+            },
+        },
+    }
+    args = SimpleNamespace(
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    return args, expected, training, stability, children
+
+
+def test_transition_dwell_control_authority_closes_before_fit_without_copying_bulk_artifacts(
+    monkeypatch, tmp_path
+) -> None:
+    args, expected, training, stability, children = _transition_dwell_control_fixture(tmp_path)
+    values = iter([{"schema_version": subject.B3_P6_D5_CHECKPOINT_SCHEMA}, stability])
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda *args, **kwargs: next(values))
+    monkeypatch.setattr(subject, "_resolve_p6_zero_refit_training_authority", lambda value: training)
+    monkeypatch.setattr(subject, "validate_b3_train_stability_report", lambda value: None)
+    monkeypatch.setattr(
+        subject,
+        "_transition_dwell_policy_payload_sha256",
+        lambda value: subject.B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256,
+    )
+
+    control = subject._load_transition_dwell_control_authority(args, expected=expected)
+
+    assert control["p6_checkpoint_receipt_sha256"] == training["receipt_sha256"]
+    assert control["control_fit_performed"] is False
+    assert control["control_artifact_copy_performed"] is False
+    assert control["feature_domain_policy_payload_sha256"] == subject.B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256
+    assert control["control_authority_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in control.items() if key != "control_authority_sha256"}
+    )
+
+
+@pytest.mark.parametrize("drift", ["source", "policy", "stability"])
+def test_transition_dwell_control_authority_fails_closed_on_any_control_drift(
+    monkeypatch, tmp_path, drift: str
+) -> None:
+    args, expected, training, stability, children = _transition_dwell_control_fixture(tmp_path)
+    if drift == "source":
+        training["dataset_manifest_hash"] = "f" * 64
+        stability["authority"]["dataset_manifest_hash"] = training["dataset_manifest_hash"]
+    elif drift == "policy":
+        expected["authority_keys"]["feature_domain_policy_manifest"]["formula_version"] = "drifted"
+    else:
+        stability["authority"]["schedule"] = list(subject.RESTART_SCHEDULE[:-1])
+    values = iter([{"schema_version": subject.B3_P6_D5_CHECKPOINT_SCHEMA}, stability])
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda *args, **kwargs: next(values))
+    monkeypatch.setattr(subject, "_resolve_p6_zero_refit_training_authority", lambda value: training)
+    monkeypatch.setattr(subject, "validate_b3_train_stability_report", lambda value: None)
+    monkeypatch.setattr(
+        subject,
+        "_transition_dwell_policy_payload_sha256",
+        lambda value: (
+            "0" * 64
+            if value.get("formula_version") == "drifted"
+            else subject.B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256
+        ),
+    )
+
+    with pytest.raises(StateModelSetError, match="TRANSITION-DWELL-B"):
+        subject._load_transition_dwell_control_authority(args, expected=expected)
+
+
+def test_transition_dwell_parent_closes_control_before_spawning_fresh_process(monkeypatch, tmp_path) -> None:
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    monkeypatch.setattr(
+        subject,
+        "_load_b3_formal_train_authority",
+        lambda *args, **kwargs: {"feature_domain_policy": {"receipt_sha256": "p" * 64}, "inputs": {}},
+    )
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: {"authority_keys": {}})
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_control_authority",
+        lambda *args, **kwargs: (_ for _ in ()).throw(StateModelSetError("TRANSITION-DWELL-B source drift")),
+    )
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fresh-process fit must not start")),
+    )
+
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["status"] == "insufficient_evidence"
+    assert report["primary_reason_code"] == "hmm_risk_transition_dwell_source_drift"
+    assert report["failure_stage"] == "control_authority_preflight"
+    assert report["terminal_entry_count"] == 0
+    assert report["fresh_process_receipts"] == []
+    assert report["report_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in report.items() if key != "report_sha256"}
+    )
+
+
+def test_transition_dwell_parent_failure_preserves_verified_control_and_truthful_fit_count(
+    monkeypatch, tmp_path
+) -> None:
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    control = {"control_authority_sha256": "a" * 64}
+    monkeypatch.setattr(
+        subject,
+        "_load_b3_formal_train_authority",
+        lambda *args, **kwargs: {"feature_domain_policy": {"receipt_sha256": "p" * 64}, "inputs": {}},
+    )
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: {"authority_keys": {}})
+    monkeypatch.setattr(subject, "_load_transition_dwell_control_authority", lambda *args, **kwargs: control)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=b"", stderr=b"failed"),
+    )
+
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["status"] == "insufficient_evidence"
+    assert report["terminal_entry_count"] == 0
+    assert report["control_authority"] == control
+    assert report["report_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in report.items() if key != "report_sha256"}
+    )
 
 
 def _preflight_inputs() -> dict:

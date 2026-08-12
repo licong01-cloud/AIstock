@@ -191,6 +191,7 @@ B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA = "hmm_risk_c008_b3_transition_dwell_b_si
 B3_TRANSITION_DWELL_REPORT_SCHEMA = "hmm_risk_c008_b3_transition_dwell_b_diagnostic_v1"
 B3_TRANSITION_DWELL_CLI_SCHEMA = "hmm_risk_c008_b3_transition_dwell_b_cli_v1"
 B3_TRANSITION_DWELL_OUTPUT_ARGUMENT = "b3_transition_dwell_output"
+B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256 = "cbccd409bddd193dfe70898d893497c1a225563f354ab5e7bce436c73c4323b1"
 B3_HIDDEN_CHILD_ARGUMENTS = (
     "_c008_b3_diag02_child",
     "_c008_b3_diag04_child",
@@ -2601,12 +2602,127 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
         raise StateModelSetError(f"TRANSITION-DWELL-B child receipt is invalid: {process_identity}")
 
 
+def _transition_dwell_policy_payload_sha256(policy: Mapping[str, Any]) -> str:
+    """Hash the immutable policy payload without its producer-specific envelope."""
+
+    body = {key: value for key, value in policy.items() if key not in {"producer_commit", "receipt_sha256"}}
+    if not body:
+        raise StateModelSetError("TRANSITION-DWELL-B control feature-domain policy payload is empty")
+    return canonical_sha256(body)
+
+
+def _load_transition_dwell_control_authority(
+    args: argparse.Namespace,
+    *,
+    expected: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Close the approved historical P6/stability control before any treatment fit."""
+
+    parent_path = Path(str(args.b3_p6_parent_report)).resolve()
+    stability_path = Path(str(args.b3_transition_dwell_control_report)).resolve()
+    parent_report = _load_json_mapping(parent_path, label="TRANSITION-DWELL-B P6 control checkpoint")
+    training_authority = _resolve_p6_zero_refit_training_authority(parent_report)
+    stability = _load_json_mapping(stability_path, label="TRANSITION-DWELL-B train-stability control")
+    validate_b3_train_stability_report(stability)
+    if stability.get("status") != "diagnostic_complete":
+        raise StateModelSetError("TRANSITION-DWELL-B train-stability control is not complete")
+
+    stability_authority = stability.get("authority")
+    if not isinstance(stability_authority, Mapping):
+        raise StateModelSetError("TRANSITION-DWELL-B train-stability control authority is missing")
+    required_stability = {
+        "training_authority_receipt_sha256": training_authority.get("receipt_sha256"),
+        "fresh_process_receipt_hashes": list(training_authority.get("fresh_process_receipt_hashes") or ()),
+        "d5_selection_receipt_sha256": (training_authority.get("selection") or {}).get("receipt_sha256"),
+        "dataset_manifest_hash": training_authority.get("dataset_manifest_hash"),
+        "mapping_manifest_hash": training_authority.get("mapping_manifest_hash"),
+        "calendar_manifest_hash": training_authority.get("calendar_manifest_hash"),
+        "l2_stock_fact_manifest_hash": training_authority.get("l2_stock_fact_manifest_hash"),
+        "feature_domain_policy_sha256": training_authority.get("feature_domain_policy_sha256"),
+        "family": B3_P6_FAMILY,
+        "level": B3_P6_LEVEL,
+        "schedule": list(RESTART_SCHEDULE),
+    }
+    if any(stability_authority.get(key) != value for key, value in required_stability.items()):
+        raise StateModelSetError("TRANSITION-DWELL-B train-stability authority differs from the P6 control checkpoint")
+
+    expected_keys = expected.get("authority_keys")
+    if not isinstance(expected_keys, Mapping):
+        raise StateModelSetError("TRANSITION-DWELL-B current treatment authority is incomplete")
+    strict_source_fields = (
+        "dataset_manifest_hash",
+        "mapping_manifest_hash",
+        "calendar_manifest_hash",
+        "l2_stock_fact_manifest_hash",
+    )
+    if any(training_authority.get(field) != expected_keys.get(field) for field in strict_source_fields):
+        raise StateModelSetError("TRANSITION-DWELL-B current source authority differs from the frozen P6 control")
+
+    child_hashes = tuple(str(value) for value in training_authority.get("fresh_process_receipt_hashes") or ())
+    if len(child_hashes) != 2:
+        raise StateModelSetError("TRANSITION-DWELL-B P6 control child lineage is incomplete")
+    training_producer = str(training_authority.get("producer_commit") or "")
+    current_policy = expected_keys.get("feature_domain_policy_manifest")
+    if not isinstance(current_policy, Mapping) or (
+        _transition_dwell_policy_payload_sha256(current_policy) != B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256
+    ):
+        raise StateModelSetError("TRANSITION-DWELL-B current feature-domain policy differs from the frozen P6 control")
+    body = {
+        "p6_checkpoint_path": str(parent_path),
+        "p6_checkpoint_receipt_sha256": training_authority["receipt_sha256"],
+        "p6_control_producer_commit": training_producer,
+        "fresh_process_receipt_hashes": list(child_hashes),
+        "train_stability_report_path": str(stability_path),
+        "train_stability_report_sha256": canonical_sha256(stability),
+        "train_stability_receipt_sha256": stability["receipt_sha256"],
+        "feature_domain_policy_payload_sha256": B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256,
+        "canonical_sector_set_sha256": expected["canonical_sector_set_sha256"],
+        **{field: training_authority[field] for field in strict_source_fields},
+        "family": B3_P6_FAMILY,
+        "level": B3_P6_LEVEL,
+        "schedule": list(RESTART_SCHEDULE),
+        "control_fit_performed": False,
+        "control_artifact_copy_performed": False,
+    }
+    return {**body, "control_authority_sha256": canonical_sha256(body)}
+
+
 def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
     """Run both fresh processes and emit only compact, no-selection parent evidence."""
 
-    authority = _load_b3_formal_train_authority(request, db_prefix=str(args.db_env_prefix))
-    policy = authority["feature_domain_policy"]
-    expected = _b3_p6_closure_from_inputs(authority["inputs"], request, policy=policy)
+    try:
+        authority = _load_b3_formal_train_authority(request, db_prefix=str(args.db_env_prefix))
+        policy = authority["feature_domain_policy"]
+        expected = _b3_p6_closure_from_inputs(authority["inputs"], request, policy=policy)
+        control_authority = _load_transition_dwell_control_authority(args, expected=expected)
+    except (StateModelSetError, OSError, ValueError) as exc:
+        body = {
+            "schema_version": B3_TRANSITION_DWELL_REPORT_SCHEMA,
+            "contract_version": B3_TRANSITION_DWELL_CONTRACT,
+            "status": "insufficient_evidence",
+            "primary_reason_code": "hmm_risk_transition_dwell_source_drift",
+            "failure_stage": "control_authority_preflight",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "planned_fit_count": 2096,
+            "terminal_entry_count": 0,
+            "control_authority": None,
+            "fresh_process_receipts": [],
+            "canonical_payload_bitwise_equal": False,
+            "diagnostic_complete_candidate_seeds": [],
+            "candidate_seed_count": 0,
+            "selection_performed": False,
+            "selected_seed": None,
+            "d5_executed": False,
+            "d6_executed": False,
+            "semantic_mapping_performed": False,
+            "formal_d5_stability_gate_applied": False,
+            "model_write_performed": False,
+            "ready_artifact_write_performed": False,
+            "database_write_performed": False,
+            "runtime_action_performed": False,
+        }
+        return {**body, "report_sha256": canonical_sha256(body)}
     children: list[dict[str, Any]] = []
     child_receipts: list[dict[str, Any]] = []
     for process_identity in ("fresh_process_1", "fresh_process_2"):
@@ -2616,7 +2732,7 @@ def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str
             capture_output=True,
         )
         if completed.returncode != 0:
-            return {
+            body = {
                 "schema_version": B3_TRANSITION_DWELL_REPORT_SCHEMA,
                 "contract_version": B3_TRANSITION_DWELL_CONTRACT,
                 "status": "insufficient_evidence",
@@ -2624,14 +2740,19 @@ def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str
                 "failed_process_identity": process_identity,
                 "completed_process_count": len(children),
                 "planned_fit_count": 2096,
+                "terminal_entry_count": len(children) * 1048,
+                "control_authority": control_authority,
                 "selection_performed": False,
                 "d5_executed": False,
                 "d6_executed": False,
+                "semantic_mapping_performed": False,
+                "formal_d5_stability_gate_applied": False,
                 "model_write_performed": False,
                 "ready_artifact_write_performed": False,
                 "database_write_performed": False,
                 "runtime_action_performed": False,
             }
+            return {**body, "report_sha256": canonical_sha256(body)}
         try:
             child = json.loads(completed.stdout.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -2697,6 +2818,7 @@ def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str
         "primary_reason_code": reason,
         "planned_fit_count": 2096,
         "terminal_entry_count": 2096,
+        "control_authority": control_authority,
         "fresh_process_receipts": child_receipts,
         "canonical_payload_bitwise_equal": bitwise_equal,
         "diagnostic_complete_candidate_seeds": candidate_seeds,
@@ -5865,6 +5987,10 @@ def parse_args() -> argparse.Namespace:
         "--b3-p6-zero-refit-report",
         help="Immutable BUG-1029 P6 zero-refit report; required only for train-stability diagnostic.",
     )
+    parser.add_argument(
+        "--b3-transition-dwell-control-report",
+        help="Immutable TRAIN-STABILITY-DIAG-01 report; required with --b3-transition-dwell-output.",
+    )
     parser.add_argument("--b3-blocker-report", help="Approved immutable C-008-B3-FORMAL-BLOCKER-DIAG-01 report.")
     parser.add_argument("--b3-remediation-report", help="Approved immutable C-008-B3-REMEDIATION-DIAG-02 report.")
     parser.add_argument(
@@ -5899,6 +6025,7 @@ def main() -> int:
         p6_zero_refit_output = getattr(args, "b3_p6_d6_zero_refit_output", None)
         train_stability_output = getattr(args, "b3_train_stability_diagnostic_output", None)
         transition_dwell_output = getattr(args, "b3_transition_dwell_output", None)
+        transition_dwell_control_report = getattr(args, "b3_transition_dwell_control_report", None)
         p6_parent_report = getattr(args, "b3_p6_parent_report", None)
         p6_zero_refit_report = getattr(args, "b3_p6_zero_refit_report", None)
         blocker_formal_report = getattr(args, "b3_formal_report", None)
@@ -5918,6 +6045,10 @@ def main() -> int:
         train_stability = bool(train_stability_output)
         transition_dwell_parent = bool(transition_dwell_output)
         transition_dwell_child = bool(getattr(args, "_b3_transition_dwell_child", False))
+        if transition_dwell_control_report and not transition_dwell_parent:
+            raise StateModelSetError(
+                "--b3-transition-dwell-control-report is only valid with --b3-transition-dwell-output"
+            )
         if transition_dwell_parent or transition_dwell_child:
             active_outputs = {
                 name
@@ -5940,9 +6071,14 @@ def main() -> int:
                 raise StateModelSetError("TRANSITION-DWELL-B child process identity is invalid")
             if transition_dwell_parent and args.b3_process_identity:
                 raise StateModelSetError("TRANSITION-DWELL-B parent must not declare a process identity")
+            if transition_dwell_parent and (not p6_parent_report or not transition_dwell_control_report):
+                raise StateModelSetError(
+                    "--b3-p6-parent-report and --b3-transition-dwell-control-report are required for TRANSITION-DWELL-B"
+                )
+            if transition_dwell_child and (p6_parent_report or transition_dwell_control_report):
+                raise StateModelSetError("TRANSITION-DWELL-B child must not receive parent control authorities")
             forbidden_authority_fields = (
                 "b3_formal_report",
-                "b3_p6_parent_report",
                 "b3_p6_zero_refit_report",
                 "b3_blocker_report",
                 "b3_remediation_report",
@@ -5993,7 +6129,7 @@ def main() -> int:
                 or d1_frozen_input_bundle_sha256
             ):
                 raise StateModelSetError("B3 P6 D6 zero-refit replay cannot be combined with another authority mode")
-        elif p6_parent_report or p6_zero_refit_report:
+        elif (p6_parent_report or p6_zero_refit_report) and not transition_dwell_parent:
             raise StateModelSetError("--b3-p6-parent-report is only valid with D6 zero-refit replay")
         elif p6_parent or p6_child:
             _require_b3_p6_mode_isolation(args, p6_parent=p6_parent, p6_child=p6_child)
