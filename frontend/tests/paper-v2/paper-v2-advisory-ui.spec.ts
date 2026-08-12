@@ -44,6 +44,31 @@ function outcomeCandidate(symbol: string) {
   };
 }
 
+function calibratedOutcomeCandidate(symbol: string) {
+  const candidate = outcomeCandidate(symbol);
+  return {
+    ...candidate,
+    horizons: candidate.horizons.map((row) => ({
+      ...row,
+      excess_return_calibrated_q10: row.excess_return_q10 - 0.01,
+      excess_return_calibrated_q50: row.excess_return_q50,
+      excess_return_calibrated_q90: row.excess_return_q90 + 0.01,
+      positive_probability_calibrated: 0.64,
+      signal_survival_probability_calibrated: 0.58,
+      path_mfe_calibrated_q50: row.path_mfe_q50,
+      path_mfe_calibrated_q90: row.path_mfe_q90 + 0.02,
+      path_mae_loss_calibrated_q50: row.path_mae_loss_q50,
+      path_mae_loss_calibrated_q90: row.path_mae_loss_q90 + 0.02,
+      positive_probability_calibration_state: "CALIBRATED",
+      signal_survival_probability_calibration_state: "CALIBRATED",
+      return_interval_calibration_state: "CALIBRATED",
+      path_mfe_calibration_state: "CALIBRATED",
+      path_mae_loss_calibration_state: "CALIBRATED",
+    })),
+    holding_period: { ...candidate.holding_period, calibration_state: "UNCALIBRATED" },
+  };
+}
+
 function priceRangeCandidate(symbol: string) {
   return {
     symbol,
@@ -1089,6 +1114,75 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   expect(consoleErrors).toEqual([]);
   expect(badResponses).toEqual([]);
 });
+
+test("Advisory calibrated outcome shows calibrated and raw values without hiding M4", async ({ page }) => {
+  await mockShellApis(page);
+  await mockAdvisoryApis(page, {
+    modelShadowByProgramId: {
+      [PROGRAM_ID]: {
+        status: "EXPERIMENTAL_SHADOW",
+        calibration_state: "UNCALIBRATED",
+        program_id: PROGRAM_ID,
+        target_trade_date: "2026-06-05",
+        candidate_count: 1,
+        shortlist_count: 1,
+        candidates: [{
+          symbol: "000002.SZ",
+          selection_effective_rank: 2,
+          selection_score: 0.6,
+          advisory_model_rank: 1,
+          advisory_model_score: 0.9,
+          is_top5: true,
+          top_feature_contributions: [],
+        }],
+        baselines: {},
+        hmm_unavailable: [],
+        outcome: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "PARTIAL",
+          calibration_policy_version: "advisory_outcome_calibration_policy_v1",
+          parent_outcome_bundle_id: "outcome_bundle_v1",
+          binary_calibration_state: "CALIBRATED",
+          return_interval_calibration_state: "CALIBRATED",
+          path_upper_calibration_state: "CALIBRATED",
+          holding_calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: "outcome_bundle_v2",
+          parent_bundle_id: "bundle_ui",
+          model_version: "advoutcal_ui",
+          horizons: OUTCOME_HORIZONS,
+          candidates: [calibratedOutcomeCandidate("000002.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        price_range: {
+          status: "EXPERIMENTAL_SHADOW",
+          calibration_state: "UNCALIBRATED",
+          price_range_bundle_id: "price_range_bundle_ui",
+          parent_bundle_id: "bundle_ui",
+          outcome_bundle_id: "outcome_bundle_v1",
+          model_version: "advprreq_ui",
+          price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          candidates: [priceRangeCandidate("000002.SZ")],
+          reason_code: null,
+          message: null,
+        },
+        reason_code: null,
+        message: null,
+      },
+    },
+  });
+
+  await page.goto("/paper-v2/advisory");
+  const row = page.getByTestId("advisory-outcome-table").locator("tbody tr").first();
+  await expect(page.getByTestId("advisory-outcome-shadow")).toContainText("PARTIAL");
+  await expect(row).toContainText("校准");
+  await expect(row).toContainText("raw");
+  await expect(row).toContainText("64.0%");
+  await expect(row).toContainText("60.0%");
+  await expect(row).toContainText("UNCALIBRATED");
+  await expect(page.getByTestId("advisory-price-range-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+});
+
 
 test("Advisory model unavailability remains isolated from the persisted rule list", async ({ page }) => {
   const badResponses: string[] = [];

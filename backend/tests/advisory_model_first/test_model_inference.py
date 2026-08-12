@@ -451,6 +451,63 @@ def test_model_shadow_attaches_exact_price_range_without_changing_m2_order() -> 
     assert feature_source.calls == 1
 
 
+def test_calibrated_outcome_keeps_price_range_bound_to_parent_m3_bundle() -> None:
+    price_loads: list[dict[str, object]] = []
+    parent_m3 = "3" * 64
+
+    service = AdvisoryModelShadowService(
+        program_service=_ProgramService(),
+        selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
+        feature_source=_FeatureSource(_feature_inputs()),
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+        outcome_bundle_loader=lambda **_: SimpleNamespace(
+            outcome_bundle_id="4" * 64,
+            manifest={
+                "request_id": "advoutcal_runtime",
+                "horizons": [1, 3, 5, 10, 20],
+                "calibration_state": "PARTIAL",
+                "parent_outcome_bundle_id": parent_m3,
+                "binary_calibration_state": "CALIBRATED",
+                "return_interval_calibration_state": "CALIBRATED",
+                "path_upper_calibration_state": "CALIBRATED",
+                "holding_calibration_state": "UNCALIBRATED",
+            },
+        ),
+        outcome_scorer=lambda _bundle, features: [
+            {"symbol": str(symbol), "horizons": [], "holding_period": {}}
+            for symbol in features["instrument"]
+        ],
+        price_range_bundle_loader=lambda **kwargs: (
+            price_loads.append(kwargs)
+            or SimpleNamespace(
+                price_range_bundle_id="price-v1-m3",
+                manifest={"request_id": "advprreq-runtime"},
+            )
+        ),
+        price_range_scorer=lambda _bundle, features, **_kwargs: [
+            {
+                "symbol": str(symbol),
+                "status": "EXPERIMENTAL_SHADOW",
+                "reason_code": None,
+                "message": None,
+            }
+            for symbol in features["instrument"]
+        ],
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["outcome"]["outcome_bundle_id"] == "4" * 64
+    assert result["outcome"]["parent_outcome_bundle_id"] == parent_m3
+    assert result["price_range"]["outcome_bundle_id"] == parent_m3
+    assert price_loads[0]["outcome_bundle_id"] == parent_m3
+
+
 def test_outcome_unavailable_does_not_remove_m2_ranking() -> None:
     feature_source = _FeatureSource(_feature_inputs())
 

@@ -103,6 +103,17 @@ function fmtPct(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "-";
 }
 
+function calibratedMetric(
+  state: "CALIBRATED" | "UNCALIBRATED" | undefined,
+  calibrated: ReactNode,
+  raw: ReactNode,
+): ReactNode {
+  if (state === "CALIBRATED") {
+    return <><strong>校准 {calibrated}</strong><small className="pv2-muted">raw {raw}</small></>;
+  }
+  return <><span>{raw}</span>{state === "UNCALIBRATED" ? <small className="pv2-muted">UNCALIBRATED</small> : null}</>;
+}
+
 function fmtBps(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value / 100).toFixed(2)}%` : "-";
 }
@@ -1956,12 +1967,12 @@ function AdvisoryPageContent() {
                               <tr key={candidate.symbol} data-testid="advisory-outcome-row">
                                 <td>{candidate.symbol}</td>
                                 <td>{rank ?? "-"}</td>
-                                <td>{horizon ? `${fmtPct(horizon.excess_return_q10)} / ${fmtPct(horizon.excess_return_q50)} / ${fmtPct(horizon.excess_return_q90)}` : "-"}</td>
-                                <td>{horizon ? fmtPct(horizon.positive_probability) : "-"}</td>
-                                <td>{horizon ? fmtPct(horizon.signal_survival_probability) : "-"}</td>
-                                <td>{horizon ? `${fmtPct(horizon.path_mfe_q50)} / ${fmtPct(horizon.path_mfe_q90)}` : "-"}</td>
-                                <td>{horizon ? `${fmtPct(horizon.path_mae_loss_q50)} / ${fmtPct(horizon.path_mae_loss_q90)}` : "-"}</td>
-                                <td>{candidate.holding_period.range_low_days}-{candidate.holding_period.range_high_days}日（{candidate.holding_period.mode_days}日）</td>
+                                <td>{horizon ? calibratedMetric(horizon.return_interval_calibration_state, <>{fmtPct(horizon.excess_return_calibrated_q10)} / {fmtPct(horizon.excess_return_calibrated_q50)} / {fmtPct(horizon.excess_return_calibrated_q90)}</>, <>{fmtPct(horizon.excess_return_q10)} / {fmtPct(horizon.excess_return_q50)} / {fmtPct(horizon.excess_return_q90)}</>) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.positive_probability_calibration_state, fmtPct(horizon.positive_probability_calibrated), fmtPct(horizon.positive_probability)) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.signal_survival_probability_calibration_state, fmtPct(horizon.signal_survival_probability_calibrated), fmtPct(horizon.signal_survival_probability)) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.path_mfe_calibration_state, <>{fmtPct(horizon.path_mfe_calibrated_q50)} / {fmtPct(horizon.path_mfe_calibrated_q90)}</>, <>{fmtPct(horizon.path_mfe_q50)} / {fmtPct(horizon.path_mfe_q90)}</>) : "-"}</td>
+                                <td>{horizon ? calibratedMetric(horizon.path_mae_loss_calibration_state, <>{fmtPct(horizon.path_mae_loss_calibrated_q50)} / {fmtPct(horizon.path_mae_loss_calibrated_q90)}</>, <>{fmtPct(horizon.path_mae_loss_q50)} / {fmtPct(horizon.path_mae_loss_q90)}</>) : "-"}</td>
+                                <td>{candidate.holding_period.range_low_days}-{candidate.holding_period.range_high_days}日（{candidate.holding_period.mode_days}日）{candidate.holding_period.calibration_state ? <small className="pv2-muted">{candidate.holding_period.calibration_state}</small> : null}</td>
                               </tr>
                             );
                           })}
