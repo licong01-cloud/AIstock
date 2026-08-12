@@ -1,10 +1,10 @@
-# MiniQMT 统一执行内核与 vn.py 插件架构 F2 实现蓝图
+﻿# MiniQMT 统一执行内核与 vn.py 插件架构 F2 实现蓝图
 
 > 权威关系：本文是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md) 的下位实现合同。上位蓝图始终是 LocalSIM / MiniQMT 模拟盘的唯一上位权威；本文只细化 MiniQMT 执行内核、算法插件和 vn.py compatibility façade，不得覆盖上位蓝图的信号/执行隔离、`B0_QUOTE_V2`、唯一 broker route、durable truth 或生产状态分离。
 >
 > Feature tier：`F2`。
 >
-> 文档状态：`implementation_verified`。PR #2685 的 dual-upstream V2 authority 保持 verified；final-review follow-up implementation `52e1c5a2` 已关闭 transitive helper SQLite、wall-clock/global-random、dynamic module 与 forbidden owner 假 PASSED，direct matrix `268 passed`、import line/branch `88.27%/77.88%`；CI run `30119335529` 的 MiniQMT/Paper/static/verdict 全绿。
+> 文档状态：`architecture_correction_design_ready`。PR #2685 的 dual-upstream V2 compatibility authority继续verified；2026-08-12撤回ordinary TICK durable event/delivery与durable-TICK cutoff，插件架构overall=`implemented_baseline_remediation_required`。`F-113/F-114/F-115/F-118/F-119/F-121` source/schema/runtime evidence未完成，历史CI只证明未受影响的compatibility/economic contracts。
 >
 > K1 下位详细设计：[`miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md`](miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md) 当前为 `implementation_verified`；K1-A/B/C、K2 overall与K3 overall均为`implemented_verified + merged`。K4-A已通过PR #2883完成`implemented_verified_contract_slice + merged`；K4-B已通过PR #2953完成`implemented_verified + merged`；K5 design/implementation已通过PR #2968/#2978合入。K6 base design、K6-A及2026-08-02 implementation-readiness revision已分别通过PR #2993/#3004/#3024合入。K6-C0 strict contracts、successor migration与versioned repository preflight已通过PR #3032 / merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`完成`implemented_verified + merged`；BUG-953 deterministic lineage/lifecycle/mapping closure已通过PR #3048 / merge `f4da00f6838f6da6344223f6bba55dfe606def3e`完成`implemented_verified + merged + runtime_verified`，Issue #3045已关闭。K6-C1 generic product authority/materializer已通过PR #3080 / merge `c0ca2e7e356a891ee5b2aad270d391071c942ae4`完成`implemented_verified + merged`、`source_merge=merged_pr_3080`；K6-B final dependent-BUY coordinator已通过PR #3120 / merge `48bcf1153dea3dca5c598793d6556d2757ed87de`完成`implemented_verified + merged`、`source_merge=merged_pr_3120`，后续唯一研发切片为`K6-D`，K6 overall=`implementation_in_progress`。predecessor与K6-B successor production DDL均已应用并回读验证，K6-B repository checks=`9/9 true`；现有产品runtime未切换，其余product DML/config/binding/broker/runtime activation gates均为`noop/not_run`。
 >
@@ -12,7 +12,7 @@
 >
 > 2026-08-03 final-architecture-only revision=`design_revision_ready + merged`、`source_merge=merged_pr_3098`，merge `b986e8f655137e9aea88f17ea91d3eb153f1c017`：legacy产品代码冻结，后续研发预算只允许投入最终KERNEL_V2的K6-B/K6-D；禁止K6-C2、legacy修复/backport、parity、compatibility bridge、translator、双写和额外shadow product route。旧实例只使用当前版本自然drain，K6-D必须删除旧产品caller并完成唯一route与正常交易日验收。
 >
-> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为 `implementation_verified`；K2-A、K2-A-M1、K2-B、K2-C和K2-D均为`implemented_verified + merged`，K2 overall=`implemented_verified + merged`。K2-D direct outbox/diagnostics/ops=`111 passed`，DEV repository/migration 验证真实 PostgreSQL transaction、reconcile history 与 schema readback；final review闭合stale recovery、EOD fresh readback、callback interval proof、完整scalar/composite owner和diagnostics cursor/alerts；required CI run `30269640126` 全绿。未启动常驻worker、未调用真实Gateway/broker、未执行生产DDL/DML，也未切换产品runtime。
+> K2 下位详细设计：[`miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md`](miniqmt_execution_kernel_k2_durable_dispatch_f2_detailed_design_20260725.md) 当前为`architecture_correction_design_ready`；K2-A..D既有经济/时钟能力保持merged，K2 overall因ordinary TICK persistence改为`implemented_baseline_remediation_required`。历史outbox/transaction CI仍有效，但不证明zero-DB hot path。
 >
 > K3 下位详细设计：[`miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md`](miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md) 当前为 `implementation_verified`。K3-A 已合入 pure plugin与3.0.0 exact binding；K3-B 已通过 PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` 合入 committed-fact single-transaction shadow source、strict policy/state/dependent-BUY inventory、ALGO_LOCAL parity/visible suppression，以及真实K2 creation/ingress/delivery/materializer/outbox的broker-neutral DEV shadow。产品runtime未切换；K6 dependent-BUY durable coordinator与产品唯一route cutover仍未开始。
 >
@@ -20,7 +20,7 @@
 
 ## 0. Executive Decision / 核心决策
 
-K1、K2、K3 overall均保持`implemented_verified + merged`。K4-A为`implemented_verified_contract_slice + merged`；K4-B已通过PR #2953合入，K4 overall=`implemented_verified + merged`。K5 design/implementation已通过PR #2968/#2978合入。K6 base design已通过PR #2993合入；K6-A通过PR #3004完成dependent-BUY V1、hash-only product authority V2与七表repository。K6-C0已通过PR #3032合入dependent-BUY V2、product authority V3 strict carriers、`DEFERRED_DEPENDENT_BUY` mapping contract、successor migration和exact pre/post schema authority；BUG-953通过PR #3048补齐deterministic SUBMIT/CANCEL lineage、lifecycle authority和exact physical mapping JSON/scalar CHECK，并完成production DDL/readback、用户重启及正式post-restart receipt。K6-C1已通过PR #3080合入；K6-B已通过PR #3120 / merge `48bcf1153dea3dca5c598793d6556d2757ed87de`完成`implemented_verified + merged`；K6-D detailed design已通过PR #3129合入，code已通过PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349`完成`implemented_verified + merged`与`source_merge=merged_pr_3146`，真实QMT snapshot callback、scheduler no-quote clock/EOD、per-binding isolation、legacy physical retirement与additive read-only diagnostics已进入main；产品runtime仍未切换。
+K1 compatibility及K2/K3经济执行能力的历史source状态保持merged；execution-kernel overall因hot-market-data persistence correction改为`implemented_baseline_remediation_required`。K4-A为`implemented_verified_contract_slice + merged`；K4-B/K5/K6既有插件、product authority、broker exactly-once与route source仍保持各自历史合入状态，但凡依赖durable TICK/cutoff的验收子项均待`F-113..F-121` remediation，不能以旧overall状态宣称最终架构完成。
 
 MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继续让 runtime、client、scheduler、B0 controller 按具体 `algo_code` 分支。目标架构固定为：
 
@@ -118,9 +118,8 @@ MiniQMT 不引入第二套 vn.py `MainEngine/EventEngine/OmsEngine`，也不继�
 Immutable ExecutionPlan
   -> MiniQMTExecutionRuntimeClient
   -> MiniQMTExecutionKernel
-       -> DurableEventIngress
-       -> RuntimeEventEnvelopeV2
-       -> AlgoEventDeliveryV1 (per subscribed algo)
+       -> DurableEventIngress (business/session events only)
+       -> RuntimeEventEnvelopeV2 + AlgoEventDeliveryV1
        -> ExecutionAlgoPluginV2.transition(state, event)
        -> AlgoTransitionReceiptV1
        -> BrokerCommandOutboxV1
@@ -131,9 +130,11 @@ Immutable ExecutionPlan
 
 Scheduler-owned quote path
   -> XtQuant whole-quote callback
-  -> B0_QUOTE_V2 normalize/eligibility/evidence
-  -> MarketDataViewV2
-  -> RuntimeEventEnvelopeV2(TICK)
+  -> B0_QUOTE_V2 normalize/eligibility
+  -> process-local HotMarketDataIngress
+  -> shared immutable MarketDataViewV2
+  -> no effect: zero SQL
+  -> effect: existing economic transition/command fields only
 
 Kernel-owned clock path
   -> ExchangeSessionClock
@@ -144,7 +145,7 @@ Kernel-owned clock path
 
 | 能力 | 唯一 owner | 插件可做 | 插件禁止 |
 | --- | --- | --- | --- |
-| event sequence/fan-out | `MiniQMTExecutionKernel` | 声明订阅类型 | 自建线程、队列或 timer |
+| event sequence/fan-out | `MiniQMTExecutionKernel`；TICK使用同一root的in-memory single writer，经济event使用durable sequence | 声明订阅类型 | 自建线程、队列或 timer |
 | algo behavior/state transition | `ExecutionAlgoPluginV2` | 计算 next state 和 commands | DB、broker、HTTP side effect |
 | quote authority | B0 quote ingress/controller | 声明并消费 capability view | 读取缓存或合成缺失字段 |
 | timer/session | kernel `ExchangeSessionClock` | 消费 TIMER/SESSION/EOD | 用 tick 数量或 for-loop 伪造时间 |
@@ -245,7 +246,7 @@ K2-A session strict carrier不复制calendar DTO：`plugin_contracts.py`仅通�
 | `event_key` | source + source identity + event type 的 canonical hash |
 | `runtime_id` | frozen runtime identity |
 | `sequence` | per-runtime strictly increasing，由 runtime row lock 分配 |
-| `event_type` | `ALGO_START/TICK/TIMER/ORDER/TRADE/ACCOUNT/SESSION/RECONCILE/EOD/OPERATOR` |
+| `event_type` | durable envelope只允许 `ALGO_START/TIMER/ORDER/TRADE/ACCOUNT/SESSION/RECONCILE/EOD/OPERATOR`；TICK属于`HotMarketDataEventV1`，不是本DTO |
 | `event_time_utc` | timezone-aware authority time |
 | `monotonic_ns` | process timer event required；外部 callback 可空但不得伪造 |
 | `source` | fixed enum |
@@ -261,7 +262,6 @@ K2-A session strict carrier不复制calendar DTO：`plugin_contracts.py`仅通�
 | event_type | source | payload/source identity authority |
 | --- | --- | --- |
 | `ALGO_START` | `MINIQMT_EXECUTION_KERNEL` | `miniqmt_algo_start_v1` / exact `algo_instance_id,runtime_id,parent_intent_id,strategy_slot_id,algo_code,plugin_id,plugin_version,plugin_manifest_sha256,plugin_config_sha256` |
-| `TICK` | `B0_QUOTE_V2` | `miniqmt_market_data_view_v2` / `market_data_id` |
 | `TIMER` | `EXCHANGE_SESSION_CLOCK` | `miniqmt_timer_due_v1` / `timer_occurrence_id` |
 | `SESSION` | `EXCHANGE_SESSION_CLOCK` | `miniqmt_session_event_v1` / `session_event_id` |
 | `EOD` | `EXCHANGE_SESSION_CLOCK` | `miniqmt_eod_event_v1` / `runtime_id + trade_date + session_epoch` |
@@ -271,7 +271,7 @@ K2-A session strict carrier不复制calendar DTO：`plugin_contracts.py`仅通�
 | `RECONCILE` | `QMT_OMS_RECONCILIATION` | reconciliation receipt / receipt identity+hash |
 | `OPERATOR` | `SIMULATION_RUNTIME_OPERATOR` | typed runtime operator command / operator command id |
 
-数据库 CHECK 必须按这张组合表实施，不得只分别校验两个独立 enum。每行 `source_identity` 的 key set 必须 exact，missing/extra 都拒绝；`ALGO_START.algo_instance_id` 按 §5.5 完整 tuple 重算。`event_key_sha256 = sha256(schema_version, runtime_id, event_type, source, canonical(source_identity))`，`event_id = "mqrtevt_" + event_key_sha256`；sequence、arrival time 和 retry attempt 不进入 identity。correlation、payload 和 payload hash 是同 key 的 immutable closure，任一变化都是 terminal conflict。
+数据库 CHECK 必须按这张删除TICK后的组合表实施，不得只分别校验两个独立 enum。历史TICK rows可只读保留，但新writer和successor CHECK必须拒绝。每行 `source_identity` 的 key set 必须 exact，missing/extra 都拒绝；`ALGO_START.algo_instance_id` 按 §5.5 完整 tuple 重算。`event_key_sha256 = sha256(schema_version, runtime_id, event_type, source, canonical(source_identity))`，`event_id = "mqrtevt_" + event_key_sha256`；sequence、arrival time 和 retry attempt 不进入 identity。correlation、payload 和 payload hash 是同 key 的 immutable closure，任一变化都是 terminal conflict。
 
 同一 `event_key` + 相同完整 closure 返回原 receipt；相同 key + 不同 hash 是 terminal identity conflict。禁止丢弃、覆盖、按 arrival time 猜测或返回假 ACK。
 
@@ -282,7 +282,6 @@ K2-A session strict carrier不复制calendar DTO：`plugin_contracts.py`仅通�
 | event type | delivery target | 禁止行为 |
 | --- | --- | --- |
 | `ALGO_START` | exact newly-created `algo_instance_id`，固定为该 algo 的 delivery sequence 1 | 广播、跳过 initialize、直接生成无 delivery command |
-| `TICK` | 同 runtime、同 symbol、manifest 订阅 TICK，且 frozen quote assignment/control identity 与 event lineage 一致的 active algo | 仅按 symbol 广播、跨 revision、把无效 observation 投递给插件 |
 | `TIMER` | `timer_schedule.algo_instance_id` 的 exact owner，manifest 订阅 TIMER，schedule/occurrence/epoch/hash 全部一致 | 向 runtime 全部 algo 广播 |
 | `ORDER/TRADE` | 由 command→child→broker order/trade durable mapping 重建出的唯一 algo owner | 按 symbol 或 broker account 广播；缺 owner 时猜测 |
 | `ACCOUNT` | 同 runtime/account group 且显式订阅 ACCOUNT 的 active algo；投递集合与 account projection hash 一并冻结 | 跨 account group 或事后把新 algo 加入旧 event |
@@ -291,6 +290,8 @@ K2-A session strict carrier不复制calendar DTO：`plugin_contracts.py`仅通�
 | `OPERATOR` | typed operator command 明确列出的 exact algo owner；runtime scope 命令必须冻结有界 owner 列表 | 根据当前 active 集合动态扩张 scope |
 
 缺少必需 correlation、owner 不唯一、跨 runtime/symbol/account/control identity、或 retry 时 delivery-set hash 漂移，必须在 ingress ACK 前以 `MINIQMT_RUNTIME_EVENT_ROUTING_*` typed failure 拒绝；不得丢 event、广播 fallback、选择第一个 owner 或返回空成功。event 首次 ingress 将 ordered target algo ids、`delivery_set_sha256` 和路由规则版本写入 ingress receipt；同 event retry 只 readback 原 delivery 集合，不向后来创建的 algo 补投旧事件。
+
+TICK 使用独立 `HotMarketDataDeliveryV1`：identity=`runtime_id + symbol + source_generation + market_sequence + market_data_sha256`，只存在于进程内；target set来自runtime creation时冻结的manifest subscription，同symbol多个algo共享同一view。它不创建`AlgoEventDeliveryV1`或durable sequence。插件无effect返回`NO_EFFECT`；有effect才由kernel分配下一durable transition identity并写既有economic transition/command字段，不新增行情carrier/hash。
 
 每个目标 algo 获得严格递增且无间隙的 `algo_delivery_sequence`：
 
@@ -481,7 +482,7 @@ terminal plugin/initialize failure 仍使用上述 deterministic transition id�
 
 ### 6.1 Ingress transaction
 
-一个外部 event ingress transaction 必须：
+一个 durable external event ingress transaction 必须：
 
 1. `SELECT execution_runtime FOR UPDATE`；
 2. exact event-key/hash dedupe；
@@ -493,7 +494,7 @@ terminal plugin/initialize failure 仍使用上述 deterministic transition id�
 8. 更新 runtime last sequence；
 9. commit 后返回 durable ingress receipt。
 
-event 与 deliveries 未同时提交时不得 ACK consumer。
+durable event 与 deliveries 未同时提交时不得 ACK consumer。TICK不进入本transaction；ordinary TICK callback的ACK只表示process-local validation/delivery完成，不表示DB成功或业务成功。
 
 algo creation 使用同等严格的 initialization transaction：
 
@@ -508,7 +509,7 @@ initialize 的 deterministic plugin/config/state failure 必须在该 transactio
 
 ### 6.2 Delivery transaction
 
-每条 delivery 在一个 transaction 内完成：
+每条 durable delivery 在一个 transaction 内完成。hot TICK transition先在进程内pure evaluate；只有有effect时进入同等严格的economic transaction，并只持久化既有transition/state/timer/command/outbox字段：
 
 1. claim 当前 algo 最小非终态 delivery，并校验 lease/fence、algo delivery sequence/predecessor；
 2. `SELECT algo_instance FOR UPDATE`；
@@ -536,7 +537,7 @@ initialize 的 deterministic plugin/config/state failure 必须在该 transactio
 ### 6.4 Single writer 与隔离
 
 - per-runtime sequence 使用 DB row lock/CAS，不依赖 Python 内存计数；
-- quote subscriber single writer 只负责 ingress identity，不能直接执行插件；
+- quote subscriber single writer负责normalize/generation/order；同一kernel hot-ingress actor负责插件投递，两者都不访问repository；
 - delivery worker 可并行处理不同 runtime/algo；同一 algo 必须同时满足最小非终态 delivery、predecessor terminal closure、`last_applied_delivery_sequence` CAS 和 algo row lock，不能仅靠线程串行或 row lock 推断事件顺序；
 - shared provider/DB/Gateway failure 可以标 runtime DEGRADED/FAILED；插件业务 failure 仅标对应 algo/delivery；
 - 所有扫描有明确 runtime/account/date/symbol/limit，禁止全表无界恢复。
@@ -574,7 +575,7 @@ Timer key 为 `runtime_id + schedule_id + due_at_exchange + epoch`；进程重�
 
 | vn.py 角色 | AIstock 实现 |
 | --- | --- |
-| EventEngine | durable ingress + delivery worker |
+| EventEngine | hot TICK 使用进程内single-writer dispatch；business/session events使用durable ingress + delivery worker |
 | AlgoEngine | `VnpyAlgoEngineFacadeV1` |
 | AlgoTemplate | pinned upstream/derived class wrapper |
 | MainEngine | `MiniQMTExecutionKernel` construction root |
@@ -590,7 +591,7 @@ Timer key 为 `runtime_id + schedule_id + due_at_exchange + epoch`；进程重�
 | `AlgoEngine.send_order(algo, direction, price, volume, order_type, offset) -> str` | 校验 manifest/Gateway/OMS capability 后收集一个 typed broker command，立即返回由 transition/ordinal 派生的 deterministic local `vt_orderid`；不得同步调用 Gateway |
 | `AlgoEngine.cancel_order(algo, vt_orderid) -> None` | 只允许取消 durable mapping 证明属于该 algo 的 active order；收集 exact `CANCEL_ORDER`，未知/跨 owner id typed fail loud |
 | `AlgoTemplate.cancel_all() -> None` | 按 durable active-order ids 排序展开为逐 order cancel commands；不使用无法重建范围的裸 broker cancel-all |
-| `AlgoEngine.get_tick(algo) -> TickData | None` | 从当前 immutable `MarketDataViewV2` 投影 manifest 声明字段；没有当前合法 view 时返回 upstream-compatible `None`，同时写 durable wait/diagnostic reason，不读缓存 fallback |
+| `AlgoEngine.get_tick(algo) -> TickData | None` | 从当前 immutable process-local `MarketDataViewV2` 投影manifest声明字段；没有当前合法view时返回upstream-compatible `None`并更新bounded process diagnostic，不写wait event、不读DB/旧行情fallback |
 | `AlgoEngine.get_contract(algo) -> ContractData | None` | 从 frozen symbol/board-lot/Gateway capability projection 读取；缺失返回 `None` 并写 typed diagnostic，不猜 exchange/min_volume |
 | `AlgoEngine.write_log(msg, algo=None) -> None` | 收集 bounded immutable diagnostic observation；不能以日志代替 error/receipt |
 | `AlgoEngine.put_algo_event(algo, data) -> None` / `AlgoTemplate.put_event()` | 收集 parameter/variable/status projection，schema/hash exact；不启动第二 EventEngine |
@@ -608,7 +609,7 @@ K4 current catalog没有façade-backed descriptor：current-three保持K3 pure b
 
 通用adapter必须实现constructor/start exactly once、每delivery由durable state经`__new__`+exact mapping恢复、callback once、state extract/schema validation和collector freeze；Python algorithm object不得跨delivery持久化。`facade_contract_sha256`必须同时绑定K1 pinned surface、K4 method/DTO/state mapping以及live callable/signature/canonical-LF source identity，writer/readback独立重算，不能以固定hash或characterization-only自证。
 
-Iceberg TIMER `get_tick()` 只允许从同一algo的`APPLIED` prior delivery反查timer delivery/event immutable双sequence cutoff之前最新的durable eligible B0 TICK event，并闭合projection/source event/consumed lineage；查询复用existing `(algo_instance_id,algo_delivery_sequence)`唯一索引与event owner join，latest candidate若cross-session/cross-symbol/stale/non-B0则unavailable且不回退更旧事件。later quote、process cache、ordinary quote和合成数据不得改变retry/restart输入。K4可在existing K2 repository增加该bounded read-only query，但不增加DB schema、writer或第二repository owner。
+Iceberg TIMER `get_tick()` 只允许读取同一runtime/symbol/generation的当前 process-local eligible B0 view，并在真正形成slice/reprice command时只把既有command/transition经济字段原子提交，不附加行情carrier/hash。latest view若cross-session/cross-symbol/stale/non-B0则unavailable，不回退更旧view、不读DB、不合成。restart后没有current view即返回`None`并等待下一真实callback；不得以确定性为由恢复durable TICK查询。已提交command的重放输入由其command/order经济字段冻结，不再依赖process cache。
 
 ### 8.3 支持边界
 
@@ -664,16 +665,17 @@ receipt_sha256 = hash_hex_v1("miniqmt_vnpy_compatibility_receipt_v2", exact prec
 
 实现预计需要一项 versioned additive migration：
 
-1. `execution_runtime_event` 增加 `event_key`、`payload_schema_version`、`payload_sha256`、`source_identity_json`、`correlation_json`、`archived_at`，并建立 `(runtime_id,event_key)` unique；
+1. `execution_runtime_event` 增加 business/session event 所需字段与 `(runtime_id,event_key)` unique；successor composite CHECK明确拒绝新KERNEL_V2 TICK/ordinary quote events，历史TICK只读保留；
 2. `execution_algo_instance` 增加 `plugin_id`、`plugin_version`、`plugin_manifest_sha256`、`plugin_config_json`、`plugin_config_sha256`、`compatibility_receipt_sha256`、`state_schema_version`、`state_json`、`state_sha256`、`transition_sequence`、`last_applied_delivery_sequence`、`last_applied_delivery_id`、`last_closed_delivery_sequence`、`terminal_delivery_sequence`、`failure_receipt_id`、`row_version`；
 3. 新建 `execution_algo_event_delivery`，包含 `algo_delivery_sequence`、`previous_delivery_id`、route/version/set hash、lease/fence、failure/skip receipt；
 4. 新建 `execution_algo_transition`，同时承载 success receipt 与 `AlgoFailureReceiptV1`，并保存 deterministic transition id/before-after/effect hashes；
 5. 新建 `execution_algo_command_outbox`，包含 nullable exact `broker_called`、dispatch attempt/client reference、unknown/reconcile/non-acceptance receipt；
 6. 新建 `execution_algo_timer_schedule`；
-7. event type/source/payload schema 使用 §5.2 composite CHECK；delivery status、command type/status、timer mutation/catch-up policy 使用 explicit CHECK；
+7. durable event type/source/payload schema 使用 §5.2 删除TICK后的composite CHECK；delivery status、command type/status、timer mutation/catch-up policy 使用 explicit CHECK；
 8. identity/status/timestamps NOT NULL；algo state/schema/hash 仅允许 §5.4 的 initialization-failed exact exception；`broker_called=false` 只允许 pre-dispatch/non-acceptance receipt，`true` 只允许 ACK/callback/reconcile evidence，`null` 只允许 DISPATCHING/OUTCOME_UNKNOWN/RECONCILING 或 `FAILED_TERMINAL + MINIQMT_COMMAND_OUTCOME_UNRESOLVED`，使用 composite CHECK 闭合；
 9. delivery `(event_id,algo_instance_id)`、`(algo_instance_id,algo_delivery_sequence)`、transition `(delivery_id)`、outbox `(transition_id,ordinal)`、timer `(algo_instance_id,timer_name,schedule_epoch)` 使用 unique；predecessor、command、timer 和 broker mapping 的所有 FK 必须指向同 runtime/algo owner，session authority以`(runtime_id,exchange_trade_date)` composite FK指向runtime `(runtime_id,trade_date)`，禁止跨 runtime/algo/date 关联；
-10. migration test 必须证明 ALGO_START sequence 1、delivery predecessor chain、stale DISPATCHING nullable truth、FAILED/SKIPPED receipts 和 compatibility receipt hash 的 CHECK/unique/FK 均由数据库拒绝非法组合，而不是只靠 Python 校验。
+10. migration test 必须证明 ALGO_START sequence 1、delivery predecessor chain、stale DISPATCHING nullable truth、FAILED/SKIPPED receipts、compatibility receipt hash以及KERNEL_V2 TICK拒绝均由数据库拒绝非法组合，而不是只靠 Python 校验；
+11. 不创建`ExecutionDecisionEvidenceV1`或任何行情evidence carrier/hash。transition/command只允许既有command/order/trade原生price与actual quantity、code-owned/frozen配置阈值、basis、reason与action time；禁止trigger/reference observed market price、source-view hash、L1-L5 arrays、bar、raw/normalized quote。reconciliation fingerprint current projection与run summary `<=64 KiB`需由CHECK/UNIQUE/readback闭合。
 
 DDL 文件名、实际表 schema 和已有 constraint 必须在开发 issue 的 DEV preflight 中 readback 后确定；不得因文档推测覆盖现有对象。
 
@@ -704,16 +706,16 @@ K2-A expected catalog projection/hash由代码和committed SQL拥有；preflight
 ### 10.4 Rollback
 
 - schema rollback 仅在尚无新-format production rows 时允许；
-- 已产生 V2 event/delivery/transition/outbox 后，应用回滚只能部署最后一个兼容读取 build 并 drain/reconcile，不能删除事实或恢复旧 broker route；
+- 已产生 V2 event/delivery/transition/outbox 后，应用回滚只能部署最后一个兼容读取且保持zero-tick-persistence的build并drain/reconcile，不能删除事实、恢复TICK writer或旧 broker route；无安全build时保持模拟盘停止；
 - unknown commit/outbox outcome 只 readback/reconcile，不重新执行写入；
 - rollback 不改变 ExecutionPlan、direction、quantity、binding 或 quote revision。
 
 ### 10.5 Retention、archive 与 cardinality
 
-- event/delivery/transition/outbox、state history 以及 command→child/order/trade 关联在任何 algo、command、reconcile、TCA/markout 未终结时禁止 archive；
+- business event/delivery/transition/outbox、normalized state history以及 command→child/order/trade关联在任何algo、command、reconcile、TCA/markout未终结时禁止archive；
 - terminal business chain 至少 active 90 个自然日，之后只允许 type-aware soft archive；按 runtime/event/delivery/transition/command identity 的只读查询必须可显式包含 archived rows；
-- timer/diagnostic cadence 中不参与 broker/business chain 的聚合事实 active 14 个自然日后可 soft archive；不得按总行数截断 mandatory event 或 unknown-outcome anchor；
-- 本阶段不新增物理 delete job，长期物理保留沿用既有 DB retention/backup authority；
+- timer/diagnostic cadence 中不参与 broker/business chain 的聚合事实 active 14 个自然日后可 soft archive；ordinary tick/reject/wait不产生row；不得按总行数截断 mandatory event 或 unknown-outcome anchor；
+- 本阶段不新增物理 delete job；历史tick/NO_FILL/duplicate reconciliation/oversized run JSON cleanup为独立授权DML，不是启动门禁；
 - diagnostics 默认要求 `runtime_id + trade_date`，默认 limit 100、最大 500，以 `(sequence, identity)` cursor 分页；禁止全表 JSONB 扫描。
 
 ## 11. Error, Diagnostics, Metrics and Runbook / 错误与运维
@@ -752,6 +754,8 @@ K2-A expected catalog projection/hash由代码和committed SQL拥有；preflight
 - per-plugin active failure 和 last failure。
 
 diagnostics 不启动 feed、不执行 delivery、不重放 command、不修复 DB。
+
+diagnostics还必须显示 hot-path repository violation count、DB transactions/economic transition ratio、forbidden market-data carrier/hash count、run summary size、reconciliation distinct/repeat counts。ordinary quote metrics仅为process counters/log，不写交易数据库窗口事实。
 
 ### 11.3 Bounded metrics/alerts
 
@@ -836,7 +840,7 @@ labels 只允许 backend、plugin_id、event_type、command_type、status、reas
 - Iceberg `display_volume`的durable numeric authority为strict non-negative integer或非整数canonical decimal string，拒绝binary float与整数字符串双重identity；只在process-local pinned-source setting bridge转换fractional carrier，不改变策略目标、方向、数量或round语义；
 - K5 conformance writer/readback必须执行catalog-bound validator/factory probe并验证fresh adapter/pure plugin closure；K2 invocation仅允许通用typed façade reason/context保真与无active child时的既有`CLEAN`终态闭包，全部`kernel*.py/client.py`继续禁止Iceberg/Stop算法分支、产品route或新门禁；
 - pure `ExecutionAlgoPluginV2` runtime-checkable Protocol归属既有K1-B catalog/process-binding authority；kernel与K5 conformance共同导入该唯一SPI，禁止conformance反向import kernel或复制第二套Protocol。原kernel export保持兼容，方法集合与业务语义不变；
-- 验证Iceberg exchange-active TIMER + sequence-cutoff native B0 quote、cancel后pointer立即清空但cancel-pending mapping保留、cancel ACK前resubmit、旧terminal callback清空新pointer及`traded >= target`；验证Stop native TICK + exactly-once trigger及`traded == target`。`< / == / >`均有直接向量，K2非法overfill在plugin transition前typed拒绝而不改source operator；完整保留多command trace，existing K2 V1无法表达时typed拒绝materialization，不丢command、不假成功；
+- 验证Iceberg exchange-active TIMER + process-local current native B0 view/economic action、cancel后pointer立即清空但cancel-pending mapping保留、cancel ACK前resubmit、旧terminal callback清空新pointer及`traded >= target`；验证Stop native TICK + exactly-once trigger及`traded == target`。`< / == / >`均有直接向量，K2非法overfill在plugin transition前typed拒绝而不改source operator；完整保留多command trace，existing K2 V1无法表达时typed拒绝materialization，不丢command、不假成功；
 - 预计 1–2 PR，6–9 人日。
 
 ### K6：旧 helper 退役、生产迁移与真实 SIM
@@ -906,7 +910,7 @@ typed failure.
 - same event multi-algo fan-out；
 - same symbol multi-slot isolation；
 - event sequence N+1 worker 先取得任务时必须等待/拒绝，直到 N APPLIED 或 failure closure；不同 algo 仍可并行；
-- TICK/TIMER/ORDER/TRADE/ACCOUNT/SESSION/EOD/RECONCILE/OPERATOR owner routing、缺 owner/多 owner/cross-runtime negative matrix；
+- TICK process-local owner routing及TIMER/ORDER/TRADE/ACCOUNT/SESSION/EOD/RECONCILE/OPERATOR durable owner routing、缺owner/多owner/cross-runtime negative matrix；
 - process crash at ingress/delivery/commit/broker-call/ACK boundaries；
 - callback-before-ACK、stale DISPATCHING 即使 `broker_called` 未知也禁止 re-submit、`OUTCOME_UNKNOWN -> RECONCILING` 与 deterministic client order reference；
 - unknown broker outcome reconcile-only；
@@ -1041,7 +1045,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-082` | K1-C authority复用与五算法+`round_to` helper source manifest exact，Iceberg/Stop只表征不注册、utility只AST提取不执行 |
 | `F-083` | initialization/transition authority input、K2 optional invocation、通用adapter、collector lifecycle、ordinal/freeze/retry/restart合同可直接实施；K2 V1单/多command shadow边界精确，K5 shadow不增加kernel算法分支/状态机/route，产品aggregate仍由K6拥有 |
 | `F-084` | 六个AlgoEngine方法、template helper与四个callback的shadow return/error/diagnostic/zero-command语义精确，含not-running/missing/rounded-zero空返回；product OMS同步reject语义由K6 disposition拥有 |
-| `F-085` | Tick/Order/Trade/Contract DTO、selected Exchange/Status enum与event routing逐字段映射，TIMER durable TICK cutoff及missing/unsupported无合成/fallback |
+| `F-085` | Tick/Order/Trade/Contract DTO、selected Exchange/Status逐字段映射；TIMER读取process-local current B0 view，missing/unsupported无DB读取、合成或fallback |
 | `F-086` | durable state envelope、constructor-once/restore/extract/freeze、active-child terminal mapping与façade effect复用existing K1/K2 identity；单command shadow链可重建，多command trace完整且不伪装V1 materialization，zero direct broker |
 | `F-087` | implementation/method/state/terminal/DTO/isolated-module contract、runtime binding disposition、command authority disposition、conformance failure/receipt/set exact schema/hash/truncation/writer/readback/zero-partial publication完整 |
 | `F-088` | current-three复用K3 parity，Iceberg/Stop source-isolated characterization-only，Iceberg TIMER lineage、K5边界与确定性输入完整 |
@@ -1052,7 +1056,7 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-093` | K4 conformance hardcode缺口以前后一致的单一pure evaluator闭合，source disposition保持不变，无平行schema/receipt/任意plugin-set authority |
 | `F-094` | code-owned exact V2 binding literal、fresh sealed K4 binding equality与exact full-five descriptor/catalog/compatibility/creation/conformance composition、zero-partial publication和fresh-process readback完整 |
 | `F-095` | config-only factory的唯一binding authority、constructor、strict config/state codec、restore/active-order/lineage closure完整，Iceberg pointer与cancel-pending mappings不混同 |
-| `F-096` | Iceberg exchange-active TIMER、sequence-cutoff native B0 quote、cancel-pending resubmit/late callback、exact `traded >= target`、restart/multi-command语义精确 |
+| `F-096` | Iceberg exchange-active TIMER、process-local current native B0 view/economic action、cancel-pending resubmit/late callback、exact `traded >= target`、restart等待下一live quote/multi-command语义精确；无行情evidence/hash |
 | `F-097` | Stop native TICK、signed price_add、limit bound、exactly-once trigger、exact `traded == target`、ORDER/TRADE/restart语义精确 |
 | `F-098` | K2 shadow invocation、transaction/retry/concurrency/failure/diagnostics/metrics/retention完整且无人工门禁 |
 | `F-099` | direct/negative/DEV PostgreSQL/fresh-process/coverage/changed-files routing/F2验收可执行 |
@@ -1069,6 +1073,12 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-110` | direct/negative/DEV PostgreSQL/migration/concurrency/final-route integration/route uniqueness/frozen-input/full-five source matrix/existing-binding normal-day/coverage/changed-files测试计划可执行，禁止legacy parity验收 |
 | `F-111` | `K6-C0 -> K6-C1 -> K6-B -> K6-D`优先级、最终架构only/no-C2/no-legacy-R&D约束、依赖、工期、source/DDL/config/restart/runtime/normal-day状态分离与rollout/rollback完整 |
 | `F-112` | DESIGN-COMPLIANCE-001、no simplification/silent error/business drift/unapproved gate及K6完成定义闭合 |
+| `F-113` | ordinary TICK process-local single-writer、zero SQL与restart等待下一live callback完整 |
+| `F-114` | action只写既有economic transaction字段且禁止行情carrier/hash完整 |
+| `F-115` | durable business facts允许集与raw/normalized market-data禁止集完整 |
+| `F-118` | outbox/reconcile event-driven wake与禁止per-tick empty scan完整 |
+| `F-119` | successor migration、retention、独立cleanup授权与no-tick rollback完整 |
+| `F-121` | soak/DEV/normal-day DB traffic/storage/cardinality evidence完整 |
 
 ## 18. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1144,6 +1154,12 @@ changed files 必须经 `file_ownership.yaml -> module_registry.yaml -> test_pla
 | `F-110` | K6 detailed §11；K6-D detailed §5/§8 | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py backend/tests/miniqmt_execution_runtime/test_kernel_clock.py -q`；完整四段native calendar/auction projection、strict frozen policy、commit-unknown/non-sequence conflict保真、callback/clock/EOD/isolation/DEV/coverage | implemented_verified | none |
 | `F-111` | K6 detailed §12–§13；K6-D detailed §9–§10 | artifact: `docs/architecture/miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`；source/production/runtime分离receipts | implemented_verified | none |
 | `F-112` | K6 detailed §16–§17；K6-D detailed §13–§14 | artifact: `docs/architecture/miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`；formal DESIGN-COMPLIANCE-001 | implemented_verified | none |
+| `F-113` | §4.1–§4.4、§5.2–§6.4 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py`：1M no-action、same-symbol five-algo、restart-await-next-callback与zero SQL | design_ready | none |
+| `F-114` | §5.6、§6.2 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py`：action/no-action、economic field allowlist、market-data carrier/hash rejection、single-transaction/fault injection | design_ready | none |
+| `F-115` | §5.2、§10 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_postgres.py`：DB writer inventory与successor CHECK allow/deny | design_ready | none |
+| `F-118` | §6.3、§10–§11 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py`：zero empty scan与event-driven wake | design_ready | none |
+| `F-119` | §10、§14 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_migration_postgres.py`：DEV migration/rollback/cleanup dry-run/no-tick rollback | design_ready | none |
+| `F-121` | §13–§15 | target artifact `tests/aistock_validation/receipts/miniqmt_hot_market_data_normal_day_v1.json`：soak、storage/cardinality、fresh-process与normal-day DB delta | design_ready | none |
 
 PR #2978 initial required CI run `30630489853` 进一步暴露 K4/K5 code-owned authority 的跨 Python/平台确定性缺口：Python 3.12/3.13 `ast.dump()` empty-field 默认值不同，source executor signature 还包含绝对 checkout 路径和 `WindowsPath/PosixPath`。修复后的唯一 authority 使用 Python 3.12 full-field AST canonical shape，以及 repo-relative、结构化 parameter/default/annotation signature payload；fresh binding 在 Windows/Python 3.13 与 Linux/Python 3.12 完全一致。新增 public composition-path tests 分别为本机 K5 direct=`12 passed`、Linux/Python 3.12 exact authority=`3 passed`；不得以固定 literals、installed/latest 或平台 fallback 规避 drift。final required CI run `30640380170`全绿，PR #2978 / merge `4bf54cf2`已闭合source merge，产品runtime仍未切换。
 
@@ -1158,12 +1174,14 @@ PR #2978 initial required CI run `30630489853` 进一步暴露 K4/K5 code-owned 
 | no parallel product route | pass | K6只复用现有K2 transport/outbox/OMS/Gateway；cutover采用new-instance唯一KERNEL_V2与legacy drain，禁止dual route、fallback和K6 state回交legacy |
 | K5/K6 boundary | pass | K5保持shadow；K6 detailed design独立拥有dependent-BUY coordinator、generic per-command V3 authority/materializer、cutover/retirement，product root拒绝K4/K5 V1与K6-A hash-only V2 receipt |
 | production state separation | pass | K2/K3/K4/K5 overall=`implemented_verified + merged`；K6-A/C0/C1/B/D均已合入，K6-D design PR #3129及source PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349`已闭合，`source_merge=merged_pr_3146`。产品runtime未切换，predecessor与K6-B successor production DDL=`applied_and_verified`，K6-D new DDL/DML/config/binding=`noop`，dependency gate=`noop`，broker/restart/runtime activation/normal-day observation=`not_run` |
+| no hot market-data persistence | pass for design | TICK走同一kernel root的in-memory dispatch，不创建durable event/delivery；action只写既有经济字段且无行情carrier/hash；Iceberg/TIMER/restart均不得从DB反查tick |
+| implementation truth | pass | K1–K6既有经济/交易能力保持历史状态，但F-113..F-121为design_ready；plugin architecture overall=`implemented_baseline_remediation_required`，未把历史CI冒充新边界实现 |
 
 ## 20. Definition of Done / 完成定义
 
 整项架构优化只有同时满足以下条件才能标为实现完成：
 
-1. `F-043..F-112` 全部更新为 `implemented_verified`，且每项有真实 implementation/test/runtime receipt；
+1. `F-043..F-121` 全部更新为 `implemented_verified`，且每项有真实 implementation/test/runtime receipt；
 2. current three 和 Iceberg/Stop 均通过同一 SPI，新增后两者没有修改 kernel 业务分支；
 3. canonical B0 route 有真实 durable timer，TWAP 上午/午休/下午/EOD 完整；
 4. ALGO_START 与普通 event 的 event/delivery/state/transition/outbox/child/order/trade 链均可独立重建；
