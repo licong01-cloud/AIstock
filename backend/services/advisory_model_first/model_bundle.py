@@ -6,13 +6,19 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from backend.services.advisory_model_first.contracts import FrozenAdvisoryTrainingRequestV1
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.feature_schema_v1 import FEATURE_SCHEMA_HASH, FEATURE_SCHEMA_PAYLOAD
+from backend.services.advisory_model_first.quality_contracts import (
+    ENSEMBLE_SCORE_POLICY,
+    QUALITY_BASELINE_NAMES,
+    QUALITY_SEEDS,
+    SELECTION_PRIOR_POLICY,
+)
 from backend.services.advisory_model_first.reranker_training import RerankerTrainingResult
 from backend.services.advisory_model_first.time_split import PurgedDateSplit
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
@@ -25,6 +31,15 @@ _RUNTIME_REQUIRED_BUNDLE_FILES = {
     "baseline_comparison.json",
 }
 
+_RUNTIME_REQUIRED_V2_SHARED_FILES = {
+    "feature_schema.json",
+    "fresh_hmm_models.json",
+    "baseline_comparison.json",
+    "winner_receipt.json",
+    "tournament_report.json",
+    "test_report.json",
+}
+
 
 @dataclass(frozen=True)
 class LoadedAdvisoryModelBundle:
@@ -35,6 +50,7 @@ class LoadedAdvisoryModelBundle:
     hmm_models: dict[str, Any]
     baselines: dict[str, Any]
     booster: Any
+    boosters: tuple[Any, ...] = ()
 
 
 def shadow_binding_path(
@@ -150,7 +166,13 @@ def load_exact_shadow_bundle(
         )
     factory = booster_factory or _load_lightgbm_booster
     try:
-        booster = factory(bundle_path / "model.txt")
+        if manifest["schema_version"] == "advisory_model_bundle_v1":
+            booster = factory(bundle_path / "model.txt")
+            boosters: tuple[Any, ...] = ()
+        else:
+            members = manifest["ensemble_members"]
+            boosters = tuple(factory(_bundle_member_path(bundle_path, member["filename"])) for member in members)
+            booster = None
     except AdvisoryModelFirstError:
         raise
     except Exception as exc:
@@ -167,6 +189,7 @@ def load_exact_shadow_bundle(
         hmm_models=hmm_models,
         baselines=baselines,
         booster=booster,
+        boosters=boosters,
     )
 
 
@@ -197,7 +220,7 @@ def publish_shadow_binding(
         "feature_schema_hash": manifest["feature_schema_hash"],
         "bundle_id": bundle_id,
         "bundle_manifest_sha256": _sha256_file(manifest_path),
-        "activated_at": activated_at or datetime.now(UTC).isoformat(),
+        "activated_at": activated_at or datetime.now(timezone.utc).isoformat(),
     }
     payload["binding_sha256"] = canonical_json_sha256(payload)
     target = shadow_binding_path(
@@ -399,7 +422,8 @@ def _read_and_validate_bundle(
             context={"bundle_id": expected_bundle_id},
         )
     manifest = _read_json(manifest_path, reason="model bundle manifest cannot be read")
-    if manifest.get("schema_version") != "advisory_model_bundle_v1":
+    schema_version = manifest.get("schema_version")
+    if schema_version not in {"advisory_model_bundle_v1", "advisory_model_bundle_v2"}:
         raise AdvisoryModelFirstError(
             "model bundle manifest schema is invalid",
             reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
@@ -420,7 +444,35 @@ def _read_and_validate_bundle(
             "model bundle file manifest is empty",
             reason_code="ADVISORY_MODEL_BUNDLE_INVALID",
         )
-    missing_runtime_files = sorted(_RUNTIME_REQUIRED_BUNDLE_FILES - set(files))
+    if schema_version == "advisory_model_bundle_v1":
+        required_runtime_files = _RUNTIME_REQUIRED_BUNDLE_FILES
+    else:
+        members = manifest.get("ensemble_members")
+        if (
+            not isinstance(members, list)
+            or len(members) != len(QUALITY_SEEDS)
+            or tuple(member.get("seed") for member in members if isinstance(member, dict)) != QUALITY_SEEDS
+            or any(
+                not isinstance(member, dict)
+                or set(member) != {"seed", "filename", "sha256"}
+                or member.get("filename") != f"model_seed_{member.get('seed')}.txt"
+                or member.get("sha256") != (files.get(str(member.get("filename"))) or {}).get("sha256")
+                for member in members
+            )
+            or manifest.get("ensemble_score_policy") != ENSEMBLE_SCORE_POLICY
+            or manifest.get("selection_prior_policy") != SELECTION_PRIOR_POLICY
+            or manifest.get("explanation_policy") != "MODEL_MEMBER_RAW_CONTRIBUTION_MEAN_V1"
+            or manifest.get("calibration_state") != "NOT_APPLICABLE_RANKING_SCORE"
+            or not str(manifest.get("program_id") or "").strip()
+            or not str(manifest.get("binding_version_id") or "").strip()
+            or not _valid_m5_model_weight(manifest.get("model_weight"))
+        ):
+            raise AdvisoryModelFirstError(
+                "M5A model bundle ensemble contract is incomplete",
+                reason_code="ADVISORY_M5_BUNDLE_INCOMPLETE",
+            )
+        required_runtime_files = _RUNTIME_REQUIRED_V2_SHARED_FILES | {str(member["filename"]) for member in members}
+    missing_runtime_files = sorted(required_runtime_files - set(files))
     if missing_runtime_files:
         raise AdvisoryModelFirstError(
             "model bundle manifest omits a runtime-consumed file",
@@ -464,6 +516,15 @@ def _read_and_validate_bundle(
         )
     hmm_models = _read_json(bundle_path / "fresh_hmm_models.json", reason="fresh HMM bundle cannot be read")
     baselines = _read_json(bundle_path / "baseline_comparison.json", reason="baseline report cannot be read")
+    if schema_version == "advisory_model_bundle_v2" and (
+        not {"model_top5", "comparison_context", *QUALITY_BASELINE_NAMES}.issubset(baselines)
+        or not isinstance(baselines.get("model_top5"), dict)
+        or not isinstance(baselines.get("comparison_context"), dict)
+    ):
+        raise AdvisoryModelFirstError(
+            "M5A baseline comparison contract is incomplete",
+            reason_code="ADVISORY_M5_BUNDLE_INCOMPLETE",
+        )
     return manifest, feature_schema, hmm_models, baselines
 
 
@@ -518,6 +579,13 @@ def _sha256_file(path: Path) -> str:
 
 def _is_sha256(value: str) -> bool:
     return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _valid_m5_model_weight(value: Any) -> bool:
+    try:
+        return float(value) in {0.25, 0.5, 0.75, 1.0}
+    except (TypeError, ValueError):
+        return False
 
 
 def _bundle_member_path(bundle_path: Path, filename: str) -> Path:
