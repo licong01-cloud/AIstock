@@ -376,6 +376,67 @@ def test_disabled_families_have_no_due_subquery_scanner_or_dml(monkeypatch) -> N
     assert calls == Counter()
 
 
+def test_due_probe_escapes_like_percent_for_psycopg2_binding(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):  # type: ignore[no-untyped-def]
+            captured["sql"] = sql
+            captured["params"] = params
+            # psycopg2 uses pyformat parameter binding. This catches any bare
+            # literal percent before a query can reach PostgreSQL.
+            captured["rendered"] = sql % tuple("ARRAY[]" for _ in params)
+
+        def fetchone(self):
+            return {
+                "reservation": False,
+                "experiment": False,
+                "evolution": False,
+                "long_trend": False,
+                "terminal_resource_session": False,
+                "resource_states": {},
+                "loop_states": {},
+            }
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, **_kwargs):
+            return Cursor()
+
+    config = QEReconciliationConfig(
+        enabled_scopes=frozenset(QEReconciliationScope),
+        family_intervals={scope: 60 for scope in QEReconciliationScope},
+        experiment_batch_size=11,
+    )
+    coordinator = QEReconciliationCoordinator(
+        config=config,
+        wake_bus=QEReconciliationWakeBus(),
+    )
+    monkeypatch.setattr(module, "get_conn", lambda: Connection())
+
+    due = coordinator._load_due_work(
+        resource_session_ids=("session-1",),
+        loop_ids=("loop-1",),
+    )
+
+    assert "NOT LIKE 'qelt:%%'" in str(captured["sql"])
+    assert "NOT LIKE 'qelt:%'" in str(captured["rendered"])
+    assert str(captured["sql"]).count("%s") == 2
+    assert captured["params"] == (["session-1"], ["loop-1"])
+    assert not due.any_due
+
+
 async def _async_count(calls: Counter[str], key: str) -> None:
     calls[key] += 1
 

@@ -112,9 +112,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process imported QEReconciliationCoordinator from tracked source, verified the escaped LIKE percent survives pyformat binding as the original qelt:% PostgreSQL pattern, printed fresh-process-ok, and exited 0 without database or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -133,6 +141,14 @@
     "fingerprint": "ff336a126286b0725c774fe9",
     "source_event_id": "FE-20260812-ff336a126286"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/unified_engine/test_qe_reconciliation_coordinator.py -q -> 20 passed",
+    "rtk pytest backend/tests/test_qe_evolution_scheduler.py::test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume -q -> 1 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and files=14 mapped=14",
+    "python -m nox -s qe_read_backend -> 34 passed",
+    "ruff, py_compile, and git diff --check -> passed",
+    "fresh-process pyformat binding smoke -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
