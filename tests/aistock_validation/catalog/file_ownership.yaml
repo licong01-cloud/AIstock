@@ -9,6 +9,7 @@ rules:
       - scripts/advisory_model_train_wsl.py
       - scripts/advisory_model_quality_prepare_request.py
       - scripts/advisory_model_quality_train_wsl.py
+      - scripts/advisory_publish_program_model_descriptor.py
       - scripts/advisory_outcome_calibration_prepare_request.py
       - scripts/advisory_outcome_calibration_train_wsl.py
       - scripts/advisory_outcome_prepare_request.py

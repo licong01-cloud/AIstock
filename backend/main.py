@@ -341,6 +341,16 @@ async def _lifespan(app: FastAPI):
         from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
         paper_trading_v2_scheduler.start()
 
+    enable_advisory_forward = (os.getenv("AISTOCK_ADVISORY_FORWARD_SCHEDULER_ENABLED") or "").strip().lower()
+    logging.getLogger("uvicorn.error").info(
+        "Advisory forward scheduler autostart=%s interval=%s",
+        enable_advisory_forward in {"1", "true", "yes", "y", "on"},
+        os.getenv("AISTOCK_ADVISORY_FORWARD_POLL_SECONDS") or "300",
+    )
+    if enable_advisory_forward in {"1", "true", "yes", "y", "on"}:
+        from .services.advisory_forward.scheduler import advisory_forward_scheduler
+        advisory_forward_scheduler.start()
+
     # Unified LocalSim/MiniQMT simulation lifecycle scheduler is opt-in. It
     # follows the committed simulation-runtime path and never starts by default.
     enable_sim_runtime = (os.getenv("ENABLE_SIMULATION_RUNTIME_SCHEDULER") or "").strip().lower()
@@ -475,6 +485,11 @@ async def _lifespan(app: FastAPI):
             paper_trading_v2_scheduler.shutdown(wait=False)
         except Exception as exc:
             _report_nonfatal_lifecycle_failure("PAPER_V2_SCHEDULER_SHUTDOWN_FAILED", exc)
+        try:
+            from .services.advisory_forward.scheduler import advisory_forward_scheduler
+            advisory_forward_scheduler.shutdown(wait=False)
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("ADVISORY_FORWARD_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             from .services.simulation_runtime import simulation_lifecycle_background_scheduler
             simulation_lifecycle_background_scheduler.shutdown(wait=False)
