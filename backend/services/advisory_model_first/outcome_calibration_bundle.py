@@ -213,7 +213,10 @@ def _validate_calibration_spec(
             value.get("coefficient") is not None
             or value.get("intercept") is not None
             or value.get("reason_code")
-            != "ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING"
+            not in {
+                "ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING",
+                "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL",
+            }
         ):
             raise _bundle_error("M5B uncalibrated head has invalid fallback parameters", head=head)
     for family_name, expected_method, expected_coverage in (

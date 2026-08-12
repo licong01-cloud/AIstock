@@ -206,6 +206,39 @@ def test_v2_bundle_is_self_contained_exact_retry_and_tamper_evident(tmp_path: Pa
     assert error.value.reason_code == "ADVISORY_OUTCOME_BUNDLE_INVALID"
 
 
+def test_v2_bundle_accepts_explicit_order_reversal_uncalibrated_head(tmp_path: Path) -> None:
+    parent_id, parent_path, parent_manifest = _parent_bundle(tmp_path)
+    request = _calibration_request(tmp_path, parent_id, parent_path, parent_manifest)
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    spec = _spec(request.request_id, request.request_sha256)
+    spec["binary_heads"]["positive_excess_h5"] = {
+        "state": "UNCALIBRATED",
+        "coefficient": None,
+        "intercept": None,
+        "reason_code": "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL",
+    }
+    spec_path = run_root / "calibration.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    predictions = pd.DataFrame({"instrument": ["000001.SZ"], "split": ["validation"]})
+
+    bundle_id, bundle_path, manifest = publish_calibrated_outcome_bundle(
+        request=request,
+        calibration_spec_path=spec_path,
+        metrics={"validation": {}, "test": {}},
+        validation_predictions=predictions,
+        test_predictions=predictions.assign(split="test"),
+        calibration_log={"environment": {"conda_environment": "rdagent-gpu"}},
+    )
+
+    assert manifest["calibration_state"] == "PARTIAL"
+    loaded = json.loads((bundle_path / "calibration.json").read_text(encoding="utf-8"))
+    assert loaded["binary_heads"]["positive_excess_h5"]["reason_code"] == (
+        "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL"
+    )
+    assert read_outcome_bundle_manifest(bundle_path, expected_bundle_id=bundle_id) == manifest
+
+
 def test_v2_bundle_publishes_exact_binding_and_loads_calibration(tmp_path: Path) -> None:
     parent_id, parent_path, parent_manifest = _parent_bundle(tmp_path)
     request = _calibration_request(tmp_path, parent_id, parent_path, parent_manifest)
