@@ -35,6 +35,12 @@ def test_platt_calibration_preserves_raw_identity_and_produces_finite_parameters
     assert result.state == "CALIBRATED"
     assert result.reason_code is None
     assert result.positive_count == 3
+    assert result.solver["library"] == "scikit-learn"
+    assert result.solver["estimator"] == "LogisticRegression"
+    assert result.solver["solver"] == "lbfgs"
+    assert result.solver["library_version"]
+    assert result.iteration_count > 0
+    assert result.convergence_state == "CONVERGED"
     assert np.array_equal(raw, 1.0 / (1.0 + np.exp(-margin)))
     assert calibrated.shape == raw.shape
     assert np.isfinite(calibrated).all()
@@ -90,6 +96,8 @@ def test_platt_single_class_is_explicitly_uncalibrated_without_constant_substitu
     assert result.coefficient is None
     assert result.intercept is None
     assert result.reason_code == "ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING"
+    assert result.iteration_count == 0
+    assert result.convergence_state == "NOT_FITTED_CLASS_VARIATION_MISSING"
     assert result.validation_metrics["calibrated"] is None
 
 
@@ -108,8 +116,21 @@ def test_platt_negative_slope_is_uncalibrated_instead_of_reversing_probability_o
     assert result.coefficient is None
     assert result.intercept is None
     assert result.reason_code == "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL"
+    assert result.iteration_count > 0
+    assert result.convergence_state == "CONVERGED_ORDER_REVERSAL"
     assert result.validation_metrics["raw"]["row_count"] == 5
     assert result.validation_metrics["calibrated"] is None
+
+
+def test_apply_platt_rejects_non_positive_slope() -> None:
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        apply_platt_calibrator(
+            raw_margin=np.asarray([-1.0, 1.0]),
+            coefficient=0.0,
+            intercept=0.0,
+        )
+
+    assert exc_info.value.reason_code == "ADVISORY_OUTCOME_CALIBRATION_FAILED"
 
 
 def test_ece_uses_fixed_ten_bins_and_includes_probability_one_in_last_bin() -> None:

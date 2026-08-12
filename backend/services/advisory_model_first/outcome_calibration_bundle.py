@@ -17,6 +17,7 @@ from backend.services.advisory_model_first.outcome_calibration_contracts import 
     FrozenAdvisoryOutcomeCalibrationRequestV1,
     expected_binary_calibration_heads,
 )
+from backend.services.advisory_model_first.outcome_calibration import PLATT_SOLVER_CONTRACT
 from backend.services.advisory_model_first.outcome_contracts import (
     OUTCOME_HORIZONS,
     OUTCOME_QUANTILES,
@@ -205,10 +206,40 @@ def _validate_calibration_spec(
     for head, value in binary_heads.items():
         if not isinstance(value, dict) or value.get("state") not in {"CALIBRATED", "UNCALIBRATED"}:
             raise _bundle_error("M5B binary calibration state is invalid", head=head)
-        if value["state"] == "CALIBRATED" and not all(
-            _is_finite_number(value.get(field)) for field in ("coefficient", "intercept")
+        solver = value.get("solver")
+        expected_solver = {
+            **PLATT_SOLVER_CONTRACT,
+            "library_version": solver.get("library_version") if isinstance(solver, dict) else None,
+        }
+        if (
+            value.get("head") != head
+            or not isinstance(solver, dict)
+            or solver != expected_solver
+            or not isinstance(solver.get("library_version"), str)
+            or not solver["library_version"].strip()
+            or not _is_positive_int(value.get("row_count"))
+            or not _is_nonnegative_int(value.get("positive_count"))
+            or not _is_nonnegative_int(value.get("negative_count"))
+            or value["positive_count"] + value["negative_count"] != value["row_count"]
+            or not isinstance(value.get("validation_metrics"), dict)
+            or set(value["validation_metrics"]) != {"raw", "calibrated"}
         ):
-            raise _bundle_error("M5B calibrated head omits Platt parameters", head=head)
+            raise _bundle_error("M5B binary calibration evidence is incomplete", head=head)
+        if value["state"] == "CALIBRATED" and (
+            not all(
+                _is_finite_number(value.get(field))
+                for field in ("coefficient", "intercept")
+            )
+            or float(value["coefficient"]) <= 0.0
+            or value.get("reason_code") is not None
+            or not _is_positive_int(value.get("iteration_count"))
+            or value.get("convergence_state") != "CONVERGED"
+            or not isinstance(value["validation_metrics"].get("calibrated"), dict)
+        ):
+            raise _bundle_error(
+                "M5B calibrated head has invalid Platt parameters",
+                head=head,
+            )
         if value["state"] == "UNCALIBRATED" and (
             value.get("coefficient") is not None
             or value.get("intercept") is not None
@@ -217,6 +248,8 @@ def _validate_calibration_spec(
                 "ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING",
                 "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL",
             }
+            or not _valid_uncalibrated_convergence(value)
+            or value["validation_metrics"].get("calibrated") is not None
         ):
             raise _bundle_error("M5B uncalibrated head has invalid fallback parameters", head=head)
     for family_name, expected_method, expected_coverage in (
@@ -291,6 +324,29 @@ def _is_finite_number(value: Any) -> bool:
         and not isinstance(value, bool)
         and math.isfinite(float(value))
     )
+
+
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_positive_int(value: Any) -> bool:
+    return _is_nonnegative_int(value) and value > 0
+
+
+def _valid_uncalibrated_convergence(value: Mapping[str, Any]) -> bool:
+    reason_code = value.get("reason_code")
+    if reason_code == "ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING":
+        return (
+            value.get("iteration_count") == 0
+            and value.get("convergence_state") == "NOT_FITTED_CLASS_VARIATION_MISSING"
+        )
+    if reason_code == "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL":
+        return (
+            _is_positive_int(value.get("iteration_count"))
+            and value.get("convergence_state") == "CONVERGED_ORDER_REVERSAL"
+        )
+    return False
 
 
 def _is_sha256(value: Any) -> bool:
