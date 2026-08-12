@@ -2,10 +2,11 @@
 
 > Feature tier：`F2`
 > Feature ID：`qe_monthly_dataset_release_v2`
-> 文档状态：`design_revision_round_13`
+> 文档状态：`implementation_fixture_platform_accepted_pending_pr_ci`
 > 设计日期：2026-08-11
 > 设计范围：一键候选月更、幂等复验、组件复用与增量、资源治理、独立 Worker、后端控制面、Skill/Runbook
 > 硬边界：本文及后续实现不授权数据导出、既有候选改写、生产指针切换、DB DDL/DML、服务启停或清理
+> 最终实现验收回执：`docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md`
 
 ## 1. Background / 背景
 
@@ -91,6 +92,7 @@
 | F-028 | 现有 PIT、资金流、指数/HMM、分钟 provider 和生产不可变性合同全部保持。 |
 | F-029 | 性能签收比较有效工作量、DB query、rows/s、I/O 和资源等待；不把等待时间误报为计算退化。 |
 | F-030 | 设计、实现和最终审查逐项执行 DESIGN-COMPLIANCE-001，不允许 simplified/partial/silent fallback。 |
+| F-031 | component manifest 与 daily/minute canonical lineage 必须支持多年按月增长：分片、增量写入、旧版只读迁移和单对象有界读取均 fail closed。 |
 
 ## 4. Architecture / 架构
 
@@ -177,7 +179,8 @@ backend/Worker 启动时只校验 schema/version，不自动建库或升级。�
 | `attempt_id` | run + monotonic attempt number | retry/resume 的 Worker ownership、lease 和 staging |
 | `release_digest` | sha256(resolved intent + frozen PIT spans digest + scope + producer fingerprint + artifact fingerprint) | 完整不可截断发布 identity；PIT digest 显式重复绑定用于审计/防实现遗漏 |
 | `release_id` | cutoff + profile + scope + release_digest16 + `candidate` | 可读 final 目录；DB/marker保存完整 digest并做碰撞拒绝 |
-| `attestation_key` | candidate/release identity + producer provenance state/digest-or-sentinel + artifact root + current source content root + PIT digest + semantic profile + validation fingerprint + equivalence mode | 当前候选/lineage复验，不跨 provenance 复用 |
+| `attestation_target_key` | candidate/release identity + producer provenance state/digest-or-sentinel + artifact root + current source content root + PIT digest + semantic profile + validation fingerprint + equivalence mode | 稳定复验目标；用于判断同一 candidate/lineage 的复验历史，不代表某次证据仍新鲜 |
+| `attestation_observation_key`（DB `attestation_key`） | attestation target key + fresh source probe key | 不可变复验观测；TTL 到期后的新 probe 必须产生新 observation row/receipt，禁止原地续期 |
 
 producer provenance state 固定为 `KNOWN | RECONSTRUCTED_SOURCE_ONLY | UNKNOWN`；原 provenance 缺失时 digest
 使用 canonical sentinel `UNKNOWN_PRODUCER_PROVENANCE_V1`，不得生成伪 hash。reconstructed attestation 的 key
@@ -195,7 +198,7 @@ re-attest run/receipt。
 
 `operation_target` 对 build 是 resolved intent/action-plan digest；对 re-attest 必须是 candidate identity +
 artifact root + attestation target key；对 no-op 必须是 candidate identity + artifact root + fresh
-`source_probe_key` + exact validation identity/attestation key。不同 candidate 或不同 artifact root 绝不能复用
+`source_probe_key` + exact validation identity/attestation observation key。不同 candidate 或不同 artifact root 绝不能复用
 同一 non-terminal re-attest/no-op generation；exact validation identity 变化也必须创建新 generation。
 
 terminal pre-publish `/resume` 的 operation kind 固定为 `RESUME_BUILD`，operation target 额外绑定
@@ -214,7 +217,9 @@ root、logical request、冻结 source content/provenance roots、PIT digest、q
 monotonic probe ordinal、`observed_at` 与 TTL deadline，并以 canonical receipt bytes 的 SHA-256 形成 receipt digest。
 `observed_at`/ordinal 只证明本次观测新鲜度，不进入 resolved intent、release 或 artifact identity。TTL 内相同
 probe receipt 可幂等复用；TTL 到期必须重新采集并生成新 receipt、`source_probe_key` 和 no-op generation，
-不能用旧 terminal no-op 继续回答“当前源未变”。
+不能用旧 terminal no-op 继续回答“当前源未变”。probe ordinal 必须由当前 resolution attempt 的 SQLite
+事务状态严格递增并与 snapshot/key/ref/TTL 原子写入；调用方传入相同或更小 ordinal、跨 attempt probe 或并发
+覆盖一律冲突，不能仅在 receipt 中声称 monotonic。
 
 `requested_at`、resource policy、文档 hash、日志级别和 UI 参数不得进入数据 identity。
 
@@ -247,9 +252,10 @@ superseding intent。源表 cutoff 之后的日常增长不得改变已冻结 pa
 VerifiedPartitionStream drift 失败则创建新 intent；若它按旧稳定 content root 成功，新 revision intent
 排队构建并用 lineage supersede，旧候选仍保留其历史 identity。
 
-preview 返回有过期时间的 `preview_token`，只绑定 request hash、profile/config identity 和轻量 watermarks。
-submit/Worker 必须重新解析真实 source；preview 与 resolved intent 不同是可见 `PREVIEW_DRIFT` event，
-不是静默沿用 preview，也不是失败本身。
+preview 返回有过期时间的 `preview_token`，只绑定 request/profile/config/cutoff identity；它不是 source
+快照或 source watermark。token 过期、篡改或请求不匹配写 `PREVIEW_TOKEN_STALE_OR_MISMATCH`，但 submit
+仍按当前请求创建 durable resolution。Worker 始终重新解析真实 source/PIT/provider；source revision 只由
+fresh source probe 的 content-root/lineage event 表达，不能把 preview token 冒充 source authority。
 
 Idempotency-Key 永久保留到显式 control-store maintenance：同 principal+route+key+request hash 返回原响应；
 同 key 异 hash 返回 HTTP 409 `DATASET_RELEASE_IDEMPOTENCY_CONFLICT`。principal、route 和 key 共同定域，
@@ -521,8 +527,9 @@ artifact root hash，完全并列返回 conflict 而非任意选择。re-attesta
 不能伪称它由当前 producer 构建。
 
 Attestation-only finalize 不进入 candidate publish protocol：先把 canonical attestation receipt 写入 control CAS
-并 readback hash，再在一个 SQLite 事务中插入 attestation/ref、将 run outcome=`REATTESTED`、写 terminal event。
-CAS 后事务前崩溃只留下无引用 content-addressed blob，可按相同 attestation key 幂等复用；整个路径没有
+并 readback hash，再在一个 SQLite 事务中插入/严格核对 observation attestation/ref、将 run/attempt
+原子终结为 outcome=`REATTESTED`、清 active pointer、释放 lease 并写 terminal event。
+CAS 后事务前崩溃只留下无引用 content-addressed blob，可按相同 observation key 幂等复用；整个路径没有
 candidate staging、rename、committed marker 或旧候选写句柄。
 
 ## 9. Durable Repository、State Machine 与 Recovery
@@ -534,11 +541,13 @@ candidate staging、rename、committed marker 或旧候选写句柄。
 ```text
 schema_metadata(version, applied_at, code_compat_min, code_compat_max)
 idempotency_keys(principal, route, key, request_hash, submission_id, response_ref)
+command_idempotency_keys(principal, route, key, request_hash, command_id)
 submissions(submission_id, logical_request_key, request_ref, actor, state, row_version,
             intent_id NULL, run_id NULL, resolution_attempt_id NULL)
 resolution_attempts(resolution_attempt_id, submission_id, logical_request_key, ordinal, state, owner, fence,
                     source_content_root NULL, source_provenance_root NULL,
-                    pit_snapshot_digest NULL, source_probe_ref NULL, error_ref)
+                    pit_snapshot_digest NULL, source_probe_ordinal NULL,
+                    source_probe_key NULL, source_probe_ref NULL, source_probe_valid_until NULL, error_ref)
 intents(intent_id, logical_request_key, resolved_intent_key, source_content_root,
         source_provenance_root, pit_snapshot_digest, supersedes_intent_id)
 runs(run_id, intent_id, run_generation_digest, operation_kind, lineage_root_run_id,
@@ -554,10 +563,17 @@ leases(resource_key PRIMARY KEY, fence_counter, state, attempt_kind, attempt_id,
 commands(command_id, target_type, target_id, submission_id NULL, run_id NULL,
          type, request_hash, state, actor, created_at, applied_at)
 artifacts(artifact_id, kind, sha256, size, cas_ref, producer_attempt_id, committed)
+candidate_registrations(registration_id PRIMARY KEY, allowlisted_root_id, volume_serial,
+                        root_relative_path, profile, scope, cutoff, lineage_anchor,
+                        candidate_identity UNIQUE, artifact_root,
+                        producer_provenance_state, producer_provenance_digest_or_sentinel,
+                        pit_provenance_state, pit_provenance_digest_or_sentinel,
+                        legacy_receipt_ref NULL, state, created_at, updated_at, last_attested_at NULL,
+                        UNIQUE(allowlisted_root_id, volume_serial, root_relative_path))
 releases(release_digest PRIMARY KEY, release_id UNIQUE, candidate_identity UNIQUE, run_id UNIQUE,
          profile, scope, cutoff, artifact_root, pit_snapshot_digest, final_path_identity,
          marker_ref, attestation_id, state)
-attestations(attestation_id, attestation_key UNIQUE, subject_type, subject_digest,
+attestations(attestation_id, attestation_target_key, attestation_key UNIQUE, subject_type, subject_digest,
              candidate_identity NULL, producer_provenance_state,
              producer_provenance_digest_or_sentinel, candidate_artifact_root,
              current_source_content_root, source_probe_key, source_probe_ref,
@@ -908,10 +924,13 @@ Worker 记录：
 - full 并发=1 是 host lease hard limit；sample/audit 是否可并发由 resource class matrix 明确配置，默认 0。
 
 为避免一次压力尖峰让每月任务反复失败，resource contract 内置 deterministic pressure ladder，仅能在安全
-checkpoint 后对下一 attempt 依次缩小物理执行单元：H5 batch `100->50->20`、minute batch `20->10->5`、
+checkpoint 后对下一 attempt 依次缩小实际物理执行单元：minute batch `20->10->5`、
 date chunk `3->1 month`、row/read group `100k->50k`、dump workers `8->4->2`。触发条件为连续两次
 aggregate private commit >=85% cap 或 available/commit headroom 接近 emergency reserve 1 GiB；每次变化写 resource fingerprint/event
 并通过同值 parity oracle。它不得减少股票、日期、字段、PIT、指数、H5 或验证范围，也不得扩大任一 hard max；
+factor H5/static 的实际内存边界是单日切片与 `row_group_rows`；`h5_batch=100->50->20` 只保留为 v1 profile/receipt
+兼容遥测，明确标记 `reserved_profile_telemetry_not_consumed_v1`，不得把它计作已生效的降压能力。分钟批大小同时由子进程
+manifest 与父进程所选 pressure rung 双重绑定，禁止子进程漂回 20。
 最低档仍 breach 才 checkpoint 后进入 typed `WAITING_RESOURCE/BLOCKED_RESOURCE_TIMEOUT`，不继续挤占内存。
 
 性能 pass/fail 基于相同 semantic workload：source rows、instrument-days、component actions、cache/reuse 命中、
@@ -971,6 +990,10 @@ restart=not_requested
 cleanup=not_requested
 ```
 
+`auto-previous-month` 是 operator/API 的稳定别名；profile 内部权威策略为
+`previous_month_last_completed_trading_day`。control plane 只通过 AIstock 官方交易日历解析上月最后一个完整交易日，
+日历缺失时 fail closed，不以工作日猜测替代；解析后的交易日才进入 `logical_request_key`。
+
 高级 `plan/run/reuse/fetch-overlay/verify` 保留用于故障诊断，但不能成为普通月更必需步骤。
 
 ## 12. Worker、API 与 Scheduler Contracts / 契约
@@ -1015,7 +1038,8 @@ POST /api/v1/dataset-releases/runs/{run_id}/cancel-request
 
 写接口要求 operator authorization 与 `Idempotency-Key`。请求只接受注册的 profile ID、cutoff policy、
 scope 和 candidate-only intent。API 不接受 shell、candidate root、production path、env file 或任意命令。
-未运行 Worker 时返回 durable `QUEUED/worker_unavailable`，不得在 API 线程代跑。
+未运行 Worker 时返回 durable `submission_state=QUEUED_RESOLUTION` 与
+`worker_health.state=unavailable|stale|blocked`，不得在 API 线程代跑。
 
 `POST /runs` 为操作员友好命名，但返回 `submission_id`、`logical_request_key`、`run_id=null|resolved`；
 resolution 前通过 submission endpoints 查询/取消，解析后响应和 event 提供稳定 run link。API 不把尚未存在的
@@ -1024,10 +1048,12 @@ run 伪造成 queued run。
 认证使用独立 FastAPI dependency `require_dataset_release_operator`：secret 仅从
 `DATASET_RELEASE_OPERATOR_TOKEN_FILE` 指定文件读取，constant-time compare；请求 actor 固定为已认证
 principal，不信任客户端传入 actor 或反向代理 header。缺失/错误 token=401，已认证但 profile/scope
-不允许=403；所有 GET/POST 端点都受保护并记录 actor。token 文件路径/rotation 属于 runtime config，
-值不进入日志/receipt。该认证是技术访问控制，不是新增人工审批。
+不允许=403；所有 GET/POST 端点都受保护。durable mutation 记录 actor；只读 GET/preview 把 principal 绑定到
+签名 cursor/请求上下文，但不为每次轮询写 access-audit 行，避免 SQLite 写放大。token 文件路径/rotation 属于
+runtime config，值不进入日志/receipt。该认证是技术访问控制，不是新增人工审批。
 
-请求/响应使用版本化 Pydantic schema；scope 为 `sample|full` 枚举，profile 来自 server allowlist。
+请求使用 `extra=forbid` 的版本化 Pydantic schema；响应使用版本化 envelope 和显式字段投影/contract tests，
+不得直接暴露未来新增的内部列。scope 为 `sample|full` 枚举，profile 来自 server allowlist。
 错误响应固定 `error_code/message/retryable/context_ref`，context 不回显 secrets/path outside allowlist。
 
 分页合同：runs 按 `(created_at, run_id)` 降序；events 按 `event_id` 升序；`limit` 默认 50、最大 200，
@@ -1238,6 +1264,12 @@ GetPerformanceInfo/low-memory/Page Reads gate。
 可标记 platform plan `not_applicable`，但不能替代目标主机证据。环境缺 WSL 时结论为 `BLOCKED_BY_ENV`，
 不得静默用 mock PASS。目标平台 receipt 通过后源码状态才可称 `source_ready_platform_verified`。
 
+2026-08-12 已在隔离 temp root 执行完整 smoke，并在 rebase 当时最新 `origin/main` 后复跑：Windows PASS，
+job peak commit 23,699,456 bytes；WSL PASS，systemd/memory controller preflight 为 true，cgroup peak
+28,565,504 bytes，swap peak 0，最终 active processes=0。
+安全计数 `database_access/dataset_exports/provider_access/production_writes/service_controls` 全为 0。该 receipt 关闭
+源码平台门禁，但不等同真实 full-scale 数据或性能证据。
+
 ### 16.4 Deferred Real Data Evidence
 
 真实 full、新 cutoff 增量和月度性能 telemetry 只能在用户未来明确授权数据更新后产生。
@@ -1276,7 +1308,7 @@ GetPerformanceInfo/low-memory/Page Reads gate。
 | 多 release 并发 | 内存/DB/X 盘被占满 | global lease + full concurrency=1 |
 | PID 复用 | stale lock 误认活跃/死亡 | pid + create time + fencing + expiry |
 | backend restart | daemon task丢失 | independent Worker + durable repository |
-| Worker 不在线 | API 接口伪装已执行 | durable QUEUED + worker_unavailable |
+| Worker 不在线 | API 接口伪装已执行 | `QUEUED_RESOLUTION` + non-healthy `worker_health.state` |
 | 日志撑爆内存 | capture_output 累积数小时 | streamed rotated logs + bounded tail |
 | 资源等待混入吞吐 | 错误判断新算法变慢 | wait/compute/provider time 分离 |
 | QFQ/PIT 传播不完整 | 局部增量语义错误 | explicit invalidation graph + parity fixture |
@@ -1284,6 +1316,20 @@ GetPerformanceInfo/low-memory/Page Reads gate。
 | API 被滥用 | 任意路径/命令或资源 DoS | auth、allowlist、idempotency、candidate-only |
 | scheduler 重复触发 | 每次重启产生新 full | daily reconcile + stable intent key |
 | 旧 full 被误报新版构建 | producer provenance 失真 | re-attested 与 rebuilt 状态分离 |
+| 月度 manifest/lineage 单文件持续膨胀 | 约 1.5--3 年后触发 32 MiB 读取硬门禁，月更不可继续 | component manifest storage v2 分片；canonical lineage v3 bucket/head/event 分片；v1/v2 只读兼容和迁移门禁 |
+
+### 18.1 Long-horizon manifest and lineage capacity
+
+候选控制元数据不得把每月全部历史行重复写入单一 JSON。component artifact manifest storage v2 使用
+top descriptor → component index → section shards；每个 CAS JSON 仍受 32 MiB stat-first 读取硬上限，writer
+目标为不超过 8 MiB/128 rows。canonical daily/minute lineage v3 使用固定 256 bucket 的 persistent head 与
+append-only event/change refs；outer daily/minute materialization/preparation schema 显式区分 v1/v2 reader
+capability，新 writer 只写 v3，旧 worker 不得 resume v3 attempt。
+
+迁移不得等旧 receipt 已超过硬上限后再开始：legacy receipt 达到 16 MiB，或预测下一次月更将超过上限时，
+必须在仍可有界读取时迁移；FULL genesis 直接写 v3。reader 对 v1/v2/v3 只读兼容，但不会在 v1 外壳中静默
+嵌入 v3。容量门禁以 6000 instruments × 36 months 的合成 producer 形态验证分片大小和内存有界性；该证据
+只证明控制元数据可长期增长，不代表真实数据导出或真实性能已运行。
 
 ## 19. Production Gates / 生产门禁
 
@@ -1304,42 +1350,47 @@ GetPerformanceInfo/low-memory/Page Reads gate。
 
 ## 20. Design Acceptance Matrix / 设计验收矩阵
 
-本矩阵只验收“详细设计是否把实现位置和可证伪 oracle 冻结完整”。它不表示 planned 文件已存在。
-设计 PR 状态为 `design_contract_ready / source_implementation_not_started / runtime_not_authorized`。
-实现 PR 必须把每行 planned ref 替换为真实 symbol/line 与测试结果，再申请 code merge。
+本矩阵已经从设计期占位引用切换为实现 PR 的真实 module/symbol/test 索引。状态
+`implemented_fixture_verified` 只表示源码和隔离 fixture 已有定向通过证据；它不表示真实月更、真实平台 hard-cap、
+真实全量性能或 production activation 已执行。任何 `pending_*` 行都阻断“完整 F2 已验收”声明。
+
+本轮证据边界固定为：`source_state=source_ready_fixture_verified`、
+`runtime_real_data_evidence=not_run_not_authorized`、`candidate_only=true`。旧 candidate、既有导出和 production
+均未读取、覆盖、重建、迁移或激活。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | planned `contracts.py`, `intent.py`, `control_store.py` identities | test: `backend/tests/dataset_release/test_intent_catalog.py` identity/idempotency matrix | design_contract_ready | 无 |
-| F-002 | planned `decision.py` run outcome + component actions | test: `backend/tests/dataset_release/test_incremental_planner.py` mixed-action plan | design_contract_ready | 无 |
-| F-003 | planned `attestation.py`, `signoff.py` | test: `backend/tests/dataset_release/test_reattest_existing.py` artifact/source outcomes | design_contract_ready | 无 |
-| F-004 | planned `fingerprints.py`, compatibility registry | test: `backend/tests/dataset_release/test_fingerprints.py` layered invalidation | design_contract_ready | 无 |
-| F-005 | planned `source_manifest.py` canonical partition hash | test: `backend/tests/dataset_release/test_fingerprints.py` same-count value revision | design_contract_ready | 无 |
-| F-006 | planned `incremental.py`, existing bin/H5 materializers | test: `backend/tests/dataset_release/test_incremental_planner.py` partition action oracle | design_contract_ready | 无 |
-| F-007 | planned `dependency_graph.py` | test: `backend/tests/dataset_release/test_incremental_planner.py` QFQ/PIT/window propagation | design_contract_ready | 无 |
-| F-008 | planned `copy_on_write.py`, `cas_store.py` | test: `backend/tests/dataset_release/test_copy_on_write.py` external-writer/source-Merkle oracle | design_contract_ready | 无 |
-| F-009 | planned `control_store.py`, `lease.py`, `cas_store.py` | test: `backend/tests/dataset_release/test_control_store.py`; `test_resource_lease.py` | design_contract_ready | 无 |
-| F-010 | planned `resource_supervisor.py`, `windows_job.py`, `wsl_cgroup.py`, `wsl_resource_guardian.py`, `resource_budget.py` | test: `backend/tests/dataset_release/test_resource_budget.py` + `tests/aistock_validation/dataset_release_platform_smoke.py` Job/cgroup/guardian-loss、12 GiB commit、host commit/pagefile | design_contract_ready | 无 |
-| F-011 | planned OS hard-limit + resource state transitions/errors | test: `backend/tests/dataset_release/test_state_machine.py` waiting/emergency/timeout；platform small-cap allocation fail-stop | design_contract_ready | 无 |
-| F-012 | planned `control_service.py`, `dataset_releases.py` | test: `backend/tests/routers/test_dataset_releases.py` no in-process execution | design_contract_ready | 无 |
-| F-013 | planned `worker.py`, `scripts/dataset_release_worker.py` | test: `backend/tests/dataset_release/test_worker.py` once/drain/serve/restart | design_contract_ready | 无 |
-| F-014 | planned `state_machine.py`, SQLite events | test: `backend/tests/dataset_release/test_state_machine.py` no-op、concurrent resume unique、publish orphan atomic handoff、lease release | design_contract_ready | 无 |
-| F-015 | planned commands table + cooperative cancel | test: `backend/tests/dataset_release/test_worker.py` pre/post publish-commit cancel race and `REJECTED_TOO_LATE` | design_contract_ready | 无 |
-| F-016 | planned `require_dataset_release_operator`, profile allowlist | test: `backend/tests/routers/test_dataset_releases.py` 401/403/409/path injection | design_contract_ready | 无 |
-| F-017 | planned profile `sample_policy=on_contract_change` | test: `backend/tests/dataset_release/test_incremental_planner.py` cutoff-only no-sample | design_contract_ready | 无 |
-| F-018 | existing `minute_overlay.py`, `tushare_sync_engine.py`; planned typed mapping | test: `backend/tests/dataset_release/test_minute_overlay.py`; `backend/tests/test_tushare_sync_engine.py` | design_contract_ready | 无 |
-| F-019 | planned retry policy in Worker | test: `backend/tests/dataset_release/test_worker.py` retryable vs terminal table | design_contract_ready | 无 |
-| F-020 | planned `contracts.py` receipt/resource/component action summaries | test: `backend/tests/dataset_release/test_reattest_existing.py`; `test_worker.py` receipt oracles | design_contract_ready | 无 |
-| F-021 | planned `signoff.py`, CAS artifact index | test: `backend/tests/dataset_release/test_reattest_existing.py` independent signoff path | design_contract_ready | 无 |
-| F-022 | planned shared contracts imported by CLI/API/Skill docs | test: `backend/tests/scripts/test_update_backtest_dataset_monthly.py`; router contract test | design_contract_ready | 无 |
-| F-023 | planned SQLite indexes + bounded CAS logs | test: `backend/tests/routers/test_dataset_releases.py` cursor/limit/rotation/reparse | design_contract_ready | 无 |
-| F-024 | planned Worker reconcile mode + singleton lease | test: `backend/tests/dataset_release/test_worker.py` catch-up/dedup/multi-instance | design_contract_ready | 无 |
-| F-025 | existing candidate-only safety plus planned API exclusion | test: `backend/tests/routers/test_dataset_releases.py` activation/DB/restart/cleanup negative routes | design_contract_ready | 无 |
-| F-026 | pytest temp-root data adapters + isolated platform smoke | test: `backend/tests/dataset_release/test_reattest_existing.py`; `tests/aistock_validation/dataset_release_platform_smoke.py` | design_contract_ready | 无 |
-| F-027 | planned Skill and five one-level references | artifact: `.codex/skills/update-backtest-dataset/SKILL.md`; fixture-only forward-test receipt | design_contract_ready | 无 |
-| F-028 | frozen §6.5 12-index roles/starts/benchmark/weight map + existing moneyflow/PIT/minute contracts | test: `backend/tests/dataset_release/test_index_context.py` exact list/units/isolation；`test_fingerprints.py` | design_contract_ready | 无 |
-| F-029 | planned comparable-workload benchmark schema | test: `backend/tests/dataset_release/test_worker.py` 3-run fixture median compute<=110%、rows/s>=90%、RSS/query thresholds；non-comparable=FAIL | design_contract_ready | 无 |
-| F-030 | F2 matrix + independent design/code reviews | artifact: `docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md#21-design-compliance-001`; review receipt | design_contract_ready | 无 |
+| F-001 | `contracts.py::{SubmissionIdentity,LogicalRequestIdentity,ResolvedIntentIdentity,RunGenerationIdentity,ReleaseIdentity}`；`control_store.py::ControlStore` | `test_contracts.py::{test_canonical_request_and_logical_identity_are_stable,test_pit_only_revision_changes_intent_release_and_path}`；`test_control_store.py::test_submission_idempotency_replays_same_hash_and_rejects_conflict` | implemented_fixture_verified | 最终全量 gate 待实现 PR 收口 |
+| F-002 | `decision.py::{build_action_plan,ActionPlan}`；`mixed_planner.py::build_mixed_action_plan` | `test_incremental_planner.py::test_planner_emits_complete_mixed_component_partition_actions`；`test_component_artifact_manifest.py::test_mixed_planner_june_to_july_tail_consumes_exact_monthly_prefix` | implemented_fixture_verified | 实际 materialization 闭环见 F-006 |
+| F-003 | `attestation.py::{AttestationService,decide_legacy_attestation}`；`signoff.py::build_signoff` | `test_reattest_existing.py::{test_complete_legacy_truth_table,test_reattest_receipt_is_external_cas_and_candidate_remains_unchanged}`；`test_signoff.py` | implemented_fixture_verified | 真实 candidate re-attest 未运行 |
+| F-004 | `fingerprints.py::{ComponentFingerprints,classify_fingerprint_change}` | `test_fingerprints.py::{test_resource_policy_change_does_not_invalidate_data_identity,test_validation_change_requires_explicit_compatibility}` | implemented_fixture_verified | 无真实 release fingerprint receipt |
+| F-005 | `source_manifest.py::{VerifiedPartitionStream,CanonicalPartitionHasher,SourceManifest}`；`source_authority.py` bounded partition stream | `test_source_manifest.py::{test_verified_partition_stream_hashes_and_consumes_same_single_row_stream,test_same_row_count_historical_value_change_changes_root_and_blocks_publish}` | implemented_fixture_verified | 真实 DB/provider source scan 未运行 |
+| F-006 | `incremental.py::{compile_incremental_plan,prepare_incremental_component_tree}`；`build_stage.py::{run_build_stage,_patch_factor_component,_prepare_bin_patch}`；`daily_minute_materializer.py::{build_composite_canonical_rows,build_selective_override_canonical_rows}` | `test_build_stage.py::test_monthly_incremental_direct_stage_updates_all_data_components_without_publish`；`test_candidate_validator.py::test_candidate_validator_accepts_explicit_override_lineage_with_clean_full_parity`；baseline Merkle/zero publish assertions | implemented_fixture_verified | 真实 candidate 未运行；fixture 已闭合 FULL baseline → mixed daily/minute/factor → validator 与 SELECTIVE clean-full 等价 |
+| F-007 | `dependency_graph.py::DatasetDependencyGraph`；`mixed_planner.py::{_apply_adj_invalidation,_factor_selective_months}` | `test_dependency_graph.py` QFQ/PIT/reference/unknown-edge matrix；`test_component_artifact_manifest.py` QFQ/PIT selective planner fixtures；F-006 mixed/override E2E | implemented_fixture_verified | 真实 source revision 未运行 |
+| F-008 | `copy_on_write.py::{prepare_copy_on_write_tree,adopt_isolated_writer_patch,adopt_deferred_writer_outputs,verify_source_unchanged}`；`cas_store.py::CASStore` | `test_copy_on_write.py::{test_untrusted_writer_only_sees_isolated_patch_and_cannot_change_baseline,test_deferred_replacement_copies_baseline_once_then_atomically_adopts}`；F-006 baseline Merkle assertions | implemented_fixture_verified | fixture 已覆盖 standalone 与 mixed direct E2E；真实 candidate 未运行 |
+| F-009 | `control_store.py::ControlStore`；`lease.py::LeaseManager`；`cas_store.py::CASStore` | `test_control_store.py` atomic/idempotency/schema drift；`test_resource_lease.py` dual-lease/fence/orphan-hold | implemented_fixture_verified | 真实 X 盘 control root 未初始化 |
+| F-010 | `resource_supervisor.py::ResourceSupervisor`；`windows_job.py::WindowsJob`；`wsl_cgroup.py::WslCgroupService`；`wsl_resource_guardian.py::WslResourceGuardian`；`runtime_adapters.py::DurableWslQuiescenceReader` | fixture gates；2026-08-12 rebase 后隔离 smoke Windows+WSL PASS，Windows job peak 23,699,456 bytes，WSL cgroup peak 28,565,504 bytes、swap peak 0、安全计数全 0 | implemented_platform_fixture_verified | 真实 full 资源证据未运行 |
+| F-011 | `resource_budget.py` hard-gate/pressure ladder；`worker.py::DatasetReleaseWorker` typed resource admission | hard-failure/wait fixture；Windows+WSL isolated platform smoke PASS；parent 对 child manifest `minute_batch` rung 二次绑定 | implemented_platform_fixture_verified | 真实 full allocation/resource telemetry 未运行 |
+| F-012 | `control_service.py::DatasetReleaseControlService`；`backend/routers/dataset_releases.py` protected control routes | `test_control_service.py::test_submit_is_durable_idempotent_and_never_creates_a_run_in_api`；`test_dataset_releases.py::{test_every_dataset_release_route_requires_operator_dependency,test_preview_submit_status_cancel_and_validation_contract}` | implemented_fixture_verified | backend runtime activation 未请求 |
+| F-013 | `worker.py::{DatasetReleaseWorker,ProcessorRegistry}`；`scripts/dataset_release_worker.py` real registry/preflight/once/drain/serve | `test_worker_cli.py::{test_default_production_registry_wires_every_real_contract,test_preflight_validates_real_registry_without_claim_heartbeat_or_worker}`；`test_worker.py::test_once_blocks_only_one_missing_processor_item_and_serve_is_bounded` | implemented_fixture_verified | Worker 注册/启动未授权、未运行 |
+| F-014 | `state_machine.py::DatasetReleaseStateMachine`；`lease.py::LeaseManager`；`publisher.py` fenced publish | `test_state_machine.py` no-op/resume/atomic terminal matrix；`test_worker.py::{test_dead_publish_owner_is_fence_handed_off_and_parent_finalizes_without_free_window,test_expired_unknown_owner_is_held_and_never_reclaimed}` | implemented_fixture_verified | 真实 crash injection/platform recovery 未运行 |
+| F-015 | `worker_commands.py::WorkerCommandCoordinator`；`worker.py` cooperative checkpoint handling | `test_worker.py::{test_cancel_and_resume_commands_are_atomic_and_fenced,test_new_resume_invocation_is_not_suppressed_by_prior_rejected_command}`；CLI cancel test | implemented_fixture_verified | 无进程终止授权；只验证 durable command |
+| F-016 | `backend/deps.py::require_dataset_release_operator`；`control_service.py::{ProfileNotAllowed,CandidateOnlyRequired}`；`api_models.py` extra-forbid contracts | `test_deps_dataset_release.py` token file/rotation/fail-closed matrix；`test_dataset_releases.py::{test_all_routes_are_operator_protected_and_token_rotates,test_preview_token_mismatch_is_visible_and_idempotency_conflict_has_exact_code}` | implemented_fixture_verified | token/runtime 配置未执行 |
+| F-017 | `resolution_processor.py::SAMPLE_POLICY`=`on_contract_change`；`profile.py::DatasetProfile` | `test_profile.py::{test_safe_physical_tuning_does_not_change_semantic_identity,test_cli_and_env_cannot_weaken_hard_limits}`；mixed planner cutoff-tail fixture | implemented_fixture_verified | 真实 monthly receipt 未产生 |
+| F-018 | `minute_overlay.py::MinuteOverlayBuilder`；`source_authority.py` pressure-rung code/date batching；`artifact_ready_source.py` TDX-first/Tushare-fallback adapters | `test_minute_overlay.py` TDX-first/240-bars/overlap/40203/bounded code-window matrix；`test_artifact_ready_source.py` provider-row bounds | implemented_fixture_verified | 真实 TDX/Tushare 调用未授权、未运行；minute 每批上限 20 仅有 fixture/profile 证据 |
+| F-019 | `worker.py::{ProcessorDisposition,DatasetReleaseWorker}` typed retry/wait/terminal policy | `test_worker.py::{test_resolution_retryable_releases_fences_and_records_durable_retry,test_resolution_retry_exhaustion_binds_latest_error_receipt,test_build_terminal_failure_is_blocked_and_never_fake_success}` | implemented_fixture_verified | 无真实 provider/DB failure replay |
+| F-020 | `contracts.py::{RunOutcome,ComponentAction,ReleaseIdentity}`；`build_processor.py::ProductionBuildProcessor` portable receipt；`signoff.py::SignoffReceipt` | `test_build_processor.py` durable result/resource/log/artifact-snapshot refs；`test_reattest_existing.py` external CAS receipt；`test_worker.py` terminal readback oracles；F-006 mixed E2E | implemented_fixture_verified | 真实 terminal receipt 未产生 |
+| F-021 | `signoff.py::build_signoff`；`component_manifest_producer.py::produce_component_artifact_manifest`；`component_artifact_manifest.py::seal_component_artifact_manifest` | `test_signoff.py`；`test_component_manifest_producer.py::test_component_manifest_producer_seals_exact_candidate_file_graph` | implemented_fixture_verified | 无真实 candidate signoff |
+| F-022 | `scripts/update_backtest_dataset_monthly.py`；`control_service.py::DatasetReleaseControlService`；`.codex/skills/update-backtest-dataset/{SKILL.md,references/*}` | `test_update_backtest_dataset_monthly.py` monthly/status/events/receipt/cancel no-execution matrix；router contract tests | implemented_fixture_verified | 运行时 client install/reload 未授权 |
+| F-023 | `control_store.py::ControlStore` bounded catalog indexes；`log_store.py::{RotatingLogWriter,read_log_page}`；router signed cursor projection | `test_log_store.py::{test_default_log_contract_keeps_128_segments_and_explicit_two_gib_cap,test_log_page_uses_forward_generation_and_byte_cursor}`；`test_dataset_releases.py::test_run_log_is_byte_line_bounded_and_cursor_bound_to_stream` | implemented_fixture_verified | 无数小时真实日志；cursor 为真实 `(log_id,generation,byte_offset)`，非 tail 占位 |
+| F-024 | `reconciler.py::MonthlyDatasetReconciler`；`worker.py::DatasetReleaseWorker` singleton/fenced claims | `test_reconciler.py` disabled/dedup/takeover/invariant matrix；`test_worker.py::test_two_worker_instances_do_not_claim_same_logical_resolution` | implemented_fixture_verified | scheduler 默认关闭、未注册 |
+| F-025 | `control_service.py::CandidateOnlyRequired`；profile/candidate-root allowlist；API/CLI 不暴露 activation/DB/restart/cleanup | `test_update_backtest_dataset_monthly.py::test_required_safety_selectors_fail_before_any_write`；router protected-route and profile-negative tests；legacy exporter unbounded fail-closed tests | implemented_fixture_verified | production/node1/DB/runtime/cleanup 全部未请求或未授权 |
+| F-026 | pytest temp-root source/build/control adapters；`tests/aistock_validation/dataset_release_platform_smoke.py` | 统一隔离回归 `742 passed, 5 skipped`；Windows+WSL platform smoke PASS，`database/provider/export/production/service_controls=0` | fixture_and_platform_verified_real_data_pending | 真实 DB/TDX/Tushare、真实 candidate 均未运行 |
+| F-027 | `.codex/skills/update-backtest-dataset/SKILL.md` + 五个一层 reference；`.claude/skills/update-backtest-dataset/SKILL.md` pointer；本 runbook | CLI fixture tests与文档 link/diff checks | implemented_fixture_verified | 首次真实月更 forward test/terminal receipt pending；client install 未授权 |
+| F-028 | `index_contract.py` exact 12-index authority；`index_context_candidate_manifest.py::{produce_index_context_candidate_manifest,validate_index_context_candidate_manifest}`；`candidate_validator.py` index + moneyflow parity | `test_index_context.py` exact list/benchmark/provider parity；`test_candidate_validator.py` index every-field、manifest hash、moneyflow static/derived rolling parity fixtures | implemented_fixture_verified | 真实指数/资金流数据未读取；HMM consumer 仍 `not_activated` |
+| F-029 | `performance.py::evaluate_performance_gate`；`synthetic_benchmark.py`；resource/query/log metrics receipts | `test_performance.py` comparable 3-run median/non-comparable/query-memory-control gates；synthetic fixture evidence | pending_real_performance | 真实 full/new-cutoff 3-run workload、RSS、query、throughput 与 <=10% regression 证据未授权、未运行 |
+| F-030 | 本矩阵、§21 item-by-item review、§22 多轮审查；实现 PR validation receipt | 已完成多轮定向审查、统一隔离回归与 Windows+WSL platform smoke；最终 ruff/compile/diff/feature-workflow、最新 main rebase、独立 code review/CI 尚待 | pending_final_code_review | F-026/F-029 的真实数据/真实性能状态与源码 gate 分开；实现 PR 尚未建立，当前禁止申报 mergeable |
+| F-031 | `component_artifact_manifest.py` storage v2 section shards；`canonical_lineage.py` lineage v3 bucket/head/event refs；daily/minute outer v2 capability binding | `test_component_artifact_manifest.py::{test_component_manifest_v2_shards_and_compacts_production_scale_index,test_v2_adj_section_shards_6000_codes_by_36_months_under_hard_bound}`；`test_canonical_lineage.py::test_lineage_6000_by_36_metadata_growth_is_bounded`；legacy dual-reader/migration/tamper tests | implemented_fixture_verified | 真实 36 个月运行未执行；合成门禁只证明元数据容量与 fail-closed 迁移合同 |
 
 ## 21. DESIGN-COMPLIANCE-001
 
@@ -1391,3 +1442,16 @@ GetPerformanceInfo/low-memory/Page Reads gate。
 | 11B | same-owner publish recovery final | 只定义新 fence adoption，当前 owner 无合法 recovery transition | 明确 same attempt/owner/fences/readback CAS 回 `PUBLISHING` | resolved_in_revision_11 |
 | 12A | marker atomicity final | committed marker 未定义原子写，crash 可留下 partial marker并误判冲突 | 同卷 temp+flush+create-if-absent atomic rename+readback；partial temp 不可发现 | resolved_in_revision_12 |
 | 13A | legacy provenance oracle | 测试把所有 provenance 缺失都判 artifact-only，与 source-only reconstructed truth table 冲突 | 区分 PIT 缺失与原 source/producer 缺失；仅后者 full parity 可 reconstructed | resolved_in_revision_13 |
+| 14A | TTL attestation identity | 稳定 attestation key UNIQUE 导致 TTL 后相同目标无法保存新 probe/receipt | 拆稳定 target key 与 probe-bound immutable observation key；禁止原地更新历史观测 | resolved_in_revision_14 |
+| 14B | probe monotonicity | probe ordinal 仅由调用方写 receipt，control attempt 未持久化，允许 2→1 回退 | resolution attempt 原子保存 ordinal/snapshot/key/ref/TTL，并要求严格递增 | resolved_in_revision_14 |
+| 14C | re-attest terminal closure | registration primitive 未保证 run/attempt/event/lease 与 receipt 同事务终结 | 增加 `finalize_reattest` ownership/freshness 校验与原子 `REATTESTED` terminal transition | resolved_in_revision_14 |
+| 14D | legacy catalog authority | candidate identity要求registration UUID，但 durable schema 只保存build releases | 增加exact-path immutable candidate registration catalog、幂等/漂移冲突及bounded latest query | resolved_in_revision_14 |
+| 15A | API/security implementation audit | 发现 preview token 被误称为 source watermark、默认 idempotency 可误重放、token digest 泄露 actor 轮换语义、响应可能透传内部字段 | 改为 request/profile/config/cutoff preview binding；人工调用随机 key；稳定 token-file actor；Pydantic extra-forbid 与显式 response projection；审查时定向回归 `90 passed`、ruff clean | resolved_fixture_only |
+| 15B | WSL orphan/resource audit | stale `ACTIVE`、systemd collected-unit/locale/rc 解析和同 fence guardian 状态可造成错误 reclaim 或覆盖 | 仅对 exact unit/cgroup 做只读恢复；要求 C locale、exact not-found、empty/absent cgroup 和 durable fence receipt；unknown 一律 hold；审查时资源/Worker 定向回归 `45 passed`、ruff clean | resolved_fixture_only_platform_pending |
+| 15C | memory/performance audit | 旧 exporter 分批查询后仍保留所有 frames/预分配全静态矩阵；新路径另发现 minute overlay 按日重扫 code-window、每股重扫 calendar、validator Python cell loop 与候选树重复 hash 风险 | 已引入 bounded row stream、code/date prebucket、单 calendar boundary index、vectorized chunk parity、128-segment log cap 与 single-copy deferred COW；artifact snapshot/hash复用和 mixed stage 仍由最终 gate复核 | partial_pending_mixed_e2e_and_real_performance |
+| 15D | data semantics implementation audit | source content/provenance、DB/provider同值覆盖、QFQ/PIT依赖、index manifest、moneyflow raw/derived parity 曾分散且可能静默漂移 | 冻结 effective/provenance dual roots、ArtifactReady、DB authority、TDX-first/Tushare missing-only、exact QFQ/PIT、12-index manifest与资金流全字段/滚动公式校验 | resolved_fixture_only_real_data_pending |
+| 15E | state durability implementation audit | API replay可能返回当前状态而非原响应；publish/reattest terminal、lease heartbeat、owner-loss recovery 的 ownership/fence 证据不完整 | CAS 冻结原始 response、atomic terminal readback、host/release 双 fence、claimed-work独立 heartbeat、`ORPHAN_HOLD`/finalizer handoff 与 durable WSL recovery receipt | resolved_fixture_only_platform_pending |
+| 16A | acceptance truth reconciliation | 原矩阵仍是 planned/design-only，容易把 fixture 实现误报为真实数据、真实平台、真实性能或 merge-ready | 全部替换为真实 module/symbol/test refs，并把 mixed direct E2E、SELECTIVE override、platform/real-data/real-performance和最终 code review 明确保留为 `pending_*` | pending_final_code_review |
+| 17A | lineage integrity independent audit | self-signed current lineage、丢失旧事件、未声明 namespace/tombstone、junction 和 scope drift 可绕过 validator | durable baseline CAS replay、exact action/scope/namespace、logical-path lstat、实际 receipt CAS authority 与 adversarial fixtures | resolved_fixture_only |
+| 17B | long-horizon capacity audit | production-shape component/lineage 元数据在数月到约三年内触发 32 MiB hard reader limit | component manifest storage v2、canonical lineage v3、legacy dual-reader/early migration 与 6000×36 容量门禁 | resolved_fixture_only_real_scale_pending |
+| 17C | integrated resource/I-O audit | FULL 批次可能漂回20、H5兼容字段被误报为有效降压、source recheck重复写CAS、顶层receipt缺snapshot证据 | parent rung binding、H5语义显式标记、hash-only exact recheck、BUILD_RECEIPT透传 artifact snapshot；统一回归742 PASS、Windows+WSL smoke PASS | resolved_fixture_and_platform_only_real_data_pending |

@@ -8,6 +8,7 @@ from . import sector_strategy
 from . import ingestion
 from . import settings
 from . import config_env
+from . import dataset_releases
 from . import qmt
 from . import qe_archive
 from . import research_pipeline
@@ -28,6 +29,7 @@ __all__ = [
     "ingestion",
     "settings",
     "config_env",
+    "dataset_releases",
     "qmt",
     "qe_archive",
     "research_pipeline",

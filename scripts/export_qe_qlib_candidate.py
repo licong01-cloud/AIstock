@@ -48,8 +48,25 @@ DEFAULT_START = "2018-08-01"
 DEFAULT_END = "2026-04-28"
 DEFAULT_SNAPSHOT_ID = "qlib_20260428_shsz_candidate"
 DEFAULT_BIN_ID = "qlib_bin_20260428_shsz_candidate"
+LEGACY_SAMPLE_MAX_INSTRUMENTS = 500
 DEFAULT_INDEX_CODES = ["000300.SH"]
 STATIC_SCHEMA_SOURCE = PROJECT_ROOT / "qlib_snapshots" / "qlib_test" / "static_factors.parquet"
+
+
+class LegacyUnboundedExportDisabled(RuntimeError):
+    """The old all-in-memory candidate exporter is sample-only."""
+
+
+def enforce_legacy_sample_bound(limit_instruments: int | None) -> int:
+    if limit_instruments is None or limit_instruments <= 0 or limit_instruments > LEGACY_SAMPLE_MAX_INSTRUMENTS:
+        raise LegacyUnboundedExportDisabled(
+            "LEGACY_UNBOUNDED_EXPORT_DISABLED: export_qe_qlib_candidate.py retains "
+            "all batches in memory and is restricted to <=500-instrument fixture/debug runs; "
+            "use scripts/update_backtest_dataset_monthly.py for monthly candidate updates"
+        )
+    return int(limit_instruments)
+
+
 RDAGENT_GIT_IGNORE = Path("F:/Dev/RD-Agent-main/git_ignore_folder")
 RDAGENT_PROD_SOURCE = RDAGENT_GIT_IGNORE / "factor_implementation_source_data"
 RDAGENT_DEBUG_SOURCE = RDAGENT_GIT_IGNORE / "factor_implementation_source_data_debug"
@@ -70,10 +87,7 @@ class ExportProfile:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Build SH/SZ QE H5 and Qlib bin candidate datasets without "
-            "overwriting the active datasets."
-        )
+        description=("Build SH/SZ QE H5 and Qlib bin candidate datasets without overwriting the active datasets.")
     )
     parser.add_argument("--start", default=DEFAULT_START)
     parser.add_argument("--end", default=DEFAULT_END)
@@ -88,17 +102,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bin-root", default=str(PROJECT_ROOT / "qlib_bin"))
     parser.add_argument("--csv-root", default=str(PROJECT_ROOT / "qlib_csv"))
     parser.add_argument("--rdagent-root", default=str(RDAGENT_GIT_IGNORE))
-    parser.add_argument("--wsl-copy-dir", default="/home/lc999/data/qlib_bin_20260428_shsz_candidate")
+    parser.add_argument("--wsl-copy-dir", default=os.getenv("QLIB_WSL_COPY_DIR", ""))
     parser.add_argument("--wsl-distro", default=os.getenv("QLIB_WSL_DISTRO", "Ubuntu"))
-    parser.add_argument("--wsl-conda-sh", default=os.getenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh"))
+    parser.add_argument("--wsl-conda-sh", default=os.getenv("QLIB_WSL_CONDA_SH", ""))
     parser.add_argument("--wsl-conda-env", default=os.getenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu"))
-    parser.add_argument("--rdagent-root-wsl", default=os.getenv("QLIB_RDAGENT_ROOT_WSL", "/mnt/f/Dev/RD-Agent-main"))
+    parser.add_argument("--rdagent-root-wsl", default=os.getenv("QLIB_RDAGENT_ROOT_WSL", ""))
     parser.add_argument("--dump-workers", type=int, default=8)
     parser.add_argument("--load-batch-size", type=int, default=400)
     parser.add_argument("--debug-instruments", type=int, default=100)
     parser.add_argument("--debug-end", default="2019-12-31")
     parser.add_argument("--index-code", action="append", dest="index_codes", default=None)
-    parser.add_argument("--limit-instruments", type=int, default=None, help="Debug only: export the first N H5 instruments.")
+    parser.add_argument(
+        "--limit-instruments", type=int, default=None, help="Debug only: export the first N H5 instruments."
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--overwrite-candidate", action="store_true")
     parser.add_argument("--skip-bin", action="store_true")
@@ -134,12 +150,11 @@ def safe_candidate_path(path: Path, allowed_root: Path | None = None) -> Path:
 def prepare_dir(path: Path, *, allowed_root: Path, overwrite: bool, dry_run: bool = False) -> Path:
     resolved = safe_candidate_path(path, allowed_root)
     if resolved.exists():
-        if not overwrite:
-            raise FileExistsError(f"Candidate path already exists; pass --overwrite-candidate to rebuild it: {resolved}")
-        if dry_run:
-            logging.info("[dry-run] would remove candidate directory %s", resolved)
-        else:
-            shutil.rmtree(resolved)
+        del overwrite, dry_run
+        raise FileExistsError(
+            "Candidate path already exists; the legacy sample exporter never "
+            f"overwrites or removes candidates: {resolved}"
+        )
     if not dry_run:
         resolved.mkdir(parents=True, exist_ok=True)
     return resolved
@@ -192,14 +207,8 @@ def get_h5_universe(end: date, limit: int | None = None) -> pd.DataFrame:
 def load_daily_data(pool_df: pd.DataFrame, start: date, end: date, batch_size: int) -> pd.DataFrame:
     reader = DBReader()
     frames: list[pd.DataFrame] = []
-    codes = (
-        pool_df["ts_code"]
-        .dropna()
-        .map(normalize_code)
-        .drop_duplicates()
-        .sort_values()
-        .tolist()
-    )
+    codes = pool_df["ts_code"].dropna().map(normalize_code).drop_duplicates().sort_values().tolist()
+    enforce_legacy_sample_bound(len(codes))
     start_dates = {}
     for row in pool_df.itertuples(index=False):
         code = normalize_code(row.ts_code)
@@ -290,9 +299,7 @@ def read_static_schema_columns(schema_source: Path) -> list[str]:
         if not name.startswith("__index_level_") and name not in {"datetime", "instrument"}
     ]
     if "l2_code_id" not in columns:
-        raise ValueError(
-            f"Static schema source is stale and lacks l2_code_id: {schema_source}"
-        )
+        raise ValueError(f"Static schema source is stale and lacks l2_code_id: {schema_source}")
     return columns
 
 
@@ -398,10 +405,7 @@ def build_aux_and_static(
 
 def compute_official_universe(daily_norm: pd.DataFrame, pool_df: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
     ranges = (
-        daily_norm.reset_index()
-        .groupby("instrument")["datetime"]
-        .agg(data_start="min", data_end="max")
-        .reset_index()
+        daily_norm.reset_index().groupby("instrument")["datetime"].agg(data_start="min", data_end="max").reset_index()
     )
     pool = pool_df.copy()
     pool["instrument"] = pool["ts_code"].map(normalize_code)
@@ -456,7 +460,9 @@ def load_limit_data(codes: list[str], start: date, end: date) -> pd.DataFrame:
     return out[["date", "symbol", "prev_close", "up_limit_price", "down_limit_price"]]
 
 
-def write_stock_csv_for_bin(daily_norm: pd.DataFrame, official: pd.DataFrame, csv_dir: Path, start: date, end: date) -> dict:
+def write_stock_csv_for_bin(
+    daily_norm: pd.DataFrame, official: pd.DataFrame, csv_dir: Path, start: date, end: date
+) -> dict:
     csv_dir.mkdir(parents=True, exist_ok=True)
     # Keep full post-listing feature history in bin files. IPO-365 eligibility
     # is expressed by instruments/all.txt, not by deleting feature rows.
@@ -477,7 +483,9 @@ def write_stock_csv_for_bin(daily_norm: pd.DataFrame, official: pd.DataFrame, cs
     df["prev_close"] = pd.to_numeric(df["prev_close"], errors="coerce").fillna(prev_from_raw)
     have_limits = df["up_limit_price"].notna() & df["down_limit_price"].notna()
     df["limit_up"] = np.where(have_limits, (df["_raw_close"] >= df["up_limit_price"] - 1e-4).astype("float32"), np.nan)
-    df["limit_down"] = np.where(have_limits, (df["_raw_close"] <= df["down_limit_price"] + 1e-4).astype("float32"), np.nan)
+    df["limit_down"] = np.where(
+        have_limits, (df["_raw_close"] <= df["down_limit_price"] + 1e-4).astype("float32"), np.nan
+    )
     df["date"] = df["date_obj"].astype(str)
 
     csv_cols = [
@@ -517,7 +525,14 @@ def win_to_wsl(path: Path | str) -> str:
     return p
 
 
-def run_wsl_script(args: argparse.Namespace, script_name: str, script_args: list[str], timeout: int | None = None) -> subprocess.CompletedProcess:
+def run_wsl_script(
+    args: argparse.Namespace, script_name: str, script_args: list[str], timeout: int | None = None
+) -> subprocess.CompletedProcess:
+    if not args.wsl_conda_sh or not args.rdagent_root_wsl:
+        raise LegacyUnboundedExportDisabled(
+            "LEGACY_WSL_PATHS_REQUIRED: pass explicit --wsl-conda-sh and "
+            "--rdagent-root-wsl for the bounded legacy sample run"
+        )
     script_path = f"{args.rdagent_root_wsl.rstrip('/')}/scripts/{script_name}"
     quoted = " ".join(shlex.quote(str(x)) for x in [script_path, *script_args])
     command = (
@@ -561,7 +576,9 @@ def dump_stock_bin(args: argparse.Namespace, csv_dir: Path, bin_dir: Path) -> No
     ]
     res = run_wsl_script(args, "dump_bin.py", dump_args)
     if res.returncode != 0:
-        raise RuntimeError(f"stock dump_bin.py failed with code {res.returncode}\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
+        raise RuntimeError(
+            f"stock dump_bin.py failed with code {res.returncode}\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+        )
 
 
 def write_index_csv(index_code: str, start: date, end: date, csv_dir: Path) -> dict:
@@ -608,7 +625,9 @@ def update_index_file(bin_dir: Path, index_code: str, all_backup: bytes | None) 
         all_path.unlink(missing_ok=True)
 
 
-def dump_index_bins(args: argparse.Namespace, index_codes: list[str], bin_dir: Path, csv_root: Path, start: date, end: date) -> dict:
+def dump_index_bins(
+    args: argparse.Namespace, index_codes: list[str], bin_dir: Path, csv_root: Path, start: date, end: date
+) -> dict:
     results = {}
     for index_code in index_codes:
         index_csv_dir = csv_root / "index" / index_code
@@ -640,7 +659,9 @@ def dump_index_bins(args: argparse.Namespace, index_codes: list[str], bin_dir: P
     return results
 
 
-def write_bin_meta(bin_dir: Path, args: argparse.Namespace, profile: ExportProfile, last_end_dates: dict[str, str]) -> None:
+def write_bin_meta(
+    bin_dir: Path, args: argparse.Namespace, profile: ExportProfile, last_end_dates: dict[str, str]
+) -> None:
     meta = {
         "snapshot_id": args.bin_id,
         "start": profile.start,
@@ -660,7 +681,7 @@ def write_bin_meta(bin_dir: Path, args: argparse.Namespace, profile: ExportProfi
 def copy_or_link(src: Path, dst: Path, mode: str) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists():
-        dst.unlink()
+        raise FileExistsError(f"Legacy candidate copy target already exists and will not be replaced: {dst}")
     if mode == "hardlink":
         try:
             os.link(src, dst)
@@ -756,6 +777,10 @@ def build_debug_candidate(snapshot_dir: Path, debug_dir: Path, n_instruments: in
 
 
 def copy_bin_to_wsl(args: argparse.Namespace, bin_dir: Path) -> None:
+    if not args.wsl_copy_dir:
+        raise LegacyUnboundedExportDisabled(
+            "LEGACY_WSL_COPY_PATH_REQUIRED: pass explicit --wsl-copy-dir for the bounded legacy sample run"
+        )
     target = args.wsl_copy_dir.rstrip("/")
     if "candidate" not in Path(target).name.lower():
         raise ValueError(f"Refusing to overwrite non-candidate WSL path: {target}")
@@ -763,7 +788,8 @@ def copy_bin_to_wsl(args: argparse.Namespace, bin_dir: Path) -> None:
     parent = str(Path(target).parent).replace("\\", "/")
     command = (
         f"set -euo pipefail; "
-        f"rm -rf {shlex.quote(target)}; "
+        f"if [ -e {shlex.quote(target)} ]; then "
+        f"echo 'candidate target already exists; refusing overwrite' >&2; exit 17; fi; "
         f"mkdir -p {shlex.quote(parent)}; "
         f"cp -a {shlex.quote(src)} {shlex.quote(target)}"
     )
@@ -788,10 +814,31 @@ def file_size_map(path: Path) -> dict[str, int]:
     return out
 
 
+def candidate_snapshot_writer(snapshot_root: Path) -> SnapshotWriter:
+    """Bind the legacy writer to the exact root guarded by ``prepare_dir``."""
+
+    return SnapshotWriter(root=snapshot_root.expanduser().resolve(strict=True))
+
+
+def candidate_field_map(*, snapshot_root: Path, snapshot_id: str) -> dict[str, object]:
+    """Keep field-map reads/writes inside the same guarded candidate root."""
+
+    return export_field_map_for_snapshot(
+        snapshot_id=snapshot_id,
+        snapshot_root=snapshot_root.expanduser().resolve(strict=True),
+        write_to_h5=True,
+    )
+
+
 def main() -> int:
     args = parse_args()
     setup_logging(args.log_level)
     started = time.time()
+    enforce_legacy_sample_bound(args.limit_instruments)
+    if args.overwrite_candidate:
+        raise LegacyUnboundedExportDisabled(
+            "LEGACY_CANDIDATE_OVERWRITE_DISABLED: the legacy sample exporter may only create new candidate paths"
+        )
 
     start = to_date(args.start)
     end = to_date(args.end)
@@ -844,7 +891,7 @@ def main() -> int:
     instruments = sorted(daily_norm.index.get_level_values("instrument").unique().tolist())
     logging.info("Daily PV loaded: rows=%s instruments=%s", len(daily_norm), len(instruments))
 
-    writer = SnapshotWriter()
+    writer = candidate_snapshot_writer(snapshot_root)
     writer.write_daily_full(args.snapshot_id, daily)
     write_data_range_all_txt(daily_norm, snapshot_dir / "instruments" / "all.txt", ",")
     aux_stats = build_aux_and_static(
@@ -859,7 +906,10 @@ def main() -> int:
     snapshot_meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
     snapshot_meta["moneyflow_unit_contract"] = moneyflow_unit_contract_receipt()
     meta_path.write_text(json.dumps(snapshot_meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    field_map = export_field_map_for_snapshot(snapshot_id=args.snapshot_id, write_to_h5=True)
+    field_map = candidate_field_map(
+        snapshot_root=snapshot_root,
+        snapshot_id=args.snapshot_id,
+    )
 
     official = compute_official_universe(daily_norm, pool, start, end)
     if official.empty:

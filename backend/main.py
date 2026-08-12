@@ -28,6 +28,7 @@ from .routers import (
     analysis,
     cloud_screening,
     config_env,
+    dataset_releases,
     execution_policy,
     external_research,
     strategy_governance,
@@ -531,6 +532,7 @@ def create_app() -> FastAPI:
     app.include_router(news.router, prefix="/api/v1")
     app.include_router(settings.router, prefix="/api/v1")
     app.include_router(config_env.router, prefix="/api/v1")
+    app.include_router(dataset_releases.router, prefix="/api/v1")
     app.include_router(smart_monitor.router, prefix="/api/v1")
     app.include_router(rdagent.router, prefix="/api/v1")
     app.include_router(rdagent_templates.router, prefix="/api/v1")

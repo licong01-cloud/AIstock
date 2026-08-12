@@ -1,5 +1,9 @@
 # AIstock 回测数据集导出与签收指引（2026-07-12）
 
+> 月度产品入口已统一为 `docs/operations/qe_backtest_dataset_monthly_update_runbook.md` 和
+> `$update-backtest-dataset`。本文保留低层 exporter、公式与历史兼容契约，不再作为普通月更的手工执行清单；
+> 不得在 durable workflow 被阻断时用本文命令绕过 catalog、source identity、资源治理或签收。
+
 ## 1. 适用范围
 
 本指引覆盖：

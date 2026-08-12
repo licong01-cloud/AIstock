@@ -52,10 +52,17 @@ def _read_h5_columns_and_dtypes(h5_path: Path) -> tuple[List[str], Dict[str, str
 def export_field_map_for_snapshot(
     *,
     snapshot_id: str,
+    snapshot_root: Optional[Path] = None,
     out_csv: Optional[Path] = None,
     write_to_h5: bool = True,
 ) -> Dict[str, object]:
-    snap_root = ensure_snapshot_root()
+    snap_root = (
+        Path(snapshot_root).expanduser().resolve(strict=True)
+        if snapshot_root is not None
+        else ensure_snapshot_root()
+    )
+    if not snap_root.is_dir():
+        raise NotADirectoryError(f"snapshot root is not a directory: {snap_root}")
     snap_dir = snap_root / snapshot_id
     if not snap_dir.exists():
         raise FileNotFoundError(f"snapshot not found: {snap_dir}")
