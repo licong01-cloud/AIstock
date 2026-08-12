@@ -5,6 +5,7 @@ import math
 import os
 import shutil
 import tempfile
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -209,14 +210,12 @@ def _validate_calibration_spec(
         solver = value.get("solver")
         expected_solver = {
             **PLATT_SOLVER_CONTRACT,
-            "library_version": solver.get("library_version") if isinstance(solver, dict) else None,
+            "library_version": version("scikit-learn"),
         }
         if (
             value.get("head") != head
             or not isinstance(solver, dict)
             or solver != expected_solver
-            or not isinstance(solver.get("library_version"), str)
-            or not solver["library_version"].strip()
             or not _is_positive_int(value.get("row_count"))
             or not _is_nonnegative_int(value.get("positive_count"))
             or not _is_nonnegative_int(value.get("negative_count"))

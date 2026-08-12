@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib.metadata import version
 from pathlib import Path
 
 import pandas as pd
@@ -134,7 +135,7 @@ def _spec(request_id: str, request_sha256: str) -> dict:
         "fit_intercept": True,
         "max_iter": 1000,
         "random_state": 20260812,
-        "library_version": "1.7.2",
+        "library_version": version("scikit-learn"),
     }
     return {
         "schema_version": "advisory_outcome_calibration_spec_v1",
@@ -299,6 +300,19 @@ def test_v2_bundle_rejects_calibrated_non_positive_platt_slope(
     ("field", "value"),
     [
         ("solver", None),
+        (
+            "solver",
+            {
+                "library": "scikit-learn",
+                "estimator": "LogisticRegression",
+                "penalty": None,
+                "solver": "lbfgs",
+                "fit_intercept": True,
+                "max_iter": 1000,
+                "random_state": 20260812,
+                "library_version": "0.0.0-tampered",
+            },
+        ),
         ("iteration_count", 0),
         ("convergence_state", "UNKNOWN"),
         ("head", "signal_survival_h5"),
