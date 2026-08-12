@@ -10,15 +10,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from backend.execution_algos.vnpy_compat.facade_characterization import (
+    _build_vnpy_facade_conformance_set_v2,
+    _validate_vnpy_facade_conformance_set_against_authority_v2,
     VnpyFacadeCharacterizationAuthorityV2,
     build_vnpy_facade_algorithm_bindings_v2,
     build_vnpy_facade_characterization_requirements_v1,
     build_vnpy_facade_contract_v1,
     build_vnpy_facade_full_five_conformance_set_v2,
-    build_vnpy_facade_product_full_five_conformance_set_v2,
     build_vnpy_facade_source_manifest_v1,
     validate_vnpy_facade_full_five_conformance_set_against_authority_v2,
-    validate_vnpy_facade_product_full_five_conformance_set_against_authority_v2,
 )
 from backend.execution_algos.vnpy_compat.k5_binding_authority import k5_facade_algorithm_bindings_v2
 from backend.execution_algos.vnpy_compat.k5_plugin_factories import k5_process_bindings_v1
@@ -269,21 +269,25 @@ def build_hot_full_five_catalog_authority_v1(
         facade_contract=facade_contract,
         source_manifest=source_manifest,
     )
-    conformance = build_vnpy_facade_product_full_five_conformance_set_v2(
+    conformance = _build_vnpy_facade_conformance_set_v2(
         catalog_runtime=runtime,
         gateway_catalog=gateway_catalog,
         facade_contract=facade_contract,
         source_manifest=source_manifest,
         characterization_authority_v2=characterization,
         algorithm_bindings_v2=algorithm_bindings,
+        expected_algo_codes=FULL_FIVE_ALGO_CODES_V1,
+        facade_backed_algo_codes=frozenset(),
     )
-    authority = validate_vnpy_facade_product_full_five_conformance_set_against_authority_v2(
+    authority = _validate_vnpy_facade_conformance_set_against_authority_v2(
         conformance_set=conformance,
         catalog_runtime=runtime,
         gateway_catalog=gateway_catalog,
         facade_contract=facade_contract,
         source_manifest=source_manifest,
         characterization_authority_v2=characterization,
+        expected_algo_codes=FULL_FIVE_ALGO_CODES_V1,
+        facade_backed_algo_codes=frozenset(),
     )
     return FullFiveCatalogAuthorityV1(
         catalog_runtime=runtime,
