@@ -386,7 +386,7 @@ export type AdvisoryPriceRangeShadow = {
 
 export type AdvisoryModelShadowResponse = {
   status: "EXPERIMENTAL_SHADOW" | "MODEL_UNAVAILABLE";
-  calibration_state: "UNCALIBRATED";
+  calibration_state: "UNCALIBRATED" | "NOT_APPLICABLE_RANKING_SCORE";
   program_id: string;
   binding_version_id: string | null;
   package_id: string | null;
