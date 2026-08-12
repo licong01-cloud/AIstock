@@ -221,12 +221,12 @@ def _verify_environment(request: FrozenAdvisoryMetaLabelTrainingRequestV1) -> di
     if os.name == "nt" or "microsoft" not in platform.release().lower() or os.getenv("CONDA_DEFAULT_ENV") != "rdagent-gpu":
         raise AdvisoryModelFirstError("meta-label training requires WSL rdagent-gpu", reason_code="ADVISORY_MODEL_TRAINING_REQUIRES_WSL")
     root = Path(request.repository_root).resolve()
-    git = ["git"]
+    git = ["git", "-c", "core.filemode=false"]
     pointer = root / ".git"
     if pointer.is_file():
         raw = pointer.read_text().strip().removeprefix("gitdir: ").strip()
         translated = subprocess.run(["wslpath", "-u", raw], check=True, capture_output=True, text=True).stdout.strip()
-        git.append(f"--git-dir={translated}")
+        git.extend((f"--git-dir={translated}", f"--work-tree={root}"))
     commit = subprocess.run([*git, "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip().lower()
     if commit != request.repository_commit:
         raise AdvisoryModelFirstError("meta-label repository commit mismatch", reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH", context={"expected": request.repository_commit, "actual": commit})
