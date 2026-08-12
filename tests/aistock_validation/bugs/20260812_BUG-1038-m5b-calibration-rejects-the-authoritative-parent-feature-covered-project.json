@@ -95,9 +95,15 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/model-shadow?target_trade_date=2026-07-16",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu request advoutcal_723094bf448ce84ac71782ca loaded commit 019e574eccb688fd65d66eebd3f86924a46c2636 and produced bundle cc5a786ee62cba5b3021422e18c366fc0ed4bf9f53027884065be5faab47ff1a twice"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
