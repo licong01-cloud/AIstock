@@ -266,6 +266,58 @@
     "python -m nox -s guardrail_changed_files -> passed; l0 scanned 10 changed files with blocking=0",
     "python -m nox -s qlib_data_backend -> 15 passed"
   ],
+  "validation_receipts": [
+    {
+      "command": "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q",
+      "commit": "d5b7a7041e1d078a1204d7b658fcec4ae6203c44",
+      "evidence_kind": "pytest",
+      "plan": "direct",
+      "receipt_id": "862d5c63d1c8fdc2",
+      "result": "56 passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s l0",
+      "commit": "d5b7a7041e1d078a1204d7b658fcec4ae6203c44",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "f5989e6dc6f69ae1",
+      "result": "passed; guardrail scan blocking=0",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s validation_module_registry_l0",
+      "commit": "d5b7a7041e1d078a1204d7b658fcec4ae6203c44",
+      "evidence_kind": "nox",
+      "plan": "validation_module_registry_l0",
+      "receipt_id": "6627a0a138b46e43",
+      "result": "8 passed; ownership mapped=14 unmapped=0 ambiguous=0",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "python -m nox -s guardrail_changed_files",
+      "commit": "d5b7a7041e1d078a1204d7b658fcec4ae6203c44",
+      "evidence_kind": "nox",
+      "plan": "guardrail_changed_files",
+      "receipt_id": "c580eb1ca2489a7b",
+      "result": "passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check origin/main...HEAD",
+      "commit": "d5b7a7041e1d078a1204d7b658fcec4ae6203c44",
+      "evidence_kind": "diff_check",
+      "plan": "direct",
+      "receipt_id": "1db5eaa16794d45e",
+      "result": "passed",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
