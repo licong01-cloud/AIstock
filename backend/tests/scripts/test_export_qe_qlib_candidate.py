@@ -232,14 +232,40 @@ def test_legacy_snapshot_helpers_bind_the_guarded_custom_root(monkeypatch, tmp_p
 
 
 def test_read_static_schema_columns_accepts_explicit_source(tmp_path) -> None:
+    from backend.services.dataset_release.static_schema import STATIC_COLUMN_DTYPES, STATIC_ORDERED_COLUMNS
+
     source = tmp_path / "schema.parquet"
+    pd.DataFrame(
+        {column: pd.Series(dtype=STATIC_COLUMN_DTYPES[column]) for column in STATIC_ORDERED_COLUMNS}
+    ).to_parquet(source)
+
+    assert MODULE.read_static_schema_columns(source) == list(STATIC_ORDERED_COLUMNS)
+
+
+def test_resolve_static_schema_columns_defaults_to_canonical_121() -> None:
+    from backend.services.dataset_release.static_schema import STATIC_ORDERED_COLUMNS
+
+    assert MODULE.resolve_static_schema_columns(None) == list(STATIC_ORDERED_COLUMNS)
+    assert len(MODULE.resolve_static_schema_columns(None)) == 121
+
+
+def test_resolve_static_schema_columns_keeps_explicit_file_validation(tmp_path) -> None:
+    from backend.services.dataset_release.static_schema import STATIC_COLUMN_DTYPES, STATIC_ORDERED_COLUMNS
+
+    source = tmp_path / "schema.parquet"
+    pd.DataFrame(
+        {column: pd.Series(dtype=STATIC_COLUMN_DTYPES[column]) for column in STATIC_ORDERED_COLUMNS}
+    ).to_parquet(source)
+
+    assert MODULE.resolve_static_schema_columns(source) == list(STATIC_ORDERED_COLUMNS)
+
+
+def test_read_static_schema_columns_rejects_noncanonical_subset(tmp_path) -> None:
+    source = tmp_path / "subset.parquet"
     pd.DataFrame({"beta": [1.0], "l2_code_id": [1], "alpha": [2.0]}).to_parquet(source)
 
-    assert MODULE.read_static_schema_columns(source) == [
-        "beta",
-        "l2_code_id",
-        "alpha",
-    ]
+    with pytest.raises(ValueError, match="ordered 121-column contract"):
+        MODULE.read_static_schema_columns(source)
 
 
 def test_read_static_schema_columns_rejects_stale_source(tmp_path) -> None:
