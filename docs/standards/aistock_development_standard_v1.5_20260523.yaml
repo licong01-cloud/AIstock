@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 316543c4c8f0486045924296cde1d2abe6b8ff801e5c6850ef6b1c02035318ed
+source_sha256: 8f667132a6a816d8cf521a27e6f857ed85fb9707a0760cadff4fcfe9e9d73eb4
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-12"
@@ -736,9 +736,15 @@ manual_review_controls:
     required_evidence:
       - markdown_and_yaml_updated_together
       - full_client_hash_verification_after_entrypoint_merge
+      - canonical_main_origin_aligned_client_authority
+      - client_authority_paths_clean_without_unrelated_root_dirty_blocking
+      - canonical_workflow_cli_for_inflight_verification
+      - checkout_relation_separate_from_profile_status
       - selected_router_and_lane_only_block_active_task
       - unrelated_lane_staleness_warning_only
       - explicit_client_profile_target
+      - single_owner_sync_with_verify_only_peer_windows
+      - task_worktree_never_used_as_global_install_source
       - idempotent_lock_protected_staged_client_sync
       - restart_only_when_recommended_or_client_ui_stale
     failure_policy: block_standard_pr_merge_and_client_current_claims
