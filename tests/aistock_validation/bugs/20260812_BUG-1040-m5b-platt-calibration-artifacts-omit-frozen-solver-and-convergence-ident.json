@@ -165,7 +165,7 @@
     "runtime_contract":  {
                              "backend_restart_owner":  "user",
                              "fresh_process_evidence":  [
-
+                                                            "WSL rdagent-gpu request advoutcal_20c72aec313fae683cfc2d84 loaded commit 03b8a1775ccc0a2c283f6ff528d7acd88524fd1a, persisted solver and convergence evidence, and exact retry reproduced bundle ed5a02a414262218a88bfacd2aaa658f8ca9ee60c340a4a05dfec8ce0aa6f329"
                                                         ],
                              "persistence_basis":  "git_tracked_source",
                              "post_restart_effective_gate":  "pending_user_restart",
@@ -174,7 +174,10 @@
                              "target_id":  "backend-main",
                              "target_ids":  [
                                                 "backend-main"
-                                            ]
+                                            ],
+                             "operator_runbook_ref":  "docs/operations/backend_main_runtime_restart_runbook.md",
+                             "identity_ref":  "http://127.0.0.1:8001/api/v1/runtime-identity",
+                             "business_smoke_ref":  "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/model-shadow?target_trade_date=2026-07-16"
                          },
     "schema_version":  "aistock_validation_bug_v1",
     "severity":  "P1",
