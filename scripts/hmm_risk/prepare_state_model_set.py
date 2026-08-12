@@ -4010,15 +4010,19 @@ def _validate_b3_p6_child_payload(
     *,
     process_identity: str,
     expected: dict[str, Any] | None = None,
+    expected_producer_commit: str | None = None,
 ) -> None:
     expected_entry_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE)
+    producer_commit = _formal_producer_commit() if expected_producer_commit is None else expected_producer_commit
+    if len(producer_commit) != 40 or any(character not in "0123456789abcdef" for character in producer_commit.lower()):
+        raise StateModelSetError("B3 P6 expected child producer commit is invalid")
     receipt_hash = value.get("single_pass_receipt_sha256")
     body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
     repeat = value.get("level_repeat")
     if (
         value.get("schema_version") != B3_P6_SINGLE_PASS_SCHEMA
         or value.get("process_identity") != process_identity
-        or value.get("producer_commit") != _formal_producer_commit()
+        or value.get("producer_commit") != producer_commit
         or value.get("target_family") != B3_P6_FAMILY
         or value.get("target_level") != B3_P6_LEVEL
         or value.get("planned_fit_count") != expected_entry_count
@@ -5246,7 +5250,11 @@ def run_b3_p6_d6_zero_refit_replay(
         ("fresh_process_1", "fresh_process_2"), child_hashes, child_paths, strict=True
     ):
         child = _load_json_mapping(Path(raw_path).resolve(), label=f"B3 P6 {process_identity} receipt")
-        _validate_b3_p6_child_payload(child, process_identity=process_identity)
+        _validate_b3_p6_child_payload(
+            child,
+            process_identity=process_identity,
+            expected_producer_commit=training_producer,
+        )
         if child.get("single_pass_receipt_sha256") != expected_hash or any(
             child.get(field) != training_authority.get(field) for field in train_identity_fields
         ):

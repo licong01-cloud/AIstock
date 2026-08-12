@@ -2045,6 +2045,27 @@ def _p6_rehash_child(value: dict) -> dict:
     return value
 
 
+def test_p6_zero_refit_child_validator_uses_frozen_training_producer(monkeypatch) -> None:
+    inputs, policy, closure = _p6_drift_fixture()
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    value = json.loads(_p6_child_payload("fresh_process_1", inputs=inputs, policy=policy))
+
+    subject._validate_b3_p6_child_payload(
+        value,
+        process_identity="fresh_process_1",
+        expected=closure,
+        expected_producer_commit="c" * 40,
+    )
+
+    with pytest.raises(StateModelSetError, match="child receipt is invalid"):
+        subject._validate_b3_p6_child_payload(
+            value,
+            process_identity="fresh_process_1",
+            expected=closure,
+            expected_producer_commit="e" * 40,
+        )
+
+
 def test_p6_child_validator_rejects_self_hashed_feature_names_drift(monkeypatch) -> None:
     inputs, policy, closure = _p6_drift_fixture()
     monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "c" * 40)

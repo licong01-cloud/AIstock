@@ -841,7 +841,18 @@ class L1TrainingSeries:
             raise StateModelSetError("L1 sector code/name must be non-empty")
         train = _finite_array(self.train_observations, f"{self.sector_code}.train", ndim=2)
         validation = _finite_array(self.validation_observations, f"{self.sector_code}.validation", ndim=2)
-        utility = _finite_array(self.validation_future_utility, f"{self.sector_code}.utility", ndim=1)
+        if self.validation_calendar_series is None:
+            utility = _finite_array(self.validation_future_utility, f"{self.sector_code}.utility", ndim=1)
+        else:
+            try:
+                utility = np.asarray(self.validation_future_utility, dtype=np.float64)
+            except (TypeError, ValueError) as exc:
+                raise StateModelSetError(f"{self.sector_code}.utility must be numeric") from exc
+            if utility.ndim != 1 or utility.size != 0:
+                raise StateModelSetError(
+                    f"{self.sector_code} legacy dense utility must be an empty one-dimensional sentinel "
+                    "when the D6 calendar carrier is authoritative"
+                )
         if train.shape[1] != feature_count or validation.shape[1] != feature_count:
             raise StateModelSetError(f"{self.sector_code} feature count differs from family contract")
         if train.shape[0] < 120:
