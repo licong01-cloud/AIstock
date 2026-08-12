@@ -3,7 +3,7 @@
 > 日期：2026-08-13  
 > Feature tier：F2  
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.0  
-> 当前阶段：`DESIGN_READY_FOR_IMPLEMENTATION`  
+> 当前阶段：`SOURCE_AND_REAL_WSL_DATASET_VERIFIED_PENDING_MERGE`  
 > 适用范围：学术研究与模拟荐股观察，不构成实时投资建议，不连接实盘交易或下单执行
 
 ## 1. Background / 当前真实基线
@@ -465,6 +465,8 @@ P0-C 产物只由后续 P0-D WSL 训练读取；不会因源码合入自动执�
 - Source Round 3：修复一字跌停已知open未计入组合mark与持有日的收益偏差。
 - Source Round 4：candidate range与rank context range分离，context-only日只推进已有持仓，不产生新标签或入场。
 - Real WSL Round 1：真实标签/组合/CPCV计算完成后，bundle JSON writer拒绝`Timestamp`；修复为显式date/datetime/numpy规范化并禁止NaN或任意对象静默字符串化。
+- Real WSL Round 2：最终SHA `f3b3f40c`生成bundle `81e2c9ba...69bd`；7,720候选、7,716成熟、3个涨停未入场、1个右删失、28/28 CPCV paths READY、峰值1.72GB、28.9秒；相同request重跑命中相同bundle及功能文件hash。
+- Result audit：take正例4,199、负例3,517；持有期中位6日/最大20日；退出原因为rank drop 6,200、stop loss 898、time stop 572、trailing take profit 46；rank 1..5至16..20 take rate均约54%，证明selection rank组内区分力弱，支持下一阶段meta-label方向。
 
 ## 20. Implementation Plan / 实施方案
 
@@ -498,3 +500,13 @@ P0-C 只有同时满足以下条件才可报告完成：
 - episode 事件 parity、无未来泄漏、Top40覆盖、删失、成本、组合 replay、CPCV/PBO receipt 均可读。
 - 没有数据库、服务、运行时、模型激活或其它模块写入。
 - 如真实数据暴露不可计算项，保持明确状态并报告，不用简化逻辑绕过。
+
+正式实验产物：
+
+```text
+request_id = advpolreq_bbc87a5590af0519caa07a2f
+request_sha256 = bbc87a5590af0519caa07a2fc3778657e2a7ace03f24bc15131bc5ae6df63bdf
+policy_dataset_bundle_id = 81e2c9bac5ce1f8e2fdc5a6174bc948dfbe984cf5028726c89ea72eb59fc69bd
+bundle_root = F:/Dev/AIstock_model_artifacts/advisory_model_first/policy_datasets/81e2c9ba...69bd
+pbo_status = NOT_COMPUTABLE_NO_TRIAL_RESULTS (P0-D前的正确状态)
+```
