@@ -18,6 +18,9 @@ from backend.services.advisory_model_first.outcome_contracts import (
     OUTCOME_QUANTILES,
     canonical_json_sha256,
 )
+from backend.services.advisory_model_first.outcome_calibration_contracts import (
+    FrozenAdvisoryOutcomeCalibrationRequestV1,
+)
 from backend.services.advisory_model_first.outcome_split import OutcomeDateSplit
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 
@@ -167,15 +170,36 @@ def _validate_outcome_bundle(bundle_path: Path, *, expected_bundle_id: str) -> d
             "outcome bundle file manifest is empty",
             reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
         )
-    required_files = {
-        "training_request.json",
-        "feature_schema.json",
-        "label_policy.json",
-        "split.json",
-        "metrics.json",
-        "training_log.json",
-        "test_predictions.parquet",
-    }
+    schema_version = manifest.get("schema_version")
+    if schema_version == "advisory_outcome_bundle_v1":
+        required_files = {
+            "training_request.json",
+            "feature_schema.json",
+            "label_policy.json",
+            "split.json",
+            "metrics.json",
+            "training_log.json",
+            "test_predictions.parquet",
+        }
+    elif schema_version == "advisory_outcome_bundle_v2":
+        required_files = {
+            "calibration_request.json",
+            "parent_training_request.json",
+            "feature_schema.json",
+            "label_policy.json",
+            "split.json",
+            "calibration.json",
+            "metrics.json",
+            "calibration_log.json",
+            "validation_predictions.parquet",
+            "test_predictions.parquet",
+        }
+    else:
+        raise AdvisoryModelFirstError(
+            "outcome bundle schema version is unsupported",
+            reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
+            context={"schema_version": schema_version},
+        )
     missing_files = sorted(required_files - set(files))
     if missing_files:
         raise AdvisoryModelFirstError(
@@ -199,9 +223,19 @@ def _validate_outcome_bundle(bundle_path: Path, *, expected_bundle_id: str) -> d
                 context={"filename": name},
             )
     try:
-        request = FrozenAdvisoryOutcomeTrainingRequestV1.model_validate_json(
-            (bundle_path / "training_request.json").read_text(encoding="utf-8")
-        )
+        if schema_version == "advisory_outcome_bundle_v1":
+            request = FrozenAdvisoryOutcomeTrainingRequestV1.model_validate_json(
+                (bundle_path / "training_request.json").read_text(encoding="utf-8")
+            )
+            request_parent_bundle_id = request.parent_bundle_id
+        else:
+            request = FrozenAdvisoryOutcomeCalibrationRequestV1.model_validate_json(
+                (bundle_path / "calibration_request.json").read_text(encoding="utf-8")
+            )
+            parent_training = json.loads(
+                (bundle_path / "parent_training_request.json").read_text(encoding="utf-8")
+            )
+            request_parent_bundle_id = str(parent_training.get("parent_bundle_id") or "")
         feature_schema = json.loads(
             (bundle_path / "feature_schema.json").read_text(encoding="utf-8")
         )
@@ -214,7 +248,7 @@ def _validate_outcome_bundle(bundle_path: Path, *, expected_bundle_id: str) -> d
     if (
         request.request_id != manifest.get("request_id")
         or request.request_sha256 != manifest.get("request_sha256")
-        or request.parent_bundle_id != manifest.get("parent_bundle_id")
+        or request_parent_bundle_id != manifest.get("parent_bundle_id")
         or request.feature_schema_hash != FEATURE_SCHEMA_HASH
         or manifest.get("feature_schema_hash") != FEATURE_SCHEMA_HASH
         or feature_schema.get("feature_schema_hash") != FEATURE_SCHEMA_HASH
@@ -225,6 +259,32 @@ def _validate_outcome_bundle(bundle_path: Path, *, expected_bundle_id: str) -> d
             "outcome bundle semantic identities are inconsistent",
             reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
         )
+    if schema_version == "advisory_outcome_bundle_v2":
+        calibration_path = bundle_path / "calibration.json"
+        try:
+            calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AdvisoryModelFirstError(
+                "calibrated outcome bundle spec cannot be read",
+                reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
+                context={"error_type": type(exc).__name__},
+            ) from exc
+        if not isinstance(calibration, dict):
+            raise AdvisoryModelFirstError(
+                "calibrated outcome bundle spec is not an object",
+                reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
+            )
+        if (
+            manifest.get("parent_outcome_bundle_id") != request.parent_outcome_bundle_id
+            or manifest.get("parent_outcome_request_id") != request.parent_outcome_request_id
+            or manifest.get("calibration_spec_sha256") != _sha256_file(calibration_path)
+            or calibration.get("request_id") != request.request_id
+            or calibration.get("request_sha256") != request.request_sha256
+        ):
+            raise AdvisoryModelFirstError(
+                "calibrated outcome bundle semantic identities are inconsistent",
+                reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
+            )
     model_files = [name for name in files if name.startswith("models/") and name.endswith(".txt")]
     model_count = manifest.get("model_count")
     if not isinstance(model_count, int) or not model_files or len(model_files) != model_count:

@@ -408,19 +408,19 @@ ADVISORY_OUTCOME_CALIBRATION_BUNDLE_INVALID
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-372 | `backend/services/advisory_model_first/outcome_calibration_contracts.py`; `outcome_calibration_pipeline.py` | `backend/tests/advisory_model_first/test_outcome_calibration_pipeline.py` | design_ready | none |
-| F-373 | `backend/services/advisory_model_first/outcome_calibration.py` Platt per head | `backend/tests/advisory_model_first/test_outcome_calibration.py` plus artifact: real validation counts in §2.2 | design_ready | none |
-| F-374 | `backend/services/advisory_model_first/outcome_calibration.py` metrics | `backend/tests/advisory_model_first/test_outcome_calibration_metrics.py`; artifact: real WSL calibration receipt | design_ready | none |
-| F-375 | `backend/services/advisory_model_first/outcome_calibration.py` return CQR | `backend/tests/advisory_model_first/test_outcome_calibration.py` | design_ready | none |
-| F-376 | `backend/services/advisory_model_first/outcome_calibration.py` path upper adjustment | `backend/tests/advisory_model_first/test_outcome_calibration.py` | design_ready | none |
-| F-377 | `backend/services/advisory_model_first/outcome_calibration_bundle.py`; `outcome_inference.py` | `backend/tests/advisory_model_first/test_outcome_calibration_bundle.py`; `test_outcome_inference.py` | design_ready | none |
-| F-378 | `backend/services/advisory_model_first/outcome_calibration_bundle.py` | `backend/tests/advisory_model_first/test_outcome_calibration_bundle.py` | design_ready | none |
-| F-379 | `backend/services/advisory_model_first/outcome_runtime_bundle.py`; `frontend/src/lib/api/advisory.ts` | `backend/tests/advisory_model_first/test_outcome_runtime_bundle.py`; `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | design_ready | none |
-| F-380 | `backend/services/advisory_model_first/model_inference.py` outcome isolation only | `backend/tests/advisory_model_first/test_model_inference.py` | design_ready | none |
+| F-372 | `backend/services/advisory_model_first/outcome_calibration_contracts.py`; `outcome_calibration_pipeline.py` | `backend/tests/advisory_model_first/test_outcome_calibration_pipeline.py` | implemented_local_verified | none |
+| F-373 | `backend/services/advisory_model_first/outcome_calibration.py` Platt per head | `backend/tests/advisory_model_first/test_outcome_calibration.py` plus artifact: real validation counts in §2.2 | implemented_local_verified | none |
+| F-374 | `backend/services/advisory_model_first/outcome_calibration.py`; `outcome_calibration_pipeline.py` metrics | `backend/tests/advisory_model_first/test_outcome_calibration.py`; `backend/tests/advisory_model_first/test_outcome_calibration_pipeline.py` | implemented_local_verified | none |
+| F-375 | `backend/services/advisory_model_first/outcome_calibration.py` return CQR | `backend/tests/advisory_model_first/test_outcome_calibration.py` | implemented_local_verified | none |
+| F-376 | `backend/services/advisory_model_first/outcome_calibration.py` path upper adjustment | `backend/tests/advisory_model_first/test_outcome_calibration.py` | implemented_local_verified | none |
+| F-377 | `backend/services/advisory_model_first/outcome_calibration_bundle.py`; `outcome_inference.py` | `backend/tests/advisory_model_first/test_outcome_calibration_bundle.py`; `backend/tests/advisory_model_first/test_outcome_inference.py` | implemented_local_verified | none |
+| F-378 | `backend/services/advisory_model_first/outcome_calibration_bundle.py` | `backend/tests/advisory_model_first/test_outcome_calibration_bundle.py` | implemented_local_verified | none |
+| F-379 | `backend/services/advisory_model_first/outcome_runtime_bundle.py`; `frontend/src/lib/api/advisory.ts`; `frontend/src/app/paper-v2/advisory/page.tsx` | `backend/tests/advisory_model_first/test_outcome_runtime_bundle.py`; `backend/tests/advisory_model_first/test_outcome_inference.py`; `frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts` | implemented_local_verified | none |
+| F-380 | `backend/services/advisory_model_first/model_inference.py` outcome isolation only | `backend/tests/advisory_model_first/test_model_inference.py` | implemented_local_verified | none |
 | F-381 | `scripts/advisory_outcome_calibration_train_wsl.py`; `scripts/wsl/advisory_outcome_calibration_train.py` | `backend/tests/advisory_model_first/test_outcome_calibration_pipeline.py`; artifact: real full M3 calibration receipt | design_ready | none |
-| F-382 | protected-module changed-file scan | `backend/tests/advisory_model_first/test_outcome_calibration_boundaries.py`; `python scripts/aistock_module_ownership_scan.py --changed-only --fail-on-unmapped --fail-on-ambiguous` | design_ready | none |
-| F-383 | no approval/admission implementation | `backend/tests/advisory_model_first/test_outcome_calibration_boundaries.py` | design_ready | none |
-| F-384 | final DESIGN-COMPLIANCE-001 + F2 validation | `backend/tests/advisory_model_first/test_outcome_calibration_boundaries.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md --tier F2` | design_ready | none |
+| F-382 | protected-module changed-file scan | `backend/tests/advisory_model_first/test_outcome_calibration_boundaries.py`; `python scripts/aistock_module_ownership_scan.py --changed-only --fail-on-unmapped --fail-on-ambiguous` | implemented_local_verified | none |
+| F-383 | no approval/admission implementation | `backend/tests/advisory_model_first/test_outcome_calibration_boundaries.py` | implemented_local_verified | none |
+| F-384 | final DESIGN-COMPLIANCE-001 + F2 validation | `backend/tests/advisory_model_first/test_outcome_calibration_boundaries.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md --tier F2` | implemented_local_verified | none |
 
 ## 16. DESIGN-COMPLIANCE-001
 
