@@ -60,7 +60,13 @@ def _request() -> dict:
     }
 
 
-def _transition_dwell_child(process_identity: str, *, candidate_seeds=()) -> dict:
+def _transition_dwell_child(
+    process_identity: str,
+    *,
+    candidate_seeds=(),
+    source_producer_commit: str = "9" * 40,
+    treatment_producer_commit: str = "c" * 40,
+) -> dict:
     entries = [{"entry_receipt_sha256": f"{index:064x}"[-64:]} for index in range(1048)]
     models = [{"model_payload_sha256": f"{index + 1:064x}"[-64:]} for index in range(1048)]
     repeat_body = {
@@ -87,7 +93,9 @@ def _transition_dwell_child(process_identity: str, *, candidate_seeds=()) -> dic
     body = {
         "schema_version": subject.B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA,
         "contract_version": subject.B3_TRANSITION_DWELL_CONTRACT,
-        "producer_commit": "c" * 40,
+        "producer_commit": treatment_producer_commit,
+        "source_producer_commit": source_producer_commit,
+        "treatment_producer_commit": treatment_producer_commit,
         "process_identity": process_identity,
         "target_family": subject.B3_P6_FAMILY,
         "target_level": subject.B3_P6_LEVEL,
@@ -144,17 +152,40 @@ def test_transition_dwell_parent_never_selects_or_runs_d6_and_reports_zero_or_ma
     )
 
     authority = {
+        "producer_commit": "c" * 40,
+        "source_producer_commit": "9" * 40,
+        "treatment_producer_commit": "c" * 40,
         "feature_domain_policy": {"receipt_sha256": "p" * 64},
         "inputs": {},
+    }
+    source_policy = {
+        "schema_version": "policy_v2",
+        "producer_commit": authority["source_producer_commit"],
+        "provider_absence_partition_receipt": {"receipt_sha256": "e" * 64},
+        "provider_absence_partition_receipt_sha256": "e" * 64,
+        "receipt_sha256": "p" * 64,
+    }
+    child_authority_keys = {
+        "producer_commit": authority["treatment_producer_commit"],
+        "dataset_manifest_hash": "1" * 64,
+        "mapping_manifest_hash": "2" * 64,
+        "calendar_manifest_hash": "3" * 64,
+        "l2_stock_fact_manifest_hash": "4" * 64,
+        "feature_domain_policy_sha256": source_policy["receipt_sha256"],
+        "feature_domain_policy_manifest": source_policy,
+        "provider_absence_partition_receipt": source_policy["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": source_policy["provider_absence_partition_receipt_sha256"],
+        "formula_version": subject.C010_FORMULA_VERSION,
     }
     closure = {
         "feature_names": tuple(ALL_CORE_FEATURES),
         "preprocess_family": "winsor_zscore_1_99_train_global_v1",
         "canonical_sector_codes": tuple(f"S{index:03d}" for index in range(131)),
         "canonical_sector_set_sha256": subject.canonical_sha256([f"S{index:03d}" for index in range(131)]),
-        "authority_keys": {},
+        "authority_keys": child_authority_keys,
     }
     for child in children:
+        child.update(child_authority_keys)
         child["level_repeat"].update(
             {
                 "canonical_sector_codes": list(closure["canonical_sector_codes"]),
@@ -165,7 +196,7 @@ def test_transition_dwell_parent_never_selects_or_runs_d6_and_reports_zero_or_ma
         body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
         child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
     payloads = iter(subject.canonical_json_bytes(value) for value in children)
-    monkeypatch.setattr(subject, "_load_b3_formal_train_authority", lambda *args, **kwargs: authority)
+    monkeypatch.setattr(subject, "_load_transition_dwell_train_authority", lambda *args, **kwargs: authority)
     monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
     control = {"control_authority_sha256": "a" * 64}
     monkeypatch.setattr(subject, "_load_transition_dwell_control_authority", lambda *args, **kwargs: control)
@@ -188,6 +219,7 @@ def test_transition_dwell_parent_never_selects_or_runs_d6_and_reports_zero_or_ma
     payloads = iter(subject.canonical_json_bytes(value) for value in children)
     args.b3_transition_dwell_output = str(tmp_path / "transition-zero.json")
     for child in children:
+        child.update(child_authority_keys)
         child["level_repeat"].update(
             {
                 "canonical_sector_codes": list(closure["canonical_sector_codes"]),
@@ -201,6 +233,149 @@ def test_transition_dwell_parent_never_selects_or_runs_d6_and_reports_zero_or_ma
     report = subject.run_b3_transition_dwell_repeated(args, _request())
     assert report["status"] == "diagnostic_complete_no_complete_candidate"
     assert report["diagnostic_complete_candidate_seeds"] == []
+
+
+def test_transition_dwell_split_producer_authority_is_explicit_and_does_not_relax_formal_b3(
+    monkeypatch,
+) -> None:
+    request = _request()
+    source_commit = str(request["producer_commit"])
+    treatment_commit = "d" * 40
+    captured: dict[str, object] = {}
+
+    def fake_loader(value, *, db_prefix, expected_source_producer_commit, treatment_producer_commit):
+        captured.update(
+            {
+                "request": value,
+                "db_prefix": db_prefix,
+                "source": expected_source_producer_commit,
+                "treatment": treatment_producer_commit,
+            }
+        )
+        return {
+            "source_producer_commit": expected_source_producer_commit,
+            "treatment_producer_commit": treatment_producer_commit,
+        }
+
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: treatment_commit)
+    original = subject._load_b3_formal_train_authority
+    monkeypatch.setattr(subject, "_load_b3_formal_train_authority", fake_loader)
+    authority = subject._load_transition_dwell_train_authority(request, db_prefix="TDX_DB_")
+
+    assert authority == {
+        "source_producer_commit": source_commit,
+        "treatment_producer_commit": treatment_commit,
+    }
+    assert captured == {
+        "request": request,
+        "db_prefix": "TDX_DB_",
+        "source": source_commit,
+        "treatment": treatment_commit,
+    }
+
+    monkeypatch.setattr(subject, "_load_b3_formal_train_authority", original)
+    with pytest.raises(StateModelSetError, match="producer_commit differs from current code"):
+        subject._load_b3_formal_train_authority(request, db_prefix="TDX_DB_")
+
+
+def test_transition_dwell_loader_recomputes_policy_with_source_but_returns_current_treatment(
+    monkeypatch,
+) -> None:
+    request = _request()
+    source_commit = str(request["producer_commit"])
+    treatment_commit = "d" * 40
+    policy = _minimal_c010_policy()
+    coverage = _coverage_preflight(policy_sha256=policy["receipt_sha256"])
+    request.update(
+        {
+            "feature_domain_policy_manifest": policy,
+            "feature_domain_policy_sha256": policy["receipt_sha256"],
+            "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
+            "train_coverage_receipt_sha256": coverage["receipt_sha256"],
+        }
+    )
+    inputs = {
+        "dataset_manifest": {
+            "schema_version": "dataset_v1",
+            "calendar_benchmark": {"schema_version": "calendar_v1"},
+        },
+        "mapping_manifest": {"schema_version": "mapping_v1"},
+        "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
+    }
+    request["dataset_manifest_hash"] = subject.canonical_sha256(inputs["dataset_manifest"])
+    request["mapping_manifest_hash"] = subject.canonical_sha256(inputs["mapping_manifest"])
+    request["l2_stock_fact_manifest_hash"] = subject.canonical_sha256(inputs["l2_stock_fact_manifest"])
+    observed_policy_producers: list[str] = []
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: treatment_commit)
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda *args, **kwargs: inputs)
+
+    def fake_policy(values, value, *, producer_commit):
+        observed_policy_producers.append(producer_commit)
+        return policy
+
+    monkeypatch.setattr(subject, "_c010_policy_manifest", fake_policy)
+    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, value: coverage)
+
+    authority = subject._load_transition_dwell_train_authority(request, db_prefix="TDX_DB_")
+
+    assert observed_policy_producers == [source_commit]
+    assert authority["producer_commit"] == treatment_commit
+    assert authority["source_producer_commit"] == source_commit
+    assert authority["treatment_producer_commit"] == treatment_commit
+    assert authority["feature_domain_policy"] == policy
+
+
+@pytest.mark.parametrize("field", ["source", "treatment"])
+def test_transition_dwell_split_producer_authority_rejects_identity_drift(monkeypatch, field: str) -> None:
+    request = _request()
+    source_commit = str(request["producer_commit"])
+    treatment_commit = "d" * 40
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: treatment_commit)
+    kwargs = {
+        "expected_source_producer_commit": source_commit,
+        "treatment_producer_commit": treatment_commit,
+    }
+    if field == "source":
+        kwargs["expected_source_producer_commit"] = "e" * 40
+    else:
+        kwargs["treatment_producer_commit"] = "e" * 40
+
+    with pytest.raises(StateModelSetError, match=r"B3 (request source|treatment) producer"):
+        subject._load_b3_formal_train_authority(request, db_prefix="TDX_DB_", **kwargs)
+
+
+def test_transition_dwell_child_command_carries_exact_split_producer_authority(tmp_path) -> None:
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+    )
+    source_commit = "9" * 40
+    treatment_commit = "d" * 40
+
+    command = subject._b3_transition_dwell_child_command(
+        args,
+        "fresh_process_1",
+        source_producer_commit=source_commit,
+        treatment_producer_commit=treatment_commit,
+    )
+
+    assert command[command.index("--b3-transition-source-producer-commit") + 1] == source_commit
+    assert command[command.index("--b3-transition-treatment-producer-commit") + 1] == treatment_commit
+    assert command[command.index("--b3-process-identity") + 1] == "fresh_process_1"
+
+
+def test_transition_dwell_child_validator_rejects_self_hashed_producer_drift() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["source_producer_commit"] = "e" * 39
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(StateModelSetError, match="child receipt is invalid"):
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
 
 
 def test_transition_dwell_parent_fails_closed_on_fresh_process_hash_mismatch(monkeypatch, tmp_path) -> None:
@@ -225,7 +400,13 @@ def test_transition_dwell_parent_fails_closed_on_fresh_process_hash_mismatch(mon
         b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
     )
 
-    authority = {"feature_domain_policy": {"receipt_sha256": "p" * 64}, "inputs": {}}
+    authority = {
+        "producer_commit": "c" * 40,
+        "source_producer_commit": "9" * 40,
+        "treatment_producer_commit": "c" * 40,
+        "feature_domain_policy": {"receipt_sha256": "p" * 64},
+        "inputs": {},
+    }
     closure = {
         "feature_names": tuple(ALL_CORE_FEATURES),
         "preprocess_family": "winsor_zscore_1_99_train_global_v1",
@@ -244,7 +425,7 @@ def test_transition_dwell_parent_fails_closed_on_fresh_process_hash_mismatch(mon
         body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
         child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
     payloads = iter((subject.canonical_json_bytes(first), subject.canonical_json_bytes(second)))
-    monkeypatch.setattr(subject, "_load_b3_formal_train_authority", lambda *args, **kwargs: authority)
+    monkeypatch.setattr(subject, "_load_transition_dwell_train_authority", lambda *args, **kwargs: authority)
     monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
     monkeypatch.setattr(
         subject,
@@ -295,16 +476,19 @@ def _transition_dwell_control_fixture(tmp_path: Path) -> tuple[SimpleNamespace, 
     policy_payload = {"schema_version": "policy_v2", "formula_version": subject.C010_FORMULA_VERSION}
     children: list[dict] = []
     expected = {
+        "source_producer_commit": training["producer_commit"],
         "feature_names": tuple(ALL_CORE_FEATURES),
         "preprocess_family": "winsor_zscore_1_99_train_global_v1",
         "canonical_sector_codes": tuple(codes),
         "canonical_sector_set_sha256": subject.canonical_sha256(codes),
         "authority_keys": {
+            "producer_commit": "d" * 40,
             **source,
+            "feature_domain_policy_sha256": training["feature_domain_policy_sha256"],
             "feature_domain_policy_manifest": {
                 **policy_payload,
                 "control_payload_marker": subject.B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256,
-                "producer_commit": "d" * 40,
+                "producer_commit": training["producer_commit"],
                 "receipt_sha256": "e" * 64,
             },
         },
@@ -339,6 +523,20 @@ def test_transition_dwell_control_authority_closes_before_fit_without_copying_bu
     assert control["control_authority_sha256"] == subject.canonical_sha256(
         {key: value for key, value in control.items() if key != "control_authority_sha256"}
     )
+
+
+def test_transition_dwell_control_authority_rejects_missing_treatment_producer_with_typed_error(
+    monkeypatch, tmp_path
+) -> None:
+    args, expected, training, stability, children = _transition_dwell_control_fixture(tmp_path)
+    del expected["authority_keys"]["producer_commit"]
+    values = iter([{"schema_version": subject.B3_P6_D5_CHECKPOINT_SCHEMA}, stability])
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda *args, **kwargs: next(values))
+    monkeypatch.setattr(subject, "_resolve_p6_zero_refit_training_authority", lambda value: training)
+    monkeypatch.setattr(subject, "validate_b3_train_stability_report", lambda value: None)
+
+    with pytest.raises(StateModelSetError, match="treatment producer authority is invalid"):
+        subject._load_transition_dwell_control_authority(args, expected=expected)
 
 
 @pytest.mark.parametrize("drift", ["source", "policy", "stability"])
@@ -383,8 +581,14 @@ def test_transition_dwell_parent_closes_control_before_spawning_fresh_process(mo
     )
     monkeypatch.setattr(
         subject,
-        "_load_b3_formal_train_authority",
-        lambda *args, **kwargs: {"feature_domain_policy": {"receipt_sha256": "p" * 64}, "inputs": {}},
+        "_load_transition_dwell_train_authority",
+        lambda *args, **kwargs: {
+            "producer_commit": "c" * 40,
+            "source_producer_commit": "9" * 40,
+            "treatment_producer_commit": "c" * 40,
+            "feature_domain_policy": {"receipt_sha256": "p" * 64},
+            "inputs": {},
+        },
     )
     monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: {"authority_keys": {}})
     monkeypatch.setattr(
@@ -425,8 +629,14 @@ def test_transition_dwell_parent_failure_preserves_verified_control_and_truthful
     control = {"control_authority_sha256": "a" * 64}
     monkeypatch.setattr(
         subject,
-        "_load_b3_formal_train_authority",
-        lambda *args, **kwargs: {"feature_domain_policy": {"receipt_sha256": "p" * 64}, "inputs": {}},
+        "_load_transition_dwell_train_authority",
+        lambda *args, **kwargs: {
+            "producer_commit": "c" * 40,
+            "source_producer_commit": "9" * 40,
+            "treatment_producer_commit": "c" * 40,
+            "feature_domain_policy": {"receipt_sha256": "p" * 64},
+            "inputs": {},
+        },
     )
     monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: {"authority_keys": {}})
     monkeypatch.setattr(subject, "_load_transition_dwell_control_authority", lambda *args, **kwargs: control)

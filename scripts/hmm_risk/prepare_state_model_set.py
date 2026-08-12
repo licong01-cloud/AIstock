@@ -2250,15 +2250,37 @@ def _direct_train_series_for_family(
     return {"L1": l1, "L2": _direct_l2_train_series_for_family(inputs, family)}
 
 
-def _load_b3_formal_train_authority(request: dict[str, Any], *, db_prefix: str) -> dict[str, Any]:
+def _load_b3_formal_train_authority(
+    request: dict[str, Any],
+    *,
+    db_prefix: str,
+    expected_source_producer_commit: str | None = None,
+    treatment_producer_commit: str | None = None,
+) -> dict[str, Any]:
     """Load and revalidate the single formal train authority shared by full B3 and P6."""
 
-    producer_commit = _formal_producer_commit()
+    current_commit = _formal_producer_commit()
+    source_producer_commit = str(request.get("producer_commit") or "")
+    if expected_source_producer_commit is None and treatment_producer_commit is None:
+        if source_producer_commit != current_commit:
+            raise StateModelSetError("B3 request producer_commit differs from current code")
+        treatment_producer_commit = current_commit
+    else:
+        if expected_source_producer_commit is None or treatment_producer_commit is None:
+            raise StateModelSetError("B3 split producer authority is incomplete")
+        for label, value in (
+            ("source", expected_source_producer_commit),
+            ("treatment", treatment_producer_commit),
+        ):
+            if len(value) != 40 or any(character not in "0123456789abcdef" for character in value.lower()):
+                raise StateModelSetError(f"B3 {label} producer commit is invalid")
+        if source_producer_commit != expected_source_producer_commit:
+            raise StateModelSetError("B3 request source producer differs from the expected frozen producer")
+        if treatment_producer_commit != current_commit:
+            raise StateModelSetError("B3 treatment producer differs from current code")
     _require_approved_b3_windows(request)
     _require_c010_policy_identity(request)
     _require_formal_train_coverage_identity(request)
-    if str(request.get("producer_commit") or "") != producer_commit:
-        raise StateModelSetError("B3 request producer_commit differs from current code")
     inputs = _load_l1_source_inputs(request, db_prefix=db_prefix, c010_formal=True)
     dataset_hash = canonical_sha256(inputs["dataset_manifest"])
     mapping_hash = canonical_sha256(inputs["mapping_manifest"])
@@ -2269,7 +2291,7 @@ def _load_b3_formal_train_authority(request: dict[str, Any], *, db_prefix: str) 
         raise StateModelSetError("B3 frozen mapping manifest hash mismatch")
     if str(request.get("l2_stock_fact_manifest_hash") or "") != l2_stock_fact_hash:
         raise StateModelSetError("B3 frozen L2 stock-fact manifest hash mismatch")
-    recomputed_policy = _c010_policy_manifest(inputs, request, producer_commit=producer_commit)
+    recomputed_policy = _c010_policy_manifest(inputs, request, producer_commit=source_producer_commit)
     if request["feature_domain_policy_sha256"] != recomputed_policy["receipt_sha256"]:
         raise StateModelSetError("B3 C-010 feature-domain policy hash mismatch")
     if request["feature_domain_policy_manifest"] != recomputed_policy:
@@ -2295,7 +2317,9 @@ def _load_b3_formal_train_authority(request: dict[str, Any], *, db_prefix: str) 
     if family_names != {"legacy_covfix", "autocycle_all_core"} or len(families) != 2:
         raise StateModelSetError("B3 requires exactly legacy_covfix and autocycle_all_core")
     return {
-        "producer_commit": producer_commit,
+        "producer_commit": treatment_producer_commit,
+        "source_producer_commit": source_producer_commit,
+        "treatment_producer_commit": treatment_producer_commit,
         "inputs": inputs,
         "dataset_manifest_hash": dataset_hash,
         "mapping_manifest_hash": mapping_hash,
@@ -2304,6 +2328,25 @@ def _load_b3_formal_train_authority(request: dict[str, Any], *, db_prefix: str) 
         "feature_domain_policy": recomputed_policy,
         "families": families,
     }
+
+
+def _load_transition_dwell_train_authority(
+    request: dict[str, Any],
+    *,
+    db_prefix: str,
+    expected_source_producer_commit: str | None = None,
+    treatment_producer_commit: str | None = None,
+) -> dict[str, Any]:
+    """Load immutable source evidence while binding models to current treatment code."""
+
+    source_commit = str(expected_source_producer_commit or request.get("producer_commit") or "")
+    treatment_commit = str(treatment_producer_commit or _formal_producer_commit())
+    return _load_b3_formal_train_authority(
+        request,
+        db_prefix=db_prefix,
+        expected_source_producer_commit=source_commit,
+        treatment_producer_commit=treatment_commit,
+    )
 
 
 def prepare_b3_single_pass(
@@ -2434,12 +2477,19 @@ def prepare_b3_transition_dwell_single_pass(
     *,
     db_prefix: str,
     process_identity: str,
+    source_producer_commit: str,
+    treatment_producer_commit: str,
 ) -> dict[str, Any]:
     """Run one exact no-selection TRANSITION-DWELL-B fresh-process grid."""
 
     if process_identity not in {"fresh_process_1", "fresh_process_2"}:
         raise StateModelSetError("TRANSITION-DWELL-B child process identity is invalid")
-    authority = _load_b3_formal_train_authority(request, db_prefix=db_prefix)
+    authority = _load_transition_dwell_train_authority(
+        request,
+        db_prefix=db_prefix,
+        expected_source_producer_commit=source_producer_commit,
+        treatment_producer_commit=treatment_producer_commit,
+    )
     family_map = {str(item["family"]): item for item in authority["families"]}
     family = family_map[B3_P6_FAMILY]
     feature_names = tuple(str(value) for value in family.get("feature_names") or ())
@@ -2517,6 +2567,8 @@ def prepare_b3_transition_dwell_single_pass(
         "schema_version": B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA,
         "contract_version": B3_TRANSITION_DWELL_CONTRACT,
         "producer_commit": authority["producer_commit"],
+        "source_producer_commit": authority["source_producer_commit"],
+        "treatment_producer_commit": authority["treatment_producer_commit"],
         "process_identity": process_identity,
         "target_family": B3_P6_FAMILY,
         "target_level": B3_P6_LEVEL,
@@ -2529,6 +2581,9 @@ def prepare_b3_transition_dwell_single_pass(
         "calendar_manifest_hash": authority["calendar_manifest_hash"],
         "l2_stock_fact_manifest_hash": authority["l2_stock_fact_manifest_hash"],
         "feature_domain_policy_sha256": policy["receipt_sha256"],
+        "feature_domain_policy_manifest": policy,
+        "provider_absence_partition_receipt": policy["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": policy["provider_absence_partition_receipt_sha256"],
         "formula_version": C010_FORMULA_VERSION,
         "level_repeat": repeat,
         "profile_count": len(profiles),
@@ -2547,7 +2602,13 @@ def prepare_b3_transition_dwell_single_pass(
     return {**body, "single_pass_receipt_sha256": canonical_sha256(body)}
 
 
-def _b3_transition_dwell_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
+def _b3_transition_dwell_child_command(
+    args: argparse.Namespace,
+    process_identity: str,
+    *,
+    source_producer_commit: str,
+    treatment_producer_commit: str,
+) -> list[str]:
     return [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -2562,6 +2623,10 @@ def _b3_transition_dwell_child_command(args: argparse.Namespace, process_identit
         "--_b3-transition-dwell-child",
         "--b3-process-identity",
         process_identity,
+        "--b3-transition-source-producer-commit",
+        source_producer_commit,
+        "--b3-transition-treatment-producer-commit",
+        treatment_producer_commit,
     ]
 
 
@@ -2577,6 +2642,13 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
         value.get("schema_version") != B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA
         or value.get("contract_version") != B3_TRANSITION_DWELL_CONTRACT
         or value.get("process_identity") != process_identity
+        or value.get("producer_commit") != value.get("treatment_producer_commit")
+        or not isinstance(value.get("source_producer_commit"), str)
+        or len(value["source_producer_commit"]) != 40
+        or any(character not in "0123456789abcdef" for character in value["source_producer_commit"].lower())
+        or not isinstance(value.get("treatment_producer_commit"), str)
+        or len(value["treatment_producer_commit"]) != 40
+        or any(character not in "0123456789abcdef" for character in value["treatment_producer_commit"].lower())
         or value.get("planned_fit_count") != 1048
         or value.get("terminal_entry_count") != 1048
         or value.get("profile_count") != 1048
@@ -2662,6 +2734,17 @@ def _load_transition_dwell_control_authority(
     if len(child_hashes) != 2:
         raise StateModelSetError("TRANSITION-DWELL-B P6 control child lineage is incomplete")
     training_producer = str(training_authority.get("producer_commit") or "")
+    expected_source_producer = str(expected.get("source_producer_commit") or "")
+    expected_treatment_producer = str((expected.get("authority_keys") or {}).get("producer_commit") or "")
+    if training_producer != expected_source_producer:
+        raise StateModelSetError("TRANSITION-DWELL-B frozen source producer differs from the P6 control")
+    expected_policy_identity = str((expected.get("authority_keys") or {}).get("feature_domain_policy_sha256") or "")
+    if expected_policy_identity != str(training_authority.get("feature_domain_policy_sha256") or ""):
+        raise StateModelSetError("TRANSITION-DWELL-B frozen policy identity differs from the P6 control")
+    if len(expected_treatment_producer) != 40 or any(
+        character not in "0123456789abcdef" for character in expected_treatment_producer.lower()
+    ):
+        raise StateModelSetError("TRANSITION-DWELL-B treatment producer authority is invalid")
     current_policy = expected_keys.get("feature_domain_policy_manifest")
     if not isinstance(current_policy, Mapping) or (
         _transition_dwell_policy_payload_sha256(current_policy) != B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256
@@ -2671,6 +2754,8 @@ def _load_transition_dwell_control_authority(
         "p6_checkpoint_path": str(parent_path),
         "p6_checkpoint_receipt_sha256": training_authority["receipt_sha256"],
         "p6_control_producer_commit": training_producer,
+        "source_producer_commit": expected_source_producer,
+        "treatment_producer_commit": expected_treatment_producer,
         "fresh_process_receipt_hashes": list(child_hashes),
         "train_stability_report_path": str(stability_path),
         "train_stability_report_sha256": canonical_sha256(stability),
@@ -2691,9 +2776,10 @@ def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str
     """Run both fresh processes and emit only compact, no-selection parent evidence."""
 
     try:
-        authority = _load_b3_formal_train_authority(request, db_prefix=str(args.db_env_prefix))
+        authority = _load_transition_dwell_train_authority(request, db_prefix=str(args.db_env_prefix))
         policy = authority["feature_domain_policy"]
         expected = _b3_p6_closure_from_inputs(authority["inputs"], request, policy=policy)
+        expected["source_producer_commit"] = authority["source_producer_commit"]
         control_authority = _load_transition_dwell_control_authority(args, expected=expected)
     except (StateModelSetError, OSError, ValueError) as exc:
         body = {
@@ -2727,7 +2813,12 @@ def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str
     child_receipts: list[dict[str, Any]] = []
     for process_identity in ("fresh_process_1", "fresh_process_2"):
         completed = subprocess.run(
-            _b3_transition_dwell_child_command(args, process_identity),
+            _b3_transition_dwell_child_command(
+                args,
+                process_identity,
+                source_producer_commit=authority["source_producer_commit"],
+                treatment_producer_commit=authority["treatment_producer_commit"],
+            ),
             check=False,
             capture_output=True,
         )
@@ -2760,6 +2851,13 @@ def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str
         if not isinstance(child, dict) or canonical_json_bytes(child) != completed.stdout:
             raise StateModelSetError(f"TRANSITION-DWELL-B {process_identity} did not return one canonical JSON object")
         _validate_transition_dwell_child(child, process_identity=process_identity)
+        if (
+            child.get("source_producer_commit") != authority["source_producer_commit"]
+            or child.get("treatment_producer_commit") != authority["treatment_producer_commit"]
+        ):
+            raise StateModelSetError(
+                f"TRANSITION-DWELL-B child producer authority drifted from parent: {process_identity}"
+            )
         repeat = child["level_repeat"]
         expected_keys = expected["authority_keys"]
         if any(child.get(key) != value for key, value in expected_keys.items()):
@@ -5965,6 +6063,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--_b3-d1-controlled-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-transition-dwell-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--b3-process-identity", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--b3-transition-source-producer-commit", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--b3-transition-treatment-producer-commit", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-d1-producer-commit", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-d1-current-authority-sha256", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-d1-historical-reference-sha256", default="", help=argparse.SUPPRESS)
@@ -6045,6 +6145,12 @@ def main() -> int:
         train_stability = bool(train_stability_output)
         transition_dwell_parent = bool(transition_dwell_output)
         transition_dwell_child = bool(getattr(args, "_b3_transition_dwell_child", False))
+        transition_source_producer = str(getattr(args, "b3_transition_source_producer_commit", "") or "")
+        transition_treatment_producer = str(getattr(args, "b3_transition_treatment_producer_commit", "") or "")
+        if not transition_dwell_child and (transition_source_producer or transition_treatment_producer):
+            raise StateModelSetError(
+                "TRANSITION-DWELL-B producer identities are only valid for its fresh-process child"
+            )
         if transition_dwell_control_report and not transition_dwell_parent:
             raise StateModelSetError(
                 "--b3-transition-dwell-control-report is only valid with --b3-transition-dwell-output"
@@ -6071,6 +6177,8 @@ def main() -> int:
                 raise StateModelSetError("TRANSITION-DWELL-B child process identity is invalid")
             if transition_dwell_parent and args.b3_process_identity:
                 raise StateModelSetError("TRANSITION-DWELL-B parent must not declare a process identity")
+            if transition_dwell_child and (not transition_source_producer or not transition_treatment_producer):
+                raise StateModelSetError("TRANSITION-DWELL-B child producer identities are required")
             if transition_dwell_parent and (not p6_parent_report or not transition_dwell_control_report):
                 raise StateModelSetError(
                     "--b3-p6-parent-report and --b3-transition-dwell-control-report are required for TRANSITION-DWELL-B"
@@ -6243,6 +6351,8 @@ def main() -> int:
                 request,
                 db_prefix=str(args.db_env_prefix),
                 process_identity=str(args.b3_process_identity),
+                source_producer_commit=transition_source_producer,
+                treatment_producer_commit=transition_treatment_producer,
             )
             sys.stdout.buffer.write(canonical_json_bytes(report))
             return 0
