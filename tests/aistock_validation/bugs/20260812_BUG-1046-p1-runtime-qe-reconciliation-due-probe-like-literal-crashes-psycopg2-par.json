@@ -116,7 +116,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Python process imported QEReconciliationCoordinator from tracked source, verified the escaped LIKE percent survives pyformat binding as the original qelt:% PostgreSQL pattern, printed fresh-process-ok, and exited 0 without database or process control"
+      "Fresh Python process imported QEReconciliationCoordinator from tracked source, verified the escaped LIKE percent survives pyformat binding as the original qelt:% PostgreSQL pattern, printed fresh-process-ok, and exited 0 without database or process control",
+      "Final code HEAD 510e26904d880740f6539bba6dbc5eb9916fcd55 fresh Python process imported QEReconciliationCoordinator, verified escaped LIKE percent survives pyformat binding as the original qelt:% PostgreSQL pattern, printed fresh-process-ok, and exited 0 without database or process control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
