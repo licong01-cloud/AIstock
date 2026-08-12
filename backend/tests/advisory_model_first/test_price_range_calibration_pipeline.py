@@ -59,7 +59,9 @@ def test_pipeline_freezes_validation_spec_before_test_labels_are_read(
 
     monkeypatch.setattr(pipeline, "_verify_environment", lambda _request: None)
     monkeypatch.setattr(pipeline, "read_price_range_bundle_manifest", lambda *_a, **_k: {})
-    monkeypatch.setattr(pipeline, "_validate_request", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        pipeline, "_validate_request", lambda *_a, **_k: {"validation": 0, "test": 0}
+    )
     monkeypatch.setattr(pipeline, "_validate_descriptor", lambda _descriptor: None)
     monkeypatch.setattr(pipeline, "_read_bound_parquet", lambda _descriptor: features)
     monkeypatch.setattr(pipeline, "_read_json", lambda path: {} if path.name == "feature_schema.json" else pipeline.json.loads(path.read_text()))
@@ -80,17 +82,49 @@ def test_pipeline_freezes_validation_spec_before_test_labels_are_read(
     assert receipt["metrics"]["test"]["row_count"] == 1
 
 
-def test_projection_rejects_non_validation_contamination_and_missing_features() -> None:
-    feature = pd.DataFrame([{"decision_as_of_trade_date": "2026-01-02", "target_trade_date": "2026-01-03", "instrument": "000001.SZ"}])
+def test_projection_rejects_contamination_and_reports_parent_compatible_coverage() -> None:
+    feature = pd.DataFrame(
+        [
+            {
+                "decision_as_of_trade_date": "2026-01-02",
+                "target_trade_date": "2026-01-03",
+                "instrument": "000001.SZ",
+            }
+        ]
+    )
     wrong = pd.DataFrame([{**feature.iloc[0].to_dict(), "split": "test", "gap_modelable": True, "entry_gap_return": 0.01}])
     with pytest.raises(AdvisoryModelFirstError) as contaminated:
         pipeline._project(features=feature, labels=wrong, split="validation")
     assert contaminated.value.reason_code == "ADVISORY_PRICE_RANGE_CALIBRATION_PROJECTION_INVALID"
 
-    missing = pd.DataFrame([{"decision_as_of_trade_date": "2026-01-04", "target_trade_date": "2026-01-05", "instrument": "000002.SZ", "split": "validation", "gap_modelable": True, "entry_gap_return": 0.01}])
-    with pytest.raises(AdvisoryModelFirstError) as no_feature:
-        pipeline._project(features=feature, labels=missing, split="validation")
-    assert no_feature.value.reason_code == "ADVISORY_PRICE_RANGE_CALIBRATION_PROJECTION_INVALID"
+    missing = {
+        "decision_as_of_trade_date": "2026-01-04",
+        "target_trade_date": "2026-01-05",
+        "instrument": "000002.SZ",
+        "split": "validation",
+        "gap_modelable": True,
+        "entry_gap_return": 0.01,
+    }
+    covered, report = pipeline._project(
+        features=feature,
+        labels=pd.DataFrame(
+            [{**feature.iloc[0].to_dict(), "split": "validation", "gap_modelable": True, "entry_gap_return": 0.02}, missing]
+        ),
+        split="validation",
+    )
+    assert len(covered) == 1
+    assert report == {
+        "eligible_row_count": 2,
+        "feature_covered_row_count": 1,
+        "feature_unavailable_row_count": 1,
+    }
+    with pytest.raises(AdvisoryModelFirstError) as test_missing:
+        pipeline._project(
+            features=feature,
+            labels=pd.DataFrame([{**missing, "split": "test"}]),
+            split="test",
+        )
+    assert test_missing.value.reason_code == "ADVISORY_PRICE_RANGE_CALIBRATION_PROJECTION_INVALID"
 
     invalid_boolean = wrong.copy()
     invalid_boolean["split"] = "validation"

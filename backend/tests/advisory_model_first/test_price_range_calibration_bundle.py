@@ -64,6 +64,7 @@ def test_m5c_bundle_is_atomic_exact_parent_model_preserving_and_tamper_evident(t
         "row_count": 10, "finite_sample_rank": 9, "delta": 0.01,
         "validation_projection_hash": "4" * 64, "validation_raw_quantile_crossing_count": 0,
         "validation_metrics": {"row_count": 10}, "entry_executable_calibration_state": "UNCALIBRATED",
+        "validation_feature_coverage": {"eligible_row_count": 10, "feature_covered_row_count": 10, "feature_unavailable_row_count": 0},
         "entry_executable_reason_code": "ADVISORY_PRICE_RANGE_LABEL_VARIATION_MISSING",
     }
     spec_path = tmp_path / "spec.json"

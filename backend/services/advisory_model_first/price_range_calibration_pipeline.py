@@ -51,14 +51,21 @@ def run_price_range_calibration_pipeline(request_path: str | Path) -> dict[str, 
     parent_manifest = read_price_range_bundle_manifest(
         parent_root, expected_bundle_id=request.parent_price_range_bundle_id
     )
-    _validate_request(request, parent_root, parent_manifest)
+    parent_missing_by_split = _validate_request(request, parent_root, parent_manifest)
     features = _read_bound_parquet(request.features_artifact)
     _validate_descriptor(request.price_range_labels_artifact)
     schema = _read_json(parent_root / "feature_schema.json")
     models = _load_parent_quantile_models(parent_root)
 
     validation = _read_split_labels(request.price_range_labels_artifact.path, "validation")
-    validation_merged = _project(features=features, labels=validation, split="validation")
+    validation_merged, validation_coverage = _project(
+        features=features, labels=validation, split="validation"
+    )
+    _validate_parent_coverage(
+        split="validation",
+        report=validation_coverage,
+        expected_missing=parent_missing_by_split["validation"],
+    )
     validation_matrix = _prepare_matrix_from_schema(validation_merged, feature_schema=schema)
     validation_raw = _predict_triplet(models, validation_matrix)
     truth = pd.to_numeric(validation_merged["entry_gap_return"], errors="raise").to_numpy()
@@ -85,6 +92,7 @@ def run_price_range_calibration_pipeline(request_path: str | Path) -> dict[str, 
         "validation_projection_hash": _projection_hash(validation_merged.loc[:, list(KEYS)]),
         "validation_raw_quantile_crossing_count": raw_crossing,
         "validation_metrics": fitted["validation_metrics"],
+        "validation_feature_coverage": validation_coverage,
         "entry_executable_calibration_state": "UNCALIBRATED",
         "entry_executable_reason_code": "ADVISORY_PRICE_RANGE_LABEL_VARIATION_MISSING",
     }
@@ -98,7 +106,12 @@ def run_price_range_calibration_pipeline(request_path: str | Path) -> dict[str, 
     gc.collect()
     # Test labels are intentionally unreachable until the validation spec is durable and read back.
     test = _read_split_labels(request.price_range_labels_artifact.path, "test")
-    test_merged = _project(features=features, labels=test, split="test")
+    test_merged, test_coverage = _project(features=features, labels=test, split="test")
+    _validate_parent_coverage(
+        split="test",
+        report=test_coverage,
+        expected_missing=parent_missing_by_split["test"],
+    )
     test_matrix = _prepare_matrix_from_schema(test_merged, feature_schema=schema)
     test_raw = _predict_triplet(models, test_matrix)
     test_truth = pd.to_numeric(test_merged["entry_gap_return"], errors="raise").to_numpy()
@@ -119,6 +132,10 @@ def run_price_range_calibration_pipeline(request_path: str | Path) -> dict[str, 
         "calibration_spec_sha256": sha256_file(spec_path),
         "validation": validation_metrics,
         "test": test_metrics,
+        "feature_coverage": {
+            "validation": validation_coverage,
+            "test": test_coverage,
+        },
         "activation_recommended": bool(
             test_metrics["calibrated_coverage_absolute_error"]
             < test_metrics["raw_coverage_absolute_error"]
@@ -184,7 +201,9 @@ def run_price_range_calibration_pipeline(request_path: str | Path) -> dict[str, 
     return receipt
 
 
-def _project(*, features: pd.DataFrame, labels: pd.DataFrame, split: str) -> pd.DataFrame:
+def _project(
+    *, features: pd.DataFrame, labels: pd.DataFrame, split: str
+) -> tuple[pd.DataFrame, dict[str, int]]:
     if set(labels["split"].astype(str)) != {split}:
         raise pipeline_error("M5C label projection has the wrong split", split=split)
     if not pd.api.types.is_bool_dtype(labels["gap_modelable"].dtype) or labels[
@@ -196,12 +215,32 @@ def _project(*, features: pd.DataFrame, labels: pd.DataFrame, split: str) -> pd.
     if labels.empty or labels["entry_gap_return"].isna().any():
         raise pipeline_error("M5C executable entry-gap projection is empty or invalid", split=split)
     try:
-        merged = features.merge(labels, on=list(KEYS), how="inner", validate="one_to_one")
+        coverage = labels.merge(
+            features.loc[:, list(KEYS)],
+            on=list(KEYS),
+            how="left",
+            validate="one_to_one",
+            indicator=True,
+        )
     except pd.errors.MergeError as exc:
         raise pipeline_error("M5C feature and label identities are not one-to-one", split=split) from exc
-    if len(merged) != len(labels) or set(merged["split"].astype(str)) != {split}:
-        raise pipeline_error("M5C feature-covered projection lost eligible rows", split=split)
-    return merged
+    missing_count = int(coverage["_merge"].eq("left_only").sum())
+    if split == "test" and missing_count:
+        raise pipeline_error(
+            "M5C test projection has feature-unavailable eligible rows",
+            split=split,
+            missing_feature_rows=missing_count,
+        )
+    covered_labels = coverage.loc[coverage["_merge"].eq("both")].drop(columns="_merge")
+    merged = features.merge(covered_labels, on=list(KEYS), how="inner", validate="one_to_one")
+    if merged.empty or set(merged["split"].astype(str)) != {split}:
+        raise pipeline_error("M5C feature-covered projection is empty or contaminated", split=split)
+    report = {
+        "eligible_row_count": int(len(labels)),
+        "feature_covered_row_count": int(len(merged)),
+        "feature_unavailable_row_count": missing_count,
+    }
+    return merged, report
 
 
 def _evaluate(*, merged, raw, truth, delta):
@@ -246,7 +285,7 @@ def _load_parent_quantile_models(root: Path) -> dict[str, Any]:
         raise pipeline_error("M5C parent quantile model cannot be loaded", error_type=type(exc).__name__) from exc
 
 
-def _validate_request(request, root: Path, manifest: Mapping[str, Any]) -> None:
+def _validate_request(request, root: Path, manifest: Mapping[str, Any]) -> dict[str, int]:
     expected = {
         "schema_version": "advisory_price_range_bundle_v1", "calibration_state": "UNCALIBRATED",
         "request_id": request.parent_price_range_request_id, "request_sha256": request.parent_price_range_request_sha256,
@@ -279,8 +318,45 @@ def _validate_request(request, root: Path, manifest: Mapping[str, Any]) -> None:
             "M5C labels do not come from the exact parent M4 run",
             reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
         )
+    parent_metrics = _read_json(root / "metrics.json")
+    missing_by_split = parent_metrics.get("feature_unavailable_rows_by_split")
+    if not isinstance(missing_by_split, dict):
+        raise AdvisoryModelFirstError(
+            "M5C parent M4 feature coverage contract is unavailable",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+        )
+    try:
+        normalized_missing = {
+            split: int(missing_by_split[split]) for split in ("validation", "test")
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AdvisoryModelFirstError(
+            "M5C parent M4 feature coverage values are invalid",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+        ) from exc
+    if any(value < 0 for value in normalized_missing.values()):
+        raise AdvisoryModelFirstError(
+            "M5C parent M4 feature coverage values are negative",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+        )
     _validate_descriptor(request.features_artifact)
     _validate_descriptor(request.price_range_labels_artifact)
+    return normalized_missing
+
+
+def _validate_parent_coverage(
+    *, split: str, report: Mapping[str, int], expected_missing: int
+) -> None:
+    if report["feature_unavailable_row_count"] != expected_missing:
+        raise AdvisoryModelFirstError(
+            "M5C feature coverage differs from the parent M4 contract",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+            context={
+                "split": split,
+                "expected_missing": expected_missing,
+                "actual_missing": report["feature_unavailable_row_count"],
+            },
+        )
 
 
 def _read_bound_parquet(descriptor) -> pd.DataFrame:

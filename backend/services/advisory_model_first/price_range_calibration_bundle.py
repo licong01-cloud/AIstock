@@ -246,6 +246,7 @@ def _validate_spec(spec: Mapping[str, Any], *, request) -> None:
     row_count = spec.get("row_count")
     rank = spec.get("finite_sample_rank")
     validation_metrics = spec.get("validation_metrics")
+    validation_coverage = spec.get("validation_feature_coverage")
     if (
         spec.get("schema_version") != "advisory_price_range_calibration_spec_v1"
         or spec.get("request_id") != request.request_id
@@ -265,6 +266,12 @@ def _validate_spec(spec: Mapping[str, Any], *, request) -> None:
         or spec["validation_raw_quantile_crossing_count"] < 0
         or not isinstance(validation_metrics, dict)
         or validation_metrics.get("row_count") != row_count
+        or not isinstance(validation_coverage, dict)
+        or validation_coverage.get("feature_covered_row_count") != row_count
+        or not isinstance(validation_coverage.get("eligible_row_count"), int)
+        or not isinstance(validation_coverage.get("feature_unavailable_row_count"), int)
+        or validation_coverage["eligible_row_count"]
+        != row_count + validation_coverage["feature_unavailable_row_count"]
         or not isinstance(delta, (int, float))
         or not math.isfinite(float(delta))
         or float(delta) < 0
