@@ -43,6 +43,41 @@ def test_platt_calibration_preserves_raw_identity_and_produces_finite_parameters
     assert result.validation_metrics["calibrated"]["ece_10_bin"]["bin_count"] == 10
 
 
+def test_platt_uses_the_frozen_unregularized_solver_contract(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Estimator:
+        coef_ = np.asarray([[1.0]])
+        intercept_ = np.asarray([0.0])
+        n_iter_ = np.asarray([1])
+
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def fit(self, _matrix, _truth) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "backend.services.advisory_model_first.outcome_calibration.LogisticRegression",
+        _Estimator,
+    )
+    margin = np.asarray([-1.0, 0.0, 1.0])
+    fit_platt_calibrator(
+        head="positive_excess_h1",
+        raw_margin=margin,
+        raw_probability=1.0 / (1.0 + np.exp(-margin)),
+        truth=np.asarray([0, 0, 1]),
+    )
+
+    assert captured == {
+        "penalty": None,
+        "solver": "lbfgs",
+        "fit_intercept": True,
+        "max_iter": 1000,
+        "random_state": 20260812,
+    }
+
+
 def test_platt_single_class_is_explicitly_uncalibrated_without_constant_substitute() -> None:
     result = fit_platt_calibrator(
         head="signal_survival_h1",

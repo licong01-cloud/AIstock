@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -70,21 +69,13 @@ def fit_platt_calibrator(
         )
     try:
         estimator = LogisticRegression(
-            C=np.inf,
-            l1_ratio=0.0,
+            penalty=None,
             solver="lbfgs",
             fit_intercept=True,
             max_iter=1000,
             random_state=20260812,
         )
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Setting penalty=None will ignore the C and l1_ratio parameters",
-                category=UserWarning,
-                module=r"sklearn\.linear_model\._logistic",
-            )
-            estimator.fit(margin.reshape(-1, 1), actual)
+        estimator.fit(margin.reshape(-1, 1), actual)
     except Exception as exc:
         raise AdvisoryModelFirstError(
             "Platt probability calibration failed",
