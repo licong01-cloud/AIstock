@@ -164,7 +164,7 @@ Current implementation acceptance is candidate-only and fixture-scoped:
 
 ```text
 source_state=source_ready_fixture_verified
-platform_hard_cap_evidence=pending
+platform_hard_cap_evidence=fixture_platform_verified_real_full_pending
 runtime_real_data_evidence=not_run_not_authorized
 real_full_scale_performance=pending
 production_activation=not_requested

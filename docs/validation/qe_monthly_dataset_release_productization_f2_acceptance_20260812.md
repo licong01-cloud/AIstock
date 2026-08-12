@@ -17,7 +17,9 @@
 python -m pytest -q backend/tests/dataset_release backend/tests/routers/test_dataset_releases.py backend/tests/scripts/test_update_backtest_dataset_monthly.py backend/tests/scripts/test_export_qe_qlib_candidate.py backend/tests/scripts/test_dataset_release_source_stage.py backend/tests/scripts/test_dataset_release_source_recheck.py backend/tests/scripts/test_dataset_release_build_stage.py backend/tests/test_deps_dataset_release.py
 ```
 
-结果：`742 passed, 5 skipped, 0 failed`。5 个 skip 均为条件/平台分支；Windows junction 与 Windows+WSL 实际 smoke 另有通过证据。168 个 warning 仅来自测试 fixture 逐列构造 DataFrame。
+结果：`743 passed, 5 skipped, 0 failed`。5 个 skip 均为条件/平台分支；Windows junction 与 Windows+WSL 实际 smoke 另有通过证据。168 个 warning 仅来自测试 fixture 逐列构造 DataFrame。
+
+该全量隔离回归绑定本任务代码与当时最新主线合并后的本地 HEAD `9a62788bf88440e3431fed208f2405d6891f94f0`。随后热合并的主线仅包含任务范围外变更；最终源码合入不得仅复用该历史 HEAD receipt，必须同时满足：当前分支 clean、F2 validator/最小门禁在最终本地 HEAD 通过、PR `headRefOid` 等于最终推送 HEAD、required checks 的 `head_sha` 与该 HEAD 一致且全绿。最终 merge SHA 由 GitHub merge readback 单独记录。
 
 ### DR-F2-20260812-02 — isolated target-platform smoke
 
@@ -83,7 +85,7 @@ python -m pytest -q backend/tests/test_validation_module_ownership.py backend/te
 | F-027 | .codex/skills/update-backtest-dataset/SKILL.md; docs/operations/qe_backtest_dataset_monthly_update_runbook.md | validation-receipt: DR-F2-20260812-03; backend/tests/scripts/test_update_backtest_dataset_monthly.py | verified | - |
 | F-028 | backend/services/dataset_release/index_contract.py; candidate_validator.py | validation-receipt: DR-F2-20260812-01; backend/tests/dataset_release/test_candidate_validator.py | verified | - |
 | F-029 | backend/services/dataset_release/performance.py; synthetic_benchmark.py | validation-receipt: DR-F2-20260812-01; backend/tests/dataset_release/test_performance.py | approved_by_user | 用户明确批准: 本轮禁止真实导出，真实 full-scale 性能延后到获授权月更；synthetic gate 已验证 |
-| F-030 | docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md | validation-receipt: DR-F2-20260812-01; backend/tests/dataset_release/test_build_stage.py | verified | - |
+| F-030 | docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md | validation-receipt: DR-F2-20260812-01..04; final-head F2/minimal gate; PR #3310 head/check/merge readback | verified_source_review | - |
 | F-031 | backend/services/dataset_release/component_artifact_manifest.py; canonical_lineage.py | validation-receipt: DR-F2-20260812-01; backend/tests/dataset_release/test_canonical_lineage.py | verified | - |
 
 ## DESIGN-COMPLIANCE-001 readback
