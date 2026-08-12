@@ -46,6 +46,15 @@ def test_successor_preflight_is_read_only_and_retains_historical_tick_rows() -> 
     assert "event_type<>'TICK'" in sql
     assert "Historical KERNEL_V2 TICK rows are explicitly preserved read-only" in sql
     assert "apply the exact BUG-1019 event-contract repair first" in sql
+    for expected_sha256 in (
+        "836b7f7ebf14ee61ec94c9df82b300b42c96ff1046de0a2e0cfb8bc0f400642d",
+        "a1b188a1431066f2e8f2d0d51107b8c0532830ca7b88567ba1903c4b3999a3d0",
+        "6ac3041d989166511127ec22d9379dd0ecdc09fb5055e72006100319026a6f24",
+        "c2f8e672b140ec88f667e251bbb5ff812cd0bea2a24f31c45d74c3f8d32eb881",
+        "4a2d33d3fc75a4b468661e1bdbf2ecce9cd13aaab491c7c4d7605a1df3af3857",
+        "888bebaf7d9540ecadae15bfb7d2944db59177b4ed2ef5e8beb231b803f9faca",
+    ):
+        assert expected_sha256 in sql
 
 
 def test_guarded_rollback_never_restores_durable_tick_writer() -> None:
@@ -54,6 +63,8 @@ def test_guarded_rollback_never_restores_durable_tick_writer() -> None:
     assert "ck_miniqmt_no_new_kernel_tick" in sql
     assert "ADD CONSTRAINT" not in sql
     assert "DROP CONSTRAINT" not in sql
+    assert "9dd2d0274fe18ad4ab487f006e420e6f11b806818cd876ebabf3d3f286cc4bed" in sql
+    assert "position(" not in sql
 
 
 def test_no_successor_artifact_guesses_nonexistent_diagnostic_columns() -> None:

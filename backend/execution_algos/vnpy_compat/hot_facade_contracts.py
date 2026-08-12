@@ -199,7 +199,18 @@ def _manifest(base: ExecutionAlgoPluginManifestV2) -> ExecutionAlgoPluginManifes
     )
     schema = _state_schema(base.algo_code)
     subscriptions = tuple(
-        sorted({*base.subscribed_event_types, EventTypeV2.OPERATOR, EventTypeV2.TICK}, key=lambda item: item.value)
+        sorted(
+            {
+                *base.subscribed_event_types,
+                EventTypeV2.COMMAND_OUTCOME,
+                EventTypeV2.EOD,
+                EventTypeV2.OPERATOR,
+                EventTypeV2.RECONCILE,
+                EventTypeV2.SESSION,
+                EventTypeV2.TICK,
+            },
+            key=lambda item: item.value,
+        )
     )
     canonical = base.canonical_payload_v1(exclude={"manifest_sha256", "behavior_contract_sha256"})
     canonical.update(

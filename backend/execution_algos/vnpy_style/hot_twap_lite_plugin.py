@@ -118,6 +118,8 @@ class TwapLiteMiniQMTPluginV4(CurrentThreeHotPluginBaseV4):
 
 class TwapLiteHotTargetV4(CurrentThreeHotTargetV4):
     def evaluate_hot_market_data_v1(self, view: HotMarketDataViewV1) -> HotMarketDataEconomicEffectV1 | None:
+        if not self._is_continuous_market_v1(view):
+            return None
         state = self._state()
         if not state["slice_ready"]:
             return None

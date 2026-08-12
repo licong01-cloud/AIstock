@@ -11,8 +11,8 @@ BEGIN
     IF definition IS NULL THEN
         RAISE EXCEPTION 'BUG-1041 rollback: successor composite is absent';
     END IF;
-    IF position('event_type <> ''TICK''' in definition)=0
-       OR position('event_contract_version <> ''KERNEL_V2''' in definition)=0 THEN
+    IF encode(sha256(convert_to(definition,'UTF8')),'hex')<>
+       '9dd2d0274fe18ad4ab487f006e420e6f11b806818cd876ebabf3d3f286cc4bed' THEN
         RAISE EXCEPTION 'BUG-1041 rollback: no-TICK successor identity drift';
     END IF;
     RAISE NOTICE 'BUG-1041 rollback is a safe no-op; ordinary market-data persistence remains retired';

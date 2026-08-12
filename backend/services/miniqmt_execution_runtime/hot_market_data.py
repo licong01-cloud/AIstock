@@ -46,6 +46,15 @@ class HotMarketDataIngressError(RuntimeError):
         super().__init__(message)
 
 
+class HotMarketDataEffectTerminalError(RuntimeError):
+    """An economic effect reached a durable terminal failure and must not retry."""
+
+    def __init__(self, reason_code: str, message: str, *, context: dict[str, Any]) -> None:
+        self.reason_code = reason_code
+        self.context = context
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class HotMarketDataIngressReceiptV1:
     disposition: HotMarketDataDispositionV1
@@ -122,6 +131,14 @@ class HotMarketDataIngressV1:
                 sorted(target.algo_instance_id for targets in self._targets_by_symbol.values() for target in targets)
             )
 
+    def _isolate_target_locked_v1(self, *, symbol: str, algo_instance_id: str) -> None:
+        targets = self._targets_by_symbol.get(symbol, ())
+        retained = tuple(target for target in targets if target.algo_instance_id != algo_instance_id)
+        if retained:
+            self._targets_by_symbol[symbol] = retained
+        else:
+            self._targets_by_symbol.pop(symbol, None)
+
     def ingest_v1(self, view: HotMarketDataViewV1) -> HotMarketDataIngressReceiptV1:
         if not isinstance(view, HotMarketDataViewV1):
             raise TypeError("view must be HotMarketDataViewV1")
@@ -176,8 +193,24 @@ class HotMarketDataIngressV1:
                     )
                 try:
                     readback = self.effect_committer(effect)
-                    target.accept_committed_effect_v1(effect, readback)
                 except Exception as exc:
+                    if isinstance(exc, HotMarketDataEffectTerminalError):
+                        self._isolate_target_locked_v1(
+                            symbol=view.symbol,
+                            algo_instance_id=target.algo_instance_id,
+                        )
+                        raise HotMarketDataIngressError(
+                            exc.reason_code,
+                            "hot economic effect closed as a durable terminal failure",
+                            context={
+                                **exc.context,
+                                "runtime_id": self.runtime_id,
+                                "algo_instance_id": target.algo_instance_id,
+                                "effect_identity": effect.effect_identity,
+                                "broker_called": False,
+                                "retryable": False,
+                            },
+                        ) from exc
                     self._pending_by_algo[target.algo_instance_id] = _PendingHotMarketEffectV1(
                         effect=effect,
                         target=target,
@@ -192,6 +225,26 @@ class HotMarketDataIngressV1:
                             "algo_instance_id": target.algo_instance_id,
                             "effect_identity": effect.effect_identity,
                             "broker_called": False,
+                            "exception_type": type(exc).__name__,
+                            "exception_message": _safe_exception_message(exc),
+                        },
+                    ) from exc
+                try:
+                    target.accept_committed_effect_v1(effect, readback)
+                except Exception as exc:
+                    self._isolate_target_locked_v1(
+                        symbol=view.symbol,
+                        algo_instance_id=target.algo_instance_id,
+                    )
+                    raise HotMarketDataIngressError(
+                        "MINIQMT_HOT_MARKET_EFFECT_COMMIT_ACK_INVALID",
+                        "committed hot economic effect failed exact successor acknowledgement",
+                        context={
+                            "runtime_id": self.runtime_id,
+                            "algo_instance_id": target.algo_instance_id,
+                            "effect_identity": effect.effect_identity,
+                            "broker_called": False,
+                            "retryable": False,
                             "exception_type": type(exc).__name__,
                             "exception_message": _safe_exception_message(exc),
                         },
@@ -226,8 +279,25 @@ class HotMarketDataIngressV1:
                     continue
                 try:
                     readback = self.effect_committer(pending.effect)
-                    pending.target.accept_committed_effect_v1(pending.effect, readback)
                 except Exception as exc:
+                    if isinstance(exc, HotMarketDataEffectTerminalError):
+                        self._pending_by_algo.pop(algo_instance_id, None)
+                        self._isolate_target_locked_v1(
+                            symbol=pending.target.symbol,
+                            algo_instance_id=algo_instance_id,
+                        )
+                        raise HotMarketDataIngressError(
+                            exc.reason_code,
+                            "pending hot economic effect closed as a durable terminal failure",
+                            context={
+                                **exc.context,
+                                "runtime_id": self.runtime_id,
+                                "algo_instance_id": algo_instance_id,
+                                "effect_identity": pending.effect.effect_identity,
+                                "broker_called": False,
+                                "retryable": False,
+                            },
+                        ) from exc
                     pending.failure_count += 1
                     delay_seconds = min(60, 2 ** min(pending.failure_count - 1, 6))
                     pending.next_retry_at_utc = observed + timedelta(seconds=delay_seconds)
@@ -242,6 +312,27 @@ class HotMarketDataIngressV1:
                         }
                     )
                     continue
+                try:
+                    pending.target.accept_committed_effect_v1(pending.effect, readback)
+                except Exception as exc:
+                    self._pending_by_algo.pop(algo_instance_id, None)
+                    self._isolate_target_locked_v1(
+                        symbol=pending.target.symbol,
+                        algo_instance_id=algo_instance_id,
+                    )
+                    raise HotMarketDataIngressError(
+                        "MINIQMT_HOT_MARKET_EFFECT_COMMIT_ACK_INVALID",
+                        "committed pending hot economic effect failed exact successor acknowledgement",
+                        context={
+                            "runtime_id": self.runtime_id,
+                            "algo_instance_id": algo_instance_id,
+                            "effect_identity": pending.effect.effect_identity,
+                            "broker_called": False,
+                            "retryable": False,
+                            "exception_type": type(exc).__name__,
+                            "exception_message": _safe_exception_message(exc),
+                        },
+                    ) from exc
                 self._pending_by_algo.pop(algo_instance_id, None)
                 committed += 1
         if failures:
@@ -279,6 +370,7 @@ class HotMarketDataIngressV1:
 
 
 __all__ = [
+    "HotMarketDataEffectTerminalError",
     "HotMarketDataDispositionV1",
     "HotMarketDataIngressError",
     "HotMarketDataIngressReceiptV1",

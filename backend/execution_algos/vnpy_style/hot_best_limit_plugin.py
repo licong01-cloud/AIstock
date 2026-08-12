@@ -43,6 +43,8 @@ class BestLimitMiniQMTPluginV4(CurrentThreeHotPluginBaseV4):
 
 class BestLimitHotTargetV4(CurrentThreeHotTargetV4):
     def evaluate_hot_market_data_v1(self, view: HotMarketDataViewV1) -> HotMarketDataEconomicEffectV1 | None:
+        if not self._is_continuous_market_v1(view):
+            return None
         state = self._state()
         side = SideV1(state["side"])
         price = self._price(view, side, opposite=True)

@@ -17,11 +17,15 @@ from backend.execution_algos.adaptive_is.contracts import (
     SessionSegment,
     canonical_json_bytes,
 )
+from backend.execution_algos.hot_market_contracts import HotMarketDataEconomicEffectV1
 from backend.execution_algos.vnpy_compat.facade_contracts import VnpyFacadeAuthorityInputV2
 from backend.services.miniqmt_execution_runtime import kernel_delivery, kernel_product_evidence
 from backend.services.miniqmt_execution_runtime.kernel_creation import KernelAlgoCreationCoordinatorV2
 from backend.services.miniqmt_execution_runtime.kernel_ingress import KernelIngressCoordinatorV1
-from backend.services.miniqmt_execution_runtime.hot_market_data import HotMarketDataIngressV1
+from backend.services.miniqmt_execution_runtime.hot_market_data import (
+    HotMarketDataEffectTerminalError,
+    HotMarketDataIngressV1,
+)
 from backend.services.miniqmt_execution_runtime.kernel_product_cutover import KernelProductCutoverCoordinator
 from backend.services.miniqmt_execution_runtime.kernel_delivery import (
     KernelProductDeliveryWorkerV3,
@@ -60,16 +64,20 @@ from backend.services.miniqmt_execution_runtime.kernel_repository_event_delivery
 )
 from backend.services.miniqmt_execution_runtime.plugin_canonical import freeze_json_v1, hash_hex_v1, thaw_json_v1
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
+    AlgoDeliveryPersistenceV1,
+    AlgoEventDeliveryV1,
     BrokerCommandOutboxStatusV1,
     BrokerCommandTypeV2,
     BrokerCommandV2,
     CommandChildMappingStatusV1,
     ExecutionCommandChildMappingV1,
     ExecutionAlgoPersistenceStatusV2,
+    KernelErrorEvidenceV1,
     AlgoTransitionV1,
     AlgoTransitionReceiptV1,
     EventSourceV2,
     EventTypeV2,
+    DeliveryStatusV1,
     OrderTypeV1,
     RuntimeEventIngressReceiptV1,
     RuntimeEventEnvelopeV2,
@@ -2356,6 +2364,151 @@ def test_product_runtime_quote_clock_callbacks_and_bounded_ingress_use_durable_s
         observed_at=datetime(2026, 8, 4, 1, 31, tzinfo=UTC),
     )
     assert (order_event, trade_event) == ("order_event", "trade_event")
+
+
+def test_product_hot_effect_commit_requires_exact_applied_delivery_and_classifies_terminal_failure() -> None:
+    _plugin, context, state = _hot_initialized("SNIPER_MINIQMT")
+    algo = _hot_persistence("SNIPER_MINIQMT", context, state)
+    effect = HotMarketDataEconomicEffectV1(
+        runtime_id=algo.runtime_id,
+        algo_instance_id=algo.algo_instance_id,
+        expected_algo_row_version=algo.row_version,
+        effect_identity="mqhoteffect_product_readback",
+        economic_payload={
+            "action": "SUBMIT_LIMIT",
+            "action_time_utc": "2026-08-12T01:30:00Z",
+            "exchange_trade_date": "2026-08-12",
+            "session_epoch": "session_hot_tick",
+            "session_phase": "CONTINUOUS_AM",
+            "symbol": algo.symbol,
+            "side": "BUY",
+            "price_decimal": "10.01",
+            "quantity": 100,
+            "reason_code": "product_readback",
+        },
+    )
+    payload = {
+        "schema_version": "miniqmt_hot_market_economic_action_v1",
+        "runtime_id": effect.runtime_id,
+        "algo_instance_id": effect.algo_instance_id,
+        "expected_algo_row_version": effect.expected_algo_row_version,
+        "effect_identity": effect.effect_identity,
+        "economic_effect": thaw_json_v1(effect.economic_payload),
+    }
+    event = RuntimeEventEnvelopeV2.create(
+        runtime_id=effect.runtime_id,
+        sequence=7,
+        event_type=EventTypeV2.OPERATOR,
+        event_time_utc="2026-08-12T01:30:00Z",
+        monotonic_ns=None,
+        source=EventSourceV2.SIMULATION_RUNTIME_OPERATOR,
+        symbol=algo.symbol,
+        payload_schema_version="miniqmt_operator_command_v1",
+        payload=payload,
+        source_identity={"operator_command_id": effect.effect_identity},
+        correlation={
+            "algo_instance_id": effect.algo_instance_id,
+            "exchange_trade_date": "2026-08-12",
+            "session_epoch": "session_hot_tick",
+            "session_phase": "CONTINUOUS_AM",
+        },
+    )
+    delivery_id = "mqdelivery_" + hash_hex_v1(
+        "miniqmt_algo_event_delivery_identity_v1",
+        {
+            "event_id": event.event_id,
+            "algo_instance_id": algo.algo_instance_id,
+            "plugin_manifest_sha256": algo.plugin_manifest_sha256,
+        },
+    )
+    receipt = RuntimeEventIngressReceiptV1.create(
+        runtime_id=event.runtime_id,
+        event_id=event.event_id,
+        event_key_sha256=event.event_key_sha256,
+        runtime_sequence=event.sequence,
+        ordered_target_algo_instance_ids=(algo.algo_instance_id,),
+        ordered_delivery_ids=(delivery_id,),
+        transaction_commit_identity="tx_hot_effect_readback",
+    )
+    def _delivery(status: DeliveryStatusV1) -> AlgoDeliveryPersistenceV1:
+        carrier = AlgoEventDeliveryV1.create(
+            event=event,
+            algo_instance_id=algo.algo_instance_id,
+            plugin_manifest_sha256=algo.plugin_manifest_sha256,
+            algo_delivery_sequence=algo.last_applied_delivery_sequence + 1,
+            previous_delivery_id=algo.last_applied_delivery_id,
+            status=DeliveryStatusV1.APPLIED,
+            attempt_count=1,
+            lease_owner=None,
+            lease_expires_at=None,
+            transition_id="transition_hot_effect",
+            last_error_json=None,
+            created_at_utc="2026-08-12T01:30:00Z",
+            updated_at_utc="2026-08-12T01:30:00Z",
+        )
+        persisted = AlgoDeliveryPersistenceV1.create(
+            delivery=carrier,
+            lease_epoch=1,
+            lease_fence_token=None,
+            row_version=3,
+            next_attempt_at_utc=None,
+            failure_receipt_id=None,
+            skip_receipt_id=None,
+            closed_at_utc="2026-08-12T01:30:00Z",
+        )
+        if status is DeliveryStatusV1.APPLIED:
+            return persisted
+        error = KernelErrorEvidenceV1.create(
+            stage="DELIVERY_APPLY",
+            stable_reason_code="PLUGIN_FAILED",
+            exception=RuntimeError("terminal"),
+            message="terminal",
+            retryable=False,
+            terminal=True,
+            broker_called=False,
+            primary_context={"stage": "DELIVERY"},
+            secondary_errors=[],
+        )
+        return AlgoDeliveryPersistenceV1.model_validate(
+            {
+                **persisted.model_dump(mode="python"),
+                "status": DeliveryStatusV1.FAILED_TERMINAL,
+                "transition_id": None,
+                "last_error_json": error.model_dump(mode="json"),
+                "failure_receipt_id": "failure_hot_effect",
+            },
+            strict=True,
+        )
+
+    applied = _delivery(DeliveryStatusV1.APPLIED)
+    successor = algo.model_copy(
+        update={
+            "row_version": algo.row_version + 1,
+            "last_applied_delivery_id": delivery_id,
+            "last_applied_delivery_sequence": applied.algo_delivery_sequence,
+        }
+    )
+
+    class Repository(_RuntimeRepository):
+        delivery = applied
+
+        def read_event_transaction(self, _event_id):
+            return {"event": event, "receipt": receipt, "deliveries": (self.delivery,)}
+
+        @staticmethod
+        def read_algo_instance(_algo_instance_id):
+            return successor
+
+    repository = Repository()
+    runtime = _runtime(repository, None, symbols=(algo.symbol,), trade_date=date(2026, 8, 12))
+    object.__setattr__(runtime, "runtime_id", algo.runtime_id)
+    object.__setattr__(runtime, "coordinator", SimpleNamespace(ingest_native_event_v1=lambda **_values: receipt))
+    assert runtime.commit_hot_market_effect_v1(effect) == successor
+
+    repository.delivery = _delivery(DeliveryStatusV1.FAILED_TERMINAL)
+    with pytest.raises(HotMarketDataEffectTerminalError) as terminal:
+        runtime.commit_hot_market_effect_v1(effect)
+    assert terminal.value.context["delivery_id"] == delivery_id
 
 
 def test_real_product_quote_callback_never_reaches_clock_schema_or_retry_backoff() -> None:

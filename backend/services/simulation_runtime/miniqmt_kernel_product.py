@@ -34,6 +34,7 @@ from backend.execution_algos.hot_market_contracts import (
     validate_hot_market_economic_payload_v1,
 )
 from backend.services.miniqmt_execution_runtime.hot_market_data import (
+    HotMarketDataEffectTerminalError,
     HotMarketDataIngressV1,
 )
 from backend.services.miniqmt_execution_runtime.kernel_outbox import (
@@ -69,7 +70,9 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     thaw_json_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
+    AlgoDeliveryPersistenceV1,
     BrokerCommandOutboxStatusV1,
+    DeliveryStatusV1,
     EventSourceV2,
     EventTypeV2,
     ExchangeSessionAuthorityV1,
@@ -688,8 +691,80 @@ class SimulationMiniQMTProductRuntimeV1:
                 },
             )
 
-        self._ingest_bounded_v1(builder=build)
-        return self.repository.read_algo_instance(effect.algo_instance_id)
+        event = self._ingest_bounded_v1(builder=build)
+        transaction = self.repository.read_event_transaction(event.event_id)
+        if transaction.get("event") != event:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_EFFECT_EVENT_READBACK_DRIFT",
+                "hot economic event readback differs from the committed event",
+                context={"runtime_id": self.runtime_id, "event_id": event.event_id},
+            )
+        receipt = transaction.get("receipt")
+        deliveries = transaction.get("deliveries")
+        if (
+            not isinstance(receipt, RuntimeEventIngressReceiptV1)
+            or type(deliveries) is not tuple
+            or len(deliveries) != 1
+            or not isinstance(deliveries[0], AlgoDeliveryPersistenceV1)
+            or receipt.ordered_target_algo_instance_ids != (effect.algo_instance_id,)
+            or receipt.ordered_delivery_ids != (deliveries[0].delivery_id,)
+        ):
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_EFFECT_DELIVERY_SET_INVALID",
+                "hot economic event did not close to one exact target delivery",
+                context={
+                    "runtime_id": self.runtime_id,
+                    "event_id": event.event_id,
+                    "algo_instance_id": effect.algo_instance_id,
+                },
+            )
+        delivery = deliveries[0]
+        if delivery.status is DeliveryStatusV1.FAILED_TERMINAL:
+            raise HotMarketDataEffectTerminalError(
+                "MINIQMT_HOT_MARKET_EFFECT_DELIVERY_FAILED_TERMINAL",
+                "hot economic effect delivery failed terminally",
+                context={
+                    "event_id": event.event_id,
+                    "delivery_id": delivery.delivery_id,
+                    "failure_receipt_id": delivery.failure_receipt_id,
+                    "delivery_error": None
+                    if delivery.last_error_json is None
+                    else thaw_json_v1(delivery.last_error_json),
+                },
+            )
+        if delivery.status is not DeliveryStatusV1.APPLIED or delivery.transition_id is None:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_EFFECT_DELIVERY_NOT_APPLIED",
+                "hot economic effect delivery has no exact applied transition",
+                context={
+                    "runtime_id": self.runtime_id,
+                    "event_id": event.event_id,
+                    "delivery_id": delivery.delivery_id,
+                    "delivery_status": delivery.status.value,
+                },
+            )
+        readback = self.repository.read_algo_instance(effect.algo_instance_id)
+        if (
+            not isinstance(readback, ExecutionAlgoInstancePersistenceV2)
+            or readback.row_version != effect.expected_algo_row_version + 1
+            or readback.status is not ExecutionAlgoPersistenceStatusV2.ACTIVE
+            or readback.last_applied_delivery_id != delivery.delivery_id
+            or readback.last_applied_delivery_sequence != delivery.algo_delivery_sequence
+        ):
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_EFFECT_ALGO_READBACK_DRIFT",
+                "hot economic effect algo readback is not the exact applied successor",
+                context={
+                    "runtime_id": self.runtime_id,
+                    "event_id": event.event_id,
+                    "delivery_id": delivery.delivery_id,
+                    "algo_instance_id": effect.algo_instance_id,
+                    "expected_row_version": effect.expected_algo_row_version + 1,
+                    "actual_row_version": readback.row_version,
+                    "actual_status": readback.status.value,
+                },
+            )
+        return readback
 
     def activate_hot_market_targets_v1(self, algo_instance_ids: tuple[str, ...]) -> None:
         if type(algo_instance_ids) is not tuple or len(algo_instance_ids) != len(set(algo_instance_ids)):
@@ -886,7 +961,7 @@ class SimulationMiniQMTProductRuntimeV1:
         self.refresh_hot_market_targets_v1()
         return callback_ids
 
-    def _ingest_bounded_v1(self, *, builder: Any) -> None:
+    def _ingest_bounded_v1(self, *, builder: Any) -> RuntimeEventEnvelopeV2:
         probe = builder(1)
         try:
             existing = self.repository.read_event_transaction(probe.event_id)
@@ -901,13 +976,13 @@ class SimulationMiniQMTProductRuntimeV1:
                     context={"runtime_id": self.runtime_id, "event_id": probe.event_id},
                 )
             self.coordinator.ingest_native_event_v1(event=existing["event"])
-            return
+            return existing["event"]
         last_error: Exception | None = None
         for _ in range(3):
             event = builder(self.repository.read_runtime_last_event_sequence(self.runtime_id) + 1)
             try:
                 self.coordinator.ingest_native_event_v1(event=event)
-                return
+                return event
             except (KernelRepositoryConflict, KernelRepositoryCommitUnknown) as exc:
                 last_error = exc
                 try:
@@ -929,7 +1004,7 @@ class SimulationMiniQMTProductRuntimeV1:
                         context={"runtime_id": self.runtime_id, "event_id": event.event_id},
                     ) from exc
                 self.coordinator.ingest_native_event_v1(event=committed["event"])
-                return
+                return committed["event"]
         raise MiniQMTKernelProductCompositionError(
             "MINIQMT_K6_PRODUCT_SOURCE_EVENT_CONTENTION",
             "native source event could not acquire the exact runtime sequence",

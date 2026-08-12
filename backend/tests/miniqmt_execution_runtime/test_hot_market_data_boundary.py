@@ -29,6 +29,7 @@ from backend.execution_algos.hot_market_contracts import (
 )
 from backend.services.miniqmt_execution_runtime.hot_market_data import (
     HotMarketDataDispositionV1,
+    HotMarketDataEffectTerminalError,
     HotMarketDataIngressError,
     HotMarketDataIngressV1,
     _PendingHotMarketEffectV1,
@@ -422,6 +423,75 @@ def test_all_five_v4_plugins_restore_without_market_state_and_decide_on_next_liv
         assert forbidden not in effect_text
 
 
+@pytest.mark.parametrize(
+    ("algo_code", "target_type", "timer_name"),
+    (
+        ("BEST_LIMIT_MINIQMT", BestLimitHotTargetV4, None),
+        ("ICEBERG", IcebergHotTargetV4, "ICEBERG_ACTIVE_SECOND"),
+        ("SNIPER_MINIQMT", SniperHotTargetV4, None),
+        ("STOP", StopHotTargetV4, None),
+        ("TWAP_LITE_MINIQMT", TwapLiteHotTargetV4, "TWAP_ACTIVE_SECOND"),
+    ),
+)
+def test_all_five_v4_hot_targets_reject_noncontinuous_market_observations(
+    algo_code: str,
+    target_type,
+    timer_name: str | None,
+) -> None:
+    plugin, context, state = _hot_initialized(algo_code)
+    if timer_name is not None:
+        state = _advance_one_timer(plugin, state, timer_name=timer_name)
+    target = target_type(algo=_hot_persistence(algo_code, context, state))
+    view = replace(_hot_view(), session_phase="OPEN_AUCTION", last_price=Decimal("10.02"))
+    assert target.evaluate_hot_market_data_v1(view) is None
+
+
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {"symbol": "600000"},
+        {"exchange_trade_date": "2026-8-12"},
+        {"session_phase": "NOT_A_SESSION"},
+    ),
+)
+def test_hot_market_view_rejects_noncanonical_owner_and_session_fields(updates) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        replace(_hot_view(), **updates)
+
+
+def test_hot_target_rejects_failed_algo_successor_as_effect_commit_ack() -> None:
+    _plugin, context, state = _hot_initialized("SNIPER_MINIQMT")
+    algo = _hot_persistence("SNIPER_MINIQMT", context, state)
+    target = SniperHotTargetV4(algo=algo)
+    effect = target.evaluate_hot_market_data_v1(_hot_view())
+    assert effect is not None
+    failed = algo.model_copy(
+        update={
+            "row_version": algo.row_version + 1,
+            "status": ExecutionAlgoPersistenceStatusV2.FAILED,
+            "failure_receipt_id": "failure_hot_effect",
+            "terminal_delivery_sequence": algo.last_closed_delivery_sequence + 1,
+            "terminal_at_utc": algo.updated_at_utc,
+            "active_child_closure_status": ActiveChildClosureStatusV1.CLEAN,
+        }
+    )
+    with pytest.raises(Exception, match="successor"):
+        target.accept_committed_effect_v1(effect, failed)
+
+    forged_manifest = algo.model_copy(
+        update={
+            "row_version": algo.row_version + 1,
+            "plugin_manifest_sha256": "f" * 64,
+            "last_applied_delivery_id": "delivery_forged_manifest",
+            "last_applied_delivery_sequence": algo.last_applied_delivery_sequence + 1,
+            "last_closed_delivery_sequence": algo.last_closed_delivery_sequence + 1,
+            "transition_sequence": algo.transition_sequence + 1,
+        }
+    )
+    with pytest.raises(Exception, match="valid target successor"):
+        target.accept_committed_effect_v1(effect, forged_manifest)
+
+
 def test_process_local_no_effect_and_duplicate_paths_never_call_committer() -> None:
     commits: list[object] = []
 
@@ -464,6 +534,17 @@ def test_hot_generation_high_watermark_is_bounded_and_rejects_late_old_generatio
     assert ingress._last_sequence_by_symbol == {"600000.SH": 1}
 
 
+def test_hot_view_accepts_real_b0_bootstrap_sequence_zero_once_per_generation() -> None:
+    ingress = HotMarketDataIngressV1(runtime_id="runtime_hot_tick", effect_committer=lambda _effect: None)
+    bootstrap = _hot_view(sequence=0)
+    first = ingress.ingest_v1(bootstrap)
+    duplicate = ingress.ingest_v1(bootstrap)
+    callback = ingress.ingest_v1(_hot_view(sequence=1))
+    assert first.disposition is HotMarketDataDispositionV1.NO_TARGET
+    assert duplicate.disposition is HotMarketDataDispositionV1.DUPLICATE
+    assert callback.disposition is HotMarketDataDispositionV1.NO_TARGET
+
+
 def test_hot_full_five_authority_publishes_exact_v4_catalog_once() -> None:
     authority = build_hot_full_five_catalog_authority_v1(gateway_catalog=build_k6d_gateway_catalog_v1())
     snapshot = authority.catalog_runtime.snapshot
@@ -477,6 +558,23 @@ def test_hot_full_five_authority_publishes_exact_v4_catalog_once() -> None:
     assert len(snapshot.registration_descriptors) == 5
     assert len(authority.conformance_set.ordered_receipts) == 5
     assert authority.conformance_authority.validation_receipt.status.value == "PASSED"
+
+
+def test_all_v4_manifests_subscribe_to_the_same_required_durable_lifecycle_events() -> None:
+    manifests = (*hot_plugin_manifests.current_three_hot_manifests_v4(), *hot_facade_manifests_v4())
+    required = {
+        EventTypeV2.ALGO_START,
+        EventTypeV2.COMMAND_OUTCOME,
+        EventTypeV2.EOD,
+        EventTypeV2.OPERATOR,
+        EventTypeV2.ORDER,
+        EventTypeV2.RECONCILE,
+        EventTypeV2.SESSION,
+        EventTypeV2.TICK,
+        EventTypeV2.TRADE,
+    }
+    for manifest in manifests:
+        assert required.issubset(set(manifest.subscribed_event_types)), manifest.algo_code
 
 
 def test_effect_commit_failure_never_retries_on_tick_and_scheduler_retains_same_identity() -> None:
@@ -541,7 +639,7 @@ def test_effect_commit_failure_never_retries_on_tick_and_scheduler_retains_same_
     assert accepted == [{"effect_identity": effect.effect_identity}]
 
 
-def test_committed_effect_with_failed_readback_acceptance_retries_same_identity_only_on_scheduler() -> None:
+def test_committed_effect_with_failed_readback_acceptance_isolated_without_retry() -> None:
     effect = HotMarketDataEconomicEffectV1(
         runtime_id="runtime_hot_tick",
         algo_instance_id="algo_hot_tick",
@@ -561,39 +659,31 @@ def test_committed_effect_with_failed_readback_acceptance_retries_same_identity_
         runtime_id = "runtime_hot_tick"
         algo_instance_id = "algo_hot_tick"
         symbol = "600000.SH"
-        accepted = False
-
         @staticmethod
         def evaluate_hot_market_data_v1(_view):
             return effect
 
-        @classmethod
-        def accept_committed_effect_v1(cls, candidate, readback):
+        @staticmethod
+        def accept_committed_effect_v1(candidate, readback):
             if readback.get("effect_identity") != candidate.effect_identity:
                 raise ValueError("durable readback identity drift")
-            cls.accepted = True
 
     attempts: list[str] = []
 
     def commit(candidate):
         attempts.append(candidate.effect_identity)
-        if len(attempts) == 1:
-            return {"effect_identity": "mqhoteffect_wrong_readback"}
-        return {"effect_identity": candidate.effect_identity}
+        return {"effect_identity": "mqhoteffect_wrong_readback"}
 
     ingress = HotMarketDataIngressV1(runtime_id="runtime_hot_tick", effect_committer=commit)
     ingress.replace_targets_v1((Target(),))
     with pytest.raises(HotMarketDataIngressError) as exc_info:
         ingress.ingest_v1(_hot_view(sequence=1))
-    assert exc_info.value.reason_code == "MINIQMT_HOT_MARKET_EFFECT_COMMIT_FAILED"
+    assert exc_info.value.reason_code == "MINIQMT_HOT_MARKET_EFFECT_COMMIT_ACK_INVALID"
     assert exc_info.value.context["effect_identity"] == effect.effect_identity
-    assert not Target.accepted
-    assert ingress.ingest_v1(_hot_view(sequence=2)).disposition is HotMarketDataDispositionV1.EFFECT_PENDING
+    assert exc_info.value.context["retryable"] is False
+    assert ingress._pending_by_algo == {}
+    assert ingress.ingest_v1(_hot_view(sequence=2)).disposition is HotMarketDataDispositionV1.NO_TARGET
     assert attempts == [effect.effect_identity]
-    receipt = ingress.retry_pending_v1(observed_at_utc=datetime(2026, 8, 12, 1, 30, 1, tzinfo=UTC))
-    assert receipt.disposition is HotMarketDataDispositionV1.EFFECT_COMMITTED
-    assert attempts == [effect.effect_identity, effect.effect_identity]
-    assert Target.accepted
 
 
 def test_failed_scheduler_retry_uses_bounded_backoff_and_intervening_ticks_never_write() -> None:
@@ -643,6 +733,70 @@ def test_failed_scheduler_retry_uses_bounded_backoff_and_intervening_ticks_never
     assert exc_info.value.reason_code == "MINIQMT_HOT_MARKET_EFFECT_RETRY_FAILED"
     assert attempts == [effect.effect_identity, effect.effect_identity]
     ingress.retry_pending_v1(observed_at_utc=datetime(2026, 8, 12, 1, 30, 2, tzinfo=UTC))
+    assert attempts == [effect.effect_identity, effect.effect_identity]
+
+
+def test_terminal_effect_failure_is_never_added_to_or_retained_by_retry_queue() -> None:
+    effect = HotMarketDataEconomicEffectV1(
+        runtime_id="runtime_hot_tick",
+        algo_instance_id="algo_hot_tick",
+        expected_algo_row_version=3,
+        effect_identity="mqhoteffect_terminal_failure",
+        economic_payload={
+            "action": "CANCEL_ORDER",
+            "action_time_utc": "2026-08-12T01:30:00Z",
+            "exchange_trade_date": "2026-08-12",
+            "session_epoch": "session_hot_tick",
+            "session_phase": "CONTINUOUS_AM",
+            "reason_code": "terminal_failure",
+        },
+    )
+
+    class Target:
+        runtime_id = "runtime_hot_tick"
+        algo_instance_id = "algo_hot_tick"
+        symbol = "600000.SH"
+
+        @staticmethod
+        def evaluate_hot_market_data_v1(_view):
+            return effect
+
+        @staticmethod
+        def accept_committed_effect_v1(_effect, _readback):
+            return None
+
+    attempts: list[str] = []
+
+    def fail_terminal(candidate):
+        attempts.append(candidate.effect_identity)
+        raise HotMarketDataEffectTerminalError(
+            "MINIQMT_HOT_MARKET_EFFECT_DELIVERY_FAILED_TERMINAL",
+            "terminal",
+            context={"delivery_id": "delivery_terminal"},
+        )
+
+    ingress = HotMarketDataIngressV1(runtime_id="runtime_hot_tick", effect_committer=fail_terminal)
+    ingress.replace_targets_v1((Target(),))
+    with pytest.raises(HotMarketDataIngressError) as initial:
+        ingress.ingest_v1(_hot_view())
+    assert initial.value.context["retryable"] is False
+    assert ingress._pending_by_algo == {}
+    assert attempts == [effect.effect_identity]
+    assert ingress.ingest_v1(_hot_view(sequence=2)).disposition is HotMarketDataDispositionV1.NO_TARGET
+    assert attempts == [effect.effect_identity]
+
+    ingress.replace_targets_v1((Target(),))
+    ingress._pending_by_algo[Target.algo_instance_id] = _PendingHotMarketEffectV1(
+        effect=effect,
+        target=Target(),
+        failure_count=1,
+        next_retry_at_utc=datetime(2026, 8, 12, 1, 30, tzinfo=UTC),
+    )
+    with pytest.raises(HotMarketDataIngressError) as retry:
+        ingress.retry_pending_v1(observed_at_utc=datetime(2026, 8, 12, 1, 30, 1, tzinfo=UTC))
+    assert retry.value.context["retryable"] is False
+    assert ingress._pending_by_algo == {}
+    assert ingress.ingest_v1(_hot_view(sequence=3)).disposition is HotMarketDataDispositionV1.NO_TARGET
     assert attempts == [effect.effect_identity, effect.effect_identity]
 
 

@@ -27,6 +27,8 @@ class SniperMiniQMTPluginV4(CurrentThreeHotPluginBaseV4):
 
 class SniperHotTargetV4(CurrentThreeHotTargetV4):
     def evaluate_hot_market_data_v1(self, view: HotMarketDataViewV1) -> HotMarketDataEconomicEffectV1 | None:
+        if not self._is_continuous_market_v1(view):
+            return None
         state = self._state()
         if state["active_orders"]:
             return self._cancel_or_wait(view=view, state=state, reason_code="sniper_active_order_cancel_before_requote")

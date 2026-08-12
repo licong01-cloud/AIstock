@@ -43,6 +43,9 @@ _SUBMIT_EFFECT_KEYS = _COMMON_EFFECT_KEYS | frozenset(
 )
 _CANCEL_EFFECT_KEYS = _COMMON_EFFECT_KEYS | frozenset({"reason_code"})
 _A_SHARE_SYMBOL_PATTERN = re.compile(r"^[0-9]{6}\.(?:SH|SZ|BJ)$")
+_SESSION_PHASES = frozenset(
+    {"OPEN_AUCTION", "CONTINUOUS_AM", "LUNCH_BREAK", "CONTINUOUS_PM", "CLOSE_AUCTION", "CLOSED"}
+)
 
 
 @dataclass(frozen=True)
@@ -70,10 +73,20 @@ class HotMarketDataViewV1:
             value = getattr(self, name)
             if type(value) is not str or not value or value != value.strip():
                 raise TypeError(f"{name} must be a canonical identity")
+        if _A_SHARE_SYMBOL_PATTERN.fullmatch(self.symbol) is None:
+            raise ValueError("symbol must be a canonical A-share identity")
+        try:
+            parsed_trade_date = date.fromisoformat(self.exchange_trade_date)
+        except ValueError as exc:
+            raise ValueError("exchange_trade_date is invalid") from exc
+        if parsed_trade_date.isoformat() != self.exchange_trade_date:
+            raise ValueError("exchange_trade_date is not canonical")
+        if self.session_phase not in _SESSION_PHASES:
+            raise ValueError("session_phase is unsupported")
         if type(self.generation) is not int or self.generation <= 0:
             raise TypeError("generation must be a positive strict integer")
-        if type(self.sequence) is not int or self.sequence <= 0:
-            raise TypeError("sequence must be a positive strict integer")
+        if type(self.sequence) is not int or self.sequence < 0:
+            raise TypeError("sequence must be a nonnegative strict integer")
         for name in ("observed_at_utc", "exchange_time_utc"):
             value = getattr(self, name)
             if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:

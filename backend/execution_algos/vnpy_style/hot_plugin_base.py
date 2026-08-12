@@ -22,6 +22,7 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     RuntimeEventEnvelopeV2,
     TerminalOutcomeV1,
     ExecutionAlgoInstancePersistenceV2,
+    ExecutionAlgoPersistenceStatusV2,
     SideV1,
     algo_transition_id_v1,
 )
@@ -293,15 +294,50 @@ class CurrentThreeHotTargetV4:
             raise CurrentThreePluginError("hot target requires committed V4 state")
         return thaw_json_v1(self.algo.state_json)
 
+    @staticmethod
+    def _is_continuous_market_v1(view: HotMarketDataViewV1) -> bool:
+        return view.session_phase in {"CONTINUOUS_AM", "CONTINUOUS_PM"}
+
     def accept_committed_effect_v1(self, effect: HotMarketDataEconomicEffectV1, readback: Any) -> None:
+        if (
+            effect.runtime_id != self.runtime_id
+            or effect.algo_instance_id != self.algo_instance_id
+            or effect.expected_algo_row_version != self.algo.row_version
+        ):
+            raise CurrentThreePluginError("hot effect does not close to the target predecessor")
         if not isinstance(readback, ExecutionAlgoInstancePersistenceV2):
             raise TypeError("hot effect readback must be ExecutionAlgoInstancePersistenceV2")
+        try:
+            readback.validate_successor_v1(self.algo)
+        except (TypeError, ValueError) as exc:
+            raise CurrentThreePluginError("hot effect readback is not a valid target successor") from exc
         if (
             readback.runtime_id != self.runtime_id
             or readback.algo_instance_id != self.algo_instance_id
-            or readback.row_version <= effect.expected_algo_row_version
+            or readback.row_version != effect.expected_algo_row_version + 1
+            or readback.status is not ExecutionAlgoPersistenceStatusV2.ACTIVE
         ):
             raise CurrentThreePluginError("hot effect readback does not close its exact algo successor")
+        event_key = hash_hex_v1(
+            "miniqmt_runtime_event_key_v2",
+            {
+                "schema_version": "miniqmt_runtime_event_envelope_v2",
+                "runtime_id": effect.runtime_id,
+                "event_type": EventTypeV2.OPERATOR.value,
+                "source": "SIMULATION_RUNTIME_OPERATOR",
+                "source_identity": {"operator_command_id": effect.effect_identity},
+            },
+        )
+        expected_delivery_id = "mqdelivery_" + hash_hex_v1(
+            "miniqmt_algo_event_delivery_identity_v1",
+            {
+                "event_id": f"mqrtevt_{event_key}",
+                "algo_instance_id": effect.algo_instance_id,
+                "plugin_manifest_sha256": readback.plugin_manifest_sha256,
+            },
+        )
+        if readback.last_applied_delivery_id != expected_delivery_id:
+            raise CurrentThreePluginError("hot effect readback does not close its exact applied delivery")
         self.algo = readback
 
     def evaluate_hot_market_data_v1(self, view: HotMarketDataViewV1) -> HotMarketDataEconomicEffectV1 | None:
