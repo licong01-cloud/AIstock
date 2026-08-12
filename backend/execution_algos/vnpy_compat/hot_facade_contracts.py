@@ -12,13 +12,27 @@ from backend.services.miniqmt_execution_runtime.plugin_contracts import (
     EventTypeV2,
     ExecutionAlgoPluginManifestV2,
     FileHashV1,
+    GatewayCapabilityCatalogV1,
     SourceAttributionV1,
     validate_json_schema_instance_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_registry import (
+    PluginCatalogRuntimeV2,
     PluginCreationBindingV1,
     PluginRegistrationDescriptorV2,
     callable_signature_sha256_v1,
+)
+from .facade_characterization import (
+    VnpyFacadeCharacterizationAuthorityV2,
+    _build_vnpy_facade_conformance_set_v2,
+    _validate_vnpy_facade_conformance_set_against_authority_v2,
+)
+from .facade_contracts import (
+    VnpyFacadeAlgorithmBindingV2,
+    VnpyFacadeConformanceAuthorityV2,
+    VnpyFacadeConformanceSetV2,
+    VnpyFacadeContractV1,
+    VnpyFacadeSourceManifestV1,
 )
 
 from .k5_plugin_manifests import k5_manifests_v1, validate_iceberg_config_v1, validate_stop_config_v1
@@ -36,6 +50,53 @@ _FACTS = {
         "vnpy_algotrading/algos/stop_algo.py",
     ),
 }
+_FULL_FIVE_ALGO_CODES = ("BEST_LIMIT_MINIQMT", "ICEBERG", "SNIPER_MINIQMT", "STOP", "TWAP_LITE_MINIQMT")
+
+
+def build_hot_product_conformance_set_v4(
+    *,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+    algorithm_bindings_v2: tuple[VnpyFacadeAlgorithmBindingV2, ...],
+) -> VnpyFacadeConformanceSetV2:
+    """Build the exact all-pure V4 product conformance set."""
+
+    return _build_vnpy_facade_conformance_set_v2(
+        catalog_runtime=catalog_runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization_authority_v2,
+        algorithm_bindings_v2=algorithm_bindings_v2,
+        expected_algo_codes=_FULL_FIVE_ALGO_CODES,
+        facade_backed_algo_codes=frozenset(),
+    )
+
+
+def validate_hot_product_conformance_set_against_authority_v4(
+    *,
+    conformance_set: VnpyFacadeConformanceSetV2,
+    catalog_runtime: PluginCatalogRuntimeV2,
+    gateway_catalog: GatewayCapabilityCatalogV1,
+    facade_contract: VnpyFacadeContractV1,
+    source_manifest: VnpyFacadeSourceManifestV1,
+    characterization_authority_v2: VnpyFacadeCharacterizationAuthorityV2,
+) -> VnpyFacadeConformanceAuthorityV2:
+    """Rebuild and read back the exact all-pure V4 product authority."""
+
+    return _validate_vnpy_facade_conformance_set_against_authority_v2(
+        conformance_set=conformance_set,
+        catalog_runtime=catalog_runtime,
+        gateway_catalog=gateway_catalog,
+        facade_contract=facade_contract,
+        source_manifest=source_manifest,
+        characterization_authority_v2=characterization_authority_v2,
+        expected_algo_codes=_FULL_FIVE_ALGO_CODES,
+        facade_backed_algo_codes=frozenset(),
+    )
 
 
 def _object(properties: dict[str, Any], required: tuple[str, ...]) -> dict[str, Any]:
@@ -247,9 +308,11 @@ def hot_facade_creation_bindings_v4() -> tuple[PluginCreationBindingV1, ...]:
 
 
 __all__ = [
+    "build_hot_product_conformance_set_v4",
     "hot_facade_creation_bindings_v4",
     "hot_facade_descriptors_v4",
     "hot_facade_manifests_v4",
     "validate_hot_facade_config_v4",
     "validate_hot_facade_state_v4",
+    "validate_hot_product_conformance_set_against_authority_v4",
 ]
