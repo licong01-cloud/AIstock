@@ -382,7 +382,13 @@ def test_feature_panel_recomputes_all_20_features_and_freezes_training_series() 
     assert carrier.observation_available_positions == tuple(range(60))
     assert carrier.utility_available_positions == tuple(range(60))
     assert np.isfinite(carrier.combined_utility_values_f64).all()
+    assert series["L1-00"].validation_future_utility.shape == (0,)
     assert series["L1-00"].validation_input_manifest["schema_version"] == "hmm_risk_d6_frozen_input_manifest_v2"
+    series["L1-00"].validate(20)
+
+    parallel_dense_utility = replace(series["L1-00"], validation_future_utility=np.asarray([0.0]))
+    with pytest.raises(StateModelSetError, match="legacy dense utility must be an empty one-dimensional sentinel"):
+        parallel_dense_utility.validate(20)
 
     sparse_panel = panel.copy()
     sparse_panel.loc[(pd.Timestamp(calendar[300]), "L1-00"), ALL_CORE_FEATURES[0]] = np.nan
@@ -405,6 +411,7 @@ def test_feature_panel_recomputes_all_20_features_and_freezes_training_series() 
     assert sparse_carrier.availability_ledger[missing_position]["mode"] == "transition_only"
     assert sparse_carrier.availability_ledger[missing_position]["evidence_included"] is False
     assert sparse.validation_observations.shape == (59, 20)
+    sparse.validate(20)
 
     legacy = subject.build_legacy_dense_diagnostic_series(
         sparse_panel,
