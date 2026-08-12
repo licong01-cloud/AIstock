@@ -45,6 +45,21 @@ def test_close_sync_bug_json_skips_backend_matrix(tmp_path: Path) -> None:
     assert payload["pr_quality_required"] is True
 
 
+def test_runtime_pending_restart_close_sync_uses_registry_fast_lane(tmp_path: Path) -> None:
+    bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-runtime.json"
+    _write_bug(bug, status="fixed_source_pending_user_restart", module="qlib_data")
+
+    payload = classifier.classify_changed_files(
+        ["tests/aistock_validation/bugs/20260601_BUG-191-runtime.json"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "close_sync_metadata_only"
+    assert payload["close_sync_metadata_only"] is True
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is False
+
+
 def test_open_bug_registry_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
     bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-example.json"
     _write_bug(bug, status="open")
