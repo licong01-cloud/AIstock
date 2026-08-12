@@ -3,9 +3,10 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-08-12
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M5C_REAL_CALIBRATION_COMPLETE_NOT_ACTIVATED_QUALITY_ITERATION_NEXT`
-> 当前用户可见功能进度：短反弹真实功能 `4/4`；长期趋势真实功能 `0/1`；M2 Top5、M3 收益/周期和 M4 买入/止盈/止损范围已由真实运行时 API 输出，页面可视化验收因当前验证窗口无可用浏览器单独保留
-> 规划进度：M0-M4 已完成训练、源码、数据库窄依赖、exact binding、用户重启和真实多 Alpha API readback；M5A 已完成真实 WSL tournament/test，但未超过原始 selection rank；M5B 已完成真实 WSL outcome calibration 与运行时验证，但质量不支持激活；M5C 已完成真实 WSL entry-gap coverage calibration 与 exact retry，validation 得到 `delta=0`，冻结 test coverage 未改善，因此现行 M4 v1 binding 保持不变。下一主线只允许真实模型质量改进或长期趋势策略包就绪后的建模，不返回历史证据、归档或通用平台工程
+> 当前状态：`MODEL_FIRST_M5C_REAL_CALIBRATION_COMPLETE_PR3346_OPEN_NOT_ACTIVATED_QUALITY_ITERATION_NEXT`
+> 当前功能覆盖：短反弹用户功能 `4/4` 已由真实模型链路实现；长期趋势用户功能 `0/1`；按“短反弹四项 + 长期趋势一项”口径为 `4/5 = 80%`，该比例只表示能力覆盖，不表示模型质量达标
+> 当前源码/运行时：M0-M4 源码、binding、用户重启和真实多 Alpha API readback 已完成；M5A/M5B 源码已合入，研究 bundle 均未激活；M5C 实现 commit 为 `faf12982f1c56ca7cfb78c4b428cceede40a8cd1`，父 M4 coverage 修复 commit 为 `09c2b5640d5a74634670079c399f44eaf789dc9c`，源码和蓝图更新位于 PR #3346；截至本次复核 PR 仍为 OPEN，尚未进入 `main`，真实 WSL artifact 基于后一个冻结 commit 生成
+> 当前质量升级：M5A/M5B/M5C 三项真实实验均已完成，`0/3` 建议激活；M5A 改善了 M1 负收益但未超过 selection rank，M5B 多数校准头在冻结 test 上退化，M5C 得到 `delta=0` 且 test coverage 不变。下一主线只允许真实 OOS 模型质量改进或长期趋势策略包就绪后的建模，不返回历史证据、归档或通用平台工程
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -22,7 +23,7 @@
 3. 将模型推理接入 Advisory；正式预测只读取数据库中的当前/实时行情和相关实际输入。
 4. 在荐股页面显示真实模型输出。
 5. 依次完成预期收益、持股周期、买入、止盈和止损区间模型。
-6. 只有上述真实功能全部完成后，用户重新确认仍有必要时，才可讨论历史证据、历史固化、归档、ModelOps 或通用平台。
+6. 上述真实功能全部完成只允许重新评估低优先级任务，不使其自动进入计划；历史证据、历史固化、归档、ModelOps 或通用平台必须由用户针对具体任务重新确认后才能讨论和实施。
 
 以下内容不再是模型训练、模型推理、页面展示或模型启用的前置条件：
 
@@ -71,6 +72,46 @@
 
 历史表、schema、证据链、报告、任务状态、artifact 数量和测试数量均不得计入上述功能完成度。
 
+### 1.1 当前进度口径
+
+为避免把“代码存在”“运行时可见”和“模型有效”混为同一完成状态，本蓝图固定使用以下五个独立维度：
+
+| 维度 | 当前进度 | 准确含义 |
+|---|---:|---|
+| 短反弹功能覆盖 | `4/4 = 100%` | Top5、收益/周期、价格范围、页面/API 四项真实能力均已实现；不代表质量已超过基线 |
+| 长期趋势功能覆盖 | `0/1 = 0%` | 长期趋势原生多 Alpha 父包尚未形成可训练输入，未开始训练或接入 |
+| 总体用户功能覆盖 | `4/5 = 80%` | 仅按上述五项用户能力计数；不包含历史平台、artifact、测试或证据工程 |
+| 短反弹运行时部署 | `M2/M3/M4 已验证` | 当前激活链路可返回 Top5、五期限 outcome/holding 和价格范围；M5A/M5B/M5C 研究 bundle 均未替换现行 binding |
+| 模型质量升级 | `0/3 建议激活` | M5A、M5B、M5C 都已完成真实冻结 test，但均未满足替换现行基线的研究结论；不是代码失败，也不能冒充质量成功 |
+
+截至本次复核，M5C PR #3346 尚未合入。因其真实 bundle 未激活，当前生产运行时仍使用已验证的 M4 v1 price-range binding；不需要为了未改善的 M5C 结果执行后端重启或 deployed readback。
+
+### 1.2 真实训练与实验数据总表
+
+下表只记录真实冻结输入、真实模型或真实校准运行；mock、fixture、历史证据平台和测试数量不计入模型实验：
+
+| 阶段 | 冻结输入与产物 | 样本/模型 | 资源 | 冻结 test 或真实运行结果 | 当前结论 |
+|---|---|---|---|---|---|
+| M0 可训练矩阵 | request `advmreq_ac5959aa8dc14a25e3b8c139` | 406 decision dates；8120 个 Top20 候选；6960 行冻结 features | 文件只读构建 | 训练/验证/test 的父输入身份已冻结，基础行情截止 `2026-06-30`，候选共同范围 `2024-07-04..2026-03-10` | 可训练输入已完成，不再扩建历史数据平台 |
+| M1 首个 reranker | bundle `9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629` | train 3818 行/191 日；validation 1139 行/57 日；test 1599 行/80 日；Top5 400 行 | 128.921 秒；RSS 2,262,388,736 bytes | model Top5 5日平均超额 `-0.0002833`、命中率 `0.5025`、NDCG@5 `0.26570`；selection rank 为 `0.0085591`，HMM 为 `0.0040167`，随机为 `0.0055652` | 真实模型已接入 shadow，但原始质量明显低于基线 |
+| M3 outcome/holding | bundle `17ce7ceb429829f15b68b196ad76ffee08d45f93b0a72d0f2fb92e72515adba0` | 46 个 LightGBM heads；test 1600 行/80 日；1/3/5/10/20 日 horizon | 108.128 秒；RSS 655,581,184 bytes | 五期限预测零 NaN；5日正超额 head AUC `0.53469`、Brier `0.25186`；holding accuracy `0.36261`、bucket-day MAE `10.1374`、range coverage `0.75031` | 功能和运行时已贯通；原始概率与周期分布保持实验/未校准语义 |
+| M4 entry/risk ranges | request `advprreq_2d826a7b2704137bf3a60d9d`；bundle `1a939f05a3410ce56d66f68245a77e9454be8bf38afe57d57330341c41c742c3` | 4 个 heads；test 1600 行/80 日；1599 个 executable gap；8120 行中仅 4 个 binary 负例 | 13.85 秒；RSS 491,802,624 bytes | q10-q90 coverage `0.727955`，零 quantile crossing；真实多 Alpha readback 20/20 返回买入、止盈、止损和移动保护范围 | M4 v1 当前继续激活；binary 必须保持 `UNCALIBRATED` |
+| M5A Top5 tournament | train request `advm5train_a64594d6f22f618a4afef84a`；test request `advm5test_818fe5a6c8ee323d2fbf25d4`；bundle `1757b24b854f8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb` | 45 trials、37 candidates；winner 为 5-seed `EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`；test 400 个 Top5/80 日 | tournament 18.925 秒、RSS 409,169,920 bytes；test 2.131 秒、RSS 342,462,464 bytes | winner 5日平均超额 `0.0071894`、命中率 `0.5425`、NDCG@5 `0.34150`；selection rank 为 `0.0085591`、`0.5375`、`0.32399`；均值 lift `-0.0013696`，95% block-bootstrap `[-0.0093061, 0.0053392]` | 相比 M1/HMM/随机有改善，但未证明超过现行 selection rank，不激活 |
+| M5B outcome calibration | request `advoutcal_ec16422ad1a97040583e5273`；bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533` | validation 940 feature-covered/1000 labels；test 1600/1600；8/10 binary heads calibrated，2 个 h5 heads 因 order reversal 保持 raw | 11.659 秒；RSS 399,200,256 bytes | 8 个 calibrated binary head 的 test Brier/logloss/ECE 均未优于 raw；收益区间名义 coverage 平均绝对偏差 `0.00984 -> 0.03129`；path upper `0.01432 -> 0.01394` | artifact 完整、exact retry 一致，但总体质量不支持激活；M3 v1 binding 不变 |
+| M5C entry-gap calibration | request `advprcal_7cb766fe38898e12a008a328`；bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead` | validation 940 feature-covered/1000 eligible；test 1599/1599；central-80 CQR | 2.679 秒；RSS 395,853,824 bytes | validation coverage `0.810638` 导致 `delta=0`；test raw/calibrated coverage 均 `0.727955`，mean width 均 `0.0122280` | 全局常数校准无法修正 validation→test 漂移，`activation_recommended=false`；PR #3346 待合入但无需激活 |
+
+### 1.3 方向一致性复核
+
+当前实现与本蓝图的核心方向一致：
+
+- 训练只读取 QE H5/Parquet/Qlib Bin 和既有预测产物，正式推理才读取数据库当前行情；M5C 不读取数据库历史训练数据。
+- M1、M3、M4、M5A、M5B、M5C 均执行真实 WSL 运行，没有用规则、随机、mock 或缩样本冒充完成。
+- Selection、StrategyPackage、Paper、模拟盘和 QE 资产业务逻辑未被 M5C 修改；模型失败或未激活不阻断现有荐股基线。
+- 没有新增角色、审批、二次策略包准入、ModelOps、历史证据、旧 batch/root 处理或通用缓存平台。
+- 真实负面实验结果均保留，没有把 artifact 发布、源码合入或 API 可返回误写为模型效果成功。
+
+当前唯一需要继续纠正的不是基础架构，而是模型质量：M5A 暴露 selection-prior 难以稳定超越，M5B 暴露 validation 校准在 test 上退化，M5C 暴露 entry-gap 分布漂移使全局 delta 失效。因此后续任务若不直接针对 OOS 排序、概率/区间泛化或长期趋势模型，不得进入主线。
+
 ## 2. Scope / 当前实施范围
 
 本蓝图当前只覆盖直接产生真实模型和荐股能力的工作：
@@ -87,7 +128,7 @@
 
 ## 3. Non-goals / 明确禁止
 
-在短反弹四项真实功能完成前，禁止实施或恢复以下任务：
+以下任务持续禁止进入当前主线；短反弹 `4/4` 已完成并不自动解禁，只有用户未来针对具体任务单独确认后才能重新排序：
 
 - 历史数据证据链建设、历史数据固化、历史归档和旧任务修复。
 - Source Catalog、逐窗口 hash、全历史 lineage、source revision union 或历史 correction E2E。
@@ -403,7 +444,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW`。
 
-状态：`M5A_M5B_M5C_REAL_RESEARCH_COMPLETE_NOT_ACTIVATED`。M5A 详细设计为 `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`，真实 request 为 `advm5train_a64594d6f22f618a4afef84a`，winner 为 `EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`，实验 bundle 为 `1757b24b854f8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb`。M5B 最终 request `advoutcal_ec16422ad1a97040583e5273` 生成 bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533`，质量不支持激活。M5C 详细设计为 `docs/architecture/advisory_model_first_m5c_entry_gap_calibration_f2_design_20260812.md`；真实 request `advprcal_7cb766fe38898e12a008a328` 在 WSL 对 940 行 feature-covered validation 和 1599 行完整 test 执行中央 80% CQR，生成 bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead` 并 exact retry 一致，耗时 2.679 秒、峰值 RSS 395,853,824 bytes。validation raw coverage `0.810638` 导致 `delta=0`，test raw/calibrated coverage 均为 `0.727955`，故 `activation_recommended=false`、现行 M4 v1 binding 保持不变。
+状态：`M5A_M5B_M5C_REAL_RESEARCH_COMPLETE_ZERO_ACTIVATION_RECOMMENDATIONS`。M5A 详细设计为 `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`，真实 request 为 `advm5train_a64594d6f22f618a4afef84a`，winner 为 `EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`，实验 bundle 为 `1757b24b854f8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb`。M5B 最终 request `advoutcal_ec16422ad1a97040583e5273` 生成 bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533`，质量不支持激活。M5C 详细设计为 `docs/architecture/advisory_model_first_m5c_entry_gap_calibration_f2_design_20260812.md`；真实 request `advprcal_7cb766fe38898e12a008a328` 在 WSL 对 940 行 feature-covered validation 和 1599 行完整 test 执行中央 80% CQR，生成 bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead` 并 exact retry 一致，耗时 2.679 秒、峰值 RSS 395,853,824 bytes。validation raw coverage `0.810638` 导致 `delta=0`，test raw/calibrated coverage 均为 `0.727955`，故 `activation_recommended=false`、现行 M4 v1 binding 保持不变。M5C 源码当前只存在于 PR #3346，尚未合入 `main`；该源码状态与真实 artifact 已生成、binding 未激活是三个独立事实。
 
 - M5A 首先改善 Top20→Top5：当前 M1 test `mean_excess_return_5=-0.0002833`，明显低于 `selection_rank_top5=0.0085591`，不得把“模型已运行”误写为“模型排序有效”。
 - M5A 在现有 406 日/8120 候选、103 特征和冻结 test 上做有限窗口、种子、模型配置及 selection-prior 混合比较；所有选择只使用 train/validation，test 只做一次最终报告。
@@ -417,9 +458,9 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 - 使用长期趋势包对应的现有QE文件训练独立模型。
 
-### 完成后再确认的可选任务
+### 用户未来单独确认后才可恢复的可选任务
 
-以下任务不属于当前路线，只有短反弹`4/4`完成后由用户重新确认：
+以下任务不属于当前路线。短反弹 `4/4` 只满足了未来重新评估的必要条件，不构成授权；截至本次复核用户没有确认恢复其中任何一项：
 
 - 历史证据、历史数据固化和归档。
 - Phase 1R完整历史链E2E。
@@ -593,14 +634,14 @@ runtime_activation = separate user-confirmed action
 
 ## 16. 当前下一步
 
-M5C 已完成详细设计、源码、真实 WSL 校准和 exact retry，但冻结 test 不改善，因此不得激活、不需要后端重启，也不执行 deployed readback。M5A/M5B/M5C 的共同事实是：当前短反弹模型链已经真实可运行，但三项质量迭代均未产生足以替换现行 binding 的 OOS 改善。
+M5C 已完成详细设计、分支源码、真实 WSL 校准和 exact retry，但 PR #3346 尚未合入，且冻结 test 不改善，因此不得激活、不需要后端重启，也不执行 deployed readback。M5A/M5B/M5C 的共同事实是：当前短反弹模型链已经真实可运行，但三项质量迭代均未产生足以替换现行 binding 的 OOS 改善。
 
 M5C 最终验收依据为：`docs/architecture/advisory_model_first_m5c_entry_gap_calibration_f2_design_20260812.md`。
 
 下一主线优先级固定为：
 
 1. 不激活 M5A/M5B/M5C 研究 bundle，不为失败质量结果安排重启、部署验证或历史状态处理。
-2. 下一项研发必须直接提高真实 OOS 模型质量：优先研究能解释 validation→test 漂移的条件化 entry-gap 模型/校准或重新训练 M4 base heads；开始前另写窄范围详细设计，test 不得重复参与选择。
+2. 下一项研发必须直接提高真实 OOS 模型质量。先编写窄范围质量诊断/实验设计，比较时间分段、市场状态、行业、流动性与策略腿特征对 M5A 排序和 M4 entry-gap 漂移的解释力；只有 validation 能形成明确候选时才重新训练或做条件化校准，冻结 test 不得重复参与选择。
 3. 若长期趋势原生多 Alpha 父包先达到可训练输入条件，则直接进入长期趋势独立模型，不要求短反弹质量迭代先成功。
 4. 继续禁止 Historical Range、历史证据、旧 batch/root 清理、通用缓存、ModelOps、角色审批和额外门禁。
 
