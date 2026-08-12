@@ -162,3 +162,35 @@ def test_feature_covered_projection_rejects_duplicate_feature_identity() -> None
 
     assert exc_info.value.reason_code == "ADVISORY_OUTCOME_CALIBRATION_FAILED"
     assert "not one-to-one" in str(exc_info.value)
+
+
+def test_feature_covered_projection_rejects_empty_authoritative_overlap() -> None:
+    features = pd.DataFrame(
+        [
+            {
+                "decision_as_of_trade_date": "2026-01-02",
+                "target_trade_date": "2026-01-03",
+                "instrument": "000001.SZ",
+            }
+        ]
+    )
+    labels = pd.DataFrame(
+        [
+            {
+                "decision_as_of_trade_date": "2026-01-04",
+                "target_trade_date": "2026-01-05",
+                "instrument": "000002.SZ",
+                "split": "validation",
+            }
+        ]
+    )
+
+    with pytest.raises(AdvisoryModelFirstError) as exc_info:
+        pipeline._feature_covered_projection(
+            features=features,
+            labels=labels,
+            projection_name="validation",
+        )
+
+    assert exc_info.value.reason_code == "ADVISORY_OUTCOME_CALIBRATION_FAILED"
+    assert "no common rows" in str(exc_info.value)

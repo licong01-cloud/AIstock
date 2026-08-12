@@ -126,14 +126,15 @@ signal_survival_h{1,3,5,10,20}
 4. 保存 `a`、`b`、样本数、正负样本数、solver、版本、收敛状态和 validation metrics。
 5. 不修改原 booster，不把 calibrated probability 回写成模型 raw prediction。
 
-若某 head validation 缺任一类别，则该 head 保存：
+若某 head validation 缺任一类别，或拟合得到非正斜率、会反转 raw probability 排序，则该 head 保存：
 
 ```text
 calibration_state = UNCALIBRATED
 reason_code = ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING
+           | ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL
 ```
 
-并继续返回 raw probability；禁止使用常数、其他 horizon、其他 family 或全局 calibrator 代替。当前权威 M3 的 10 个 head 均有双边样本，因此真实执行预期为 10/10 calibrated。若 optimizer 不收敛、系数非有限或运行异常，则整个 request typed failure，不把技术失败伪装成合法 `UNCALIBRATED`。
+两种情况均继续返回 raw probability；禁止使用常数、其他 horizon、其他 family 或全局 calibrator 代替，也禁止把 raw 值复制到 calibrated 字段。optimizer 不收敛、系数非有限或运行异常仍使整个 request typed failure，不把技术失败伪装成合法 `UNCALIBRATED`。
 
 ### 6.2 指标
 

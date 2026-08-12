@@ -95,6 +95,18 @@ def fit_platt_calibrator(
     intercept = float(estimator.intercept_[0])
     if not math.isfinite(coefficient) or not math.isfinite(intercept) or int(estimator.n_iter_[0]) >= 1000:
         raise _calibration_error("Platt probability calibration did not converge", head=head)
+    if coefficient <= 0.0:
+        return PlattCalibrationResult(
+            state="UNCALIBRATED",
+            head=head,
+            row_count=len(actual),
+            positive_count=positive_count,
+            negative_count=negative_count,
+            coefficient=None,
+            intercept=None,
+            reason_code="ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL",
+            validation_metrics={"raw": raw_metrics, "calibrated": None},
+        )
     calibrated = apply_platt_calibrator(
         raw_margin=margin,
         coefficient=coefficient,

@@ -58,6 +58,25 @@ def test_platt_single_class_is_explicitly_uncalibrated_without_constant_substitu
     assert result.validation_metrics["calibrated"] is None
 
 
+def test_platt_negative_slope_is_uncalibrated_instead_of_reversing_probability_order() -> None:
+    margin = np.asarray([-2.0, -1.0, 0.0, 1.0, 2.0])
+    raw = 1.0 / (1.0 + np.exp(-margin))
+
+    result = fit_platt_calibrator(
+        head="positive_excess_h5",
+        raw_margin=margin,
+        raw_probability=raw,
+        truth=np.asarray([1, 1, 1, 0, 0]),
+    )
+
+    assert result.state == "UNCALIBRATED"
+    assert result.coefficient is None
+    assert result.intercept is None
+    assert result.reason_code == "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL"
+    assert result.validation_metrics["raw"]["row_count"] == 5
+    assert result.validation_metrics["calibrated"] is None
+
+
 def test_ece_uses_fixed_ten_bins_and_includes_probability_one_in_last_bin() -> None:
     result = expected_calibration_error(
         np.asarray([0, 1, 1]),
