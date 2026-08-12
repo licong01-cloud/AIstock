@@ -1,0 +1,171 @@
+{
+  "schema_version": "pit_v2_window_scope_receipt_v1",
+  "observed_at": "2026-08-12T17:52:37.1355038Z",
+  "source_head": "708d22395ecc8a6c5097a3441dd0e3ae133cc4a7",
+  "single_writer_policy": true,
+  "sequence": ["W0", "W1", "W2", "W3_W4_W5_parallel", "W6", "W7", "W8", "W9"],
+  "windows": {
+    "W0": {
+      "branch": "feature/qe-pit-v2-phase0-inventory-20260813",
+      "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-phase0-inventory-20260813",
+      "status": "implemented_pending_review",
+      "allowed_write_files": [
+        "docs/analysis/qe_pit_v2_phase0_inventory_and_scope_20260813.md",
+        "tests/aistock_validation/pit_v2/source_freeze_receipt.json",
+        "tests/aistock_validation/pit_v2/retention_inventory.json",
+        "tests/aistock_validation/pit_v2/window_scope_receipt.json",
+        "tests/aistock_validation/pit_v2/design_compliance_receipt.json"
+      ],
+      "forbidden": ["business_code", "data_build", "data_export", "dataset_mutation", "ddl_dml", "activation", "distribution", "restart", "cleanup", "process_control"]
+    },
+    "W1": {
+      "depends_on": ["W0_merged"],
+      "owner": "PIT Core/Registry",
+      "planned_exact_write_files": [
+        "backend/services/canonical_equity_pit.py",
+        "backend/services/stock_universe_pit_service.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/migrations/stock_universe_pit_authority_registry_20260813.preflight.sql",
+        "backend/migrations/stock_universe_pit_authority_registry_20260813.sql",
+        "backend/migrations/stock_universe_pit_authority_registry_20260813.rollback.sql",
+        "backend/tests/test_canonical_equity_pit.py",
+        "backend/tests/test_canonical_equity_pit_authority_registry.py",
+        "backend/tests/test_stock_universe_pit_service.py",
+        "backend/tests/test_stock_universe_pit_spans.py"
+      ],
+      "entry_gate": ["fresh_worktree_from_latest_origin_main", "workflow_gate_ready", "w0_receipts_parse", "no_overlapping_writer"],
+      "exit_gate": ["dev_preflight_pass", "dev_forward_readback_pass", "dev_rollback_readback_pass", "resolver_contract_tests_pass", "builder_oracles_pass", "production_pointer_remains_v1_pending_migration"],
+      "forbidden": ["production_ddl_dml", "consumer_module_edits", "data_export", "activation"]
+    },
+    "W2": {
+      "depends_on": ["W1_merged"],
+      "owner": "Dataset Release",
+      "planned_exact_write_files": [
+        "backend/services/dataset_release/profile.py",
+        "backend/services/dataset_release/pit.py",
+        "backend/services/dataset_release/dependency_graph.py",
+        "backend/services/dataset_release/source_authority.py",
+        "backend/services/dataset_release/daily_minute_materializer.py",
+        "backend/services/dataset_release/factor_materializer.py",
+        "backend/services/dataset_release/component_artifact_manifest.py",
+        "backend/services/dataset_release/component_manifest_producer.py",
+        "backend/services/dataset_release/build_stage.py",
+        "backend/services/dataset_release/build_processor.py",
+        "backend/services/dataset_release/candidate_validator.py",
+        "backend/services/dataset_release/retention.py",
+        "backend/qlib_exporter/authoritative_bin_exporter.py",
+        "backend/mcp/modules/qlib_export.py",
+        "scripts/update_backtest_dataset_monthly.py",
+        "configs/datasets/qe_backtest_monthly_v2.yaml",
+        "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
+        ".codex/skills/update-backtest-dataset/SKILL.md",
+        ".codex/skills/update-backtest-dataset/references/monthly-workflow.md",
+        ".codex/skills/update-backtest-dataset/references/index-hmm-contract.md",
+        ".codex/skills/update-backtest-dataset/references/release-receipt.md",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+        "backend/tests/dataset_release/test_profile.py",
+        "backend/tests/dataset_release/test_pit.py",
+        "backend/tests/dataset_release/test_dependency_graph.py",
+        "backend/tests/dataset_release/test_daily_minute_materializer.py",
+        "backend/tests/dataset_release/test_factor_materializer.py",
+        "backend/tests/dataset_release/test_candidate_validator.py",
+        "backend/tests/dataset_release/test_selective_clean_full_parity.py",
+        "backend/tests/dataset_release/test_long_horizon_manifest_lineage_capacity.py",
+        "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+        "backend/tests/scripts/test_pit_v2_initial_migration_plan.py"
+      ],
+      "entry_gate": ["w1_public_binding_merged", "fresh_worktree_from_latest_origin_main", "no_overlapping_writer"],
+      "exit_gate": ["sample_only_tests_pass", "streaming_memory_bounds_pass", "selective_clean_full_parity_pass", "manifest_lineage_capacity_pass", "candidate_only_enforced", "production_runtime_remains_v1"],
+      "forbidden": ["real_full_candidate", "production_dataset_mutation", "consumer_default_change", "production_ddl_dml", "activation"]
+    },
+    "W3": {
+      "depends_on": ["W2_merged"],
+      "owner": "QE/HMM/Training",
+      "reserved_existing_files": [
+        "backend/services/quantevolver/qe_dataset_contract.py",
+        "backend/services/quantevolver/experiment_config.py",
+        "backend/services/quantevolver/config_composer.py",
+        "backend/services/quantevolver/factor_universe_mask_service.py",
+        "backend/services/quantevolver/long_trend_data_reader.py",
+        "backend/services/hmm_data_source/legacy_qe_artifact_manifests.py",
+        "backend/services/hmm_evolution/universe.py",
+        "backend/services/hmm_risk/stock_fact_repository.py",
+        "scripts/backfill_factor_cache.py",
+        "scripts/hmm_risk/repair_b3_stock_fact_gaps.py"
+      ],
+      "new_test_reservations": [
+        "backend/tests/quantevolver/test_canonical_pit_dataset_binding.py",
+        "backend/tests/hmm_data_source/test_isolation_constraints.py"
+      ],
+      "forbidden": ["selection_paper_simulation", "strategy_package_advisory", "online_db_fallback_for_frozen_data"]
+    },
+    "W4": {
+      "depends_on": ["W2_merged"],
+      "owner": "Selection/Paper/Simulation",
+      "reserved_existing_files": [
+        "backend/services/selection_center/runtime_profile.py",
+        "backend/services/selection_center/risk_policy.py",
+        "backend/services/selection_center/service.py",
+        "backend/services/selection_center/hmm_risk_gate.py",
+        "backend/services/selection_center/prospective_evidence.py",
+        "backend/services/selection_center/prospective_evidence_assembler.py",
+        "backend/services/paper_trading_v2/models.py",
+        "backend/services/paper_trading_v2/repository.py",
+        "backend/services/paper_trading_v2/service.py",
+        "backend/services/paper_trading_v2/day_runner.py",
+        "backend/services/paper_trading_v2/live_session.py",
+        "backend/services/paper_trading_v2/readiness.py",
+        "backend/services/simulation_runtime/selection.py",
+        "backend/routers/paper_trading_v2.py"
+      ],
+      "new_test_reservations": [
+        "backend/tests/selection_center/test_canonical_pit_runtime.py",
+        "backend/tests/paper_trading_v2/test_runtime_profile.py"
+      ],
+      "forbidden": ["qe_hmm_training", "strategy_package_advisory", "orderability_semantic_change", "in_place_legacy_profile_rewrite"]
+    },
+    "W5": {
+      "depends_on": ["W2_merged"],
+      "owner": "StrategyPackage/Advisory",
+      "reserved_existing_files": [
+        "backend/services/strategy_package/advisory_input_projection.py",
+        "backend/services/strategy_package/backtest_contract.py",
+        "backend/services/strategy_package/models.py",
+        "backend/services/strategy_package/package_asset.py",
+        "backend/services/strategy_package/runtime.py",
+        "backend/services/strategy_package/runtime_variant.py",
+        "backend/services/strategy_package/selection_computation.py",
+        "backend/services/advisory_dev_input_onboarding/contracts.py",
+        "backend/services/advisory_dev_input_onboarding/phase1e_orchestration.py",
+        "backend/services/advisory_historical_range/catalog_postgres.py",
+        "backend/services/advisory_historical_range/catalog_source_cache.py",
+        "backend/services/advisory_historical_range/decision_mark_provider.py",
+        "backend/services/advisory_historical_range/requirement_planner.py",
+        "backend/services/advisory_modeling/feature_sources.py"
+      ],
+      "new_test_reservations": ["backend/tests/strategy_package/test_canonical_pit_compatibility.py"],
+      "forbidden": ["qe_hmm_training", "selection_paper_simulation", "published_manifest_rewrite", "model_asset_rewrite"]
+    },
+    "W6": {
+      "depends_on": ["W3_merged", "W4_merged", "W5_merged"],
+      "owner": "Integration",
+      "planned_exact_write_files": [
+        "backend/inference_engine.py",
+        "backend/tests/test_canonical_pit_consumer_inventory.py",
+        "tests/aistock_validation/pit_v2/window_scope_receipt.json",
+        "tests/aistock_validation/pit_v2/source_freeze_receipt.json"
+      ],
+      "additional_shared_file_rule": "requires explicit handoff from W1-W5 and W6 single-writer registration before edit",
+      "forbidden": ["production_or_full_candidate", "activation", "unscoped_shared_core_edit"]
+    },
+    "W7": {"owner": "Candidate Build", "write_boundary": "new candidate root plus control catalog and candidate-local CAS only", "forbidden": ["source_code", "production_db", "historical_candidate_overwrite"]},
+    "W8": {"owner": "Independent Validation", "write_boundary": "validation receipts only", "forbidden": ["dataset_mutation", "candidate_mutation", "activation"]},
+    "W9": {"owner": "Activation/Aftercare", "write_boundary": "separately authorized exact migration distribution activation receipts", "forbidden": ["source_change_after_w8", "inferred_restart", "inferred_cleanup"]}
+  },
+  "overlap_review": {
+    "W1_W2": "serial_no_overlap",
+    "W3_W4_W5": "parallel_reserved_files_disjoint",
+    "shared_core": "W6_single_writer_only",
+    "status": "PASS_W0_SCOPE_FREEZE"
+  }
+}
