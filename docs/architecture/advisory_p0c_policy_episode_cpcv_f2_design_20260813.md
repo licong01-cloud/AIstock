@@ -464,6 +464,7 @@ P0-C 产物只由后续 P0-D WSL 训练读取；不会因源码合入自动执�
 - Source Round 2：删除无直接依赖的factor schema门槛并强化shadow policy逐字段继承。
 - Source Round 3：修复一字跌停已知open未计入组合mark与持有日的收益偏差。
 - Source Round 4：candidate range与rank context range分离，context-only日只推进已有持仓，不产生新标签或入场。
+- Real WSL Round 1：真实标签/组合/CPCV计算完成后，bundle JSON writer拒绝`Timestamp`；修复为显式date/datetime/numpy规范化并禁止NaN或任意对象静默字符串化。
 
 ## 20. Implementation Plan / 实施方案
 

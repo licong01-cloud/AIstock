@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date, datetime
 import os
 import shutil
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import pandas as pd
+import numpy as np
 import pyarrow.parquet as pq
 
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
@@ -219,7 +221,14 @@ def load_policy_dataset_bundle(
 
 def _write_json(path: Path, payload: Any) -> None:
     path.write_text(
-        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n",
+        json.dumps(
+            _json_ready(payload),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -250,3 +259,21 @@ def _sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None
+        return value.isoformat()
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, np.generic):
+        return _json_ready(value.item())
+    if isinstance(value, Mapping):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise TypeError(f"unsupported policy dataset JSON value: {type(value).__name__}")
