@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 
 from backend.services.quantevolver import qe_evolution_service as qes
+from backend.services.quantevolver import qe_log_broker as broker_module
+from backend.services.quantevolver.qe_log_broker import QELogBroker
+from backend.services.quantevolver.qe_log_store import QELiveLogStore
 
 
 def _collect_stream(stream):
@@ -136,6 +139,12 @@ def test_custom_evo_log_stream_node_plan_includes_strategy_and_loop_nodes(monkey
 
 def test_distributed_task_log_stream_fans_in_all_loop_nodes(tmp_path, monkeypatch):
     monkeypatch.setattr(qes, "SOTA_ASSETS_DIR", str(tmp_path))
+    ring_root = tmp_path / "qe_live_logs"
+    monkeypatch.setattr(
+        broker_module,
+        "_PROCESS_BROKER",
+        QELogBroker(QELiveLogStore(ring_root, max_file_bytes=4096)),
+    )
 
     class DummyClient:
         def __init__(self, payloads):
@@ -146,8 +155,8 @@ def test_distributed_task_log_stream_fans_in_all_loop_nodes(tmp_path, monkeypatc
                 yield "data: " + json.dumps(payload, ensure_ascii=False)
 
     clients = {
-        "node-a": DummyClient([{"status": "running", "logs": ["[Loop1] local-node line"]}]),
-        "node-b": DummyClient([{"status": "running", "logs": ["[Loop2] remote-node line"]}]),
+        "node-a": DummyClient([{"status": "completed", "logs": ["[Loop1] local-node line"]}]),
+        "node-b": DummyClient([{"status": "completed", "logs": ["[Loop2] remote-node line"]}]),
     }
 
     scheduler = qes.AutoEvolutionScheduler.__new__(qes.AutoEvolutionScheduler)
@@ -165,10 +174,10 @@ def test_distributed_task_log_stream_fans_in_all_loop_nodes(tmp_path, monkeypatc
 
     assert "[node-a] [Loop1] local-node line" in joined
     assert "[node-b] [Loop2] remote-node line" in joined
-    log_text = (tmp_path / "qe_dist" / "logs" / "evolution.log").read_text(encoding="utf-8")
-    assert "[Log Nodes] node-a, node-b" in log_text
-    assert "[node-a] [Loop1] local-node line" in log_text
-    assert "[node-b] [Loop2] remote-node line" in log_text
+    assert not (tmp_path / "qe_dist" / "logs" / "evolution.log").exists()
+    ring_text = "".join(path.read_text(encoding="utf-8") for path in sorted(ring_root.glob("qe-live-*.jsonl")))
+    assert "[node-a] [Loop1] local-node line" in ring_text
+    assert "[node-b] [Loop2] remote-node line" in ring_text
 
 
 def test_delete_task_captures_node_id_before_db_record_deletion():
@@ -333,5 +342,10 @@ def test_frontend_log_stream_requires_expanded_log_panel():
 
     assert "const [logsCollapsed, setLogsCollapsed] = useState(true);" in source
     assert "if (!activeTaskId || logsCollapsed)" in log_effect
+    assert 'document.addEventListener("visibilitychange", updateVisibility)' in source
+    assert "if (!pageVisible)" in log_effect
+    assert "lastLogCursorRef.current = event.lastEventId" in log_effect
+    assert "?after_cursor=${encodeURIComponent(resumeCursor)}" in log_effect
+    assert "if (!backendLogsOpen || !pageVisible) return;" in source
     assert log_effect.index("if (!activeTaskId || logsCollapsed)") < log_effect.index("new EventSource")
     assert log_effect.index("if (!activeTaskId || logsCollapsed)") < log_effect.index("/logs/tail?tail=200")

@@ -7524,7 +7524,11 @@ async def stream_experiment_logs(experiment_id: str):
                 },
             )
 
-        from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+        from ..services.quantevolver.qe_log_broker import (
+            QELogBrokerSource,
+            get_qe_log_broker,
+        )
+        from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient, QEWorkspaceLogEvent
 
         try:
             client = QEWorkspaceClient.for_node(execution_node_id)
@@ -7546,22 +7550,53 @@ async def stream_experiment_logs(experiment_id: str):
         async def event_generator():
             streamed_any = False
             try:
-                async for line in client.stream_task_logs(qe_task_id):
-                    streamed_any = True
-                    raw = line
-                    if raw.startswith("data:"):
-                        raw = raw[5:].strip()
+                async def open_stream(source_cursor: str | None):
+                    typed_stream = getattr(client, "stream_task_log_events", None)
+                    if callable(typed_stream):
+                        async for source_event in typed_stream(
+                            qe_task_id,
+                            after_cursor=source_cursor,
+                        ):
+                            yield source_event
+                        return
+                    if source_cursor:
+                        raise RuntimeError("legacy QE log source cannot resume a cursor")
+                    async for raw_line in client.stream_task_logs(qe_task_id):
+                        data = raw_line[len("data:"):].strip() if raw_line.startswith("data:") else raw_line
+                        if data:
+                            yield QEWorkspaceLogEvent(
+                                data=data,
+                                cursor=None,
+                                event_type=None,
+                                terminal=QEWorkspaceClient._log_event_is_terminal(data, None),
+                            )
+
+                source = QELogBrokerSource(
+                    node_key=str(execution_node_id),
+                    node_label=str(execution_node_id),
+                    open_stream=open_stream,
+                )
+                async for broker_event in get_qe_log_broker().stream(qe_task_id, [source]):
+                    raw = broker_event.data
                     if raw:
                         try:
                             payload = json.loads(raw)
                             if isinstance(payload, dict) and "logs" in payload:
+                                if payload.get("event") not in {
+                                    "node_log_stream_error",
+                                    "qe_live_log_store_error",
+                                }:
+                                    streamed_any = True
                                 for log_line in payload["logs"]:
                                     yield f"data: {log_line}\n\n"
                                 continue
                         except (json.JSONDecodeError, TypeError):
                             pass
+                        streamed_any = True
                         for sub in raw.split("\n"):
                             yield f"data: {sub}\n\n"
+                if not streamed_any:
+                    raise RuntimeError("QE live log upstream ended before any business log event")
             except Exception as e:
                 if not streamed_any:
                     source, tail_lines = await _load_experiment_node_log_tail(
@@ -7616,6 +7651,7 @@ async def stream_multi_node_logs(experiment_id: str):
     """
     import asyncio
 
+    from ..services.quantevolver.qe_log_broker import QELogBrokerSource, get_qe_log_broker
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
 
     with get_conn() as conn:
@@ -7655,10 +7691,20 @@ async def stream_multi_node_logs(experiment_id: str):
         try:
             client = QEWorkspaceClient.for_node(node_id)
             async with client:
-                async for line in client.stream_task_logs(qe_task_id):
-                    raw = line
-                    if raw.startswith("data:"):
-                        raw = raw[5:].strip()
+                async def open_stream(source_cursor: str | None):
+                    async for source_event in client.stream_task_log_events(
+                        qe_task_id,
+                        after_cursor=source_cursor,
+                    ):
+                        yield source_event
+
+                source = QELogBrokerSource(
+                    node_key=str(node_id),
+                    node_label=str(node_id),
+                    open_stream=open_stream,
+                )
+                async for broker_event in get_qe_log_broker().stream(qe_task_id, [source]):
+                    raw = broker_event.data
                     if not raw:
                         continue
                     try:
