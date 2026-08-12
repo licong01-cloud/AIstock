@@ -4357,6 +4357,7 @@ class AutoEvolutionScheduler:
                 phase_pipeline_enabled=retry_phase_pipeline_enabled,
                 submission_source_kind="qe_evolution_loop",
                 submission_source_execution_id=retry_source_execution_id,
+                submission_source_claim_id=evolution_loop_db_id,
             )
             retry_mode = BacktestMode.BACKTEST_ONLY if retry_mode_name == "backtest_only" else BacktestMode.FULL_TRAIN
             result = await executor.submit(cfg, ctx, mode=retry_mode)

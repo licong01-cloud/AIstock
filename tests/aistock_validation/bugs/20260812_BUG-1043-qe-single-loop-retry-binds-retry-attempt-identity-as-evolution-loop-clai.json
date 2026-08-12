@@ -166,9 +166,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python subprocess imported the tracked ExecutionContext and BacktestExecutor, constructed a retry-attempt reservation identity with a distinct canonical qe_evolution_loops claim identity, resolved the source without database access, and exited 0 with fresh-process-ok; no user backend or experiment process was controlled",
+      "Fresh Python subprocess imported tracked ExecutionContext and BacktestExecutor, resolved distinct retry-attempt reservation and canonical evolution-loop claim identities, printed fresh-process-ok, and exited 0 without database or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -187,6 +196,15 @@
     "fingerprint": "ebd7db49fdb0ae5f1255c316",
     "source_event_id": "FE-20260812-ebd7db49fdb0"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/unified_engine/test_backtest_executor.py backend/tests/test_qe_evolution_scheduler.py -q -> 30 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and module ownership files=14 mapped=14",
+    "python -m nox -s qe_read_backend -> 34 passed",
+    "python -m ruff check on five changed Python files -> passed",
+    "python -m py_compile on five changed Python files -> passed",
+    "git diff --check -> passed",
+    "fresh-process retry identity and canonical claim identity import smoke -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
