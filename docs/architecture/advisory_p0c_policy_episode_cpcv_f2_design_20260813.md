@@ -3,7 +3,7 @@
 > 日期：2026-08-13  
 > Feature tier：F2  
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.0  
-> 当前阶段：`SOURCE_AND_REAL_WSL_DATASET_VERIFIED_PENDING_MERGE`  
+> 当前阶段：`SOURCE_AND_REAL_WSL_DATASET_VERIFIED_PENDING_MERGE`
 > 适用范围：学术研究与模拟荐股观察，不构成实时投资建议，不连接实盘交易或下单执行
 
 ## 1. Background / 当前真实基线
