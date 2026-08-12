@@ -22,12 +22,15 @@ description: Operate the durable, candidate-only AIstock monthly QE backtest dat
 普通 operator 入口：
 
 ```powershell
-rtk python scripts/update_backtest_dataset_monthly.py monthly --candidate-only
-rtk python scripts/update_backtest_dataset_monthly.py status --latest
-rtk python scripts/update_backtest_dataset_monthly.py reattest-existing --latest
-rtk python scripts/update_backtest_dataset_monthly.py events --run-id <run_id> --limit 50
-rtk python scripts/update_backtest_dataset_monthly.py receipt --run-id <run_id>
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v1 reattest-existing --latest
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 events --run-id <run_id> --limit 50
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 receipt --run-id <run_id>
 ```
+
+`qe_hmm_full_v2` 是 future canonical candidate profile；`qe_hmm_full_v1` 只保留既有 release 的复现与只读重验。
+源码交付不等于 runtime activation，未完成 v2 全量验证和独立激活授权前不得把 production 默认值切到 v2。
 
 `monthly` 成功响应返回随机 `idempotency_key`；只在重试同一次调用时显式复用。未显式给 key 的下一次人工
 调用必须形成新 submission/fresh probe，resolution 再按 source identity 复用既有 run/release。
@@ -36,7 +39,7 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 
 ## 每次执行
 
-1. 从当前 repo 读取 `configs/datasets/qe_backtest_monthly_v1.yaml`；不要复用聊天中的 cutoff、路径、资源值或旧 schema 路径。
+1. 新月更读取 `configs/datasets/qe_backtest_monthly_v2.yaml`；历史复现读取 v1。不要复用聊天中的 cutoff、路径、资源值或旧 schema 路径。
 2. 确认请求是只读状态、candidate 月更、re-attest，还是独立 production/runtime 动作。授权不得跨类别继承。
 3. 对月更只提交一次 durable intent。默认 profile、cutoff policy、reuse/resume 和 sample policy 由 profile/control plane 决定。
 4. 用 `status --latest` 或受保护 API 查询 submission/run/events。Worker 未运行时是
@@ -55,8 +58,9 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 - 默认始终 `candidate-only`。不得覆盖或原地追加现有 candidate；不得切 production pointer/symlink。
 - 不自动初始化/迁移真实 control root，不启动、停止、重启或注册 backend、Worker、scheduler、QE、RDAgent、WSL task 或 node1。
 - planner/source acquisition 只读 DB。provider 只进入 candidate-local immutable CAS/overlay，不写 DB；DB repair 是独立动作。
-- 分钟缺口固定 TDX 优先、Tushare 次级；只补 missing keys。重叠冲突、重复、required NULL/非有限、非 240 根或 Tushare `40203` 都 fail closed。
+- 历史 D/P 日线缺口使用 candidate-local Tushare `pro_bar` missing-only overlay；价格转厘、成交量转手、amount 千元转厘，DB/provider 重叠必须完全一致。分钟缺口固定 TDX 优先、Tushare 次级；只补 missing keys。重叠冲突、重复、required NULL/非有限、非 240 根或 Tushare `40203` 都 fail closed。
 - 股票 universe 使用冻结 PIT spans；candidate 保存 canonical snapshot/hash。不得用当前 ST 列表、实验黑名单或 max-date/count 代替。
+- v2 PIT 仅接受 `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`：252 个交易所交易日 IPO 暖机、历史退市股生命周期、公告 as-of 终止风险与 ST snapshot gap 闭环必须同时满足；rolling 与 frozen snapshot 必须同 rule/digest。
 - DB 外 moneyflow 固定 `tushare_moneyflow_shares_yuan_v1`：量=股、额=元；`mf_total_net_*` 来自 canonical `net_mf_*`。
 - static 固定 121 数据列、`l2_code_id int16`、unknown=`-1`。12 指数和 HMM `000300.SH` benchmark 不得运行时扩张或替换。
 - 不降低 resource reserve、不提高 hard cap、不扩大并发。资源压力只能走 profile pressure ladder；不能减少股票、日期、字段、指数或验证。
@@ -67,6 +71,7 @@ RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运�
 - profile 冻结的 Ubuntu/conda/Qlib dump script/repo guardian-runner 路径和 SHA 是 hard gate；缺失或漂移
   fail closed，不 fallback、不临时安装依赖。
 - re-attest、cancel、resume、publish recovery 都必须使用 durable identity/lease/fence；不要删除 lock、staging、receipt、candidate 或失败证据来“恢复”。
+- 被 QE、训练、审计、正式发布或 production 引用的历史 release 必须保留完整不可变数据集；`all.txt` 只是索引证据，不能替代 daily/minute、H5/static、指数、PIT 和 receipts。未引用失败候选也只可登记为 cleanup candidate，Skill 不自动删除。
 - 真实数据导出、生产激活、DB DDL/DML、进程控制和 cleanup 各自需要明确授权。
 
 ## 按需读取 references

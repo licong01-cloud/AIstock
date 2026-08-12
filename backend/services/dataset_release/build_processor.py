@@ -54,6 +54,11 @@ from .daily_minute_materializer import (
 )
 from .errors import DatasetReleaseError, IdentityConflictError
 from .profile import DatasetProfile
+from .pit import (
+    PitSnapshotError,
+    frozen_pit_snapshot_from_mapping,
+    require_canonical_frozen_snapshot,
+)
 from .publisher import DatasetPublisher, PublishSpec
 from .resource_gate import RESOURCE_GATE_RECEIPT_SCHEMA
 from .resolution import (
@@ -244,6 +249,7 @@ class ProductionBuildProcessor:
         plan, build_inputs = self._plan(run)
         release = _release_identity(build_inputs)
         _validate_run_plan_identity(run, plan, build_inputs, release)
+        _validate_release_pit_binding(self.profile, self.cas, build_inputs, release)
         return WorkResourceSpec(
             policy=self.profile.resource_policy,
             hybrid_wsl=True,
@@ -313,6 +319,7 @@ class ProductionBuildProcessor:
         plan, build_inputs = self._plan(run)
         release = _release_identity(build_inputs)
         _validate_run_plan_identity(run, plan, build_inputs, release)
+        _validate_release_pit_binding(self.profile, self.cas, build_inputs, release)
         layout = self._layout(release, context)
         self._bind_attempt_staging(context, layout)
 
@@ -1240,6 +1247,37 @@ def _release_identity(build_inputs: Mapping[str, Any]) -> ReleaseIdentity:
         )
     except (KeyError, ValueError, IdentityConflictError) as exc:
         raise BuildProcessorError("release identity cannot be derived from build plan") from exc
+
+
+def _validate_release_pit_binding(
+    profile: DatasetProfile,
+    cas: CASStore,
+    build_inputs: Mapping[str, Any],
+    release: ReleaseIdentity,
+) -> None:
+    if profile.pit_authority_status != "ACTIVE_CANONICAL":
+        return
+    reference = build_inputs.get("pit_snapshot_ref")
+    source_snapshot = build_inputs.get("source_snapshot")
+    if not isinstance(reference, Mapping) or not isinstance(source_snapshot, Mapping):
+        raise BuildProcessorError("canonical release PIT reference is missing")
+    try:
+        payload = cas.get_json_bounded(str(reference["sha256"]), max_bytes=MAX_BUILD_PLAN_BYTES)
+        if not isinstance(payload, Mapping):
+            raise PitSnapshotError("canonical release PIT artifact is not a mapping")
+        snapshot = frozen_pit_snapshot_from_mapping(payload)
+        expected_digest = ensure_sha256(
+            str(source_snapshot["pit_snapshot_digest"]),
+            field="pit_snapshot_digest",
+        )
+        require_canonical_frozen_snapshot(
+            snapshot,
+            release_id=release.release_id,
+            rolling_cutoff_spans_sha256=expected_digest,
+            consumer="qe_training",
+        )
+    except (KeyError, CASStoreError, PitSnapshotError, ValueError) as exc:
+        raise BuildProcessorError("canonical release PIT binding is invalid") from exc
 
 
 def _consumer_smoke_instrument(prepare: Mapping[str, Any]) -> str:

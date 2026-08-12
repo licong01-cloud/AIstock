@@ -20,7 +20,7 @@ The scheduler is optional and disabled by default. It runs as Worker reconcile m
 
 ## Hard resource contract
 
-Read live values from the allowlisted profile. `qe_hmm_full_v1` v1 freezes these defaults/hard boundaries:
+Read live values from the selected allowlisted profile. `qe_hmm_full_v1` reproduction and `qe_hmm_full_v2` canonical candidate share these defaults/hard boundaries:
 
 | Resource | Boundary |
 |---|---:|

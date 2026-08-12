@@ -2,11 +2,22 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 from datetime import date
+import copy
 import re
 from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping
 
 import yaml
+
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_IPO_TRADING_SESSIONS,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SCOPE,
+    CANONICAL_PIT_UNIVERSE_KEY,
+    PitAuthorityStatus,
+    canonical_rule_parameters_digest,
+)
 
 from .canonical import digest_named_fields
 from .contracts import Component
@@ -36,6 +47,9 @@ from .stock_schema import (
 GIB = 2**30
 PROFILE_SCHEMA_VERSION = "qe_backtest_monthly_profile_v2"
 PROFILE_ID = "qe_hmm_full_v1"
+CANONICAL_PROFILE_OVERLAY_SCHEMA_VERSION = "qe_backtest_monthly_profile_overlay_v1"
+CANONICAL_PROFILE_ID = "qe_hmm_full_v2"
+CANONICAL_PROFILE_BASE_NAME = "qe_backtest_monthly_v1.yaml"
 
 
 @dataclass(frozen=True)
@@ -312,6 +326,11 @@ class DatasetProfile:
     components: tuple[Component, ...]
     universe_key: str
     universe_rule_version: str
+    pit_authority_id: str
+    pit_authority_status: str
+    pit_rule_parameters_digest: str
+    pit_ipo_trading_sessions: int
+    pit_scope: str
     moneyflow_contract: str
     static_column_count: int
     static_schema_version: str
@@ -480,11 +499,44 @@ def _load_dataset_profile(
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_file():
         raise ProfileValidationError(f"profile not found: {resolved}")
-    raw = yaml.safe_load(resolved.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
+    source_raw = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    if not isinstance(source_raw, dict):
         raise ProfileValidationError("profile root must be a mapping")
-    if raw.get("schema_version") != PROFILE_SCHEMA_VERSION or raw.get("profile") != PROFILE_ID:
-        raise ProfileValidationError(f"profile must be {PROFILE_SCHEMA_VERSION}/{PROFILE_ID}")
+    overlay_source: Mapping[str, Any] | None = None
+    if source_raw.get("schema_version") == CANONICAL_PROFILE_OVERLAY_SCHEMA_VERSION:
+        expected_overlay_fields = {"schema_version", "profile", "extends", "semantic"}
+        if set(source_raw) != expected_overlay_fields or source_raw.get("profile") != CANONICAL_PROFILE_ID:
+            raise ProfileValidationError("canonical profile overlay shape differs")
+        if source_raw.get("extends") != CANONICAL_PROFILE_BASE_NAME:
+            raise ProfileValidationError("canonical profile overlay must extend the registered v1 profile")
+        semantic_overlay = source_raw.get("semantic")
+        if not isinstance(semantic_overlay, Mapping) or set(semantic_overlay) != {
+            "universe_key",
+            "universe_rule_version",
+            "pit_authority",
+        }:
+            raise ProfileValidationError("canonical profile semantic overlay shape differs")
+        base_path = (resolved.parent / CANONICAL_PROFILE_BASE_NAME).resolve(strict=True)
+        if base_path.parent != resolved.parent:
+            raise ProfileValidationError("canonical profile base escapes profile directory")
+        base_raw = yaml.safe_load(base_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(base_raw, dict)
+            or base_raw.get("schema_version") != PROFILE_SCHEMA_VERSION
+            or base_raw.get("profile") != PROFILE_ID
+        ):
+            raise ProfileValidationError("canonical profile base identity differs")
+        raw = copy.deepcopy(base_raw)
+        raw["profile"] = CANONICAL_PROFILE_ID
+        raw["semantic"].update(copy.deepcopy(dict(semantic_overlay)))
+        overlay_source = source_raw
+    else:
+        raw = source_raw
+    profile_id = str(raw.get("profile") or "")
+    if raw.get("schema_version") != PROFILE_SCHEMA_VERSION or profile_id not in {PROFILE_ID, CANONICAL_PROFILE_ID}:
+        raise ProfileValidationError(
+            f"profile must be {PROFILE_SCHEMA_VERSION}/({PROFILE_ID}|{CANONICAL_PROFILE_ID})"
+        )
 
     semantic = raw.get("semantic") or {}
     storage = raw.get("storage") or {}
@@ -556,6 +608,31 @@ def _load_dataset_profile(
 
     if semantic.get("moneyflow_contract") != "tushare_moneyflow_shares_yuan_v1":
         raise ProfileValidationError("moneyflow share/CNY contract drift")
+    if profile_id == CANONICAL_PROFILE_ID:
+        pit_authority = semantic.get("pit_authority") or {}
+        expected_pit_authority = {
+            "authority_id": CANONICAL_PIT_AUTHORITY_ID,
+            "authority_status": PitAuthorityStatus.ACTIVE_CANONICAL.value,
+            "rule_parameters_digest": canonical_rule_parameters_digest(),
+            "ipo_warmup_unit": "exchange_trading_session",
+            "ipo_warmup_count": CANONICAL_PIT_IPO_TRADING_SESSIONS,
+            "historical_delisted_included": True,
+            "data_availability_changes_membership": False,
+        }
+        if pit_authority != expected_pit_authority:
+            raise ProfileValidationError("canonical PIT authority contract drift")
+        if (
+            semantic.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY
+            or semantic.get("universe_rule_version") != CANONICAL_PIT_RULE_VERSION
+        ):
+            raise ProfileValidationError("canonical monthly releases must use the active canonical PIT rule")
+    else:
+        pit_authority = {}
+        if (
+            semantic.get("universe_key") != "shsz_st_pit_active_v1"
+            or semantic.get("universe_rule_version") != "st_pub_next_trade_restore_active_l_v1"
+        ):
+            raise ProfileValidationError("legacy v1 profile PIT identity drift")
     static = semantic.get("static_authority") or {}
     if (
         int(static.get("column_count", 0)) != 121
@@ -613,7 +690,7 @@ def _load_dataset_profile(
         raise ProfileValidationError("candidate_root_id is required")
 
     semantic_payload = {
-        "profile": PROFILE_ID,
+        "profile": profile_id,
         "start_date": start_date,
         "minute_start_date": minute_start_date,
         "components": [item.value for item in required],
@@ -626,10 +703,19 @@ def _load_dataset_profile(
         "source_partitioning": source_partitioning,
         "index_context": index_contract_payload(),
     }
-    config_digest = digest_named_fields("dataset_release_profile_file_v2", raw)
+    if profile_id == CANONICAL_PROFILE_ID:
+        semantic_payload["pit_authority"] = pit_authority
+    config_digest = (
+        digest_named_fields(
+            "dataset_release_profile_overlay_v1",
+            {"effective": raw, "overlay": overlay_source},
+        )
+        if overlay_source is not None
+        else digest_named_fields("dataset_release_profile_file_v2", raw)
+    )
     return DatasetProfile(
         path=resolved,
-        profile=PROFILE_ID,
+        profile=profile_id,
         start_date=start_date,
         minute_start_date=minute_start_date,
         cutoff_policy=str(raw.get("cutoff_policy")),
@@ -645,6 +731,23 @@ def _load_dataset_profile(
         components=required,
         universe_key=str(semantic.get("universe_key")),
         universe_rule_version=str(semantic.get("universe_rule_version")),
+        pit_authority_id=str(pit_authority.get("authority_id") or "legacy_shsz_st_pit_v1"),
+        pit_authority_status=str(
+            pit_authority.get("authority_status")
+            or PitAuthorityStatus.DEPLOYED_LEGACY_PENDING_MIGRATION.value
+        ),
+        pit_rule_parameters_digest=str(
+            pit_authority.get("rule_parameters_digest")
+            or digest_named_fields(
+                "legacy_st_pit_rule_v1",
+                {
+                    "universe_key": semantic.get("universe_key"),
+                    "rule_version": semantic.get("universe_rule_version"),
+                },
+            )
+        ),
+        pit_ipo_trading_sessions=int(pit_authority.get("ipo_warmup_count") or 0),
+        pit_scope=(CANONICAL_PIT_SCOPE if profile_id == CANONICAL_PROFILE_ID else "st_only_active"),
         moneyflow_contract=str(semantic.get("moneyflow_contract")),
         static_column_count=int(static.get("column_count")),
         static_schema_version=STATIC_SCHEMA_VERSION,

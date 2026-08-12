@@ -66,6 +66,7 @@ router = APIRouter(
     route_class=DatasetReleaseApiRoute,
 )
 PROFILE_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "datasets" / "qe_backtest_monthly_v1.yaml"
+CANONICAL_PROFILE_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml"
 DEFAULT_PROFILE = "qe_hmm_full_v1"
 MAX_PAGE_SIZE = 200
 T = TypeVar("T")
@@ -136,8 +137,10 @@ def get_dataset_release_control_service() -> DatasetReleaseControlService:
     """Open registered control roots only; never initialize or migrate them."""
 
     try:
-        profile = load_dataset_profile(PROFILE_CONFIG)
-        return DatasetReleaseControlService([DatasetReleaseProfileBinding.from_profile(profile)])
+        profiles = [load_dataset_profile(path) for path in (PROFILE_CONFIG, CANONICAL_PROFILE_CONFIG)]
+        return DatasetReleaseControlService(
+            [DatasetReleaseProfileBinding.from_profile(profile) for profile in profiles]
+        )
     except (
         CASStoreNotInitialized,
         ControlStoreError,

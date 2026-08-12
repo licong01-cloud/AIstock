@@ -34,7 +34,7 @@ from .cas_store import (
 from .contracts import Component
 from .errors import DatasetReleaseError, SourceManifestError
 from .index_sources import independent_postgres_connection_factory
-from .pit import FrozenPitSnapshot, freeze_pit_snapshot
+from .pit import FrozenPitSnapshot, freeze_pit_snapshot, require_canonical_source_snapshot
 from .profile import DatasetProfile, ResourcePolicy
 from .source_manifest import (
     CanonicalPartitionHasher,
@@ -2188,6 +2188,7 @@ class MonthlySourceAuthority:
         expected_state = {
             "universe_key": self.profile.universe_key,
             "rule_version": self.profile.universe_rule_version,
+            "scope": self.profile.pit_scope,
         }
         mismatch = {
             field: {"expected": expected, "actual": state.get(field)}
@@ -2313,6 +2314,8 @@ class MonthlySourceAuthority:
             state_start=_as_date(state["start_date"]),
             state_end=_as_date(state["end_date"]),
         )
+        if self.profile.pit_authority_status == "ACTIVE_CANONICAL":
+            require_canonical_source_snapshot(snapshot)
         return (state_partition, spans_partition), snapshot
 
     def _partition_requests(
