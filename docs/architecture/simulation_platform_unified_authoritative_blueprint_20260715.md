@@ -1,12 +1,14 @@
-# AIstock LocalSIM / MiniQMT 模拟盘统一权威蓝图
+﻿# AIstock LocalSIM / MiniQMT 模拟盘统一权威蓝图
 
-> 文档状态：`implementation_in_progress`；F2 设计与 K1–K6 source 已闭合，runtime activation、用户 restart 和正常交易日验证仍是独立未完成状态。
+> 文档状态：`architecture_correction_design_ready`；既有 K1–K6 source 中经济事实、outbox、broker callback 与算法隔离能力继续有效，但“普通 TICK 先持久化再路由”、每分钟 `NO_FILL` 事件、重复 reconciliation 行和无界 run JSON 历史被 2026-08-12 正式撤回。对应 source remediation 尚未实现，模拟盘 runtime 保持用户停止状态。
 >
 > MiniQMT execution-kernel进度（2026-08-05）：K1/K2/K3/K4/K5 overall=`implemented_verified + merged`。K6 base design、K6-A与implementation-readiness revision已分别通过PR #2993/#3004/#3024合入。K6-C0 strict contracts、successor migration与versioned repository preflight已通过PR #3032 / merge `2a3622a3ba63585e3dfe12ef7ccb3f33b00dcb63`完成`implemented_verified + merged`；BUG-953 deterministic lineage、lifecycle authority与exact physical mapping closure已通过PR #3048 / merge `f4da00f6838f6da6344223f6bba55dfe606def3e`完成`implemented_verified + merged + runtime_verified`。K6-C1 generic product authority/materializer已通过PR #3080合入，K6-B final dependent-BUY coordinator已通过PR #3120合入且successor production DDL=`9/9 true`。K6-D下位设计PR #3129已合入；K6-D code已通过PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349`完成`implemented_verified + merged`与`source_merge=merged_pr_3146`，唯一KERNEL_V2 composition、真实QMT snapshot callback、scheduler no-quote clock/EOD、per-binding failure isolation、legacy产品caller物理退役、fresh-process source capability及additive只读diagnostics均已进入main。K6 overall仍=`implementation_in_progress`，用户restart、runtime activation和正常交易日验收均未完成，产品runtime未切换。
 >
-> 2026-08-08 Acceptance status audit：112 个 Acceptance ID 中，107 个行为/实现条目已有 merged source 与 direct test evidence；仅 `F-001/F-002/F-003/F-025/F-061` 保持 `design_ready`，因为它们分别是 authority/progress/compliance、P1 sequencing 与 K2 subordinate-design 合同，不是未实现代码。该分类不把 source merge 冒充 runtime activation。
+> 2026-08-08 的112项audit是历史快照；2026-08-12已扩展为121项。`F-113..F-121`均为`design_ready`且implementation/runtime evidence未完成；凡旧条目依赖durable TICK、per-wait event、NO_FILL append或unbounded history，其历史`implemented_verified`只保留审计记录，不再代表满足当前目标。
 >
 > 2026-08-12 runtime blocking audit：生产 `ck_miniqmt_event_type/source` 仍停留在 P1-D allowlist，而 `ck_miniqmt_k2_event_composite` 已允许 KERNEL_V2，三者互相矛盾并使合法 `SESSION + EXCHANGE_SESSION_CLOCK` 每个 quote callback 都重复进入数据库读取、锁、失败 INSERT 和 rollback。BUG-1019 / Issue #3274 的 source repair、DEV successor migration、持久 callback actor、exact physical/logical lease、B0 real seam、scheduler UNKNOWN reconcile 与 peer isolation 已完成本地实现和最终独立复审，PR/CI 尚未创建。后端由用户主动停止，`production_ddl_gate=pending`，source merge、生产 DDL、用户 restart、runtime identity 和正常交易日验收继续分别记录。
+>
+> 2026-08-12 hot-market-data persistence correction：生产只读审计确认 `qmt_strategy.execution_runtime_event` 已保存 `10,570` 条 RAW_TICK，且同日 KERNEL_V2 TICK 在约 35 分钟写入 `3,169` 条；10 秒窗口约 `5,899` 次 transaction commit，而实际 KERNEL_V2 event 仅约 `37` 条。`paper_v2.order_events` 有 `765,294` 条 `NO_FILL`，`qmt_strategy.reconciliation_issue` 约 `439,996` 行且 `99.31%` 为重复 fingerprint，`paper_v2.simulation_daily_run` 以单行 JSON 保存最高约 10 MB 历史。本文据此把行情热路径改为 vn.py 式进程内单写者 event bus：普通 tick/分钟行情数据库读写必须为零；只有真正改变交易决策或经济状态时，才把不可反向还原盘口的决策标量随同一经济事务入库。任何 raw/normalized quote、BBO、L1-L5 depth、bar payload或行情快照均不得入交易数据库。旧“durable TICK”条款及其实现验收结论对该 slice 撤回，详见 `F-113..F-121` 与 `SIM-P-080`。
 >
 > 2026-08-03 final-architecture-only revision=`design_revision_ready + merged`、`source_merge=merged_pr_3098`，merge `b986e8f655137e9aea88f17ea91d3eb153f1c017`：后续所有MiniQMT execution-kernel研发预算只投入最终KERNEL_V2隔离架构。legacy产品代码冻结，禁止C2、旧路线修复/backport、legacy parity、compatibility bridge、translator、双写和额外shadow product route；旧实例只使用当前版本自然drain，K6-D必须删除旧产品caller并完成唯一route与正常交易日验收。
 >
@@ -205,7 +207,7 @@ PLAN_ACCEPTED
 - terminal status/reason 和 residual classification；
 - idempotency key 和 state hash。
 
-当次 tick 只消费新到达且晚于 causality cursor 的 bars。部分成交后 remaining quantity 继续由后续分钟事件驱动；不能因为当前 bars 用尽就把全天计划报成功。收盘后才可根据完整 schedule、可交易性和 residual policy 终结。
+当次 cadence 只消费进程内新到达且晚于 causality cursor 的 bars。输入分钟 bar 属于行情热数据，不复制到模拟盘 PostgreSQL；只有 order/fill/cash/position、remaining quantity和实际经济状态迁移是 durable facts。无成交、无状态变化的分钟只推进进程内 clock/view，不写cursor、不插入 `NO_FILL`/run-event；restart从最近经济checkpoint的因果边界确定性重读TDX分钟数据，不把bar本身持久化。部分成交后 remaining quantity 继续由后续分钟事件驱动，不能因为当前 bars 用尽就把全天计划报成功。收盘后才可根据完整 schedule、可交易性和 residual policy 终结。
 
 broker-neutral plan 必须保留全部合法 intent。临时 quote 不可用、当前资金尚未由卖出成交释放、当前分钟无新 bar，均由执行状态分别表达为 `WAITING_FOR_MARKET_DATA`、`WAITING_FOR_CAPITAL`、`WAITING_FOR_CAUSAL_BAR`；不得在计划阶段删除 intent、伪造 `NO_REBALANCE` 或提前写成功。LocalSIM 每轮调度先处理 SELL，再处理 BUY；BUY 只能消费 ledger 已提交的真实现金，卖出回款到达后自动继续，直到 filled 或收盘 residual terminalization。历史闭日回放也必须保留原始 intent；任何未完成 order 都形成 `localsim_historical_residual_v1`，并区分 `CAPITAL_RESIDUAL` 与 `SCHEDULE_RESIDUAL_AT_HISTORICAL_CLOSE`，不得恢复计划期估价跳单。
 
@@ -218,10 +220,12 @@ MiniQMT SIM 的产品执行行情只有以下来源：
 1. `subscribe_whole_quote` 的真实 XtQuant callback；
 2. 订阅建立时 `get_full_tick` 只用于 bootstrap 当前 snapshot；
 3. callback 进入 Phase 1 normalizer/ordering/freshness/clock/tradability；
-4. `B0_QUOTE_V2` context/evidence durable ack 后驱动 `MiniQMTExecutionRuntime`；
+4. `B0_QUOTE_V2` normalized immutable view 在进程内 single-writer event bus 上驱动 `MiniQMTExecutionRuntime`；
 5. runtime 通过唯一 OMS/Gateway 提交 child，broker order/trade callback 及 reconcile 反向更新状态。
 
-normalized tick 进入 kernel 时必须先形成有 durable identity/sequence 的 `RuntimeEventEnvelopeV2`，再按 active algo 形成 `AlgoEventDeliveryV1`。真实 `TIMER`、session boundary 和 EOD 由同一 `ExchangeSessionClock` 生成，不来自 quote，也不得由 tick 计数、快速 `for` 循环或 scheduler polling 伪造；B0 quote authority 与 timer authority 必须保持独立。
+normalized tick 进入 kernel 时必须先形成 immutable、hash-closed、process-local `MarketDataViewV2`，再由同一 runtime 的单写者内存 event bus 按 active algo subscription 投递。普通 tick 不创建 `execution_runtime_event`、delivery、outbox、repository readback、reconciliation scan 或 SQL transaction；同 symbol 多 algo 共享同一 view，不按 algo 扩大 DB fan-out。tick实际触发action/reprice/cancel/terminal reject/状态迁移时，也不得保存任何quote snapshot/depth、observed market price、bar字段或行情hash；经济事务只写本来就属于订单/成交的command price与quantity、code-owned/frozen配置阈值、reason和action time，不新增`ExecutionDecisionEvidenceV1`。真实 `TIMER`、session boundary 和 EOD 仍由同一 `ExchangeSessionClock` 生成，不来自 quote，也不得由 tick 计数、快速 `for` 循环或 scheduler polling 伪造；B0 quote authority 与 timer authority 必须保持独立。
+
+hot path 不从数据库恢复“上一条 tick”。进程重启后先恢复 durable algo/economic state，再等待同一 B0 physical feed 的下一条真实 callback 或合法 bootstrap snapshot；缺行情时维持 process-local WAITING 状态并输出低基数 aggregate health，不写 per-tick/per-wait journal，也不回退旧 tick、分钟线、last price 或 LEGACY_B0。
 
 每次 callback/lifecycle evaluation 必须使用同一次采样得到的当前 wall clock 与 monotonic clock；scheduler 启动时刻或前一轮 tick 的时间不能复用为后续 quote eligibility 时钟。single writer 在生成 observation 时必须把同一个不可变 projection context 一并交付 controller；controller 先校验 observation/context identity，再保存这份原始 authority，不得在 callback sink 中重新读取可能已经推进的 current context 来猜测原始 identity。已接受 observation 只有 calendar/policy/continuity generation/clock domain/trade date/symbol authority 与当前 evaluation context 全部一致时才可在当前时钟重新评价；不得重写 observation identity，也不得用 timer 合成新 quote。
 
@@ -233,7 +237,29 @@ authority refresh 只有 calendar/policy/symbol static authority、canonical tra
 
 禁止：分钟线代理 tick、定时器合成 tick、普通 quote 合成 auction 字段、提交后只查一次、旧 compiler/day runner 直接下单、B0_V2 失败时回退 LEGACY_B0。
 
-### 4.5 Durable fact plane
+### 4.5 三平面数据边界与 durable fact plane
+
+模拟盘只有以下三条单向数据平面：
+
+```text
+Hot market-data plane
+  QMT callback / TDX causal minute
+    -> normalize + immutable MarketDataView
+    -> in-process single-writer bus / latest-view cache
+    -> algo transition evaluation
+    -> zero SQL for no-action/no-state-change input
+
+Decision-evidence plane
+  action-bearing market-data view
+    -> existing economic transition/command/child fields only
+    -> same transaction as transition/command/child/reject/TCA
+
+Economic durable plane
+  release/binding/run/plan/algo current state
+    -> command/outbox/order/trade/cash/position/reconcile/session/EOD/TCA
+```
+
+禁止把 raw callback、normalized tick、盘口snapshot、ordinary rejected quote、每分钟bar、每分钟`NO_FILL`、每tick WAIT或unchanged state当成durable fact。行情质量故障在没有action/economic transition时只更新进程内有界metrics/log；不得为quote health/cadence在交易数据库写窗口event。TCA/markout所需benchmark/mark行情在查询或离线计算时从权威历史行情源读取；交易库只允许保存与order/trade绑定的派生TCA结果、horizon、policy/version和不可逆source hash，不保存benchmark/mark行情价格、时间序列或盘口。
 
 事实链必须可从任一 terminal run 重建：
 
@@ -245,10 +271,10 @@ admission_receipt
   -> order_event_id <-> broker_order_id
   -> trade_event_id <-> broker_trade_id
   -> cash_entry_id / position_lot_id / account_snapshot_id
-  -> market_data_id / quote evidence / markout / TCA receipt
+  -> action/command/child/trade identity / derived TCA receipt
 ```
 
-写路径必须有单 writer、单调递增 sequence、canonical economic hash、幂等 key、重复冲突检测和 readback。DB 成功前不得返回 durable success；内存 snapshot 和日志不能替代事实落库。
+经济写路径必须有单 writer、单调递增 sequence、canonical economic hash、幂等 key、重复冲突检测和 readback。DB 成功前不得返回 durable success；内存 snapshot 和日志不能替代经济事实落库。反向同样成立：行情热数据不是经济事实，不得为了“可重放”或 diagnostics 把全部 tick/bar 持久化。
 
 ## 5. Contracts / 契约
 
@@ -425,13 +451,13 @@ event-loop retry 若发现同一 runtime 已持久化 parent intent，只能在 
 
 event-loop durable batch 的 request/result 关联 identity 是唯一、非空的 parent intent ID，不是 JSON 数组位置。request/result cardinality 相同、两侧 identity 均唯一且集合完全相同但排列不同，属于合法 permutation：replay 必须按 identity 恢复，并按 durable request 的 canonical 顺序返回和重新持久化；禁止分别排序后 positional zip。null/empty identity、request/result duplicate、missing/extra、cardinality drift、identity alias 冲突、success 缺 `qmt_order_id`、`broker_called` 与 accepted/rejected carrier 矛盾均立即 typed fail loud，错误上下文保留 batch/runtime/binding（可获得时）、两侧完整 identity、duplicates/missing/extra 和 expected/actual。一个 parent 的多个 child slice 以 runtime child facts 为完整 authority；parent batch projection 保留首次已接受 broker identity，后续 rejected 或 accepted slice 不得抹掉、迁移或重复累计既有 side effect。restart/replay 复用同一 batch 和 child facts，不重复 broker call、child、accepted/submitted count；single-writer update 后按 request canonical order readback，持久化失败不得返回 ACK。
 
-MiniQMT kernel/plugin 的详细实施契约由 `miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md` 定义。产品 runtime 必须保持一个 durable kernel：event ingress 只负责规范化和持久化，delivery transaction 使用 `SELECT ... FOR UPDATE`/等价 single-writer 语义加载插件 state，插件只接收 immutable context 并返回 `AlgoTransitionReceiptV1`，state、delivery result、transition 和 `BrokerCommandOutboxV1` 在同一事务提交；broker dispatcher 只能消费 committed outbox，并以 `command_id/idempotency_key` 经唯一 OMS/Gateway 去重。插件不得持有 DB、gateway、scheduler、strategy package 或 mutable runtime service 引用，不得自行启动 EventEngine、线程、订阅或 broker side effect。vn.py compatibility façade 只映射算法 API/对象语义，不成为第二 runtime、OMS、Gateway、时钟或数据源 owner。
+MiniQMT kernel/plugin 的详细实施契约由 `miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md` 定义。产品 runtime 必须保持一个 kernel，但 durable ingress 只接纳 business/session/timer/order/trade/account/reconcile/operator/EOD 事实；TICK 使用同一 kernel 的 process-local hot ingress，绝不调用 PostgreSQL。经济 delivery transaction 使用 `SELECT ... FOR UPDATE`/等价 single-writer 语义加载插件 state，插件只接收 immutable context并返回 `AlgoTransitionReceiptV1`；若 tick 未产生 effect，零 DB 写入；若产生 effect，也只提交既有state、transition和`BrokerCommandOutboxV1`所需的订单价格、数量、reason、策略版本与时间，不新增任何行情evidence carrier/hash。broker dispatcher只能消费committed outbox，并以`command_id/idempotency_key`经唯一OMS/Gateway去重。插件不得持有DB、gateway、scheduler、strategy package或mutable runtime service引用，不得自行启动第二EventEngine、线程、订阅或broker side effect。vn.py compatibility façade只映射算法API/对象语义；行情分发遵循vn.py内存EventEngine/engine cache模式，但不复制第二runtime、OMS、Gateway、时钟或数据源owner。
 
-该 kernel contract 还必须同时满足：algo 创建具有 deterministic `ALGO_START` event→delivery sequence 1→initial transition→outbox 身份链；TICK/TIMER/ORDER/TRADE/ACCOUNT/SESSION/EOD/RECONCILE/OPERATOR 按事件类型和 durable owner 精确路由并冻结 delivery-set hash；每个 algo 使用无间隙 delivery sequence/predecessor 与 state CAS，`SKIP LOCKED` 或 row lock 本身不构成顺序证明。插件异常必须在同一 transaction 写 failure receipt、FAILED state、timer cancellation 和 active-child cancel outbox，后续 delivery 只写可重建 SKIPPED receipt。
+该 kernel contract 还必须同时满足：algo 创建具有 deterministic `ALGO_START` event→delivery sequence 1→initial transition→outbox 身份链；TIMER/ORDER/TRADE/ACCOUNT/SESSION/EOD/RECONCILE/OPERATOR 按 durable owner 精确路由并冻结 delivery-set hash；TICK 只按 frozen runtime/symbol/plugin subscription 在内存路由，保持 process-local market sequence 但不占用 durable event/delivery sequence。真正产生 effect 时才分配下一 durable transition sequence，并只持久化经济transition/command原生字段；不得附加行情证据、行情hash或行情source identity。每个 algo 的 durable transition 使用无间隙 predecessor 与 state CAS，`SKIP LOCKED` 或 row lock 本身不构成顺序证明。插件异常若发生在 action-bearing transition 内，必须在同一 transaction 写 failure receipt、FAILED state、timer cancellation 和 active-child cancel outbox；普通 malformed/no-action tick 只形成有界进程诊断，不能制造一条 DB failure event。
 
 K2-B 对callback与quantity进一步只有一套authority：ORDER/TRADE/RECONCILE，以及K3 additive generic `COMMAND_OUTCOME`，均以strict `KernelCallbackMappingUpdateV1`和同一repository transaction把mapping、existing child projection、FAILED algo active-child closure、event/receipt/delivery-set和runtime sequence闭合，禁止ACK后第二writer或按payload猜归属；COMMAND_OUTCOME只承载已持久化outbox outcome且source为execution kernel，不冒充OMS RECONCILE。state的`parent_quantity`必须等于durable target，`traded_quantity`必须严格、非负、不回退且不超过target，remaining只由kernel派生，`FILLED`只有在traded等于target时成立。stale CLAIMED recovery保持同一attempt，只推进exact lease successor；attempt 5后不存在第6次plugin调用。当前三算法pure façade属于K4，K2-B对不兼容旧binding保留durable fail-loud evidence，不fallback legacy route。
 
-dispatcher 提交 `DISPATCHING` 后的 `broker_called` 必须为 unknown/null；stale lease、重启或 timeout 一律自动转 `OUTCOME_UNKNOWN -> RECONCILING`，在 MiniQMT 未证明 `IDEMPOTENT_SUBMIT_BY_CLIENT_REF` 时禁止重提 SUBMIT。capability 必须分为静态 route unsupported、当前合法 observation 暂缺、已提供但非法/冲突：分别执行创建前 typed refusal、durable wait+EOD residual、observation typed rejection；不得让实现任意选择“等待或拒绝”，也不新增人工 acknowledge。vn.py compatibility 仅对 manifest 登记且通过 pinned exact method signature/DTO/return/error characterization receipt 的算法成立，不得用方法子集、动态 no-op 或默认字段宣称 source-compatible。
+dispatcher 提交 `DISPATCHING` 后的 `broker_called` 必须为 unknown/null；stale lease、重启或 timeout 一律自动转 `OUTCOME_UNKNOWN -> RECONCILING`，在 MiniQMT 未证明 `IDEMPOTENT_SUBMIT_BY_CLIENT_REF` 时禁止重提 SUBMIT。capability 必须分为静态 route unsupported、当前合法 observation 暂缺、已提供但非法/冲突：分别执行创建前 typed refusal、process-local wait（仅在deadline/EOD形成一次durable residual）、process-local typed rejection（只有真实action终结才在经济transition写reason）；不得让实现任意选择“等待或拒绝”，也不新增人工 acknowledge。vn.py compatibility 仅对 manifest 登记且通过 pinned exact method signature/DTO/return/error characterization receipt 的算法成立，不得用方法子集、动态 no-op 或默认字段宣称 source-compatible。
 
 ### 5.9 Error and health contract
 
@@ -448,7 +474,7 @@ dispatcher 提交 `DISPATCHING` 后的 `broker_called` 必须为 unknown/null；
 
 MiniQMT TCA observation 对“字段缺失”和“字段已提供但非法”必须严格分离：quote price/time 全部已提供别名都必须分别可解析且相互一致，price 拒绝 bool、非有限、非正数，time 拒绝空串/布尔/未知格式；缺少全部可选 quote 字段才允许显式 `MISSING/MISSING_TIME`。preflight `allowed` 必须是 exact bool，before/after quantity 必须是非负整数且 after 不得大于 before，classification flags 不得冲突，deadline `RESOLVED/UNRESOLVED` 必须与 deadline/reason 闭合。任一非法值必须抛带稳定 reason、字段、原始类型和有界安全值的 `TcaCaptureDataError`，由既有 sidecar single-writer 写入 durable `capture_errors`；error message 最长 2048、context 最多 20 项且值最长 512，单次 first-write capture attempt 明确 `retryable=false/terminal=true/observation_only=true/execution_gate=false`。TCA 是 observation-only，capture error 不得回滚、重试或改写已经确定的 B0 broker execution，也不得被解释为执行成功证据。
 
-`ACTION_REJECT` 是 market-data evidence：有 normalized observation 时必须携带其 `market_data_id/tradability/raw ingress` 关联；没有可归属的 raw/normalized observation 时不得伪造 quote-less evidence。首次 quote 尚未到达或 context 尚无兼容 observation 时，runtime 必须持久化有界去重的 `b0_quote_v2_quote_waiting_v1` lifecycle event，明确 reason/stage/parent/algo/clock、`market_data_id=null`、`broker_called=false`，并保持 algo 等待真实 tick；wait event 必须携带由完整 semantic payload 计算的 deterministic fingerprint，controller 恢复时从包含 archived 的 durable journal 校验并重建已见 fingerprint/current wait，不得因进程重建重复写相同 runtime/algo/semantic wait；hash 或 event carrier 冲突必须 typed fail loud。持久化失败必须向调用方抛出，不能静默跳过。
+`ACTION_REJECT` 只在某条 quote 已参与一次真实 action decision 且该 decision 终结为拒绝时才是 durable execution fact；只能携带reason、action identity、策略版本与时间，不得携带tradability/盘口snapshot、行情价格或行情hash。ordinary stale/duplicate/out-of-order/zero-depth/no-action quote不能写`ACTION_REJECT`。首次quote尚未到达或context尚无兼容observation时，runtime仅保留process-local WAITING state与bounded metrics/log；恢复后等待下一真实tick，不从durable journal重放quote wait。若该等待导致EOD residual、action deadline terminal或其它经济状态迁移，才在相应transition中写一次稳定reason和`broker_called=false`。任何经济transition持久化失败必须向调用方抛出，不能静默跳过。
 
 ### 5.10 Scheduler health contract
 
@@ -623,7 +649,9 @@ config、restart、binding migration 和真实 SIM observation 六类状态继�
 
 diagnostics 绝不启动 feed、修改状态、重放订单、修复 DB 或触发 broker。
 
-MiniQMT quote diagnostics 的唯一权威投影为 `/api/v1/simulation-runtime/miniqmt/quote-diagnostics`。同一响应必须按 `runtime_id` 同时呈现 durable health ack/readback/event time/age、callback subscription progress、single-writer health、B0 controller health、gateway state 和 OMS state，并保留各层原始事实；canonical status 必须消费 durable payload 自身的 `HEALTHY/DEGRADED/FAILED`，并以当前 process config 的 evidence cadence 两倍作为只读 freshness 上限，超期必须给出稳定 `STALE` reason，durable `FAILED`、invalid readback/status 或未来事件时间不得被 live component 绿色覆盖。该 freshness 只影响 diagnostics，不成为执行、审批或人工确认门禁。缺少 durable health 时整体为明确 `DEGRADED` 与稳定 reason，而不是与 scheduler live telemetry 形成两个互相竞争的布尔状态。scheduler status 仅标注为 in-process live component telemetry；`/monitor/miniqmt/status` 仅是 legacy 手工接口连接状态，必须显式 `authoritative_for_simulation_runtime=false`，不得参与模拟盘健康判定。
+MiniQMT quote diagnostics 的唯一权威投影为 `/api/v1/simulation-runtime/miniqmt/quote-diagnostics`。同一响应必须按 `runtime_id` 同时呈现当前进程 generation、callback subscription progress、single-writer health、B0 controller health、gateway state、OMS state与已有经济事实的独立readback，并保留各层原始事实。quote freshness只以process-local monotonic heartbeat/callback age和显式generation判定；重启后旧generation明确失效，不从数据库恢复或伪造连续性。gateway/OMS/economic事实中的durable `FAILED`、invalid readback/status或未来事件时间不得被live quote component绿色覆盖；quote telemetry缺失时整体为明确`DEGRADED`与稳定reason。该freshness只影响diagnostics，不成为执行、审批或人工确认门禁。scheduler status仅标注in-process live component telemetry；`/monitor/miniqmt/status`仅是legacy手工接口连接状态，必须显式`authoritative_for_simulation_runtime=false`，不得参与模拟盘健康判定。
+
+quote health只存在于bounded process metrics/log，不得写交易数据库窗口event。read-only diagnostics可读取process-local counters和已有经济facts，但不得为了页面刷新触发feed、repository repair、全表扫描或tick persistence。进程重启后metrics重新开始并明确generation变化，不伪装durable continuity。
 
 ### 7.2 Bounded metrics
 
@@ -638,6 +666,8 @@ MiniQMT quote diagnostics 的唯一权威投影为 `/api/v1/simulation-runtime/m
 - invalid payload count；
 - false-green prevention count；
 - durable readback mismatch。
+- hot-path repository call count、DB transactions per economic transition、no-action tick/minute zero-write violations；
+- reconciliation distinct fingerprint、repeat count 和 current unresolved count，而不是重复 issue 行数。
 
 ### 7.3 Alerts
 
@@ -651,6 +681,19 @@ MiniQMT quote diagnostics 的唯一权威投影为 `/api/v1/simulation-runtime/m
 - raw/direct broker path 被调用。
 
 告警是可观测通知，不是运行审批。恢复后自动解除；不要求人工 acknowledge 才恢复业务。
+
+### 7.5 数据库容量与写放大预算
+
+| 路径 | hard budget |
+| --- | --- |
+| ordinary MiniQMT tick | repository/SQL/query/write/outbox scan 均为 `0` |
+| ordinary LocalSIM minute/no fill | market-data/event/cursor write均为 `0`；仅经济state变化可写一次compact update |
+| action-bearing tick | 只写既有经济transition/command/child的订单价格、数量、reason、策略版本与时间；不新增行情carrier/hash |
+| run current summary | 单 row canonical JSON 总预算 `<= 64 KiB`；历史 states/receipts/outbox 必须规范化到子表或对象引用 |
+| quote/health diagnostics | 仅process metrics/log；PostgreSQL写入为`0` |
+| reconciliation issue | 同 fingerprint 一个 current row，重复只更新 `last_seen/count`；不得每 cadence append 同一 issue |
+
+数据库 transaction 数必须与 economic transitions/commands/callbacks 成比例，不能与 tick/bar 数成比例。DEV soak 验收至少注入 1,000,000 条无 action tick 和一个完整交易日无成交分钟序列，instrumented repository 证明 market-data hot path `query_count=0/write_count=0`；`pg_stat_database/pg_stat_statements` 证明无 tick-volume 线性增长。任何违反 hard budget 的实现都属于 P0，不能通过调低轮询频率、连接池扩容或静默丢弃来放行。
 
 ### 7.4 Operator runbook
 
@@ -676,6 +719,10 @@ LocalSIM `causal_bar_lag_seconds` 定义为 diagnostics observation clock 到 ac
 | Failure mode | Required behavior | Forbidden behavior |
 | --- | --- | --- |
 | LocalSIM 只取得早盘 bars | 保持 ACTIVE，后续 bar 继续 schedule | 部分成交后把全天 run 报成功 |
+| ordinary tick/minute 无 action | 只更新进程内 view/clock | 写 event/delivery/NO_FILL、查 DB、扫 outbox/reconcile |
+| decision-bearing quote | 同经济事务只写既有订单/transition原生经济字段 | 保存raw/normalized quote、盘口snapshot、行情价格/hash或另起第二writer |
+| identical reconciliation repeats | fingerprint current row upsert count/last_seen | 每 cadence append duplicate issue/run |
+| run history增长 | normalized child facts + bounded current summary | 在 `simulation_daily_run` 单行追加无界 JSON arrays |
 | LocalSIM plan 遇到临时 quote/停牌/涨跌停 | 保留 broker-neutral intent，执行层进入 wait/no-fill/market state | 计划阶段删除 intent、写 PRE_TRADE_BLOCKED 成功或重新选股 |
 | LocalSIM 单 symbol 行情不可用 | 该 symbol `WAITING_FOR_MARKET_DATA`，健康 symbol 继续 | 整批 rollback 或吞错后报成功 |
 | LocalSIM 同 cadence 多 intent/symbol | 每 unique symbol 一次 snapshot/validation，marks 复用；下一 cadence 刷新 | 每 intent 重拉全日或永久复用旧 snapshot |
@@ -819,7 +866,7 @@ operator runbook 与同一 schema/阈值/reason 对齐；source/CI/merge、depen
 承接 `F-034` 至 `F-039`。本 slice 修复真实运行暴露出的 durable truth 与执行可达性缺口，不改变 Selection/Target、V25、T+1、涨跌停、停牌、B0 tick authority、共享 batch account preflight 或唯一 broker route：
 
 - `BUG-779`：LocalSIM economic snapshot 必须支持 Pydantic、dataclass、immutable `Mapping`/`MappingProxyType` 和严格 JSON value；JSON object key 必须原生为 string，禁止以 `str(key)` 合并不同业务 key，float/Decimal 的 `NaN`、`Infinity` 必须在 hash/持久化前以 `LOCALSIM_FACT_JSON_KEY_INVALID` / `LOCALSIM_FACT_JSON_NUMBER_INVALID` fail loud。只有 durable economic transaction 已 staged/committed 才可声明 broker/economic side effect。pre-commit 失败必须持久化 `economic_commit_staged=false`、`broker_called=false` 和完整失败数量；历史 run 若曾声称提交但无 receipt/state/outbox，可读 diagnostics 必须标记 `LOCAL_SIM_DURABLE_FACTS_UNRECONSTRUCTIBLE`，不得补写或伪造经济事实；
-- `BUG-780`：B0 parent preflight 使用冻结 parent reference，不得预取普通 quote 代替 controller 的真实 callback tick。每个真实 quote 只捕获一次完整 strict JSON-compatible payload并校验 hash；缺 quote、空对手盘或 transient directional depth 只写该 symbol durable wait，健康 symbol 继续。zero-price/positive-volume、未知 source/identity 或 payload/hash 冲突仍 typed fail loud；共享账户/仓位/资金 batch preflight 继续保持全批原子失败；
+- `BUG-780`历史根因仍有效，但其“每quote完整payload/durable wait”修复策略已由`F-113..F-115`取代：preflight继续使用冻结parent reference且不预取普通quote；真实callback只更新bounded in-memory view。缺quote、空对手盘或transient directional depth只更新该symbol process-local wait/aggregate，健康symbol继续；真实action只写既有经济transition/command字段，不保存行情evidence/hash；
 - `BUG-781`：BUY 与普通 SELL child 继续遵守 symbol-aware board-lot；SELL 仅在 child quantity 等于 authoritative available whole position 时允许低于最小手数或带 odd-lot residual，任意 partial odd-lot child 必须在 gateway 前拒绝。runtime、vn.py core、managed-order preflight 共用同一语义，不用 `min_volume=1` 放宽所有 SELL；qmt strategy ledger preflight 与 vn.py asset direct test 必须精确映射到既有 MiniQMT/Paper execution sessions，不能因 unmapped classifier 跳过真实依赖测试；submit exception 后 broker status probe 自身失败必须在 cash unfreeze 和 intent rejection 后以 `MINIQMT_BROKER_STATUS_PROBE_FAILED` 向上抛出，不得静默解释为 disconnect；
 - `BUG-782`：恢复必须先把 runtime-owned broker trade snapshot 与 archived durable trade event 按 exact trade identity 合并、去重和冲突校验，再通过同一 `record_trade_event` 路径重放。BUY 原冻结按 order price 释放并写 cash/T+1 lot，SELL 写 cash/lot/realized facts；event 已 append 但 settlement/child/vn.py core update 失败时，后续同 identity retry 必须按 durable stage checkpoint 续做未完成阶段且不重复经济事实。多 fill 必须用规范化 broker time 稳定排序，同秒 fill 保留 durable event/broker snapshot 原相对顺序；`cumulative_quantity` 是 child progress 派生事实，不得纳入单笔 trade identity hash 冲突判定。缺失/非法/冲突 identity、owner、quantity、price、time 均 fail loud；
 - `BUG-783`：daily run、qmt batch、order intent 与 runtime journal 必须形成精确可重建投影。`broker_called` 必须来自 gateway ack 的 exact boolean，并同步到 child metadata、runtime event、batch result、order intent metadata 和 diagnostics；pre-broker rejection 必须保持 false，broker 调用后的 reject 保持 true，任意 rejected event 不得被事件类型本身推断为已调用 broker。order intent status 与 `broker_called/broker_call_pending/qmt_order_id` projection metadata 必须在同一 repository update 中提交；parent outcome count 与实际 child count 分离；同 parent 后续 rejected slice 不得覆盖既有 accepted broker fact；restart recovery 必须把全部 recovered child/trade 投影回原 batch/intent。read-only diagnostics 比较 runtime child/event/trade/count/hash 与 run/batch carrier，陈旧或冲突显示 `MINIQMT_RUNTIME_PROJECTION_STALE`、低基数 metric 和自动解除 alert，不自动 repair、不形成 execution gate；
@@ -844,7 +891,7 @@ operator runbook 与同一 schema/阈值/reason 对齐；source/CI/merge、depen
 承接 `F-043` 至 `F-052`，详细契约见 `miniqmt_execution_kernel_vnpy_plugin_architecture_f2_design_20260722.md`。本 slice 把当前 runtime 中算法专用分支、缺失的真实 timer、弱版本 state 和 submit helper 收敛为一个 execution kernel，不改变 `B0_QUOTE_V2`、Selection/Target、方向数量、A 股交易规则、OMS/Gateway 或 broker route：
 
 1. K0/K1 固定 `RuntimeEventEnvelopeV2`、exact routing、per-algo sequence/predecessor、`ExecutionAlgoPluginManifestV2`、`ExecutionAlgoPluginV2`、capability 三分法、state/version/migration、pinned façade surface 和 import boundary；K1 的 strict schema/canonical hash/registry/deterministic context/current-three manifests/compatibility receipt 以 `miniqmt_execution_kernel_k1_contracts_registry_f2_detailed_design_20260722.md` 为唯一实施级下位合同。code-owned durable descriptor facts 不保存 live callable，factory/config-validator/state-codec 只存在于 process binding 并按冻结 ref/signature/source fail-loud 校验；route receipt 普通 readback 仅证明 structural hash，K2 消费前必须以 exact plugin catalog 与 strict gateway catalog 调用同一 pure evaluator 的 authority-aware readback，重算全部 facts、failure set、status/hash；
-2. K2 实现 ALGO_START、durable ingress、per-algo delivery/failure、`ExchangeSessionClock`、transition transaction、command outbox、nullable broker-called、dispatcher retry/dedupe/unknown-outcome readback；
+2. K2 实现 ALGO_START、business-event durable ingress、process-local TICK hot ingress、per-algo economic delivery/failure、`ExchangeSessionClock`、transition transaction、command outbox、nullable broker-called、dispatcher retry/dedupe/unknown-outcome readback；普通 TICK 不得进入 repository；
    - K2-B 子切片由 `kernel_ingress.py/kernel_creation.py/kernel_delivery.py/kernel_materializer.py/kernel_repository_k2b.py`实现shadow-only ALGO_START、exact routing、callback single-transaction、pure delivery/failure/skip、bounded retry与stale claim recovery；不启动产品worker、不调用broker、不接线legacy/current-three runtime。
 3. K3 把 Sniper、BestLimit、TWAP Lite 迁移到同一 SPI，并以旧/新 trace parity 固定既有业务行为；实施级合同见 `miniqmt_execution_kernel_k3_current_three_runtime_migration_f2_detailed_design_20260727.md`，固定 pure plugin 3.0.0 exact factory/class/binding、transition-first construction、SUBMIT/CANCEL pending/unknown与terminal-trade-pending state、strict ORDER/TRADE/OMS RECONCILE/COMMAND_OUTCOME payload、mapping/outbox lifecycle projection、deterministic outcome ingress、TWAP raw/effective due authority、committed-fact shadow source、visible transport suppression、legacy zero-write inventory和K3/K4/K6边界；
 4. K4交付不拥有第二套runtime/OMS/Gateway、且对每个注册算法生成exact compatibility receipt的`VnpyAlgoEngineFacadeV1`；实施级合同为`miniqmt_execution_kernel_k4_vnpy_facade_f2_detailed_design_20260729.md`，严格限定initialize/transition-scoped façade、通用adapter、existing K2 optional invocation/read-only authority seam、K1/K2/K3 authority复用、current-three shadow conformance和Iceberg/Stop characterization-only；K4-A V1永久observation-only，K4-B positive path必须使用V2 full input/actual trace/source-execution/conformance authority与fresh readback；不注册Iceberg/Stop、不改current-three binding、不进入K6 cutover；K2 V1仅允许单command exact shadow materialization，多command collector trace必须完整但不得复用receipt或冒充产品闭环，generic per-command product authority aggregate仍由K6独立F2拥有；
@@ -854,9 +901,9 @@ operator runbook 与同一 schema/阈值/reason 对齐；source/CI/merge、depen
    - pure `ExecutionAlgoPluginV2` Protocol归属既有catalog/process-binding authority，kernel与conformance只引用这一份SPI；不得反向import kernel、复制Protocol或放宽K1 import-boundary。
 6. K6按[`miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md`](miniqmt_execution_kernel_k6_product_cutover_f2_detailed_design_20260801.md)实施：K6-A/C0/BUG-953既有contracts、migration、deterministic lineage与production schema readback保持闭合。K6-C1已通过PR #3080实现并合入唯一pure per-command evaluator、full creation/timer envelope、0/1/N与MIXED atomic materializer、typed pre-call reject、deferred coordination、same-authority idempotency、commit-unknown和fresh readback，继续复用K2 transition/mapping/outbox/child/algo/delivery。之后K6-B直接实现最终KERNEL_V2 coordinator/invocation seam，只把同一physical mapping row/command id由product RESERVED显式交接给现有K2 outbox/dispatch lifecycle；K3 inventory不得作为candidate source、legacy parity、迁移oracle或验收输入。K6-D完成new-instance唯一KERNEL_V2 cutover、冻结旧实例自然drain、旧产品caller删除与正常交易日验收。legacy代码不得再获得功能、修复、backport、parity、bridge或shadow研发；只增加现有K2缺失的coordination/product-authority事实，不复制K2 event/transition/outbox/OMS/Gateway，不进入算法plugin，不允许dual route/fallback。
 
-BUG-1019 固定 runtime-event schema 的唯一 successor authority：`ck_miniqmt_event_type` 必须是 P1-D 27 类与 `EventTypeV2` 11 类的 36 类去重并集，`ck_miniqmt_event_source` 必须是 P1-D 7 来源与 `EventSourceV2` 7 来源的 14 项并集；`ck_miniqmt_k2_event_composite` 以二值闭包精确区分两个互斥命名空间——`LEGACY_V1` 只允许既有 P1-D type/source，`KERNEL_V2` 只允许 12 个 exact type/source/payload-schema 组合（含 `ALGO_START` v1/v2 与 `COMMAND_OUTCOME`），NULL、跨命名空间和三值 CHECK 漏口全部拒绝。preflight、forward、rollback 与 application readback 使用同一 frozen artifact identity、exact definition identity、经函数体校验且独立重算的 K2/K2-D catalog authority；mixed、unvalidated、expression/hash drift、伪造 fingerprint helper、K2-D `pg_proc.proconfig` 漂移或非法 durable row均 fail loud。forward 在同一事务锁内原子替换并验证 `event_id/event_sequence/event_type/event_source/K2 composite/K2 envelope contract` 六项完整 CHECK authority；六项 target 都用二值 `IS TRUE`，helper 固定 `search_path=pg_catalog,qmt_strategy` 且 catalog order 固定 `COLLATE "C"`，target no-op 必须同时保留 helper OID/xmin 与六项 constraint OID。rollback只恢复立即 predecessor，存在任何 KERNEL_V2 或 K2/K2-D/K6 successor durable fact时拒绝，绝不删改 durable event；shared algo/child 表中的合法 `LEGACY_V1` 行不是 successor fact，preflight 与 post-COMMIT 必须使用相同 namespace filter。post-COMMIT readback重新锁定完整 graph、逐表重数全部 successor facts并闭合 predecessor六项 CHECK、helper及K2/K2-D catalog。应用启动只读 gate 必须在同一 read-only repeatable-read snapshot 内闭合完整relation locks、successor六约束、helper body/config、独立 catalog与durable rows；单独 quote-event receipt只能报告`pending_full_kernel_readback`，DEV schema readback也不得冒充production DDL完成。
+BUG-1019 固定的 runtime-event successor authority 仅作为历史/经济 event schema 基线。2026-08-12 correction 要求下一 successor 从 KERNEL_V2 allowed composites 中删除 ordinary `TICK` 及 quote-observation variants，并禁止所有新 writer 使用 `execution_runtime_event` 保存 raw/normalized quote。`ck_miniqmt_event_type/source` 仍须闭合合法 SESSION/ORDER/TRADE/ACCOUNT/RECONCILE/EOD/OPERATOR/ALGO_START/COMMAND_OUTCOME 等经济与时钟事实；NULL、跨命名空间和三值 CHECK 漏口继续拒绝。preflight/forward/rollback/application readback仍使用同一 frozen artifact、exact definition和独立 catalog authority。历史 TICK 行只读保留，后续清理由单独授权 DML 执行，不把清理作为 source merge、启动或业务执行门禁；rollback 永远不得恢复 per-tick persistence。
 
-若 schema 在进程运行期间发生外部漂移，`MiniQMTQuoteIngressActivation` 按 runtime、registration generation和`callback|watchdog`操作分别持有process-local single-flight技术退避：首次真实 SQLSTATE `23514` 必须同时精确匹配`qmt_strategy.execution_runtime_event`及六项登记constraint identity并立即 fail loud，之后按`60/120/240/480/960/1920/3600`秒自动重试。未到期callback不再访问repository，但必须返回显式`BACKOFF_SUPPRESSED` disposition并保留有界latest-per-symbol pending identity；不同操作成功不得清除原失败，只有原失败操作真实成功才清除active并保留last-failure诊断。每个 runtime/generation 只有一个持久 callback actor，projection sink registration 以 `consumer_id + exact symbol tuple + sink identity` 冻结所有权；quote 只路由给持有该 symbol 的 runtime，同 symbol 多 runtime 才允许 fan-out，禁止无差别广播。callback 在 10ms 内未完成时返回 frame-bound `ASYNC_IN_FLIGHT`，其中 `executed=true/outcome_pending=true/business_success=null`；晚到 schema failure 进入原 backoff，晚到非 schema failure 保持 `RETRY_READY` active health并由下一条合法 live quote自动重试，绝不假报`HEALTHY`。callback、watchdog、release-unknown reconciliation与shared-supervisor watchdog使用各自exact owner worker和有界peer wait：一个sink、supervisor或release owner阻塞不得占用shared projection writer、阻塞健康runtime cadence或建立第二writer；worker result必须闭合runtime object、lifecycle generation和attempt token，旧结果不得跳过或释放同ID successor。release/shutdown先以不可复用generation fence新claim，再等待callback/watchdog worker与in-flight结束、消费exact outcome并校验lease/sink/symbol ownership release exact `True`；无法停止的writer/worker保持`SHUTDOWN_UNKNOWN`或active owner并fail loud，不得报告假`STOPPED`。stale callback不得在`RELEASED/STOPPED`后重建owner或写DB/outbox，且不得借用successor failure fingerprint。mailbox被symbol revoke、generation fence、pending supersede或shutdown清除，以及batch drain或generation replay在中途失败后已pop但未处理的frame，都必须逐帧保留有界reason/count/generation/sequence诊断，不能静默消失或生成假ACK。无法证明broker side effect时诊断为`UNKNOWN`，不得硬报`false`。该process-local状态在fresh process明确重建、不冒充durable replay；不重放过期tick、不返回broker/consumer假ACK、不停订阅、不切legacy route、不要求人工acknowledge/RBAC/审批/业务开关。新进程必须先通过full exact schema gate，坏schema时在subscriber创建前保持`BLOCKED`。
+quote callback 不再触达 runtime-event schema；任何 callback 触发的 SQL/SQLSTATE 都是 hot-path boundary violation，必须立即 typed fail loud、隔离该 runtime 并计入 process-local bounded aggregate，禁止由下一 tick 重试 DB。business-event schema drift 由对应 business writer 按 runtime/operation single-flight 自动退避，不借 quote callback 驱动。每个 runtime/generation 只有一个 callback actor，projection sink registration 仍以 `consumer_id + exact symbol tuple + sink identity` 冻结所有权；quote 只路由给持有该 symbol 的 runtime，同 symbol 多 runtime共享同一 normalized frame后在内存 fan-out。release/shutdown必须 fence generation、等待 callback/watchdog/in-flight 完成并校验 lease/sink/symbol ownership；无法停止则保持 `SHUTDOWN_UNKNOWN`/active owner并 fail loud，不得报告假 `STOPPED`。mailbox revoke/fence/supersede/shutdown 的丢弃使用 bounded process diagnostics，不逐帧写DB。fresh process重建 owner并等待新 quote，不重放过期tick、不返回假ACK、不切legacy route、不要求人工acknowledge/RBAC/审批/业务开关。
 
 K1 route authority validation 必须先分别完成 plugin catalog 与 gateway catalog strict readback，再重建并比较 receipt；supplied invalid gateway 保留 `MINIQMT_GATEWAY_CAPABILITY_CATALOG_INVALID` 和完整 context，不能包装成 receipt corruption 或 static unsupported。`MINIQMT_PLUGIN_ROUTE_COMPATIBILITY_RECEIPT_INVALID` 仅用于两个 authority 有效后的 durable receipt drift；有效 authority 的能力不满足仍是隔离的 per-plugin/per-route FAILED receipt，不形成全局执行门禁。
 
@@ -886,7 +933,8 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 - legacy runner `RUN_PENDING`/`RUN_COMPLETED` 互斥及 pending handle identity；
 - 主板/创业板/科创板与 SELL residual 的 TWAP/VWAP/AC/POV/SBB/V24/V25 init、child fill、participation board-lot 一致性；VWAP missing/invalid/exhausted profile typed failure和 valid profile 正路径；
 - MiniQMT real tick projection、B0_V2 revision、no minute synthesis；
-- MiniQMT runtime ALGO_START/event schema、event-owner routing、delivery-set hash、per-algo sequence/predecessor、plugin manifest/config/capability 三分法/state version 正反路径；
+- MiniQMT hot TICK 经 in-memory single-writer 路由且 repository/query/write/outbox scan 均为零；action tick 只写既有经济transition/command字段，不新增行情carrier/hash；
+- MiniQMT runtime ALGO_START/business-event schema、event-owner routing、delivery-set hash、per-algo durable transition sequence/predecessor、plugin manifest/config/capability 三分法/state version 正反路径；
 - `ExchangeSessionClock` 上午/午休/下午/EOD、无 quote timer、TWAP restart 后不重复/不丢 slice；
 - plugin import boundary、非法 side effect dependency、pinned vn.py façade method signature/return/error/DTO characterization、未声明 surface 与第二 runtime owner 反例；
 - MiniQMT openInt missing/present-invalid、等价 authority refresh generation、zero placeholder/单边盘口正反路径；
@@ -905,6 +953,9 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 - late order/trade/fill 和 archive read path；
 - MiniQMT BUY/SELL broker fill restart replay、partial snapshot + archived union、event-before-settlement retry、cash/lot/child/algo exactly-once；
 - runtime journal 与 daily-run/batch/intent parent/child/trade count、identity/hash stale/conflict diagnostics 及自动解除。
+- 1,000,000 no-action ticks 和完整无成交分钟日的 repository spy/DEV soak，证明 DB query/write/transaction 不随行情量增长；
+- `simulation_daily_run` compact summary `<=64 KiB`、state/receipt/outbox normalized child facts，以及 legacy oversized row fail-loud readback；
+- identical reconciliation fingerprint 10,000 次只保留一条 current issue并闭合 count/first_seen/last_seen/resolution；
 - MiniQMT durable request/result 第 5 项 permutation、canonical request-order serialization、重复 replay、restart、multi-slice accepted→rejected、duplicate/missing/extra/null/alias/order-id/broker-called corruption matrix；
 - plugin state/transition/delivery/failure/outbox 同事务 commit/rollback、N+1 抢先 claim refusal、delivery lease takeover、active-child cancel/SKIPPED closure、command ACK before/after crash、stale DISPATCHING nullable truth、unknown outcome broker readback 和 exactly-once side effect；
 - additive schema preflight/apply/readback/重复 apply/rollback，以及旧 state migration 成功/失败不半迁移；
@@ -916,10 +967,12 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 - 收盘 residual terminalization；
 - 次日 roll-forward 不改昨日 identity；
 - MiniQMT pending algo 在 restart 后由 tick 驱动且不重复 child；
+- restart 不读取 durable tick；恢复 durable algo/economic state 后等待下一真实 B0 callback/bootstrap；
 - stale DISPATCHING 在 restart 后只能 reconcile，不以 false 重提；plugin FAILED state 的 active child 继续 cancel/reconcile 且后续 delivery 只写 SKIPPED receipt；
 - MiniQMT 多 fill 以规范化 broker time 排序；time-only/compact/epoch/ISO 与交易日 mismatch 均有正反测试；
 - 单 binding 失败不影响其它 LocalSIM/MiniQMT binding。
-- 多 slot、同 symbol、多 algo callback 并发仍保持 per-runtime/per-algo strict sequence，单插件失败只影响其 owner chain；
+- 多 slot、同 symbol、多 algo callback 并发共享同一 in-memory view；只有 effect 才分配 durable transition sequence，单插件失败只影响其 owner chain；
+- scheduler stop 只有在 controllers/product runtimes/LocalSIM in-flight 全部为零时返回 STOPPED；超时返回 typed STOPPING/SHUTDOWN_UNKNOWN 及 remaining identities，不得假成功；
 
 ### 10.4 Route uniqueness tests
 
@@ -927,7 +980,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 - router/Paper v2/day runner 无 broker side effect；
 - MiniQMT quote 来源没有 minute-bar adapter；
 - execution plugin 不 import scheduler/client/gateway/repository/StrategyPackage，且新增 Iceberg/Stop 不修改 kernel dispatcher；
-- TICK/TIMER/ORDER/TRADE/ACCOUNT/SESSION/EOD/RECONCILE/OPERATOR owner routing 无 broadcast fallback；
+- TICK in-memory owner routing无 DB/broadcast fallback；TIMER/ORDER/TRADE/ACCOUNT/SESSION/EOD/RECONCILE/OPERATOR durable owner routing无 broadcast fallback；
 - vn.py compatibility façade 不创建第二 EventEngine、OMS、Gateway、quote subscription 或 broker session；
 - `LEGACY_B0` 不接纳新 parent；
 - 新 `minqmt_sim` binding 省略/显式 LEGACY/非法 control 均 fail loud，历史 omitted binding 仍可只读解码；
@@ -963,13 +1016,15 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 
 如 LocalSIM state/outbox 需要新 schema，必须提供 forward migration、幂等 preflight、exact CHECK/enum、rollback、DEV migration tests 和生产 readback。只有用户明确授权才可执行生产 DDL；不得在 SQL 前增加项目未要求的数据库导出。
 
+hot-path correction migration 必须 DEV-first，并同时完成：禁止新 KERNEL_V2 TICK/ordinary quote-observation 写入、提供 normalized economic state/reconciliation current-state schema、独立 catalog/readback 和 guarded rollback。历史 raw tick、quote diagnostics、`NO_FILL`、duplicate reconciliation 与 oversized run JSON 的删除/压缩属于单独授权 DML；source/DDL 合入不得自动删除。rollback 只能回到仍保持“普通行情零持久化”的上一个安全 build；若旧 build 依赖 per-tick DB，则回滚结果是保持模拟盘停止，而不是恢复错误路径。
+
 ### 11.3 Runtime rollout
 
 生产步骤固定为：merge → dependency/DDL gate → 用户重启 → readback → binding migration DML（单独授权）→ 正常交易日观察。Codex 不自行重启服务。
 
 ### 11.4 Application rollback
 
-回滚到上一个已验证 build；不删除已提交 facts，不反向改写 parent revision，不用 LEGACY 路径承接新的 B0_V2 work。必要 projection 可从 durable facts 重建。
+回滚到上一个仍满足 hot-data boundary 的已验证 build；不删除已提交经济 facts，不反向改写 parent revision，不用 LEGACY 路径承接新的 B0_V2 work，也不得恢复 raw/normalized tick persistence。必要 projection 可从 durable economic facts 重建；行情 view 在重启后等待下一真实 source。
 
 ## 12. Production Gates / 生产门禁
 
@@ -1072,7 +1127,7 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 | `F-082` | K1-C authority复用与五算法+`round_to` helper source manifest exact，Iceberg/Stop只表征不注册、utility只AST提取不执行 |
 | `F-083` | initialization/transition authority input、K2 optional invocation、通用adapter、collector lifecycle、ordinal/freeze/retry/restart合同可直接实施；K2 V1单/多command shadow边界精确，K5 shadow不增加kernel算法分支/状态机/route，产品aggregate仍由K6拥有 |
 | `F-084` | 六个AlgoEngine方法、template helper与四个callback的shadow return/error/diagnostic/zero-command语义精确，含not-running/missing/rounded-zero空返回；product OMS同步reject语义由K6 disposition拥有 |
-| `F-085` | Tick/Order/Trade/Contract DTO、selected Exchange/Status enum与event routing逐字段映射，TIMER durable TICK cutoff及missing/unsupported无合成/fallback |
+| `F-085` | Tick/Order/Trade/Contract DTO与selected Exchange/Status逐字段映射；TICK process-local latest-view cutoff，missing/unsupported无DB读取、合成或fallback（旧durable-TICK cutoff撤回） |
 | `F-086` | durable state envelope、constructor-once/restore/extract/freeze、active-child terminal mapping与façade effect复用existing K1/K2 identity；单command shadow链可重建，多command trace完整且不伪装V1 materialization，zero direct broker |
 | `F-087` | implementation/method/state/terminal/DTO/isolated-module contract、runtime binding disposition、command authority disposition、conformance failure/receipt/set exact schema/hash/truncation/writer/readback/zero-partial publication完整 |
 | `F-088` | current-three复用K3 parity，Iceberg/Stop source-isolated characterization-only，Iceberg TIMER lineage、K5边界与确定性输入完整 |
@@ -1083,7 +1138,7 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 | `F-093` | K4 conformance hardcode缺口以前后一致的单一pure evaluator闭合，source disposition保持不变，无平行schema/receipt/任意plugin-set authority |
 | `F-094` | code-owned exact V2 binding literal、fresh sealed K4 binding equality与exact full-five descriptor/catalog/compatibility/creation/conformance composition、zero-partial publication和fresh-process readback完整 |
 | `F-095` | config-only factory的唯一binding authority、constructor、strict config/state codec、restore/active-order/lineage closure完整，Iceberg pointer与cancel-pending mappings不混同 |
-| `F-096` | Iceberg exchange-active TIMER、sequence-cutoff native B0 quote、cancel-pending resubmit/late callback、exact `traded >= target`、restart/multi-command语义精确 |
+| `F-096` | Iceberg exchange-active TIMER、process-local current native B0 view与经济action、cancel-pending resubmit/late callback、exact `traded >= target`、restart等待下一live quote/multi-command语义精确；不保存行情evidence/hash |
 | `F-097` | Stop native TICK、signed price_add、limit bound、exactly-once trigger、exact `traded == target`、ORDER/TRADE/restart语义精确 |
 | `F-098` | K2 shadow invocation、transaction/retry/concurrency/failure/diagnostics/metrics/retention完整且无人工门禁 |
 | `F-099` | direct/negative/DEV PostgreSQL/fresh-process/coverage/changed-files routing/F2验收可执行 |
@@ -1100,6 +1155,15 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 | `F-110` | direct/negative/DEV PostgreSQL/migration/concurrency/final-route integration/route uniqueness/frozen-input/full-five source matrix/existing-binding normal-day/coverage/changed-files测试计划可执行，禁止legacy parity验收 |
 | `F-111` | `K6-C0 -> K6-C1 -> K6-B -> K6-D`优先级、最终架构only/no-C2/no-legacy-R&D约束、依赖、工期、source/DDL/config/restart/runtime/normal-day状态分离与rollout/rollback完整 |
 | `F-112` | DESIGN-COMPLIANCE-001、no simplification/silent error/business drift/unapproved gate及K6完成定义闭合 |
+| `F-113` | MiniQMT ordinary TICK 与 LocalSIM input minute 只走 process-local single-writer hot-data plane，steady-state repository/query/write/outbox scan 全为零 |
+| `F-114` | action/reprice/cancel/terminal reject只写既有transition/command/child/order/trade原生字段、冻结配置阈值、reason/time；禁止新增行情carrier/hash及任何observed market price/quote/bar字段 |
+| `F-115` | durable plane 仅保存运行身份、当前 algo/economic state、command/outbox/order/trade/cash/position/session/EOD/reconcile/TCA，不保存 raw/normalized行情流 |
+| `F-116` | LocalSIM 无状态变化分钟不写 `NO_FILL`；run summary `<=64 KiB`，历史 state/receipt/outbox 规范化且可重建 |
+| `F-117` | reconciliation 以 fingerprint current row + first/last/count/resolution 为权威，重复 cadence 不 append duplicate issue/run |
+| `F-118` | outbox/reconcile dispatcher 由 command/callback/独立 cadence 唤醒，禁止每 tick 空扫描；DB transaction 与经济 transition 成比例 |
+| `F-119` | migration/retention/capacity/cleanup 都 DEV-first、独立 readback；历史行情清理是单独授权 DML，rollback 永不恢复 tick persistence |
+| `F-120` | stop 必须 drain/cancel 所有 controller/product runtime/LocalSIM in-flight 后才报告 STOPPED；超时 typed 返回 remaining owners |
+| `F-121` | 1M no-action tick、完整 no-fill minute day、restart-await-next-tick、same-symbol multi-algo 与 DB/storage budgets 具有直接、DEV 和正常交易日证据 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1217,6 +1281,15 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 | `F-110` | K6 detailed §11；K6-D detailed §5/§8 | `python -m pytest backend/tests/miniqmt_execution_runtime/test_kernel_product_runtime_integration.py backend/tests/miniqmt_execution_runtime/test_kernel_clock.py -q`；callback/scheduler clock/EOD/binding isolation/direct/DEV/coverage；PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` | implemented_verified + merged | none |
 | `F-111` | K6 detailed §12–§13；K6-D detailed §9–§10 | artifact: `docs/architecture/miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`；source/production/runtime分离receipts；PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` | implemented_verified + merged | none |
 | `F-112` | K6 detailed §16–§17；K6-D detailed §13–§14 | artifact: `docs/architecture/miniqmt_execution_kernel_k6d_final_route_cutover_f2_detailed_design_20260804.md`；formal DESIGN-COMPLIANCE-001；PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349` | implemented_verified + merged | none |
+| `F-113` | §4.3–§4.5、K2 detailed §3/§5/§6、plugin detailed §4–§6 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py` 与 `backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py`：1M no-action ticks/完整无成交分钟日及source AST zero repository | design_ready | none |
+| `F-114` | §4.5、§5.9、Adaptive P1 §4.4/§5.9 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py`：action/reprice/cancel/reject经济字段allowlist、行情carrier/hash拒绝和single-transaction fault injection | design_ready | none |
+| `F-115` | §4.5、§5.8、K2 detailed §4/§6 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_postgres.py`：durable writer allow/deny inventory与restart economic-only readback | design_ready | none |
+| `F-116` | §4.3、§7.5 | target `backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py`：NO_FILL insert=0、64KiB summary、normalized PostgreSQL readback/oversize refusal | design_ready | none |
+| `F-117` | §4.5、§7.5 | target `backend/tests/simulation_runtime/test_reconciliation_compaction.py`：10,000 same fingerprints one current row及restart/concurrency closure | design_ready | none |
+| `F-118` | §4.4、§7.5 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py`：no-pending burst zero outbox/reconcile scan与event-driven wake | design_ready | none |
+| `F-119` | §11.2–§11.4 | target `backend/tests/miniqmt_execution_runtime/test_hot_market_data_migration_postgres.py`：DEV preflight/forward/second-apply/readback/rollback与cleanup dry-run | design_ready | none |
+| `F-120` | §10.3、§11.3 | target `backend/tests/simulation_runtime/test_scheduler_stop_drain.py`：slow LocalSIM/blocked callback/timeout remaining owners/idempotent stop/zero-owner readback | design_ready | none |
+| `F-121` | §7.5、§10.1–§10.5 | target `python -m pytest backend/tests/miniqmt_execution_runtime/test_hot_market_data_boundary.py backend/tests/paper_trading_v2/test_localsim_hot_market_data_boundary.py backend/tests/simulation_runtime/test_reconciliation_compaction.py -q`；normal-day pg_stat receipt | design_ready | none |
 
 ## 15. Current Implementation Progress Ledger / 当前实现进度账本
 
@@ -1242,8 +1315,8 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 | `SIM-P-016` | `F-005,006,021` | BUG-668 将 selection inference in-flight identity 补齐 `release_id/release_hash`，不同 runtime release 不再共享 future、结果或错误上下文 | BUG-668 / issue #2207；`test_scheduler_auto_generated_selection_inference_isolated_by_runtime_release`；批次 direct matrix 8 passed | IMPLEMENTED_VERIFIED | PR/CI/merge 后，正常调度日核对各 release inference evidence 独立推进 |
 | `SIM-P-017` | `F-016,020,021` | BUG-669 由 B0 controller 每次 lifecycle tick 使用成对当前 wall/monotonic sample 推进 clock；single writer 同步交付 observation 的原 projection context，controller 不再以可能已推进的 current context 拒绝合法 callback；仅在静态 authority/continuity/clock domain/trade date 兼容时以当前时钟评价 | BUG-669 / issue #2208；paired-clock no-provider-IO、projection-context handoff、interleaved current-clock child submit direct tests | IMPLEMENTED_VERIFIED | PR/CI/merge 与用户重启后，正常交易时段观察 callback time 持续推进且无 stale scheduler snapshot/context race rejection |
 | `SIM-P-018` | `F-016,020` | BUG-670 仅对 exact runtime-owned durable parent chain 恢复原 batch/preflight；动态 quote repricing 不再把自身 remark/pending sell lot 当外部重复，foreign/mismatch 仍 typed fail loud 且 broker call=0 | BUG-670 / issue #2209；self-duplicate sell reservation、repriced retry、foreign owner negative direct test；批次 direct matrix 8 passed | IMPLEMENTED_VERIFIED | PR/CI/merge 与用户重启后，readback 原失败 run 自动恢复且不重复 child/order |
-| `SIM-P-019` | `F-016,020,022` | BUG-671 在无兼容 observation 时写带 deterministic semantic fingerprint 的 runtime wait event，不再构造缺少 raw ingress identity 的 quote-less `ACTION_REJECT`；恢复从 durable journal 校验并重建去重状态，algo 保持等待真实 tick | BUG-671 / issue #2210；no-observation durable wait/no-QUOTE_REJECTED/broker-call-zero、controller reconstruction no-duplicate direct test | IMPLEMENTED_VERIFIED | PR/CI/merge 与用户重启后，观察首次 callback 到达后 wait 自动清除并进入真实 tick 路径 |
-| `SIM-P-020` | `F-021,022,024` | BUG-672 建立 runtime-id canonical quote health，联合 durable ack/readback/payload status/cadence freshness、callback、writer、controller、gateway、OMS；durable failed/invalid/future/stale 不得假绿，scheduler live 与 legacy monitor 状态均明确非权威范围；BUG-687 将该 canonical health 纳入平台 backend 层和 bounded metrics/alerts | BUG-672 / issue #2211；canonical healthy、failed+stale、missing durable degraded、paginated read-only direct tests；BUG-687 runtime-only query direct test | IMPLEMENTED_VERIFIED | source merge 后补真实 runtime diagnostics/platform readback |
+| `SIM-P-019` | `F-016,020,022,113,115` | BUG-671 的“quote-less ACTION_REJECT不得伪造、algo等待真实tick”结论保留；其durable wait event/journal去重实现被2026-08-12 hot-data boundary取代，目标为process-local wait + metrics/log，只有deadline/EOD economic residual持久化 | 历史BUG-671/issue #2210证据仅证明旧修复；新证据由`F-113/F-115`目标测试提供 | HISTORICAL_SUPERSEDED_PARTIAL | source remediation not_started；不得恢复per-wait writer |
+| `SIM-P-020` | `F-021,022,024,113,115` | BUG-672/687 的runtime-id分层健康、callback/writer/controller/gateway/OMS不得互相假绿结论保留；其中durable quote health ack/cadence freshness已由2026-08-12 correction撤回。successor quote health只来自当前进程generation/monotonic heartbeat与bounded metrics，durable层只读gateway/OMS/economic facts；旧quote-health rows仅历史只读 | 历史BUG-672/687证据仅证明分层投影；新zero-DB quote-health证据由`F-113/F-115`目标测试提供 | HISTORICAL_SUPERSEDED_PARTIAL | source remediation not_started；不得恢复durable quote health/cadence writer |
 | `SIM-P-021` | `F-005,006,020,021` | BUG-674 将 selection inference `IN_PROGRESS` 持久化为 `SIGNAL_GENERATING` 非失败等待，旧等待失败可自动修正；timeout/worker error 仍为明确失败，成功规划后清除等待与失败诊断 | BUG-674 / issue #2218；pending non-failure、timeout fail-loud、completion cleanup、release isolation direct tests | IMPLEMENTED_VERIFIED | source PR/CI/merge 后由用户重启；正常调度日核对等待、完成与跨窗口 readback，不把 source test 写成 runtime activated |
 | `SIM-P-022` | `F-016,020,021` | BUG-675 为 `FAILED_RETRYABLE` 增加 exact durable pending runtime 恢复入口；仅接受 B0 plan/runtime/batch/ownership/count/side-effect 全闭合证据，恢复既有 controller/tick driver，不重提 parent | BUG-675 / issue #2219；restart controller reconstruction、owned duplicate、runtime-id/count/zero-side-effect、no-parent-resubmit direct test | IMPLEMENTED_VERIFIED | source PR/CI/merge 与用户重启后，在正常交易时段观察 callback subscription/controller/child evidence 自动推进 |
 | `SIM-P-023` | `F-021,022,024` | BUG-676 保留最后 blocking tick，并按当前有效交易日分别有界读取 durable `FAILED_RETRYABLE`/`FAILED_TERMINAL`；即使首个 scheduler tick 尚未发生也不得假绿。BUG-687 将 blocker/loop status 纳入 process/lifecycle/binding 六层聚合并生成自动解除 alerts | BUG-676 / issue #2220；no-op rollover、before-first-tick/current-day blocker readback、inactive scheduler、status-specific bounded projection、component projection direct tests；BUG-687 binding isolation/tick-lag auto-clear tests | IMPLEMENTED_VERIFIED | source merge 后补生产 scheduler/platform read-only status |
@@ -1267,7 +1340,7 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 | `SIM-P-041` | `F-033,024` | BUG-718 已将 minute execution algorithm、adapter、engine 与 direct tests 精确映射到既有 `paper_v2_backend`，保留 unmapped executable-code fail-closed；本次严格复核补齐遗漏的 `execution_algo_adapter.py` ownership/classifier | BUG-718 / issue #2328；PR #2325 CI run `29580550883` 精确复现 adapter unmapped；classifier direct、full PR classification、ownership/module registry 验证 | IMPLEMENTED_VERIFIED | 更新 PR #2325 并等待完整 `paper_v2_backend`/static/Semgrep/CodeQL CI，不缩窄 session |
 | `SIM-P-042` | `F-023,024` | BUG-719 已把 simulation L2 陈旧 fixtures 对齐当前 event-loop、OMS/account、StrategyPackage lifecycle、LocalSIM mark 与 EOD schema，产品 fail-fast 语义不变 | BUG-719 / issue #2329；旧 main 7 failures 复现，修复 exact 7 passed、`simulation_core_l2` 395 passed | IMPLEMENTED_VERIFIED | 更新 PR #2325/CI；正常交易日 runtime readback 继续独立记录 |
 | `SIM-P-043` | `F-034,024` | BUG-779 规范化 immutable LocalSIM snapshot，并让 pre-commit failure、broker_called、durable receipt/state/outbox truth 一致；strict JSON 禁止 key coercion collision 与 non-finite number；不可重建历史 run 只读 BLOCKED，不补写经济事实 | BUG-779 / issue #2488；mappingproxy canonical、non-string key collision、NaN/Infinity、scheduler persistence failure、ops/platform unreconstructible direct tests | IMPLEMENTED_VERIFIED | PR/CI/merge 后由用户重启并只读核对；DDL/DML/config/broker call 均为 noop |
-| `SIM-P-044` | `F-035,024` | BUG-780 取消 B0 普通 quote 预取，真实 callback tick 完整 capture/hash；transient quote/directional depth 逐 symbol wait，健康 parent 继续；共享 account/position/cash batch preflight 保持原子失败 | BUG-780 / issue #2489；two-symbol quote/depth isolation、strict snapshot、shared preflight regression direct tests | IMPLEMENTED_VERIFIED | PR/CI/merge 后观察真实 callback；不执行 binding/config/DML 或 broker 激活动作 |
+| `SIM-P-044` | `F-024,035,113,114` | BUG-780取消普通quote预取、逐symbol隔离和共享preflight原子性继续有效；“每callback完整capture/逐symbol durable wait”被hot-data correction取代，ordinary callback只更新in-memory view，真实action只写既有经济字段且无行情carrier/hash | 历史BUG-780/issue #2489证据；新hot-path证据由`F-113/F-114`目标测试提供 | HISTORICAL_SUPERSEDED_PARTIAL | source remediation not_started |
 | `SIM-P-045` | `F-036,024` | BUG-781 统一 vn.py/runtime/managed-order SELL board-lot：仅 exact whole available position 可携带 odd-lot residual，partial odd-lot child 在 gateway 前拒绝；补齐 qmt strategy ledger/vn.py asset ownership与既有 execution sessions，禁止 classifier unmapped 导致测试 skipped；broker status probe failure 不再静默转换为 disconnect | BUG-781 / issue #2490；order preflight、vn.py asset、runtime child validator、status-probe cash/intent fail-loud 正反 direct tests；classifier existing-session direct test；changed-file L0 0 HIGH findings | IMPLEMENTED_VERIFIED | PR/CI/merge 后正常交易日观察 child quantity；DDL/DML/config/restart/broker activation 均分离 |
 | `SIM-P-046` | `F-037,039,024` | BUG-782 以 exact broker trade identity/time 合并 snapshot 与 archived event，重放 BUY/SELL cash/lot/child/algo；同秒 fill 稳定保持权威相对顺序，cumulative 不冒充 trade identity；event-before-settlement/child-before-vn.py-core retry 可续做且 exactly-once | BUG-782 / issue #2491；BUY/SELL double recovery、partial snapshot union、same-second reverse-trade-id、settlement fault injection、child-before-core restart checkpoint、identity/time negative direct tests | IMPLEMENTED_VERIFIED | PR/CI/merge 后由真实 broker snapshot readback 验证；本 slice 未调用生产 broker |
 | `SIM-P-047` | `F-038,024` | BUG-783 分离 parent outcome 与 child/trade count，restart 回投影 batch/intent，accepted child 不被后续 reject 覆盖；gateway ack 到 child/event/result/intent/diagnostics 保留 exact broker_called，intent status 与 projection metadata 原子更新；只读 diagnostics 对 stale/conflict 生成 metric/auto-clear alert | BUG-783 / issue #2492；scheduler one-parent/multi-child、client recovery、missing-place_order false chain、accepted intent metadata、ops pre-broker rejection、repository metadata update、platform stale/clear direct tests | IMPLEMENTED_VERIFIED | PR/CI/merge 和用户重启后读取 platform diagnostics；不自动 repair、不新增 execution gate |
@@ -1293,7 +1366,7 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 | `SIM-P-064` | `F-067,F-068,F-070` | K2-C实现shadow-only ExchangeSessionClock：strict durable CalendarSnapshotSet/session authority、确定性SESSION/TIMER/EOD identity、AM/PM exchange-active seconds、午休零TIMER与PM恢复、三种显式catch-up、EOD residual、event-commit后atomic finalize及same-occurrence stale reclaim；K2-C additive migration扩展CLAIMED epoch/version closure且guarded rollback，不改写K2-A migration | final source `c87748cd...`；direct/import/structure=`122 passed`；clock=`16 passed`、line/branch=`90.10%/80.85%`；DEV migration=`13 passed`且真实PostgreSQL atomic claim/reclaim/finalize通过；MiniQMT L2=`789 passed,25 skipped`；classifier仅MiniQMT、`unmapped_code_files=[]`；required CI run `30235878200`全绿；PR #2794 / merge `801dc3c9...` | IMPLEMENTED_VERIFIED_MERGED | `source_merge=merged_pr_2794`；`close_sync=not_applicable_feature`；K2-D、K3/K4=`not_started`；shadow-only且产品runtime未切换；production DDL/DML/dependency/config/binding/broker/restart/runtime activation全部`noop` |
 | `SIM-P-065` | `F-066,F-068,F-069,F-070` | K2-D实现shadow-only durable outbox/reconcile/observability：唯一dispatcher/reconciler与gateway adapter执行PENDING/FAILED_RETRYABLE→CLAIMED→DISPATCHING→ACK/reject/unknown；broker boundary前必须验证底层place/cancel method，缺失时以broker_called=false显式pre-call failure进入既有有界重试，optional diagnostic reader失败写入ACK evidence而不改变broker事实；last-release后successor generation对已fenced writer执行两秒有界join且仍拒绝live stale writer，QuoteContractError保持只读业务字段但允许Python traceback lifecycle，避免负载竞态和FrozenInstanceError覆盖primary reason；repository event sequence随outbox DISPATCHING原子持久化且只允许单次赋值，post-call全链不可改写并与unknown/non-acceptance receipt identity闭合；expired CLAIMED显式pre-call retry、expired DISPATCHING显式转OUTCOME_UNKNOWN且不调用broker；safe retry除exact capability与watermark变化外还必须证明区间内零matching callback；pre-call cadence固定1/2/4/8秒，持久化exchange-clock EOD触发fresh final snapshot；reconcile history由(command_id,runtime_id) composite FK与完整scalar/carrier readback闭合；sync ACK不伪造mapping event lineage；只读diagnostics提供稳定keyset cursor、精确lag阈值、expired lease/unknown/readback critical alert及自动清除；additive migration含每列注释、独立catalog readback（包括复合UNIQUE backing index）和有数据rollback保护；无人工ack、审批或额外业务门禁 | direct outbox/diagnostics/ops=`111 passed`，direct+structure=`115 passed`，DEV migration=`15 passed`；MiniQMT/Paper/Simulation=`852 passed,27 skipped` / `1050 passed,2 skipped,2 xfailed` / `438 passed`；F2=`10/10,28/28,70/70`，required CI run `30269640126` 全绿；final source `82c69fbf7e7245e0af76262ddc7b7f59ce7d996b` 已通过 PR #2804 / merge `fc4170faa10847c0b58aa8088b4a8b6d0ca26b29` 合入 | IMPLEMENTED_VERIFIED_MERGED | `source_merge=merged_pr_2804`；`close_sync=not_applicable_feature`；K2 overall=`implemented_verified + merged`；K3/K4=`not_started`；shadow-only且产品runtime未切换；production DDL/DML/dependency/config/binding/broker/restart/runtime activation全部`noop` |
 | `SIM-P-066` | `F-071..080` | K3 current-three runtime migration两个shadow-only切片均已实现。K3-A已通过PR #2840合入三个pure `ExecutionAlgoPluginV2`与strict lifecycle；K3-B从单事务committed legacy snapshot构建strict policy/state/dependent-BUY zero-write inventory与ALGO_LOCAL parity，完成visible transport suppression、stable runtime identity及真实K2 creation/ingress/delivery/materializer/mapping/outbox broker-neutral shadow。最终审核补修将in-memory/file mutation、evidence append与JSONL durable append纳入同一snapshot锁；callback owner missing/multiple/cross-parent/cross-slot全部typed fail；legacy/kernel共用QMT status/cumulative/trade alias authority；child-command由committed `CHILD_ORDER_SUBMITTED` sequence闭合same-step/effect。未增加algo分支、第二route、fallback或人工门禁。dependent-BUY durable coordinator和产品route cutover仍由K6拥有 | review-fix direct=`116 passed,2 skipped`、JSON restart/evidence=`11 passed`；DEV disposable PostgreSQL source+durable shadow=`2 passed`且包含committed parity，repeated ingress/restart不重复mapping/outbox且dispatch attempt=0；MiniQMT=`988 passed,29 skipped`；Paper=`1050 passed,2 skipped,2 xfailed`；K3-B变更核心line≥91%/branch≥77%；classifier选择MiniQMT/Paper且`unmapped_code_files=[]`；K3-A PR #2840 / merge `aa155222a1072d6c1110f4cc8a11b4f501d8dd1b`；K3-B PR #2848 / merge `38434e10d530edd883fa75f904de5b025158f918` | K3_IMPLEMENTED_VERIFIED_MERGED | `source_merge=merged_pr_2848`；K3-A/K3-B/K3 overall=`implemented_verified + merged`；K4/K6=`not_started`；产品runtime未切换；production DDL/DML/dependency/config/binding/broker/restart/runtime activation全部`noop` |
-| `SIM-P-067` | `F-081..090` | K4-A保持V1 observation-only/zero-positive-publication；K4-B已实现81项V2 full-input/full-actual-trace vector、六项K3 committed parity material、fresh spawned writer/readback、sealed conformance authority、真实CLAIMED pre-call transition identity、existing K2 locked transaction中的ALGO_START/latest prior native B0 TICK read、current-three live K3重放与Iceberg/Stop characterization-only。2026-07-31正式审核补修canonical-LF跨平台authority、primary failure保留、bounded omitted hash/path evidence及characterization active-failure build-cycle；不修改current-three算法语义、不注册Iceberg/Stop、不新增DDL/产品command authority或route | artifact semantic/vector/file=`37dc70e5.../4a3117fa.../ec7bc3c7...`、live K3 binding=`123b3349...`；非DB direct=`202 passed,1 skipped`、DEV=`2 passed`、MiniQMT=`1099 passed,30 skipped`、Paper=`1050 passed,2 skipped,2 xfailed`，八核心coverage line/branch均`>=80/>=70`；final source HEAD `3b740721...`与required CI run `30573914476`已通过PR #2953 / merge `cbb5f128...`闭合 | K4_IMPLEMENTED_VERIFIED_MERGED | `k4a_source_merge=merged_pr_2883`；`k4b_design_source_merge=merged_pr_2914`；`k4b_code_source_merge=merged_pr_2953`；K4 overall=`implemented_verified + merged`；K5 design source已合入、implementation本地验证状态由`SIM-P-068`记录；K6=`not_started`；产品runtime未切换；production gates全部`noop` |
+| `SIM-P-067` | `F-081..090,F-113,F-114` | K4-A/B compatibility/conformance source保持历史verified；existing K2 transaction中的latest durable B0 TICK read被2026-08-12撤回，Iceberg/Stop改用process-local current view，action只写既有经济字段且无行情carrier/hash。其余full-input trace、source authority和current-three semantics不变 | 历史K4 PR #2953 / merge `cbb5f128...`只证明未受影响slice；新hot-path证据由`F-113/F-114`目标测试提供 | K4_BASELINE_VERIFIED_HOT_PATH_REMEDIATION_REQUIRED | source remediation not_started；production gates noop |
 | `SIM-P-068` | `F-091..100` | K5 exact Iceberg/Stop manifest/config/source、K4 provenance到K1 full-five shadow bridge、code-owned/fresh V2 binding、config-only factory、shared conformance evaluator、strict state codec、Iceberg TIMER/cancel/late callback/`>=`、Stop TICK exactly-once/`==`、K2 broker-neutral shadow均已实现并合入。正式代码审核闭合fractional durable carrier、factory real probe、typed error、terminal CLEAN、public binding readback、SPI ownership/import-boundary、DEV并发/ingress、branch coverage及Python 3.12/3.13 AST与checkout-path authority确定性，不增加产品route、algo kernel分支或门禁 | Windows/Python 3.13 K5 direct=`12 passed`、Linux/Python 3.12 exact authority=`3 passed`、lifecycle=`15 passed`、DEV=`1 passed`；MiniQMT=`1129 passed,31 skipped`、Paper=`1050 passed,2 skipped,2 xfailed`；classifier=`targeted_ci_required`、20 files、MiniQMT+Paper、unmapped=[]；final source HEAD=`894c22ff`，required CI run `30640380170`全绿；PR #2978 / merge `4bf54cf2` | K5_IMPLEMENTED_VERIFIED_MERGED | `k5_design_source_merge=merged_pr_2968`；`implementation_source_merge=merged_pr_2978`；K5 overall=`implemented_verified + merged`；K6=`not_started`；product runtime未切换；production gates全部`noop` |
 | `SIM-P-069` | `F-101..112` | K6-A/C0/C1/B与production schema保持既有闭合。K6-D同一source slice实现SIM/runtime-binding-account exact closure、code-owned KERNEL_V2 first/retry/successor cutover、V2 creation双lineage、full-five统一ALGO_START和后续V3 event delivery、真实QMT snapshot ORDER/TRADE callback、scheduler-driven SESSION/TIMER/EOD、K2 outbox/reconcile、dependent-BUY、legacy product caller物理删除与five-root fresh-process capability。正式复审补齐完整四段native calendar及auction/continuous精确投影、compiler-owned frozen policy唯一闭包、commit-unknown与non-sequence conflict原typed failure保真、stale-source runtime拒绝、quote runtime exact symbol/object owner及primary+rollback双失败证据；callback/clock failure按binding隔离，terminal late TRADE只扩展lineage不重开状态；跨日final tick后释放旧runtime lease。现有platform endpoint additive投影durable route/live source/current active count，alerts自动clear且无ack/force/replay。无新DDL/DML/config/binding、legacy fallback/parity/bridge或审批门禁 | product integration+clock=`55 passed`；quote activation=`16 passed`；DEV PostgreSQL exact writer/materialization=`25 passed`；MiniQMT/Paper/Simulation=`1346 passed,68 skipped` / `1050 passed,2 skipped,2 xfailed` / `407 passed`；product composition coverage line/branch=`88.17%/78.57%`；设计PR #3129、source PR #3146 / merge `33c09049e82c11cdbae7cd9b596b3666cb481349`已合入；changed-files路由选择MiniQMT/Paper/Simulation，ownership catalog补齐shared adapter test | K6_SOURCE_IMPLEMENTED_VERIFIED_MERGED_RUNTIME_PENDING | `source_merge=merged_pr_3146`；K6 source slices=`5/5`；runtime cutover/用户restart/正常交易日=`not_run`；K6 overall=`implementation_in_progress`；K6-D new DDL/DML/config/binding/dependency=`noop` |
 | `SIM-P-070` | `F-021,F-022` | BUG-981 修复 platform diagnostics 与 LocalSIM repository durable carrier 的 schema 漂移：只接受唯一权威的 `state_id -> LocalSimExecutionStateV1` map，复用 repository reader 完成 schema/hash/key identity closure；legacy list、malformed state 与 identity conflict 均 typed fail loud，不做转换或 fallback | `backend/tests/simulation_runtime/test_ops_api.py -k platform_diagnostics`=`30 passed,22 deselected`；新增 authoritative map 正例及 list/schema/identity 负例；public `SimulationRuntimeOpsService.platform_diagnostics` fresh-process path；用户重启后 runtime identity 与 business smoke 已通过 | BUG_981_IMPLEMENTED_VERIFIED_MERGED_RUNTIME_EFFECTIVE | source PR #3151、final close-sync PR #3156 / merge `a6b6d20a...`；`post_restart_effective_gate=passed`；DDL/DML/dependency/config/binding/broker/service-control 全部 `noop` |
@@ -1314,6 +1387,8 @@ K1-C 的 F-053/F-058 实施边界已固定为两层 import proof：source-isolat
 
 | `SIM-P-079` | `F-021,F-043,F-047,F-052,F-107,F-110,F-112` | BUG-1019 修复 P1-D allowlist 与 KERNEL_V2 composite 的生产合同冲突：单一 successor 同时闭合36 event types、14 sources、LEGACY=P1-D exact namespace及12个KERNEL_V2 exact composites，NULL/跨命名空间组合拒绝；六项完整CHECK同锁事务替换、frozen artifact/definition identity、fixed-search-path/C-collation helper + independent K2/K2-D catalog readback、full same-snapshot startup gate及拒绝全部K2/K2-D/K6 facts的guarded rollback/post-commit readback前后一致，合法LEGACY shared rows不误阻断rollback。运行期外部schema漂移由per-runtime/generation/per-operation single-flight自动退避保护；每runtime持久callback actor及exact logical/physical lease闭合consumer、symbols、sink、generation和physical subscription identity，合法union/rebuild/release-survivor rollover会同步刷新全部survivor lease；callback pending/completion按runtime/consumer/symbol/generation/attempt/hash闭合，fan-out先enqueue全部owner再共享单一10ms预算；release、unregister、shutdown、generation fence与ghost/retained lease均保留bounded drop/failure证据。B0 factory/controller只用稳定bound sink，先unregister sink再release physical lease，`RELEASE_UNKNOWN`可自动精确重试且不假报CLOSED。scheduler仅匹配current plan deterministic runtime/generation/token，global/unmatched failure在全部peer尝试后形成bounded receipt；preplan UNKNOWN先按durable outbox、account/date/binding/run/runtime/order authority自动reconcile，绝不直接建replacement plan或要求人工gate | RED覆盖contradictory CHECK、每tickDB重打、跨runtime广播、late async false-green、batch/pending尾帧静默丢失、K2-D helper/proconfig/pg_temp漂移、LEGACY rollback误报、NULL三值漏口、owner/lease/union/TOCTOU/ghost/retained lease、blocked release、B0 real seam、foreign/stale runtime、fresh-process UNKNOWN、错误account/date/outbox ambiguity与unbounded failure tail；GREEN：activation=`85 passed`、quote ingress=`68 passed`、B0 7-file=`54 passed`、product integration=`46 passed`、scheduler=`293 passed,1 skipped`、DEV repository=`19 passed`、event-contract DEV=`11 passed`、MiniQMT L2=`1434 passed,81 skipped`、Simulation Core L2=`590 passed,1 skipped`、registry=`8 passed/14-of-14 mapped`、L0 blocking=`0`、F2=`112/112,warnings=0`、fresh-process source SHA=`1802202b0ab81175f595717165a5ab28a85039cb6e59d553161fb92106782366`；Issue #3274 | BUG_1019_SOURCE_VERIFIED_READY_FOR_PR | `source_merge=pending_pr`；`production_ddl_gate=pending`；DEV DDL仅disposable schema；生产DDL/DML未执行；`backend_restart_owner=user`且后端当前停止；runtime identity/activation/单策略→双策略异股/同股→多alpha验收=`pending_source_merge_ddl_user_restart` |
 
+| `SIM-P-080` | `F-113..F-121` | 2026-08-12 architecture correction 撤回 ordinary TICK/bar/NO_FILL/quote-wait/duplicate-reconciliation 的持久化设计。目标为 process-local hot market-data plane、只含订单/成交原生字段的normalized economic fact plane、event-driven outbox/reconcile、bounded diagnostics与真实stop/drain；交易库不保存任何行情payload、价格副本或hash。旧 K1–K6经济事实、算法、OMS/Gateway和broker exactly-once能力继续有效；受影响的 durable-TICK、durable-TICK cutoff、per-wait event及单行无界history验收状态改为 remediation required，不再以历史CI冒充符合新目标。 | 生产只读审计：RAW_TICK=`10,570`；KERNEL_V2 TICK=`3,169/约35min`；10秒transactions=`5,899`而events约`37`；`NO_FILL=765,294`；reconciliation issue≈`439,996`且duplicate fingerprint=`99.31%`；run row最大约`10MB`。本轮正式复审先后撤回“有界行情快照”“单点mark/reference价格”“source-view hash/独立decision carrier”三类隐性入库通道；最终四份F2 validator=`121/121,16/16,76/76,15 items/22 rows`且warnings=`0`，classifier=`docs_fast_update`、backend plans=`[]`、`unmapped_code_files=[]`，`git diff --check`通过。 | ARCHITECTURE_CORRECTION_DESIGN_READY | source/schema/data remediation=`not_started`；production DDL/DML/dependency/config/binding/broker=`noop`；backend restart owner=`user`；模拟盘runtime保持用户停止；历史清理需独立DML授权 |
+
 BUG-987 source verification closure：`miniqmt_execution_runtime_l2=1346 passed,69 skipped`、`simulation_core_l2=414 passed`、L0 blocking=`0`、ownership registry=`8 passed/14-of-14 mapped`、F2=`112/112,warnings=0`。2026-08-06 生产只读证据确认当前 MiniQMT 已选择唯一 `KERNEL_V2` route，但旧进程仍包含本 BUG；source merge、用户 restart、runtime identity match 与修复后正常交易日业务闭环继续分开记录。
 
 ## 16. DESIGN-COMPLIANCE-001 设计复核
@@ -1326,6 +1401,16 @@ BUG-987 source verification closure：`miniqmt_execution_runtime_l2=1346 passed,
 | `no_unrequested_gate_or_approval` | pass | §0.3 区分技术条件与审批；禁止 RBAC/ack/confirm-run，自动恢复 |
 | design-to-implementation traceability | pass | §13 稳定索引、§14 验收矩阵、§15 当前进度和 same-PR 更新契约 |
 | production state separation | pass | §10.5、§11、§12、`F-024`分离merge/DDL/config/restart/binding/runtime evidence；K2-A与K2-A-M1 source merge分别记录为`merged_pr_2729`和`merged_pr_2753`，M1全部production/runtime gates为`noop` |
+
+2026-08-12 hot-market-data boundary 修订的逐项复核：
+
+| Control | Review result | Design evidence |
+| --- | --- | --- |
+| `no_simplified_delivery` | pass for design | `F-113..F-121`同时覆盖 MiniQMT hot path、LocalSIM分钟事件、经济action/state、outbox/reconcile、诊断、容量、stop/drain、migration/rollback与正常交易日证据；不是只删除一条 INSERT 或调低频率 |
+| `no_silent_error` | pass for design | ordinary invalid/no-action quote使用process-local typed disposition与bounded aggregate；action/economic evidence失败仍fail loud；stop timeout返回remaining owners，schema/hot-path SQL violation明确P0，不以丢tick/假ACK/假STOPPED处理 |
+| `no_business_semantic_drift` | pass for design | 不改signal、selection、target、side、quantity、算法、A股规则、B0/TDX source、OMS/Gateway、broker route、TCA；只改变行情传输/证据持久化和存储形态 |
+| `no_unrequested_gate_or_approval` | pass for design | storage budgets、schema contract与自动drain是技术不变量；未新增RBAC、人工acknowledge、审批、manual recovery或业务enable gate，生产DDL/DML/重启仍只是独立授权状态 |
+| `implementation truth` | pass | 既有受影响的 durable-TICK/NO_FILL/unbounded-history实现不再标作符合目标；`SIM-P-080=ARCHITECTURE_CORRECTION_DESIGN_READY`，source/schema/data/runtime evidence均明确未完成 |
 
 `BUG-1010` source implementation 的逐项复核：
 
@@ -1380,8 +1465,8 @@ P0-H MiniQMT execution kernel/plugin F2 设计的逐项复核：
 
 | Control | Review result | Implementation evidence |
 | --- | --- | --- |
-| `no_simplified_delivery` | pass | release identity、paired clock、exact projection-context handoff、owned retry identity、remark/lot attribution、durable wait fingerprint recovery、canonical health status/freshness 各自实现完整正反路径；未以全局放宽 duplicate、旧 clock、合成 quote、进程内-only 去重、mock-only diagnostics 或 legacy fallback 代替 |
-| `no_silent_error` | pass | release/clock/context/request/batch/parent/remark/runtime/wait hash identity 不一致均 typed failure；无 quote 明确写 durable wait event，写失败向上抛出；canonical health 对 durable 缺失、FAILED、invalid、future、stale 均返回明确 reason，不伪装绿色 |
+| `no_simplified_delivery` | historical pass, hot-path slice superseded | release identity、paired clock、projection-context、owned retry和remark/lot结论保留；durable wait fingerprint实现已由`F-113/F-115`撤回，不再作为当前通过证据 |
+| `no_silent_error` | historical pass, hot-path slice superseded | 既有identity冲突仍typed；无quote不再写durable wait，而是process-local typed wait/aggregate，deadline/EOD才写经济residual。新source证据待`SIM-P-080`闭合 |
 | `no_business_semantic_drift` | pass | Selection score/target、方向、数量、T+1/lot/limit/suspend、B0 tick source 和唯一 broker route 均未改变；只修复并发 identity、当前时钟、exact retry 和 diagnostics projection |
 | `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、审批、人工 acknowledge、confirm-run、业务开关或重启前置；恢复由 exact durable ownership 自动判定，foreign/mismatch 仅作为已有技术一致性约束 fail loud |
 | `production state separation` | pass | 本批次只改 source/test/蓝图；DDL、DML、production config、broker call、服务重启和正常交易日 observation 均未执行，PR/CI/merge 继续独立记录 |
@@ -1599,6 +1684,6 @@ P0-H MiniQMT execution kernel/plugin F2 设计的逐项复核：
 
 本蓝图本身完成的条件是：权威关系、目标架构、契约、迁移、失败模式、测试、发布/回滚、生产边界、稳定索引和当前进度均完整，并通过 F2 validator 与 DESIGN-COMPLIANCE-001。
 
-模拟盘平台整体完成必须是 §15 所有 `REPAIR_REQUIRED` 项均由真实实现和直接证据更新为 `IMPLEMENTED_VERIFIED`，Phase 0B/Adaptive 阶段按各自批准范围完成；在此之前，只能汇报具体 slice 的完成状态，不能宣称整个平台已经完成。
+模拟盘平台整体完成必须是 §15 所有 `REPAIR_REQUIRED` 项以及 `SIM-P-080/F-113..F-121` 均由真实实现和直接证据更新为 `IMPLEMENTED_VERIFIED`，Phase 0B/Adaptive 阶段按各自批准范围完成；在此之前，只能汇报具体 slice 的完成状态，不能宣称整个平台已经完成。
 
-MiniQMT 插件化架构只有在 `F-043..F-112` 全部更新为 `implemented_verified`，现有五算法、dependent-BUY coordinator、generic per-command product authority、restart/outbox exactly-once、唯一KERNEL_V2 cutover、旧 algorithm-specific route 退役及正常交易日 MiniQMT SIM 证据均闭合后，才可宣称实现完成；蓝图或任何K1–K6详细设计合入本身不代表代码或生产 runtime 已具备该能力。
+MiniQMT 插件化架构只有在 `F-043..F-121` 全部更新为 `implemented_verified`，现有五算法、dependent-BUY coordinator、generic per-command product authority、hot-data zero-DB、action-bound不可还原决策标量、restart/outbox exactly-once、唯一KERNEL_V2 cutover、旧 algorithm-specific route 退役及正常交易日 MiniQMT SIM 证据均闭合后，才可宣称实现完成；蓝图或任何K1–K6详细设计合入本身不代表代码或生产 runtime 已具备该能力。
