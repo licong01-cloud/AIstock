@@ -2,17 +2,19 @@
 
 - 文档类型：F2 从属实现级详细设计 / Feature Card
 - 日期：2026-07-22
-- 修订日期：2026-08-10
-- 状态：`B3_P6_D5_SELECTED_SEED43_D6_NA_SOURCE_PR_3258_REVIEW_FIXES_VERIFIED_PENDING_MERGE_NO_REPLAY_NO_READY`
-- 父级权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.19
+- 修订日期：2026-08-12
+- 状态：`B3_P6_D5_SELECTED_SEED43_D6_ZERO_REFIT_120_OF_131_ACCEPTED_11_FAILED_NO_READY`
+- 父级唯一产品目标权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.20
 - 上游权威：`docs/architecture/hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md` v2.8
 - Feature tier：F2
 - Design Acceptance Index：F-011、F-012、F-013
-- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已固化；Slice 0 B3/L2 retrain、C-009、C-010-FORMAL-A、C-010-A5、BUG-977、BUG-982、REFIT-03、D1-D5 mixed-dimension、BUG-995 与 BUG-999 源码均已合入。最新 P6 在 producer `0ab6dec3` 的同一冻结 authority、固定单线程环境和两个 fresh processes 完成 `2096/2096` fits；D5 按 train-only 合同选定 `autocycle_all_core:L2` seed 43。原 D6 因概率域 causal posterior underflow fail closed；BUG-1008 的 log-space修复及 `C-008-B3-D6-NA-A` 源码已进入 PR #3258，并在第二轮独立审核后修复历史 C-008 dense diagnostic 构造隔离与 zero-refit hidden-child 模式互斥：完整182日carrier/manifest v2、transition-only、E-mask、calendar-aware structure、composite selected schema与zero-refit lineage均已进入源码，旧schema不能进入active READY。PR 尚未合入，且本轮没有执行zero-refit replay；只读根因报告 `d6_date_sequence_diagnostic.json` canonical SHA-256=`08b396d5c901d1e5ed416f56134f9a93bdf6d6f142542d9cbfbef93744a38a7f` 仍是当前运行事实。model/READY、database 与 runtime 动作均为0（见§23.16-23.17、§24）。
+- 当前边界：C-001-A/C-002-A/C-003-A/C-006-A/C-007-A/C-008-D1/C-008-B1、B3 structural 与 D3-D7 精确合同均已固化；Slice 0 B3/L2 retrain、C-009、C-010-FORMAL-A、C-010-A5、D1-D5 mixed-dimension、BUG-1008、D6-NA-A与BUG-1029均已合入并close-sync。最新 P6 在producer `0ab6dec3`的同一冻结authority、固定单线程环境和两个fresh processes完成`2096/2096` fits；D5按train-only合同选定`autocycle_all_core:L2` seed43。BUG-1029后零refit D6重放为assignment `131/131` accepted、evidence `120/131` accepted、`11/131` failed，`fits=0`、`selection_reexecuted=false`、模型hash不变；report SHA-256=`dcf4c69ec7ba817d8d19f8cca27f6a855f25b2e7d147a5b754549d431d8c26a1`。model/READY、database与runtime动作均为0（见§24）。
 
 本文只细化总体蓝图已批准的 Phase 2。它不建立第二套产品方向，不修改 Selection、Advisory、
 Paper v2、MiniQMT、StrategyPackage、QE 或现有 `hmm_risk_gate_v1` 消费者的业务语义。
 Phase 2 的输出是研究分析事实，不是交易门禁、可买性、调仓或模型晋级结论。
+
+本文是从属实现展开，不是第二份产品目标权威。若本文中的历史诊断、artifact、receipt、实施顺序或状态描述与父蓝图v2.20冲突，以父蓝图为准并修订本文。§23及各历史DIAG/REFIT章节仅保存决策与审计来源，不构成后续任务清单，不得以继续扩展这些章节为产品交付。
 
 ## 0. Feature Card / 功能卡
 
@@ -24,15 +26,13 @@ Phase 2 的输出是研究分析事实，不是交易门禁、可买性、调仓
 
 ### 0.2 成功边界
 
-- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 源码已实现并通过本模块 required plan。最新 P6 已完成 `2096/2096` fits，D5 train-only selection 已冻结 `autocycle_all_core:L2` seed 43；D6 尚未 accepted。BUG-1008 log-space与D6-NA-A源码已在独立分支实现并完成直接审核，但尚未合入或执行新zero-refit replay。当前为 `P6_D5_SELECTED_D6_NA_SOURCE_IMPLEMENTED_PENDING_PR_NO_READY`。不得以 fit 完成、D5 selected identity、transition-only posterior、部分 semantic evidence、单 family、部分 sector、插补、日期压缩、默认系数、忽略缺失或 validation-picked seed 冒充完成。
+- F-011：唯一 versioned sector-state generator、共同水位、revision/dedupe、预警状态机和迟到数据重算完整；其 direct L1/L2 model-set preparation 源码已实现并通过本模块 required plan。最新 P6 已完成 `2096/2096` fits，D5 train-only selection 已冻结 `autocycle_all_core:L2` seed43；BUG-1029后D6为120/131 accepted、11/131 failed，当前为`P6_D5_SELECTED_D6_11_EVIDENCE_FAILURES_NO_READY`。不得以fit完成、D5 selected identity、部分semantic evidence、单family、部分sector、插补、日期压缩、默认系数、忽略缺失或validation-picked seed冒充完成。
 - F-012：所有生成、查询和报告均为 advisory-only，只写 `hmm_risk.*`，不产生任何交易副作用。
 - F-013：真实 API/UI 完成 L1/L2、7 日热力图、今日预警、固定详情、状态分布、事件与回测证据。
 
 ### 0.3 交付顺序
 
-先完成 catalog/schema/纯计算与 repository，再完成受控 job/API，最后完成真实 UI。任何实现 PR 只在其
-Design Acceptance Matrix 行全部有源码和结果证据后才能标为完成。不得以后端-only、静态页面冒充完成；
-不得以 mock-only、旧 artifact 换皮或部分 sector 成功冒充 Phase 2 完成。
+交付顺序以父蓝图Gate 2的P2-1～P2-7为唯一优先级：11个D6失败闭合 → 必要模型修复/受影响refit → 两family READY → 最小离线板块状态预测 → 历史预警分析 → 最小schema/repository/job/API/UI产品纵切 → 受控日任务与集成验收。不得再采用“先完成全部catalog/schema/repository/job平台，最后才验证预测”的横向顺序。任何实现PR只在其Design Acceptance Matrix行全部有源码和结果证据后才能标为完成；不得以后端-only、静态页面、mock-only、旧artifact换皮、更多receipt或部分sector成功冒充Phase 2完成。
 
 ## 1. Background / 背景与当前代码事实
 
@@ -2968,6 +2968,8 @@ Decision C-004 已按用户指令确定为 `NO_MIGRATION`：本 Phase 2 不修�
 
 ## 15. Implementation Plan / 实施方案与分片
 
+以下Slice 0/0A/0B保留为已完成历史，不再接受新增诊断或基础设施任务。当前执行顺序由父蓝图Gate 2 P2-1～P2-7控制：先闭合11个D6失败和两family READY，再以同一真实预测结果完成generator/repository/job/API/UI纵向切片。除解除当前blocker所必需的最小修改外，不得新增通用evidence框架、重复完整输入artifact、通用训练平台或调度器。
+
 ### Slice 0：catalog 与 schema contract
 
 - 修改三份 validation catalog，登记 `hmm.risk` ownership/module/test plans。
@@ -3002,24 +3004,25 @@ Decision C-004 已按用户指令确定为 `NO_MIGRATION`：本 Phase 2 不修�
 - 当前Slice状态为`SOURCE_MERGED_DIAGNOSTIC_EXECUTED_COMPLETE_INCONCLUSIVE_MIXED_SEED_PATTERN`。report canonical
   `7e8a1755…76b9`与两process payload `53574f62…088f`已闭合；该状态不构成D5/D6、selection、model/READY、数据库或runtime授权。
 
-### Slice 1：identity、input、generator、repository
+### Slice 1：最小离线预测纵切与必要持久化
 
-- 新增 `models.py`、`input_resolver.py`、`market_repository.py`、`observation.py`、`state_generator.py`、
-  `alert_state_machine.py`、`repository.py`。
-- 完成 C-001-A candidate capability resolver、C-002-A model-set adapters、deterministic hashes、direct L1/L2、revision、late-data cascade 和 isolation tests。
+- READY model set闭合后，先用一个完整交易日生成真实L1/L2 state、transition、severity和reason；该业务oracle通过前不扩展durable job平台。
+- 只新增该预测纵切必需的`models.py`、`input_resolver.py`、`market_repository.py`、`observation.py`、`state_generator.py`、`alert_state_machine.py`与最小repository写入。
+- 完成 C-001-A candidate capability resolver、C-002-A model-set adapters、direct L1/L2和advisory-only isolation；revision/late-data只在真实日度预测纵切通过后补齐。
 - 不修改或迁移 legacy script；旧 gate 不属于本模块 changed files。
 
-### Slice 2：durable job、worker、API、report
+### Slice 2：历史分析与同结果API
 
-- 新增 job service、manual worker CLI、router、report service。
-- API 只登记 `hmm_risk.*` queue；worker 显式启动。
-- 完成 API envelope、idempotency、lease/fencing、partial/failed 和 report tests。
+- 使用Slice 1同一计算入口生成已批准历史窗口的状态时序、预警、事件和retrospective report，不创建第二套计算路径。
+- 先新增read API与report service，让产品可读取真实预测；manual job/worker只在单日与历史纵切业务oracle通过后加入。
+- 完成API envelope、partial/failed、report denominator与advisory-only tests；lease/fencing等运行框架不得先于真实业务结果开发。
 
-### Slice 3：真实 UI 与 route activation
+### Slice 3：真实 UI、受控日任务与 route activation
 
 - 新增 `/hmm-risk` 页面、typed adapter、heatmap、fixed detail、alerts/events/report panels。
 - 修改 HMM navigation；只有真实 API/UI 验收后才切 `/hmm` 默认 route。
 - 安全端口运行真实 API/UI Playwright；不得 mock route 冒充最终验收。
+- UI读取与Slice 1/2相同预测、预警和报告；完成产品纵切后才补job idempotency、revision/late-data、受控runner，不建设Phase 3 scheduler。
 
 每个 slice 都是完整、可验证的 feature slice；不得用 schema-only、backend-only 或 static UI 宣称整个 Phase 2 完成。
 
@@ -3243,7 +3246,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 ## 18. Design Acceptance Index / 设计验收索引
 
-- F-011 parent：`APPROVED_BY_USER_SOURCE_IMPLEMENTED_P6_FITS_COMPLETE_D5_SELECTED_D6_NA_DESIGN_APPROVED_BLOCKED_MODEL_ACCEPTANCE`；C-009、BUG-892 与
+- F-011 parent：`APPROVED_BY_USER_SOURCE_IMPLEMENTED_P6_FITS_COMPLETE_D5_SELECTED_D6_120_OF_131_BLOCKED_MODEL_ACCEPTANCE`；C-009、BUG-892 与
   C-010-FORMAL-A 已合入并完成 clean-main 601 日 formal preflight。两 fresh-process 共 5184 fits 和 D5/D6 已执行；formal canonical
   `e7992f87…39f` 为 blocked，未生成 model/READY。targeted blocker diagnostic 已按批准合同完成，canonical
   `10287e84…cffe8`；no-fit remediation diagnostic也已完成，canonical `48157a42…bb58`。两项都只完成根因证据闭合且未重跑
@@ -3251,7 +3254,7 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
   REFIT-02-B已按v6 matched-fit合同完成48/48真实fit并通过双进程bitwise验证；matched 20D在16/16 attempts均于covariance stage失败，
   treatment/harness均16/16 `fit_completed`且descriptive covariance accepted，机制仍inconclusive。REFIT-03 covariance exact-evidence已完成48/48 fits并形成
   `mixed_seed_pattern`。其后最新P6完成2096/2096 fits并选择`autocycle_all_core:L2/seed=43`；BUG-1008零refit重放闭合131-entry
-  posterior后暴露6个calendar availability blocker。D6-NA-A源码已本地实现并审核，尚未合入/重放，model/READY仍为0。
+  posterior与carrier readback后，最新零refit重放为assignment 131/131 accepted、evidence 120/131 accepted与11/131 failed；D6-NA-A与BUG-1029均已合入并close-sync，model/READY仍为0。
 - F-011-A 数据/PIT/observation：`APPROVED_BY_USER_C010_A5_SOURCE_MERGED_601_DAY_PREFLIGHT_VERIFIED`；C-007-A 单位、PIT sector mapping、7/20 维公式、
   hard semantic authority、120/30 行合同与既有 `0.90` coverage authority 均保留。已批准 policy 只把 full-universe train-frozen
   contributor ledger、price/moneyflow 双层 coverage、同源 moneyflow denominator 与逐 feature cross-section 形式化；它不删除证券或
@@ -3261,9 +3264,8 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
   C-010-A5源码与新601日只读formal preflight已合入并闭合；F-011-A已完成。D1当前blocker是实验authority重基准，不是数据域或代码合入。
 - F-011-B fit/convergence/covariance/occupancy：`P6_2096_FITS_COMPLETE_D5_ELIGIBLE_SELECTED`；最新P6在两个fresh processes完成
   `2096/2096` fits并通过child/parent closure，形成可供D5选择的`autocycle_all_core:L2`候选。该事实不外推到另一个family或完整5184 grid。
-- F-011-C semantic evidence/selection：`D5_SELECTED_SEED43_D6_NA_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_PENDING_PR_REPLAY`；D5 train-only selection冻结
-  `autocycle_all_core:L2/seed=43`且未读取validation/future utility。BUG-1008 log-space零refit重放后6个entry因calendar availability
-  blocked；D6-NA-A完整ledger/transition-only/evidence-mask源码已实现但未合入/重放，禁止reselection或声称D6 accepted。
+- F-011-C semantic evidence/selection：`D5_SELECTED_SEED43_D6_ZERO_REFIT_120_OF_131_ACCEPTED_11_FAILED`；D5 train-only selection冻结
+  `autocycle_all_core:L2/seed=43`且未读取validation/future utility。D6-NA-A与BUG-1029后的零refit重放保留11个真实evidence failures，禁止reselection、放宽阈值或声称D6/family accepted。
 - F-011-D 两-family READY：`BLOCKED_FORMAL_ACCEPTANCE`；READY artifact 数为0；四个 family/level 未全部 accepted，源码正确禁止 write。
 - F-011-E generator/job/revision：`PENDING_IMPLEMENTATION`；不得由未完成的 model-set preparation 推导为 verified。
 - F-012：advisory-only 写入与依赖隔离，不产生 Selection/Paper/QMT/QE/交易副作用。
@@ -3273,11 +3275,11 @@ C-005 是用户明确要求的交付控制，适用于今后每个 PR。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_mixed_dimension,b3_remediation_diagnostic,b3_d1_inactive_dimension,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_state_model_set,test_stock_fact_observation,test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`；最新P6 `2096/2096` fits；D5 selected `autocycle_all_core:L2/seed=43`；`d6_date_sequence_diagnostic.json` canonical `08b396d5…a38a7f` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_P6_D5_COMPLETE_D6_NA_LOCAL_REVIEWED_PENDING_PR_BLOCKED_MODEL_ACCEPTANCE | D6-NA-A源码已实现但尚未合入/重放；另一family与两-family READY合取未闭合，READY=0；不得自动改阈值、扩大grid或声明模型验收完成 |
+| F-011 | `backend/db/init_hmm_risk_schema.py`; `backend/services/hmm_risk/{state_model_set,b3_acceptance,b3_training,b3_mixed_dimension,b3_remediation_diagnostic,b3_d1_inactive_dimension,observation_eligibility,stock_fact_observation,stock_fact_repository}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_state_model_set,test_stock_fact_observation,test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`；最新P6 `2096/2096` fits；D5 selected `autocycle_all_core:L2/seed=43`；BUG-1029 zero-refit report `dcf4c69e…c26a1` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_P6_D5_COMPLETE_D6_120_OF_131_BLOCKED_MODEL_ACCEPTANCE | 11个D6 evidence failures、另一family与两-family READY合取未闭合，READY=0；不得自动改阈值、扩大grid、reselection或声明模型验收完成 |
 | F-011-A data/PIT/observation | `backend/services/hmm_risk/{security_identity,provider_absence,observation_eligibility,stock_fact_repository,stock_fact_observation}.py`; C-007-A/C-009/C-010 contracts | `backend/tests/hmm_risk/test_observation_eligibility.py`；`backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`；C-010-A5 preflight与partition canonical `03d78534…ead6` | APPROVED_BY_USER_C010_A5_SOURCE_MERGED_601_DAY_PREFLIGHT_VERIFIED | `P_all=502/P_in=501/P_out=1`，已知002951 key按SW-domain-out保留完整证据；v1历史只读、v2新写、out-only denominator与同symbol in/out均闭合。不得伪造SW、删证券/absence、填值或回退v1输入 |
 | F-011-B fit/convergence/covariance/occupancy | `backend/services/hmm_risk/{b3_training,b3_acceptance,b3_remediation_diagnostic,b3_d1_inactive_dimension,state_model_set}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/test_prepare_state_model_set_b3.py`；historical formal/DIAG receipts；最新P6两个fresh processes `2096/2096` fits与D5 input closure | APPROVED_BY_USER_P6_FITS_COMPLETE_D5_ELIGIBLE | `autocycle_all_core:L2`已形成D5候选；不表示其他level/family、semantic validation、model或READY完成 |
-| F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`；D5 selected seed43；historical BUG-1008零refit 131-entry replay；`d6_date_sequence_diagnostic.json` canonical `08b396d5…a38a7f` | APPROVED_BY_USER_D5_SELECTED_D6_NA_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_PENDING_PR_REPLAY | selection train-only且无refit；D6失败未reselection；6个entry缺失拆为observation/utility availability。D6-NA-A不改变hard authority且新replay尚未执行，B2不采用 |
-| C-008-B3-D6-NA-A calendar/availability amendment | `backend/services/hmm_risk/{stock_fact_observation,state_model_set,b3_acceptance,b3_training,b3_mixed_dimension}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_state_model_set,test_stock_fact_observation,test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`; §16.2 exact fix-points | APPROVED_BY_USER_SOURCE_IMPLEMENTED_LOCAL_REVIEWED_PENDING_PR_NO_REPLAY | carrier/manifest v2、full-feature preprocess/projection顺序、T/O/U/E、composite selected schema、shared writer/readback authority、zero-refit lineage与daily reason mapping已实现；不执行fit/D5、尚未重放D6、不写model/READY |
+| F-011-C semantic/selection | `backend/services/hmm_risk/{b3_acceptance,b3_training}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`；D5 selected seed43；BUG-1029 zero-refit assignment 131/131、evidence 120/131 accepted | APPROVED_BY_USER_D5_SELECTED_D6_120_OF_131_ACCEPTED_11_FAILED | selection train-only且无refit/reselection；11个失败保持typed evidence，D6-NA-A不改变hard authority，B2不采用 |
+| C-008-B3-D6-NA-A calendar/availability amendment | `backend/services/hmm_risk/{stock_fact_observation,state_model_set,b3_acceptance,b3_training,b3_mixed_dimension}.py`; `scripts/hmm_risk/prepare_state_model_set.py` | `backend/tests/hmm_risk/{test_state_model_set,test_stock_fact_observation,test_b3_acceptance,test_b3_training,test_prepare_state_model_set_b3}.py`; PR #3258；BUG-1029/PR #3311 zero-refit report | APPROVED_BY_USER_SOURCE_MERGED_ZERO_REFIT_EXECUTED | carrier/manifest v2、T/O/U/E、composite selected schema、shared writer/readback与zero-refit lineage已实现并执行；11个真实D6 failure不被补值、删日或降级，不写model/READY |
 | F-011-D two-family READY | `backend/services/hmm_risk/b3_training.py::write_b3_ready_model_set` | `F:/Dev/AIstock_artifacts/hmm_risk/b3_formal_20260729_e2c01bae_bug912/b3_formal_preparation.json` top-level blocked/no-write receipt；`backend/tests/hmm_risk/test_b3_training.py` | APPROVED_BY_USER_SOURCE_IMPLEMENTED_BLOCKED_FORMAL_ACCEPTANCE | READY artifact数为0；四个family/level完整性未成立，禁止partial/single-family write |
 | F-011-E generator/job/revision | `backend/services/hmm_risk/{state_generator,job_service,repository}.py` | `backend/tests/hmm_risk/test_state_generator.py`; `backend/tests/hmm_risk/test_revision_and_late_data.py` | APPROVED_BY_USER_PENDING_IMPLEMENTATION | 用户明确批准 C-008-D1：上游 READY model set 尚未形成，不推导 generator/job 已验证 |
 | F-012 | `backend/services/hmm_risk/**`; DB role/write-scope guard; `backend/routers/hmm_risk.py` | `backend/tests/hmm_risk/test_isolation.py` | DESIGN_READY_USER_APPROVED | 无 |
@@ -3949,13 +3951,7 @@ domain partition已不再是上游blocker。C-008-B3-REMEDIATION-DIAG-02 已按�
 F-011-A 为 `APPROVED_BY_USER_C010_A5_SOURCE_MERGED_601_DAY_PREFLIGHT_VERIFIED`，F-011-B/C/D 分别 blocked 于尚未形成的D1-B D4机制证据、D5/D6 与两-family READY 合取。F-012 保持
 `DESIGN_READY_USER_APPROVED`，F-013 保持 `PENDING_UPSTREAM_MODEL_SET`。
 
-`C-008-B3-FORMAL-BLOCKER-DIAG-01` 已完成：producer=`ac3687c2…`、canonical=`10287e84…cffe8`、348/348 fits、
-3-entry D6 replay、双 fresh-process bitwise equality均闭合；执行没有selection、threshold/authority变更、model/READY、数据库或runtime动作。
-
-`C-008-B3-REMEDIATION-DIAG-02` 已完成：producer=`b2456424…fdec`、canonical=`48157a42…bb58`、324/324 profiles、
-163/163 completed entries与11/11 initialization source均闭合；唯一zero-variance profile、46个train-structure failed entries、
-4个跨8-seed persistent sector identity与6个statistic-insufficient groups均保留exact evidence。执行没有HMM refit、validation、
-acceptance、selection、threshold/authority变更、model/READY、数据库或runtime动作。
+历史`C-008-B3-FORMAL-BLOCKER-DIAG-01`、`C-008-B3-REMEDIATION-DIAG-02`与REFIT-01/02/03证据保持append-only只读，用于解释既有合同来源；它们已经完成，不再产生后续任务、重复fit或新的产品验收计数。
 
 用户已选择B“显式inactive-dimension identity”，A“保持fail-closed”不采用；P1最小必要模型机制源码已实现并通过正式审核，
 但不提升F-011完成计数。C-010-A5已合入并完成601日preflight；BUG-962又修复current-A5 authority与历史readback的程序矛盾。
@@ -3975,19 +3971,23 @@ formal D4 acceptance、D5 selection或READY。
 `C-008-B3-D1-POST-REFIT03-A`与`C-008-B3-REMEDIATION-D1-D5-COMPAT-01-A`已获批准，且P5正式
 mixed-dimension artifact/parser、dimension receipt与公式/identity/131-entry完整性的确定性直接测试已完成源码实现和本模块审核。
 最新 P6 已在 producer `0ab6dec3` 完成`autocycle_all_core:L2`双 fresh-process `2096/2096` fits；D5按train-only
-合同选定seed43。原D6概率域posterior underflow由BUG-1008 log-space源码修复；零refit重放完成131 entries后，6个entry因冻结validation
-calendar中的observation/utility availability fail closed。`d6_date_sequence_diagnostic.json` canonical SHA-256=
-`08b396d5c901d1e5ed416f56134f9a93bdf6d6f142542d9cbfbef93744a38a7f`，没有执行refit、selection重算、model/READY、DB或runtime写入。
+合同选定seed43。历史BUG-1008修复后的首次零refit replay曾有6个calendar availability blocker；该结果已被后续D6-NA-A与BUG-1029 replay取代，只保留为历史诊断来源，不是当前任务状态。
 
-用户已批准`C-008-B3-D6-NA-A`；本revision现已完成详细设计、源码实施和本地正式审核，源码位于 PR #3258 且尚未合入，新zero-refit
-D6 replay尚未执行。下一步完成PR复核并等待用户合入确认；合入后只复用已冻结P6模型和
-D5 seed43执行零refit D6 replay。若D6仍失败则保持blocked，禁止扩大seed或返回D5；若该selected level
-accepted也仍不能推导两family READY。公共KMeans/EM/covariance合同不变，不重跑2096/5184 fits。
+`C-008-B3-D6-NA-A`已由PR #3258合入；BUG-1029又修复carrier-v2严格empty legacy sentinel与冻结producer zero-refit readback。最新零refit D6 report SHA-256=`dcf4c69ec7ba817d8d19f8cca27f6a855f25b2e7d147a5b754549d431d8c26a1`，`fits=0`、`refit_count=0`、`selection_reexecuted=false`、seed43与模型hash不变；assignment 131/131 accepted，evidence 120/131 accepted、11/131 failed。11个失败为：`801038.SI`、`801127.SI`、`801204.SI`、`801223.SI`、`801231.SI`、`801711.SI`、`801723.SI`、`801733.SI`、`801738.SI`、`801743.SI`、`801971.SI`。
 
-之后继续闭合另一个family与两-family READY，再实现generator/job/repository/API/UI/runtime。任何局部结果都不得冒充family/Phase 2完成。
-当前revision的DDL/DML、依赖、runtime、数据库、model/READY与客户端同步均为`noop`；严格进度保持`11/17=64.71%`。
+### 24.1 当前唯一任务优先级（父蓝图Gate 2）
 
-### 24.1 BUG-982：REFIT-03 冻结输入可回放合同
+1. **P2-1 / P0业务blocker**：用现有冻结模型和紧凑聚合脚本逐项判定11个D6失败是程序缺陷、数据/NA语义缺陷还是真实模型能力不足；禁止复制/重写现有多GB JSON、重跑2096 fits、reselect或改阈值。
+2. **P2-2 / P0模型闭合**：程序/数据缺陷登记BUG并精确修复；只有真实模型能力不足才提交模型/特征合同修订。按changed level/family运行最小必要refit，禁止默认full-grid。
+3. **P2-3 / P0验收**：完成当前selected level D6与其余level/family的D5/D6，四层全部accepted后才写两family READY；失败不得per-sector stitching、切换seed或删除sector。
+4. **P2-4 / P1功能**：READY后立即实现一个完整交易日L1/L2板块状态预测、transition、severity与可读原因的离线纵切，不先建设job平台。
+5. **P2-5 / P1功能**：运行历史状态/预警分析并给出误报、漏报、样本量和分阶段稳定性，不新增效果门禁。
+6. **P2-6 / P1产品**：用同一计算入口完成最小schema/repository/read API和真实`/hmm-risk`热力图/预警/详情/报告纵切。
+7. **P2-7 / P2运维**：产品纵切验收后再补幂等日任务、revision/late-data、受控runner与集成测试；Phase 3调度器不属于本阶段。
+
+停止项：新的通用evidence/训练/调度平台、重复完整输入物化、历史artifact迁移/清理、与11个blocker或F-011/F-012/F-013无直接关系的基础设施、以及用diagnostic/receipt数量增加完成度。当前DDL/DML、依赖、runtime、数据库、model/READY与客户端同步均为`noop`；严格进度保持`11/17=64.71%`。
+
+### 24.2 BUG-982：REFIT-03 冻结输入可回放合同（历史已闭合）
 
 REFIT-03 首次真实执行暴露了一个独立的可复现性缺陷：C-010-A5 artifact 冻结了
 `mapping_manifest_sha256`，但没有保存可回放的映射行或 D1 角色训练矩阵；runner 的父进程与两个 fresh child 又分别读取
