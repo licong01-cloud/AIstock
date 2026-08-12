@@ -6,7 +6,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1030",
-  "closed_at": null,
+  "closed_at": "2026-08-12T02:17:14Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -54,8 +54,8 @@
   },
   "first_seen_at": "2026-08-11T19:49:19.362263Z",
   "fix_branch": "bug/BUG-1030-qe-log-cursor-20260812",
-  "fix_commit": "9f7f8086430f83e23aca34733394074e24021731",
-  "fixed_at": null,
+  "fix_commit": "aee31e674af85d8c290fe5393648bb070df442df",
+  "fixed_at": "2026-08-12T02:17:14Z",
   "github_issue_number": 3297,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3297",
   "last_seen_at": "2026-08-11T19:49:19.362263Z",
@@ -64,6 +64,7 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval.",
     "Do not deploy RD-Agent or delete historical logs as part of the source fix."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3300",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -89,6 +90,8 @@
     "overall_runtime_activation_gate": "pending_rdagent_source_merge_and_runtime_verification",
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -96,7 +99,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -105,6 +108,9 @@
     "fingerprint": "1cfa454f84294fe847cb17e3",
     "source_event_id": "FE-20260811-1cfa454f8429"
   },
+  "validation_evidence": [
+    "validation-receipt: id=556df1a72f563069 commit=0e0afed26732ea5eb61988b516bd0b49becfead5 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- tests/aistock_validation/bugs/.bug_id_allocator.json tests/aistock_validation/bugs/20260811_BUG-1030-rd-agent-qe-log-sse-replays-full-history-without-resumable-cursor.json` result=`Session l0 was successful`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
