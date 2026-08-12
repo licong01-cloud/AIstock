@@ -1,13 +1,13 @@
 # AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.0
 
 > 初始日期：2026-07-10
-> 修订日期：2026-08-12
+> 修订日期：2026-08-13
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`OFFLINE_MODELS_AND_POINT_READBACK_COMPLETE_FORWARD_PUBLICATION_ZERO_META_LABEL_PIVOT_NEXT`
+> 当前状态：`P0A_P0D_SOURCE_COMPLETE_REAL_META_LABEL_TRAINED_PENDING_MERGES_AND_FORWARD_ACTIVATION`
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 四类组件已由真实模型实现；但只完成固定历史日期的按需影子推理，尚未形成任何每日 `PUBLISHED` 推荐、前向模型 observation 或持仓 episode。因此不再用 `4/5 = 80%` 表示总体可用进度
 > 当前源码/运行时：M0-M5C 源码均已进入 `main`；PR #3346 已于 2026-08-12 squash 合入为 `034ccd36dd94441ec8c0fe0f94010d6874b8b799`。M2/M3/M4 仅对目标多 Alpha Program 的 `decision=2026-07-15 / target=2026-07-16` 完成按需 GET readback；这不是每日发布或前向运行验证
 > 当前生产前向状态：两个 Program 自 2026-07-17 为 `ENABLED` 且配置 `daily_after_close`，但截至 2026-08-12 均为 `last_review_trade_date=null`、`entered_episode_count=0`、`active_count=0`、`metric_status=NO_EPISODES`、无 `PUBLISHED` list version；现有 `2026-07-16` 记录均为 `REPLAY`
-> 当前模型质量：M5A/M5B/M5C 三项真实实验均完成，`0/3` 建议激活；当前相对 selection rank 的已证明净增量为零。冻结 80 日 test 已被使用，只保留为历史报告，不再参与后续模型选择
+> 当前模型质量：M5A/M5B/M5C 三项旧实验均不建议激活；P0-D policy-aligned meta-label 已完成 168 个 CPCV path-trials，winner 相对 matched Selection Top5 提升 `3.6556 bps`、path win rate `64.29%`，但 PBO `0.40` 且 AUC `0.5142`，仅为未激活 experimental challenger
 > 演进方向：先建立无资金、无下单的每日前向发布与 champion/challenger 跟踪，再把纯 Top20 重排主线调整为 policy-aligned meta-label `take/skip/confidence`；CPCV/PBO、自适应 conformal 和跨包共享均为结果驱动的研究方法，不是新增审批或运行门禁
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
@@ -106,6 +106,8 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 | M5B outcome calibration | request `advoutcal_ec16422ad1a97040583e5273`；bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533` | validation 940 feature-covered/1000 labels；test 1600/1600；8/10 binary heads calibrated，2 个 h5 heads 因 order reversal 保持 raw | 11.659 秒；RSS 399,200,256 bytes | 8 个 calibrated binary head 的 test Brier/logloss/ECE 均未优于 raw；收益区间名义 coverage 平均绝对偏差 `0.00984 -> 0.03129`；path upper `0.01432 -> 0.01394` | artifact 完整、exact retry 一致，但总体质量不支持激活；M3 v1 binding 不变 |
 | M5C entry-gap calibration | request `advprcal_7cb766fe38898e12a008a328`；bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead` | validation 940 feature-covered/1000 eligible；test 1599/1599；central-80 CQR | 2.679 秒；RSS 395,853,824 bytes | validation coverage `0.810638` 导致 `delta=0`；test raw/calibrated coverage 均 `0.727955`，mean width 均 `0.0122280` | 全局常数校准无法修正 validation→test 漂移，`activation_recommended=false`；源码已合入但不激活 |
 | 生产前向基线 | 两个 ENABLED Program；各有一条 `2026-07-16` REPLAY | `PUBLISHED=0`；review=0；episode=0 | 非训练项 | `NO_EPISODES`，无 win rate、无 latest recommendation、无 forward outcome | 生产前向闭环尚未开始，不能据此判断模型未来质量 |
+| P0-C policy dataset | bundle `81e2c9bac5ce1f8e2fdc5a6174bc948dfbe984cf5028726c89ea72eb59fc69bd` | 386 candidate days；7,720 candidates；7,716 matured labels；28/28 READY CPCV paths | 28.9 秒；RSS 1.72GB | take 4,199 / skip 3,517；holding median 6 days；Selection rank buckets 均约 54% take rate | policy-aligned 标签和评价输入已完成；PR #3367 未合入 |
+| P0-D meta-label | request `advmetareq_cf90fa2c84d77352c5f8898b`；bundle `20d662860e053c70fb817fe7d0a3f28d09790d2a17cb6b9a8a51c41b492713c8` | 2 families × 3 seeds × 28 paths = 168；winner `FAMILY_CORE_HMM/20260817` | 312.222 秒；RSS 2.80GB；exact retry 4.578 秒 | winner `19.4357 bps` vs Selection `15.7801 bps`，lift `+3.6556 bps`，path win rate `64.29%`，PBO `0.40`，AUC `0.5142` | 真实模型已训练，保持 `EXPERIMENTAL_MODEL/UNCALIBRATED/NOT_ACTIVATED`；源码待 PR/合入 |
 
 ### 1.3 方向一致性复核
 
@@ -673,20 +675,20 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-124 | M5A ensemble and selection-prior policy；现行 M1 binding 保留的运行状态见 §9 | `backend/tests/advisory_model_first/test_quality_scoring.py`; `test_quality_runtime_bundle.py`; artifact: bundle `1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb` | implemented_bundle_verified | none |
 | F-125 | M5B validation-only probability calibration；8 个正斜率 head 发布 calibrated，2 个排序反转 head 明确 uncalibrated；逐 head solver/版本/迭代/收敛证据 fail-closed | `backend/services/advisory_model_first/outcome_calibration.py`; artifact: `outcome_calibration_runs/advoutcal_ec16422ad1a97040583e5273/outcome_calibration_receipt.json`; `backend/tests/advisory_model_first/test_outcome_calibration.py` | real_calibration_verified | none |
 | F-126 | M5B outcome quantile calibration和 M5C entry-gap coverage calibration均只使用 validation 拟合；M5C test 零缺失、`delta=0` 且质量未改善 | `outcome_calibration.py`; `price_range_calibration.py`; artifact: M5C bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead`; `test_price_range_calibration.py` | m5b_m5c_real_calibration_negative_quality_verified_not_activated | none |
-| F-127 | P0-A Advisory after-close runner + existing review service | `backend/tests/advisory_model_first/test_forward_scheduler.py` (target path) | APPROVED_BY_USER_P0A_DESIGN_READY_PENDING_IMPLEMENTATION | none |
-| F-128 | baseline/challenger/replay identity contract | `backend/tests/advisory_model_first/test_forward_observation.py` (target path) | APPROVED_BY_USER_P0A_IDENTITY_DESIGN_READY_PENDING_IMPLEMENTATION | none |
-| F-129 | `AdvisoryForwardObservationV1` | `backend/tests/advisory_model_first/test_forward_observation_postgres.py` (target path) | APPROVED_BY_USER_P0A_STORAGE_DESIGN_READY_PENDING_IMPLEMENTATION | none |
-| F-130 | `AdvisoryModelBindingResolutionV1` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py` (target path) | APPROVED_BY_USER_P0B_DESIGN_READY_PENDING_IMPLEMENTATION | none |
-| F-131 | policy-aligned meta-label take/skip/confidence | `backend/tests/advisory_model_first/test_meta_label_training.py` (target path) | APPROVED_BY_USER_P0D_DESIGN_READY_PENDING_IMPLEMENTATION | none |
-| F-132 | `AdvisoryPolicyEpisodeLabelV1` + existing review transition semantics | `backend/tests/advisory_model_first/test_policy_episode_labels.py` (target path) | APPROVED_BY_USER_P0C_LABEL_DESIGN_READY_PENDING_IMPLEMENTATION | none |
-| F-133 | purged rolling/CPCV + PBO/equivalent report | `backend/tests/advisory_model_first/test_policy_cpcv.py` (target path) | APPROVED_BY_USER_P0C_EVALUATION_DESIGN_READY_PENDING_IMPLEMENTATION | none |
+| F-127 | P0-A Advisory after-close runner + existing review service | P0-A/B task branch；PR #3366 | SOURCE_AND_TESTS_COMPLETE_PR_OPEN_NOT_MERGED | production forward activation not executed |
+| F-128 | baseline/challenger/replay identity contract | P0-A/B task branch；PR #3366 | SOURCE_AND_TESTS_COMPLETE_PR_OPEN_NOT_MERGED | production forward activation not executed |
+| F-129 | `AdvisoryForwardObservationV1` | P0-A/B task branch；PR #3366 | SOURCE_AND_TESTS_COMPLETE_PR_OPEN_NOT_MERGED | DDL/DML/runtime not executed |
+| F-130 | `AdvisoryModelBindingResolutionV1` | P0-A/B task branch；PR #3366 | SOURCE_AND_TESTS_COMPLETE_PR_OPEN_NOT_MERGED | descriptor write/runtime activation not executed |
+| F-131 | policy-aligned meta-label take/skip/confidence | `meta_label_training.py`; final bundle `20d66286...` | REAL_WSL_TRAINED_EXPERIMENTAL_NOT_ACTIVATED | source PR/merge pending |
+| F-132 | `AdvisoryPolicyEpisodeLabelV1` + existing review transition semantics | P0-C bundle `81e2c9ba...`; PR #3367 | REAL_FILE_DATASET_COMPLETE_PR_OPEN_NOT_MERGED | none |
+| F-133 | purged rolling/CPCV + PBO/equivalent report | P0-C 28 paths；P0-D 168 trial-path rows/70 PBO partitions | REAL_CPCV_AND_PBO_COMPLETE | PBO 0.40 must remain visible |
 | F-134 | daily forward observations and matured policy episodes | `backend/tests/advisory_model_first/test_forward_maturity.py` (target path) | APPROVED_BY_USER_FORWARD_OOS_DESIGN_READY_PENDING_IMPLEMENTATION | none |
 | F-135 | rolling/adaptive calibration matched study | `backend/tests/advisory_model_first/test_adaptive_calibration.py` (target path) | APPROVED_BY_USER_P1A_DESIGN_READY_WAITING_NATURAL_FORWARD_LABELS | none |
 | F-136 | compatible-set pooled/multi-task experiment | `backend/tests/advisory_model_first/test_strategy_conditioned_pooling.py` (target path) | APPROVED_BY_USER_P1B_DIRECTION_READY_WAITING_COMPATIBLE_PACKAGE_DATA | none |
-| F-137 | Advisory-only forward boundaries | `backend/tests/advisory_model_first/test_forward_boundaries.py` (target path) | APPROVED_BY_USER_FORWARD_ISOLATION_DESIGN_READY_PENDING_IMPLEMENTATION | none |
-| F-138 | P0-C Top40/held-symbol rank reconstruction | `backend/tests/advisory_model_first/test_policy_rank_reconstruction.py` (target path) | APPROVED_BY_USER_P0C_RANK_DEPTH_DESIGN_READY_PENDING_IMPLEMENTATION | none |
-| F-139 | candidate meta-label evaluator + shadow portfolio policy simulator | `backend/tests/advisory_model_first/test_shadow_portfolio_policy.py` (target path) | APPROVED_BY_USER_P0C_PORTFOLIO_DESIGN_READY_PENDING_IMPLEMENTATION | none |
-| F-140 | after-close publication and target-open episode clock | `backend/tests/advisory_model_first/test_forward_date_clock.py` (target path) | APPROVED_BY_USER_P0A_DATE_CLOCK_DESIGN_READY_PENDING_IMPLEMENTATION | none |
+| F-137 | Advisory-only forward boundaries | P0-A/B boundary tests；PR #3366 | SOURCE_AND_TESTS_COMPLETE_PR_OPEN_NOT_MERGED | runtime not activated |
+| F-138 | P0-C Top40/held-symbol rank reconstruction | `policy_rank_source.py`; P0-C bundle `candidate_rankings.parquet` | REAL_FILE_RECONSTRUCTION_COMPLETE | source PR #3367 not merged |
+| F-139 | candidate meta-label evaluator + shadow portfolio policy simulator | `policy_episode_labels.py`; `shadow_portfolio_policy.py`; P0-D matched baselines | REAL_POLICY_SIMULATION_COMPLETE | source PRs not merged |
+| F-140 | after-close publication and target-open episode clock | P0-A/B task branch；PR #3366 | SOURCE_AND_TESTS_COMPLETE_PR_OPEN_NOT_MERGED | production scheduler not activated |
 
 ## 12. Verification Plan
 

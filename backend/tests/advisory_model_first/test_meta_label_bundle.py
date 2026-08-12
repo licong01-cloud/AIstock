@@ -61,14 +61,18 @@ def test_meta_label_bundle_exact_request_reuse_and_hmm_jitter_are_deterministic(
         policy_dataset_bundle_root=str(tmp_path / "policy"), output_root=str(tmp_path)
     )
     assert find_meta_label_bundle_for_request(request)[0] == first_id
-    assert _stable_hmm_payload({"x": -0.08011144564834183}) == _stable_hmm_payload(
-        {"x": -0.08011144590547303}
+    assert _stable_hmm_payload({"x": 0.5095992816185344}) == _stable_hmm_payload(
+        {"x": 0.509599281618536}
     )
+    assert _stable_hmm_payload({"final_log_likelihood_delta": 7.871711386542302e-05}) == {
+        "final_log_likelihood_status": "NON_REGRESSING"
+    }
     assert _stable_hmm_payload(
-        {"final_log_likelihood_delta": 7.871711386542302e-05}
-    ) == _stable_hmm_payload(
-        {"final_log_likelihood_delta": 7.87170770308876e-05}
-    )
+        {"reason": "fit_likelihood_regressed", "log_likelihood_delta": -0.08011144564834183}
+    ) == {
+        "reason": "fit_likelihood_regressed",
+        "log_likelihood_status": "REGRESSED_BEYOND_TOLERANCE",
+    }
     assert path.is_dir()
 
 

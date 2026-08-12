@@ -4,7 +4,7 @@
 > Feature tier：F2
 > 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.0
 > 直接父产物：P0-C bundle `81e2c9bac5ce1f8e2fdc5a6174bc948dfbe984cf5028726c89ea72eb59fc69bd`
-> 当前阶段：`DESIGN_READY_FOR_IMPLEMENTATION`
+> 当前阶段：`SOURCE_AND_REAL_WSL_EXPERIMENT_COMPLETE_PENDING_PR_NOT_ACTIVATED`
 > 适用范围：学术研究与模拟荐股观察，不构成实时投资建议，不连接实盘交易或下单执行
 
 ## 1. Background / 当前真实基线
@@ -20,6 +20,8 @@ P0-C 已基于目标多 Alpha 父包真实文件数据产出：
 - P0-C PBO 为 `NOT_COMPUTABLE_NO_TRIAL_RESULTS`，因为尚无真实模型 family/trial。
 
 P0-D 的唯一目标是训练首个真实 take/skip/confidence meta-label challenger，并以同一 policy portfolio 口径评价。它不再优化5日 NDCG，也不建设额外基础设施。
+
+截至 2026-08-13，最终源码提交 `e0b189293c581d36c96d2941352e3e52927bb862` 已完成真实 WSL 训练。权威 request 为 `advmetareq_cf90fa2c84d77352c5f8898b`，权威 experimental bundle 为 `20d662860e053c70fb817fe7d0a3f28d09790d2a17cb6b9a8a51c41b492713c8`。bundle 未激活、未写 descriptor、未进入生产前向发布。
 
 ## 2. Scope / 交付范围
 
@@ -358,6 +360,29 @@ scripts/wsl/advisory_meta_label_train.py
 - Source Round 4：传给fresh HMM的inference calendar从HMM history start开始，warmup行情只用于构造首日observations；避免warmup前空日期被误判为continuation gap。
 - Source Round 5：不以宽泛catch把失败trial降级后继续选winner；已声明6×28矩阵任一异常整体fail closed，修复后重跑完整矩阵。
 - Real WSL Round 1：旧reranker的group-level required-feature策略使任一候选缺值时整日删除（仅328/386日）；增加meta-label显式candidate-level排除模式，旧默认行为不变。缺特征候选不回退selection priority，少于5只时保留现金并typed不可计算。
+- Real WSL Round 2：相同 request 两次完整训练得到相同 winner、trial metrics 和 `model.txt`，但 BLAS 级 HMM 浮点抖动导致两个 bundle id。修复为预测参数 9 位有效数字；收敛 delta 只保留已由训练合同判定的确定性状态 `NON_REGRESSING` / `REGRESSED_BEYOND_TOLERANCE`。完整 HMM 参数、可用性 evidence 和文件 hash 仍参与身份，不通过移除 HMM evidence 或忽略 hash 掩盖分叉。
+- Source Round 6：exact retry 原先在全部 Qlib/HMM/LightGBM 计算之后才识别现有 bundle；改为验证环境、P0-C manifest 和 request identity 后，在任何重计算前全文件 readback exact bundle。最终 retry 4.578 秒返回 `EXISTING_BUNDLE`。
+- Source Round 7：bundle loader 增加目录名必须等于 content-addressed `bundle_id`；scorer 对预测形状、有限性及 `[0,1]` 范围 fail closed，防止损坏模型输出静默进入排名。
+
+## 19.1 Real WSL Result / 真实实验结果
+
+| item | result |
+|---|---|
+| repository commit | `e0b189293c581d36c96d2941352e3e52927bb862` |
+| request | `advmetareq_cf90fa2c84d77352c5f8898b` / `cf90fa2c84d77352c5f8898b35bd5d7d9ac19dae1a81be752b73920c2d879a5a` |
+| bundle | `20d662860e053c70fb817fe7d0a3f28d09790d2a17cb6b9a8a51c41b492713c8` |
+| input | 7,720 labels；7,651 modelable feature rows；386/386 decision dates；28 READY CPCV paths |
+| trial matrix | 2 families × 3 seeds × 28 paths = 168 rows；6 trials × 8 blocks = 48 block rows |
+| winner | `FAMILY_CORE_HMM` / seed `20260817` / 5 boost rounds |
+| winner policy metric | mean daily net excess `19.4356787838 bps` |
+| matched baselines | Selection Top5 `15.7800538252 bps`；HMM Top5 `16.4994029170 bps`；random Top5 `9.4868886901 bps` |
+| winner lift | versus Selection `+3.6556249586 bps`；28-path win rate `0.6428571429` |
+| candidate classification | ROC AUC `0.5142260421`；Brier `0.2506001180` |
+| PBO | `0.40`，8 blocks / 70 partitions / 6 trials |
+| resource | 312.222 秒；peak RSS 2,804,068,352 bytes，低于 8GB |
+| exact retry | 4.578 秒；同一 bundle；`EXISTING_BUNDLE`；`activated=false` |
+
+结论必须同时保留两面：policy-aligned meta-label 在冻结 CPCV 口径下相对 Selection Top5 有正增量，方向值得进入前向 challenger；但 AUC 接近随机且 PBO 为 0.40，选择偏差风险仍高，因此只能保持 `EXPERIMENTAL_MODEL / UNCALIBRATED / NOT_ACTIVATED`。该结论不是审批或收益门禁，也不得被改写为已验证 champion。
 
 ## 20. Implementation Plan / 实施方案
 
@@ -374,11 +399,11 @@ scripts/wsl/advisory_meta_label_train.py
 
 | action | 状态 | 独立授权 |
 |---|---|---|
-| P0-D源码/PR合入 | pending user confirmation | 必须 |
+| P0-D源码/PR合入 | source complete；PR pending creation；merge pending user confirmation | 必须 |
 | DEV/生产DDL/DML | none | 不适用 |
 | backend restart | none | 不适用 |
 | descriptor写入/模型激活 | out of scope | 后续单独授权 |
-| 正式WSL训练 | 长任务实验步骤 | 只写repo-external model artifacts |
+| 正式WSL训练 | complete；bundle `20d66286...`；未激活 | 只写repo-external model artifacts |
 
 ## 22. Completion Definition
 

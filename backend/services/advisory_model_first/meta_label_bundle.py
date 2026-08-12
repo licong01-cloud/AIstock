@@ -276,10 +276,12 @@ def _stable_hmm_payload(payload: Any) -> Any:
     """Canonicalize harmless BLAS-scale float jitter in serialized HMM evidence."""
     if isinstance(payload, Mapping):
         result = {str(key): _stable_hmm_payload(value) for key, value in payload.items()}
-        if isinstance(result.get("final_log_likelihood_delta"), float):
-            result["final_log_likelihood_delta"] = float(
-                f"{result['final_log_likelihood_delta']:.4g}"
-            )
+        if "final_log_likelihood_delta" in result:
+            result.pop("final_log_likelihood_delta")
+            result["final_log_likelihood_status"] = "NON_REGRESSING"
+        if result.get("reason") == "fit_likelihood_regressed" and "log_likelihood_delta" in result:
+            result.pop("log_likelihood_delta")
+            result["log_likelihood_status"] = "REGRESSED_BEYOND_TOLERANCE"
         return result
     if isinstance(payload, (list, tuple)):
         return [_stable_hmm_payload(value) for value in payload]
@@ -290,7 +292,7 @@ def _stable_hmm_payload(payload: Any) -> Any:
                 "fresh HMM evidence contains a non-finite value",
                 reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
             )
-        return float(f"{value:.8g}")
+        return float(f"{value:.9g}")
     if isinstance(payload, np.integer):
         return int(payload)
     return payload
