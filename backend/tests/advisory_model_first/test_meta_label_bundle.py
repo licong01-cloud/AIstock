@@ -80,7 +80,7 @@ def test_meta_label_bundle_exact_request_rejects_multiple_claimants(tmp_path) ->
     )
     with pytest.raises(AdvisoryModelFirstError) as excinfo:
         find_meta_label_bundle_for_request(request)
-    assert excinfo.value.reason_code == "ADVISORY_META_LABEL_BUNDLE_IDENTITY_CONFLICT"
+    assert excinfo.value.reason_code == "ADVISORY_META_LABEL_BUNDLE_INVALID"
 
 
 class _InvalidBooster:

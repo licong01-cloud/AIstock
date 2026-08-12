@@ -176,7 +176,11 @@ def load_meta_label_bundle(
     actual = canonical_json_sha256(
         {key: value for key, value in manifest.items() if key not in {"bundle_id", "files"}}
     )
-    if manifest.get("bundle_id") != expected_bundle_id or actual != expected_bundle_id:
+    if (
+        root.name != expected_bundle_id
+        or manifest.get("bundle_id") != expected_bundle_id
+        or actual != expected_bundle_id
+    ):
         raise AdvisoryModelFirstError(
             "meta-label bundle identity is invalid",
             reason_code="ADVISORY_META_LABEL_BUNDLE_INVALID",
