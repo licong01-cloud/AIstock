@@ -155,6 +155,19 @@ async def probe_node(node_id: str):
         raise HTTPException(502, f"探测失败: {e}")
 
 
+@router.post("/nodes/discover-manual")
+async def discover_manual_tasks():
+    """Explicitly discover manually started remote tasks.
+
+    Discovery is intentionally absent from the automatic health observer.
+    """
+    try:
+        discovered = await _svc.discover_manual_tasks()
+        return {"discovered": discovered}
+    except Exception as e:
+        raise HTTPException(502, f"手工任务发现失败: {e}")
+
+
 # ── 通用代理转发 ──
 
 @router.api_route(

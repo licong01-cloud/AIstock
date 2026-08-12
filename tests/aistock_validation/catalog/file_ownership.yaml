@@ -7,11 +7,14 @@ rules:
       - backend/tests/advisory_model_first/**
       - scripts/advisory_model_prepare_request.py
       - scripts/advisory_model_train_wsl.py
+      - scripts/advisory_model_quality_prepare_request.py
+      - scripts/advisory_model_quality_train_wsl.py
       - scripts/advisory_outcome_prepare_request.py
       - scripts/advisory_outcome_train_wsl.py
       - scripts/advisory_price_range_prepare_request.py
       - scripts/advisory_price_range_train_wsl.py
       - scripts/wsl/advisory_model_train.py
+      - scripts/wsl/advisory_model_quality_train.py
       - scripts/wsl/advisory_outcome_train.py
       - scripts/wsl/advisory_price_range_train.py
       - docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_*.md
@@ -444,6 +447,16 @@ rules:
     layer: database
     risk_level: high
     ownership_reason: Multi-Alpha P0-2 control and Archive recovery migrations jointly change durable orchestration and archive readback contracts.
+  - rule_id: qe_node_health_scheduler
+    priority: 130
+    include:
+      - backend/schedulers/node_health_scheduler.py
+      - backend/tests/test_dispatch_observer_quiet.py
+    primary_module: qe.core
+    impact_modules: [platform.api]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: The process-local QE node observer owns bounded remote health and dispatch-state reconciliation while Platform API consumes its snapshot.
   - rule_id: qe_services
     priority: 80
     include:

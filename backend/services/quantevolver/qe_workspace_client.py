@@ -8,7 +8,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, Mapping, Optional
+from typing import Any, AsyncIterator, Dict, Mapping, Optional
 import httpx
 
 from backend.services.qe_archive.models import normalize_json
@@ -289,13 +289,36 @@ class QEWorkspaceCatalogInvalid(QEWorkspaceCatalogUnavailable):
     """Raised when a QE node exposes the catalog endpoint but violates its contract."""
 
 
+class QEWorkspaceLogCursorExpired(RuntimeError):
+    """The remote QE log source rejected a stale or invalid cursor."""
+
+    def __init__(self, message: str, *, reason_code: str = "qe_log_cursor_expired") -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+@dataclass(frozen=True)
+class QEWorkspaceLogEvent:
+    data: str
+    cursor: str | None
+    event_type: str | None
+    terminal: bool
+    raw_line: str | None = None
+
+
 class QEWorkspaceClient:
     """
     专门负责与被物理隔离的 RDAgent 端进行网络交互的客户端
     封装了诸如触发任务、获取回测指标、获取日志流、下载模型资产等操作。
     """
-    def __init__(self, base_url: str = "http://localhost:9000/api/v1/qe_workspace"):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:9000/api/v1/qe_workspace",
+        *,
+        node_id: str | None = None,
+    ):
         self.base_url = base_url
+        self.node_id = str(node_id or "").strip() or None
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
             trust_env=False,
@@ -320,7 +343,7 @@ class QEWorkspaceClient:
                 if not row:
                     raise ValueError(f"节点不存在: {node_id}")
                 base = row["api_base_url"].rstrip("/")
-                return cls(base_url=f"{base}/api/v1/qe_workspace")
+                return cls(base_url=f"{base}/api/v1/qe_workspace", node_id=node_id)
 
     @classmethod
     def for_task_loop(cls, task_id: str, loop_id: str | None = None) -> "QEWorkspaceClient":
@@ -1698,20 +1721,98 @@ class QEWorkspaceClient:
             except httpx.HTTPError as e:
                 raise RuntimeError(f"Failed to get enhanced metrics for task {task_id} loop {loop_id}: {e}") from e
 
-    async def stream_task_logs(self, task_id: str):
-        """
-        从 RDAgent 侧实时拉取任务日志流。
-        SSE 长连接不设 read timeout — 实验可能运行数小时，训练期间可能长时间无输出。
-        """
+    @staticmethod
+    def _log_event_is_terminal(data: str, event_type: str | None) -> bool:
+        if event_type == "terminal":
+            return True
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        status = str(payload.get("status") or "").lower()
+        event = str(payload.get("event") or "").lower()
+        return status in {"completed", "failed", "cancelled", "canceled"} or event in {
+            "task_completed",
+            "task_log_terminal",
+        }
+
+    async def stream_task_log_events(
+        self,
+        task_id: str,
+        *,
+        after_cursor: str | None = None,
+    ) -> AsyncIterator[QEWorkspaceLogEvent]:
+        """Read typed RD-Agent SSE events while discarding heartbeat comments."""
         url = f"{self.base_url}/tasks/{task_id}/logs"
         stream_timeout = httpx.Timeout(connect=30.0, read=None, write=10.0, pool=10.0)
+        headers = {"Last-Event-ID": after_cursor} if after_cursor else None
         async with httpx.AsyncClient(timeout=stream_timeout, trust_env=False) as stream_client:
-            async with stream_client.stream("GET", url) as response:
+            request_kwargs = {"headers": headers} if headers else {}
+            async with stream_client.stream("GET", url, **request_kwargs) as response:
+                if getattr(response, "status_code", 200) == 410:
+                    raw = await response.aread()
+                    reason_code = "qe_log_cursor_expired"
+                    message = "RD-Agent rejected the QE log cursor"
+                    try:
+                        body = json.loads(raw.decode("utf-8"))
+                        detail = body.get("detail") if isinstance(body, dict) else None
+                        if isinstance(detail, dict):
+                            reason_code = str(detail.get("reason_code") or reason_code)
+                            message = str(detail.get("message") or message)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        message = f"{message}: HTTP 410"
+                    raise QEWorkspaceLogCursorExpired(message, reason_code=reason_code)
                 response.raise_for_status()
+                cursor: str | None = None
+                event_type: str | None = None
+                data_lines: list[str] = []
+                raw_passthrough = False
                 async for line in response.aiter_lines():
-                    if not line:
+                    if line.startswith(":"):
                         continue
-                    yield line
+                    if line == "":
+                        if data_lines:
+                            data = "\n".join(data_lines)
+                            yield QEWorkspaceLogEvent(
+                                data=data,
+                                cursor=cursor,
+                                event_type=event_type,
+                                terminal=self._log_event_is_terminal(data, event_type),
+                                raw_line=data if raw_passthrough else None,
+                            )
+                        cursor = None
+                        event_type = None
+                        data_lines = []
+                        raw_passthrough = False
+                        continue
+                    field, separator, value = line.partition(":")
+                    if not separator:
+                        data_lines.append(line)
+                        raw_passthrough = True
+                        continue
+                    value = value[1:] if value.startswith(" ") else value
+                    if field == "id":
+                        cursor = value
+                    elif field == "event":
+                        event_type = value
+                    elif field == "data":
+                        data_lines.append(value)
+                if data_lines:
+                    data = "\n".join(data_lines)
+                    yield QEWorkspaceLogEvent(
+                        data=data,
+                        cursor=cursor,
+                        event_type=event_type,
+                        terminal=self._log_event_is_terminal(data, event_type),
+                        raw_line=data if raw_passthrough else None,
+                    )
+
+    async def stream_task_logs(self, task_id: str):
+        """Backward-compatible data-line view over typed QE SSE events."""
+        async for event in self.stream_task_log_events(task_id):
+            yield event.raw_line if event.raw_line is not None else f"data: {event.data}"
 
     async def download_mlruns_params(self, task_id: str, loop_id: str) -> Optional[bytes]:
         """从节点下载指定 loop 的 mlruns params.pkl（tar.gz 打包，保留目录结构）。
