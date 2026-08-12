@@ -66,7 +66,10 @@ from backend.services.hmm_risk.b3_remediation_diagnostic import (  # noqa: E402
 )
 from backend.services.hmm_risk.b3_train_stability_diagnostic import (  # noqa: E402
     REPORT_SCHEMA_VERSION as B3_TRAIN_STABILITY_REPORT_SCHEMA,
+    WINDOW_ROWS as B3_TRAIN_STABILITY_WINDOW_ROWS,
     build_report as build_b3_train_stability_report,
+    evaluate_window as evaluate_b3_train_stability_window,
+    project_train_source as project_b3_train_stability_source,
     source_drift_report as build_b3_train_stability_source_drift,
     validate_report as validate_b3_train_stability_report,
 )
@@ -80,6 +83,9 @@ from backend.services.hmm_risk.b3_training import (  # noqa: E402
     read_b3_selected_level_artifact,
     run_level_repeat,
     write_b3_ready_model_set,
+)
+from backend.services.hmm_risk.b3_transition_dwell import (  # noqa: E402
+    CONTRACT_VERSION as B3_TRANSITION_DWELL_CONTRACT,
 )
 from backend.services.hmm_risk.b3_mixed_dimension import (  # noqa: E402
     MIXED_DIMENSION_CONTRACT_VERSION,
@@ -181,12 +187,17 @@ B3_P6_OUTPUT_ARGUMENT = "b3_p6_autocycle_l2_output"
 B3_P6_D6_ZERO_REFIT_SCHEMA = "hmm_risk_b3_d6_zero_refit_replay_v1"
 B3_P6_D6_ZERO_REFIT_CLI_SCHEMA = "hmm_risk_b3_d6_zero_refit_replay_cli_receipt_v1"
 B3_TRAIN_STABILITY_CLI_SCHEMA = "hmm_risk_c008_b3_train_stability_diag01_cli_v1"
+B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA = "hmm_risk_c008_b3_transition_dwell_b_single_pass_v1"
+B3_TRANSITION_DWELL_REPORT_SCHEMA = "hmm_risk_c008_b3_transition_dwell_b_diagnostic_v1"
+B3_TRANSITION_DWELL_CLI_SCHEMA = "hmm_risk_c008_b3_transition_dwell_b_cli_v1"
+B3_TRANSITION_DWELL_OUTPUT_ARGUMENT = "b3_transition_dwell_output"
 B3_HIDDEN_CHILD_ARGUMENTS = (
     "_c008_b3_diag02_child",
     "_c008_b3_diag04_child",
     "_b3_child",
     "_b3_blocker_diag01_child",
     "_b3_d1_controlled_child",
+    "_b3_transition_dwell_child",
 )
 B3_APPROVED_FROZEN_IDENTITIES = {
     "dataset_manifest_hash": "c07177ddd01b324106755e47ee2cfe61a7f2916e08ccf9e888d3abf1115ebd7f",
@@ -2415,6 +2426,293 @@ def prepare_b3_p6_autocycle_l2_single_pass(
         "runtime_action_performed": False,
     }
     return {**body, "single_pass_receipt_sha256": canonical_sha256(body)}
+
+
+def prepare_b3_transition_dwell_single_pass(
+    request: dict[str, Any],
+    *,
+    db_prefix: str,
+    process_identity: str,
+) -> dict[str, Any]:
+    """Run one exact no-selection TRANSITION-DWELL-B fresh-process grid."""
+
+    if process_identity not in {"fresh_process_1", "fresh_process_2"}:
+        raise StateModelSetError("TRANSITION-DWELL-B child process identity is invalid")
+    authority = _load_b3_formal_train_authority(request, db_prefix=db_prefix)
+    family_map = {str(item["family"]): item for item in authority["families"]}
+    family = family_map[B3_P6_FAMILY]
+    feature_names = tuple(str(value) for value in family.get("feature_names") or ())
+    preprocess_family = str(family.get("preprocess_family") or "")
+    series = _direct_l2_train_series_for_family(authority["inputs"], family)
+    if len(series) != B3_P6_EXPECTED_SECTOR_COUNT:
+        raise StateModelSetError("TRANSITION-DWELL-B requires the exact canonical 131-sector L2 set")
+    repeat, models = run_level_repeat(
+        series,
+        family=B3_P6_FAMILY,
+        level=B3_P6_LEVEL,
+        feature_names=feature_names,
+        preprocess_family=preprocess_family,
+        process_identity=process_identity,
+        transition_dwell_b=True,
+    )
+    expected_entry_count = B3_P6_EXPECTED_SECTOR_COUNT * len(RESTART_SCHEDULE)
+    if len(repeat.get("entries") or ()) != expected_entry_count:
+        raise StateModelSetError("TRANSITION-DWELL-B child did not complete all 1048 terminal entries")
+
+    trading_dates = tuple(authority["inputs"].get("trading_dates") or ())
+    profiles: list[dict[str, Any]] = []
+    per_seed: list[dict[str, Any]] = []
+    for seed in RESTART_SCHEDULE:
+        accepted_codes: list[str] = []
+        stable_codes: list[str] = []
+        for code in sorted(series):
+            model = models.get((seed, code))
+            if model is None:
+                continue
+            accepted_codes.append(code)
+            projected, source = project_b3_train_stability_source(series[code], [model])
+            dates = series[code].train_dates
+            early = evaluate_b3_train_stability_window(
+                projected[:B3_TRAIN_STABILITY_WINDOW_ROWS],
+                dates[:B3_TRAIN_STABILITY_WINDOW_ROWS],
+                trading_dates,
+                model,
+                window="early",
+            )
+            late = evaluate_b3_train_stability_window(
+                projected[-B3_TRAIN_STABILITY_WINDOW_ROWS:],
+                dates[-B3_TRAIN_STABILITY_WINDOW_ROWS:],
+                trading_dates,
+                model,
+                window="late",
+            )
+            stable = all(value.get("status") == "train_window_structurally_observed" for value in (early, late))
+            if stable:
+                stable_codes.append(code)
+            profile_body = {
+                "seed": seed,
+                "sector_code": code,
+                "model_payload_sha256": model.model_payload_sha256,
+                "source_comparison_sha256": source["comparison_sha256"],
+                "early": early,
+                "late": late,
+                "both_windows_structurally_observed": stable,
+            }
+            profiles.append({**profile_body, "profile_sha256": canonical_sha256(profile_body)})
+        complete = len(accepted_codes) == B3_P6_EXPECTED_SECTOR_COUNT
+        stable_complete = len(stable_codes) == B3_P6_EXPECTED_SECTOR_COUNT
+        per_seed.append(
+            {
+                "seed": seed,
+                "d3_d4_accepted_sector_count": len(accepted_codes),
+                "d3_d4_accepted_131_of_131": complete,
+                "early_late_stable_sector_count": len(stable_codes),
+                "early_late_stable_131_of_131": stable_complete,
+                "diagnostic_candidate_complete": complete and stable_complete,
+            }
+        )
+    policy = authority["feature_domain_policy"]
+    body = {
+        "schema_version": B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA,
+        "contract_version": B3_TRANSITION_DWELL_CONTRACT,
+        "producer_commit": authority["producer_commit"],
+        "process_identity": process_identity,
+        "target_family": B3_P6_FAMILY,
+        "target_level": B3_P6_LEVEL,
+        "feature_names": list(feature_names),
+        "preprocess_family": preprocess_family,
+        "planned_fit_count": expected_entry_count,
+        "terminal_entry_count": expected_entry_count,
+        "dataset_manifest_hash": authority["dataset_manifest_hash"],
+        "mapping_manifest_hash": authority["mapping_manifest_hash"],
+        "calendar_manifest_hash": authority["calendar_manifest_hash"],
+        "l2_stock_fact_manifest_hash": authority["l2_stock_fact_manifest_hash"],
+        "feature_domain_policy_sha256": policy["receipt_sha256"],
+        "formula_version": C010_FORMULA_VERSION,
+        "level_repeat": repeat,
+        "profile_count": len(profiles),
+        "profiles": profiles,
+        "per_seed": per_seed,
+        "selection_performed": False,
+        "d5_executed": False,
+        "d6_executed": False,
+        "semantic_mapping_performed": False,
+        "formal_d5_stability_gate_applied": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "single_pass_receipt_sha256": canonical_sha256(body)}
+
+
+def _b3_transition_dwell_child_command(args: argparse.Namespace, process_identity: str) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--request",
+        str(Path(args.request).resolve()),
+        "--output-root",
+        str(Path(args.output_root).resolve()),
+        "--env-file",
+        str(Path(args.env_file).resolve()),
+        "--db-env-prefix",
+        str(args.db_env_prefix),
+        "--_b3-transition-dwell-child",
+        "--b3-process-identity",
+        process_identity,
+    ]
+
+
+def _transition_dwell_child_path(args: argparse.Namespace, process_identity: str, receipt_sha256: str) -> Path:
+    report = Path(args.b3_transition_dwell_output).resolve()
+    return report.with_name(f"{report.stem}.{process_identity}.{receipt_sha256}.json")
+
+
+def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identity: str) -> None:
+    body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
+    repeat = value.get("level_repeat")
+    if (
+        value.get("schema_version") != B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA
+        or value.get("contract_version") != B3_TRANSITION_DWELL_CONTRACT
+        or value.get("process_identity") != process_identity
+        or value.get("planned_fit_count") != 1048
+        or value.get("terminal_entry_count") != 1048
+        or value.get("profile_count") != 1048
+        or not isinstance(repeat, Mapping)
+        or repeat.get("transition_dwell_contract") != B3_TRANSITION_DWELL_CONTRACT
+        or repeat.get("entry_count") != 1048
+        or value.get("single_pass_receipt_sha256") != canonical_sha256(body)
+        or any(
+            value.get(field) is not False
+            for field in (
+                "selection_performed",
+                "d5_executed",
+                "d6_executed",
+                "semantic_mapping_performed",
+                "formal_d5_stability_gate_applied",
+                "model_write_performed",
+                "ready_artifact_write_performed",
+                "database_write_performed",
+                "runtime_action_performed",
+            )
+        )
+    ):
+        raise StateModelSetError(f"TRANSITION-DWELL-B child receipt is invalid: {process_identity}")
+
+
+def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str, Any]) -> dict[str, Any]:
+    """Run both fresh processes and emit only compact, no-selection parent evidence."""
+
+    authority = _load_b3_formal_train_authority(request, db_prefix=str(args.db_env_prefix))
+    policy = authority["feature_domain_policy"]
+    expected = _b3_p6_closure_from_inputs(authority["inputs"], request, policy=policy)
+    children: list[dict[str, Any]] = []
+    child_receipts: list[dict[str, Any]] = []
+    for process_identity in ("fresh_process_1", "fresh_process_2"):
+        completed = subprocess.run(
+            _b3_transition_dwell_child_command(args, process_identity),
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode != 0:
+            return {
+                "schema_version": B3_TRANSITION_DWELL_REPORT_SCHEMA,
+                "contract_version": B3_TRANSITION_DWELL_CONTRACT,
+                "status": "insufficient_evidence",
+                "primary_reason_code": "hmm_risk_transition_dwell_fresh_process_failed",
+                "failed_process_identity": process_identity,
+                "completed_process_count": len(children),
+                "planned_fit_count": 2096,
+                "selection_performed": False,
+                "d5_executed": False,
+                "d6_executed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+        try:
+            child = json.loads(completed.stdout.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StateModelSetError(f"TRANSITION-DWELL-B {process_identity} returned invalid JSON") from exc
+        if not isinstance(child, dict) or canonical_json_bytes(child) != completed.stdout:
+            raise StateModelSetError(f"TRANSITION-DWELL-B {process_identity} did not return one canonical JSON object")
+        _validate_transition_dwell_child(child, process_identity=process_identity)
+        repeat = child["level_repeat"]
+        expected_keys = expected["authority_keys"]
+        if any(child.get(key) != value for key, value in expected_keys.items()):
+            raise StateModelSetError(
+                f"TRANSITION-DWELL-B child authority drifted from parent reload: {process_identity}"
+            )
+        if (
+            tuple(child.get("feature_names") or ()) != tuple(expected["feature_names"])
+            or child.get("preprocess_family") != expected["preprocess_family"]
+            or tuple(repeat.get("canonical_sector_codes") or ()) != tuple(expected["canonical_sector_codes"])
+            or repeat.get("canonical_sector_set_sha256") != expected["canonical_sector_set_sha256"]
+            or tuple(repeat.get("schedule") or ()) != tuple(RESTART_SCHEDULE)
+        ):
+            raise StateModelSetError(
+                f"TRANSITION-DWELL-B child level closure drifted from parent reload: {process_identity}"
+            )
+        child_path = _transition_dwell_child_path(
+            args,
+            process_identity,
+            str(child["single_pass_receipt_sha256"]),
+        )
+        child_sha256 = _write_diagnostic_report(child_path, child)
+        children.append(child)
+        child_receipts.append(
+            {
+                "process_identity": process_identity,
+                "receipt_path": str(child_path),
+                "receipt_sha256": child_sha256,
+                "entry_payload_sha256": child["level_repeat"]["entry_payload_sha256"],
+                "model_payload_sha256": child["level_repeat"]["model_payload_sha256"],
+                "profile_payload_sha256": canonical_sha256(child["profiles"]),
+            }
+        )
+    comparable_fields = ("entry_payload_sha256", "model_payload_sha256", "profile_payload_sha256")
+    bitwise_equal = all(child_receipts[0][field] == child_receipts[1][field] for field in comparable_fields)
+    first_candidates = {
+        int(value["seed"]) for value in children[0]["per_seed"] if value["diagnostic_candidate_complete"] is True
+    }
+    second_candidates = {
+        int(value["seed"]) for value in children[1]["per_seed"] if value["diagnostic_candidate_complete"] is True
+    }
+    candidate_seeds = sorted(first_candidates & second_candidates) if bitwise_equal else []
+    if not bitwise_equal:
+        status = "insufficient_evidence"
+        reason = "hmm_risk_transition_dwell_fresh_process_mismatch"
+    elif candidate_seeds:
+        status = "diagnostic_complete_candidate_available"
+        reason = None
+    else:
+        status = "diagnostic_complete_no_complete_candidate"
+        reason = "hmm_risk_transition_dwell_no_complete_candidate"
+    body = {
+        "schema_version": B3_TRANSITION_DWELL_REPORT_SCHEMA,
+        "contract_version": B3_TRANSITION_DWELL_CONTRACT,
+        "status": status,
+        "primary_reason_code": reason,
+        "planned_fit_count": 2096,
+        "terminal_entry_count": 2096,
+        "fresh_process_receipts": child_receipts,
+        "canonical_payload_bitwise_equal": bitwise_equal,
+        "diagnostic_complete_candidate_seeds": candidate_seeds,
+        "candidate_seed_count": len(candidate_seeds),
+        "selection_performed": False,
+        "selected_seed": None,
+        "d5_executed": False,
+        "d6_executed": False,
+        "semantic_mapping_performed": False,
+        "formal_d5_stability_gate_applied": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "report_sha256": canonical_sha256(body)}
 
 
 def _load_b3_blocker_train_inputs(
@@ -5515,6 +5813,13 @@ def parse_args() -> argparse.Namespace:
         help="Run the approved zero-refit 8x131 train-window stability diagnostic.",
     )
     diagnostic_group.add_argument(
+        "--b3-transition-dwell-output",
+        help=(
+            "Run approved TRANSITION-DWELL-B autocycle_all_core:L2 two-process diagnostics without "
+            "D5, D6, model, or READY writes."
+        ),
+    )
+    diagnostic_group.add_argument(
         "--b3-blocker-diagnostic-output",
         help="Run the approved 174-pair x two-process blocker diagnostic and zero-refit D6 replay.",
     )
@@ -5536,6 +5841,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--_b3-p6-autocycle-l2-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-blocker-diag01-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_b3-d1-controlled-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--_b3-transition-dwell-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--b3-process-identity", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-d1-producer-commit", default="", help=argparse.SUPPRESS)
     parser.add_argument("--b3-d1-current-authority-sha256", default="", help=argparse.SUPPRESS)
@@ -5592,6 +5898,7 @@ def main() -> int:
         p6_output = getattr(args, "b3_p6_autocycle_l2_output", None)
         p6_zero_refit_output = getattr(args, "b3_p6_d6_zero_refit_output", None)
         train_stability_output = getattr(args, "b3_train_stability_diagnostic_output", None)
+        transition_dwell_output = getattr(args, "b3_transition_dwell_output", None)
         p6_parent_report = getattr(args, "b3_p6_parent_report", None)
         p6_zero_refit_report = getattr(args, "b3_p6_zero_refit_report", None)
         blocker_formal_report = getattr(args, "b3_formal_report", None)
@@ -5609,6 +5916,46 @@ def main() -> int:
         p6_child = bool(getattr(args, "_b3_p6_autocycle_l2_child", False))
         p6_zero_refit = bool(p6_zero_refit_output)
         train_stability = bool(train_stability_output)
+        transition_dwell_parent = bool(transition_dwell_output)
+        transition_dwell_child = bool(getattr(args, "_b3_transition_dwell_child", False))
+        if transition_dwell_parent or transition_dwell_child:
+            active_outputs = {
+                name
+                for name, value in vars(args).items()
+                if name.endswith("_output") and name != "b3_request_candidate_output" and bool(value)
+            }
+            expected_outputs = {B3_TRANSITION_DWELL_OUTPUT_ARGUMENT} if transition_dwell_parent else set()
+            other_children = [
+                name
+                for name in B3_HIDDEN_CHILD_ARGUMENTS
+                if name != "_b3_transition_dwell_child" and bool(getattr(args, name, False))
+            ]
+            if (
+                transition_dwell_parent == transition_dwell_child
+                or active_outputs != expected_outputs
+                or other_children
+            ):
+                raise StateModelSetError("TRANSITION-DWELL-B parent/child mode isolation failed")
+            if transition_dwell_child and args.b3_process_identity not in {"fresh_process_1", "fresh_process_2"}:
+                raise StateModelSetError("TRANSITION-DWELL-B child process identity is invalid")
+            if transition_dwell_parent and args.b3_process_identity:
+                raise StateModelSetError("TRANSITION-DWELL-B parent must not declare a process identity")
+            forbidden_authority_fields = (
+                "b3_formal_report",
+                "b3_p6_parent_report",
+                "b3_p6_zero_refit_report",
+                "b3_blocker_report",
+                "b3_remediation_report",
+                "c010_a5_domain_partition_report",
+                "b3_target_manifest_sha256",
+                "b3_d1_producer_commit",
+                "b3_d1_current_authority_sha256",
+                "b3_d1_historical_reference_sha256",
+                "b3_d1_frozen_input_bundle",
+                "b3_d1_frozen_input_bundle_sha256",
+            )
+            if any(bool(getattr(args, field, "")) for field in forbidden_authority_fields):
+                raise StateModelSetError("TRANSITION-DWELL-B cannot be combined with another authority mode")
         if train_stability:
             _require_b3_p6_zero_refit_mode_isolation(args)
             if not p6_parent_report or not p6_zero_refit_report:
@@ -5754,6 +6101,14 @@ def main() -> int:
                 "runtime_action_performed": False,
             }
             print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0
+        if transition_dwell_child:
+            report = prepare_b3_transition_dwell_single_pass(
+                request,
+                db_prefix=str(args.db_env_prefix),
+                process_identity=str(args.b3_process_identity),
+            )
+            sys.stdout.buffer.write(canonical_json_bytes(report))
             return 0
         if c010_diagnostic_output:
             if args.b3_request_candidate_output:
@@ -5966,6 +6321,30 @@ def main() -> int:
             }
             print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
             return 0 if report["status"] == "diagnostic_complete" else 1
+        if transition_dwell_parent:
+            report = run_b3_transition_dwell_repeated(args, request)
+            report_path = Path(transition_dwell_output).resolve()
+            report_sha256 = _write_diagnostic_report(report_path, report)
+            readback = _load_json_mapping(report_path, label="TRANSITION-DWELL-B report")
+            if readback != report:
+                raise StateModelSetError("TRANSITION-DWELL-B durable report readback differs")
+            receipt = {
+                "schema_version": B3_TRANSITION_DWELL_CLI_SCHEMA,
+                "status": report["status"],
+                "report_path": str(report_path),
+                "report_sha256": report_sha256,
+                "planned_fit_count": report["planned_fit_count"],
+                "terminal_entry_count": report.get("terminal_entry_count", 0),
+                "selection_performed": False,
+                "d5_executed": False,
+                "d6_executed": False,
+                "model_write_performed": False,
+                "ready_artifact_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+            return 0 if report["status"].startswith("diagnostic_complete") else 1
         if args._b3_child:
             if args.b3_process_identity not in {"fresh_process_1", "fresh_process_2"}:
                 raise StateModelSetError("formal B3 child process identity is invalid")

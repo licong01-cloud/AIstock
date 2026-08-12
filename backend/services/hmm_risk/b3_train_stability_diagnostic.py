@@ -160,6 +160,15 @@ def _source_closure(
     return projected, {**comparison, "comparison_sha256": canonical_sha256(comparison)}
 
 
+def project_train_source(
+    item: B3TrainOnlySeries,
+    models: Sequence[B3FittedModel],
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Public exact source closure for an in-process no-selection controlled fit."""
+
+    return _source_closure(item, models)
+
+
 def _window_evidence(
     observations: np.ndarray,
     dates: Sequence[date],
