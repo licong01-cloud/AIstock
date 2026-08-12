@@ -53,7 +53,7 @@ policy_dataset_bundle_root / id / manifest_file_sha256
 program/package/binding/manifest/style identities
 shadow_policy_sha256 / cost_policy_sha256 / split_policy_sha256
 qlib_daily_root / factor_data_root / factor_data_cutoff / suspend_data_root
-repository_root / repository_commit
+repository_root / repository_root_windows / repository_commit
 output_root / resource_max_rss_bytes
 feature_schema_version / feature_schema_hash
 family_specs
@@ -361,7 +361,7 @@ scripts/wsl/advisory_meta_label_train.py
 - Source Round 5：不以宽泛catch把失败trial降级后继续选winner；已声明6×28矩阵任一异常整体fail closed，修复后重跑完整矩阵。
 - Real WSL Round 1：旧reranker的group-level required-feature策略使任一候选缺值时整日删除（仅328/386日）；增加meta-label显式candidate-level排除模式，旧默认行为不变。缺特征候选不回退selection priority，少于5只时保留现金并typed不可计算。
 - Real WSL Round 2：相同 request 两次完整训练得到相同 winner、trial metrics 和 `model.txt`，但 BLAS 级 HMM 浮点抖动导致两个 bundle id。修复为预测参数 8 位有效数字；收敛 delta 只保留已由训练合同判定的确定性状态 `NON_REGRESSING` / `REGRESSED_BEYOND_TOLERANCE`。完整 HMM 参数、可用性 evidence 和文件 hash 仍参与身份，不通过移除 HMM evidence 或忽略 hash 掩盖分叉。
-- Source Round 8：repository identity 原只校验 `HEAD`，tracked dirty source 仍可在相同 commit 名义下参与训练。正式训练现要求 tracked worktree clean；只忽略不参与运行的 untracked 文件，dirty 时返回 `ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH`，不静默训练。
+- Source Round 8：repository identity 原只校验 `HEAD`，tracked dirty source 仍可在相同 commit 名义下参与训练。frozen request v2 同时绑定 WSL source root 与 Windows worktree root；正式训练在 WSL 通过 `git.exe -C <explicit Windows root>` 校验 commit 与 tracked clean，避免 CRLF/filemode 伪差异，也不猜测路径。dirty 时返回 `ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH`，不静默训练。
 - Source Round 6：exact retry 原先在全部 Qlib/HMM/LightGBM 计算之后才识别现有 bundle；改为验证环境、P0-C manifest 和 request identity 后，在任何重计算前全文件 readback exact bundle。最终 retry 4.578 秒返回 `EXISTING_BUNDLE`。
 - Source Round 7：bundle loader 增加目录名必须等于 content-addressed `bundle_id`；scorer 对预测形状、有限性及 `[0,1]` 范围 fail closed，防止损坏模型输出静默进入排名。
 

@@ -55,6 +55,7 @@ def main() -> int:
         factor_data_cutoff=args.factor_data_cutoff,
         suspend_data_root=args.suspend_data_root_wsl,
         repository_root=args.repository_root_wsl,
+        repository_root_windows=str(Path(args.repository_root_windows).resolve()),
         repository_commit=_git_commit(Path(args.repository_root_windows).resolve()),
         output_root=args.output_root_wsl,
         feature_schema_hash=FEATURE_SCHEMA_HASH,

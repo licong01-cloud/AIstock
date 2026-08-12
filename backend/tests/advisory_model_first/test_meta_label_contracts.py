@@ -25,6 +25,7 @@ def _request(**overrides):
         "factor_data_cutoff": "2026-06-30",
         "suspend_data_root": "/data/suspend",
         "repository_root": "/repo",
+        "repository_root_windows": "F:\\repo",
         "repository_commit": "8" * 40,
         "output_root": "/output/one",
         "feature_schema_hash": "9" * 64,

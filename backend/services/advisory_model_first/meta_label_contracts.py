@@ -39,8 +39,8 @@ class MetaLabelFamilySpecV1(BaseModel):
 class FrozenAdvisoryMetaLabelTrainingRequestV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["frozen_advisory_meta_label_training_request_v1"] = (
-        "frozen_advisory_meta_label_training_request_v1"
+    schema_version: Literal["frozen_advisory_meta_label_training_request_v2"] = (
+        "frozen_advisory_meta_label_training_request_v2"
     )
     request_id: str
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -62,6 +62,7 @@ class FrozenAdvisoryMetaLabelTrainingRequestV1(BaseModel):
     factor_data_cutoff: str
     suspend_data_root: str
     repository_root: str
+    repository_root_windows: str
     repository_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     output_root: str
     feature_schema_version: Literal["advisory_feature_schema_v1"] = "advisory_feature_schema_v1"
@@ -106,7 +107,7 @@ def build_frozen_meta_label_request(**values: Any) -> FrozenAdvisoryMetaLabelTra
     values = dict(values)
     created_at = str(values.pop("created_at", datetime.now(timezone.utc).isoformat()))
     seed = FrozenAdvisoryMetaLabelTrainingRequestV1.model_construct(
-        schema_version="frozen_advisory_meta_label_training_request_v1",
+        schema_version="frozen_advisory_meta_label_training_request_v2",
         request_id="pending",
         request_sha256="0" * 64,
         created_at=created_at,
@@ -114,7 +115,7 @@ def build_frozen_meta_label_request(**values: Any) -> FrozenAdvisoryMetaLabelTra
     )
     digest = canonical_json_sha256(seed.functional_payload())
     return FrozenAdvisoryMetaLabelTrainingRequestV1(
-        schema_version="frozen_advisory_meta_label_training_request_v1",
+        schema_version="frozen_advisory_meta_label_training_request_v2",
         request_id=f"advmetareq_{digest[:24]}",
         request_sha256=digest,
         created_at=created_at,
