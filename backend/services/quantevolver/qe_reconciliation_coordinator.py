@@ -929,7 +929,7 @@ class QEReconciliationCoordinator:
                 JOIN qe_evolution_loops l
                   ON l.task_id = s.task_id AND l.loop_index = s.loop_index
                 WHERE s.status IN ('reserved', 'running')
-                  AND s.source_run_key NOT LIKE 'qelt:%'
+                  AND s.source_run_key NOT LIKE 'qelt:%%'
                   AND l.status IN (
                       'completed', 'failed', 'cancelled', 'canceled',
                       'interrupted', 'timeout', 'stopped'

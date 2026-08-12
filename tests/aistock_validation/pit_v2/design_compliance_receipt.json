@@ -1,0 +1,85 @@
+{
+  "schema_version": "pit_v2_design_compliance_receipt_v1",
+  "observed_at": "2026-08-12T17:52:37.1355038Z",
+  "scope": "W0_baseline_inventory_and_window_scope_only",
+  "source_head": "708d22395ecc8a6c5097a3441dd0e3ae133cc4a7",
+  "design": "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+  "standard": "docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-compliance-001",
+  "checks": [
+    {
+      "id": "no_simplified_delivery",
+      "status": "PASS",
+      "evidence": [
+        "W0 is reported only as baseline and inventory completion",
+        "W1-W9 remain explicitly pending",
+        "no candidate, activation, production or full-project completion is claimed"
+      ]
+    },
+    {
+      "id": "no_silent_error",
+      "status": "PASS",
+      "evidence": [
+        "missing qe_dataset_manifest.json is recorded for both compute nodes",
+        "empty control catalog is not treated as proof that legacy candidates are unreferenced",
+        "unmeasured failed-candidate sizes are null with size_status instead of invented values",
+        "all unresolved references retain FULL_IMMUTABLE"
+      ]
+    },
+    {
+      "id": "no_business_logic_change",
+      "status": "PASS",
+      "evidence": [
+        "changed files are documentation and validation receipts only",
+        "production v1 and 20260731 candidate files were read only",
+        "no source, config, skill, DB, runtime or process state was changed"
+      ]
+    },
+    {
+      "id": "no_private_gate",
+      "status": "PASS",
+      "evidence": [
+        "gates mirror the approved master design",
+        "DEV migration, production DDL/DML, activation, restart and cleanup remain separate existing action boundaries",
+        "no additional monthly manual approval was introduced"
+      ]
+    }
+  ],
+  "acceptance_matrix": [
+    {
+      "requirement": "P0 freeze source/profile/toolchain/calendar and current production identity",
+      "implementation": "tests/aistock_validation/pit_v2/source_freeze_receipt.json",
+      "evidence": "origin/main, both profile digests, calendar digest, production qlib pins, runtime and node readbacks",
+      "conclusion": "PASS_W0"
+    },
+    {
+      "requirement": "P0 classify every v1 source/config/test reference with no unknown",
+      "implementation": "tests/aistock_validation/pit_v2/source_freeze_receipt.json#consumer_scan",
+      "evidence": "67 files; production_consumer=12, candidate_builder=8, reproduction_only=17, test_fixture=30, unknown=0",
+      "conclusion": "PASS_W0"
+    },
+    {
+      "requirement": "P0 retain 20260630, 20260731, failures and duplicates read only",
+      "implementation": "tests/aistock_validation/pit_v2/retention_inventory.json",
+      "evidence": "20 release/candidate records; FULL_IMMUTABLE=20; cleanup targets=0",
+      "conclusion": "PASS_W0"
+    },
+    {
+      "requirement": "F-006 independent worktrees and single-writer scope",
+      "implementation": "tests/aistock_validation/pit_v2/window_scope_receipt.json",
+      "evidence": "W0 exact changed files; W1/W2 exact planned files; W3-W5 disjoint reservations; W6 shared single-writer",
+      "conclusion": "PASS_W0"
+    },
+    {
+      "requirement": "Activation and cleanup must remain blocked until their approved stages",
+      "implementation": "docs/analysis/qe_pit_v2_phase0_inventory_and_scope_20260813.md",
+      "evidence": "running v1 Paper run, pending v1 QE loop, unmigrated records and node manifest gaps are explicit",
+      "conclusion": "PASS_FAIL_CLOSED"
+    }
+  ],
+  "gaps": [
+    {"id": "W1_W9_not_implemented", "impact": "v2 cannot be activated", "next_step": "start W1 from latest origin/main after W0 review/merge"},
+    {"id": "compute_node_dataset_manifest_missing", "impact": "complete immutable dataset identity cannot be attested", "next_step": "W2/W6 implement and validate the manifest contract"},
+    {"id": "retention_reference_graph_unsettled", "impact": "no legacy candidate is eligible for cleanup", "next_step": "close catalog/model/audit/node identity coverage in W6/W9 before any separate cleanup request"}
+  ],
+  "overall": "PASS_W0_ONLY"
+}
