@@ -3,9 +3,9 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-08-12
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`MODEL_FIRST_M5B_SOURCE_AND_RUNTIME_VERIFIED_NOT_ACTIVATED_M5C_NEXT`
+> 当前状态：`MODEL_FIRST_M5C_REAL_CALIBRATION_COMPLETE_NOT_ACTIVATED_QUALITY_ITERATION_NEXT`
 > 当前用户可见功能进度：短反弹真实功能 `4/4`；长期趋势真实功能 `0/1`；M2 Top5、M3 收益/周期和 M4 买入/止盈/止损范围已由真实运行时 API 输出，页面可视化验收因当前验证窗口无可用浏览器单独保留
-> 规划进度：M0-M4 已完成训练、源码、数据库窄依赖、exact binding、用户重启和真实多 Alpha API readback；M5A 已完成真实 WSL tournament/test 与实验 bundle，但冻结 test 仍未超过原始 selection rank，故现行 M1 binding 未被替换；M5B 已完成真实 WSL calibration、exact retry、BUG-1038/BUG-1039/BUG-1040 源码修复合入、用户重启、运行时身份和真实多 Alpha model-shadow 只读验证。最终研究 bundle 的校准质量不支持激活，现行 M3 v1 outcome binding 保持不变；当前唯一主线为 M5C
+> 规划进度：M0-M4 已完成训练、源码、数据库窄依赖、exact binding、用户重启和真实多 Alpha API readback；M5A 已完成真实 WSL tournament/test，但未超过原始 selection rank；M5B 已完成真实 WSL outcome calibration 与运行时验证，但质量不支持激活；M5C 已完成真实 WSL entry-gap coverage calibration 与 exact retry，validation 得到 `delta=0`，冻结 test coverage 未改善，因此现行 M4 v1 binding 保持不变。下一主线只允许真实模型质量改进或长期趋势策略包就绪后的建模，不返回历史证据、归档或通用平台工程
 > 唯一当前目标：使用已有 QE H5/Parquet/Qlib Bin 基础数据和已有预测 PKL，在 WSL 完成真实模型训练，并把真实模型预测接入荐股功能
 > 最终决策者：用户人工决定是否买入；系统不下单、不形成交易执行输入
 
@@ -403,7 +403,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 
 优先级：`P0_NOW`。
 
-状态：`M5A_AND_M5B_REAL_TRAINING_COMPLETE_M5B_SOURCE_RUNTIME_VERIFIED_NOT_ACTIVATED_M5C_NEXT`。M5A 详细设计为 `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`，真实 request 为 `advm5train_a64594d6f22f618a4afef84a`，winner 为 `EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`，实验 bundle 为 `1757b24b854f8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb`。M5B 详细设计为 `docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md`；最终 request `advoutcal_ec16422ad1a97040583e5273` 在 WSL 生成 bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533` 并 exact retry 一致。BUG-1038/BUG-1039/BUG-1040 修复随 PR #3326 合入，用户重启后 `backend-main` 运行时身份确认包含 merge commit `546b8d47360ee577dc470742ce2c50cda7f7e89a`，健康、身份和真实多 Alpha model-shadow 只读 probes 均为 HTTP 200，三项 BUG 已 verified 并关闭。M5B 质量结论仍不支持激活，现行 M3 v1 outcome binding 保持不变。
+状态：`M5A_M5B_M5C_REAL_RESEARCH_COMPLETE_NOT_ACTIVATED`。M5A 详细设计为 `docs/architecture/advisory_model_first_m5_quality_iteration_f2_design_20260811.md`，真实 request 为 `advm5train_a64594d6f22f618a4afef84a`，winner 为 `EXPANDING_ALL__LAMBDARANK_NDCG5__MW_0.75`，实验 bundle 为 `1757b24b854f8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb`。M5B 最终 request `advoutcal_ec16422ad1a97040583e5273` 生成 bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533`，质量不支持激活。M5C 详细设计为 `docs/architecture/advisory_model_first_m5c_entry_gap_calibration_f2_design_20260812.md`；真实 request `advprcal_7cb766fe38898e12a008a328` 在 WSL 对 940 行 feature-covered validation 和 1599 行完整 test 执行中央 80% CQR，生成 bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead` 并 exact retry 一致，耗时 2.679 秒、峰值 RSS 395,853,824 bytes。validation raw coverage `0.810638` 导致 `delta=0`，test raw/calibrated coverage 均为 `0.727955`，故 `activation_recommended=false`、现行 M4 v1 binding 保持不变。
 
 - M5A 首先改善 Top20→Top5：当前 M1 test `mean_excess_return_5=-0.0002833`，明显低于 `selection_rank_top5=0.0085591`，不得把“模型已运行”误写为“模型排序有效”。
 - M5A 在现有 406 日/8120 候选、103 特征和冻结 test 上做有限窗口、种子、模型配置及 selection-prior 混合比较；所有选择只使用 train/validation，test 只做一次最终报告。
@@ -487,7 +487,7 @@ calibration_state = UNCALIBRATED or PARTIAL
 | F-123 | M5A shared baseline evaluator；冻结 test 结果低于 selection rank 的事实见 §9 | `backend/tests/advisory_model_first/test_quality_evaluation.py`; artifact: `quality_evaluations/advm5test_818fe5a6c8ee323d2fbf25d4/test_report.json` | implemented_real_evaluated_verified | none |
 | F-124 | M5A ensemble and selection-prior policy；现行 M1 binding 保留的运行状态见 §9 | `backend/tests/advisory_model_first/test_quality_scoring.py`; `test_quality_runtime_bundle.py`; artifact: bundle `1757b24b854cf8b5bfee8874bd442491091ea979c86522fbeef15a02930f8ecb` | implemented_bundle_verified | none |
 | F-125 | M5B validation-only probability calibration；8 个正斜率 head 发布 calibrated，2 个排序反转 head 明确 uncalibrated；逐 head solver/版本/迭代/收敛证据 fail-closed | `backend/services/advisory_model_first/outcome_calibration.py`; artifact: `outcome_calibration_runs/advoutcal_ec16422ad1a97040583e5273/outcome_calibration_receipt.json`; `backend/tests/advisory_model_first/test_outcome_calibration.py` | real_calibration_verified | none |
-| F-126 | M5B quantile calibration真实运行；M5C 是 §9 明确的后续独立阶段，不属于本次 M5B 源码验收 | `backend/services/advisory_model_first/outcome_calibration.py`; `outcome_calibration_bundle.py`; artifact: bundle `a2dea5157f1b768dff42ea844f7dc5a2d31563652967a6535adf89b228bd5533`; `backend/tests/advisory_model_first/test_outcome_calibration_bundle.py` | m5b_real_calibration_verified | none |
+| F-126 | M5B outcome quantile calibration和 M5C entry-gap coverage calibration均只使用 validation 拟合；M5C test 零缺失、`delta=0` 且质量未改善 | `outcome_calibration.py`; `price_range_calibration.py`; artifact: M5C bundle `5197ceac96c76881a506555652acc006987442024cb2d86955e7370b27968ead`; `test_price_range_calibration.py` | m5b_m5c_real_calibration_negative_quality_verified_not_activated | none |
 
 ## 12. Verification Plan
 
@@ -593,16 +593,15 @@ runtime_activation = separate user-confirmed action
 
 ## 16. 当前下一步
 
-下一项主线任务是在不激活当前 M5B bundle 的前提下，完成 M5C 详细设计、源码实现和真实 WSL 训练：对 M4 entry-gap q10/q90 执行 validation-only coverage 校准。M5B 已完成源码和运行时收敛，不得继续作为后续阻断或重复投入项。M5C 的父级依据为：
+M5C 已完成详细设计、源码、真实 WSL 校准和 exact retry，但冻结 test 不改善，因此不得激活、不需要后端重启，也不执行 deployed readback。M5A/M5B/M5C 的共同事实是：当前短反弹模型链已经真实可运行，但三项质量迭代均未产生足以替换现行 binding 的 OOS 改善。
 
-`docs/architecture/advisory_model_first_m5b_outcome_calibration_f2_design_20260812.md`
+M5C 最终验收依据为：`docs/architecture/advisory_model_first_m5c_entry_gap_calibration_f2_design_20260812.md`。
 
-执行顺序固定为：
+下一主线优先级固定为：
 
-1. 编写并正式审核 M5C F2 详细设计，冻结 M4 父 request/bundle、validation/test 投影、entry-gap q10/q90 校准算法、raw/calibrated 双语义和 exact bundle 身份；不得夹带 M5B、历史证据或通用平台重构。
-2. 实现 validation-only coverage 校准和完整 artifact/runtime 合同；不重训 M4 base heads，不改变候选、排名、Top5、outcome、止盈止损、Selection、模拟盘或其它模块。
-3. 在 WSL Conda `rdagent-gpu` 使用既有 M4 冻结 QE 文件执行真实训练和 exact retry；test 只用于一次最终评价，报告覆盖率、区间宽度、目标偏差、资源和全部不适用原因。
-4. M4 `entry_executable` 继续因全量仅 4 条权威负例保持 `UNCALIBRATED`，不得训练常数模型、伪造负例或把规则可执行性描述成已校准概率。
-5. 只有 M5C 冻结 test 明确支持激活时，才独立执行 exact binding、用户后端重启和 deployed API/UI readback；否则保留完整研究 bundle 和负面质量结论但不激活。
+1. 不激活 M5A/M5B/M5C 研究 bundle，不为失败质量结果安排重启、部署验证或历史状态处理。
+2. 下一项研发必须直接提高真实 OOS 模型质量：优先研究能解释 validation→test 漂移的条件化 entry-gap 模型/校准或重新训练 M4 base heads；开始前另写窄范围详细设计，test 不得重复参与选择。
+3. 若长期趋势原生多 Alpha 父包先达到可训练输入条件，则直接进入长期趋势独立模型，不要求短反弹质量迭代先成功。
+4. 继续禁止 Historical Range、历史证据、旧 batch/root 清理、通用缓存、ModelOps、角色审批和额外门禁。
 
 M4 页面视觉验收可在具备浏览器的窗口独立完成，不阻断已可运行的 M5 训练主线；若发现真实 UI 缺陷则按 BUG 流程修复。M5 期间继续禁止插入 Historical Range、历史证据、旧 batch/root 清理、通用缓存、ModelOps、角色审批或额外门禁。
