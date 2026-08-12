@@ -171,7 +171,8 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python subprocess imported the tracked ExecutionContext and BacktestExecutor, constructed a retry-attempt reservation identity with a distinct canonical qe_evolution_loops claim identity, resolved the source without database access, and exited 0 with fresh-process-ok; no user backend or experiment process was controlled",
-      "Fresh Python subprocess imported tracked ExecutionContext and BacktestExecutor, resolved distinct retry-attempt reservation and canonical evolution-loop claim identities, printed fresh-process-ok, and exited 0 without database or process control"
+      "Fresh Python subprocess imported tracked ExecutionContext and BacktestExecutor, resolved distinct retry-attempt reservation and canonical evolution-loop claim identities, printed fresh-process-ok, and exited 0 without database or process control",
+      "Final HEAD d87e725ccaca2feef054040dc73239f7def4126a fresh subprocess loaded retry reservation and canonical source claim identities and exited fresh-process-ok without database or process control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
