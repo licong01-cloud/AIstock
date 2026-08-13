@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,10 @@ from backend.services.strategy_package.runtime_variant import canonical_json_sha
 
 DESCRIPTOR_SCHEMA_VERSION = "advisory_program_model_binding_v1"
 CANDIDATE_PROJECTION_SCHEMA_VERSION = "advisory_candidate_projection_v1"
+_DESCRIPTOR_IDENTITY_PATTERNS = {
+    "program_id": re.compile(r"^advp_[A-Za-z0-9_-]{1,123}$"),
+    "binding_version_id": re.compile(r"^advb_[A-Za-z0-9_-]{1,123}$"),
+}
 
 
 @dataclass(frozen=True)
@@ -41,12 +46,16 @@ class AdvisoryModelBindingResolver:
         program_id: str,
         binding_version_id: str,
     ) -> Path:
-        return (
-            Path(model_root).resolve()
-            / "program_bindings"
-            / program_id
-            / f"{binding_version_id}.json"
+        safe_program_id = _descriptor_identity("program_id", program_id)
+        safe_binding_version_id = _descriptor_identity(
+            "binding_version_id", binding_version_id
         )
+        root = Path(model_root).resolve()
+        binding_root = (root / "program_bindings").resolve()
+        _require_contained_path(binding_root, root, field="program_bindings_root")
+        target = (binding_root / safe_program_id / f"{safe_binding_version_id}.json").resolve()
+        _require_contained_path(target, binding_root, field="descriptor_path")
+        return target
 
     def is_configured(
         self,
@@ -317,3 +326,26 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _is_sha256(value: str) -> bool:
     return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _descriptor_identity(field: str, value: str) -> str:
+    normalized = str(value).strip()
+    pattern = _DESCRIPTOR_IDENTITY_PATTERNS[field]
+    if not pattern.fullmatch(normalized):
+        raise AdvisoryModelFirstError(
+            "Advisory model descriptor identity cannot be used as a path component",
+            reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+            context={"field": field},
+        )
+    return normalized
+
+
+def _require_contained_path(path: Path, root: Path, *, field: str) -> None:
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise AdvisoryModelFirstError(
+            "Advisory model descriptor path escapes its configured root",
+            reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+            context={"field": field},
+        ) from exc

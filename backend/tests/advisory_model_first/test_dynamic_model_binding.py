@@ -74,6 +74,69 @@ def test_missing_exact_descriptor_is_typed_unavailable_without_directory_scan(tm
     assert error.value.reason_code == "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE"
 
 
+@pytest.mark.parametrize(
+    ("program_id", "binding_version_id"),
+    (
+        ("../outside", "advb_test"),
+        ("advp_test", "../../outside"),
+        ("/absolute", "advb_test"),
+        ("advp_test\\outside", "advb_test"),
+        ("advp_test", "advb/test"),
+        ("CON", "advb_test"),
+        ("advp_test", "NUL"),
+    ),
+)
+def test_descriptor_path_rejects_non_opaque_path_identities(
+    tmp_path, program_id, binding_version_id
+) -> None:
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        AdvisoryModelBindingResolver.descriptor_path(
+            model_root=tmp_path,
+            program_id=program_id,
+            binding_version_id=binding_version_id,
+        )
+
+    assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
+
+
+def test_descriptor_path_rejects_program_bindings_symlink_escape(tmp_path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    try:
+        (tmp_path / "program_bindings").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {type(exc).__name__}")
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        AdvisoryModelBindingResolver.descriptor_path(
+            model_root=tmp_path,
+            program_id="advp_test",
+            binding_version_id="advb_test",
+        )
+
+    assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
+
+
+def test_descriptor_path_rejects_program_directory_symlink_escape(tmp_path) -> None:
+    binding_root = tmp_path / "program_bindings"
+    binding_root.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-program-outside"
+    outside.mkdir()
+    try:
+        (binding_root / "advp_test").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {type(exc).__name__}")
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        AdvisoryModelBindingResolver.descriptor_path(
+            model_root=tmp_path,
+            program_id="advp_test",
+            binding_version_id="advb_test",
+        )
+
+    assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
+
+
 def test_descriptor_component_roles_and_hash_fail_closed(tmp_path) -> None:
     payload = _descriptor()
     payload["candidate_projection"] = {
