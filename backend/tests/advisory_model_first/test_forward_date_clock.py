@@ -4,6 +4,8 @@ from datetime import date, datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.advisory_forward.service import _maturity_date
 
@@ -64,6 +66,34 @@ def test_weekend_does_not_publish_latest_prior_trading_day() -> None:
 
     assert result["publication_due"] is False
     assert result["decision_as_of_trade_date"] is None
+
+
+def test_after_close_environment_controls_publication_cutoff(monkeypatch) -> None:
+    monkeypatch.setenv("AISTOCK_ADVISORY_FORWARD_AFTER_CLOSE_TIME", "17:15:00")
+    now = datetime(2026, 8, 14, 17, 14, tzinfo=ZoneInfo("Asia/Shanghai"))
+    service = AdvisoryForwardService(
+        repository=_Repository(),
+        program_service=_Programs(),
+        model_service=SimpleNamespace(),
+        calendar=_Calendar(),
+        now_provider=lambda: now,
+    )
+
+    assert service.status()["after_close_time"] == "17:15:00"
+    assert service.run_once()["publication_due"] is False
+
+
+@pytest.mark.parametrize("raw", ("invalid", "24:00", "16:60", "16:30:01"))
+def test_invalid_after_close_environment_fails_visibly(monkeypatch, raw) -> None:
+    monkeypatch.setenv("AISTOCK_ADVISORY_FORWARD_AFTER_CLOSE_TIME", raw)
+
+    with pytest.raises(ValueError, match="AFTER_CLOSE_TIME|clock range|seconds"):
+        AdvisoryForwardService(
+            repository=_Repository(),
+            program_service=_Programs(),
+            model_service=SimpleNamespace(),
+            calendar=_Calendar(),
+        )
 
 
 def test_model_maturity_uses_longest_declared_outcome_or_holding_horizon() -> None:

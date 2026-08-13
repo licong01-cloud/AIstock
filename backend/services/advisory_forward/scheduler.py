@@ -4,34 +4,42 @@ import logging
 import os
 import threading
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable
 
 from backend.services.advisory_forward.service import AdvisoryForwardService
 
 
 LOGGER = logging.getLogger("aistock.advisory.forward.scheduler")
+DEFAULT_INTERVAL_SECONDS = 300
 
 
 class AdvisoryForwardScheduler:
-    def __init__(self, *, service: AdvisoryForwardService | Any | None = None) -> None:
-        self.service = service or AdvisoryForwardService()
+    def __init__(
+        self,
+        *,
+        service: AdvisoryForwardService | Any | None = None,
+        service_factory: Callable[[], AdvisoryForwardService | Any] | None = None,
+    ) -> None:
+        self._service = service
+        self._service_factory = service_factory or AdvisoryForwardService
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
         self._run_lock = threading.Lock()
-        self._interval_seconds = _interval_seconds()
+        self._interval_seconds = DEFAULT_INTERVAL_SECONDS
         self._last_run_at: datetime | None = None
         self._last_result: dict[str, Any] | None = None
         self._last_error: dict[str, Any] | None = None
 
     def start(self, *, interval_seconds: int | None = None) -> dict[str, Any]:
-        interval = int(interval_seconds or self._interval_seconds)
+        interval = _interval_seconds() if interval_seconds is None else int(interval_seconds)
         if interval <= 0:
             raise ValueError("Advisory forward scheduler interval_seconds must be positive")
         with self._lock:
             self._interval_seconds = interval
             if self._thread and self._thread.is_alive():
                 return self.status()
+            self._ensure_service()
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._run_loop,
@@ -66,7 +74,7 @@ class AdvisoryForwardScheduler:
         self._last_run_at = started
         try:
             try:
-                result = self.service.run_once()
+                result = self._ensure_service().run_once()
             except Exception as exc:
                 self._last_error = {
                     "at": started.isoformat(),
@@ -80,6 +88,12 @@ class AdvisoryForwardScheduler:
             return result
         finally:
             self._run_lock.release()
+
+    def _ensure_service(self) -> AdvisoryForwardService | Any:
+        with self._lock:
+            if self._service is None:
+                self._service = self._service_factory()
+            return self._service
 
     def status(self) -> dict[str, Any]:
         thread = self._thread

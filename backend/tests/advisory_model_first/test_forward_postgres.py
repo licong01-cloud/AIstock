@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 import pytest
 
 from backend.services.advisory_forward.models import AdvisoryForwardModelObservationV1
@@ -11,9 +12,11 @@ from backend.services.advisory_forward.repository import (
 from backend.services.trading_core.errors import InvalidStateTransitionError
 from backend.services.advisory_program import (
     AdvisoryProgram,
+    AdvisoryEpisode,
     AdvisoryRecommendationListItem,
     AdvisoryRecommendationListVersion,
     AdvisoryReviewRun,
+    AdvisoryReviewDecision,
 )
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 
@@ -73,6 +76,42 @@ class _Connection:
 
     def cursor(self, **_kwargs):
         return self.cursor_instance
+
+
+class _SettlementCursor(_Cursor):
+    def __init__(self, *, fail_on: str | None = None, terminal_hash: str | None = None) -> None:
+        super().__init__(fail_on=fail_on)
+        self.terminal_hash = terminal_hash
+
+    def execute(self, sql, params=()):
+        assert str(sql).count("%s") == len(params), str(sql)
+        normalized = " ".join(str(sql).split())
+        if self.fail_on and self.fail_on in normalized:
+            raise RuntimeError("injected transaction failure")
+        self.one = None
+        self.rows = []
+        if "FROM app.advisory_forward_run" in normalized:
+            self.one = {
+                "forward_run_id": "advfwd-test",
+                "program_id": "advp-test",
+                "publication_status": "PUBLISHED",
+                "settlement_status": "SETTLED" if self.terminal_hash else "NOT_DUE",
+                "settlement_payload_sha256": self.terminal_hash,
+                "review_run_id": "review-test",
+            }
+        elif "SELECT version, status FROM app.advisory_program" in normalized:
+            self.one = {"version": 3, "status": "ENABLED"}
+        elif "SELECT DISTINCT ON (episode_id)" in normalized:
+            self.rows = []
+        elif "UPDATE app.advisory_forward_run" in normalized:
+            self.one = {"forward_run_id": "advfwd-test", "settlement_status": "SETTLED"}
+
+
+class _SettlementConnection(_Connection):
+    def __init__(self, *, fail_on: str | None = None, terminal_hash: str | None = None) -> None:
+        self.cursor_instance = _SettlementCursor(fail_on=fail_on, terminal_hash=terminal_hash)
+        self.rolled_back = False
+        self.committed = False
 
 
 def _program() -> AdvisoryProgram:
@@ -138,6 +177,47 @@ def _publication_inputs():
     return review, version, item, payload
 
 
+def _settlement_inputs():
+    episode = AdvisoryEpisode(
+        episode_id="episode-test",
+        program_id="advp-test",
+        program_version=3,
+        symbol="000001.SZ",
+        status="ACTIVE",
+        signal_date=date(2026, 8, 14),
+        effective_entry_date=date(2026, 8, 17),
+        entry_price=10.0,
+        entry_price_basis="next_open_executable",
+        entry_rank=1,
+    )
+    decision = AdvisoryReviewDecision(
+        program_id="advp-test",
+        program_version=3,
+        trade_date=date(2026, 8, 17),
+        symbol=episode.symbol,
+        action="ENTER",
+        reason_code="ENTER_RANK",
+        review_status="SUCCEEDED",
+        episode_id=episode.episode_id,
+        entry_price=episode.entry_price,
+        binding_version_id="advb-test",
+        review_run_id="review-test",
+        list_version_id="list-test",
+    )
+    result = SimpleNamespace(
+        active_pool=[episode],
+        metrics={},
+        review_status="SUCCEEDED",
+    )
+    payload = {
+        "schema_version": "advisory_forward_settlement_v1",
+        "program_id": "advp-test",
+        "target_trade_date": "2026-08-17",
+        "decisions": [{"symbol": episode.symbol, "action": decision.action, "entry_price": 10.0}],
+    }
+    return episode, decision, result, payload
+
+
 def test_publication_sql_contract_commits_as_one_connection_transaction() -> None:
     conn = _Connection()
     review, version, item, payload = _publication_inputs()
@@ -193,6 +273,48 @@ def test_mark_failure_sql_contract_preserves_terminal_settlement() -> None:
     )
 
     assert conn.committed is True
+
+
+def test_settlement_decision_failure_rolls_back_episode_and_decision_transaction() -> None:
+    conn = _SettlementConnection(fail_on="INSERT INTO app.advisory_daily_review")
+    _episode, decision, result, payload = _settlement_inputs()
+    repository = AdvisoryForwardPGRepository(conn_factory=lambda: conn)
+
+    with pytest.raises(RuntimeError, match="injected transaction failure"):
+        repository.commit_settlement(
+            forward_run_id="advfwd-test",
+            expected_active_episode_state_hash=canonical_json_sha256([]),
+            expected_program_version=3,
+            expected_program_status="ENABLED",
+            result=result,
+            decisions=[decision],
+            program=_program(),
+            settlement_payload=payload,
+        )
+
+    assert conn.rolled_back is True
+    assert conn.committed is False
+
+
+def test_terminal_settlement_rejects_changed_economic_payload_hash() -> None:
+    _episode, decision, result, payload = _settlement_inputs()
+    conn = _SettlementConnection(terminal_hash="a" * 64)
+    repository = AdvisoryForwardPGRepository(conn_factory=lambda: conn)
+
+    with pytest.raises(InvalidStateTransitionError, match="payload conflicts"):
+        repository.commit_settlement(
+            forward_run_id="advfwd-test",
+            expected_active_episode_state_hash=canonical_json_sha256([]),
+            expected_program_version=3,
+            expected_program_status="ENABLED",
+            result=result,
+            decisions=[decision],
+            program=_program(),
+            settlement_payload=payload,
+        )
+
+    assert conn.rolled_back is True
+    assert conn.committed is False
 
 
 def test_model_observation_rejects_cross_forward_identity() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import os
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Any, Mapping
@@ -30,6 +31,7 @@ from backend.services.advisory_program import (
     AdvisoryReviewRun,
     candidates_from_selection_run,
     compute_program_metrics,
+    decision_to_dict,
     episode_to_dict,
     list_item_to_dict,
     program_to_dict,
@@ -54,8 +56,8 @@ class AdvisoryForwardService:
         model_resolver: AdvisoryModelBindingResolver | Any | None = None,
         calendar: TradingCalendarStatusService | Any | None = None,
         now_provider: Any | None = None,
-        after_close_hour: int = 16,
-        after_close_minute: int = 30,
+        after_close_hour: int | None = None,
+        after_close_minute: int | None = None,
     ) -> None:
         self.repository = repository or AdvisoryForwardPGRepository()
         self.program_service = program_service or AdvisoryProgramService()
@@ -63,8 +65,15 @@ class AdvisoryForwardService:
         self.model_resolver = model_resolver or AdvisoryModelBindingResolver()
         self.calendar = calendar or TradingCalendarStatusService()
         self.now_provider = now_provider or (lambda: datetime.now(SHANGHAI_TZ))
-        self.after_close_hour = after_close_hour
-        self.after_close_minute = after_close_minute
+        if after_close_hour is None and after_close_minute is None:
+            self.after_close_hour, self.after_close_minute = _after_close_time()
+        elif after_close_hour is None or after_close_minute is None:
+            raise ValueError("after_close_hour and after_close_minute must be supplied together")
+        else:
+            self.after_close_hour, self.after_close_minute = _validate_after_close_parts(
+                after_close_hour,
+                after_close_minute,
+            )
 
     def status(self) -> dict[str, Any]:
         now = self.now_provider().astimezone(SHANGHAI_TZ)
@@ -636,17 +645,13 @@ class AdvisoryForwardService:
         )
         metrics = compute_program_metrics(updated_program, result.active_pool)
         result = replace(result, program=updated_program, decisions=enriched_decisions, metrics=metrics)
-        settlement_payload = {
-            "schema_version": "advisory_forward_settlement_v1",
-            "program_id": program_id,
-            "target_trade_date": persisted["target_trade_date"].isoformat(),
-            "review_status": result.review_status,
-            "entered_count": sum(item.action == "ENTER" for item in enriched_decisions),
-            "held_count": sum(item.action == "HOLD" for item in enriched_decisions),
-            "exited_count": sum(item.action == "EXIT" for item in enriched_decisions),
-            "waiting_count": sum(item.action == "WAITING" for item in enriched_decisions),
-            "episode_ids": sorted(episode.episode_id for episode in result.active_pool),
-        }
+        settlement_payload = _settlement_payload(
+            program_id=program_id,
+            target_trade_date=persisted["target_trade_date"],
+            review_status=result.review_status,
+            decisions=enriched_decisions,
+            active_pool=result.active_pool,
+        )
         committed = self.repository.commit_settlement(
             forward_run_id=str(persisted["forward_run_id"]),
             expected_active_episode_state_hash=active_hash,
@@ -699,6 +704,24 @@ class AdvisoryForwardService:
 def _scheduled(program: AdvisoryProgram) -> bool:
     schedule = dict(program.review_schedule or {})
     return program.status == PROGRAM_STATUS_ENABLED and schedule.get("frequency") == "daily_after_close"
+
+
+def _after_close_time() -> tuple[int, int]:
+    raw = (os.getenv("AISTOCK_ADVISORY_FORWARD_AFTER_CLOSE_TIME") or "16:30:00").strip()
+    parts = raw.split(":")
+    if len(parts) not in {2, 3} or any(not part.isdigit() for part in parts):
+        raise ValueError("AISTOCK_ADVISORY_FORWARD_AFTER_CLOSE_TIME must be HH:MM or HH:MM:SS")
+    hour, minute = int(parts[0]), int(parts[1])
+    second = int(parts[2]) if len(parts) == 3 else 0
+    if second != 0:
+        raise ValueError("AISTOCK_ADVISORY_FORWARD_AFTER_CLOSE_TIME seconds must be 00")
+    return _validate_after_close_parts(hour, minute)
+
+
+def _validate_after_close_parts(hour: int, minute: int) -> tuple[int, int]:
+    if not 0 <= int(hour) <= 23 or not 0 <= int(minute) <= 59:
+        raise ValueError("Advisory forward after-close time is outside the valid clock range")
+    return int(hour), int(minute)
 
 
 def _active_episode_state_hash(episodes: list[Any]) -> str:
@@ -867,6 +890,44 @@ def _maturity_date(target_date: date, *, horizons: list[Any], calendar: Any) -> 
 def _stable_id(prefix: str, *parts: str) -> str:
     digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
     return f"{prefix}_{digest}"
+
+
+def _settlement_decision_identity(decision: Any) -> dict[str, Any]:
+    payload = decision_to_dict(decision)
+    payload.pop("created_at", None)
+    return payload
+
+
+def _settlement_payload(
+    *,
+    program_id: str,
+    target_trade_date: date,
+    review_status: str,
+    decisions: list[Any],
+    active_pool: list[Any],
+) -> dict[str, Any]:
+    ordered_decisions = sorted(decisions, key=lambda row: (row.symbol, row.action))
+    ordered_episodes = sorted(active_pool, key=lambda row: row.episode_id)
+    return {
+        "schema_version": "advisory_forward_settlement_v1",
+        "program_id": program_id,
+        "target_trade_date": target_trade_date.isoformat(),
+        "review_status": review_status,
+        "entered_count": sum(item.action == "ENTER" for item in ordered_decisions),
+        "held_count": sum(item.action == "HOLD" for item in ordered_decisions),
+        "exited_count": sum(item.action == "EXIT" for item in ordered_decisions),
+        "waiting_count": sum(item.action == "WAITING" for item in ordered_decisions),
+        "episode_ids": [episode.episode_id for episode in ordered_episodes],
+        "decisions": [_settlement_decision_identity(item) for item in ordered_decisions],
+        "active_pool": [_settlement_episode_identity(item) for item in ordered_episodes],
+    }
+
+
+def _settlement_episode_identity(episode: Any) -> dict[str, Any]:
+    payload = episode_to_dict(episode)
+    payload.pop("created_at", None)
+    payload.pop("updated_at", None)
+    return payload
 
 
 def _frozen_program(current: AdvisoryProgram, payload: Any) -> AdvisoryProgram:

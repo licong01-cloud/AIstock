@@ -1,20 +1,27 @@
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import replace
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
 
-from backend.services.advisory_forward.service import AdvisoryForwardService, _active_episode_state_hash
+from backend.services.advisory_forward.service import (
+    AdvisoryForwardService,
+    _active_episode_state_hash,
+    _settlement_payload,
+)
 from backend.services.advisory_forward.models import AdvisoryForwardRunV1
 from backend.services.advisory_program import (
     AdvisoryCandidate,
     AdvisoryEpisode,
     AdvisoryProgram,
+    AdvisoryReviewDecision,
     AdvisoryReviewResult,
     program_to_dict,
     _forward_episode_id,
 )
+from backend.services.strategy_package.runtime_variant import canonical_json_sha256
 
 
 def _program() -> AdvisoryProgram:
@@ -229,3 +236,50 @@ def test_forward_episode_identity_is_deterministic_per_program_target_and_symbol
 
     assert first == repeated
     assert first.startswith("advep_")
+
+
+def test_settlement_payload_hash_tracks_economic_changes_but_not_runtime_timestamps() -> None:
+    episode = _episode()
+    decision = AdvisoryReviewDecision(
+        program_id="advp_test",
+        program_version=3,
+        trade_date=date(2026, 8, 17),
+        symbol=episode.symbol,
+        action="HOLD",
+        reason_code="RANK_HELD",
+        review_status="SUCCEEDED",
+        episode_id=episode.episode_id,
+        rank=1,
+        score=0.9,
+        created_at=datetime(2026, 8, 17, 1, tzinfo=UTC),
+    )
+    first = _settlement_payload(
+        program_id="advp_test",
+        target_trade_date=date(2026, 8, 17),
+        review_status="SUCCEEDED",
+        decisions=[decision],
+        active_pool=[episode],
+    )
+    timestamp_only = _settlement_payload(
+        program_id="advp_test",
+        target_trade_date=date(2026, 8, 17),
+        review_status="SUCCEEDED",
+        decisions=[replace(decision, created_at=datetime(2026, 8, 17, 2, tzinfo=UTC))],
+        active_pool=[
+            replace(
+                episode,
+                created_at=datetime(2026, 8, 17, 2, tzinfo=UTC),
+                updated_at=datetime(2026, 8, 17, 2, tzinfo=UTC),
+            )
+        ],
+    )
+    changed_price = _settlement_payload(
+        program_id="advp_test",
+        target_trade_date=date(2026, 8, 17),
+        review_status="SUCCEEDED",
+        decisions=[replace(decision, exit_price=11.0)],
+        active_pool=[episode],
+    )
+
+    assert canonical_json_sha256(first) == canonical_json_sha256(timestamp_only)
+    assert canonical_json_sha256(first) != canonical_json_sha256(changed_price)

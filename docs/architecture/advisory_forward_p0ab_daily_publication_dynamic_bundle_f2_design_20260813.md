@@ -238,7 +238,7 @@ Challenger 在 baseline publication commit 后运行。它失败不能回滚已�
 7. 以 canonical payload hash 更新 forward run settlement status/summary。
 8. commit。
 
-forward row `FOR UPDATE`、终态不可逆、canonical payload hash 与按 `Program/target/symbol` 确定性生成的新 episode id共同保证重复调用不会创建第二批经济 episode；相同 payload 返回既有 settlement，不同 payload明确 conflict。现有 append-only episode snapshot 表不新增伪造的唯一约束。
+forward row `FOR UPDATE`、终态不可逆、canonical payload hash 与按 `Program/target/symbol` 确定性生成的新 episode id共同保证重复调用不会创建第二批经济 episode。canonical settlement payload 必须覆盖逐 symbol decision 的 action/reason/价格/rank/score/evidence，以及结算后 episode 的状态、价格、收益、持有期和 evidence；只排除 `created_at/updated_at` 这类非经济运行时间戳。相同经济 payload 返回既有 settlement，任一逐股经济结果不同均明确 conflict。现有 append-only episode snapshot 表不新增伪造的唯一约束。
 
 ## 9. Baseline Publication Semantics
 
@@ -333,6 +333,8 @@ AISTOCK_ADVISORY_FORWARD_AFTER_CLOSE_TIME=16:30:00
 ```
 
 - 默认关闭，源码合入不等于调度激活。
+- 默认关闭时，模块 import、API status 和后端启动不得解析或校验可选 poll interval；只有显式 `start()`/env autostart 激活时才校验 interval，非法值必须可见失败。
+- after-close cutoff 默认 `16:30:00`；`AISTOCK_ADVISORY_FORWARD_AFTER_CLOSE_TIME` 显式配置必须被 service/status/runner真实使用，接受 `HH:MM` 或秒为 `00` 的 `HH:MM:SS`，非法值不得静默回退默认时间。
 - 用户显式配置并重启后才自动运行；本任务不自行启停后端。
 - `run_once()` 可被 scheduler 和 Advisory API 复用，不依赖线程本地状态。
 - scheduler 每次只处理已存在的未结算 run，以及“本地今天是交易日且当前时间不早于 after-close time”时的当天 decision；周末、节假日或停机错过的 decision day不回补、不取最近交易日代替今天。
@@ -486,17 +488,17 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 | F-130 | Program/binding exact descriptor动态解析，不扫描latest，不依赖运行时target常量 |
 | F-137 | 无资金/订单/QMT/Paper/模拟盘/Selection cross-write |
 | F-140 | D收盘 publication 与 D+1 target-open settlement 分阶段，发布不读取target行情 |
-| F-401 | P0-A runner 只处理当前自然交易日和已存在pending settlement |
+| F-401 | P0-A runner 只处理当前自然交易日和已存在pending settlement，并真实遵循显式after-close cutoff |
 | F-402 | target market与suspend同步不完整时不创建episode且不做价格回退 |
 | F-403 | baseline publication复用现有PUBLISHED list；结算复用现有review policy/transition/episode，不复制算法 |
 | F-404 | publication和settlement各自单事务，无review/list/episode部分写入 |
-| F-405 | 唯一键、payload hash和active episode state hash处理并发；无lease/owner/审批状态机 |
+| F-405 | 唯一键、覆盖逐股经济结果且排除运行时间戳的payload hash和active episode state hash处理并发；无lease/owner/审批状态机 |
 | F-406 | model resolution在publication时冻结，未来descriptor不回刷既有forward day |
 | F-407 | baseline与challenger分阶段失败，model失败不回滚baseline |
 | F-408 | descriptor驱动runtime常量和candidate projection |
 | F-409 | 当前两腿角色从descriptor读取并与bundle/Selection交叉校验；目标多Alpha模型字节不变 |
 | F-410 | 单Alpha与原生多Alpha共用resolver；无真实兼容bundle时typed unavailable且baseline继续 |
-| F-411 | scheduler仅处理Advisory自然当前日和pending settlement，默认关闭且无历史扫描 |
+| F-411 | scheduler仅处理Advisory自然当前日和pending settlement，默认关闭时不解析可选interval且无历史扫描 |
 | F-412 | API/UI分开展示publication、settlement、challenger、maturity和错误 |
 | F-413 | API/UI显示真实当日状态且无交易入口 |
 | F-414 | 无简化版、静默错误、业务语义漂移、角色审批、二次准入或未经确认门禁 |
@@ -518,7 +520,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 | F-402 | `backend/services/advisory_program.py`, `backend/services/advisory_forward/service.py` | `backend/tests/advisory_model_first/test_forward_boundaries.py`, `backend/tests/advisory_model_first/test_forward_recovery.py` | pass | none |
 | F-403 | `backend/services/advisory_program.py`, `backend/services/advisory_forward/service.py` | `backend/tests/advisory_model_first/test_forward_publication.py`, `backend/tests/advisory_model_first/test_forward_recovery.py` | pass | none |
 | F-404 | `backend/services/advisory_forward/repository.py` | `backend/tests/advisory_model_first/test_forward_postgres.py` | pass | none |
-| F-405 | `backend/services/advisory_forward/repository.py`, `backend/services/advisory_forward/scheduler.py` | `backend/tests/advisory_model_first/test_forward_postgres.py`, `backend/tests/advisory_model_first/test_forward_recovery.py`, `backend/tests/advisory_model_first/test_forward_scheduler.py` | pass | none |
+| F-405 | `backend/services/advisory_forward/service.py`, `backend/services/advisory_forward/repository.py`, `backend/services/advisory_forward/scheduler.py` | `backend/tests/advisory_model_first/test_forward_postgres.py`, `backend/tests/advisory_model_first/test_forward_recovery.py`, `backend/tests/advisory_model_first/test_forward_scheduler.py` | pass | none |
 | F-406 | `backend/services/advisory_forward/service.py`, `backend/services/advisory_model_first/model_binding_resolution.py` | `backend/tests/advisory_model_first/test_forward_recovery.py`, `backend/tests/advisory_model_first/test_dynamic_model_binding.py` | pass | none |
 | F-407 | `backend/services/advisory_forward/service.py`, `backend/services/advisory_forward/repository.py` | `backend/tests/advisory_model_first/test_forward_boundaries.py`, `backend/tests/advisory_model_first/test_forward_recovery.py` | pass | none |
 | F-408 | `backend/services/advisory_model_first/model_binding_resolution.py`, `backend/services/advisory_model_first/model_inference.py` | `backend/tests/advisory_model_first/test_dynamic_model_binding.py`, `backend/tests/advisory_model_first/test_model_inference.py` | pass | none |
@@ -547,6 +549,9 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 - Source Round 3：补齐active持仓不在候选时的WAITING发布、Program暂停状态保留、终态不可逆、确定性episode identity与scheduler同进程互斥。
 - Source Round 4：补齐冻结前向Top5/outcome/holding/price UI、observation/forward交叉身份校验、最长预测成熟度和migration精确catalog读回。
 - Source Round 5：对照实际测试文件与两表DDL重写本矩阵，删除不存在测试与不存在唯一约束的验收陈述；未发现简化版、静默错误、业务语义漂移或未经确认门禁审批。
+- Source Round 6：修复 BUG-1057 settlement hash 只覆盖聚合计数/episode ids、可能把不同逐股价格或 action 静默判为幂等的问题；canonical payload现覆盖全部逐股经济字段并排除非确定性时间戳，同时增加终态冲突与事务rollback测试。
+- Source Round 7：修复 BUG-1060 disabled scheduler 在模块import时解析可选 interval、把未启用功能变成后台启动门禁的问题；interval只在显式启动时校验，disabled import/status保持稳定。
+- Source Round 8：修复 BUG-1061 设计声明的 after-close env 未被 service 使用、显式配置被静默忽略的问题；默认16:30保持不变，合法配置真实控制 publication due，非法值明确失败。
 
 ## 20. Implementation Plan / 本阶段唯一实施顺序
 
