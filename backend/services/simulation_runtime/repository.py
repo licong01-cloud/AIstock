@@ -55,6 +55,7 @@ LOCAL_SIM_PROJECTION_READBACK_FAILURE_PAYLOAD_KEY = "local_sim_projection_readba
 LOCAL_SIM_PROJECTION_READBACK_TERMINAL_FAILURE_PAYLOAD_KEY = "local_sim_projection_readback_terminal_failure"
 LOCAL_SIM_VALUATION_PENDING_PAYLOAD_KEY = "local_sim_valuation_pending_v1"
 LOCAL_SIM_VALUATION_COMPLETION_PAYLOAD_KEY = "local_sim_valuation_completion_v1"
+LOCAL_SIM_AUTHORITY_DIAGNOSTIC_LIMIT = 64
 SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY = "simulation_scheduler_retry_control_v1"
 SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA = "simulation_scheduler_retry_control_v1"
 SIMULATION_SCHEDULER_RETRY_ENTRY_SCHEMA = "simulation_scheduler_retry_entry_v1"
@@ -897,6 +898,21 @@ def _local_sim_json_safe_context_value(value: Any) -> Any:
     return str(value)
 
 
+def _local_sim_bounded_authority_evidence(values: Iterable[Any]) -> dict[str, Any]:
+    normalized = sorted(
+        (_retry_json_safe(value) for value in values),
+        key=canonical_json_sha256,
+    )
+    retained = normalized[:LOCAL_SIM_AUTHORITY_DIAGNOSTIC_LIMIT]
+    return {
+        "retained": retained,
+        "total_count": len(normalized),
+        "retained_count": len(retained),
+        "omitted_count": max(0, len(normalized) - len(retained)),
+        "full_set_sha256": canonical_json_sha256(normalized),
+    }
+
+
 def _local_sim_empty_authority_carrier_context(
     payload: dict[str, Any],
     *,
@@ -1368,6 +1384,8 @@ def _local_sim_state_authority_closure(
                 )
             superseded_authoritative[state_id] = state
         if {state.intent_id for state in superseded_authoritative.values()} != authority_intents:
+            predecessor_intents = sorted(state.intent_id for state in superseded_authoritative.values())
+            current_intents = sorted(authority_intents)
             raise InvalidStateTransitionError(
                 "LocalSIM superseded and current plan authorities do not close over the same intent set",
                 context={
@@ -1376,8 +1394,8 @@ def _local_sim_state_authority_closure(
                     "receipt_id": predecessor_receipt.receipt_id,
                     "predecessor_plan_id": predecessor_plan_id,
                     "current_plan_id": plan_id,
-                    "predecessor_intent_ids": sorted(state.intent_id for state in superseded_authoritative.values()),
-                    "current_intent_ids": sorted(authority_intents),
+                    "predecessor_intents": _local_sim_bounded_authority_evidence(predecessor_intents),
+                    "current_intents": _local_sim_bounded_authority_evidence(current_intents),
                 },
             )
         predecessor_by_intent = {state.intent_id: state for state in superseded_authoritative.values()}
@@ -1410,6 +1428,9 @@ def _local_sim_state_authority_closure(
         }
         semantic_drift = {intent_id: fields for intent_id, fields in semantic_drift.items() if fields}
         if semantic_drift:
+            bounded_semantic_drift = _local_sim_bounded_authority_evidence(
+                {"intent_id": intent_id, "fields": fields} for intent_id, fields in semantic_drift.items()
+            )
             raise InvalidStateTransitionError(
                 "LocalSIM superseded and current plan authorities drift in execution semantics",
                 context={
@@ -1418,7 +1439,7 @@ def _local_sim_state_authority_closure(
                     "receipt_id": predecessor_receipt.receipt_id,
                     "predecessor_plan_id": predecessor_plan_id,
                     "current_plan_id": plan_id,
-                    "semantic_drift": semantic_drift,
+                    "semantic_drift": bounded_semantic_drift,
                 },
             )
     active_history = tuple(

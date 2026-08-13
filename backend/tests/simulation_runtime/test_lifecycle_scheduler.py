@@ -9471,6 +9471,11 @@ def test_localsim_state_authority_rejects_superseded_plan_semantic_drift() -> No
         repo.list_local_sim_execution_states(run.run_id, authoritative=True)
 
     assert exc_info.value.context["reason_code"] == ("LOCALSIM_DURABLE_STATE_SUPERSEDED_SEMANTIC_CONFLICT")
+    evidence = exc_info.value.context["semantic_drift"]
+    assert evidence["total_count"] == 1
+    assert evidence["retained_count"] == 1
+    assert evidence["omitted_count"] == 0
+    assert len(evidence["full_set_sha256"]) == 64
 
 
 def _localsim_authority_review_fixture(
