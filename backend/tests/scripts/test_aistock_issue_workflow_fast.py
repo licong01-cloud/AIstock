@@ -387,6 +387,70 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
     assert events == ["root_sync", "install:merge_aftercare", "install:router"]
 
 
+def test_merge_aftercare_backfills_preexisting_stale_lanes_in_same_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installed: list[str] = []
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        workflow,
+        "_cleanup_preflight_fetch_origin",
+        lambda root, apply: {"status": "fetched", "result": _result()},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"branch": "main", "dirty": False, "head": "same", "origin_main": "same"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_merge_commit_changed_files",
+        lambda merge_commit, root: {
+            "ok": True,
+            "files": [".codex/skills/aistock-merge-aftercare/SKILL.md"],
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_client_manifest",
+        lambda: {
+            "codex_entries": {
+                "merge_aftercare": {"status": "current"},
+                "validation_delegation": {"status": "stale"},
+            },
+            "claude_entries": {
+                "validation_delegation": {"status": "stale_global"},
+                "readonly_triage": {"status": "missing_global"},
+            },
+        },
+    )
+    monkeypatch.setattr(workflow, "_ClientInstallLock", lambda: workflow.contextlib.nullcontext())
+    monkeypatch.setattr(
+        workflow,
+        "build_client_install_plan",
+        lambda *, apply, selected_lane, **kwargs: (
+            installed.append(selected_lane) or {"workflow_gate": "installed", "blocking": []}
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_client_lane_verification",
+        lambda manifest, selected_lane, verify_codex, verify_claude: {"ready": True, "blocking": []},
+    )
+
+    result = workflow._publish_changed_clients_after_merge(
+        merge_commit="e" * 40,
+        sync_root=True,
+        apply=True,
+    )
+
+    assert result["workflow_gate"] == "installed_and_verified"
+    assert result["changed_lanes"] == ["merge_aftercare"]
+    assert result["stale_lanes_before"] == ["readonly_triage", "validation_delegation"]
+    assert installed == ["merge_aftercare", "readonly_triage", "validation_delegation"]
+
+
 def test_merge_finalizer_stops_before_close_sync_when_client_publish_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
