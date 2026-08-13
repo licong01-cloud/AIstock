@@ -298,10 +298,11 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 ### 8.2 客户端同步
 
 - 普通任务直接执行选定 lane 的 `run`、`resume`、`submit-bug` 或对应入口，不把 `doctor` 作为通用前置门禁。仅在客户端/bootstrap 状态未知、workflow/client 代码刚变更、恢复状态 stale/conflict，或用户明确要求诊断时运行一次 `doctor`；失败后按具体检查修复，禁止反复全量 doctor。
-- `.codex/**` 或 `.claude/**` 合入后，由一个明确 owner 对列入本次任务的目标执行完整 `install-client --apply`，随后使用 `verify-clients --workflow-only` 校验全部 workflow lane；禁止多个窗口无差别重复安装。
+- `.codex/**` 或 `.claude/**` 合入后，由一个明确 owner 从与 `origin/main` 对齐、且客户端权威路径无未提交改动的 canonical `main`，对列入本次任务的目标执行完整 `install-client --apply`，随后使用 `verify-clients --workflow-only` 校验全部 workflow lane；canonical root 的无关路径状态不构成客户端门禁，禁止把 task worktree、未合入 commit 或旧 checkout 作为全局客户端安装源，禁止多个窗口无差别重复安装。
 - 官方隔离 Codex 或单一客户端目标必须显式传入 `--codex-home <path>`/`--claude-home <path>` 和对应的 `--skip-*`。客户端 profile 只在本次任务明确列入目标时更新。
-- 在途任务仅在 `doctor` 报告客户端 stale、窗口恢复或当前 lane 需要新入口时，使用 `verify-clients --workflow-only --selected-lane <lane>` 校验 router 与当前 lane。router/当前 lane stale 才阻断；无关 lane stale 只告警并记录待同步，禁止升级为全局任务门禁。
-- `install-client --selected-lane <lane>` 只同步 router 与该 lane，hash 相同时跳过，并通过跨进程锁与 staged replacement 避免并发窗口观察到部分安装。一次目标限定同步失败后停止并报告，禁止循环重装。
+- 在途任务仅在 `doctor` 报告客户端 stale、窗口恢复或当前 lane 需要新入口时，使用 canonical root 内的 CLI 执行 `verify-clients --workflow-only --selected-lane <lane>` 校验 router 与当前 lane，禁止从旧 task worktree 调用旧版 workflow CLI。校验以已合入的 canonical `main` 为入口权威并分别报告 checkout relation 与 profile status：task checkout 落后、领先或包含未合入入口变更只产生 advisory，禁止把已符合合入权威的客户端判为 stale；router/当前 lane 的 profile drift 才阻断，无关 lane drift 只告警并记录待同步。
+- profile drift 阻断时，CLI 必须返回 `request_single_owner_sync`、明确目标 profile 和 canonical-owner command；活动任务窗口禁止自行从 worktree 安装。唯一 owner 完成一次同步后，其他窗口只复验；`continue_without_install` 明确禁止重复安装或重启。
+- `install-client --selected-lane <lane>` 只从已合入的 canonical `main` 同步 router 与该 lane；canonical `main` 未与 `origin/main` 对齐，或 `.codex/skills`、`.claude/commands`、workflow CLI 存在未提交改动时 fail closed，无关路径 dirty 不阻断。hash 相同时跳过，并通过跨进程锁、authority identity 复验与 staged replacement 避免并发窗口观察到部分安装。一次目标限定同步失败后停止并报告，禁止循环重装或从不同版本 worktree 相互覆盖。
 - 同步完成且 `restart_recommended=false` 时，旧窗口重新读取 router 与当前 lane 后继续；只有 CLI 明确建议重启或客户端 UI 仍加载旧入口时才重启客户端。客户端同步不授权任何后端进程控制。
 - 授权以动作和目标为边界，而不是以消息次数为边界。同一条用户指令可明确打包 merge、精确 cleanup targets 和具体 production target/migration；完整授权包在合入后连续执行，无需二次询问，并分别报告结果。裸 PR/branch merge 授权仍只覆盖源码合入和必要 BUG/metadata 同步；禁止据此推导 source cleanup、生产 DDL/DML、依赖安装、runtime/frontend/client 激活、程序控制或任何删除。
 
