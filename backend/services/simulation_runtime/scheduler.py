@@ -3220,9 +3220,7 @@ class SimulationLifecycleScheduler:
             status="MINIQMT_KERNEL_V2_UNMATCHED_FAILURE",
             error={
                 "type": "MiniQMTKernelProductSyncError",
-                "message": (
-                    "KERNEL_V2 callback or exchange-clock failure did not map to the current binding page"
-                ),
+                "message": ("KERNEL_V2 callback or exchange-clock failure did not map to the current binding page"),
                 "context": context,
             },
             lifecycle_diagnostic={
@@ -3260,14 +3258,18 @@ class SimulationLifecycleScheduler:
         except Exception:  # noqa: BLE001 - classify one owner readback without starving peer bindings.
             return None, "RUNTIME_ATTEMPT_AUTHORITY_READ_FAILED"
         runtime_rows = health.get("kernel_product_runtimes") if isinstance(health, Mapping) else None
-        runtime_health = next(
-            (
-                dict(item)
-                for item in runtime_rows
-                if isinstance(item, Mapping) and item.get("runtime_id") == runtime_id
-            ),
-            None,
-        ) if isinstance(runtime_rows, list) else None
+        runtime_health = (
+            next(
+                (
+                    dict(item)
+                    for item in runtime_rows
+                    if isinstance(item, Mapping) and item.get("runtime_id") == runtime_id
+                ),
+                None,
+            )
+            if isinstance(runtime_rows, list)
+            else None
+        )
         ingress_retry = (
             runtime_health.get("ingress_retry")
             if isinstance(runtime_health, dict) and isinstance(runtime_health.get("ingress_retry"), Mapping)
@@ -3430,15 +3432,11 @@ class SimulationLifecycleScheduler:
                 "command_id": command_id,
                 "runtime_id": str(self._kernel_carrier_field(command, "runtime_id") or "").strip(),
                 "mapping_id": str(self._kernel_carrier_field(command, "mapping_id") or "").strip(),
-                "parent_intent_id": str(
-                    self._kernel_carrier_field(command, "parent_intent_id") or ""
-                ).strip(),
+                "parent_intent_id": str(self._kernel_carrier_field(command, "parent_intent_id") or "").strip(),
                 "status": status,
                 "broker_called": self._kernel_carrier_field(command, "broker_called"),
                 "broker_order_id": self._kernel_carrier_field(command, "broker_order_id"),
-                "deterministic_client_order_ref": self._kernel_carrier_field(
-                    mapping, "deterministic_client_order_ref"
-                ),
+                "deterministic_client_order_ref": self._kernel_carrier_field(mapping, "deterministic_client_order_ref"),
                 "order_remark": self._kernel_carrier_field(mapping, "order_remark"),
             }
             chain_identity = {
@@ -3483,8 +3481,7 @@ class SimulationLifecycleScheduler:
             1 for row in rows if row["broker_called"] is True or bool(row["broker_order_id"])
         )
         safe_terminal_nonacceptance = all(
-            row["broker_called"] is False
-            and row["status"] == BrokerCommandOutboxStatusV1.FAILED_TERMINAL.value
+            row["broker_called"] is False and row["status"] == BrokerCommandOutboxStatusV1.FAILED_TERMINAL.value
             for row in rows
         )
         complete = inventory_exhaustive and not conflicts and len(rows) == len(commands)
@@ -4931,8 +4928,7 @@ class SimulationLifecycleScheduler:
         )
         preplan_unknown_failure = (
             self._preplan_unknown_failure_evidence(binding=binding, diagnostic=diagnostic)
-            if side_effect_patch.get("broker_side_effect_state") == "UNKNOWN"
-            and self._is_pre_run_failure_run(existing)
+            if side_effect_patch.get("broker_side_effect_state") == "UNKNOWN" and self._is_pre_run_failure_run(existing)
             else None
         )
         if side_effect_patch.get("broker_side_effect_state") == "UNKNOWN" and not self._is_pre_run_failure_run(
@@ -5453,9 +5449,7 @@ class SimulationLifecycleScheduler:
             }
         ):
             return None
-        reason_code = str(
-            proof.get("reason_code") or "MINIQMT_PREPLAN_UNKNOWN_RECONCILIATION_TERMINAL"
-        )
+        reason_code = str(proof.get("reason_code") or "MINIQMT_PREPLAN_UNKNOWN_RECONCILIATION_TERMINAL")
         return SimulationSchedulerBindingResult(
             binding_id=binding.binding_id,
             strategy_id=binding.strategy_id,
@@ -5530,9 +5524,7 @@ class SimulationLifecycleScheduler:
         effective_runtime_authority = dict(runtime_authority)
         raw_preflight = run.run_payload_json.get("miniqmt_preplan_unknown_runtime_release_preflight")
         if isinstance(raw_preflight, dict):
-            preflight_payload = {
-                key: value for key, value in raw_preflight.items() if key != "preflight_sha256"
-            }
+            preflight_payload = {key: value for key, value in raw_preflight.items() if key != "preflight_sha256"}
             preflight_authority = raw_preflight.get("effective_runtime_authority")
             if (
                 raw_preflight.get("preflight_sha256") != canonical_json_sha256(preflight_payload)
@@ -5613,9 +5605,7 @@ class SimulationLifecycleScheduler:
                     },
                 )
             assert attempt_authority is not None
-            authority_plan = self.repository.get_execution_plan(
-                str(runtime_authority.get("execution_plan_id") or "")
-            )
+            authority_plan = self.repository.get_execution_plan(str(runtime_authority.get("execution_plan_id") or ""))
             effective_runtime_authority = {
                 **dict(runtime_authority),
                 "outbox_authority": self._kernel_product_outbox_authority(
@@ -5749,9 +5739,9 @@ class SimulationLifecycleScheduler:
         outbox = runtime_authority.get("outbox_authority")
         outbox_authority = dict(outbox) if isinstance(outbox, Mapping) else {}
         command_rows = outbox_authority.get("commands")
-        commands = [dict(item) for item in command_rows if isinstance(item, Mapping)] if isinstance(
-            command_rows, list
-        ) else []
+        commands = (
+            [dict(item) for item in command_rows if isinstance(item, Mapping)] if isinstance(command_rows, list) else []
+        )
         broker_order_ids = {
             str(item.get("broker_order_id") or "").strip()
             for item in commands
@@ -5770,10 +5760,7 @@ class SimulationLifecycleScheduler:
         exact_refs = broker_order_ids | order_remarks | deterministic_refs
 
         def is_exact_order(*, order_id: Any, order_remark: Any) -> bool:
-            return bool(
-                str(order_id or "").strip() in exact_refs
-                or str(order_remark or "").strip() in exact_refs
-            )
+            return bool(str(order_id or "").strip() in exact_refs or str(order_remark or "").strip() in exact_refs)
 
         repository = getattr(context, "qmt_ledger_repository", None)
         list_orders = getattr(repository, "list_order_ledger", None)
@@ -5808,17 +5795,23 @@ class SimulationLifecycleScheduler:
         exact_orders = [
             order
             for order in orders
-            if is_exact_order(order_id=getattr(order, "qmt_order_id", None), order_remark=getattr(order, "order_remark", None))
+            if is_exact_order(
+                order_id=getattr(order, "qmt_order_id", None), order_remark=getattr(order, "order_remark", None)
+            )
         ]
         exact_unattributed_orders = [
             order
             for order in unattributed_orders
-            if is_exact_order(order_id=getattr(order, "qmt_order_id", None), order_remark=getattr(order, "order_remark", None))
+            if is_exact_order(
+                order_id=getattr(order, "qmt_order_id", None), order_remark=getattr(order, "order_remark", None)
+            )
         ]
         exact_unattributed_trades = [
             trade
             for trade in unattributed_trades
-            if is_exact_order(order_id=getattr(trade, "qmt_order_id", None), order_remark=getattr(trade, "order_remark", None))
+            if is_exact_order(
+                order_id=getattr(trade, "qmt_order_id", None), order_remark=getattr(trade, "order_remark", None)
+            )
         ]
         exact_open_orders = [
             order
@@ -5830,10 +5823,9 @@ class SimulationLifecycleScheduler:
         for order in exact_unattributed_orders:
             raw = getattr(order, "raw_json", None)
             raw_payload = raw if isinstance(raw, Mapping) else {}
-            if (
-                is_open_like_order_status(raw_payload.get("order_status"))
-                and int(raw_payload.get("order_volume") or 0) > int(raw_payload.get("traded_volume") or 0)
-            ):
+            if is_open_like_order_status(raw_payload.get("order_status")) and int(
+                raw_payload.get("order_volume") or 0
+            ) > int(raw_payload.get("traded_volume") or 0):
                 exact_unattributed_open_orders.append(order)
         retained_orders = [
             {
@@ -5875,7 +5867,10 @@ class SimulationLifecycleScheduler:
             "exact_open_order_count": len(exact_open_orders) + len(exact_unattributed_open_orders),
             "exact_unattributed_open_order_count": len(exact_unattributed_open_orders),
             "exact_broker_side_effect_count": exact_side_effect_count,
-            "foreign_order_count": len(orders) + len(unattributed_orders) - len(exact_orders) - len(exact_unattributed_orders),
+            "foreign_order_count": len(orders)
+            + len(unattributed_orders)
+            - len(exact_orders)
+            - len(exact_unattributed_orders),
             "foreign_trade_count": len(unattributed_trades) - len(exact_unattributed_trades),
             "identity_conflicts": authority_conflicts,
             "orders": retained_orders,
@@ -5900,13 +5895,7 @@ class SimulationLifecycleScheduler:
             if isinstance(diagnostic, dict):
                 failure = self._preplan_unknown_failure_evidence(binding=binding, diagnostic=diagnostic)
         runtime_ids = (
-            sorted(
-                {
-                    str(item or "").strip()
-                    for item in failure.get("runtime_ids", [])
-                    if str(item or "").strip()
-                }
-            )
+            sorted({str(item or "").strip() for item in failure.get("runtime_ids", []) if str(item or "").strip()})
             if isinstance(failure, dict) and isinstance(failure.get("runtime_ids"), list)
             else []
         )
@@ -6039,14 +6028,12 @@ class SimulationLifecycleScheduler:
             )
 
         assert runtime_id is not None
-        run, runtime_release_evidence, effective_runtime_authority = (
-            self._release_preplan_unknown_kernel_runtime(
+        run, runtime_release_evidence, effective_runtime_authority = self._release_preplan_unknown_kernel_runtime(
             binding=binding,
             run=run,
             runtime_id=runtime_id,
             runtime_authority=runtime_authority,
             trade_date=trade_date,
-        )
         )
         context = self._load_run_context(
             runtime_release=runtime_release,
@@ -6086,9 +6073,7 @@ class SimulationLifecycleScheduler:
                     },
                 )
         run_status_gate = (
-            reconciliation.get("run_status_gate")
-            if isinstance(reconciliation.get("run_status_gate"), dict)
-            else {}
+            reconciliation.get("run_status_gate") if isinstance(reconciliation.get("run_status_gate"), dict) else {}
         )
         exact_broker_authority = self._preplan_exact_broker_authority(
             binding=binding,
@@ -6174,12 +6159,7 @@ class SimulationLifecycleScheduler:
             )
             return cleared, None
 
-        if (
-            run_status == "SUCCEEDED"
-            and not sync_conflicts
-            and open_order_count == 0
-            and broker_side_effect_count > 0
-        ):
+        if run_status == "SUCCEEDED" and not sync_conflicts and open_order_count == 0 and broker_side_effect_count > 0:
             proof = {
                 **proof_base,
                 "status": "BROKER_SIDE_EFFECT_RECONCILED_TERMINAL",
@@ -6787,9 +6767,12 @@ class SimulationLifecycleScheduler:
         self._validate_local_sim_post_close_state_closure(run)
         active_states = tuple(state for state in states if not state.is_terminal)
         if active_states:
-            if run.status != SimulationDailyRunStatus.FAILED_TERMINAL:
+            if run.status not in {
+                SimulationDailyRunStatus.FAILED_RETRYABLE,
+                SimulationDailyRunStatus.FAILED_TERMINAL,
+            }:
                 return None
-            return self._recover_historical_failed_terminal_localsim_active_generation(
+            return self._recover_historical_failed_localsim_active_generation(
                 run=run,
                 plan=plan,
                 binding=binding,
@@ -6857,7 +6840,7 @@ class SimulationLifecycleScheduler:
         )
         return terminalized
 
-    def _recover_historical_failed_terminal_localsim_active_generation(
+    def _recover_historical_failed_localsim_active_generation(
         self,
         *,
         run: SimulationDailyRun,
@@ -6869,14 +6852,20 @@ class SimulationLifecycleScheduler:
         scheduler_trade_date: date,
         as_of_time: datetime | None,
     ) -> dict[str, Any]:
-        """Finish an old incorrectly-terminal run from its exact durable generation."""
+        """Finish an old failed run from its exact active durable generation."""
+
+        is_terminal_failure = run.status == SimulationDailyRunStatus.FAILED_TERMINAL
+        evidence_suffix = "terminal" if is_terminal_failure else "retryable"
+        reason_prefix = (
+            "LOCALSIM_HISTORICAL_FAILED_TERMINAL" if is_terminal_failure else "LOCALSIM_HISTORICAL_FAILED_RETRYABLE"
+        )
 
         persistence = run.run_payload_json.get("local_sim_persistence")
         if not isinstance(persistence, dict) or persistence.get("terminal") is not False:
             raise DataUnavailableError(
-                "Historical failed-terminal LocalSim active generation has invalid persistence authority",
+                "Historical failed LocalSim active generation has invalid persistence authority",
                 context={
-                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_PERSISTENCE_CONFLICT",
+                    "reason_code": f"{reason_prefix}_PERSISTENCE_CONFLICT",
                     "run_id": run.run_id,
                     "binding_id": run.binding_id,
                     "plan_id": plan.plan_id,
@@ -6899,9 +6888,9 @@ class SimulationLifecycleScheduler:
         recovery_data_source = str(context.market_data_source or "").strip()
         if not recovery_data_source:
             raise DataUnavailableError(
-                "Historical failed-terminal LocalSim recovery has no authoritative market-data source",
+                "Historical failed LocalSim recovery has no authoritative market-data source",
                 context={
-                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_MARKET_DATA_SOURCE_MISSING",
+                    "reason_code": f"{reason_prefix}_MARKET_DATA_SOURCE_MISSING",
                     "run_id": run.run_id,
                     "binding_id": run.binding_id,
                     "plan_id": plan.plan_id,
@@ -6920,7 +6909,7 @@ class SimulationLifecycleScheduler:
             binding=binding,
             trade_date=run.trade_date,
             context={
-                "stage": "STALE_LOCALSIM_FAILED_TERMINAL_ACTIVE_RECOVERY",
+                "stage": f"STALE_LOCALSIM_FAILED_{evidence_suffix.upper()}_ACTIVE_RECOVERY",
                 "run_id": run.run_id,
                 "binding_id": binding.binding_id,
                 "trade_date": run.trade_date.isoformat(),
@@ -6948,9 +6937,9 @@ class SimulationLifecycleScheduler:
             or latest_persistence.get("terminal") is not True
         ):
             raise DataUnavailableError(
-                "Historical failed-terminal LocalSim generation did not reach exact terminal closure",
+                "Historical failed LocalSim generation did not reach exact terminal closure",
                 context={
-                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_CLOSURE_INCOMPLETE",
+                    "reason_code": f"{reason_prefix}_CLOSURE_INCOMPLETE",
                     "run_id": run.run_id,
                     "binding_id": run.binding_id,
                     "plan_id": plan.plan_id,
@@ -6967,17 +6956,17 @@ class SimulationLifecycleScheduler:
             )
         except Exception as exc:
             raise DataUnavailableError(
-                "Historical failed-terminal LocalSim terminal outbox is invalid",
+                "Historical failed LocalSim terminal outbox is invalid",
                 context={
-                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_OUTBOX_INVALID",
+                    "reason_code": f"{reason_prefix}_OUTBOX_INVALID",
                     "run_id": run.run_id,
                     "binding_id": run.binding_id,
                     "plan_id": plan.plan_id,
                 },
             ) from exc
         recovery_evidence = {
-            "schema_version": "localsim_historical_failed_terminal_active_recovery_v1",
-            "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_ACTIVE_GENERATION_RECOVERED",
+            "schema_version": f"localsim_historical_failed_{evidence_suffix}_active_recovery_v1",
+            "reason_code": f"{reason_prefix}_ACTIVE_GENERATION_RECOVERED",
             "run_id": run.run_id,
             "binding_id": binding.binding_id,
             "plan_id": plan.plan_id,
@@ -7016,7 +7005,7 @@ class SimulationLifecycleScheduler:
             status=latest.status,
             payload_patch={
                 "last_stage": latest.status.value,
-                "localsim_historical_failed_terminal_active_recovery_v1": recovery_evidence,
+                f"localsim_historical_failed_{evidence_suffix}_active_recovery_v1": recovery_evidence,
             },
         )
         return {
@@ -7026,9 +7015,9 @@ class SimulationLifecycleScheduler:
             "broker_backend": updated.broker_backend.value,
             "previous_status": run.status.value,
             "status": updated.status.value,
-            "reason": "localsim_historical_failed_terminal_active_generation_recovered",
+            "reason": f"localsim_historical_failed_{evidence_suffix}_active_generation_recovered",
             "reason_code": recovery_evidence["reason_code"],
-            "historical_failed_terminal_active_recovery": True,
+            f"historical_failed_{evidence_suffix}_active_recovery": True,
             "scheduler_trade_date": scheduler_trade_date.isoformat(),
             "driven_status": driven.status,
         }

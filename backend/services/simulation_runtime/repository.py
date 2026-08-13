@@ -1114,6 +1114,77 @@ def _local_sim_state_authority_closure(
             },
         )
 
+    predecessor_plan_id: str | None = None
+    if payload.get("rebuilt_after_side_effect_free_failure") is True:
+        raw_predecessor = payload.get("rebuilt_from_execution_plan_id")
+        raw_rebuilt = payload.get("rebuilt_execution_plan_id")
+        raw_backend = payload.get("rebuilt_failure_backend")
+        if (
+            isinstance(raw_predecessor, str)
+            and raw_predecessor.strip()
+            and isinstance(raw_rebuilt, str)
+            and raw_rebuilt.strip()
+            and raw_backend == SimulationBrokerBackend.LOCAL_SIM.value
+        ):
+            normalized_predecessor = raw_predecessor.strip()
+            normalized_rebuilt = raw_rebuilt.strip()
+            cash_fit = payload.get("local_sim_cash_fit")
+            prepared_successor_is_proven = normalized_rebuilt == plan_id
+            if normalized_rebuilt != plan_id and isinstance(cash_fit, dict):
+                prepared_successor_is_proven = (
+                    cash_fit.get("schema_version") == "localsim_capital_dependency_v1"
+                    and cash_fit.get("status") == "SELL_FIRST_DEPENDENCY_ORDERED"
+                    and cash_fit.get("capital_waiting_owner") == "LocalSimExecutionStateV1"
+                )
+            if prepared_successor_is_proven:
+                predecessor_plan_id = normalized_predecessor
+
+    allowed_receipt_plan_ids = {plan_id}
+    if predecessor_plan_id is not None:
+        allowed_receipt_plan_ids.add(predecessor_plan_id)
+    receipt_plan_ids = {receipt.plan_id for receipt in receipts.values()}
+    latest = by_generation[raw_generation][0]
+    ordered_receipt_plan_ids = [by_generation[generation][0].plan_id for generation in receipt_generations]
+    expected_plan_sequence = (
+        [predecessor_plan_id] * ordered_receipt_plan_ids.count(predecessor_plan_id)
+        + [plan_id] * ordered_receipt_plan_ids.count(plan_id)
+        if predecessor_plan_id is not None
+        else [plan_id] * len(ordered_receipt_plan_ids)
+    )
+    if (
+        latest.plan_id != plan_id
+        or receipt_plan_ids - allowed_receipt_plan_ids
+        or ordered_receipt_plan_ids != expected_plan_sequence
+        or (predecessor_plan_id is not None and receipt_plan_ids != {predecessor_plan_id, plan_id})
+    ):
+        conflicting_receipt = next(
+            (
+                receipt
+                for receipt in sorted(receipts.values(), key=lambda item: item.generation)
+                if receipt.plan_id not in allowed_receipt_plan_ids or receipt.generation == raw_generation
+            ),
+            latest,
+        )
+        raise InvalidStateTransitionError(
+            "LocalSIM economic receipt identity conflicts with the durable run",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_IDENTITY_CONFLICT",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": conflicting_receipt.generation,
+                "receipt_id": conflicting_receipt.receipt_id,
+                "current_run_identity": current_identity,
+                "receipt_identity": {
+                    "run_id": conflicting_receipt.run_id,
+                    "binding_id": conflicting_receipt.binding_id,
+                    "trade_date": conflicting_receipt.trade_date.isoformat(),
+                    "plan_id": conflicting_receipt.plan_id,
+                },
+                "allowed_receipt_plan_ids": sorted(item for item in allowed_receipt_plan_ids if item is not None),
+                "ordered_receipt_plan_ids": ordered_receipt_plan_ids,
+            },
+        )
+
     for receipt in receipts.values():
         receipt_identity = {
             "run_id": receipt.run_id,
@@ -1121,7 +1192,11 @@ def _local_sim_state_authority_closure(
             "trade_date": receipt.trade_date.isoformat(),
             "plan_id": receipt.plan_id,
         }
-        if receipt_identity != current_identity:
+        expected_receipt_identity = {
+            **current_identity,
+            "plan_id": receipt.plan_id,
+        }
+        if receipt_identity != expected_receipt_identity:
             raise InvalidStateTransitionError(
                 "LocalSIM economic receipt identity conflicts with the durable run",
                 context={
@@ -1130,11 +1205,11 @@ def _local_sim_state_authority_closure(
                     "expected_generation": raw_generation,
                     "actual_generation": receipt.generation,
                     "receipt_id": receipt.receipt_id,
-                    "current_run_identity": current_identity,
+                    "current_run_identity": expected_receipt_identity,
                     "receipt_identity": receipt_identity,
                 },
             )
-        expected_fact_identity = current_identity
+        expected_fact_identity = expected_receipt_identity
         actual_fact_identity = {
             field: receipt.economic_facts.get(field)
             for field in ("run_id", "binding_id", "trade_date", "plan_id")
@@ -1160,7 +1235,6 @@ def _local_sim_state_authority_closure(
                 },
             )
 
-    latest = by_generation[raw_generation][0]
     raw_hashes = latest.economic_facts.get("state_hashes")
     if raw_hashes == {} and not state_map:
         return _LocalSimStateAuthority(generation=raw_generation, receipt=latest, states={})
@@ -1245,19 +1319,141 @@ def _local_sim_state_authority_closure(
             },
         )
     authority_intents = {state.intent_id for state in authoritative.values()}
+    superseded_authoritative: dict[str, LocalSimExecutionStateV1] = {}
+    if predecessor_plan_id is not None:
+        predecessor_receipt = max(
+            (receipt for receipt in receipts.values() if receipt.plan_id == predecessor_plan_id),
+            key=lambda item: item.generation,
+        )
+        predecessor_hashes = predecessor_receipt.economic_facts.get("state_hashes")
+        if not isinstance(predecessor_hashes, dict) or not predecessor_hashes:
+            raise InvalidStateTransitionError(
+                "LocalSIM superseded plan has no exact terminal generation state authority",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_AUTHORITY_MISSING",
+                    "run_id": run_id,
+                    "expected_generation": predecessor_receipt.generation,
+                    "actual_generation": predecessor_receipt.generation,
+                    "receipt_id": predecessor_receipt.receipt_id,
+                    "plan_id": predecessor_plan_id,
+                },
+            )
+        for state_id, expected_hash in predecessor_hashes.items():
+            state = state_map.get(state_id) if isinstance(state_id, str) else None
+            if (
+                state is None
+                or not isinstance(expected_hash, str)
+                or not expected_hash
+                or state.state_hash != expected_hash
+                or state.run_id != run_id
+                or state.binding_id != binding_id
+                or state.trade_date != trade_date
+                or state.plan_id != predecessor_plan_id
+            ):
+                raise InvalidStateTransitionError(
+                    "LocalSIM superseded plan state authority does not close over its final committed generation",
+                    context={
+                        "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_AUTHORITY_CONFLICT",
+                        "run_id": run_id,
+                        "expected_generation": predecessor_receipt.generation,
+                        "actual_generation": predecessor_receipt.generation,
+                        "receipt_id": predecessor_receipt.receipt_id,
+                        "plan_id": predecessor_plan_id,
+                        "state_id": state_id if isinstance(state_id, str) else None,
+                        "expected_state_hash": expected_hash,
+                        "actual_state_hash": state.state_hash if state is not None else None,
+                    },
+                )
+            superseded_authoritative[state_id] = state
+        if {state.intent_id for state in superseded_authoritative.values()} != authority_intents:
+            raise InvalidStateTransitionError(
+                "LocalSIM superseded and current plan authorities do not close over the same intent set",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_INTENT_CONFLICT",
+                    "run_id": run_id,
+                    "receipt_id": predecessor_receipt.receipt_id,
+                    "predecessor_plan_id": predecessor_plan_id,
+                    "current_plan_id": plan_id,
+                    "predecessor_intent_ids": sorted(state.intent_id for state in superseded_authoritative.values()),
+                    "current_intent_ids": sorted(authority_intents),
+                },
+            )
+        predecessor_by_intent = {state.intent_id: state for state in superseded_authoritative.values()}
+        current_by_intent = {state.intent_id: state for state in authoritative.values()}
+        semantic_fields = (
+            "portfolio_id",
+            "symbol",
+            "side",
+            "total_quantity",
+            "filled_quantity",
+            "remaining_quantity",
+            "algo_code",
+            "schedule_version",
+            "causality_cursor",
+            "order_status",
+            "runtime_status",
+            "plan",
+            "plan_sha256",
+        )
+        semantic_drift = {
+            intent_id: {
+                field: {
+                    "predecessor": _local_sim_json_safe_context_value(getattr(predecessor_by_intent[intent_id], field)),
+                    "current": _local_sim_json_safe_context_value(getattr(current_by_intent[intent_id], field)),
+                }
+                for field in semantic_fields
+                if getattr(predecessor_by_intent[intent_id], field) != getattr(current_by_intent[intent_id], field)
+            }
+            for intent_id in sorted(authority_intents)
+        }
+        semantic_drift = {intent_id: fields for intent_id, fields in semantic_drift.items() if fields}
+        if semantic_drift:
+            raise InvalidStateTransitionError(
+                "LocalSIM superseded and current plan authorities drift in execution semantics",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_SUPERSEDED_SEMANTIC_CONFLICT",
+                    "run_id": run_id,
+                    "receipt_id": predecessor_receipt.receipt_id,
+                    "predecessor_plan_id": predecessor_plan_id,
+                    "current_plan_id": plan_id,
+                    "semantic_drift": semantic_drift,
+                },
+            )
+    active_history = tuple(
+        state
+        for state_id, state in state_map.items()
+        if state_id not in authoritative
+        and state_id not in superseded_authoritative
+        and not state.is_terminal
+        and state.intent_id in authority_intents
+        and state.plan_id == plan_id
+    )
+    if active_history:
+        raise InvalidStateTransitionError(
+            "LocalSIM durable state history contains a second active authority",
+            context={
+                "reason_code": "LOCALSIM_DURABLE_STATE_ACTIVE_AUTHORITY_CONFLICT",
+                "run_id": run_id,
+                "expected_generation": raw_generation,
+                "actual_generation": latest.generation,
+                "receipt_id": latest.receipt_id,
+                "active_state_ids": sorted(state.state_id for state in active_history),
+            },
+        )
     invalid_history = tuple(
         state
         for state_id, state in state_map.items()
         if state_id not in authoritative
-        and (
-            state.intent_id not in authority_intents
-            or {
+        and state_id not in superseded_authoritative
+        and not (
+            state.intent_id in authority_intents
+            and {
                 "run_id": state.run_id,
                 "binding_id": state.binding_id,
                 "trade_date": state.trade_date.isoformat(),
                 "plan_id": state.plan_id,
             }
-            != current_identity
+            == current_identity
         )
     )
     if invalid_history:
@@ -1273,7 +1469,9 @@ def _local_sim_state_authority_closure(
             },
         )
     active_history = tuple(
-        state for state_id, state in state_map.items() if state_id not in authoritative and not state.is_terminal
+        state
+        for state_id, state in state_map.items()
+        if state_id not in authoritative and state_id not in superseded_authoritative and not state.is_terminal
     )
     if active_history:
         raise InvalidStateTransitionError(
