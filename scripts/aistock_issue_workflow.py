@@ -8893,6 +8893,17 @@ def _client_lanes_for_changed_files(changed_files: Iterable[str]) -> list[str]:
     return sorted(lanes)
 
 
+def _stale_client_lanes(manifest: dict[str, Any]) -> list[str]:
+    stale_statuses = {"stale", "stale_global", "missing_global"}
+    lanes: set[str] = set()
+    for entries_key in ("codex_entries", "claude_entries"):
+        entries = manifest.get(entries_key) if isinstance(manifest.get(entries_key), dict) else {}
+        for lane, entry in entries.items():
+            if str((entry or {}).get("status") or "") in stale_statuses:
+                lanes.add(str(lane))
+    return sorted(lanes)
+
+
 def _merge_commit_changed_files(merge_commit: str, *, root: Path) -> dict[str, Any]:
     parent_result = _run_command(
         ["git", "rev-list", "--parents", "-n", "1", merge_commit],
@@ -8973,11 +8984,17 @@ def _publish_changed_clients_after_merge(
         payload["blocking"].append(str(changed.get("error") or "merge changed-file inspection failed"))
         payload["workflow_gate"] = "blocked"
         return payload
-    lanes = _client_lanes_for_changed_files(payload["changed_files"])
-    payload["selected_lanes"] = lanes
-    if not lanes:
+    changed_lanes = _client_lanes_for_changed_files(payload["changed_files"])
+    payload["changed_lanes"] = changed_lanes
+    if not changed_lanes:
         payload.update({"workflow_gate": "not_required", "reason": "merge_did_not_change_workflow_clients"})
         return payload
+    with _ClientInstallLock():
+        preinstall_manifest = _client_manifest()
+    stale_lanes = _stale_client_lanes(preinstall_manifest)
+    lanes = sorted(set(changed_lanes) | set(stale_lanes))
+    payload["stale_lanes_before"] = stale_lanes
+    payload["selected_lanes"] = lanes
 
     for lane in lanes:
         install = build_client_install_plan(apply=True, selected_lane=lane)
