@@ -158,7 +158,8 @@
       "Fresh pytest process loaded the persisted BUG-1007 projector and public K6 plan-authority reader; exact VirtualAccount, plan/evidence parity, malformed carrier, parallel model_dump carrier and owner-drift matrix passed 3 tests without backend process control",
       "python -m nox -s miniqmt_execution_runtime_l2 launched a fresh pytest process from the persisted worktree and passed 1347 tests with 69 explicit DEV-gated skips; no backend process control",
       "python -m pytest exact BUG-1007 three-node matrix -> 3 passed in 1.89s",
-      "Fresh MiniQMT and Simulation nox processes loaded persisted latest-main BUG-1007 source; MiniQMT 1498 passed/82 skipped and Simulation 596 passed/1 skipped; no backend process control"
+      "Fresh MiniQMT and Simulation nox processes loaded persisted latest-main BUG-1007 source; MiniQMT 1498 passed/82 skipped and Simulation 596 passed/1 skipped; no backend process control",
+      "Fresh latest-main review process at merge 982eecb7 loaded persisted BUG-1007 source: exact authority matrix 3 passed, validation module registry 8 passed with ownership 14/14, platform API 13 passed, changed-file Ruff/compileall/diff-check passed; no backend process control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
