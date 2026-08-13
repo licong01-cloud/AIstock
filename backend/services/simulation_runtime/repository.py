@@ -1145,17 +1145,18 @@ def _local_sim_state_authority_closure(
     receipt_plan_ids = {receipt.plan_id for receipt in receipts.values()}
     latest = by_generation[raw_generation][0]
     ordered_receipt_plan_ids = [by_generation[generation][0].plan_id for generation in receipt_generations]
+    predecessor_has_economic_history = predecessor_plan_id is not None and predecessor_plan_id in receipt_plan_ids
     expected_plan_sequence = (
         [predecessor_plan_id] * ordered_receipt_plan_ids.count(predecessor_plan_id)
         + [plan_id] * ordered_receipt_plan_ids.count(plan_id)
-        if predecessor_plan_id is not None
+        if predecessor_has_economic_history
         else [plan_id] * len(ordered_receipt_plan_ids)
     )
     if (
         latest.plan_id != plan_id
         or receipt_plan_ids - allowed_receipt_plan_ids
         or ordered_receipt_plan_ids != expected_plan_sequence
-        or (predecessor_plan_id is not None and receipt_plan_ids != {predecessor_plan_id, plan_id})
+        or (predecessor_has_economic_history and receipt_plan_ids != {predecessor_plan_id, plan_id})
     ):
         conflicting_receipt = next(
             (
@@ -1320,7 +1321,8 @@ def _local_sim_state_authority_closure(
         )
     authority_intents = {state.intent_id for state in authoritative.values()}
     superseded_authoritative: dict[str, LocalSimExecutionStateV1] = {}
-    if predecessor_plan_id is not None:
+    if predecessor_has_economic_history:
+        assert predecessor_plan_id is not None
         predecessor_receipt = max(
             (receipt for receipt in receipts.values() if receipt.plan_id == predecessor_plan_id),
             key=lambda item: item.generation,
