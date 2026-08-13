@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from datetime import date
 from pathlib import Path
 
@@ -19,6 +20,17 @@ from backend.services.canonical_equity_pit import (
     canonical_rule_parameters_digest,
     require_canonical_consumer_binding,
 )
+
+
+def test_pit_authority_status_preserves_string_enum_contract() -> None:
+    status = PitAuthorityStatus.ACTIVE_CANONICAL
+
+    assert isinstance(status, str)
+    assert status.value == "ACTIVE_CANONICAL"
+    assert str(status) == "ACTIVE_CANONICAL"
+    assert f"{status}" == "ACTIVE_CANONICAL"
+    assert PitAuthorityStatus("ACTIVE_CANONICAL") is status
+    assert json.dumps({"status": status}) == '{"status": "ACTIVE_CANONICAL"}'
 
 
 def _binding(**overrides):

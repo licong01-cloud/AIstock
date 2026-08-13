@@ -12,7 +12,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date
-from enum import StrEnum
+from enum import Enum
 from typing import Any, Callable, Mapping
 
 import psycopg2.extras as pgx
@@ -42,12 +42,15 @@ def _transactional_connection() -> Any:
     return get_conn(autocommit=False, manage_transaction=True)
 
 
-class PitAuthorityStatus(StrEnum):
+class PitAuthorityStatus(str, Enum):
     ACTIVE_CANONICAL = "ACTIVE_CANONICAL"
     DEPLOYED_LEGACY_PENDING_MIGRATION = "DEPLOYED_LEGACY_PENDING_MIGRATION"
     SESSION_PINNED_DRAINING = "SESSION_PINNED_DRAINING"
     ARCHIVED_NONCANONICAL = "ARCHIVED_NONCANONICAL"
     EMERGENCY_LEGACY_ROLLBACK = "EMERGENCY_LEGACY_ROLLBACK"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 CANONICAL_RULE_PARAMETERS: Mapping[str, Any] = {
