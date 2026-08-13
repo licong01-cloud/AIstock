@@ -11528,6 +11528,19 @@ def _delete_remote_branch_with_lease(
     expected_sha = _remote_branch_sha(expected_remote_ref, branch)
     if not expected_sha:
         raise WorkflowError(f"remote branch preflight identity is invalid: {branch}")
+    observed_ref = _git(
+        ["ls-remote", "--heads", "origin", branch],
+        cwd=root,
+        check=False,
+    )
+    observed_sha = _remote_branch_sha(observed_ref, branch)
+    if observed_sha is None:
+        return {"expected_sha": expected_sha, "already_absent": True}
+    if observed_sha != expected_sha:
+        raise WorkflowError(
+            f"remote branch changed after cleanup preflight: {branch}; "
+            f"expected={expected_sha} observed={observed_sha}"
+        )
     result = _execute_checked(
         [
             "git",
@@ -11540,7 +11553,12 @@ def _delete_remote_branch_with_lease(
         cwd=root,
         timeout=180,
     )
-    return {**result, "expected_sha": expected_sha, "already_absent": False}
+    return {
+        **result,
+        "expected_sha": expected_sha,
+        "observed_sha": observed_sha,
+        "already_absent": False,
+    }
 
 
 def _orphan_worktree_dir_profile(path: Path) -> dict[str, Any]:

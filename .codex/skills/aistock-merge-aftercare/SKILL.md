@@ -17,7 +17,7 @@ Use the RD-Agent section when source merge, immutable release, deployment, resta
 2. Check PR state and CI with `gh pr view <PR> --json statusCheckRollup,mergeable,state`.
 3. Do not use long `gh pr checks --watch` waits when a compact rollup is enough.
 4. Stop if required checks fail, mergeability is blocked, or source worktree is dirty.
-5. Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine it.
+5. AIstock workflows must use RTK under `TOOL-RTK-001` from the sole development standard and never make RTK or telemetry a task/PR/CI gate; this lane does not redefine it.
 
 ## Merge
 

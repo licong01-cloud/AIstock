@@ -12,7 +12,7 @@ Use this skill when local Codex validation would become broad, repetitive, or lo
 ## Boundary
 
 - Validation Center, CI and Nightly may manage only explicitly marked runner-owned temporary processes on isolated ports. They must never start, stop or restart a user backend, and delegation never transfers user restart authority.
-- Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine RTK or CI semantics.
+- AIstock workflows must use RTK under `TOOL-RTK-001` from the sole development standard and never make RTK or telemetry a task/PR/CI gate; this lane does not redefine RTK or CI semantics.
 - Codex keeps the minimal pre-merge gate: changed-file lint/compile, direct fix-point targeted test or contract smoke, `git diff --check`, scope check, and production gates.
 - Deep validation runs in Validation Center, GitHub CI, or Nightly; Codex does not manually run broad module matrices, UI journeys, or cross-module business-flow suites for every BUG.
 - When a local test fails, Codex should rerun only the failed nodeid or `pytest --lf` before escalating to a broader suite.
