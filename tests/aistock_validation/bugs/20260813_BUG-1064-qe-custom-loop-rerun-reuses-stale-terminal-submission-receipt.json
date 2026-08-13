@@ -40,6 +40,12 @@
       "actor": "codex",
       "note": "Destructive reruns now persist a unique attempt-scoped reservation identity while claiming the canonical loop row; normal submissions remain canonical and malformed rerun metadata fails closed.",
       "timestamp": "2026-08-13T05:08:00Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "codex",
+      "note": "DESIGN-COMPLIANCE-001 passed item by item: complete rerun-generation delivery, explicit malformed-metadata failure, unchanged normal submit/retry and business config semantics, and no new approval gate.",
+      "timestamp": "2026-08-13T05:12:00Z"
     }
   ],
   "evidence_uris": [
@@ -111,7 +117,7 @@
   },
   "first_seen_at": "2026-08-13T04:55:32.115568Z",
   "fix_branch": "bug/BUG-1064-qe-custom-loop-rerun-reuses-stale-terminal-submi-20260813",
-  "fix_commit": null,
+  "fix_commit": "16973538f42def87ba99434eeb61bf698eaf2f04",
   "fixed_at": null,
   "github_issue_number": 3393,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3393",
@@ -135,7 +141,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh Python subprocess imported tracked AutoEvolutionScheduler, resolved a unique rerun reservation identity plus canonical Loop claim identity, printed fresh-process-ok, and exited 0 without database or process control."
+      "Fresh Python subprocess imported tracked AutoEvolutionScheduler, resolved a unique rerun reservation identity plus canonical Loop claim identity, printed fresh-process-ok, and exited 0 without database or process control.",
+      "Source commit 16973538f42def87ba99434eeb61bf698eaf2f04 contains the persistent scheduler fix and direct tests; no user backend or experiment process was controlled by the BUG workflow."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
