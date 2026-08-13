@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,11 @@ from backend.services.dataset_release.control_service import (
     previous_month_end,
 )
 from backend.services.dataset_release.control_store import ControlStore, IdempotencyConflict
+from backend.services.dataset_release.profile import load_initial_migration_plan
+
+
+ROOT = Path(__file__).resolve().parents[3]
+INITIAL_PLAN_PATH = ROOT / "configs" / "datasets" / "migrations" / "pit_v2_initial_20260731_v1.yaml"
 
 
 def _service(tmp_path) -> DatasetReleaseControlService:
@@ -28,6 +34,24 @@ def _service(tmp_path) -> DatasetReleaseControlService:
                 store=store,
                 cas=CASStore(store.root),
                 cutoff_resolver=lambda _: date(2026, 7, 31),
+            )
+        ]
+    )
+
+
+def _initial_service(tmp_path) -> DatasetReleaseControlService:
+    store = ControlStore.initialize(tmp_path / "control")
+    plan = load_initial_migration_plan(INITIAL_PLAN_PATH)
+    return DatasetReleaseControlService(
+        [
+            DatasetReleaseProfileBinding(
+                profile_id="qe_hmm_full_v2",
+                semantic_profile_digest="b" * 64,
+                cutoff_policy="previous_month_last_completed_trading_day",
+                store=store,
+                cas=CASStore(store.root),
+                cutoff_resolver=lambda _: date(2099, 12, 31),
+                initial_migration_plans={plan.plan_id: plan},
             )
         ]
     )
@@ -112,6 +136,36 @@ def test_submit_is_durable_idempotent_and_never_creates_a_run_in_api(tmp_path) -
 
     with pytest.raises(IdempotencyConflict):
         service.submit_monthly(**{**arguments, "scope": "sample"})
+
+
+def test_initial_migration_submission_binds_fixed_plan_not_wall_clock_cutoff(tmp_path) -> None:
+    service = _initial_service(tmp_path)
+    result = service.submit_initial_migration(
+        profile_id="qe_hmm_full_v2",
+        plan_id="pit_v2_initial_20260731_v1",
+        scope="sample",
+        candidate_only=True,
+        principal="operator:one",
+        idempotency_key="initial-pit-v2-sample",
+        route="cli:initial-migration",
+        now=datetime(2027, 3, 15, tzinfo=UTC),
+    )
+    binding = service._bindings["qe_hmm_full_v2"]
+    row = binding.store.get_submission(result["submission_id"])
+    request = binding.cas.get_json_bounded(row["request_ref"], max_bytes=2 * 1024**2)["request"]
+
+    assert result["fixed_cutoff"] == "2026-07-31"
+    assert result["plan_digest"] == request["plan_digest"]
+    assert request["cutoff_policy"] == "fixed-allowlisted-plan"
+    assert request["resolved_cutoff"] == "2026-07-31"
+    assert request["sample_instruments"] == [
+        "000001.SZ",
+        "300379.SZ",
+        "600462.SH",
+        "600930.SH",
+        "688981.SH",
+    ]
+    assert binding.store._many("SELECT * FROM runs", ()) == []
 
 
 def test_service_fails_closed_on_profile_candidate_and_missing_record(tmp_path) -> None:

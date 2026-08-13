@@ -1,5 +1,5 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-07-31"
+updated_at: "2026-08-13"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
@@ -51,6 +51,7 @@ targets:
       - backend/services/**/*worker*.py
       - scripts/**/*scheduler*.py
       - scripts/dataset_release_worker.py
+      - scripts/dataset_release_source_stage.py
     probe_origins: [http://127.0.0.1:8001, http://localhost:8001]
     operator_runbook_ref: bug_record.runtime_contract.operator_runbook_ref
     expected_identity_ref: merged_commit

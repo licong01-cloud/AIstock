@@ -7,6 +7,7 @@ import shutil
 from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path, PureWindowsPath
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -54,7 +55,10 @@ from backend.data_service.moneyflow_contract import (
     TUSHARE_MONEYFLOW_VOLUME_COLUMNS,
 )
 from backend.services.dataset_release.publisher import artifact_tree_digest
+from backend.services.dataset_release.pit import DatasetPitBinding, freeze_pit_snapshot
+from backend.services.dataset_release.profile import load_dataset_profile
 from backend.services.dataset_release.streaming_artifacts import sha256_file
+from backend.services.canonical_equity_pit import CANONICAL_PIT_RULE_VERSION, CANONICAL_PIT_UNIVERSE_KEY
 from backend.tests.dataset_release.test_candidate_validator import (
     DATES,
     STOCKS,
@@ -88,6 +92,59 @@ def _source_partition(component: Component) -> list[dict]:
             "monthly_content_leaves": [],
         }
     ]
+
+
+def test_v2_candidate_manifest_embeds_readable_canonical_pit_binding() -> None:
+    profile = load_dataset_profile(Path(__file__).resolve().parents[3] / "configs/datasets/qe_backtest_monthly_v2.yaml")
+    pit = freeze_pit_snapshot(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "eligible_start": date(2026, 7, 30),
+                "eligible_end": date(2026, 7, 31),
+                "entry_reason": "listed",
+                "exit_reason": "scope_end",
+            }
+        ],
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rule_version=CANONICAL_PIT_RULE_VERSION,
+        scope_start=date(2026, 7, 30),
+        cutoff=date(2026, 7, 31),
+        state_identity="canonical-state",
+        source_fingerprint_sha256="a" * 64,
+        parameter_hash="b" * 64,
+        state_start=date(2018, 8, 1),
+        state_end=date(2026, 7, 31),
+    )
+    component_ref = SimpleNamespace(as_dict=lambda: {"sha256": "c" * 64, "size_bytes": 1})
+    invocation = SimpleNamespace(
+        profile=profile,
+        release_id="qe-pit-v2-20260731",
+        release_digest="d" * 64,
+        build_inputs={
+            "scope": "full",
+            "source_snapshot": {
+                "raw_source_content_root": "e" * 64,
+                "pit_snapshot_digest": pit.spans_sha256,
+            },
+            "artifact_ready_content_root": "f" * 64,
+        },
+    )
+
+    manifest = build_stage._build_candidate_manifest(
+        invocation=invocation,
+        pit=pit,
+        artifact_root="1" * 64,
+        component_manifest={"manifest_root": "2" * 64},
+        component_ref=component_ref,
+    )
+    binding = DatasetPitBinding.from_release_manifest(manifest)
+
+    assert binding.release_id == invocation.release_id
+    assert binding.cutoff == date(2026, 7, 31)
+    assert binding.scope == "full"
+    assert binding.rolling_cutoff_spans_sha256 == pit.spans_sha256
+    assert manifest["source_content_root"] == "e" * 64
 
 
 def _frozen(evidence, *, action: ComponentAction) -> dict:
@@ -599,7 +656,10 @@ def test_full_baseline_to_mixed_selective_stage_isolated_adopt_and_validate(
         "artifact_ready_effective_partitions": {
             component.value: _source_partition(component) for component in Component
         },
-        "source_snapshot": {"raw_source_content_root": "7" * 64},
+        "source_snapshot": {
+            "raw_source_content_root": "7" * 64,
+            "pit_snapshot_digest": pit.spans_sha256,
+        },
         "baseline": _baseline_build_input(
             baseline_manifest,
             baseline_manifest_ref,
@@ -997,7 +1057,10 @@ def test_monthly_incremental_direct_stage_updates_all_data_components_without_pu
             "artifact_ready_effective_partitions": {
                 component.value: _source_partition(component) for component in Component
             },
-            "source_snapshot": {"raw_source_content_root": "7" * 64},
+            "source_snapshot": {
+                "raw_source_content_root": "7" * 64,
+                "pit_snapshot_digest": target_pit.spans_sha256,
+            },
             "baseline": _baseline_build_input(
                 baseline_manifest,
                 baseline_manifest_ref,

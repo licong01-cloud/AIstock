@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from datetime import date
 import copy
+import hashlib
 import re
 from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping
@@ -19,7 +20,7 @@ from backend.services.canonical_equity_pit import (
     canonical_rule_parameters_digest,
 )
 
-from .canonical import digest_named_fields
+from .canonical import canonical_json_bytes, digest_named_fields
 from .contracts import Component
 from .errors import IndexContractError, ProfileValidationError
 from .index_contract import (
@@ -50,6 +51,161 @@ PROFILE_ID = "qe_hmm_full_v1"
 CANONICAL_PROFILE_OVERLAY_SCHEMA_VERSION = "qe_backtest_monthly_profile_overlay_v1"
 CANONICAL_PROFILE_ID = "qe_hmm_full_v2"
 CANONICAL_PROFILE_BASE_NAME = "qe_backtest_monthly_v1.yaml"
+INITIAL_MIGRATION_PLAN_SCHEMA_VERSION = "pit_v2_initial_migration_plan_v1"
+CANONICAL_INITIAL_MIGRATION_PLAN_ID = "pit_v2_initial_20260731_v1"
+_CANONICAL_INITIAL_EVENT_WINDOWS = (
+    ("600930.SH", "2026-07-27", "2026-07-31", "ipo_251_252_exchange_trading_session_boundary"),
+    ("600930.SH", "2026-07-02", "2026-07-06", "adjustment_factor_change"),
+    ("600462.SH", "2019-01-14", "2019-01-16", "st_announcement_implementation_boundary"),
+    ("600462.SH", "2022-04-28", "2022-05-06", "st_restore_boundary"),
+    ("600462.SH", "2025-06-17", "2025-06-24", "termination_listing_risk_event"),
+    ("600462.SH", "2025-07-18", "2025-07-21", "delisted_lifecycle_terminal_boundary"),
+    ("300379.SZ", "2026-01-21", "2026-01-23", "adjustment_factor_during_long_suspension"),
+    ("300379.SZ", "2026-06-05", "2026-06-09", "long_suspension_restore_chinext_boundary"),
+    ("000001.SZ", "2025-06-11", "2025-06-13", "main_board_normal_adjustment_boundary"),
+    ("688981.SH", "2020-08-21", "2020-08-25", "star_market_twenty_percent_limit_boundary"),
+)
+_CANONICAL_INITIAL_INDEX_WINDOWS = (
+    ("000688.SH", "2019-12-31", "2020-01-03", "required_from_excludes_2019_12_31"),
+    ("all_12_indices", "2026-07-30", "2026-07-31", "exact_frozen_universe_terminal_coverage"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class InitialMigrationPlan:
+    path: Path
+    plan_id: str
+    profile: str
+    cutoff: date
+    allowed_scopes: tuple[str, ...]
+    sample_instruments: tuple[str, ...]
+    event_windows: tuple[Mapping[str, str], ...]
+    index_windows: tuple[Mapping[str, str], ...]
+    source_identity_policy: str
+    plan_digest: str
+    raw: Mapping[str, Any]
+
+    def allows_scope(self, scope: str) -> bool:
+        return str(scope) in self.allowed_scopes
+
+
+def load_initial_migration_plan(path: str | Path) -> InitialMigrationPlan:
+    """Load one checked-in fixed-cutoff plan with a canonical payload digest."""
+
+    resolved = Path(path).expanduser().resolve()
+    try:
+        value = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ProfileValidationError("initial migration plan could not be parsed") from exc
+    required = {
+        "schema_version",
+        "plan_id",
+        "profile",
+        "cutoff",
+        "allowed_scopes",
+        "sample_instruments",
+        "event_windows",
+        "index_windows",
+        "source_identity_policy",
+        "safety",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ProfileValidationError("initial migration plan schema/fields differ")
+    if value.get("schema_version") != INITIAL_MIGRATION_PLAN_SCHEMA_VERSION:
+        raise ProfileValidationError("initial migration plan schema version differs")
+    plan_id = str(value.get("plan_id") or "").strip()
+    if plan_id != CANONICAL_INITIAL_MIGRATION_PLAN_ID or resolved.stem != plan_id:
+        raise ProfileValidationError("initial migration plan identity/path differs")
+    if value.get("profile") != CANONICAL_PROFILE_ID:
+        raise ProfileValidationError("initial migration plan profile differs")
+    try:
+        cutoff = date.fromisoformat(str(value.get("cutoff")))
+    except ValueError as exc:
+        raise ProfileValidationError("initial migration plan cutoff is invalid") from exc
+    if cutoff != date(2026, 7, 31):
+        raise ProfileValidationError("initial migration plan cutoff must remain 2026-07-31")
+    scopes = tuple(value.get("allowed_scopes") or ())
+    instruments = tuple(value.get("sample_instruments") or ())
+    if scopes != ("sample", "full"):
+        raise ProfileValidationError("initial migration plan scopes differ")
+    if instruments != ("000001.SZ", "300379.SZ", "600462.SH", "600930.SH", "688981.SH"):
+        raise ProfileValidationError("initial migration plan sample instruments differ")
+    events = _migration_windows(value.get("event_windows"), field="event_windows", selector="instrument")
+    indices = _migration_windows(value.get("index_windows"), field="index_windows", selector="selector")
+    if _window_contract(events, selector="instrument") != _CANONICAL_INITIAL_EVENT_WINDOWS:
+        raise ProfileValidationError("initial migration event windows differ")
+    if _window_contract(indices, selector="selector") != _CANONICAL_INITIAL_INDEX_WINDOWS:
+        raise ProfileValidationError("initial migration index windows differ")
+    source_identity_policy = str(value.get("source_identity_policy") or "")
+    if source_identity_policy != "fresh_authority_readback_required":
+        raise ProfileValidationError("initial migration source identity policy differs")
+    safety = value.get("safety")
+    if safety != {
+        "candidate_only": True,
+        "production_dataset_writes": 0,
+        "production_database_writes": 0,
+        "activation_requests": 0,
+        "process_controls": 0,
+    }:
+        raise ProfileValidationError("initial migration safety contract differs")
+    normalized = {
+        "schema_version": INITIAL_MIGRATION_PLAN_SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "profile": CANONICAL_PROFILE_ID,
+        "cutoff": cutoff.isoformat(),
+        "allowed_scopes": list(scopes),
+        "sample_instruments": list(instruments),
+        "event_windows": [dict(item) for item in events],
+        "index_windows": [dict(item) for item in indices],
+        "source_identity_policy": source_identity_policy,
+        "safety": dict(safety),
+    }
+    return InitialMigrationPlan(
+        path=resolved,
+        plan_id=plan_id,
+        profile=CANONICAL_PROFILE_ID,
+        cutoff=cutoff,
+        allowed_scopes=scopes,
+        sample_instruments=instruments,
+        event_windows=events,
+        index_windows=indices,
+        source_identity_policy=source_identity_policy,
+        plan_digest=hashlib.sha256(canonical_json_bytes(normalized)).hexdigest(),
+        raw=normalized,
+    )
+
+
+def _migration_windows(value: Any, *, field: str, selector: str) -> tuple[Mapping[str, str], ...]:
+    if not isinstance(value, list) or not value:
+        raise ProfileValidationError(f"initial migration {field} must be non-empty")
+    rows: list[Mapping[str, str]] = []
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {selector, "start", "end", "oracle"}:
+            raise ProfileValidationError(f"initial migration {field} row differs")
+        try:
+            start = date.fromisoformat(str(item["start"]))
+            end = date.fromisoformat(str(item["end"]))
+        except ValueError as exc:
+            raise ProfileValidationError(f"initial migration {field} date is invalid") from exc
+        if end < start or not str(item[selector]).strip() or not str(item["oracle"]).strip():
+            raise ProfileValidationError(f"initial migration {field} row is invalid")
+        rows.append(
+            {
+                selector: str(item[selector]),
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "oracle": str(item["oracle"]),
+            }
+        )
+    return tuple(rows)
+
+
+def _window_contract(
+    rows: tuple[Mapping[str, str], ...],
+    *,
+    selector: str,
+) -> tuple[tuple[str, str, str, str], ...]:
+    return tuple((row[selector], row["start"], row["end"], row["oracle"]) for row in rows)
 
 
 @dataclass(frozen=True)
@@ -318,6 +474,7 @@ class DatasetProfile:
     reconcile_catchup_months: int
     reconcile_lease_ttl_seconds: int
     worker_heartbeat_ttl_seconds: int
+    initial_migration_plan_ids: tuple[str, ...]
     source_audit_reuse_policy: str
     stage_timeouts_seconds: Mapping[str, int]
     candidate_root: PureWindowsPath
@@ -504,7 +661,13 @@ def _load_dataset_profile(
         raise ProfileValidationError("profile root must be a mapping")
     overlay_source: Mapping[str, Any] | None = None
     if source_raw.get("schema_version") == CANONICAL_PROFILE_OVERLAY_SCHEMA_VERSION:
-        expected_overlay_fields = {"schema_version", "profile", "extends", "semantic"}
+        expected_overlay_fields = {
+            "schema_version",
+            "profile",
+            "extends",
+            "initial_migration_plans",
+            "semantic",
+        }
         if set(source_raw) != expected_overlay_fields or source_raw.get("profile") != CANONICAL_PROFILE_ID:
             raise ProfileValidationError("canonical profile overlay shape differs")
         if source_raw.get("extends") != CANONICAL_PROFILE_BASE_NAME:
@@ -528,15 +691,14 @@ def _load_dataset_profile(
             raise ProfileValidationError("canonical profile base identity differs")
         raw = copy.deepcopy(base_raw)
         raw["profile"] = CANONICAL_PROFILE_ID
+        raw["initial_migration_plans"] = copy.deepcopy(source_raw["initial_migration_plans"])
         raw["semantic"].update(copy.deepcopy(dict(semantic_overlay)))
         overlay_source = source_raw
     else:
         raw = source_raw
     profile_id = str(raw.get("profile") or "")
     if raw.get("schema_version") != PROFILE_SCHEMA_VERSION or profile_id not in {PROFILE_ID, CANONICAL_PROFILE_ID}:
-        raise ProfileValidationError(
-            f"profile must be {PROFILE_SCHEMA_VERSION}/({PROFILE_ID}|{CANONICAL_PROFILE_ID})"
-        )
+        raise ProfileValidationError(f"profile must be {PROFILE_SCHEMA_VERSION}/({PROFILE_ID}|{CANONICAL_PROFILE_ID})")
 
     semantic = raw.get("semantic") or {}
     storage = raw.get("storage") or {}
@@ -609,6 +771,9 @@ def _load_dataset_profile(
     if semantic.get("moneyflow_contract") != "tushare_moneyflow_shares_yuan_v1":
         raise ProfileValidationError("moneyflow share/CNY contract drift")
     if profile_id == CANONICAL_PROFILE_ID:
+        initial_migration_plan_ids = tuple(raw.get("initial_migration_plans") or ())
+        if initial_migration_plan_ids != (CANONICAL_INITIAL_MIGRATION_PLAN_ID,):
+            raise ProfileValidationError("canonical initial migration plan allowlist differs")
         pit_authority = semantic.get("pit_authority") or {}
         expected_pit_authority = {
             "authority_id": CANONICAL_PIT_AUTHORITY_ID,
@@ -627,6 +792,7 @@ def _load_dataset_profile(
         ):
             raise ProfileValidationError("canonical monthly releases must use the active canonical PIT rule")
     else:
+        initial_migration_plan_ids = ()
         pit_authority = {}
         if (
             semantic.get("universe_key") != "shsz_st_pit_active_v1"
@@ -723,6 +889,7 @@ def _load_dataset_profile(
         reconcile_catchup_months=reconcile_catchup_months,
         reconcile_lease_ttl_seconds=reconcile_lease_ttl_seconds,
         worker_heartbeat_ttl_seconds=worker_heartbeat_ttl_seconds,
+        initial_migration_plan_ids=initial_migration_plan_ids,
         source_audit_reuse_policy=source_audit_reuse_policy,
         stage_timeouts_seconds=stage_timeouts,
         candidate_root=candidate_root,
@@ -733,8 +900,7 @@ def _load_dataset_profile(
         universe_rule_version=str(semantic.get("universe_rule_version")),
         pit_authority_id=str(pit_authority.get("authority_id") or "legacy_shsz_st_pit_v1"),
         pit_authority_status=str(
-            pit_authority.get("authority_status")
-            or PitAuthorityStatus.DEPLOYED_LEGACY_PENDING_MIGRATION.value
+            pit_authority.get("authority_status") or PitAuthorityStatus.DEPLOYED_LEGACY_PENDING_MIGRATION.value
         ),
         pit_rule_parameters_digest=str(
             pit_authority.get("rule_parameters_digest")
