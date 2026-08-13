@@ -22,7 +22,7 @@ from .kernel_delivery import (
     validate_vnpy_facade_k2_shadow_command_authority_v1,
 )
 from .kernel_materializer import materialize_applied_transition_v1, materialize_failure_transition_v1
-from .full_five_catalog_authority import FULL_FIVE_ALGO_CODES_V1, build_full_five_catalog_authority_v1
+from .full_five_catalog_authority import FULL_FIVE_ALGO_CODES_V1, build_hot_full_five_catalog_authority_v1
 from .plugin_canonical import thaw_json_v1
 from .plugin_contracts import (
     AlgoDeliveryPersistenceV1,
@@ -534,7 +534,7 @@ class KernelAlgoCreationCoordinatorV2(KernelAlgoCreationCoordinatorV1):
         strict_gateway = GatewayCapabilityCatalogV1.model_validate(
             gateway_catalog.model_dump(mode="python"), strict=True
         )
-        full_authority = build_full_five_catalog_authority_v1(gateway_catalog=strict_gateway)
+        full_authority = build_hot_full_five_catalog_authority_v1(gateway_catalog=strict_gateway)
         supplied_snapshot = PluginCatalogSnapshotV1.model_validate(
             catalog_runtime.snapshot.model_dump(mode="python"), strict=True
         )

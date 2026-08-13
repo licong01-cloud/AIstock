@@ -51,6 +51,7 @@ class LoadedAdvisoryModelBundle:
     baselines: dict[str, Any]
     booster: Any
     boosters: tuple[Any, ...] = ()
+    manifest_file_sha256: str | None = None
 
 
 def shadow_binding_path(
@@ -190,6 +191,7 @@ def load_exact_shadow_bundle(
         baselines=baselines,
         booster=booster,
         boosters=boosters,
+        manifest_file_sha256=str(binding["bundle_manifest_sha256"]),
     )
 
 

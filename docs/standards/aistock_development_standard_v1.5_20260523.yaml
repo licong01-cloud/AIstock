@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 316543c4c8f0486045924296cde1d2abe6b8ff801e5c6850ef6b1c02035318ed
+source_sha256: ec3705a65feaa302e0776e296d46e197747f3d6c2a960aafd63796b98022c04a
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-12"
+updated_at: "2026-08-13"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -102,8 +102,6 @@ rules:
       include_globs:
         - backend/**/*.py
         - frontend/src/**/*
-        - scripts/**/*
-        - noxfile.py
       exclude_globs: []
     checker:
       type: regex
@@ -156,6 +154,9 @@ rules:
         - scripts/**/*.py
       exclude_globs:
         - backend/tests/**
+        - debug_tools/**
+        - scripts/**/*debug*.py
+        - scripts/**/*diagnos*.py
     checker:
       type: regex
       patterns:
@@ -662,6 +663,7 @@ rules:
         - ignored_artifact_manifest_classifies_transient_protected_unknown
         - active_process_and_path_boundary_preflight
         - exact_transient_roots_only_no_git_clean_or_wildcard
+        - ignored_asset_tree_transients_require_exact_bounded_structural_classifier
         - manifest_unchanged_before_purge
         - path_registration_local_remote_four_state_readback
         - bare_merge_does_not_imply_cleanup
@@ -707,6 +709,10 @@ manual_review_controls:
     title: "Completed implementation records four explicit checks against approved requirements: complete delivery, visible failures, preserved business semantics, and approved gates or approvals."
     effect: block
     enforcement_phase: pr_readiness
+    control_kind: composite_manual_review
+    machine_evidence_refs:
+      - ERR-FALLBACK-001
+      - TRADING-FALLBACK-001
     required_evidence:
       - no_simplified_delivery
       - no_silent_error
@@ -736,9 +742,15 @@ manual_review_controls:
     required_evidence:
       - markdown_and_yaml_updated_together
       - full_client_hash_verification_after_entrypoint_merge
+      - canonical_main_origin_aligned_client_authority
+      - client_authority_paths_clean_without_unrelated_root_dirty_blocking
+      - canonical_workflow_cli_for_inflight_verification
+      - checkout_relation_separate_from_profile_status
       - selected_router_and_lane_only_block_active_task
       - unrelated_lane_staleness_warning_only
       - explicit_client_profile_target
+      - single_owner_sync_with_verify_only_peer_windows
+      - task_worktree_never_used_as_global_install_source
       - idempotent_lock_protected_staged_client_sync
       - restart_only_when_recommended_or_client_ui_stale
     failure_policy: block_standard_pr_merge_and_client_current_claims

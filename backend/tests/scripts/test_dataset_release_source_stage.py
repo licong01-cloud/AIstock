@@ -7,6 +7,39 @@ import pytest
 from scripts import dataset_release_source_stage as source_stage
 
 
+def test_source_stage_accepts_only_explicit_repeated_sample_instruments() -> None:
+    arguments = source_stage._parser().parse_args(
+        [
+            "--profile",
+            "profile.yaml",
+            "--control-root",
+            "X:/control",
+            "--cutoff",
+            "2026-07-31",
+            "--attempt-id",
+            "attempt-1",
+            "--attempt-fence",
+            "1",
+            "--execution-id",
+            "source-freeze",
+            "--result-path",
+            "X:/control/result.json",
+            "--predicted-new-bytes",
+            "0",
+            "--pressure-rung",
+            "0",
+            "--stage-timeout-seconds",
+            "300",
+            "--sample-instrument",
+            "000001.SZ",
+            "--sample-instrument",
+            "600462.SH",
+        ]
+    )
+
+    assert arguments.sample_instrument == ["000001.SZ", "600462.SH"]
+
+
 def test_source_stage_error_envelope_never_persists_raw_exception_text() -> None:
     sensitive_text = "SENSITIVE_VALUE=" + "https://example.invalid/" + "?field=abc"
     envelope = source_stage._sanitized_error_envelope(RuntimeError(sensitive_text))

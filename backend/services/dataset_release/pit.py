@@ -41,6 +41,8 @@ PIT_COLUMNS = (
     "entry_reason",
     "exit_reason",
 )
+DATASET_PIT_BINDING_SCHEMA = "dataset_release_canonical_pit_binding_v1"
+DATASET_CANDIDATE_MANIFEST_SCHEMA = "dataset_release_candidate_manifest_v1"
 _CODE_PATTERN = re.compile(r"^[0-9]{6}\.(?:SH|SZ)$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _NULL_REASON = "<NULL>"
@@ -112,6 +114,174 @@ def require_canonical_frozen_snapshot(
         return require_canonical_consumer_binding(binding, consumer=consumer, immutable_snapshot_required=True)
     except ValueError as exc:
         raise PitSnapshotError(str(exc)) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetPitBinding:
+    """Immutable release binding shared by QE/training compute consumers.
+
+    The rolling and frozen digests are kept as separate fields so a release
+    cannot claim canonical parity by supplying only one self-consistent value.
+    They must be equal at the release cutoff before this object is accepted.
+    """
+
+    authority_id: str
+    authority_status: str
+    scope: str
+    rolling_universe_key: str
+    frozen_universe_key: str
+    rule_version: str
+    rule_parameters_digest: str
+    cutoff: date
+    rolling_cutoff_spans_sha256: str
+    frozen_snapshot_digest: str
+    release_id: str
+    schema_version: str = DATASET_PIT_BINDING_SCHEMA
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "authority_id": self.authority_id,
+            "authority_status": self.authority_status,
+            "scope": self.scope,
+            "rolling_universe_key": self.rolling_universe_key,
+            "frozen_universe_key": self.frozen_universe_key,
+            "rule_version": self.rule_version,
+            "rule_parameters_digest": self.rule_parameters_digest,
+            "cutoff": self.cutoff.isoformat(),
+            "rolling_cutoff_spans_sha256": self.rolling_cutoff_spans_sha256,
+            "frozen_snapshot_digest": self.frozen_snapshot_digest,
+            "release_id": self.release_id,
+        }
+
+    def consumer_binding(self, *, consumer: str) -> PitConsumerBinding:
+        if self.scope != "full" and consumer != "candidate_validation":
+            raise PitSnapshotError("sample PIT binding cannot drive QE/training consumers")
+        try:
+            binding = PitConsumerBinding(
+                authority_id=self.authority_id,
+                authority_status=PitAuthorityStatus(self.authority_status),
+                universe_key=self.frozen_universe_key,
+                rule_version=self.rule_version,
+                rule_parameters_digest=self.rule_parameters_digest,
+                snapshot_digest=self.frozen_snapshot_digest,
+                cutoff=self.cutoff,
+                release_id=self.release_id,
+            )
+            return require_canonical_consumer_binding(
+                binding,
+                consumer=consumer,
+                immutable_snapshot_required=True,
+            )
+        except ValueError as exc:
+            raise PitSnapshotError(str(exc)) from exc
+
+    @classmethod
+    def from_release_manifest(cls, value: Mapping[str, Any]) -> "DatasetPitBinding":
+        manifest = dict(value)
+        if manifest.get("schema_version") == DATASET_CANDIDATE_MANIFEST_SCHEMA:
+            binding_value = manifest.get("pit_binding")
+            if not isinstance(binding_value, Mapping):
+                raise PitSnapshotError("release manifest has no canonical PIT binding")
+            expected_release_id = str(manifest.get("release_id") or "").strip()
+            expected_cutoff = str(manifest.get("cutoff") or "").strip()
+            expected_scope = str(manifest.get("scope") or "").strip()
+        else:
+            binding_value = manifest
+            expected_release_id = ""
+            expected_cutoff = ""
+            expected_scope = ""
+        required = {
+            "schema_version",
+            "authority_id",
+            "authority_status",
+            "scope",
+            "rolling_universe_key",
+            "frozen_universe_key",
+            "rule_version",
+            "rule_parameters_digest",
+            "cutoff",
+            "rolling_cutoff_spans_sha256",
+            "frozen_snapshot_digest",
+            "release_id",
+        }
+        if set(binding_value) != required or binding_value.get("schema_version") != DATASET_PIT_BINDING_SCHEMA:
+            raise PitSnapshotError("release PIT binding schema/fields are invalid")
+        try:
+            cutoff = date.fromisoformat(str(binding_value["cutoff"]))
+        except ValueError as exc:
+            raise PitSnapshotError("release PIT binding cutoff is invalid") from exc
+        release_id = str(binding_value["release_id"] or "").strip()
+        if not release_id:
+            raise PitSnapshotError("release PIT binding release_id is empty")
+        rolling_digest = str(binding_value["rolling_cutoff_spans_sha256"])
+        frozen_digest = str(binding_value["frozen_snapshot_digest"])
+        _require_sha256(rolling_digest, field="rolling_cutoff_spans_sha256")
+        _require_sha256(frozen_digest, field="frozen_snapshot_digest")
+        if rolling_digest != frozen_digest:
+            raise PitSnapshotError("release rolling/frozen PIT digests differ")
+        binding = cls(
+            authority_id=str(binding_value["authority_id"]),
+            authority_status=str(binding_value["authority_status"]),
+            scope=str(binding_value["scope"]),
+            rolling_universe_key=str(binding_value["rolling_universe_key"]),
+            frozen_universe_key=str(binding_value["frozen_universe_key"]),
+            rule_version=str(binding_value["rule_version"]),
+            rule_parameters_digest=str(binding_value["rule_parameters_digest"]),
+            cutoff=cutoff,
+            rolling_cutoff_spans_sha256=rolling_digest,
+            frozen_snapshot_digest=frozen_digest,
+            release_id=release_id,
+        )
+        if expected_release_id and release_id != expected_release_id:
+            raise PitSnapshotError("release manifest/PIT release_id differ")
+        if expected_cutoff and cutoff.isoformat() != expected_cutoff:
+            raise PitSnapshotError("release manifest/PIT cutoff differ")
+        if expected_scope and binding.scope != expected_scope:
+            raise PitSnapshotError("release manifest/PIT scope differ")
+        if binding.rolling_universe_key != CANONICAL_PIT_UNIVERSE_KEY:
+            raise PitSnapshotError("release rolling PIT key is not canonical")
+        expected_frozen_key = f"{CANONICAL_PIT_SNAPSHOT_PREFIX}{release_id}"
+        if binding.frozen_universe_key != expected_frozen_key:
+            raise PitSnapshotError("release frozen PIT key differs from release identity")
+        if binding.scope not in {"sample", "full"}:
+            raise PitSnapshotError("release PIT binding scope is invalid")
+        binding.consumer_binding(consumer=("candidate_validation" if binding.scope == "sample" else "qe_training"))
+        return binding
+
+
+def build_dataset_pit_binding(
+    snapshot: "FrozenPitSnapshot",
+    *,
+    release_id: str,
+    rolling_cutoff_spans_sha256: str,
+    scope: str = "full",
+) -> DatasetPitBinding:
+    """Build and read back the canonical release binding from one PIT snapshot."""
+
+    normalized_scope = str(scope).strip().lower()
+    if normalized_scope not in {"sample", "full"}:
+        raise PitSnapshotError("release PIT binding scope is invalid")
+    consumer = require_canonical_frozen_snapshot(
+        snapshot,
+        release_id=release_id,
+        rolling_cutoff_spans_sha256=rolling_cutoff_spans_sha256,
+        consumer="qe_training",
+    )
+    value = DatasetPitBinding(
+        authority_id=consumer.authority_id,
+        authority_status=consumer.authority_status.value,
+        scope=normalized_scope,
+        rolling_universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        frozen_universe_key=consumer.universe_key,
+        rule_version=consumer.rule_version,
+        rule_parameters_digest=consumer.rule_parameters_digest,
+        cutoff=snapshot.cutoff,
+        rolling_cutoff_spans_sha256=rolling_cutoff_spans_sha256,
+        frozen_snapshot_digest=snapshot.spans_sha256,
+        release_id=str(release_id).strip(),
+    )
+    return DatasetPitBinding.from_release_manifest(value.as_dict())
 
 
 @dataclass(frozen=True, slots=True)

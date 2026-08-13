@@ -113,6 +113,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
     "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "scripts/aistock_bug_id_allocator.py",
     "scripts/aistock_mcp_server.py",
     "scripts/aistock_feature_workflow.py",
@@ -141,9 +142,12 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     ".github/workflows/test.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
     ".github/workflows/pr-quality.yml": ("backend/tests/scripts/test_issue_flow_pr_quality.py",),
     ".github/workflows/semgrep.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
-    "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow.py",),
+    "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow_fast.py",),
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py": (
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    ),
     "scripts/aistock_bug_id_allocator.py": (
-        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
         "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
     ),
     "scripts/aistock_mcp_server.py": ("backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",),
@@ -282,13 +286,20 @@ def _workflow_test_targets(paths: list[str]) -> list[str]:
     targets: list[str] = []
     for path in paths:
         path_targets = list(WORKFLOW_TEST_TARGETS_BY_FILE.get(path, ()))
-        if path.startswith("backend/tests/") and path.endswith(".py"):
+        if (
+            path.startswith("backend/tests/")
+            and path.endswith(".py")
+            and not (
+                path == "backend/tests/scripts/test_aistock_issue_workflow.py"
+                and "scripts/aistock_issue_workflow.py" in paths
+            )
+        ):
             path_targets.append(path)
         if path in WORKFLOW_AUTHORITY_FILES or path.startswith(WORKFLOW_AUTHORITY_PREFIXES):
             path_targets.extend(
                 [
                     "backend/tests/scripts/test_issue_flow.py",
-                    "backend/tests/scripts/test_aistock_issue_workflow.py",
+                    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
                 ]
             )
         for target in path_targets:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 import re
@@ -20,7 +20,7 @@ from .contracts import (
 from .control_store import CandidateRegistrationSpec, ControlStore
 from .errors import DatasetReleaseError
 from .log_store import read_log_page
-from .profile import DatasetProfile
+from .profile import DatasetProfile, InitialMigrationPlan, load_initial_migration_plan
 from .resolution import ResolutionService
 from .retention import DatasetReferenceState, classify_dataset_retention
 from .state_machine import RUN_TRANSITIONS, TERMINAL_RUN_STATES
@@ -28,6 +28,7 @@ from .worker_identity import WorkerHeartbeatStore
 
 
 MONTHLY_REQUEST_SCHEMA = "dataset_release_monthly_request_v1"
+INITIAL_MIGRATION_REQUEST_SCHEMA = "dataset_release_initial_migration_request_v1"
 MAX_RECEIPT_BYTES = 2 * 1024**2
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 SOURCE_PROBE_POLICY_VERSION = "monthly_source_probe_v1"
@@ -78,10 +79,15 @@ class DatasetReleaseProfileBinding:
     reconcile_lease_ttl_seconds: int = 300
     config_digest: str | None = None
     worker_heartbeat_ttl_seconds: int = 30
+    initial_migration_plans: Mapping[str, InitialMigrationPlan] = field(default_factory=dict)
 
     @classmethod
     def from_profile(cls, profile: DatasetProfile) -> "DatasetReleaseProfileBinding":
         store = ControlStore(Path(profile.control_root))
+        plans = {
+            plan_id: load_initial_migration_plan(profile.path.parent / "migrations" / f"{plan_id}.yaml")
+            for plan_id in profile.initial_migration_plan_ids
+        }
         return cls(
             profile_id=profile.profile,
             semantic_profile_digest=profile.semantic_profile_digest,
@@ -95,6 +101,7 @@ class DatasetReleaseProfileBinding:
             reconcile_lease_ttl_seconds=profile.reconcile_lease_ttl_seconds,
             config_digest=profile.config_digest,
             worker_heartbeat_ttl_seconds=profile.worker_heartbeat_ttl_seconds,
+            initial_migration_plans=plans,
         )
 
 
@@ -222,6 +229,116 @@ class DatasetReleaseControlService:
             },
         )
         return dict(submitted)
+
+    def submit_initial_migration(
+        self,
+        *,
+        profile_id: str,
+        plan_id: str,
+        scope: Scope | str,
+        candidate_only: bool,
+        principal: str,
+        idempotency_key: str,
+        route: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Submit one fixed, repository-allowlisted first-migration intent."""
+
+        binding = self._binding(profile_id)
+        observed_at = now or datetime.now(UTC)
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            raise ValueError("initial migration timestamp must be timezone-aware")
+        if not candidate_only:
+            raise CandidateOnlyRequired("initial migration requires candidate-only")
+        try:
+            plan = binding.initial_migration_plans[str(plan_id)]
+        except KeyError as exc:
+            raise ProfileNotAllowed("initial migration plan is not allowlisted for this profile") from exc
+        normalized_scope = Scope(scope)
+        if plan.profile != binding.profile_id or not plan.allows_scope(normalized_scope.value):
+            raise ProfileNotAllowed("initial migration plan profile/scope differs")
+        logical_request_key = digest_named_fields(
+            "dataset_release_initial_migration_logical_request_v1",
+            {
+                "profile": binding.profile_id,
+                "scope": normalized_scope.value,
+                "cutoff": plan.cutoff,
+                "semantic_profile_digest": binding.semantic_profile_digest,
+                "plan_id": plan.plan_id,
+                "plan_digest": plan.plan_digest,
+            },
+        )
+        request_payload = {
+            "schema_version": INITIAL_MIGRATION_REQUEST_SCHEMA,
+            "profile": binding.profile_id,
+            "operation": "initial-migration",
+            "cutoff_policy": "fixed-allowlisted-plan",
+            "resolved_cutoff": plan.cutoff.isoformat(),
+            "scope": normalized_scope.value,
+            "candidate_only": True,
+            "logical_request_key": logical_request_key,
+            "semantic_profile_digest": binding.semantic_profile_digest,
+            "plan_id": plan.plan_id,
+            "plan_digest": plan.plan_digest,
+            "source_identity_policy": plan.source_identity_policy,
+            "sample_instruments": list(plan.sample_instruments),
+            "event_windows": [dict(item) for item in plan.event_windows],
+            "index_windows": [dict(item) for item in plan.index_windows],
+            "plan_safety": dict(plan.raw["safety"]),
+            "resolution": "worker_required",
+            "activation": "not_requested",
+            "node1": "not_requested",
+            "db_repair": "not_requested",
+            "restart": "not_requested",
+            "cleanup": "not_requested",
+        }
+        worker_health = self._worker_health(binding, now=observed_at)
+        return dict(
+            ResolutionService(binding.store, binding.cas).submit(
+                identity=SubmissionIdentity(
+                    principal=principal,
+                    route=route,
+                    idempotency_key=idempotency_key,
+                ),
+                logical_request_key=logical_request_key,
+                request_payload=request_payload,
+                response_payload={
+                    "schema_version": "dataset_release_initial_migration_submission_response_v1",
+                    "worker_status": worker_health["state"],
+                    "worker_health": worker_health,
+                    "plan_id": plan.plan_id,
+                    "plan_digest": plan.plan_digest,
+                    "fixed_cutoff": plan.cutoff.isoformat(),
+                    "scope": normalized_scope.value,
+                },
+            )
+        )
+
+    def initial_migration_invocation_idempotency_key(
+        self,
+        *,
+        profile_id: str,
+        plan_id: str,
+        scope: Scope | str,
+        observed_at: datetime,
+    ) -> str:
+        binding = self._binding(profile_id)
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            raise ValueError("initial migration timestamp must be timezone-aware")
+        try:
+            plan = binding.initial_migration_plans[str(plan_id)]
+        except KeyError as exc:
+            raise ProfileNotAllowed("initial migration plan is not allowlisted for this profile") from exc
+        return "dsi_" + digest_named_fields(
+            "dataset_release_initial_migration_invocation_v1",
+            {
+                "profile": profile_id,
+                "plan_id": plan.plan_id,
+                "plan_digest": plan.plan_digest,
+                "scope": Scope(scope).value,
+                "invocation_uuid": uuid.uuid4().hex,
+            },
+        )
 
     def monthly_invocation_idempotency_key(
         self,

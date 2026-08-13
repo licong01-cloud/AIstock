@@ -801,6 +801,29 @@ class KernelDeliveryWorkerV1:
                     context=exc.context,
                     projection_set=inputs.services.execution_projection_set,
                 )
+            if event.event_type is EventTypeV2.OPERATOR:
+                operator_payload = thaw_json_v1(event.payload)
+                if operator_payload.get("schema_version") == "miniqmt_hot_market_economic_action_v1":
+                    expected_row_version = operator_payload.get("expected_algo_row_version")
+                    if type(expected_row_version) is not int or expected_row_version != locked_algo.row_version:
+                        exc = KernelPluginInvocationError(
+                            "MINIQMT_HOT_MARKET_EFFECT_STALE_ALGO_VERSION",
+                            "hot economic effect does not own the exact locked algo generation",
+                            context={
+                                "runtime_id": event.runtime_id,
+                                "algo_instance_id": locked_algo.algo_instance_id,
+                                "event_id": event.event_id,
+                                "expected_algo_row_version": expected_row_version,
+                                "actual_algo_row_version": locked_algo.row_version,
+                            },
+                            broker_called=False,
+                        )
+                        return terminal_failure(
+                            exc,
+                            reason_code=exc.reason_code,
+                            context=exc.context,
+                            projection_set=inputs.services.execution_projection_set,
+                        )
             try:
                 resolved = resolve_plugin_for_restore_v1(
                     catalog_runtime=self._catalog_runtime,

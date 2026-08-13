@@ -101,7 +101,10 @@ def _write_runtime_catalog(root: Path) -> Path:
                     },
                     "worker-scheduler": {
                         "runtime_kind": "worker_scheduler",
-                        "source_globs": ["scripts/dataset_release_worker.py"],
+                        "source_globs": [
+                            "scripts/dataset_release_worker.py",
+                            "scripts/dataset_release_source_stage.py",
+                        ],
                         "probe_origins": ["http://127.0.0.1:8001"],
                         "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
                         "expected_identity_ref": "merged_commit",
@@ -584,9 +587,46 @@ def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
     monkeypatch.setenv("AISTOCK_BUG_ID_STATE_PATH", str(tmp_path / "bug-id-state.json"))
+    monkeypatch.setattr(
+        workflow,
+        "_client_source_authority",
+        lambda: {
+            "ready": True,
+            "source": "canonical_main",
+            "root": str(tmp_path),
+            "commit": "a" * 40,
+            "origin_main_commit": "a" * 40,
+            "blocking_reason": None,
+        },
+    )
+    monkeypatch.setattr(workflow, "_client_checkout_relation", lambda _authority: "matches_authority")
+    monkeypatch.setattr(workflow, "_client_checkout_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        workflow,
+        "_publish_changed_clients_after_merge",
+        lambda **_kwargs: {
+            "schema_version": "aistock_merge_aftercare_client_publish_v1",
+            "workflow_gate": "not_required",
+            "selected_lanes": [],
+            "blocking": [],
+        },
+    )
     monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
     monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
     monkeypatch.setattr(workflow, "_github_bug_issue_by_number", lambda _issue_number, **_kwargs: (None, []))
+
+    def isolated_read_command(args: list[str], cwd: Path | None = None, timeout: int = 30, attempts: int = 3) -> dict[str, Any]:
+        if args[:2] == ["git", "fetch"]:
+            return {**workflow._run_command(args, cwd=cwd, timeout=timeout), "attempts": 1}
+        if args and args[0] == "git":
+            try:
+                stdout = workflow._git(args[1:], cwd=cwd, check=False)
+                return {"ok": True, "returncode": 0, "stdout": stdout, "stderr": "", "attempts": 1}
+            except Exception as exc:
+                return {"ok": False, "returncode": 1, "stdout": "", "stderr": str(exc), "attempts": 1}
+        return {**workflow._run_command(args, cwd=cwd, timeout=timeout), "attempts": 1}
+
+    monkeypatch.setattr(workflow, "_run_read_command_with_retry", isolated_read_command)
     submit_scope_root = tmp_path / "submit-scope"
     monkeypatch.setattr(workflow, "_submit_bug_file_root", lambda: submit_scope_root)
     for relative_path in (
@@ -1296,6 +1336,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["scripts/dataset_release_worker.py"],
         root=isolated_workflow_root,
     )
+    dataset_source_stage = workflow._classify_runtime_impact(
+        ["scripts/dataset_release_source_stage.py"],
+        root=isolated_workflow_root,
+    )
     mixed_advisory_and_backend = workflow._classify_runtime_impact(
         [
             "backend/services/advisory_phase0b/audit_service.py",
@@ -1343,6 +1387,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert dataset_offline_tools["runtime_files"] == []
     assert dataset_worker["runtime_impact"] == "worker_scheduler"
     assert dataset_worker["target_ids"] == ["worker-scheduler"]
+    assert dataset_source_stage["runtime_impact"] == "worker_scheduler"
+    assert dataset_source_stage["target_ids"] == ["worker-scheduler"]
     assert mixed_advisory_and_backend["runtime_impact"] == "backend"
     assert mixed_advisory_and_backend["runtime_files"] == ["backend/services/example.py"]
     assert mixed_advisory_and_backend["target_ids"] == ["backend-main"]
@@ -3124,13 +3170,8 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["dry_run"] is True
     assert payload["synthetic_record"] is True
     assert payload["unexpected_dirty_paths"] == []
-    assert payload["client_manifest"]["codex_skill_status"] in {
-        "current",
-        "missing_repo_skill",
-        "missing_global",
-        "stale",
-    }
-    assert payload["h7_code_intelligence"]["workflow_gate"] in {"ready", "warning"}
+    assert payload["client_manifest"] is None
+    assert payload["h7_code_intelligence"] is None
     assert payload["fast_path"]["task_tier"] == "T1"
     assert payload["start"]["worktree_plan"]["dry_run"] is True
     assert payload["finish"]["workflow_gate"] == "plan_ready"
@@ -3846,7 +3887,7 @@ def test_doctor_reports_stale_global_skill_manifest(
 
     assert payload["workflow_gate"] == "warning"
     assert payload["client_manifest"]["codex_skill_status"] == "stale"
-    assert payload["restart_recommended"] is True
+    assert payload["restart_recommended"] is False
     assert "install-client --apply" in payload["install_client_next_command"]
 
 
@@ -5478,7 +5519,7 @@ def test_verify_clients_selected_lane_blocks_when_selected_entry_is_stale(
     assert result == 2
     assert payload["workflow_gate"] == "blocked"
     assert payload["warnings"] == []
-    assert payload["restart_recommended"] is True
+    assert payload["restart_recommended"] is False
     assert payload["blocking"] == ["codex lane feature is stale"]
 
 
@@ -5513,7 +5554,211 @@ def test_install_client_selected_lane_is_idempotent_and_leaves_unrelated_lane_un
 
     assert second["installed_count"] == 0
     assert second["skipped_current_count"] == 2
+    assert second["single_owner_required"] is False
     assert unrelated.read_text(encoding="utf-8") == "preserve unrelated lane"
+
+
+def test_verify_clients_uses_merged_authority_instead_of_older_task_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    authority_root = isolated_workflow_root / "canonical"
+    _write_repo_client_entrypoints(authority_root)
+    for key, skill_name in workflow.CLIENT_CODEX_SKILLS:
+        (isolated_workflow_root / ".codex" / "skills" / skill_name / "SKILL.md").write_text(
+            f"older worktree {key}", encoding="utf-8"
+        )
+        (authority_root / ".codex" / "skills" / skill_name / "SKILL.md").write_text(
+            f"merged authority {key}", encoding="utf-8"
+        )
+    authority = {
+        "ready": True,
+        "source": "canonical_main",
+        "root": str(authority_root),
+        "commit": "a" * 40,
+        "origin_main_commit": "a" * 40,
+        "blocking_reason": None,
+    }
+    monkeypatch.setattr(workflow, "_client_source_authority", lambda: authority)
+    monkeypatch.setattr(workflow, "_client_checkout_relation", lambda _authority: "behind_authority")
+    codex_home = isolated_workflow_root / "authority_codex_home"
+
+    installed = workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert installed["workflow_gate"] == "installed"
+    assert installed["source_authority"] == authority
+    assert installed["task_worktree_is_install_source"] is False
+    assert (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "merged authority feature"
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--selected-lane",
+            "feature",
+            "--codex-home",
+            str(codex_home),
+            "--skip-claude",
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    feature = payload["client_manifest"]["codex_entries"]["feature"]
+    assert result == 0
+    assert payload["workflow_gate"] == "ready"
+    assert payload["blocking"] == []
+    assert payload["remediation"]["action"] == "continue_without_install"
+    assert payload["remediation"]["owner_command"] is None
+    assert str(authority_root / "scripts" / "aistock_issue_workflow.py") in payload["remediation"][
+        "window_verify_command"
+    ]
+    assert payload["client_manifest"]["checkout_commit_relation"] == "behind_authority"
+    assert payload["client_manifest"]["codex_feature_skill_sha256"] == feature["authority_sha256"]
+    assert feature["status"] == "current"
+    assert feature["checkout_status"] == "differs_from_authority"
+    assert any("do not install from this task worktree" in item for item in payload["checkout_advisories"])
+
+
+def test_install_client_blocks_when_merged_authority_is_unavailable(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    authority = {
+        "ready": False,
+        "source": "canonical_main",
+        "root": str(isolated_workflow_root),
+        "commit": "a" * 40,
+        "origin_main_commit": "b" * 40,
+        "blocking_reason": "canonical main is not aligned with origin/main",
+    }
+    monkeypatch.setattr(workflow, "_client_source_authority", lambda: authority)
+
+    payload = workflow.build_client_install_plan(
+        codex_home=str(isolated_workflow_root / "blocked_codex_home"),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["task_worktree_is_install_source"] is False
+    assert payload["blocking"] == [
+        "merged client authority is unavailable: canonical main is not aligned with origin/main"
+    ]
+
+
+def test_install_client_rechecks_authority_identity_under_lock(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    first = {
+        "ready": True,
+        "source": "canonical_main",
+        "root": str(isolated_workflow_root),
+        "commit": "a" * 40,
+        "origin_main_commit": "a" * 40,
+        "blocking_reason": None,
+    }
+    changed = {**first, "commit": "b" * 40, "origin_main_commit": "b" * 40}
+    authorities = iter([first, first, changed])
+    monkeypatch.setattr(workflow, "_client_source_authority", lambda: next(authorities))
+
+    with pytest.raises(workflow.WorkflowError, match="authority changed before install"):
+        workflow.build_client_install_plan(
+            apply=True,
+            codex_home=str(isolated_workflow_root / "racing_codex_home"),
+            install_claude=False,
+            selected_lane="feature",
+        )
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "head", "origin_main", "authority_status", "expected_reason"),
+    [
+        (
+            {"ok": False, "branch": None, "dirty": False},
+            "",
+            None,
+            {"ok": False, "stdout": ""},
+            "not a readable Git checkout",
+        ),
+        (
+            {"ok": True, "branch": "main", "dirty": True},
+            "a" * 40,
+            "a" * 40,
+            {"ok": True, "stdout": " M .codex/skills/aistock-task-router/SKILL.md"},
+            "canonical client-authority paths are dirty",
+        ),
+        (
+            {"ok": True, "branch": "main", "dirty": False},
+            "a" * 40,
+            "b" * 40,
+            {"ok": True, "stdout": ""},
+            "canonical main is not aligned with origin/main",
+        ),
+    ],
+)
+def test_client_source_authority_fails_closed_without_clean_aligned_main(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot: dict[str, object],
+    head: str,
+    origin_main: str | None,
+    authority_status: dict[str, object],
+    expected_reason: str,
+) -> None:
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+    monkeypatch.setattr(workflow, "_git_snapshot", lambda _root: snapshot)
+    def fake_run(command: list[str], **_kwargs: object) -> dict[str, object]:
+        if "status" in command:
+            return authority_status
+        return {"ok": bool(head), "stdout": head}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_origin_main_commit", lambda **_kwargs: origin_main)
+
+    authority = workflow._client_source_authority()
+
+    assert authority["ready"] is False
+    assert expected_reason in authority["blocking_reason"]
+
+
+def test_client_source_authority_ignores_unrelated_canonical_dirty_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit = "a" * 40
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda _root: {"ok": True, "branch": "main", "dirty": True},
+    )
+
+    def fake_run(command: list[str], **_kwargs: object) -> dict[str, object]:
+        if "status" in command:
+            return {"ok": True, "stdout": ""}
+        return {"ok": True, "stdout": commit}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_origin_main_commit", lambda **_kwargs: commit)
+
+    authority = workflow._client_source_authority()
+
+    assert authority["ready"] is True
+    assert authority["authority_paths_clean"] is True
 
 
 def test_explicit_linked_issue_reservation_uses_direct_lookup_without_global_scan(
@@ -6746,9 +6991,19 @@ def test_merge_uses_cleanup_owned_branch_deletion(
                     {
                         "state": "OPEN",
                         "statusCheckRollup": [
-                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                            {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                            {"name": "advisory", "status": "COMPLETED", "conclusion": "FAILURE"},
                         ],
                     }
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
                 ),
                 "stderr": "",
             }
@@ -6790,9 +7045,19 @@ def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
                     {
                         "state": "OPEN",
                         "statusCheckRollup": [
-                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                            {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                            {"name": "advisory", "status": "IN_PROGRESS", "conclusion": ""},
                         ],
                     }
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
                 ),
                 "stderr": "",
             }
@@ -6817,6 +7082,69 @@ def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
     assert payload["verified"]["merged"] is True
     merge_commands = [args for args in commands if args[:3] == ["gh", "pr", "merge"]]
     assert merge_commands == [["gh", "pr", "merge", "https://github.example/pull/199", "--squash"]]
+
+
+def test_generic_merge_helper_blocks_failed_required_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "statusCheckRollup": []}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "FAILURE", "bucket": "fail", "workflow": "AIstock CI"}]
+                ),
+                "stderr": "required checks failed",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="CI verdict"):
+        workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert not any(args[:3] == ["gh", "pr", "merge"] for args in commands)
+
+
+def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        assert args[:3] == ["gh", "pr", "view"]
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps({"state": "MERGED", "statusCheckRollup": []}),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["already_merged"] is True
+    assert commands == [
+        [
+            "gh",
+            "pr",
+            "view",
+            "https://github.example/pull/199",
+            "--json",
+            "state,mergeStateStatus,statusCheckRollup,url",
+        ]
+    ]
 
 
 def test_close_sync_pr_commit_only_stages_bug_registry_files(
@@ -8453,6 +8781,11 @@ def test_worktree_creation_puts_branch_option_before_path(
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(
         workflow,
+        "_run_read_command_with_retry",
+        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
+    monkeypatch.setattr(
+        workflow,
         "_close_sync_worktree_names",
         lambda bug_id: ("chore/BUG-199-close-sync", isolated_workflow_root / "worktrees" / "BUG-199-close-sync"),
     )
@@ -8743,6 +9076,11 @@ def test_cleanup_after_merge_blocks_unmerged_branch(
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(
         workflow,
+        "_run_read_command_with_retry",
+        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
+    monkeypatch.setattr(
+        workflow,
         "_git_snapshot",
         lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
     )
@@ -8835,6 +9173,121 @@ def test_worktree_transient_artifact_profile_and_purge_are_manifest_bound(
     assert not cache.exists()
     assert not local_config.exists()
     assert canonical_config.exists()
+
+
+def test_worktree_qe_live_log_ring_is_structurally_validated_and_purged(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    relative_paths = sorted(workflow.WORKTREE_QE_LIVE_LOG_PATHS)
+    for index, relative_path in enumerate(relative_paths):
+        target = worktree / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = (
+            {"schema_version": workflow.WORKTREE_QE_LIVE_LOG_SCHEMA, "slot": index}
+            if index in {0, 4}
+            else None
+        )
+        target.write_text(json.dumps(payload) + "\n" if payload else "", encoding="utf-8")
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            existing = [item for item in relative_paths if (worktree / item).exists()]
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(existing), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    assert profile["ignored_count"] == 5
+    assert profile["transient_count"] == 5
+    assert profile["unknown_count"] == 0
+    assert profile["transient_roots"] == [workflow.WORKTREE_QE_LIVE_LOG_ROOT]
+
+    purge = workflow._purge_worktree_transient_artifacts(
+        worktree,
+        canonical_root=isolated_workflow_root,
+        expected_profile=profile,
+    )
+
+    assert purge["ignored_count_before"] == 5
+    assert purge["ignored_count_after"] == 0
+    assert not (worktree / workflow.WORKTREE_QE_LIVE_LOG_ROOT).exists()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("missing_slot", "qe_live_log_ring_inventory_mismatch"),
+        ("extra_file", "qe_live_log_ring_inventory_mismatch"),
+        ("wrong_schema", "qe_live_log_ring_schema_mismatch"),
+        ("invalid_json", "qe_live_log_ring_invalid_jsonl"),
+        ("oversized", "qe_live_log_ring_file_too_large"),
+    ],
+)
+def test_worktree_qe_live_log_ring_remains_unknown_when_contract_is_not_exact(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    expected_reason: str,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    relative_paths = sorted(workflow.WORKTREE_QE_LIVE_LOG_PATHS)
+    for relative_path in relative_paths:
+        target = worktree / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps({"schema_version": workflow.WORKTREE_QE_LIVE_LOG_SCHEMA}) + "\n",
+            encoding="utf-8",
+        )
+
+    if mutation == "missing_slot":
+        (worktree / relative_paths[-1]).unlink()
+    elif mutation == "extra_file":
+        extra = worktree / workflow.WORKTREE_QE_LIVE_LOG_ROOT / "qe-live-5.jsonl"
+        extra.write_text(json.dumps({"schema_version": workflow.WORKTREE_QE_LIVE_LOG_SCHEMA}) + "\n", encoding="utf-8")
+    elif mutation == "wrong_schema":
+        (worktree / relative_paths[0]).write_text('{"schema_version":"unexpected"}\n', encoding="utf-8")
+    elif mutation == "invalid_json":
+        (worktree / relative_paths[0]).write_text("not-json\n", encoding="utf-8")
+    elif mutation == "oversized":
+        monkeypatch.setattr(workflow, "WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES", 1)
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            root = worktree / workflow.WORKTREE_QE_LIVE_LOG_ROOT
+            existing = sorted(path.relative_to(worktree).as_posix() for path in root.iterdir() if path.is_file())
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(existing), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    assert profile["transient_count"] == 0
+    assert profile["unknown_count"] >= 1
+    assert profile["transient_roots"] == []
+    assert {item["reason"] for item in profile["unknown_samples"]} == {expected_reason}
+
+
+def test_worktree_qe_live_log_ring_does_not_widen_other_rdagent_assets(
+    isolated_workflow_root: Path,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    worktree.mkdir(parents=True)
+
+    root, reason = workflow._worktree_transient_root(
+        "rdagent_assets/model.bin",
+        worktree_path=worktree,
+        canonical_root=isolated_workflow_root,
+    )
+
+    assert root is None
+    assert reason == "unknown_ignored_artifact"
 
 
 def test_worktree_transient_purge_stops_on_manifest_drift(
