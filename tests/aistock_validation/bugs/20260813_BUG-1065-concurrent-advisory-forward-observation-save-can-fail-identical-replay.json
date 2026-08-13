@@ -23,6 +23,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260813-41059b8147f2",
       "timestamp": "2026-08-13T05:08:30.270701Z"
+    },
+    {
+      "action": "source_fix_verified",
+      "actor": "codex",
+      "note": "Observation persistence now locks the parent forward row FOR UPDATE before reading/inserting the child row, so concurrent first saves serialize and preserve the existing payload contract.",
+      "timestamp": "2026-08-13T05:10:00Z"
+    },
+    {
+      "action": "shared_feature_pr_gate_reconciled",
+      "actor": "codex",
+      "note": "This BUG adds no DDL, but its source fix is carried by Feature PR #3366, whose pre-existing Advisory forward migration remains pending explicit authorization; metadata records the aggregate PR gate without authorizing execution.",
+      "timestamp": "2026-08-13T05:10:00Z"
     }
   ],
   "evidence_uris": [],
@@ -93,9 +105,9 @@
     ]
   },
   "first_seen_at": "2026-08-13T05:08:30.270716Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "feature/advisory-forward-p0ab-design-20260813",
+  "fix_commit": "51f803ff",
+  "fixed_at": "2026-08-13T05:10:00Z",
   "github_issue_number": 3394,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3394",
   "last_seen_at": "2026-08-13T05:08:30.270716Z",
@@ -104,7 +116,7 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending_explicit_authorization",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Review AdvisoryForwardPGRepository.save_observation parent lock and concurrent missing-row insert path",
   "required_verification": [
@@ -127,7 +139,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -241,5 +253,11 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3366",
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_forward_postgres.py backend/tests/advisory_model_first/test_forward_recovery.py backend/tests/advisory_model_first/test_forward_date_clock.py backend/tests/advisory_model_first/test_forward_scheduler.py -q -p no:cacheprovider -> 26 passed",
+    "python -m ruff check backend/services/advisory_forward/repository.py backend/tests/advisory_model_first/test_forward_postgres.py -> passed",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_forward_p0ab_daily_publication_dynamic_bundle_f2_design_20260813.md --tier F2 -> PASS, 21/21, 0 warnings"
+  ]
 }
