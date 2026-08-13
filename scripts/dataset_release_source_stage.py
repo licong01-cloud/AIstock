@@ -70,6 +70,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--predicted-new-bytes", required=True, type=int)
     parser.add_argument("--pressure-rung", required=True, type=int)
     parser.add_argument("--stage-timeout-seconds", required=True, type=int)
+    parser.add_argument("--sample-instrument", action="append", default=[])
     return parser
 
 
@@ -189,6 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         predicted_new_bytes=args.predicted_new_bytes,
         disk_checkpoint=disk_guard.checkpoint,
         pressure_rung=args.pressure_rung,
+        sample_instruments=tuple(args.sample_instrument),
     )
     checkpoint.checkpoint()
     artifact_ready = ArtifactReadySourceBuilder(profile, cas).build(

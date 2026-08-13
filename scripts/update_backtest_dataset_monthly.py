@@ -47,7 +47,10 @@ from backend.services.dataset_release.legacy_catalog import (  # noqa: E402
     LegacyCandidateCataloger,
     LegacyCatalogRequest,
 )
-from backend.services.dataset_release.profile import load_dataset_profile  # noqa: E402
+from backend.services.dataset_release.profile import (  # noqa: E402
+    CANONICAL_INITIAL_MIGRATION_PLAN_ID,
+    load_dataset_profile,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -72,6 +75,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     monthly.add_argument("--scope", choices=("sample", "full"), default="full")
     monthly.add_argument("--idempotency-key")
+
+    initial = subparsers.add_parser(
+        "initial-migration",
+        help="submit the fixed, repository-allowlisted PIT v2 first-migration intent",
+    )
+    initial.add_argument("--plan", choices=(CANONICAL_INITIAL_MIGRATION_PLAN_ID,), required=True)
+    initial.add_argument("--scope", choices=("sample", "full"), required=True)
+    initial.add_argument("--candidate-only", action="store_true", help="required safety declaration")
+    initial.add_argument("--idempotency-key")
 
     status = subparsers.add_parser("status", help="read bounded durable status")
     status.add_argument("--latest", action="store_true", help="select newest submission")
@@ -212,6 +224,41 @@ def _status(
         "bounded_read": True,
         "execution_started_by_cli": False,
         "production_activation": status["activation"],
+    }
+
+
+def _initial_migration(
+    service: DatasetReleaseControlService,
+    args: argparse.Namespace,
+    *,
+    observed_at: datetime,
+) -> Mapping[str, Any]:
+    if not args.candidate_only:
+        raise ValueError("initial-migration requires --candidate-only")
+    profile_id = _selected_profile_id(service, args)
+    idempotency_key = args.idempotency_key or service.initial_migration_invocation_idempotency_key(
+        profile_id=profile_id,
+        plan_id=args.plan,
+        scope=args.scope,
+        observed_at=observed_at,
+    )
+    result = service.submit_initial_migration(
+        profile_id=profile_id,
+        plan_id=args.plan,
+        scope=args.scope,
+        candidate_only=True,
+        principal=CLI_PRINCIPAL,
+        idempotency_key=idempotency_key,
+        route="cli:initial-migration",
+        now=observed_at,
+    )
+    return {
+        "ok": True,
+        "action": "initial-migration",
+        "idempotency_key": idempotency_key,
+        **result,
+        "execution_started_by_cli": False,
+        "production_activation": "not_requested",
     }
 
 
@@ -403,6 +450,12 @@ def main(
         _selected_profile_id(control, args)
         if args.action == "monthly":
             result = _monthly(
+                control,
+                args,
+                observed_at=observed_at or datetime.now(UTC),
+            )
+        elif args.action == "initial-migration":
+            result = _initial_migration(
                 control,
                 args,
                 observed_at=observed_at or datetime.now(UTC),

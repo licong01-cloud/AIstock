@@ -79,5 +79,9 @@ Future consumers must explicitly bind release ID, schema/universe version, as-of
 
 Signoff must assert exact list/order/mapping, provider parity, coverage, H5/bin value/unit parity, `all.txt`/`index.txt` isolation, benchmark unchanged and consumer not activated.
 
+The allowlisted first-migration sample keeps the same 12-code universe. Its fixed oracle windows cover
+`000688.SH` from `2019-12-31..2020-01-03` (the base row must remain excluded) and all 12 codes on
+`2026-07-30..2026-07-31`; these windows do not authorize a smaller or substituted index universe.
+
 Current source acceptance for this contract is fixture-only. No real index/moneyflow provider rows, candidate bytes or HMM
 consumer were read, written or activated in this implementation round.

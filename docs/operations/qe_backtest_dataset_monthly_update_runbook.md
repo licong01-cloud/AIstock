@@ -84,7 +84,33 @@ API token 文件必须是绝对路径上的 plain local file，内容至少 32 �
 
 每月 operator 只做：提交一次、查看 bounded status、处理 typed 状态、读取 terminal receipt、报告独立 gates。
 
-## 3. 提交普通月更
+## 3. 首次 PIT v2 迁移与普通月更
+
+### 3.1 首次 PIT v2 迁移
+
+首次迁移不是可输入任意 cutoff/路径/证券的通用入口，只接受仓库登记的固定计划：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration `
+  --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only
+```
+
+该命令只有在 W7 真实小样本执行另获授权后才能运行；W2 源码/fixture 验证不得提交真实 intent。control service
+和 Worker 会共同复验 `plan_id`、canonical `plan_digest`、固定 cutoff `2026-07-31`、5 只样本证券、事件/指数窗口及
+零生产动作 safety。即使在其他月份执行，cutoff 也不会随系统日期漂移。sample 的股票代码在数据库返回行之前
+完成过滤，并形成 validation-only PIT binding，不能交给 QE/训练。
+
+sample terminal PASS 且绑定最终 source/profile/toolchain/plan digest 后，完整候选仍需独立真实数据授权，并使用
+同一计划提交：
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration `
+  --plan pit_v2_initial_20260731_v1 --scope full --candidate-only
+```
+
+这两条命令都只提交 durable candidate intent，不启动 Worker、不覆盖既有 2026-07-31 v1 candidate、不切 production。
+
+### 3.2 普通月更
 
 只有在本次真实数据更新已获授权时执行：
 

@@ -53,7 +53,7 @@ from .daily_minute_materializer import (
     build_qlib_dump_command,
 )
 from .errors import DatasetReleaseError, IdentityConflictError
-from .profile import DatasetProfile
+from .profile import DatasetProfile, load_initial_migration_plan
 from .pit import (
     PitSnapshotError,
     frozen_pit_snapshot_from_mapping,
@@ -528,6 +528,7 @@ class ProductionBuildProcessor:
             raise BuildProcessorError("immutable build inputs are missing")
         if dict(build_inputs.get("safety") or {}).get("candidate_writes") != 0:
             raise BuildProcessorError("resolution build inputs contain prior candidate writes")
+        _validate_initial_migration_build_inputs(self.profile, build_inputs)
         return plan, build_inputs
 
     def _active_run(self, context: WorkerAttemptContext) -> Mapping[str, Any]:
@@ -1128,6 +1129,8 @@ class ProductionBuildProcessor:
             "reason": "new candidate passed full frozen-source validation",
             "safety": dict(_ZERO_SAFETY),
         }
+        if "initial_migration_plan" in build_inputs:
+            receipt["initial_migration_plan"] = dict(build_inputs["initial_migration_plan"])
         reference = self.cas.put_json(receipt)
         self.cas.verify(reference)
         self.state_machine.register_attestation(
@@ -1247,6 +1250,53 @@ def _release_identity(build_inputs: Mapping[str, Any]) -> ReleaseIdentity:
         )
     except (KeyError, ValueError, IdentityConflictError) as exc:
         raise BuildProcessorError("release identity cannot be derived from build plan") from exc
+
+
+def _validate_initial_migration_build_inputs(
+    profile: DatasetProfile,
+    build_inputs: Mapping[str, Any],
+) -> None:
+    value = build_inputs.get("initial_migration_plan")
+    if value is None:
+        return
+    required = {
+        "plan_id",
+        "plan_digest",
+        "fixed_cutoff",
+        "scope",
+        "sample_instruments",
+        "event_windows",
+        "index_windows",
+        "source_identity_policy",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise BuildProcessorError("initial migration build identity schema differs")
+    plan_id = str(value.get("plan_id") or "")
+    if plan_id not in profile.initial_migration_plan_ids:
+        raise BuildProcessorError("initial migration build plan is not profile-allowlisted")
+    try:
+        plan = load_initial_migration_plan(profile.path.parent / "migrations" / f"{plan_id}.yaml")
+        plan_digest = ensure_sha256(str(value.get("plan_digest") or ""), field="plan_digest")
+    except (DatasetReleaseError, OSError, ValueError) as exc:
+        raise BuildProcessorError("initial migration build plan cannot be verified") from exc
+    expected = {
+        "plan_id": plan.plan_id,
+        "plan_digest": plan.plan_digest,
+        "fixed_cutoff": plan.cutoff.isoformat(),
+        "scope": str(build_inputs.get("scope")),
+        "sample_instruments": list(plan.sample_instruments),
+        "event_windows": [dict(item) for item in plan.event_windows],
+        "index_windows": [dict(item) for item in plan.index_windows],
+        "source_identity_policy": plan.source_identity_policy,
+    }
+    scope = str(build_inputs.get("scope"))
+    if (
+        dict(value) != expected
+        or plan_digest != plan.plan_digest
+        or str(build_inputs.get("cutoff")) != plan.cutoff.isoformat()
+        or not plan.allows_scope(scope)
+    ):
+        raise BuildProcessorError("initial migration build inputs differ from the checked-in plan")
 
 
 def _validate_release_pit_binding(

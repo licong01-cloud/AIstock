@@ -805,6 +805,8 @@ rules:
       - tests/aistock_validation/dataset_release_platform_smoke.py
       - configs/datasets/qe_backtest_monthly_v1.yaml
       - configs/datasets/qe_backtest_monthly_v2.yaml
+      - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
+      - tests/aistock_validation/pit_v2/window_scope_receipt.json
       - .codex/skills/update-backtest-dataset/**
       - .claude/skills/update-backtest-dataset/**
       - docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md
