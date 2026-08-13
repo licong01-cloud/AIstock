@@ -9,6 +9,7 @@ import pytest
 from backend.services.advisory_forward.service import (
     AdvisoryForwardService,
     _active_episode_state_hash,
+    _published_publication_matches,
     _settlement_payload,
 )
 from backend.services.advisory_forward.models import AdvisoryForwardRunV1
@@ -236,6 +237,25 @@ def test_forward_episode_identity_is_deterministic_per_program_target_and_symbol
 
     assert first == repeated
     assert first.startswith("advep_")
+
+
+def test_uncertain_publication_commit_recovers_only_exact_payload_hash() -> None:
+    payload = {
+        "schema_version": "advisory_forward_publication_v1",
+        "program_id": "advp_test",
+        "target_trade_date": "2026-08-17",
+    }
+    persisted = {
+        "publication_status": "PUBLISHED",
+        "publication_payload_sha256": canonical_json_sha256(payload),
+    }
+
+    assert _published_publication_matches(persisted, payload) is True
+    assert _published_publication_matches(
+        persisted,
+        {**payload, "target_trade_date": "2026-08-18"},
+    ) is False
+    assert _published_publication_matches(persisted, None) is False
 
 
 def test_settlement_payload_hash_tracks_economic_changes_but_not_runtime_timestamps() -> None:

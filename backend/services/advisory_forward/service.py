@@ -196,6 +196,7 @@ class AdvisoryForwardService:
             raise RuntimeError(
                 "unpublished advisory forward attempt identity differs from the current Program binding"
             )
+        publication_payload: dict[str, Any] | None = None
         try:
             program, binding, selection_run, runtime_config = self.program_service.prepare_forward_selection(
                 program_id,
@@ -314,7 +315,7 @@ class AdvisoryForwardService:
                 error={"message": str(exc), "context": dict(getattr(exc, "context", {}) or {})},
                 waiting_data=isinstance(exc, DataUnavailableError),
             )
-            if failed["publication_status"] == "PUBLISHED":
+            if _published_publication_matches(failed, publication_payload):
                 return self._resume_published_observation(failed)
             raise
         try:
@@ -909,6 +910,17 @@ def _settlement_decision_identity(decision: Any) -> dict[str, Any]:
     payload = decision_to_dict(decision)
     payload.pop("created_at", None)
     return payload
+
+
+def _published_publication_matches(
+    persisted: Mapping[str, Any],
+    publication_payload: Mapping[str, Any] | None,
+) -> bool:
+    if persisted.get("publication_status") != "PUBLISHED" or publication_payload is None:
+        return False
+    return str(persisted.get("publication_payload_sha256") or "") == canonical_json_sha256(
+        publication_payload
+    )
 
 
 def _settlement_payload(

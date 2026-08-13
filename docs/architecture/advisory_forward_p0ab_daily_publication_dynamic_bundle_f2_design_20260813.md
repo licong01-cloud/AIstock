@@ -214,7 +214,7 @@ Selection 和模型计算不持有数据库长事务。Selection 成功后，`co
 
 1. `FOR UPDATE` 锁定 Program 和目标日有效 binding。
 2. 验证 Program 仍可运行、binding/version 与计算输入一致、前序 settlement 已闭合。
-3. 若已存在同 Program/target 的 publication，校验 decision、binding、selection 和 payload hash 完全一致后返回既有事实；不一致则 conflict。
+3. 若已存在同 Program/target 的 publication，校验 decision、binding、selection 和 payload hash 完全一致后返回既有事实；不一致则 conflict。若提交结果因并发或连接异常不确定，异常恢复也必须用本次 canonical payload 重新比对 persisted hash，不能仅凭 `PUBLISHED` 状态吞掉冲突。
 4. 插入现有 `advisory_review_run(run_type=RUN, trade_date=target, status=WAITING_DATA)`。
 5. 插入现有 `PUBLISHED` list version 和 items。
 6. 更新 `advisory_forward_run` 为 `PUBLISHED/NOT_DUE`。
@@ -555,6 +555,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 - Source Round 8：修复 BUG-1061 设计声明的 after-close env 未被 service 使用、显式配置被静默忽略的问题；默认16:30保持不变，合法配置真实控制 publication due，非法值明确失败。
 - Source Round 9：修复 BUG-1063 同一 Program 较早 settlement 阻塞后仍执行更晚日期、可能倒序改变 episode 状态的问题；runner 现在按 Program 传播本轮阻塞并返回明确 skip，其他 Program 不受影响。
 - Source Round 10：修复 BUG-1065 并发首次保存同一 forward observation 时共享父锁无法阻止 child unique-key 竞争的问题；父行改为排它短锁，相同重放按既有payload幂等合同收敛。
+- Source Round 11：修复 BUG-1066 publication 异常路径只看到 persisted `PUBLISHED` 就恢复、可能吞掉并发不同payload冲突的问题；仅 canonical hash完全相同的 uncertain commit 可恢复，其他异常保持可见。
 
 ## 20. Implementation Plan / 本阶段唯一实施顺序
 
