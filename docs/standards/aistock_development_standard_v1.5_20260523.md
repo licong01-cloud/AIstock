@@ -68,8 +68,9 @@
 3. runtime `post-restart-verify` receipt 在 close-sync 消费前属于受保护证据。close-sync 通过后必须把 expected/observed identity、runtime proof、contract/catalog/probe digest、receipt SHA-256 和 gate 保存为不含响应正文的 durable summary；只有 durable summary 完整时，worktree-local receipt 才可清理。等待用户重启不要求保留 source worktree；后续 receipt 写入 canonical/registry workflow root 并由 close-sync 固化。
 4. 已明确授权的精确 cleanup 在合入/close-sync 后连续执行，无需再次授权：先重新验证 PR/HEAD、干净状态、活动进程引用和路径边界，再生成 ignored artifact manifest；`transient` 可在同一次 cleanup 内删除，`protected` 或 `unknown` 必须 fail closed。裸 merge 仍不推导 cleanup。
 5. cleanup 只能删除 manifest 中已分类且位于目标 worktree 内的精确 transient roots；禁止 `git clean`、通配符删除、越界路径、跟随 symlink/junction 到目标外或在 manifest 漂移后继续。与 canonical root 不同的本地配置、未固化 receipt、未知文件和活动进程引用均阻断删除。
-6. 执行顺序固定为：evidence finalization → ignored/process manifest → transient purge → 普通 `git worktree remove` → local branch delete → remote branch SHA 校验与 delete → 路径/注册/local/remote 四态读回。任一步失败只报告已完成状态并停止后续破坏性动作，禁止伪造 `cleanup_done`。
-7. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
+6. 位于整体 ignored 资产树内的运行产物，只有精确分类器验证固定目录、有限且完整的文件名集合、非权威 schema、文件大小上限、无额外文件、无 tracked file、无 symlink/junction/reparse point，并继续通过活动进程引用与 manifest 漂移门禁后，才可标为 `transient`。任一条件不满足仍归为 `unknown`；禁止为兼容单类运行产物而放宽其父资产树。
+7. 执行顺序固定为：evidence finalization → ignored/process manifest → transient purge → 普通 `git worktree remove` → local branch delete → remote branch SHA 校验与 delete → 路径/注册/local/remote 四态读回。任一步失败只报告已完成状态并停止后续破坏性动作，禁止伪造 `cleanup_done`。
+8. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
 
 ## 3. 风险与工作量分级
 

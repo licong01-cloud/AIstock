@@ -9055,6 +9055,121 @@ def test_worktree_transient_artifact_profile_and_purge_are_manifest_bound(
     assert canonical_config.exists()
 
 
+def test_worktree_qe_live_log_ring_is_structurally_validated_and_purged(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    relative_paths = sorted(workflow.WORKTREE_QE_LIVE_LOG_PATHS)
+    for index, relative_path in enumerate(relative_paths):
+        target = worktree / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = (
+            {"schema_version": workflow.WORKTREE_QE_LIVE_LOG_SCHEMA, "slot": index}
+            if index in {0, 4}
+            else None
+        )
+        target.write_text(json.dumps(payload) + "\n" if payload else "", encoding="utf-8")
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            existing = [item for item in relative_paths if (worktree / item).exists()]
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(existing), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    assert profile["ignored_count"] == 5
+    assert profile["transient_count"] == 5
+    assert profile["unknown_count"] == 0
+    assert profile["transient_roots"] == [workflow.WORKTREE_QE_LIVE_LOG_ROOT]
+
+    purge = workflow._purge_worktree_transient_artifacts(
+        worktree,
+        canonical_root=isolated_workflow_root,
+        expected_profile=profile,
+    )
+
+    assert purge["ignored_count_before"] == 5
+    assert purge["ignored_count_after"] == 0
+    assert not (worktree / workflow.WORKTREE_QE_LIVE_LOG_ROOT).exists()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("missing_slot", "qe_live_log_ring_inventory_mismatch"),
+        ("extra_file", "qe_live_log_ring_inventory_mismatch"),
+        ("wrong_schema", "qe_live_log_ring_schema_mismatch"),
+        ("invalid_json", "qe_live_log_ring_invalid_jsonl"),
+        ("oversized", "qe_live_log_ring_file_too_large"),
+    ],
+)
+def test_worktree_qe_live_log_ring_remains_unknown_when_contract_is_not_exact(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    expected_reason: str,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    relative_paths = sorted(workflow.WORKTREE_QE_LIVE_LOG_PATHS)
+    for relative_path in relative_paths:
+        target = worktree / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps({"schema_version": workflow.WORKTREE_QE_LIVE_LOG_SCHEMA}) + "\n",
+            encoding="utf-8",
+        )
+
+    if mutation == "missing_slot":
+        (worktree / relative_paths[-1]).unlink()
+    elif mutation == "extra_file":
+        extra = worktree / workflow.WORKTREE_QE_LIVE_LOG_ROOT / "qe-live-5.jsonl"
+        extra.write_text(json.dumps({"schema_version": workflow.WORKTREE_QE_LIVE_LOG_SCHEMA}) + "\n", encoding="utf-8")
+    elif mutation == "wrong_schema":
+        (worktree / relative_paths[0]).write_text('{"schema_version":"unexpected"}\n', encoding="utf-8")
+    elif mutation == "invalid_json":
+        (worktree / relative_paths[0]).write_text("not-json\n", encoding="utf-8")
+    elif mutation == "oversized":
+        monkeypatch.setattr(workflow, "WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES", 1)
+
+    def fake_run(args: list[str], cwd: Path | None = None, **_kwargs: Any) -> dict[str, Any]:
+        if args[:3] == ["git", "ls-files", "--others"]:
+            root = worktree / workflow.WORKTREE_QE_LIVE_LOG_ROOT
+            existing = sorted(path.relative_to(worktree).as_posix() for path in root.iterdir() if path.is_file())
+            return {"ok": True, "returncode": 0, "stdout": "\0".join(existing), "stderr": ""}
+        if args[:3] == ["git", "ls-files", "-z"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    profile = workflow._worktree_ignored_artifact_profile(worktree, canonical_root=isolated_workflow_root)
+
+    assert profile["transient_count"] == 0
+    assert profile["unknown_count"] >= 1
+    assert profile["transient_roots"] == []
+    assert {item["reason"] for item in profile["unknown_samples"]} == {expected_reason}
+
+
+def test_worktree_qe_live_log_ring_does_not_widen_other_rdagent_assets(
+    isolated_workflow_root: Path,
+) -> None:
+    worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    worktree.mkdir(parents=True)
+
+    root, reason = workflow._worktree_transient_root(
+        "rdagent_assets/model.bin",
+        worktree_path=worktree,
+        canonical_root=isolated_workflow_root,
+    )
+
+    assert root is None
+    assert reason == "unknown_ignored_artifact"
+
+
 def test_worktree_transient_purge_stops_on_manifest_drift(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
