@@ -97,6 +97,7 @@ from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 from .schedulers.strategy_scheduler import scheduler as strategy_scheduler
 from .infra.qmt_client import get_qmt_client_singleton
+from .services.quantevolver.qe_log_store import get_qe_live_log_store
 
 
 def _report_bootstrap_failure(event: str, exc: BaseException) -> None:
@@ -291,6 +292,12 @@ async def _lifespan(app: FastAPI):
             lg.propagate = True
     except Exception as exc:
         _report_nonfatal_lifecycle_failure("APPLICATION_LOGGER_SETUP_FAILED", exc)
+
+    # QE live logs are runtime state, never source-tree artifacts. Construct
+    # the process store before any backend service starts so a missing or
+    # unsafe state root fails startup instead of being swallowed by a lazy SSE
+    # fallback later.
+    get_qe_live_log_store()
 
     init_db_pool(minconn=5, maxconn=40)
     _configure_external_research_provider()

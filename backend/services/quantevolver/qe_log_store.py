@@ -20,14 +20,56 @@ QE_LIVE_LOG_MAX_FILE_BYTES = 1024 * 1024 * 1024
 QE_LIVE_LOG_MAX_READ_BYTES = 16 * 1024 * 1024
 _FILE_PREFIX = "qe-live-"
 _FILE_SUFFIX = ".jsonl"
+QE_LIVE_LOG_STATE_ROOT_MISSING = "qe_live_log_state_root_missing"
+QE_LIVE_LOG_STATE_ROOT_INVALID = "qe_live_log_state_root_invalid"
+
+
+class QELiveLogConfigurationError(RuntimeError):
+    """Loud configuration failure for the repo-external live-log mirror."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: {message}")
+
+
+def _repository_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _resolve_external_root(raw: str, *, field_name: str) -> Path:
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise QELiveLogConfigurationError(
+            QE_LIVE_LOG_STATE_ROOT_INVALID,
+            f"{field_name} must be an absolute path",
+        )
+    resolved = candidate.resolve(strict=False)
+    repository_root = _repository_root()
+    if resolved == repository_root or resolved.is_relative_to(repository_root):
+        raise QELiveLogConfigurationError(
+            QE_LIVE_LOG_STATE_ROOT_INVALID,
+            f"{field_name} must resolve outside the AIstock repository",
+        )
+    for ancestor in (resolved, *resolved.parents):
+        if (ancestor / ".git").exists():
+            raise QELiveLogConfigurationError(
+                QE_LIVE_LOG_STATE_ROOT_INVALID,
+                f"{field_name} must not resolve inside a Git checkout",
+            )
+    return resolved
 
 
 def default_qe_live_log_root() -> Path:
     explicit = str(os.getenv("QE_LIVE_LOG_DIR") or "").strip()
     if explicit:
-        return Path(explicit).expanduser().resolve()
-    repo_root = Path(__file__).resolve().parents[3]
-    return repo_root / "rdagent_assets" / "qe_live_logs"
+        return _resolve_external_root(explicit, field_name="QE_LIVE_LOG_DIR")
+    state_root = str(os.getenv("RDAGENT_STATE_ROOT") or "").strip()
+    if not state_root:
+        raise QELiveLogConfigurationError(
+            QE_LIVE_LOG_STATE_ROOT_MISSING,
+            "QE_LIVE_LOG_DIR or RDAGENT_STATE_ROOT is required; repository fallback is forbidden",
+        )
+    return _resolve_external_root(state_root, field_name="RDAGENT_STATE_ROOT") / "qe_live_logs"
 
 
 class QELiveLogStore:
