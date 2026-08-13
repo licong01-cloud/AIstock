@@ -10,6 +10,7 @@ rules:
       - scripts/advisory_model_quality_prepare_request.py
       - scripts/advisory_model_quality_train_wsl.py
       - scripts/advisory_policy_dataset_prepare_request.py
+      - scripts/advisory_meta_label_prepare_request.py
       - scripts/advisory_publish_program_model_descriptor.py
       - scripts/advisory_outcome_calibration_prepare_request.py
       - scripts/advisory_outcome_calibration_train_wsl.py
@@ -22,12 +23,14 @@ rules:
       - scripts/wsl/advisory_model_train.py
       - scripts/wsl/advisory_model_quality_train.py
       - scripts/wsl/advisory_policy_dataset_build.py
+      - scripts/wsl/advisory_meta_label_train.py
       - scripts/wsl/advisory_outcome_calibration_train.py
       - scripts/wsl/advisory_outcome_train.py
       - scripts/wsl/advisory_price_range_calibration_train.py
       - scripts/wsl/advisory_price_range_train.py
       - docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_*.md
       - docs/architecture/advisory_p0c_policy_episode_cpcv_f2_design_*.md
+      - docs/architecture/advisory_p0d_short_rebound_meta_label_f2_design_*.md
     primary_module: advisory.model_first
     impact_modules: []
     layer: data_pipeline
