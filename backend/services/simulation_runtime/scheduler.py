@@ -3105,6 +3105,7 @@ class SimulationLifecycleScheduler:
                 },
             )
         begin_epoch()
+        self._refresh_recovered_miniqmt_quote_activation_authorities()
         watchdog = getattr(activation, "watchdog_tick", None)
         if not callable(watchdog):
             raise RuntimeConfigInvalidError(
@@ -3140,6 +3141,49 @@ class SimulationLifecycleScheduler:
                 raise
             return tuple(dict(item) for item in failures)
         return ()
+
+    def _refresh_recovered_miniqmt_quote_activation_authorities(self) -> None:
+        activation = self._miniqmt_quote_ingress_activation
+        if activation is None:
+            return
+        recovered_factory = getattr(activation, "controller_factory", None)
+        recovered_adapter = getattr(activation, "quote_context_adapter", None)
+        if recovered_factory is not None:
+            if (
+                self._b0_quote_v2_controller_factory is not None
+                and self._b0_quote_v2_controller_factory is not recovered_factory
+            ):
+                raise RuntimeConfigInvalidError(
+                    "recovered MiniQMT quote activation conflicts with the scheduler controller factory",
+                    context={
+                        "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_AUTHORITY_CONFLICT",
+                        "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_LIFECYCLE",
+                    },
+                )
+            orchestrator_factory = getattr(self.orchestrator, "b0_quote_v2_controller_factory", None)
+            if orchestrator_factory is not None and orchestrator_factory is not recovered_factory:
+                raise RuntimeConfigInvalidError(
+                    "recovered MiniQMT quote activation conflicts with the orchestrator controller factory",
+                    context={
+                        "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_AUTHORITY_CONFLICT",
+                        "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_LIFECYCLE",
+                    },
+                )
+            self._b0_quote_v2_controller_factory = recovered_factory
+            self.orchestrator.b0_quote_v2_controller_factory = recovered_factory
+        if recovered_adapter is not None:
+            if (
+                self._miniqmt_quote_context_adapter is not None
+                and self._miniqmt_quote_context_adapter is not recovered_adapter
+            ):
+                raise RuntimeConfigInvalidError(
+                    "recovered MiniQMT quote activation conflicts with the scheduler quote context adapter",
+                    context={
+                        "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_AUTHORITY_CONFLICT",
+                        "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_LIFECYCLE",
+                    },
+                )
+            self._miniqmt_quote_context_adapter = recovered_adapter
 
     @staticmethod
     def _is_shared_kernel_product_failure(failure: Mapping[str, Any]) -> bool:
