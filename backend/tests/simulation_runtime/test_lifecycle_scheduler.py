@@ -234,9 +234,13 @@ class SimulationLifecycleScheduler(ProductionSimulationLifecycleScheduler):
     def __init__(self, **values: Any) -> None:
         super().__init__(**values)
         self._test_k6d_start_calls: list[dict[str, Any]] = []
+        self._test_k6d_activation_calls: list[tuple[str, ...]] = []
         self.orchestrator.miniqmt_product_runtime_factory = lambda **factory_values: SimpleNamespace(
             coordinator=_TestK6DCoordinator(factory_values["plan"], self._test_k6d_start_calls),
             worker_incarnation_id="test_k6d_worker_incarnation",
+            activate_hot_market_targets_v1=lambda algo_instance_ids: self._test_k6d_activation_calls.append(
+                algo_instance_ids
+            ),
         )
 
 
@@ -1108,9 +1112,7 @@ class _TestKernelOutboxRepository:
         del trade_date
         accepted = set(statuses)
         return tuple(
-            command
-            for command in self.commands
-            if command.runtime_id == runtime_id and str(command.status) in accepted
+            command for command in self.commands if command.runtime_id == runtime_id and str(command.status) in accepted
         )[:limit]
 
     def read_command_identity_chain(self, command_id: str) -> dict[str, Any]:
@@ -1813,9 +1815,7 @@ def _orphan_current_kernel_plan_run(
             "execution_plan_id": None,
             "execution_plan_hash": None,
             "status": SimulationDailyRunStatus.SIGNAL_GENERATING,
-            "run_payload_json": {
-                key: value for key, value in run.run_payload_json.items() if key in identity_keys
-            },
+            "run_payload_json": {key: value for key, value in run.run_payload_json.items() if key in identity_keys},
         }
     )
     repo.daily_runs[run.run_id] = orphan
@@ -2651,12 +2651,8 @@ def test_scheduler_unmatched_kernel_product_tick_failure_is_not_silently_success
     assert unmatched.error["type"] == "MiniQMTKernelProductSyncError"
     assert unmatched.error["context"]["reason_code"] == "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_UNMATCHED"
     assert unmatched.error["context"]["failure_count"] == 1
-    assert unmatched.error["context"]["ordered_failures"][0]["runtime_id"] == (
-        "runtime_not_in_current_binding_page"
-    )
-    assert unmatched.error["context"]["ordered_failures"][0]["binding_id"] == (
-        "simbind_not_in_current_binding_page"
-    )
+    assert unmatched.error["context"]["ordered_failures"][0]["runtime_id"] == ("runtime_not_in_current_binding_page")
+    assert unmatched.error["context"]["ordered_failures"][0]["binding_id"] == ("simbind_not_in_current_binding_page")
     assert broker.place_order_payloads == []
 
 
@@ -3269,9 +3265,7 @@ def test_scheduler_preplan_unknown_dispatching_outbox_stays_pending_and_honors_r
     assert {item.binding_id: item for item in first_retry.results}[binding_a.binding_id].status == (
         SimulationDailyRunStatus.FAILED_RETRYABLE.value
     )
-    proof = repo.get_simulation_daily_run(failed_run.run_id).run_payload_json[
-        "miniqmt_preplan_unknown_reconciliation"
-    ]
+    proof = repo.get_simulation_daily_run(failed_run.run_id).run_payload_json["miniqmt_preplan_unknown_reconciliation"]
     assert proof["status"] == "RECONCILIATION_PENDING"
     assert "outbox_outcome_ambiguous" in proof["sync_conflicts"]
     assert sync_calls == 2
@@ -3473,10 +3467,7 @@ def test_scheduler_matched_failure_persistence_is_bounded_and_hashes_omitted_tai
         repo=repo,
         binding=binding_a,
     )
-    failures = tuple(
-        {**base_failure, "exception_message": f"bounded exact failure {index}"}
-        for index in range(101)
-    )
+    failures = tuple({**base_failure, "exception_message": f"bounded exact failure {index}"} for index in range(101))
 
     def failing_watchdog() -> None:
         raise MiniQMTKernelProductSyncError(failures)

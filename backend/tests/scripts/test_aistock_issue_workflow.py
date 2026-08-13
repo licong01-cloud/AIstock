@@ -604,6 +604,19 @@ def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
     monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
     monkeypatch.setattr(workflow, "_github_bug_issue_by_number", lambda _issue_number, **_kwargs: (None, []))
+
+    def isolated_read_command(args: list[str], cwd: Path | None = None, timeout: int = 30, attempts: int = 3) -> dict[str, Any]:
+        if args[:2] == ["git", "fetch"]:
+            return {**workflow._run_command(args, cwd=cwd, timeout=timeout), "attempts": 1}
+        if args and args[0] == "git":
+            try:
+                stdout = workflow._git(args[1:], cwd=cwd, check=False)
+                return {"ok": True, "returncode": 0, "stdout": stdout, "stderr": "", "attempts": 1}
+            except Exception as exc:
+                return {"ok": False, "returncode": 1, "stdout": "", "stderr": str(exc), "attempts": 1}
+        return {**workflow._run_command(args, cwd=cwd, timeout=timeout), "attempts": 1}
+
+    monkeypatch.setattr(workflow, "_run_read_command_with_retry", isolated_read_command)
     submit_scope_root = tmp_path / "submit-scope"
     monkeypatch.setattr(workflow, "_submit_bug_file_root", lambda: submit_scope_root)
     for relative_path in (
@@ -3147,13 +3160,8 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["dry_run"] is True
     assert payload["synthetic_record"] is True
     assert payload["unexpected_dirty_paths"] == []
-    assert payload["client_manifest"]["codex_skill_status"] in {
-        "current",
-        "missing_authority",
-        "missing_global",
-        "stale",
-    }
-    assert payload["h7_code_intelligence"]["workflow_gate"] in {"ready", "warning"}
+    assert payload["client_manifest"] is None
+    assert payload["h7_code_intelligence"] is None
     assert payload["fast_path"]["task_tier"] == "T1"
     assert payload["start"]["worktree_plan"]["dry_run"] is True
     assert payload["finish"]["workflow_gate"] == "plan_ready"
@@ -6973,9 +6981,19 @@ def test_merge_uses_cleanup_owned_branch_deletion(
                     {
                         "state": "OPEN",
                         "statusCheckRollup": [
-                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                            {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                            {"name": "advisory", "status": "COMPLETED", "conclusion": "FAILURE"},
                         ],
                     }
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
                 ),
                 "stderr": "",
             }
@@ -7017,9 +7035,19 @@ def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
                     {
                         "state": "OPEN",
                         "statusCheckRollup": [
-                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                            {"name": "CI verdict", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                            {"name": "advisory", "status": "IN_PROGRESS", "conclusion": ""},
                         ],
                     }
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "SUCCESS", "bucket": "pass", "workflow": "AIstock CI"}]
                 ),
                 "stderr": "",
             }
@@ -7044,6 +7072,69 @@ def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(
     assert payload["verified"]["merged"] is True
     merge_commands = [args for args in commands if args[:3] == ["gh", "pr", "merge"]]
     assert merge_commands == [["gh", "pr", "merge", "https://github.example/pull/199", "--squash"]]
+
+
+def test_generic_merge_helper_blocks_failed_required_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps({"state": "OPEN", "statusCheckRollup": []}),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "checks"]:
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": json.dumps(
+                    [{"name": "CI verdict", "state": "FAILURE", "bucket": "fail", "workflow": "AIstock CI"}]
+                ),
+                "stderr": "required checks failed",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="CI verdict"):
+        workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert not any(args[:3] == ["gh", "pr", "merge"] for args in commands)
+
+
+def test_generic_merge_helper_short_circuits_required_checks_for_merged_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        assert args[:3] == ["gh", "pr", "view"]
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": json.dumps({"state": "MERGED", "statusCheckRollup": []}),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    payload = workflow._merge_pr_if_ready("https://github.example/pull/199")
+
+    assert payload["already_merged"] is True
+    assert commands == [
+        [
+            "gh",
+            "pr",
+            "view",
+            "https://github.example/pull/199",
+            "--json",
+            "state,mergeStateStatus,statusCheckRollup,url",
+        ]
+    ]
 
 
 def test_close_sync_pr_commit_only_stages_bug_registry_files(
@@ -8680,6 +8771,11 @@ def test_worktree_creation_puts_branch_option_before_path(
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(
         workflow,
+        "_run_read_command_with_retry",
+        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
+    monkeypatch.setattr(
+        workflow,
         "_close_sync_worktree_names",
         lambda bug_id: ("chore/BUG-199-close-sync", isolated_workflow_root / "worktrees" / "BUG-199-close-sync"),
     )
@@ -8968,6 +9064,11 @@ def test_cleanup_after_merge_blocks_unmerged_branch(
         return ""
 
     monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
     monkeypatch.setattr(
         workflow,
         "_git_snapshot",

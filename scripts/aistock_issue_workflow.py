@@ -30,6 +30,7 @@ try:
         BugIdLockError,
         GlobalBugIdLock,
         bootstrap_fingerprint_index,
+        compact_terminal_reservation,
         compact_terminal_reservations as compact_terminal_reservations,
         find_matching_reservation,
         read_allocator_state,
@@ -44,6 +45,7 @@ except ModuleNotFoundError:  # Direct execution: python scripts/aistock_issue_wo
         BugIdLockError,
         GlobalBugIdLock,
         bootstrap_fingerprint_index,
+        compact_terminal_reservation,
         compact_terminal_reservations as compact_terminal_reservations,
         find_matching_reservation,
         read_allocator_state,
@@ -129,6 +131,15 @@ WORKTREE_QE_LIVE_LOG_SCHEMA = "qe_live_log_record_v1"
 WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES = 16 * 1024 * 1024
 WORKTREE_QE_LIVE_LOG_PATHS = frozenset(
     f"{WORKTREE_QE_LIVE_LOG_ROOT}/qe-live-{index}.jsonl" for index in range(5)
+)
+WORKTREE_BACKEND_LOG_ROOT = "backend/logs"
+WORKTREE_BACKEND_LOG_LIMITS = {
+    "backend/logs/aistock.log": 10 * 1024 * 1024,
+    "backend/logs/errors.log": 5 * 1024 * 1024,
+}
+WORKTREE_BACKEND_LOG_LINE_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} "
+    r"(?:DEBUG|INFO|WARNING|ERROR|CRITICAL) \[[^\]\r\n]+\] .+$"
 )
 RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -2499,6 +2510,26 @@ def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) ->
         return {"ok": False, "returncode": None, "stdout": "", "stderr": str(exc)}
 
 
+def _run_read_command_with_retry(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 30,
+    attempts: int = 3,
+) -> dict[str, Any]:
+    """Retry a bounded idempotent remote/read command with short backoff."""
+
+    total = max(1, int(attempts))
+    last: dict[str, Any] = {"ok": False, "returncode": None, "stdout": "", "stderr": "not run"}
+    for index in range(total):
+        last = _run_command(args, cwd=cwd, timeout=timeout)
+        if last.get("ok"):
+            return {**last, "attempts": index + 1}
+        if index + 1 < total:
+            time.sleep(0.5 * (index + 1))
+    return {**last, "attempts": total}
+
+
 def _subprocess_env(args: list[str]) -> dict[str, str] | None:
     """Return a safe environment for workflow child processes."""
     if not args or Path(str(args[0])).name.lower() != "git":
@@ -3756,9 +3787,21 @@ def _reserve_bug_id(
             "exact_candidate" if include_github else "not_requested"
         )
         if allocator_bootstrap_required:
+            bootstrap_records = _fingerprint_bootstrap_records(root)
             report["fingerprint_index_bootstrap_count"] = bootstrap_fingerprint_index(
                 _bug_id_reservation_root(),
-                _fingerprint_bootstrap_records(root),
+                bootstrap_records,
+            )
+            durable_bug_ids = {
+                str(item.get("bug_id") or "").upper()
+                for item in bootstrap_records
+                if item.get("registry_path") and item.get("bug_id")
+            }
+            report["terminal_reservation_compaction_count"] = len(
+                compact_terminal_reservations(
+                    _bug_id_reservation_root(),
+                    durable_bug_ids,
+                )
             )
             try:
                 write_allocator_state(
@@ -5280,8 +5323,14 @@ def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) ->
     if not bug_id:
         raise WorkflowError("Either --bug-id or --issue-json is required")
     normalized = bug_id.strip().upper()
+    target_number = _bug_id_number(normalized)
     matches: list[tuple[dict[str, Any], Path]] = []
+    candidates: list[Path] = []
     for path in _bug_files():
+        filename_number = _bug_id_number_from_filename(path.name)
+        if filename_number == target_number or filename_number is None:
+            candidates.append(path)
+    for path in candidates:
         record = _load_json(path)
         if str(record.get("bug_id") or "").upper() == normalized:
             matches.append((record, path))
@@ -5970,7 +6019,14 @@ def build_submit_bug_plan(
         "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
         "github_issue_labels": github_labels,
         "registry_pr_only": registry_pr_only,
-        "stale_pr_check": _stale_pr_check_for_bug(canonical_bug_id) if effective_apply else {"status": "not_applicable_before_apply"},
+        "stale_pr_check": (
+            _stale_pr_check_for_bug(canonical_bug_id)
+            if effective_apply and bug_id
+            else {
+                "status": "skipped_fresh_allocation" if effective_apply else "not_applicable_before_apply",
+                "reason": "a newly allocated BUG id cannot have a stale PR",
+            }
+        ),
         "bug_id_allocation": {
             "allocator_root": str(allocation_root),
             "global_max_number": allocation_report.get("max_number"),
@@ -7078,7 +7134,10 @@ def build_workflow_smoke_plan(
     finish: dict[str, Any] | None = None
     postmortem_preview: dict[str, Any] | None = None
     try:
-        doctor_payload = build_doctor_report(skip_external=True)
+        doctor_payload = {
+            "workflow_gate": "skipped",
+            "reason": "workflow-smoke validates the lightweight state-machine contract; run doctor explicitly for diagnostics",
+        }
         fast_path = build_fast_path_plan(
             bug_id=bug_id,
             issue_json=issue_json,
@@ -7087,6 +7146,20 @@ def build_workflow_smoke_plan(
             allow_missing_linkage=True,
             allow_closed=True,
         )
+        shared_code_intelligence = {
+            "schema_version": "aistock_code_intelligence_summary_v1",
+            "provider": "workflow_smoke_contract",
+            "status": "skipped_external_in_smoke",
+            "context_ref": "not_required_workflow_smoke",
+            "manifest_ref": "not_required_workflow_smoke",
+            "affected_tests_ref": "not_required_workflow_smoke",
+            "affected_tests_count": 0,
+            "affected_quality": "not_required_workflow_smoke",
+            "affected_tests": {"suggested_tests": []},
+            "fallback_used": False,
+            "understand_anything": {"status": "not_required_workflow_smoke", "graph_exists": True},
+            "understand_anything_summary_ref": "not_required_workflow_smoke",
+        }
         start = build_start_plan(
             bug_id=bug_id,
             issue_json=issue_json,
@@ -7096,6 +7169,7 @@ def build_workflow_smoke_plan(
             task_slug="workflow-smoke",
             allow_missing_linkage=True,
             allow_closed=True,
+            code_intelligence_summary_override=shared_code_intelligence,
         )
         finish = build_finish_plan(
             bug_id=bug_id,
@@ -7106,6 +7180,7 @@ def build_workflow_smoke_plan(
             validation_evidence=[],
             plan_only=True,
             allow_missing_evidence=False,
+            code_intelligence_summary_override=shared_code_intelligence,
         )
         postmortem_preview = {
             "schema_version": "aistock_issue_workflow_smoke_postmortem_preview_v1",
@@ -7484,6 +7559,7 @@ def build_start_plan(
     allow_missing_linkage: bool,
     allow_closed: bool,
     active_decision: dict[str, Any] | None = None,
+    code_intelligence_summary_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not issue_json and active_decision and active_decision.get("registry_issue_json"):
         issue_json = str(active_decision["registry_issue_json"])
@@ -7517,7 +7593,7 @@ def build_start_plan(
     context_pack["required_verification"] = budgeted_validation["required_plans"]
     context_pack["recommended_verification"] = budgeted_validation["recommended_plans"]
     context_pack["deferred_nightly_plans"] = budgeted_validation.get("deferred_nightly_plans") or []
-    code_intelligence_summary = _build_code_intelligence_summary(
+    code_intelligence_summary = code_intelligence_summary_override or _build_code_intelligence_summary(
         item_id=canonical_bug_id,
         record=record,
         changed_files=changed_files,
@@ -7698,6 +7774,7 @@ def build_finish_plan(
     plan_only: bool,
     allow_missing_evidence: bool,
     fresh_process_evidence: list[str] | None = None,
+    code_intelligence_summary_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
@@ -7707,7 +7784,7 @@ def build_finish_plan(
         validation=flow.select_validation(changed, module=record.get("module")),
     )
     pr_quality = flow.build_pr_quality(base=base, head=head, issue_record=record, changed_files=changed)
-    code_intelligence_summary = _build_code_intelligence_summary(
+    code_intelligence_summary = code_intelligence_summary_override or _build_code_intelligence_summary(
         item_id=canonical_bug_id,
         record=record,
         changed_files=changed,
@@ -9597,7 +9674,10 @@ def build_postmortem_plan(
             return prior
     active = _active_workflows_for_bug(canonical_bug_id)
     duplicate_active_count = max(0, len(active) - 1)
-    stale_pr_check = _stale_pr_check_for_bug(canonical_bug_id)
+    stale_pr_check = state.get("stale_pr_check") or {
+        "status": "skipped_postmortem_remote_read",
+        "reason": "postmortem reuses durable workflow state and does not repeat GitHub PR inventory queries",
+    }
     context_metrics = state.get("context_metrics") or {}
     if not context_metrics:
         context_metrics = _fallback_context_metrics(canonical_bug_id, root)
@@ -10876,6 +10956,43 @@ def _validated_qe_live_log_transient_paths(
     return set(WORKTREE_QE_LIVE_LOG_PATHS), "bounded_non_authoritative_qe_live_log_ring"
 
 
+def _validated_backend_lifespan_log_transient_paths(
+    ignored_paths: Iterable[str],
+    *,
+    worktree_path: Path,
+) -> tuple[set[str], str]:
+    prefix = WORKTREE_BACKEND_LOG_ROOT + "/"
+    observed = {
+        _normalize_worktree_artifact_path(item)
+        for item in ignored_paths
+        if _normalize_worktree_artifact_path(item).startswith(prefix)
+    }
+    if not observed:
+        return set(), "backend_lifespan_logs_not_present"
+    allowed = set(WORKTREE_BACKEND_LOG_LIMITS)
+    if not observed.issubset(allowed):
+        return set(), "backend_lifespan_log_inventory_mismatch"
+
+    root = worktree_path / WORKTREE_BACKEND_LOG_ROOT
+    if not root.is_dir() or _is_reparse_or_symlink(root.parent) or _is_reparse_or_symlink(root):
+        return set(), "backend_lifespan_log_unsafe_directory"
+    for relative_path in sorted(observed):
+        candidate = worktree_path / relative_path
+        try:
+            if _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                return set(), "backend_lifespan_log_unsafe_file"
+            if candidate.stat().st_size > WORKTREE_BACKEND_LOG_LIMITS[relative_path]:
+                return set(), "backend_lifespan_log_file_too_large"
+            with candidate.open("r", encoding="utf-8", errors="strict") as handle:
+                for line in handle:
+                    text = line.rstrip("\r\n")
+                    if not text or not WORKTREE_BACKEND_LOG_LINE_RE.fullmatch(text):
+                        return set(), "backend_lifespan_log_format_mismatch"
+        except (OSError, UnicodeError):
+            return set(), "backend_lifespan_log_unreadable"
+    return observed, "bounded_test_created_backend_lifespan_log"
+
+
 def _minimal_relative_roots(roots: Iterable[str]) -> list[str]:
     ordered = sorted({_normalize_worktree_artifact_path(item) for item in roots if item}, key=lambda item: (item.count("/"), item))
     minimal: list[str] = []
@@ -10978,12 +11095,17 @@ def _worktree_active_process_profile(worktree_path: Path) -> dict[str, Any]:
             return profile
         env = os.environ.copy()
         env["AISTOCK_CLEANUP_TARGET"] = resolved
-        env["AISTOCK_CLEANUP_EXCLUDE_PIDS"] = ",".join(str(item) for item in {os.getpid(), os.getppid()})
+        env["AISTOCK_CLEANUP_CALLER_PID"] = str(os.getpid())
         script = (
             "$target=$env:AISTOCK_CLEANUP_TARGET;"
             "$forward=$target.Replace('\\','/');"
-            "$exclude=@($env:AISTOCK_CLEANUP_EXCLUDE_PIDS.Split(',')|ForEach-Object{[int]$_});"
-            "$hits=@(Get-CimInstance Win32_Process|Where-Object{$exclude -notcontains [int]$_.ProcessId}|"
+            "$all=@(Get-CimInstance Win32_Process);"
+            "$exclude=New-Object 'System.Collections.Generic.HashSet[int]';"
+            "$null=$exclude.Add([int]$PID);$cursor=[int]$env:AISTOCK_CLEANUP_CALLER_PID;"
+            "while($cursor -gt 0 -and $exclude.Add($cursor)){"
+            "$row=$all|Where-Object{[int]$_.ProcessId -eq $cursor}|Select-Object -First 1;"
+            "if($null -eq $row){break};$cursor=[int]$row.ParentProcessId};"
+            "$hits=@($all|Where-Object{-not $exclude.Contains([int]$_.ProcessId)}|"
             "Where-Object{([string]$_.CommandLine).IndexOf($target,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or "
             "([string]$_.CommandLine).IndexOf($forward,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or "
             "([string]$_.ExecutablePath).IndexOf($target,[StringComparison]::OrdinalIgnoreCase)-ge 0}|"
@@ -11076,6 +11198,11 @@ def _worktree_ignored_artifact_profile(
         worktree_path=worktree_path,
     )
     qe_live_log_prefix = WORKTREE_QE_LIVE_LOG_ROOT + "/"
+    backend_log_paths, backend_log_reason = _validated_backend_lifespan_log_transient_paths(
+        ignored,
+        worktree_path=worktree_path,
+    )
+    backend_log_prefix = WORKTREE_BACKEND_LOG_ROOT + "/"
     roots: list[str] = []
     canonical_lines: list[str] = []
     for rel in ignored:
@@ -11088,6 +11215,9 @@ def _worktree_ignored_artifact_profile(
             if rel.startswith(qe_live_log_prefix):
                 root = WORKTREE_QE_LIVE_LOG_ROOT if rel in qe_live_log_paths else None
                 reason = qe_live_log_reason
+            elif rel.startswith(backend_log_prefix):
+                root = rel if rel in backend_log_paths else None
+                reason = backend_log_reason
             else:
                 root, reason = _worktree_transient_root(rel, worktree_path=worktree_path, canonical_root=canonical_root)
             if root:
@@ -11214,12 +11344,13 @@ def _cleanup_post_removal_verification(
     local_refs = set(
         _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
     )
-    try:
-        remote_output = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=True)
-        remote_check_ok = True
-    except Exception:
-        remote_output = ""
-        remote_check_ok = False
+    remote_result = _run_read_command_with_retry(
+        ["git", "ls-remote", "--heads", "origin", branch],
+        cwd=root,
+        timeout=60,
+    )
+    remote_output = str(remote_result.get("stdout") or "") if remote_result.get("ok") else ""
+    remote_check_ok = bool(remote_result.get("ok"))
     local_absent = branch not in local_refs
     remote_absent = remote_check_ok and not remote_output.strip()
     path_absent = worktree_path is None or not worktree_path.exists()
@@ -11232,6 +11363,7 @@ def _cleanup_post_removal_verification(
         "local_branch_absent": local_absent,
         "remote_branch_absent": remote_absent,
         "remote_check_ok": remote_check_ok,
+        "remote_check_attempts": remote_result.get("attempts"),
         "all_clear": all_clear,
     }
 
@@ -11254,22 +11386,6 @@ def _delete_remote_branch_with_lease(
     expected_sha = _remote_branch_sha(expected_remote_ref, branch)
     if not expected_sha:
         raise WorkflowError(f"remote branch preflight identity is invalid: {branch}")
-    live_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=True)
-    if not live_ref.strip():
-        return {
-            "ok": True,
-            "returncode": 0,
-            "stdout": "remote branch already absent",
-            "stderr": "",
-            "expected_sha": expected_sha,
-            "already_absent": True,
-        }
-    live_sha = _remote_branch_sha(live_ref, branch)
-    if live_sha != expected_sha:
-        raise WorkflowError(
-            f"remote branch changed after cleanup preflight: {branch} "
-            f"expected={expected_sha} observed={live_sha or 'invalid'}"
-        )
     result = _execute_checked(
         [
             "git",
@@ -11459,6 +11575,50 @@ def _classify_pr_checks(checks: list[dict[str, Any]]) -> dict[str, list[str]]:
             if conclusion in {"NEUTRAL", "SKIPPED"}:
                 non_blocking.append(name)
         elif conclusion:
+            failed.append(name)
+    return {
+        "failed": failed,
+        "pending": pending,
+        "non_blocking": non_blocking,
+        "passed": passed,
+    }
+
+
+def _required_pr_check_summary(result: dict[str, Any]) -> dict[str, list[str]]:
+    """Classify only checks GitHub says are required by branch protection."""
+    raw = str(result.get("stdout") or "").strip()
+    if not raw:
+        if result.get("ok"):
+            checks: list[dict[str, Any]] = []
+        else:
+            raise WorkflowError(
+                str(result.get("stderr") or "required PR check query failed without a result").strip()
+            )
+    else:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise WorkflowError(f"required PR check query returned invalid JSON: {exc}") from exc
+        if not isinstance(parsed, list):
+            raise WorkflowError("required PR check query returned a non-list payload")
+        checks = [item for item in parsed if isinstance(item, dict)]
+
+    failed: list[str] = []
+    pending: list[str] = []
+    non_blocking: list[str] = []
+    passed: list[str] = []
+    for item in checks:
+        name = _check_name(item)
+        bucket = str(item.get("bucket") or "").lower()
+        if bucket == "pass":
+            passed.append(name)
+        elif bucket == "skipping":
+            passed.append(name)
+            non_blocking.append(name)
+        elif bucket == "pending":
+            pending.append(name)
+        else:
+            # fail, cancel, and unknown buckets must all fail closed.
             failed.append(name)
     return {
         "failed": failed,
@@ -11835,7 +11995,7 @@ def _maybe_create_pr(
 def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[str, Any]:
     if skip_github_check:
         return {"checked": False, "merged": True, "reason": "skip_github_check"}
-    result = _run_command(
+    result = _run_read_command_with_retry(
         ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,mergeCommit,url,headRefName,headRefOid"],
         cwd=REPO_ROOT,
         timeout=30,
@@ -11863,7 +12023,7 @@ def _merged_pr_validation_receipt_profile(pr_url: str) -> dict[str, Any]:
         "durable_receipt_present": False,
         "status": "check_failed",
     }
-    result = _run_command(
+    result = _run_read_command_with_retry(
         ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,url,headRefOid,body"],
         cwd=REPO_ROOT,
         timeout=30,
@@ -12173,7 +12333,11 @@ def _cleanup_merge_verification(
 def _cleanup_preflight_fetch_origin(root: Path, *, apply: bool) -> dict[str, Any]:
     if not apply:
         return {"status": "skipped", "reason": "dry_run"}
-    result = _run_command(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)
+    result = _run_read_command_with_retry(
+        ["git", "fetch", "origin", "--prune"],
+        cwd=root,
+        timeout=120,
+    )
     return {
         "status": "fetched" if result.get("ok") else "failed",
         "command": "git fetch origin --prune",
@@ -12475,11 +12639,16 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
         timeout=60,
     )
     payload = json.loads(str(view.get("stdout") or "{}"))
-    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
-    failed = check_summary["failed"]
-    pending = check_summary["pending"]
     if payload.get("state") == "MERGED":
         return {"already_merged": True, "view": payload}
+    required_result = _run_command(
+        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    check_summary = _required_pr_check_summary(required_result)
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _run_command(["gh", "pr", "merge", pr_url, "--squash"], cwd=REPO_ROOT, timeout=180)
@@ -12512,11 +12681,20 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         event="command:gh_pr_view_before_merge",
     )
     payload = json.loads(str(view.get("stdout") or "{}"))
-    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
-    failed = check_summary["failed"]
-    pending = check_summary["pending"]
     if payload.get("state") == "MERGED":
         return {"already_merged": True, "view": payload}
+    required_result = _execute_workflow_command(
+        bug_id,
+        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
+        state="ci_green",
+        cwd=REPO_ROOT,
+        timeout=60,
+        event="command:gh_pr_required_checks_before_merge",
+        allow_failure=True,
+    )
+    check_summary = _required_pr_check_summary(required_result)
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _execute_workflow_command(
@@ -13502,16 +13680,27 @@ def build_merge_finalizer_plan(
                 production_gates=production_gates or _production_gates_payload(),
                 create_registry_worktree=True,
             )
-            close_sync_commit = _maybe_commit_and_pr_close_sync(
-                bug_id=canonical_bug_id,
-                close_sync=close_sync,
-                validation_evidence=evidence,
-            )
-            close_sync_pr_merge = _merge_close_sync_pr_if_ready(
-                bug_id=canonical_bug_id,
-                close_sync_commit=close_sync_commit,
-                auto_merge=merge_close_sync_pr,
-            )
+            if close_sync.get("workflow_gate") == "fixed_source_pending_user_restart":
+                close_sync_commit = {
+                    "workflow_gate": "deferred_runtime_verification",
+                    "reason": "persist pending state in workflow/GitHub evidence and create only the final verified close-sync PR",
+                }
+                close_sync_pr_merge = {
+                    "workflow_gate": "deferred_runtime_verification",
+                    "auto_merge": False,
+                    "reason": "runtime verification receipt is not available yet",
+                }
+            else:
+                close_sync_commit = _maybe_commit_and_pr_close_sync(
+                    bug_id=canonical_bug_id,
+                    close_sync=close_sync,
+                    validation_evidence=evidence,
+                )
+                close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+                    bug_id=canonical_bug_id,
+                    close_sync_commit=close_sync_commit,
+                    auto_merge=merge_close_sync_pr,
+                )
 
     cleanup_plan = None
     if cleanup and source_branch:
@@ -14369,7 +14558,23 @@ def build_cleanup_after_merge_plan(
     local_branches = set(
         _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
     )
-    remote_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=False)
+    if apply:
+        remote_ref_result = _run_read_command_with_retry(
+            ["git", "ls-remote", "--heads", "origin", branch],
+            cwd=root,
+            timeout=60,
+        )
+        remote_ref = str(remote_ref_result.get("stdout") or "") if remote_ref_result.get("ok") else ""
+    else:
+        remote_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=False)
+        remote_ref_result = {
+            "ok": True,
+            "returncode": 0,
+            "stdout": remote_ref,
+            "stderr": "",
+            "attempts": 1,
+            "mode": "single_dry_run_read",
+        }
     merged_refs = set(_git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], cwd=root, check=False).splitlines())
     merged = branch in merged_refs
     merge_verification = _cleanup_merge_verification(branch, pr_url, merged, cwd=root)
@@ -14377,7 +14582,7 @@ def build_cleanup_after_merge_plan(
     pr_check = merge_verification["pr_check"]
     tree_equivalent = bool(merge_verification["tree_equivalent_to_origin_main"])
     merge_verified = bool(merge_verification["verified"])
-    worktree_path = Path(worktree) if worktree else None
+    worktree_path = Path(worktree) if worktree else _registered_worktree_for_branch(branch, cwd=root)
     worktree_clean = True
     worktree_registered = False
     worktree_exists = bool(worktree_path and worktree_path.exists())
@@ -14451,6 +14656,9 @@ def build_cleanup_after_merge_plan(
         result = pre_cleanup_fetch.get("result") if isinstance(pre_cleanup_fetch.get("result"), dict) else {}
         detail = result.get("stderr") or result.get("stdout") or "unknown error"
         blocking.append(f"failed to refresh origin/main before cleanup: {detail}")
+    if not remote_ref_result.get("ok"):
+        detail = remote_ref_result.get("stderr") or remote_ref_result.get("stdout") or "unknown error"
+        blocking.append(f"failed to inspect remote branch before cleanup: {detail}")
     if branch == current_branch and apply:
         blocking.append("refusing to cleanup the currently checked-out branch")
     if not merge_verified:
@@ -14571,6 +14779,7 @@ def build_cleanup_after_merge_plan(
         "evidence_bug_id": evidence_bug_id,
         "worktree_is_current_cwd": worktree_is_current_cwd,
         "pre_cleanup_fetch": pre_cleanup_fetch,
+        "remote_ref_check": remote_ref_result,
         "root_git": root_git,
         "root_dirty_files": root_dirty_files,
         "origin_equivalent_dirty_files": origin_equivalent_dirty_files,
@@ -14716,6 +14925,21 @@ def build_cleanup_after_merge_plan(
             payload["registry_intake_cleanup"] = registry_cleanup
             if registry_cleanup.get("warnings"):
                 payload["warnings"].extend(registry_cleanup.get("warnings") or [])
+            try:
+                with _GlobalBugIdAllocatorLock(timeout=30.0):
+                    removed_reservation = compact_terminal_reservation(
+                        _bug_id_reservation_root(),
+                        bug_id,
+                        min_age_seconds=0,
+                    )
+                payload["reservation_cleanup"] = {
+                    "status": "removed" if removed_reservation else "already_absent_or_non_terminal",
+                    "path": removed_reservation,
+                    "inventory_scanned": False,
+                }
+            except (BugIdLockError, WorkflowError) as exc:
+                payload["reservation_cleanup"] = {"status": "deferred", "error": str(exc)}
+                payload["warnings"].append(f"terminal BUG reservation cleanup deferred: {exc}")
         payload["applied"] = applied
         payload["workflow_gate"] = "cleanup_done"
         payload["dry_run"] = False
@@ -15092,12 +15316,17 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
         allow_current_worktree=args.allow_current_worktree,
         post_restart_receipt=args.post_restart_receipt,
     )
-    if args.create_pr:
+    if args.create_pr and payload.get("workflow_gate") != "fixed_source_pending_user_restart":
         payload["close_sync_commit"] = _maybe_commit_and_pr_close_sync(
             bug_id=str(payload.get("bug_id") or args.bug_id or "").upper(),
             close_sync=payload,
             validation_evidence=list(args.validation_evidence or []),
         )
+    elif args.create_pr:
+        payload["close_sync_commit"] = {
+            "workflow_gate": "deferred_runtime_verification",
+            "reason": "skip the intermediate pending close-sync PR; create one final PR after post-restart verification",
+        }
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced", "fixed_source_pending_user_restart"} else 2
 

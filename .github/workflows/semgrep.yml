@@ -3,6 +3,8 @@ name: Semgrep
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'tests/aistock_validation/bugs/**'
   push:
     branches: [main]
   workflow_dispatch: {}
