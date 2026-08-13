@@ -73,7 +73,9 @@
     "fresh_process_evidence": [
       "Windows AIstock fresh process imported backend.main, called the correlation GPU resolver, and proved torch.cuda.is_initialized remained false for both operations",
       "WSL rdagent-gpu fresh process proved CUDA was false before the first real correlation resolver call and true only after that call on NVIDIA GeForce RTX 5080",
-      "WSL rdagent-gpu fresh process compared the changed GPU 5-GEMM kernel with CPU BLAS and passed numpy allclose with atol=1e-10"
+      "WSL rdagent-gpu fresh process compared the changed GPU 5-GEMM kernel with CPU BLAS and passed numpy allclose with atol=1e-10",
+      "Windows fresh process import backend.main and resolve correlation backend -> passed (torch.cuda.is_initialized=false before and after; backend=None)",
+      "WSL rdagent-gpu fresh process correlation resolver and numerical parity -> passed (CUDA initialized only at resolver execution; GPU/CPU allclose)"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
