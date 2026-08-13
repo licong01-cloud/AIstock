@@ -224,7 +224,7 @@ Selection 和模型计算不持有数据库长事务。Selection 成功后，`co
 
 ### 8.2 Challenger observation
 
-Challenger 在 baseline publication commit 后运行。它失败不能回滚已发布 baseline；服务必须写 `UNAVAILABLE` 或 `FAILED` observation，并保留 reason。重试只针对同一 `forward_run_id + model_descriptor_sha256`。保存时先以 `FOR UPDATE` 锁定父 `forward_run`，使同一 forward 的并发首次 insert 串行收敛；不得仅使用共享锁后竞争 child unique key。
+Challenger 在 baseline publication commit 后运行。它失败不能回滚已发布 baseline；服务必须写 `UNAVAILABLE` 或 `FAILED` observation，并保留 reason。重试只针对同一 `forward_run_id + model_descriptor_sha256` 且既有 observation 状态为 `FAILED`；`EXPERIMENTAL_SHADOW/UNAVAILABLE` 成功事实只接受相同payload幂等重放，不允许不同payload覆盖。保存时先以 `FOR UPDATE` 锁定父 `forward_run`，使同一 forward 的并发首次 insert 串行收敛；不得仅使用共享锁后竞争 child unique key。
 
 ### 8.3 Settlement commit
 
@@ -558,6 +558,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 - Source Round 10：修复 BUG-1065 并发首次保存同一 forward observation 时共享父锁无法阻止 child unique-key 竞争的问题；父行改为排它短锁，相同重放按既有payload幂等合同收敛。
 - Source Round 11：修复 BUG-1066 publication 异常路径只看到 persisted `PUBLISHED` 就恢复、可能吞掉并发不同payload冲突的问题；仅 canonical hash完全相同的 uncertain commit 可恢复，其他异常保持可见。
 - Source Round 12：修复 BUG-1067 跨进程 stale pending 在另一进程已完成结算后，使用结算后episode重算同一target并产生假冲突的问题；service在计算前后读回权威终态，已闭合事实直接幂等返回。
+- Source Round 13：修复 BUG-1069 同冻结descriptor下不同payload可覆盖既有成功observation、静默改写前向模型事实的问题；仅 `FAILED` 可显式恢复，成功/typed-unavailable事实保持不可变。
 
 ## 20. Implementation Plan / 本阶段唯一实施顺序
 

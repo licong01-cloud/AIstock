@@ -289,6 +289,11 @@ class AdvisoryForwardPGRepository:
                     if existing["payload_sha256"] == payload_hash:
                         _clear_observation_failure(cur, observation.forward_run_id)
                         return dict(existing)
+                    if existing["status"] != "FAILED":
+                        raise InvalidStateTransitionError(
+                            "successful forward model observation payload cannot change",
+                            context={"forward_run_id": observation.forward_run_id},
+                        )
                     if existing["model_descriptor_sha256"] != observation.model_descriptor_sha256:
                         raise InvalidStateTransitionError(
                             "forward model observation descriptor identity cannot change",
