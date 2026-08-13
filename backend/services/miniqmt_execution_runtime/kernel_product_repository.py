@@ -34,7 +34,7 @@ from .kernel_product_contracts import (
 )
 from .full_five_catalog_authority import (
     FULL_FIVE_ALGO_CODES_V1,
-    build_full_five_catalog_authority_v1,
+    build_hot_full_five_catalog_authority_v1,
 )
 from .plugin_canonical import hash_hex_v1
 from .plugin_contracts import GatewayCapabilityCatalogV1
@@ -587,7 +587,7 @@ class KernelProductRepositoryMixin:
                 "K6-D route activation requires an explicit strict product gateway authority"
             )
         strict_gateway = GatewayCapabilityCatalogV1.model_validate(gateway.model_dump(mode="python"), strict=True)
-        full_authority = build_full_five_catalog_authority_v1(gateway_catalog=strict_gateway)
+        full_authority = build_hot_full_five_catalog_authority_v1(gateway_catalog=strict_gateway)
         strict_snapshot = PluginCatalogSnapshotV1.model_validate(
             full_authority.catalog_runtime.snapshot.model_dump(mode="python"), strict=True
         )
