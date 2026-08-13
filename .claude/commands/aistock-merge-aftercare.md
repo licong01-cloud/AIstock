@@ -10,7 +10,7 @@ Use this command for AIstock/RD-Agent PR merge and post-merge aftercare. RD-Agen
 2. Check PR state and CI with compact `gh pr view <PR> --json statusCheckRollup,mergeable,state`.
 3. Avoid long `gh pr checks --watch` waits when compact rollup is enough.
 4. Stop if checks fail, mergeability is blocked, or source worktree is dirty.
-5. Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK; direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure, with one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a task/PR/CI gate.
+5. Follow `TOOL-RTK-001` from the sole development standard; this command does not redefine it.
 
 ## Merge and aftercare
 
