@@ -71,7 +71,11 @@ def _resolve_gpu_backend() -> Any | None:
             )
         except Exception as exc:
             _gpu_backend = None
-            logger.info("GPU 不可用，使用 CPU BLAS: %s", exc)
+            logger.warning(
+                "GPU correlation initialization failed; using CPU BLAS: %s",
+                exc,
+                exc_info=True,
+            )
         return _gpu_backend
 
 # HDF5 存储目录

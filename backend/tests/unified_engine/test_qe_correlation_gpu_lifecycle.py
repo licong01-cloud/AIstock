@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -37,11 +38,52 @@ print("correlation_engine_import_without_torch=passed")
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
         timeout=30,
     )
     assert completed.returncode == 0, completed.stderr
     assert "correlation_engine_import_without_torch=passed" in completed.stdout
+
+
+def test_backend_main_import_does_not_initialize_cuda_in_fresh_process() -> None:
+    script = r"""
+import sys
+import types
+
+class RejectCuda:
+    @staticmethod
+    def is_initialized():
+        return False
+
+    @staticmethod
+    def is_available():
+        raise AssertionError("unexpected CUDA probe during backend.main import")
+
+torch_module = types.ModuleType("torch")
+torch_module.cuda = RejectCuda()
+sys.modules["torch"] = torch_module
+
+import backend.main
+
+assert torch_module.cuda.is_initialized() is False
+print("backend_main_import_without_cuda=passed")
+"""
+    env = dict(os.environ)
+    env["PYTHONUTF8"] = "1"
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "backend_main_import_without_cuda=passed" in completed.stdout
 
 
 def test_gpu_backend_is_resolved_only_on_first_compute_request(monkeypatch) -> None:
@@ -86,6 +128,42 @@ def test_gpu_backend_is_resolved_only_on_first_compute_request(monkeypatch) -> N
     assert calls == ["import:torch", "is_available", "gemm", "synchronize"]
     assert ce._resolve_gpu_backend() is fake_torch
     assert calls == ["import:torch", "is_available", "gemm", "synchronize"]
+
+
+def test_gpu_probe_failure_warns_once_and_caches_cpu_fallback(
+    monkeypatch,
+    caplog,
+) -> None:
+    _reset_gpu_backend(monkeypatch)
+    monkeypatch.setattr(ce, "is_wsl_runtime", lambda: True)
+    imports: list[str] = []
+
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+    fake_torch = SimpleNamespace(
+        cuda=FakeCuda(),
+        randn=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("probe failed")
+        ),
+    )
+
+    def fake_import(name: str):
+        imports.append(name)
+        return fake_torch
+
+    monkeypatch.setattr(ce.importlib, "import_module", fake_import)
+
+    with caplog.at_level(logging.WARNING, logger=ce.logger.name):
+        assert ce._resolve_gpu_backend() is None
+        assert ce._resolve_gpu_backend() is None
+
+    assert imports == ["torch"]
+    assert caplog.messages == [
+        "GPU correlation initialization failed; using CPU BLAS: probe failed"
+    ]
 
 
 def test_unavailable_cuda_is_cached_and_uses_cpu_blas(monkeypatch) -> None:

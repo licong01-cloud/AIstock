@@ -28,6 +28,12 @@
       "actor": "codex",
       "note": "Removed import-time torch/CUDA probing. Windows backend correlation paths remain CPU-only; the WSL compute runtime lazily imports and validates CUDA at the first real GEMM. First review added the non-WSL guard so a pairwise request cannot leave CUDA resident in backend-main. Focused tests, required nox plans, Windows fresh-process lifecycle, WSL lazy CUDA, and GPU/CPU numerical parity passed.",
       "timestamp": "2026-08-13T15:39:00Z"
+    },
+    {
+      "action": "second_code_review_fix",
+      "actor": "codex",
+      "note": "Second review found that CUDA import or probe exceptions were logged only at INFO and that the automated fresh-process test covered correlation_engine import but not the complete backend.main startup chain. The fallback now emits one WARNING with traceback and remains cached to avoid log storms; tests now lock backend.main CUDA inactivity and one-time probe-failure reporting.",
+      "timestamp": "2026-08-13T16:10:10Z"
     }
   ],
   "evidence_uris": [],
