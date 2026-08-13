@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1048",
-  "closed_at": null,
+  "closed_at": "2026-08-13T03:11:00Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -75,8 +75,8 @@
   },
   "first_seen_at": "2026-08-12T17:56:07.036197Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6d88ae616aaa4fd3dd483845de1e3bb7a858fe8f",
+  "fixed_at": "2026-08-13T03:11:00Z",
   "github_issue_number": 3360,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3360",
   "last_seen_at": "2026-08-12T17:56:07.036197Z",
@@ -84,6 +84,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3364",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -98,6 +99,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -105,7 +108,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -114,6 +117,15 @@
     "fingerprint": "9e168f410b5a7d0604b70451",
     "source_event_id": "FE-20260812-9e168f410b5a"
   },
+  "validation_evidence": [
+    "validation-receipt: id=2cd56f7b532ffc75 commit=f27f27014b5d5dd14fb899bd7fb22d213bdb9122 kind=ruff plan=direct status=passed command=`rtk ruff check and format; python -m py_compile changed files` result=`passed`",
+    "validation-receipt: id=32f54fa2dd227030 commit=f27f27014b5d5dd14fb899bd7fb22d213bdb9122 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -k transition_dwell -q` result=`24 passed`",
+    "validation-receipt: id=8477ca0b451f61b1 commit=f27f27014b5d5dd14fb899bd7fb22d213bdb9122 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_risk/test_prepare_state_model_set_b3.py -q` result=`133 passed`",
+    "validation-receipt: id=0a5b0a59b7ba77e4 commit=f27f27014b5d5dd14fb899bd7fb22d213bdb9122 kind=nox plan=hmm_risk_backend status=passed command=`python -m nox -s hmm_risk_backend` result=`436 passed; coverage 76.49 percent`",
+    "validation-receipt: id=5e460284cdfce9ea commit=f27f27014b5d5dd14fb899bd7fb22d213bdb9122 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; 14/14 mapped`",
+    "validation-receipt: id=448e3865e3b362af commit=f27f27014b5d5dd14fb899bd7fb22d213bdb9122 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+    "validation-receipt: id=acee4748b02e830b commit=f27f27014b5d5dd14fb899bd7fb22d213bdb9122 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
