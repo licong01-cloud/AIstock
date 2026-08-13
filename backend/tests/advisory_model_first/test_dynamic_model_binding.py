@@ -99,6 +99,17 @@ def test_descriptor_path_rejects_non_opaque_path_identities(
     assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
 
 
+def test_is_configured_rejects_traversal_before_filesystem_probe(tmp_path) -> None:
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        AdvisoryModelBindingResolver().is_configured(
+            model_root=tmp_path,
+            program_id="../outside",
+            binding_version_id="advb_test",
+        )
+
+    assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
+
+
 def test_descriptor_path_rejects_program_bindings_symlink_escape(tmp_path) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.mkdir()
@@ -132,6 +143,28 @@ def test_descriptor_path_rejects_program_directory_symlink_escape(tmp_path) -> N
             model_root=tmp_path,
             program_id="advp_test",
             binding_version_id="advb_test",
+        )
+
+    assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"
+
+
+def test_resolve_rejects_program_directory_symlink_before_descriptor_read(tmp_path) -> None:
+    binding_root = tmp_path / "program_bindings"
+    binding_root.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-resolve-outside"
+    outside.mkdir()
+    (outside / "advb_test.json").write_text(json.dumps(_descriptor()), encoding="utf-8")
+    try:
+        (binding_root / "advp_test").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {type(exc).__name__}")
+
+    with pytest.raises(AdvisoryModelFirstError) as error:
+        AdvisoryModelBindingResolver().resolve(
+            model_root=tmp_path,
+            program=SimpleNamespace(program_id="advp_test", package_ids=["pkg_test"]),
+            active_binding={"binding_version_id": "advb_test", "package_ids": ["pkg_test"]},
+            selection_run=SimpleNamespace(manifest_sha256_by_package={"pkg_test": "a" * 64}),
         )
 
     assert error.value.reason_code == "ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID"

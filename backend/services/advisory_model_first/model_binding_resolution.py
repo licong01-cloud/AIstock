@@ -66,11 +66,22 @@ class AdvisoryModelBindingResolver:
         program_id: str,
         binding_version_id: str,
     ) -> bool:
-        return self.descriptor_path(
+        descriptor_path = self.descriptor_path(
             model_root=model_root,
             program_id=program_id,
             binding_version_id=binding_version_id,
-        ).is_file()
+        )
+        normalized_path, normalized_root = _normalized_descriptor_access(
+            descriptor_path=descriptor_path,
+            model_root=model_root,
+        )
+        if not normalized_path.startswith(normalized_root + os.sep):
+            raise AdvisoryModelFirstError(
+                "Advisory model descriptor path escapes its configured root",
+                reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+                context={"field": "descriptor_path"},
+            )
+        return os.path.isfile(normalized_path)
 
     def resolve(
         self,
@@ -101,13 +112,23 @@ class AdvisoryModelBindingResolver:
             program_id=program_id,
             binding_version_id=binding_version_id,
         )
-        if not descriptor_path.is_file():
+        normalized_path, normalized_root = _normalized_descriptor_access(
+            descriptor_path=descriptor_path,
+            model_root=model_root,
+        )
+        if not normalized_path.startswith(normalized_root + os.sep):
+            raise AdvisoryModelFirstError(
+                "Advisory model descriptor path escapes its configured root",
+                reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+                context={"field": "descriptor_path"},
+            )
+        if not os.path.isfile(normalized_path):
             raise AdvisoryModelFirstError(
                 "no exact model descriptor is configured for this Advisory Program binding",
                 reason_code="ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
                 context={"program_id": program_id, "binding_version_id": binding_version_id},
             )
-        payload = _read_json(descriptor_path)
+        payload = _read_json(Path(normalized_path))
         required = {
             "schema_version",
             "program_id",
@@ -351,3 +372,15 @@ def _require_contained_path(path: Path, root: Path, *, field: str) -> None:
             reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
             context={"field": field},
         ) from exc
+
+
+def _normalized_descriptor_access(
+    *,
+    descriptor_path: Path,
+    model_root: str | Path,
+) -> tuple[str, str]:
+    normalized_path = os.path.realpath(os.fspath(descriptor_path))
+    normalized_root = os.path.realpath(
+        os.path.join(os.fspath(model_root), "program_bindings")
+    )
+    return normalized_path, normalized_root
