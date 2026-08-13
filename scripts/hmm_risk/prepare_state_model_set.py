@@ -2635,9 +2635,177 @@ def _transition_dwell_child_path(args: argparse.Namespace, process_identity: str
     return report.with_name(f"{report.stem}.{process_identity}.{receipt_sha256}.json")
 
 
+def _transition_dwell_parent_failure_path(args: argparse.Namespace) -> Path:
+    report = Path(args.b3_transition_dwell_output).resolve()
+    return report.with_name(f"{report.stem}.parent.failure.json")
+
+
+def _transition_dwell_execution_failure(
+    *,
+    control_authority: Mapping[str, Any],
+    child_receipts: list[dict[str, Any]],
+    process_identity: str,
+    error_type: str,
+    error: str,
+    fit_budget_completion_unknown: bool,
+    returncode: int | None = None,
+    stdout: bytes = b"",
+    stderr: bytes = b"",
+    child_reason_code: str | None = None,
+) -> dict[str, Any]:
+    body = {
+        "schema_version": B3_TRANSITION_DWELL_REPORT_SCHEMA,
+        "contract_version": B3_TRANSITION_DWELL_CONTRACT,
+        "status": "insufficient_evidence",
+        "primary_reason_code": "hmm_risk_transition_dwell_fresh_process_failed",
+        "failure_stage": "fresh_process_execution",
+        "failed_process_identity": process_identity,
+        "completed_process_count": len(child_receipts),
+        "planned_fit_count": 2096,
+        "terminal_entry_count": len(child_receipts) * 1048,
+        "fit_budget_completion_unknown": fit_budget_completion_unknown,
+        "error_type": error_type[:256],
+        "error": error[-4000:],
+        "child_returncode": returncode,
+        "child_reason_code": child_reason_code,
+        "child_stdout_byte_count": len(stdout),
+        "child_stdout_sha256": sha256_bytes(stdout),
+        "child_stderr_byte_count": len(stderr),
+        "child_stderr_sha256": sha256_bytes(stderr),
+        "control_authority": dict(control_authority),
+        "fresh_process_receipts": list(child_receipts),
+        "canonical_payload_bitwise_equal": False,
+        "diagnostic_complete_candidate_seeds": [],
+        "candidate_seed_count": 0,
+        "selection_performed": False,
+        "selected_seed": None,
+        "d5_executed": False,
+        "d6_executed": False,
+        "semantic_mapping_performed": False,
+        "formal_d5_stability_gate_applied": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "report_sha256": canonical_sha256(body)}
+
+
+def _build_transition_dwell_parent_failure(
+    error: Exception,
+    *,
+    known_report: Mapping[str, Any] | None,
+    failure_stage: str,
+) -> dict[str, Any]:
+    receipts = list((known_report or {}).get("fresh_process_receipts") or ())
+    terminal_entry_count = (known_report or {}).get("terminal_entry_count")
+    body = {
+        "schema_version": "hmm_risk_b3_transition_dwell_parent_failure_v1",
+        "contract_version": B3_TRANSITION_DWELL_CONTRACT,
+        "status": "insufficient_evidence",
+        "primary_reason_code": "hmm_risk_transition_dwell_parent_finalization_failed",
+        "failure_stage": failure_stage,
+        "error_type": type(error).__name__,
+        "error": str(error)[-4000:],
+        "planned_fit_count": 2096,
+        "terminal_entry_count": terminal_entry_count if isinstance(terminal_entry_count, int) else 0,
+        "completed_process_count": len(receipts),
+        "fit_budget_completion_unknown": known_report is None,
+        "fresh_process_receipts": receipts,
+        "selection_performed": False,
+        "d5_executed": False,
+        "d6_executed": False,
+        "semantic_mapping_performed": False,
+        "formal_d5_stability_gate_applied": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
 def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identity: str) -> None:
     body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
     repeat = value.get("level_repeat")
+    entries = list(repeat.get("entries") or ()) if isinstance(repeat, Mapping) else []
+    models = list(repeat.get("models") or ()) if isinstance(repeat, Mapping) else []
+    profiles = list(value.get("profiles") or ())
+    per_seed = list(value.get("per_seed") or ())
+    entry_keys: list[tuple[int, str]] = []
+    valid_entry_keys: set[tuple[int, str]] = set()
+    model_keys: set[tuple[int, str]] = set()
+    model_hash_by_key: dict[tuple[int, str], str] = {}
+    profile_keys: set[tuple[int, str]] = set()
+    stable_keys: set[tuple[int, str]] = set()
+    closure_valid = True
+    try:
+        for entry in entries:
+            entry_body = {key: item for key, item in entry.items() if key != "entry_receipt_sha256"}
+            entry_key = (int(entry["seed"]), str(entry["sector_code"]))
+            if entry.get("entry_receipt_sha256") != canonical_sha256(entry_body):
+                closure_valid = False
+            entry_keys.append(entry_key)
+            if entry.get("model_entry_valid") is True:
+                valid_entry_keys.add(entry_key)
+            elif (
+                entry.get("model_entry_valid") is not False
+                or not isinstance(entry.get("failure_stage"), str)
+                or not entry.get("failure_stage")
+                or not isinstance(entry.get("failure_reason_codes"), list)
+                or not entry.get("failure_reason_codes")
+                or any(not isinstance(reason, str) or not reason for reason in entry["failure_reason_codes"])
+            ):
+                closure_valid = False
+        for model in models:
+            model_body = {key: item for key, item in model.items() if key != "model_payload_sha256"}
+            model_key = (int(model["seed"]), str(model["sector_code"]))
+            model_hash = str(model.get("model_payload_sha256") or "")
+            if model_key in model_keys or len(model_hash) != 64 or model_hash != canonical_sha256(model_body):
+                closure_valid = False
+            model_keys.add(model_key)
+            model_hash_by_key[model_key] = model_hash
+        for profile in profiles:
+            profile_body = {key: item for key, item in profile.items() if key != "profile_sha256"}
+            profile_key = (int(profile["seed"]), str(profile["sector_code"]))
+            if (
+                profile_key in profile_keys
+                or profile.get("profile_sha256") != canonical_sha256(profile_body)
+                or profile.get("model_payload_sha256") != model_hash_by_key.get(profile_key)
+                or not isinstance(profile.get("both_windows_structurally_observed"), bool)
+            ):
+                closure_valid = False
+            profile_keys.add(profile_key)
+            if profile.get("both_windows_structurally_observed") is True:
+                stable_keys.add(profile_key)
+    except (KeyError, TypeError, ValueError):
+        closure_valid = False
+    expected_codes = tuple(str(item) for item in (repeat.get("canonical_sector_codes") or ())) if repeat else ()
+    expected_entry_keys = {(seed, sector_code) for seed in RESTART_SCHEDULE for sector_code in expected_codes}
+    per_seed_by_seed = {
+        int(item.get("seed")): item
+        for item in per_seed
+        if isinstance(item, Mapping) and isinstance(item.get("seed"), int)
+    }
+    if len(per_seed) != len(RESTART_SCHEDULE) or set(per_seed_by_seed) != set(RESTART_SCHEDULE):
+        closure_valid = False
+    else:
+        for seed in RESTART_SCHEDULE:
+            summary = per_seed_by_seed[seed]
+            model_count = sum(key[0] == seed for key in model_keys)
+            stable_count = sum(key[0] == seed for key in stable_keys)
+            expected_complete = model_count == B3_P6_EXPECTED_SECTOR_COUNT
+            expected_stable = stable_count == B3_P6_EXPECTED_SECTOR_COUNT
+            if any(
+                (
+                    summary.get("d3_d4_accepted_sector_count") != model_count,
+                    summary.get("d3_d4_accepted_131_of_131") is not expected_complete,
+                    summary.get("early_late_stable_sector_count") != stable_count,
+                    summary.get("early_late_stable_131_of_131") is not expected_stable,
+                    summary.get("diagnostic_candidate_complete") is not (expected_complete and expected_stable),
+                )
+            ):
+                closure_valid = False
     if (
         value.get("schema_version") != B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA
         or value.get("contract_version") != B3_TRANSITION_DWELL_CONTRACT
@@ -2651,10 +2819,18 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
         or any(character not in "0123456789abcdef" for character in value["treatment_producer_commit"].lower())
         or value.get("planned_fit_count") != 1048
         or value.get("terminal_entry_count") != 1048
-        or value.get("profile_count") != 1048
+        or value.get("profile_count") != len(profiles)
         or not isinstance(repeat, Mapping)
         or repeat.get("transition_dwell_contract") != B3_TRANSITION_DWELL_CONTRACT
         or repeat.get("entry_count") != 1048
+        or len(entries) != 1048
+        or len(entry_keys) != len(set(entry_keys))
+        or set(entry_keys) != expected_entry_keys
+        or valid_entry_keys != model_keys
+        or model_keys != profile_keys
+        or repeat.get("entry_payload_sha256") != canonical_sha256(entries)
+        or repeat.get("model_payload_sha256") != canonical_sha256(models)
+        or not closure_valid
         or value.get("single_pass_receipt_sha256") != canonical_sha256(body)
         or any(
             value.get(field) is not False
@@ -2812,74 +2988,105 @@ def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str
     children: list[dict[str, Any]] = []
     child_receipts: list[dict[str, Any]] = []
     for process_identity in ("fresh_process_1", "fresh_process_2"):
-        completed = subprocess.run(
-            _b3_transition_dwell_child_command(
+        try:
+            completed = subprocess.run(
+                _b3_transition_dwell_child_command(
+                    args,
+                    process_identity,
+                    source_producer_commit=authority["source_producer_commit"],
+                    treatment_producer_commit=authority["treatment_producer_commit"],
+                ),
+                check=False,
+                capture_output=True,
+            )
+        except OSError as exc:
+            return _transition_dwell_execution_failure(
+                control_authority=control_authority,
+                child_receipts=child_receipts,
+                process_identity=process_identity,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                fit_budget_completion_unknown=True,
+            )
+        if completed.returncode != 0:
+            decoded_error = completed.stderr.decode("utf-8", errors="replace").strip()
+            parsed_error: Mapping[str, Any] = {}
+            if decoded_error:
+                try:
+                    candidate = json.loads(decoded_error.splitlines()[-1])
+                    if isinstance(candidate, Mapping):
+                        parsed_error = candidate
+                except json.JSONDecodeError:
+                    parsed_error = {}
+            return _transition_dwell_execution_failure(
+                control_authority=control_authority,
+                child_receipts=child_receipts,
+                process_identity=process_identity,
+                error_type=str(parsed_error.get("error_type") or "FreshProcessExitError"),
+                error=str(
+                    parsed_error.get("error")
+                    or decoded_error
+                    or f"fresh process exited with returncode={completed.returncode}"
+                ),
+                fit_budget_completion_unknown=True,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                child_reason_code=(
+                    str(parsed_error["reason_code"]) if parsed_error.get("reason_code") is not None else None
+                ),
+            )
+        try:
+            try:
+                child = json.loads(completed.stdout.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise StateModelSetError(f"TRANSITION-DWELL-B {process_identity} returned invalid JSON") from exc
+            if not isinstance(child, dict) or canonical_json_bytes(child) != completed.stdout:
+                raise StateModelSetError(
+                    f"TRANSITION-DWELL-B {process_identity} did not return one canonical JSON object"
+                )
+            _validate_transition_dwell_child(child, process_identity=process_identity)
+            if (
+                child.get("source_producer_commit") != authority["source_producer_commit"]
+                or child.get("treatment_producer_commit") != authority["treatment_producer_commit"]
+            ):
+                raise StateModelSetError(
+                    f"TRANSITION-DWELL-B child producer authority drifted from parent: {process_identity}"
+                )
+            repeat = child["level_repeat"]
+            expected_keys = expected["authority_keys"]
+            if any(child.get(key) != value for key, value in expected_keys.items()):
+                raise StateModelSetError(
+                    f"TRANSITION-DWELL-B child authority drifted from parent reload: {process_identity}"
+                )
+            if (
+                tuple(child.get("feature_names") or ()) != tuple(expected["feature_names"])
+                or child.get("preprocess_family") != expected["preprocess_family"]
+                or tuple(repeat.get("canonical_sector_codes") or ()) != tuple(expected["canonical_sector_codes"])
+                or repeat.get("canonical_sector_set_sha256") != expected["canonical_sector_set_sha256"]
+                or tuple(repeat.get("schedule") or ()) != tuple(RESTART_SCHEDULE)
+            ):
+                raise StateModelSetError(
+                    f"TRANSITION-DWELL-B child level closure drifted from parent reload: {process_identity}"
+                )
+            child_path = _transition_dwell_child_path(
                 args,
                 process_identity,
-                source_producer_commit=authority["source_producer_commit"],
-                treatment_producer_commit=authority["treatment_producer_commit"],
-            ),
-            check=False,
-            capture_output=True,
-        )
-        if completed.returncode != 0:
-            body = {
-                "schema_version": B3_TRANSITION_DWELL_REPORT_SCHEMA,
-                "contract_version": B3_TRANSITION_DWELL_CONTRACT,
-                "status": "insufficient_evidence",
-                "primary_reason_code": "hmm_risk_transition_dwell_fresh_process_failed",
-                "failed_process_identity": process_identity,
-                "completed_process_count": len(children),
-                "planned_fit_count": 2096,
-                "terminal_entry_count": len(children) * 1048,
-                "control_authority": control_authority,
-                "selection_performed": False,
-                "d5_executed": False,
-                "d6_executed": False,
-                "semantic_mapping_performed": False,
-                "formal_d5_stability_gate_applied": False,
-                "model_write_performed": False,
-                "ready_artifact_write_performed": False,
-                "database_write_performed": False,
-                "runtime_action_performed": False,
-            }
-            return {**body, "report_sha256": canonical_sha256(body)}
-        try:
-            child = json.loads(completed.stdout.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise StateModelSetError(f"TRANSITION-DWELL-B {process_identity} returned invalid JSON") from exc
-        if not isinstance(child, dict) or canonical_json_bytes(child) != completed.stdout:
-            raise StateModelSetError(f"TRANSITION-DWELL-B {process_identity} did not return one canonical JSON object")
-        _validate_transition_dwell_child(child, process_identity=process_identity)
-        if (
-            child.get("source_producer_commit") != authority["source_producer_commit"]
-            or child.get("treatment_producer_commit") != authority["treatment_producer_commit"]
-        ):
-            raise StateModelSetError(
-                f"TRANSITION-DWELL-B child producer authority drifted from parent: {process_identity}"
+                str(child["single_pass_receipt_sha256"]),
             )
-        repeat = child["level_repeat"]
-        expected_keys = expected["authority_keys"]
-        if any(child.get(key) != value for key, value in expected_keys.items()):
-            raise StateModelSetError(
-                f"TRANSITION-DWELL-B child authority drifted from parent reload: {process_identity}"
+            child_sha256 = _write_diagnostic_report(child_path, child)
+        except (StateModelSetError, OSError, ValueError) as exc:
+            return _transition_dwell_execution_failure(
+                control_authority=control_authority,
+                child_receipts=child_receipts,
+                process_identity=process_identity,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                fit_budget_completion_unknown=True,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
             )
-        if (
-            tuple(child.get("feature_names") or ()) != tuple(expected["feature_names"])
-            or child.get("preprocess_family") != expected["preprocess_family"]
-            or tuple(repeat.get("canonical_sector_codes") or ()) != tuple(expected["canonical_sector_codes"])
-            or repeat.get("canonical_sector_set_sha256") != expected["canonical_sector_set_sha256"]
-            or tuple(repeat.get("schedule") or ()) != tuple(RESTART_SCHEDULE)
-        ):
-            raise StateModelSetError(
-                f"TRANSITION-DWELL-B child level closure drifted from parent reload: {process_identity}"
-            )
-        child_path = _transition_dwell_child_path(
-            args,
-            process_identity,
-            str(child["single_pass_receipt_sha256"]),
-        )
-        child_sha256 = _write_diagnostic_report(child_path, child)
         children.append(child)
         child_receipts.append(
             {
@@ -6568,12 +6775,30 @@ def main() -> int:
             print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
             return 0 if report["status"] == "diagnostic_complete" else 1
         if transition_dwell_parent:
-            report = run_b3_transition_dwell_repeated(args, request)
             report_path = Path(transition_dwell_output).resolve()
-            report_sha256 = _write_diagnostic_report(report_path, report)
-            readback = _load_json_mapping(report_path, label="TRANSITION-DWELL-B report")
-            if readback != report:
-                raise StateModelSetError("TRANSITION-DWELL-B durable report readback differs")
+            failure_path = _transition_dwell_parent_failure_path(args)
+            report = None
+            failure_stage = "execution"
+            try:
+                report = run_b3_transition_dwell_repeated(args, request)
+                failure_stage = "report_write"
+                report_sha256 = _write_diagnostic_report(report_path, report)
+                failure_stage = "report_readback"
+                readback = _load_json_mapping(report_path, label="TRANSITION-DWELL-B report")
+                if readback != report:
+                    raise StateModelSetError("TRANSITION-DWELL-B durable report readback differs")
+            except Exception as exc:
+                known_report = report if isinstance(report, dict) else None
+                failure = _build_transition_dwell_parent_failure(
+                    exc,
+                    known_report=known_report,
+                    failure_stage=failure_stage,
+                )
+                _write_diagnostic_report(failure_path, failure)
+                raise StateModelSetError(
+                    f"TRANSITION-DWELL-B parent finalization failed error_type={type(exc).__name__} "
+                    f"error={exc} failure_receipt={failure_path}"
+                ) from exc
             receipt = {
                 "schema_version": B3_TRANSITION_DWELL_CLI_SCHEMA,
                 "status": report["status"],
