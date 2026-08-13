@@ -101,7 +101,10 @@ def _write_runtime_catalog(root: Path) -> Path:
                     },
                     "worker-scheduler": {
                         "runtime_kind": "worker_scheduler",
-                        "source_globs": ["scripts/dataset_release_worker.py"],
+                        "source_globs": [
+                            "scripts/dataset_release_worker.py",
+                            "scripts/dataset_release_source_stage.py",
+                        ],
                         "probe_origins": ["http://127.0.0.1:8001"],
                         "operator_runbook_ref": "bug_record.runtime_contract.operator_runbook_ref",
                         "expected_identity_ref": "merged_commit",
@@ -1310,6 +1313,10 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
         ["scripts/dataset_release_worker.py"],
         root=isolated_workflow_root,
     )
+    dataset_source_stage = workflow._classify_runtime_impact(
+        ["scripts/dataset_release_source_stage.py"],
+        root=isolated_workflow_root,
+    )
     mixed_advisory_and_backend = workflow._classify_runtime_impact(
         [
             "backend/services/advisory_phase0b/audit_service.py",
@@ -1357,6 +1364,8 @@ def test_runtime_catalog_globs_and_client_paths_drive_activation_classification(
     assert dataset_offline_tools["runtime_files"] == []
     assert dataset_worker["runtime_impact"] == "worker_scheduler"
     assert dataset_worker["target_ids"] == ["worker-scheduler"]
+    assert dataset_source_stage["runtime_impact"] == "worker_scheduler"
+    assert dataset_source_stage["target_ids"] == ["worker-scheduler"]
     assert mixed_advisory_and_backend["runtime_impact"] == "backend"
     assert mixed_advisory_and_backend["runtime_files"] == ["backend/services/example.py"]
     assert mixed_advisory_and_backend["target_ids"] == ["backend-main"]

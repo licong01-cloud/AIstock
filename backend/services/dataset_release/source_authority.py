@@ -76,6 +76,7 @@ SOURCE_MONTH_CONTENT_LEAF_SCHEMA = "dataset_release_source_month_content_leaf_v1
 MVCC_PARTITION_REUSE_PRODUCTION_VALIDATED = False
 MAX_SOURCE_STAGE_ARTIFACT_BYTES = 64 * 1024 * 1024
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
+_STOCK_CODE = re.compile(r"^[0-9]{6}\.(?:SH|SZ)$")
 
 
 class SourceAuthorityError(DatasetReleaseError):
@@ -262,7 +263,8 @@ class SourceQuerySpec:
                 "AND source_row.trade_date >= stock.list_date + interval '365 days' "
                 "AND EXISTS (SELECT 1 FROM market.kline_daily_raw AS daily "
                 "WHERE daily.ts_code=source_row.ts_code "
-                "AND daily.trade_date=source_row.trade_date) ORDER BY row_key,row_payload"
+                "AND daily.trade_date=source_row.trade_date) "
+                "AND source_row.ts_code = ANY(%(codes)s) ORDER BY row_key,row_payload"
             )
         if self.query_id == "sw_index_classify":
             return (
@@ -351,6 +353,9 @@ def _query(
     code_column: str | None = None,
     code_policy: str | None = None,
 ) -> SourceQuerySpec:
+    if code_column is None and keys and keys[0] == "ts_code":
+        code_column = "ts_code"
+        code_policy = "pit_stock_codes"
     required_columns = tuple(dict.fromkeys((*keys, *values, *required)))
     return SourceQuerySpec(
         query_id=query_id,
@@ -364,7 +369,11 @@ def _query(
         non_null_value_columns=tuple(non_null_values),
         date_expression=date_expression,
         start_policy=start_policy,
-        query_version=(f"{query_id}_canonical_row_code_major_v3" + (":derived_l2_v1" if derived_values else "")),
+        query_version=(
+            f"{query_id}_canonical_row_code_major_v3"
+            + (":derived_l2_v1" if derived_values else "")
+            + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
+        ),
         audit_dataset=audit_dataset,
         audit_eligible_sources=tuple(audit_eligible_sources),
         code_column=code_column,
@@ -758,6 +767,7 @@ FROM market.stock_universe_pit_spans AS source_row
 WHERE universe_key = %(universe_key)s
   AND eligible_end >= %(start)s
   AND eligible_start <= %(end)s
+  AND (%(codes)s::text[] IS NULL OR ts_code = ANY(%(codes)s))
 ORDER BY ts_code,eligible_start,eligible_end,entry_reason,exit_reason,semantic_payload
 """
 
@@ -1434,10 +1444,12 @@ class MonthlySourceAuthority:
         recheck_partition_expectations: Sequence[Mapping[str, Any]] | None = None,
         expected_source_content_root: str | None = None,
         expected_pit_snapshot_digest: str | None = None,
+        sample_instruments: Sequence[str] = (),
     ) -> FrozenSourceAuthoritySnapshot | ExactSourceRecheckSnapshot:
         if type(pressure_rung) is not int or not 0 <= pressure_rung < len(self.profile.pressure_ladder["h5_batch"]):
             raise SourceProviderContractError("source pressure rung is invalid")
         pulse = checkpoint or (lambda: None)
+        selected_stock_codes = _validated_sample_instruments(sample_instruments)
         read_chunk_rows = max(
             1_000,
             self.profile.resource_policy.validation_read_chunk_rows // (2**pressure_rung),
@@ -1469,6 +1481,7 @@ class MonthlySourceAuthority:
             budget=budget,
             read_chunk_rows=read_chunk_rows,
             recheck_by_identity=recheck_by_identity,
+            selected_stock_codes=selected_stock_codes,
         )
         token_receipts = [f"control-before:{index}:{token}" for index, token in enumerate(before.snapshot_tokens)]
         writer_ledger_check_count = 1
@@ -1497,7 +1510,12 @@ class MonthlySourceAuthority:
                 )
             schema = before.schemas[query.query_id]
             query_rows = 0
-            for partition_key, params in self._partition_requests(query, cutoff, pit_snapshot=before.pit_snapshot):
+            for partition_key, params in self._partition_requests(
+                query,
+                cutoff,
+                pit_snapshot=before.pit_snapshot,
+                selected_stock_codes=selected_stock_codes,
+            ):
                 pulse()
                 audit_digest = None
                 if query.date_expression is not None:
@@ -1701,6 +1719,7 @@ class MonthlySourceAuthority:
             budget=None,
             read_chunk_rows=read_chunk_rows,
             recheck_by_identity=recheck_by_identity,
+            selected_stock_codes=selected_stock_codes,
         )
         if after.consistency_digest != before.consistency_digest:
             raise SourceSnapshotDriftBlocked(
@@ -1913,6 +1932,7 @@ class MonthlySourceAuthority:
         budget: SourceCASBudgetTracker | None,
         read_chunk_rows: int,
         recheck_by_identity: Mapping[str, Mapping[str, Any]] | None = None,
+        selected_stock_codes: tuple[str, ...] = (),
     ) -> _SourceControlSnapshot:
         with self._session_factory(self.profile.resource_policy) as session:
             tokens = self._session_tokens(session)
@@ -1946,6 +1966,7 @@ class MonthlySourceAuthority:
                 budget=budget,
                 read_chunk_rows=read_chunk_rows,
                 recheck_by_identity=recheck_by_identity,
+                selected_stock_codes=selected_stock_codes,
             )
         audit_receipt = audit.as_receipt(profile=self.profile.profile, cutoff=cutoff)
         consistency_digest = digest_named_fields(
@@ -2178,6 +2199,7 @@ class MonthlySourceAuthority:
         budget: SourceCASBudgetTracker | None,
         read_chunk_rows: int | None = None,
         recheck_by_identity: Mapping[str, Mapping[str, Any]] | None = None,
+        selected_stock_codes: tuple[str, ...] = (),
     ) -> tuple[tuple[SealedSourcePartition, ...], FrozenPitSnapshot]:
         state = session.fetch_one("pit_state", {"universe_key": self.profile.universe_key})
         if state is None:
@@ -2233,8 +2255,19 @@ class MonthlySourceAuthority:
         )
         spans_spec = PartitionSpec(
             dataset="stock_universe_pit_spans",
-            partition_key=f"{self.profile.start_date.isoformat()}_{cutoff.isoformat()}",
-            query_version="pit_spans_semantic_v1",
+            partition_key=(
+                f"{self.profile.start_date.isoformat()}_{cutoff.isoformat()}"
+                + (
+                    "_sample-"
+                    + digest_named_fields(
+                        "dataset_release_pit_sample_codes_v1",
+                        {"codes": list(selected_stock_codes)},
+                    )[:16]
+                    if selected_stock_codes
+                    else ""
+                )
+            ),
+            query_version=("pit_spans_semantic_sample_v2" if selected_stock_codes else "pit_spans_semantic_v1"),
             columns=(
                 ColumnSpec("ts_code", ColumnKind.STRING, True),
                 ColumnSpec("eligible_start", ColumnKind.DATE, True),
@@ -2267,6 +2300,7 @@ class MonthlySourceAuthority:
                     "universe_key": self.profile.universe_key,
                     "start": self.profile.start_date,
                     "end": cutoff,
+                    "codes": list(selected_stock_codes) if selected_stock_codes else None,
                 },
                 fetch_rows=(read_chunk_rows or self.profile.resource_policy.validation_read_chunk_rows),
             ),
@@ -2285,6 +2319,11 @@ class MonthlySourceAuthority:
         )
         if not frozen_rows:
             raise SourceRequiredDatasetEmpty("frozen PIT span source is empty")
+        if selected_stock_codes and tuple(sorted({str(row["ts_code"]) for row in frozen_rows})) != selected_stock_codes:
+            raise SourceRequiredDatasetEmpty(
+                "sample PIT source does not cover the exact allowlisted instruments",
+                context={"expected": list(selected_stock_codes)},
+            )
         exact_pit_source = digest_named_fields(
             "dataset_release_exact_pit_source_v1",
             {
@@ -2324,14 +2363,18 @@ class MonthlySourceAuthority:
         cutoff: date,
         *,
         pit_snapshot: FrozenPitSnapshot,
+        selected_stock_codes: tuple[str, ...] = (),
     ) -> Iterable[tuple[str, dict[str, Any]]]:
         codes: list[str] | None = None
         if query.code_policy == "profile_index_codes":
             codes = list(self.profile.index_codes)
-        elif query.code_policy == "pit_minute_code_batch":
-            codes = sorted({span.ts_code for span in pit_snapshot.spans})
+        elif query.code_policy in {"pit_stock_codes", "pit_minute_code_batch"}:
+            pit_codes = tuple(sorted({span.ts_code for span in pit_snapshot.spans}))
+            codes = list(selected_stock_codes or pit_codes)
+            if not set(codes).issubset(pit_codes):
+                raise SourceProviderContractError("source sample instruments escape the frozen PIT snapshot")
             if not codes:
-                raise SourceRequiredDatasetEmpty("frozen PIT has no minute instruments")
+                raise SourceRequiredDatasetEmpty("frozen PIT has no stock instruments")
         if query.start_policy == "timeless":
             params: dict[str, Any] = {}
             if codes is not None:
@@ -3600,6 +3643,18 @@ def ensure_sha256_text(value: Any, *, field: str) -> str:
         return ensure_sha256(str(value), field=field)
     except Exception as exc:
         raise SourceAuditIncomplete(f"baseline {field} is invalid") from exc
+
+
+def _validated_sample_instruments(values: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)):
+        raise SourceProviderContractError("sample instruments must be a bounded sequence")
+    raw = tuple(values)
+    normalized = tuple(sorted({str(value).strip().upper() for value in raw}))
+    if len(normalized) != len(raw):
+        raise SourceProviderContractError("sample instruments are duplicated or empty")
+    if len(normalized) > 20 or any(not _STOCK_CODE.fullmatch(value) for value in normalized):
+        raise SourceProviderContractError("sample instruments exceed the bounded SH/SZ allowlist contract")
+    return normalized
 
 
 def _restore_portable_key(value: Any) -> tuple[Any, ...] | None:

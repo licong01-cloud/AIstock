@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 from backend.services.dataset_release.cas_store import CASStore
 from backend.services.dataset_release.control_service import (
@@ -14,6 +15,11 @@ from backend.services.dataset_release.control_store import (
     ControlStore,
 )
 from scripts import update_backtest_dataset_monthly as cli
+from backend.services.dataset_release.profile import load_initial_migration_plan
+
+
+ROOT = Path(__file__).resolve().parents[3]
+INITIAL_PLAN_PATH = ROOT / "configs" / "datasets" / "migrations" / "pit_v2_initial_20260731_v1.yaml"
 
 
 def _digest(value: str) -> str:
@@ -40,6 +46,7 @@ def _service(tmp_path) -> tuple[DatasetReleaseControlService, ControlStore]:
 
 def _dual_profile_service(tmp_path) -> tuple[DatasetReleaseControlService, ControlStore]:
     store = ControlStore.initialize(tmp_path / "control")
+    plan = load_initial_migration_plan(INITIAL_PLAN_PATH)
     bindings = tuple(
         DatasetReleaseProfileBinding(
             profile_id=profile_id,
@@ -49,6 +56,7 @@ def _dual_profile_service(tmp_path) -> tuple[DatasetReleaseControlService, Contr
             cas=CASStore(store.root),
             cutoff_resolver=lambda _: date(2026, 7, 31),
             candidate_root_id="aistock-x-candidate-v1",
+            initial_migration_plans=({plan.plan_id: plan} if profile_id == "qe_hmm_full_v2" else {}),
         )
         for profile_id in ("qe_hmm_full_v1", "qe_hmm_full_v2")
     )
@@ -124,13 +132,44 @@ def test_monthly_can_explicitly_select_canonical_v2_without_changing_legacy_defa
     service, store = _dual_profile_service(tmp_path)
     observed = datetime(2026, 8, 11, tzinfo=UTC)
 
-    assert cli.main(["--profile", "qe_hmm_full_v2", "monthly", "--candidate-only"], service=service, observed_at=observed) == 0
+    assert (
+        cli.main(["--profile", "qe_hmm_full_v2", "monthly", "--candidate-only"], service=service, observed_at=observed)
+        == 0
+    )
     canonical = _output(capsys)
     request = store.get_submission(canonical["submission_id"])
     assert request is not None
     assert cli.main(["monthly", "--candidate-only"], service=service, observed_at=observed) == 0
     legacy = _output(capsys)
     assert canonical["logical_request_key"] != legacy["logical_request_key"]
+
+
+def test_initial_migration_cli_submits_fixed_plan_once_without_execution(tmp_path, capsys) -> None:
+    service, store = _dual_profile_service(tmp_path)
+    observed = datetime(2027, 3, 15, tzinfo=UTC)
+    arguments = [
+        "--profile",
+        "qe_hmm_full_v2",
+        "initial-migration",
+        "--plan",
+        "pit_v2_initial_20260731_v1",
+        "--scope",
+        "sample",
+        "--candidate-only",
+    ]
+
+    assert cli.main(arguments, service=service, observed_at=observed) == 0
+    result = _output(capsys)
+    request_row = store.get_submission(result["submission_id"])
+    request = CASStore(store.root).get_json_bounded(request_row["request_ref"], max_bytes=2 * 1024**2)["request"]
+
+    assert result["action"] == "initial-migration"
+    assert result["fixed_cutoff"] == "2026-07-31"
+    assert result["execution_started_by_cli"] is False
+    assert result["production_activation"] == "not_requested"
+    assert request["plan_id"] == "pit_v2_initial_20260731_v1"
+    assert request["plan_digest"] == result["plan_digest"]
+    assert store._many("SELECT * FROM runs", ()) == []
 
 
 def test_status_latest_is_bounded_and_does_not_execute(tmp_path, capsys) -> None:

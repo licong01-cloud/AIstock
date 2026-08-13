@@ -4,7 +4,8 @@
 
 Use these authorities in order:
 
-1. `configs/datasets/qe_backtest_monthly_v1.yaml` for semantic, storage and resource policy.
+1. `configs/datasets/qe_backtest_monthly_v2.yaml` for canonical monthly semantics and its inherited storage/resource policy;
+   `qe_backtest_monthly_v1.yaml` is read only for explicit historical reproduction/re-attestation.
 2. SQLite control catalog plus immutable CAS for submissions, runs, events, receipts and attestations.
 3. Candidate committed marker and artifact hashes for a published release.
 4. CLI/API bounded projections for operator display.
@@ -24,6 +25,20 @@ Run once:
 ```powershell
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
 ```
+
+## Fixed first PIT v2 migration
+
+The first PIT v2 migration is not an arbitrary-cutoff monthly request. It accepts exactly one checked-in plan id and
+persists the canonical plan digest in submission, immutable build inputs, candidate manifest and terminal receipt:
+
+```powershell
+rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only
+```
+
+The plan freezes cutoff `2026-07-31`, five stock instruments, event windows and the 12-index boundary oracles. The
+resolution child filters the five stock codes before row materialization; the sample PIT binding is validation-only and
+cannot drive QE/training. A full intent uses the same plan id/digest and requires separate real-data authorization after
+the sample receipt passes. Neither command activates production or overwrites the historical 2026-07-31 v1 candidate.
 
 Defaults come from the live profile:
 

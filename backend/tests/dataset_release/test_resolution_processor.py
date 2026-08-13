@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -25,6 +26,11 @@ from backend.services.dataset_release.control_store import (
     CandidateRegistrationSpec,
     ControlStore,
 )
+from backend.services.dataset_release.control_service import (
+    DatasetReleaseControlService,
+    DatasetReleaseProfileBinding,
+)
+from backend.services.dataset_release.profile import load_dataset_profile, load_initial_migration_plan
 from backend.services.dataset_release.resolution import (
     ResolutionService,
     SourceSnapshot,
@@ -32,6 +38,7 @@ from backend.services.dataset_release.resolution import (
 from backend.services.dataset_release.resolution_processor import (
     MonthlyResolutionProcessor,
     ResolutionProcessorError,
+    ResolutionRequestInvalid,
     SupervisedResolutionSourceStage,
 )
 from backend.services.dataset_release.source_authority import (
@@ -39,6 +46,11 @@ from backend.services.dataset_release.source_authority import (
     SOURCE_REUSE_MANIFEST_SCHEMA,
 )
 from backend.services.dataset_release.worker import WORKER_ERROR_RECEIPT_SCHEMA
+
+
+ROOT = Path(__file__).resolve().parents[3]
+V2_PROFILE_PATH = ROOT / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml"
+INITIAL_PLAN_PATH = ROOT / "configs" / "datasets" / "migrations" / "pit_v2_initial_20260731_v1.yaml"
 
 
 def _digest(value: str) -> str:
@@ -130,6 +142,7 @@ def test_supervised_source_stage_uses_versioned_timeout_and_rung(
             baseline_partitions=(),
             predicted_new_bytes=1,
             pressure_rung=2,
+            sample_instruments=("000001.SZ", "600462.SH"),
         )
 
     assert observed["timeout_seconds"] == float(dataset_profile.stage_timeouts_seconds["source_freeze"])
@@ -138,6 +151,76 @@ def test_supervised_source_stage_uses_versioned_timeout_and_rung(
     assert command[command.index("--stage-timeout-seconds") + 1] == str(
         dataset_profile.stage_timeouts_seconds["source_freeze"]
     )
+    assert [command[index + 1] for index, value in enumerate(command) if value == "--sample-instrument"] == [
+        "000001.SZ",
+        "600462.SH",
+    ]
+
+
+def test_resolution_reader_revalidates_fixed_initial_plan_and_sample_scope(tmp_path) -> None:
+    profile = load_dataset_profile(V2_PROFILE_PATH)
+    plan = load_initial_migration_plan(INITIAL_PLAN_PATH)
+    store = ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(store.root)
+    service = DatasetReleaseControlService(
+        (
+            DatasetReleaseProfileBinding(
+                profile_id=profile.profile,
+                semantic_profile_digest=profile.semantic_profile_digest,
+                cutoff_policy=profile.cutoff_policy,
+                store=store,
+                cas=cas,
+                cutoff_resolver=lambda _: date(2099, 12, 31),
+                initial_migration_plans={plan.plan_id: plan},
+            ),
+        )
+    )
+    submitted = service.submit_initial_migration(
+        profile_id=profile.profile,
+        plan_id=plan.plan_id,
+        scope="sample",
+        candidate_only=True,
+        principal="operator",
+        idempotency_key="initial-plan-reader",
+        route="cli:initial-migration",
+        now=datetime(2027, 3, 15, tzinfo=UTC),
+    )
+    processor = MonthlyResolutionProcessor(profile, store, cas, source_authority=object())
+    request = processor._read_request(store.get_submission(submitted["submission_id"]))
+
+    assert request.is_initial_migration is True
+    assert request.cutoff == date(2026, 7, 31)
+    assert request.sample_instruments == plan.sample_instruments
+
+    valid_outer = cas.get_json_bounded(
+        store.get_submission(submitted["submission_id"])["request_ref"],
+        max_bytes=2 * 1024**2,
+    )
+    tampered = {**valid_outer["request"], "plan_digest": "c" * 64, "logical_request_key": "d" * 64}
+    rejected = ResolutionService(store, cas).submit(
+        identity=SubmissionIdentity(
+            principal="operator",
+            route="cli:initial-migration",
+            idempotency_key="initial-plan-reader-tampered",
+        ),
+        logical_request_key="d" * 64,
+        request_payload=tampered,
+    )
+    with pytest.raises(ResolutionRequestInvalid, match="checked-in plan"):
+        processor._read_request(store.get_submission(rejected["submission_id"]))
+
+    tampered_logical = {**valid_outer["request"], "logical_request_key": "e" * 64}
+    rejected_logical = ResolutionService(store, cas).submit(
+        identity=SubmissionIdentity(
+            principal="operator",
+            route="cli:initial-migration",
+            idempotency_key="initial-plan-reader-logical-tampered",
+        ),
+        logical_request_key="e" * 64,
+        request_payload=tampered_logical,
+    )
+    with pytest.raises(ResolutionRequestInvalid, match="checked-in plan"):
+        processor._read_request(store.get_submission(rejected_logical["submission_id"]))
 
 
 class _FrozenFixtureStage:
