@@ -30,6 +30,7 @@ def build_advisory_feature_matrix(
     benchmark_daily: pd.DataFrame,
     suspend_rows: pd.DataFrame,
     hmm_states: pd.DataFrame,
+    component_roles: dict[str, str] | None = None,
 ) -> FeatureBuildResult:
     panel = candidate_daily.join(candidate_static, how="left").sort_index()
     panel_features = _build_instrument_features(panel)
@@ -57,14 +58,26 @@ def build_advisory_feature_matrix(
     rows["parent_rank_pct"] = 1.0 - (
         pd.to_numeric(rows["selection_effective_rank"], errors="coerce") - 1
     ) / denominator
-    rows["lstm_raw_score"] = rows[f"raw__{LSTM_LEG_ID}"]
-    rows["lstm_norm_score"] = rows[f"norm__{LSTM_LEG_ID}"]
-    rows["lstm_leg_rank"] = rows[f"rank__{LSTM_LEG_ID}"]
-    rows["lstm_weight"] = rows[f"weight__{LSTM_LEG_ID}"]
-    rows["fund_raw_score"] = rows[f"raw__{FUND_LEG_ID}"]
-    rows["fund_norm_score"] = rows[f"norm__{FUND_LEG_ID}"]
-    rows["fund_leg_rank"] = rows[f"rank__{FUND_LEG_ID}"]
-    rows["fund_weight"] = rows[f"weight__{FUND_LEG_ID}"]
+    roles = component_roles or {"lstm": LSTM_LEG_ID, "fund": FUND_LEG_ID}
+    if set(roles) != {"lstm", "fund"} or any(not str(value).strip() for value in roles.values()):
+        raise AdvisoryModelFirstError(
+            "candidate component roles are invalid",
+            reason_code="ADVISORY_MODEL_CANDIDATE_PROJECTION_UNSUPPORTED",
+        )
+    for role in ("lstm", "fund"):
+        component_id = str(roles[role]).strip()
+        required = tuple(f"{prefix}__{component_id}" for prefix in ("raw", "norm", "rank", "weight"))
+        missing = sorted(set(required) - set(rows.columns))
+        if missing:
+            raise AdvisoryModelFirstError(
+                "candidate component projection is incomplete",
+                reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
+                context={"role": role, "component_id": component_id, "missing_columns": missing},
+            )
+        rows[f"{role}_raw_score"] = rows[f"raw__{component_id}"]
+        rows[f"{role}_norm_score"] = rows[f"norm__{component_id}"]
+        rows[f"{role}_leg_rank"] = rows[f"rank__{component_id}"]
+        rows[f"{role}_weight"] = rows[f"weight__{component_id}"]
     rows["leg_norm_score_gap"] = rows["lstm_norm_score"] - rows["fund_norm_score"]
     rows["leg_rank_gap"] = rows["lstm_leg_rank"] - rows["fund_leg_rank"]
     rows["leg_direction_agreement"] = (

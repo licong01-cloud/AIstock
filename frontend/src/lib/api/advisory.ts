@@ -434,6 +434,47 @@ export type AdvisoryModelShadowResponse = {
   message: string | null;
 };
 
+export type AdvisoryForwardRun = {
+  forward_run_id: string;
+  program_id: string;
+  decision_as_of_trade_date: string;
+  target_trade_date: string;
+  publication_status: "PENDING" | "PUBLISHED" | "WAITING_DATA" | "FAILED";
+  settlement_status: "NOT_DUE" | "WAITING_DATA" | "SETTLED" | "NOT_ENTERED" | "FAILED";
+  selection_run_id?: string | null;
+  list_version_id?: string | null;
+  last_stage: string;
+  last_reason_code?: string | null;
+  last_error_json?: JsonObject | null;
+  model_resolution_json?: JsonObject;
+  run_payload_json?: JsonObject;
+  published_at?: string | null;
+  settled_at?: string | null;
+};
+
+export type AdvisoryForwardModelObservation = {
+  observation_id: string;
+  forward_run_id: string;
+  status: "EXPERIMENTAL_SHADOW" | "UNAVAILABLE" | "FAILED";
+  reason_code?: string | null;
+  message?: string | null;
+  package_id?: string | null;
+  manifest_sha256?: string | null;
+  model_descriptor_sha256?: string | null;
+  bundle_id?: string | null;
+  outcome_bundle_id?: string | null;
+  price_range_bundle_id?: string | null;
+  maturity_trade_date?: string | null;
+  candidate_count: number;
+  shortlist_count: number;
+  prediction_payload_json?: JsonObject;
+};
+
+export type AdvisoryForwardRunDetail = {
+  forward_run: AdvisoryForwardRun;
+  model_observation: AdvisoryForwardModelObservation | null;
+};
+
 export type WatchlistCategory = {
   id: number;
   name: string;
@@ -893,6 +934,15 @@ export const advisoryApi = {
     return apiFetch<AdvisoryModelShadowResponse>(
       `/advisory/programs/${encodeURIComponent(programId)}/model-shadow?target_trade_date=${encodeURIComponent(targetTradeDate)}`,
     );
+  },
+  async forwardRuns(programId: string, limit = 20): Promise<AdvisoryForwardRun[]> {
+    const data = await apiFetch<{ forward_runs: AdvisoryForwardRun[] }>(
+      `/advisory/programs/${encodeURIComponent(programId)}/forward-runs?limit=${encodeURIComponent(String(limit))}`,
+    );
+    return data.forward_runs || [];
+  },
+  async forwardRunDetail(forwardRunId: string): Promise<AdvisoryForwardRunDetail> {
+    return apiFetch<AdvisoryForwardRunDetail>(`/advisory/forward-runs/${encodeURIComponent(forwardRunId)}`);
   },
   async previewReview(programId: string, payload: AdvisoryReviewPayload): Promise<AdvisoryReviewResult> {
     const data = await apiFetch<{ review: AdvisoryReviewResult }>(`/advisory/programs/${encodeURIComponent(programId)}/reviews/preview`, body(payload));

@@ -1,68 +1,97 @@
 {
-  "actual": "workflow-smoke always invokes the full doctor despite the conditional-doctor standard, and any change to the large issue workflow script maps to the entire monolithic test file. PR workflows also independently recompute changed-file classification. Introduce a lightweight smoke contract, domain-scoped test targets, and reusable classification outputs so small workflow fixes run one directly affected matrix plus the aggregate CI verdict without dropping required coverage.",
+  "actual": "fresh_process_1 returned code 0 after long computation, then parent failed with 'TRANSITION-DWELL-B child receipt is invalid: fresh_process_1'; no child receipt was persisted and parent reported terminal_entry_count=0.",
   "allowed_write_scope": [
-    "scripts/aistock_issue_workflow.py",
-    "scripts/ci_change_classifier.py",
-    "backend/tests/scripts/test_aistock_issue_workflow.py",
-    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-    "backend/tests/scripts/test_ci_change_classifier.py",
-    ".github/workflows/test.yml",
-    "tests/aistock_validation/catalog/file_ownership.yaml",
-    "tests/aistock_validation/bugs/20260813_BUG-1055-workflow-changes-trigger-unconditional-full-doctor-and-monolithic-regres.json",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "tests/aistock_validation/bugs/20260813_BUG-1068-transition-dwell-b-child-receipt-validator-rejects-successful-fresh-proc.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1055",
-  "closed_at": "2026-08-13T05:38:15Z",
+  "bug_id": "BUG-1068",
+  "closed_at": "2026-08-13T06:43:02Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-08-13T04:14:32.604541Z",
-  "description": "workflow-smoke always invokes the full doctor despite the conditional-doctor standard, and any change to the large issue workflow script maps to the entire monolithic test file. PR workflows also independently recompute changed-file classification. Introduce a lightweight smoke contract, domain-scoped test targets, and reusable classification outputs so small workflow fixes run one directly affected matrix plus the aggregate CI verdict without dropping required coverage.",
+  "created_at": "2026-08-13T05:19:15.171647Z",
+  "description": "fresh_process_1 returned code 0 after long computation, then parent failed with 'TRANSITION-DWELL-B child receipt is invalid: fresh_process_1'; no child receipt was persisted and parent reported terminal_entry_count=0.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260813-be470056845e",
-      "timestamp": "2026-08-13T04:14:32.604529Z"
+      "note": "Promoted from IC-20260813-62a658a64b8f",
+      "timestamp": "2026-08-13T05:19:15.171634Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/hmm_risk/transition_dwell_b_20260813_5971fdf2/transition_dwell_b.json#sha256=54542fc7c6adce9d469e0e80b1c3bd06027614956d839943881a5d89a97fe981"
+  ],
+  "expected": "A successful fresh-process child receipt must round-trip through the parent validator with exact entry/model/profile/per-seed closure; when validation fails, durable failure evidence must preserve the completed child payload or a compact structural mismatch receipt without claiming zero completed terminal entries.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/hmm_risk/prepare_state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py"
+    ]
   },
-  "first_seen_at": "2026-08-13T04:14:32.604541Z",
+  "first_seen_at": "2026-08-13T05:19:15.171647Z",
   "fix_branch": null,
-  "fix_commit": "7e3b1308d42bb58d9ebee683e5940d9648a7866a",
-  "fixed_at": "2026-08-13T05:54:48.667263Z",
-  "github_issue_number": 3384,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3384",
-  "last_seen_at": "2026-08-13T04:14:32.604541Z",
-  "module": "validation",
+  "fix_commit": "c494540f255f675bde640c8e20340f5ea0dc08fd",
+  "fixed_at": "2026-08-13T06:43:02Z",
+  "github_issue_number": 3399,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3399",
+  "last_seen_at": "2026-08-13T05:19:15.171647Z",
+  "module": "hmm.risk",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3395",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3405",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Run the approved --b3-transition-dwell-output command on treatment producer 5971fdf2 with frozen P6 and TRAIN-STABILITY authority; fresh_process_1 exits 0 and parent validator rejects its receipt.",
   "required_verification": [
-    "l0"
+    "l0",
+    "hmm_risk_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -70,6 +99,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -79,27 +110,28 @@
   "severity": "P1",
   "status": "fixed",
   "suspected_modules": [
-    "validation"
+    "hmm.risk"
   ],
-  "title": "Workflow changes trigger unconditional full doctor and monolithic regression jobs",
+  "title": "TRANSITION-DWELL-B child receipt validator rejects successful fresh-process output",
   "trigger_condition": {
-    "fingerprint": "be470056845eff6db15375b7",
-    "source_event_id": "FE-20260813-be470056845e"
+    "fingerprint": "62a658a64b8f7c80cc06e36a",
+    "source_event_id": "FE-20260813-62a658a64b8f"
   },
   "validation_evidence": [
-    "python -m nox -s l0 -> passed (blocking=0; source-head=cea8bc2d; merge=7e3b1308)",
-    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; 14/14 mapped; source-head=cea8bc2d)",
-    "python -m nox -s guardrail_changed_files -> passed (blocking=0; source-head=cea8bc2d)"
+    "rtk nox -s hmm_risk_backend -> 442 passed; coverage 76.49 percent",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; 14 of 14 catalog files mapped",
+    "rtk nox -s l0 -> passed; blocking findings 0",
+    "git diff --check origin/main...9377fd29820942aca8d420d69126c99ec82e3f73 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
-        "validation",
-        "validation_center"
+        "hmm.risk",
+        "hmm_risk"
       ],
       "plans": [
-        "validation_center_backend"
+        "hmm_risk_backend"
       ],
       "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -138,7 +170,7 @@
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
-    "batch_candidate": true,
+    "batch_candidate": false,
     "cleanup_fast_candidate": false,
     "compact_success_output": true,
     "docs_only_merge_with_related_code": true,
@@ -146,8 +178,6 @@
     "recommendations": [
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
-      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
-      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
@@ -155,11 +185,11 @@
       "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
-          "validation",
-          "validation_center"
+          "hmm.risk",
+          "hmm_risk"
         ],
         "plans": [
-          "validation_center_backend"
+          "hmm_risk_backend"
         ],
         "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
@@ -196,6 +226,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  }
 }
