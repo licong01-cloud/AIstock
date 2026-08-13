@@ -584,6 +584,20 @@ def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
     monkeypatch.setenv("AISTOCK_BUG_ID_STATE_PATH", str(tmp_path / "bug-id-state.json"))
+    monkeypatch.setattr(
+        workflow,
+        "_client_source_authority",
+        lambda: {
+            "ready": True,
+            "source": "canonical_main",
+            "root": str(tmp_path),
+            "commit": "a" * 40,
+            "origin_main_commit": "a" * 40,
+            "blocking_reason": None,
+        },
+    )
+    monkeypatch.setattr(workflow, "_client_checkout_relation", lambda _authority: "matches_authority")
+    monkeypatch.setattr(workflow, "_client_checkout_root", lambda: tmp_path)
     monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
     monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
     monkeypatch.setattr(workflow, "_github_bug_issue_by_number", lambda _issue_number, **_kwargs: (None, []))
@@ -3126,7 +3140,7 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["unexpected_dirty_paths"] == []
     assert payload["client_manifest"]["codex_skill_status"] in {
         "current",
-        "missing_repo_skill",
+        "missing_authority",
         "missing_global",
         "stale",
     }
@@ -3846,7 +3860,7 @@ def test_doctor_reports_stale_global_skill_manifest(
 
     assert payload["workflow_gate"] == "warning"
     assert payload["client_manifest"]["codex_skill_status"] == "stale"
-    assert payload["restart_recommended"] is True
+    assert payload["restart_recommended"] is False
     assert "install-client --apply" in payload["install_client_next_command"]
 
 
@@ -5478,7 +5492,7 @@ def test_verify_clients_selected_lane_blocks_when_selected_entry_is_stale(
     assert result == 2
     assert payload["workflow_gate"] == "blocked"
     assert payload["warnings"] == []
-    assert payload["restart_recommended"] is True
+    assert payload["restart_recommended"] is False
     assert payload["blocking"] == ["codex lane feature is stale"]
 
 
@@ -5513,7 +5527,211 @@ def test_install_client_selected_lane_is_idempotent_and_leaves_unrelated_lane_un
 
     assert second["installed_count"] == 0
     assert second["skipped_current_count"] == 2
+    assert second["single_owner_required"] is False
     assert unrelated.read_text(encoding="utf-8") == "preserve unrelated lane"
+
+
+def test_verify_clients_uses_merged_authority_instead_of_older_task_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    authority_root = isolated_workflow_root / "canonical"
+    _write_repo_client_entrypoints(authority_root)
+    for key, skill_name in workflow.CLIENT_CODEX_SKILLS:
+        (isolated_workflow_root / ".codex" / "skills" / skill_name / "SKILL.md").write_text(
+            f"older worktree {key}", encoding="utf-8"
+        )
+        (authority_root / ".codex" / "skills" / skill_name / "SKILL.md").write_text(
+            f"merged authority {key}", encoding="utf-8"
+        )
+    authority = {
+        "ready": True,
+        "source": "canonical_main",
+        "root": str(authority_root),
+        "commit": "a" * 40,
+        "origin_main_commit": "a" * 40,
+        "blocking_reason": None,
+    }
+    monkeypatch.setattr(workflow, "_client_source_authority", lambda: authority)
+    monkeypatch.setattr(workflow, "_client_checkout_relation", lambda _authority: "behind_authority")
+    codex_home = isolated_workflow_root / "authority_codex_home"
+
+    installed = workflow.build_client_install_plan(
+        apply=True,
+        codex_home=str(codex_home),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert installed["workflow_gate"] == "installed"
+    assert installed["source_authority"] == authority
+    assert installed["task_worktree_is_install_source"] is False
+    assert (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "merged authority feature"
+
+    result = workflow.main(
+        [
+            "verify-clients",
+            "--workflow-only",
+            "--selected-lane",
+            "feature",
+            "--codex-home",
+            str(codex_home),
+            "--skip-claude",
+            "--output-format",
+            "full-json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    feature = payload["client_manifest"]["codex_entries"]["feature"]
+    assert result == 0
+    assert payload["workflow_gate"] == "ready"
+    assert payload["blocking"] == []
+    assert payload["remediation"]["action"] == "continue_without_install"
+    assert payload["remediation"]["owner_command"] is None
+    assert str(authority_root / "scripts" / "aistock_issue_workflow.py") in payload["remediation"][
+        "window_verify_command"
+    ]
+    assert payload["client_manifest"]["checkout_commit_relation"] == "behind_authority"
+    assert payload["client_manifest"]["codex_feature_skill_sha256"] == feature["authority_sha256"]
+    assert feature["status"] == "current"
+    assert feature["checkout_status"] == "differs_from_authority"
+    assert any("do not install from this task worktree" in item for item in payload["checkout_advisories"])
+
+
+def test_install_client_blocks_when_merged_authority_is_unavailable(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    authority = {
+        "ready": False,
+        "source": "canonical_main",
+        "root": str(isolated_workflow_root),
+        "commit": "a" * 40,
+        "origin_main_commit": "b" * 40,
+        "blocking_reason": "canonical main is not aligned with origin/main",
+    }
+    monkeypatch.setattr(workflow, "_client_source_authority", lambda: authority)
+
+    payload = workflow.build_client_install_plan(
+        codex_home=str(isolated_workflow_root / "blocked_codex_home"),
+        install_claude=False,
+        selected_lane="feature",
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["task_worktree_is_install_source"] is False
+    assert payload["blocking"] == [
+        "merged client authority is unavailable: canonical main is not aligned with origin/main"
+    ]
+
+
+def test_install_client_rechecks_authority_identity_under_lock(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_repo_client_entrypoints(isolated_workflow_root)
+    first = {
+        "ready": True,
+        "source": "canonical_main",
+        "root": str(isolated_workflow_root),
+        "commit": "a" * 40,
+        "origin_main_commit": "a" * 40,
+        "blocking_reason": None,
+    }
+    changed = {**first, "commit": "b" * 40, "origin_main_commit": "b" * 40}
+    authorities = iter([first, first, changed])
+    monkeypatch.setattr(workflow, "_client_source_authority", lambda: next(authorities))
+
+    with pytest.raises(workflow.WorkflowError, match="authority changed before install"):
+        workflow.build_client_install_plan(
+            apply=True,
+            codex_home=str(isolated_workflow_root / "racing_codex_home"),
+            install_claude=False,
+            selected_lane="feature",
+        )
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "head", "origin_main", "authority_status", "expected_reason"),
+    [
+        (
+            {"ok": False, "branch": None, "dirty": False},
+            "",
+            None,
+            {"ok": False, "stdout": ""},
+            "not a readable Git checkout",
+        ),
+        (
+            {"ok": True, "branch": "main", "dirty": True},
+            "a" * 40,
+            "a" * 40,
+            {"ok": True, "stdout": " M .codex/skills/aistock-task-router/SKILL.md"},
+            "canonical client-authority paths are dirty",
+        ),
+        (
+            {"ok": True, "branch": "main", "dirty": False},
+            "a" * 40,
+            "b" * 40,
+            {"ok": True, "stdout": ""},
+            "canonical main is not aligned with origin/main",
+        ),
+    ],
+)
+def test_client_source_authority_fails_closed_without_clean_aligned_main(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot: dict[str, object],
+    head: str,
+    origin_main: str | None,
+    authority_status: dict[str, object],
+    expected_reason: str,
+) -> None:
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+    monkeypatch.setattr(workflow, "_git_snapshot", lambda _root: snapshot)
+    def fake_run(command: list[str], **_kwargs: object) -> dict[str, object]:
+        if "status" in command:
+            return authority_status
+        return {"ok": bool(head), "stdout": head}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_origin_main_commit", lambda **_kwargs: origin_main)
+
+    authority = workflow._client_source_authority()
+
+    assert authority["ready"] is False
+    assert expected_reason in authority["blocking_reason"]
+
+
+def test_client_source_authority_ignores_unrelated_canonical_dirty_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit = "a" * 40
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda _root: {"ok": True, "branch": "main", "dirty": True},
+    )
+
+    def fake_run(command: list[str], **_kwargs: object) -> dict[str, object]:
+        if "status" in command:
+            return {"ok": True, "stdout": ""}
+        return {"ok": True, "stdout": commit}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_origin_main_commit", lambda **_kwargs: commit)
+
+    authority = workflow._client_source_authority()
+
+    assert authority["ready"] is True
+    assert authority["authority_paths_clean"] is True
 
 
 def test_explicit_linked_issue_reservation_uses_direct_lookup_without_global_scan(
