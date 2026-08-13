@@ -4,7 +4,7 @@ Use this lane for AIstock BUG/GitHub Issue work in Claude Code. The sole develop
 
 ## Context
 
-- Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK; direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure, with one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a task/PR/CI gate.
+- Follow `TOOL-RTK-001` from the sole development standard; this command does not redefine it.
 - Read project rules once, then use this command, `task-card.md`, the compact Context Pack and direct code references.
 - After compaction/restart, run `resume` and use the Context Resume Digest hashes.
 - Machine JSON supports failure diagnosis and state recovery; normal execution uses compact Markdown/stdout artifacts.

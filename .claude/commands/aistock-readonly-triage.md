@@ -11,7 +11,7 @@ Do not edit files, stage, commit, push, merge, delete, move, cleanup, start/stop
 ## Efficient context
 
 1. Start with `git status --short --branch`, targeted `gh`/workflow status, and user-specified paths.
-2. Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK; direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure, with one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a task/PR/CI gate.
+2. Follow `TOOL-RTK-001` from the sole development standard; this command does not redefine it.
 3. Use CodeGraph/Understand Anything summaries when available before broad `rg` scans.
 4. Read `docs/codex_project_memory.md` for AIstock workflow/runtime questions; read active standards only when the analysis concerns workflow policy.
 5. Verify live state for GitHub issues, PRs, CI, branches, and runtime claims.

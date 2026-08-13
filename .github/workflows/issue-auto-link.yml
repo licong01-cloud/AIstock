@@ -8,6 +8,8 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+    paths-ignore:
+      - 'tests/aistock_validation/bugs/**'
   workflow_dispatch:
     inputs:
       pr_number:

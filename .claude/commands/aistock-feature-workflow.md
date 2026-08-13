@@ -8,7 +8,7 @@ Use this Claude Code command only for real AIstock feature delivery or architect
 
 Read project rules once, then this command plus the approved Feature Card/design. Use stable `Design Acceptance Index` ids after the first design read; do not repeatedly load the full design or unrelated standards/commands.
 
-- Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK; direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure, with one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a task/PR/CI gate.
+- Follow `TOOL-RTK-001` from the sole development standard; this command does not redefine it.
 
 For F1 work, start with graph/UA refs or exact-symbol search before broad `rg`. Pause and summarize before expanding if exploration reaches about 25 commands or 30 minutes.
 
