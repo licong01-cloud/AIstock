@@ -8,6 +8,9 @@ from decimal import Decimal, InvalidOperation
 import json
 from typing import Any
 
+import psycopg2
+from psycopg2.pool import PoolError
+
 from backend.execution_algos.adaptive_is.contracts import MarketCode, canonical_json_bytes
 from backend.execution_algos.vnpy_style.hot_best_limit_plugin import BestLimitHotTargetV4
 from backend.execution_algos.vnpy_style.hot_sniper_plugin import SniperHotTargetV4
@@ -34,6 +37,7 @@ from backend.execution_algos.hot_market_contracts import (
     validate_hot_market_economic_payload_v1,
 )
 from backend.services.miniqmt_execution_runtime.hot_market_data import (
+    HotMarketDataEffectRetryableError,
     HotMarketDataEffectTerminalError,
     HotMarketDataIngressV1,
 )
@@ -127,7 +131,37 @@ class _BoundHotMarketEffectCommitterV1:
     def __call__(self, effect: HotMarketDataEconomicEffectV1) -> Any:
         if self._runtime is None:
             raise RuntimeError("hot market effect committer is not bound")
-        return self._runtime.commit_hot_market_effect_v1(effect)
+        try:
+            return self._runtime.commit_hot_market_effect_v1(effect)
+        except (HotMarketDataEffectRetryableError, HotMarketDataEffectTerminalError):
+            raise
+        except Exception as exc:
+            if not _is_retryable_hot_market_database_failure_v1(exc):
+                raise
+            raise HotMarketDataEffectRetryableError(
+                "MINIQMT_HOT_MARKET_EFFECT_DATABASE_TRANSIENT",
+                "hot economic effect encountered an allowlisted transient database failure",
+                context={
+                    "stage": "ECONOMIC_EFFECT_COMMIT",
+                    "exception_type": type(exc).__name__,
+                    "sqlstate": getattr(exc, "pgcode", None),
+                },
+            ) from exc
+
+
+def _is_retryable_hot_market_database_failure_v1(exc: Exception) -> bool:
+    """Recognize only transaction uncertainty or explicit PostgreSQL availability failures."""
+
+    if isinstance(exc, KernelRepositoryCommitUnknown):
+        return True
+    if isinstance(exc, (psycopg2.errors.SerializationFailure, psycopg2.errors.DeadlockDetected, PoolError)):
+        return True
+    if isinstance(exc, psycopg2.InterfaceError):
+        return True
+    if isinstance(exc, psycopg2.OperationalError):
+        sqlstate = getattr(exc, "pgcode", None)
+        return sqlstate is None or (isinstance(sqlstate, str) and sqlstate.startswith("08"))
+    return False
 
 
 class _ProductOutcomePublisherV1:
@@ -808,8 +842,10 @@ class SimulationMiniQMTProductRuntimeV1:
     def refresh_hot_market_targets_v1(self) -> None:
         """Refresh process-local targets only at scheduler cadence."""
 
+        if self.hot_market_data_ingress.has_uncommitted_effects_v1():
+            return
         targets = []
-        for algo_instance_id in self.hot_market_data_ingress.target_algo_instance_ids_v1():
+        for algo_instance_id in self.hot_market_data_ingress.registered_algo_instance_ids_v1():
             algo = self.repository.read_algo_instance(algo_instance_id)
             if algo.status is ExecutionAlgoPersistenceStatusV2.ACTIVE:
                 targets.append(self._build_hot_market_target_v1(algo))
