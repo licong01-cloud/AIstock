@@ -46,6 +46,7 @@ def replay_shadow_portfolio(
     request_id: str,
     rank_depth: int = 40,
     candidate_decision_dates: Sequence[pd.Timestamp] | None = None,
+    entry_priorities: pd.DataFrame | None = None,
 ) -> ShadowPortfolioResult:
     if policy.target_count != 5 or policy.rank_enter_threshold != 5:
         raise ValueError("shadow portfolio policy must use target_count=rank_enter_threshold=5")
@@ -77,6 +78,9 @@ def replay_shadow_portfolio(
             reason_code="ADVISORY_POLICY_RANK_INCOMPLETE",
         )
     last_candidate_decision = max(candidate_decision_set)
+    first_candidate_decision = min(candidate_decision_set)
+    priority_by_key = _entry_priority_map(entry_priorities)
+    explicit_priority = entry_priorities is not None
     if any(len(group) != rank_depth for group in groups.values()):
         raise AdvisoryModelFirstError(
             "shadow portfolio requires an exact Top40 for every decision",
@@ -99,6 +103,8 @@ def replay_shadow_portfolio(
     engine = AdvisoryListTransitionEngine()
 
     for decision in sorted(groups):
+        if decision < first_candidate_decision:
+            continue
         if decision not in candidate_decision_set and decision > last_candidate_decision and not active:
             break
         frame = groups[decision]
@@ -140,7 +146,16 @@ def replay_shadow_portfolio(
             candidates.append(
                 AdvisoryTransitionCandidateV1(
                     symbol=symbol,
-                    rank=int(row.selection_effective_rank),
+                    rank=(
+                        int(row.selection_effective_rank)
+                        if symbol in active_symbols
+                        else priority_by_key.get(
+                            (decision, symbol),
+                            rank_depth + int(row.selection_effective_rank)
+                            if explicit_priority
+                            else int(row.selection_effective_rank),
+                        )
+                    ),
                     score=float(row.combined_score),
                     entry_mark=open_price if entry_available else None,
                     exit_mark=open_price if open_price is not None and not suspended_today else None,
@@ -408,3 +423,30 @@ def _finite(value: object) -> float | None:
 
 def _mean(frame: pd.DataFrame, column: str) -> float | None:
     return float(frame[column].mean()) if not frame.empty else None
+
+
+def _entry_priority_map(frame: pd.DataFrame | None) -> dict[tuple[pd.Timestamp, str], int]:
+    if frame is None:
+        return {}
+    required = {"decision_as_of_trade_date", "instrument", "entry_priority_rank"}
+    if not required.issubset(frame.columns):
+        raise AdvisoryModelFirstError(
+            "entry priority frame omits required columns",
+            reason_code="ADVISORY_META_LABEL_PRIORITY_INVALID",
+            context={"missing_columns": sorted(required - set(frame.columns))},
+        )
+    rows = frame.copy()
+    rows["decision_as_of_trade_date"] = pd.to_datetime(rows["decision_as_of_trade_date"]).dt.normalize()
+    rows["instrument"] = rows["instrument"].astype(str).str.upper()
+    rows["entry_priority_rank"] = pd.to_numeric(rows["entry_priority_rank"], errors="raise").astype(int)
+    if rows.duplicated(["decision_as_of_trade_date", "instrument"]).any() or (
+        rows["entry_priority_rank"] < 1
+    ).any():
+        raise AdvisoryModelFirstError(
+            "entry priority rows are invalid",
+            reason_code="ADVISORY_META_LABEL_PRIORITY_INVALID",
+        )
+    return {
+        (row.decision_as_of_trade_date, row.instrument): row.entry_priority_rank
+        for row in rows.itertuples(index=False)
+    }
