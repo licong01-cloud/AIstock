@@ -214,6 +214,14 @@ B3_APPROVED_WINDOWS = {
 }
 
 
+class TransitionDwellChildReceiptError(StateModelSetError):
+    """A child completed, but its durable receipt failed structural closure."""
+
+    def __init__(self, process_identity: str, evidence: Mapping[str, Any]):
+        self.evidence = dict(evidence)
+        super().__init__(f"TRANSITION-DWELL-B child receipt is invalid: {process_identity}")
+
+
 def _read_env_file(path: Path) -> None:
     if not path.is_file():
         raise StateModelSetError(f"env file does not exist: {path}")
@@ -2516,11 +2524,18 @@ def prepare_b3_transition_dwell_single_pass(
     for seed in RESTART_SCHEDULE:
         accepted_codes: list[str] = []
         stable_codes: list[str] = []
+        entry_by_code = {
+            str(entry.get("sector_code")): entry
+            for entry in repeat.get("entries") or ()
+            if isinstance(entry, Mapping) and entry.get("seed") == seed
+        }
         for code in sorted(series):
             model = models.get((seed, code))
             if model is None:
                 continue
-            accepted_codes.append(code)
+            entry = entry_by_code.get(code)
+            if isinstance(entry, Mapping) and entry.get("model_entry_valid") is True:
+                accepted_codes.append(code)
             projected, source = project_b3_train_stability_source(series[code], [model])
             dates = series[code].train_dates
             early = evaluate_b3_train_stability_window(
@@ -2652,7 +2667,12 @@ def _transition_dwell_execution_failure(
     stdout: bytes = b"",
     stderr: bytes = b"",
     child_reason_code: str | None = None,
+    child_validation_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    validation_evidence = dict(child_validation_evidence or {})
+    completed_terminal_entries = validation_evidence.get("terminal_entry_count_verified")
+    if not isinstance(completed_terminal_entries, int):
+        completed_terminal_entries = 0
     body = {
         "schema_version": B3_TRANSITION_DWELL_REPORT_SCHEMA,
         "contract_version": B3_TRANSITION_DWELL_CONTRACT,
@@ -2662,7 +2682,7 @@ def _transition_dwell_execution_failure(
         "failed_process_identity": process_identity,
         "completed_process_count": len(child_receipts),
         "planned_fit_count": 2096,
-        "terminal_entry_count": len(child_receipts) * 1048,
+        "terminal_entry_count": len(child_receipts) * 1048 + completed_terminal_entries,
         "fit_budget_completion_unknown": fit_budget_completion_unknown,
         "error_type": error_type[:256],
         "error": error[-4000:],
@@ -2672,6 +2692,7 @@ def _transition_dwell_execution_failure(
         "child_stdout_sha256": sha256_bytes(stdout),
         "child_stderr_byte_count": len(stderr),
         "child_stderr_sha256": sha256_bytes(stderr),
+        "child_validation_evidence": validation_evidence or None,
         "control_authority": dict(control_authority),
         "fresh_process_receipts": list(child_receipts),
         "canonical_payload_bitwise_equal": False,
@@ -2725,47 +2746,88 @@ def _build_transition_dwell_parent_failure(
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
-def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identity: str) -> None:
+def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identity: str) -> dict[str, Any]:
     body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
     repeat = value.get("level_repeat")
-    entries = list(repeat.get("entries") or ()) if isinstance(repeat, Mapping) else []
-    models = list(repeat.get("models") or ()) if isinstance(repeat, Mapping) else []
-    profiles = list(value.get("profiles") or ())
-    per_seed = list(value.get("per_seed") or ())
+    repeat_receipt = repeat if isinstance(repeat, Mapping) else {}
+    raw_entries = repeat_receipt.get("entries")
+    raw_models = repeat_receipt.get("models")
+    raw_profiles = value.get("profiles")
+    raw_per_seed = value.get("per_seed")
+    entries = list(raw_entries) if isinstance(raw_entries, list) else []
+    models = list(raw_models) if isinstance(raw_models, list) else []
+    profiles = list(raw_profiles) if isinstance(raw_profiles, list) else []
+    per_seed = list(raw_per_seed) if isinstance(raw_per_seed, list) else []
     entry_keys: list[tuple[int, str]] = []
-    valid_entry_keys: set[tuple[int, str]] = set()
+    accepted_entry_keys: set[tuple[int, str]] = set()
+    fitted_entry_keys: set[tuple[int, str]] = set()
+    fitted_entry_hash_by_key: dict[tuple[int, str], str] = {}
     model_keys: set[tuple[int, str]] = set()
     model_hash_by_key: dict[tuple[int, str], str] = {}
     profile_keys: set[tuple[int, str]] = set()
     stable_keys: set[tuple[int, str]] = set()
-    closure_valid = True
+    mismatches: set[str] = set()
+    if not isinstance(repeat, Mapping):
+        mismatches.add("level_repeat_shape_invalid")
+    for field_name, raw_value in (
+        ("entries", raw_entries),
+        ("models", raw_models),
+        ("profiles", raw_profiles),
+        ("per_seed", raw_per_seed),
+    ):
+        if not isinstance(raw_value, list):
+            mismatches.add(f"{field_name}_shape_invalid")
     try:
         for entry in entries:
+            if not isinstance(entry, Mapping):
+                mismatches.add("entry_shape_invalid")
+                continue
             entry_body = {key: item for key, item in entry.items() if key != "entry_receipt_sha256"}
             entry_key = (int(entry["seed"]), str(entry["sector_code"]))
             if entry.get("entry_receipt_sha256") != canonical_sha256(entry_body):
-                closure_valid = False
+                mismatches.add("entry_receipt_hash_mismatch")
             entry_keys.append(entry_key)
-            if entry.get("model_entry_valid") is True:
-                valid_entry_keys.add(entry_key)
-            elif (
-                entry.get("model_entry_valid") is not False
-                or not isinstance(entry.get("failure_stage"), str)
-                or not entry.get("failure_stage")
-                or not isinstance(entry.get("failure_reason_codes"), list)
-                or not entry.get("failure_reason_codes")
-                or any(not isinstance(reason, str) or not reason for reason in entry["failure_reason_codes"])
-            ):
-                closure_valid = False
+            entry_valid = entry.get("model_entry_valid")
+            fit_status = entry.get("fit_status")
+            entry_status = entry.get("model_entry_status")
+            model_hash = str(entry.get("model_payload_sha256") or "")
+            if fit_status == "accepted" and len(model_hash) == 64:
+                fitted_entry_keys.add(entry_key)
+                fitted_entry_hash_by_key[entry_key] = model_hash
+                if entry_valid is True and entry_status == "accepted":
+                    accepted_entry_keys.add(entry_key)
+                elif entry_valid is not False or entry_status not in {"failed", "insufficient_evidence"}:
+                    mismatches.add("fitted_entry_status_invalid")
+            elif fit_status == "failed":
+                reasons = entry.get("failure_reason_codes")
+                if (
+                    entry_valid is not False
+                    or entry_status != "failed"
+                    or model_hash
+                    or not isinstance(entry.get("failure_stage"), str)
+                    or not entry.get("failure_stage")
+                    or not isinstance(reasons, list)
+                    or not reasons
+                    or any(not isinstance(reason, str) or not reason for reason in reasons)
+                ):
+                    mismatches.add("fit_failure_evidence_invalid")
+            else:
+                mismatches.add("entry_lifecycle_invalid")
         for model in models:
+            if not isinstance(model, Mapping):
+                mismatches.add("model_shape_invalid")
+                continue
             model_body = {key: item for key, item in model.items() if key != "model_payload_sha256"}
             model_key = (int(model["seed"]), str(model["sector_code"]))
             model_hash = str(model.get("model_payload_sha256") or "")
             if model_key in model_keys or len(model_hash) != 64 or model_hash != canonical_sha256(model_body):
-                closure_valid = False
+                mismatches.add("model_payload_invalid")
             model_keys.add(model_key)
             model_hash_by_key[model_key] = model_hash
         for profile in profiles:
+            if not isinstance(profile, Mapping):
+                mismatches.add("profile_shape_invalid")
+                continue
             profile_body = {key: item for key, item in profile.items() if key != "profile_sha256"}
             profile_key = (int(profile["seed"]), str(profile["sector_code"]))
             if (
@@ -2774,13 +2836,13 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
                 or profile.get("model_payload_sha256") != model_hash_by_key.get(profile_key)
                 or not isinstance(profile.get("both_windows_structurally_observed"), bool)
             ):
-                closure_valid = False
+                mismatches.add("profile_model_link_mismatch")
             profile_keys.add(profile_key)
             if profile.get("both_windows_structurally_observed") is True:
                 stable_keys.add(profile_key)
     except (KeyError, TypeError, ValueError):
-        closure_valid = False
-    expected_codes = tuple(str(item) for item in (repeat.get("canonical_sector_codes") or ())) if repeat else ()
+        mismatches.add("receipt_shape_invalid")
+    expected_codes = tuple(str(item) for item in (repeat_receipt.get("canonical_sector_codes") or ()))
     expected_entry_keys = {(seed, sector_code) for seed in RESTART_SCHEDULE for sector_code in expected_codes}
     per_seed_by_seed = {
         int(item.get("seed")): item
@@ -2788,25 +2850,41 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
         if isinstance(item, Mapping) and isinstance(item.get("seed"), int)
     }
     if len(per_seed) != len(RESTART_SCHEDULE) or set(per_seed_by_seed) != set(RESTART_SCHEDULE):
-        closure_valid = False
+        mismatches.add("per_seed_identity_invalid")
     else:
         for seed in RESTART_SCHEDULE:
             summary = per_seed_by_seed[seed]
-            model_count = sum(key[0] == seed for key in model_keys)
+            accepted_count = sum(key[0] == seed for key in accepted_entry_keys)
             stable_count = sum(key[0] == seed for key in stable_keys)
-            expected_complete = model_count == B3_P6_EXPECTED_SECTOR_COUNT
+            expected_complete = accepted_count == B3_P6_EXPECTED_SECTOR_COUNT
             expected_stable = stable_count == B3_P6_EXPECTED_SECTOR_COUNT
             if any(
                 (
-                    summary.get("d3_d4_accepted_sector_count") != model_count,
+                    summary.get("d3_d4_accepted_sector_count") != accepted_count,
                     summary.get("d3_d4_accepted_131_of_131") is not expected_complete,
                     summary.get("early_late_stable_sector_count") != stable_count,
                     summary.get("early_late_stable_131_of_131") is not expected_stable,
                     summary.get("diagnostic_candidate_complete") is not (expected_complete and expected_stable),
                 )
             ):
-                closure_valid = False
-    if (
+                mismatches.add("per_seed_summary_mismatch")
+    entry_grid_complete = (
+        len(entries) == 1048
+        and len(entry_keys) == len(set(entry_keys))
+        and set(entry_keys) == expected_entry_keys
+        and repeat_receipt.get("entry_payload_sha256") == canonical_sha256(entries)
+    )
+    if not entry_grid_complete:
+        mismatches.add("entry_grid_incomplete")
+    if fitted_entry_keys != model_keys:
+        mismatches.add("fitted_entry_model_closure_mismatch")
+    elif any(fitted_entry_hash_by_key[key] != model_hash_by_key[key] for key in fitted_entry_keys):
+        mismatches.add("fitted_entry_model_hash_mismatch")
+    if model_keys != profile_keys:
+        mismatches.add("model_profile_closure_mismatch")
+    if repeat_receipt.get("model_payload_sha256") != canonical_sha256(models):
+        mismatches.add("model_aggregate_hash_mismatch")
+    top_level_valid = not (
         value.get("schema_version") != B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA
         or value.get("contract_version") != B3_TRANSITION_DWELL_CONTRACT
         or value.get("process_identity") != process_identity
@@ -2823,14 +2901,6 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
         or not isinstance(repeat, Mapping)
         or repeat.get("transition_dwell_contract") != B3_TRANSITION_DWELL_CONTRACT
         or repeat.get("entry_count") != 1048
-        or len(entries) != 1048
-        or len(entry_keys) != len(set(entry_keys))
-        or set(entry_keys) != expected_entry_keys
-        or valid_entry_keys != model_keys
-        or model_keys != profile_keys
-        or repeat.get("entry_payload_sha256") != canonical_sha256(entries)
-        or repeat.get("model_payload_sha256") != canonical_sha256(models)
-        or not closure_valid
         or value.get("single_pass_receipt_sha256") != canonical_sha256(body)
         or any(
             value.get(field) is not False
@@ -2846,8 +2916,25 @@ def _validate_transition_dwell_child(value: Mapping[str, Any], *, process_identi
                 "runtime_action_performed",
             )
         )
-    ):
-        raise StateModelSetError(f"TRANSITION-DWELL-B child receipt is invalid: {process_identity}")
+    )
+    if not top_level_valid:
+        mismatches.add("top_level_contract_mismatch")
+    evidence = {
+        "schema_version": "hmm_risk_transition_dwell_child_validation_evidence_v1",
+        "process_identity": process_identity,
+        "receipt_valid": not mismatches,
+        "entry_grid_complete": entry_grid_complete,
+        "terminal_entry_count_verified": (
+            1048 if entry_grid_complete and "entry_receipt_hash_mismatch" not in mismatches else 0
+        ),
+        "fitted_model_count": len(model_keys),
+        "d3_d4_accepted_entry_count": len(accepted_entry_keys),
+        "profile_count": len(profile_keys),
+        "mismatch_reason_codes": sorted(mismatches),
+    }
+    if mismatches:
+        raise TransitionDwellChildReceiptError(process_identity, evidence)
+    return evidence
 
 
 def _transition_dwell_policy_payload_sha256(policy: Mapping[str, Any]) -> str:
@@ -3076,16 +3163,20 @@ def run_b3_transition_dwell_repeated(args: argparse.Namespace, request: dict[str
             )
             child_sha256 = _write_diagnostic_report(child_path, child)
         except (StateModelSetError, OSError, ValueError) as exc:
+            child_validation_evidence = exc.evidence if isinstance(exc, TransitionDwellChildReceiptError) else None
             return _transition_dwell_execution_failure(
                 control_authority=control_authority,
                 child_receipts=child_receipts,
                 process_identity=process_identity,
                 error_type=type(exc).__name__,
                 error=str(exc),
-                fit_budget_completion_unknown=True,
+                fit_budget_completion_unknown=not bool(
+                    child_validation_evidence and child_validation_evidence.get("terminal_entry_count_verified") == 1048
+                ),
                 returncode=completed.returncode,
                 stdout=completed.stdout,
                 stderr=completed.stderr,
+                child_validation_evidence=child_validation_evidence,
             )
         children.append(child)
         child_receipts.append(
