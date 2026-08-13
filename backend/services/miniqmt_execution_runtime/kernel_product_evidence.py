@@ -339,7 +339,7 @@ class KernelProductEvidenceProviderV3:
                 "mqcontract_" + hash_hex_v1("miniqmt_contract_projection_v1", contract_payload)[:32],
                 "miniqmt_contract_projection_v1",
                 contract_payload,
-                market_source_event_id,
+                event.event_id,
             ),
             (
                 KernelProjectionTypeV1.ACCOUNT,
@@ -453,8 +453,14 @@ class KernelProductEvidenceProviderV3:
         if same_cursor_base != base_services:
             raise self._error("PRODUCT_BASE_PROJECTION_DRIFT", event=event, delivery=delivery, algo=algo)
         contract = thaw_json_v1(base_services.contract_projection)
-        market = thaw_json_v1(base_services.market_data_projection)
-        if not isinstance(contract, dict) or not contract or not isinstance(market, dict) or not market:
+        market = (
+            None if base_services.market_data_projection is None else thaw_json_v1(base_services.market_data_projection)
+        )
+        if (
+            not isinstance(contract, dict)
+            or not contract
+            or (market is not None and (not isinstance(market, dict) or not market))
+        ):
             raise self._error("PRODUCT_PROJECTION_MISSING", event=event, delivery=delivery, algo=algo)
 
         plan = self._locked_plan_context(cur, event=event, algo=algo)
@@ -579,21 +585,9 @@ class KernelProductEvidenceProviderV3:
         event: RuntimeEventEnvelopeV2,
         algo: ExecutionAlgoInstancePersistenceV2,
     ) -> tuple[str | None, dict[str, Any] | None, str | None]:
-        selected = event
         if event.event_type is not EventTypeV2.TICK:
-            cur.execute(
-                "SELECT payload FROM qmt_strategy.execution_runtime_event e "
-                "JOIN qmt_strategy.execution_algo_event_delivery d ON d.runtime_id=e.runtime_id AND d.event_id=e.event_id "
-                "WHERE e.runtime_id=%s AND d.algo_instance_id=%s AND e.sequence<%s "
-                "AND e.event_contract_version='KERNEL_V2' AND e.event_type='TICK' "
-                "AND e.source='B0_QUOTE_V2' AND e.payload_schema_version='miniqmt_market_data_view_v2' "
-                "AND d.status='APPLIED' ORDER BY e.sequence DESC LIMIT 1 FOR SHARE OF e,d",
-                (event.runtime_id, algo.algo_instance_id, event.sequence),
-            )
-            row = cur.fetchone()
-            if row is None:
-                return None, None, None
-            selected = RuntimeEventEnvelopeV2.model_validate(row["payload"], strict=True)
+            return None, None, None
+        selected = event
         if selected.symbol != algo.symbol:
             raise KernelProductEvidenceError(
                 "MINIQMT_K6_PRODUCT_MARKET_OWNER_CONFLICT",
@@ -1043,6 +1037,8 @@ class KernelProductEvidenceProviderV3:
                 context={"delivery_id": delivery.delivery_id, "command_count": len(evidence_parts)},
             )
         refs = {item.projection_type: item for item in base_services.execution_projection_set.ordered_projection_refs}
+        if base_services.market_data_projection is None:
+            refs.pop(KernelProjectionTypeV1.MARKET_DATA, None)
         account_hash = hash_hex_v1("miniqmt_account_projection_v1", account_payload)
         refs[KernelProjectionTypeV1.ACCOUNT] = ExecutionProjectionRefV1.create(
             projection_type=KernelProjectionTypeV1.ACCOUNT,
@@ -1099,7 +1095,6 @@ class KernelProductEvidenceProviderV3:
             )
         required = {
             KernelProjectionTypeV1.CONTRACT,
-            KernelProjectionTypeV1.MARKET_DATA,
             KernelProjectionTypeV1.MARKET_CAPABILITY,
             KernelProjectionTypeV1.ACCOUNT,
             KernelProjectionTypeV1.KILL_SWITCH_STATE,
@@ -1107,6 +1102,8 @@ class KernelProductEvidenceProviderV3:
             KernelProjectionTypeV1.RISK_DECISION,
             KernelProjectionTypeV1.ROUTE_COMPATIBILITY,
         }
+        if base_services.market_data_projection is not None:
+            required.add(KernelProjectionTypeV1.MARKET_DATA)
         if set(refs) != required:
             raise KernelProductEvidenceError(
                 "MINIQMT_K6_PRODUCT_PROJECTION_SET_INVALID",

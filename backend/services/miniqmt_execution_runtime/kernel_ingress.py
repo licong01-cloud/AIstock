@@ -108,6 +108,17 @@ class KernelIngressCoordinatorV1:
                 "non-callback ingress cannot mutate a durable child mapping",
                 context={"event_id": event.event_id, "event_type": event.event_type.value},
             )
+        if event.event_type is EventTypeV2.TICK:
+            raise KernelEventRoutingError(
+                "MINIQMT_HOT_MARKET_DATA_DURABLE_INGRESS_FORBIDDEN",
+                "ordinary TICK is process-local and cannot enter durable event routing",
+                context={
+                    "event_id": event.event_id,
+                    "runtime_id": event.runtime_id,
+                    "event_type": event.event_type.value,
+                    "broker_called": False,
+                },
+            )
         repository_values = dict(
             event=event,
             catalog_runtime=self.catalog_runtime,
