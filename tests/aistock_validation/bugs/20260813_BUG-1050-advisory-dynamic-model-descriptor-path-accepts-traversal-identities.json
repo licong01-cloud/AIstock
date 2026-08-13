@@ -22,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260813-26ae4496e6c0",
       "timestamp": "2026-08-13T02:05:54.419920Z"
+    },
+    {
+      "action": "source_fix_verified",
+      "actor": "codex",
+      "note": "Validated field-specific descriptor identities and resolved-path containment, including traversal, absolute-fragment and symlink-escape rejection; merge and user-owned backend restart remain pending.",
+      "timestamp": "2026-08-13T02:24:34Z"
     }
   ],
   "evidence_uris": [
@@ -74,9 +80,9 @@
     ]
   },
   "first_seen_at": "2026-08-13T02:05:54.419934Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "feature/advisory-forward-p0ab-design-20260813",
+  "fix_commit": "8498de9697e9c7d53037d347dad45a6d0bfdfb52",
+  "fixed_at": "2026-08-13T02:24:34Z",
   "github_issue_number": 3372,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3372",
   "last_seen_at": "2026-08-13T02:05:54.419934Z",
@@ -84,6 +90,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3366",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -95,7 +102,9 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "A fresh Python process loaded backend.services.advisory_model_first.model_binding_resolution from fix commit 8498de96, resolved a legal descriptor beneath model_root/program_bindings, and received ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID for a traversal identity; no backend process was controlled."
+    ],
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "runtime_impact": "backend",
@@ -107,7 +116,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -160,7 +169,14 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
-  "verification_run_id": null,
+  "validation_evidence": [
+    "python -m pytest backend/tests/advisory_model_first/test_dynamic_model_binding.py -q -p no:cacheprovider -> 13 passed, 2 skipped (Windows symlink privilege unavailable; Linux CI exercises the symlink cases)",
+    "rtk nox -s advisory_modeling_backend -> 254 passed, 3 skipped",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14 mapped",
+    "changed-file Ruff, compileall, git diff --check and guardrail -> passed; 0 blocking findings",
+    "fresh-process descriptor containment source smoke -> passed"
+  ],
+  "verification_run_id": "local-BUG-1050-8498de96",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
