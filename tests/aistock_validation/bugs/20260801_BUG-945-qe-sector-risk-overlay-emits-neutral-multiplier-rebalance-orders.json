@@ -23,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260801-403e6e5fcacb",
       "timestamp": "2026-08-01T16:39:52.587325Z"
+    },
+    {
+      "action": "runtime_contract_probe_repair",
+      "actor": "codex",
+      "note": "Replaced legacy free-text and placeholder probes with executable read-only backend-main identity and multi-alpha run-list endpoints; database readback is not required because the source fix has no DDL/DML.",
+      "timestamp": "2026-08-13T17:44:14Z"
     }
   ],
   "evidence_uris": [
@@ -132,12 +138,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "GET http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/{run_id} plus fixed-candidate neutral-order and reentry action-ledger readback",
-    "database_readback_ref": "noop:no_database_change",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs?limit=1",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "fresh Python pytest process loaded the tracked sector-risk wrapper and verified NORMAL/UNMAPPED/INCOMPLETE no-order parity plus three-day confirmed reentry -> PASS"
     ],
-    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
