@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1049",
-  "closed_at": null,
+  "closed_at": "2026-08-13T01:31:18Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -148,8 +148,8 @@
   },
   "first_seen_at": "2026-08-12T18:28:51.848457Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c40fcea7d812c4b34b5a370d42ec66cb3155bbe6",
+  "fixed_at": "2026-08-13T01:31:18Z",
   "github_issue_number": 3363,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3363",
   "last_seen_at": "2026-08-12T18:28:51.848457Z",
@@ -157,6 +157,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3365",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -171,6 +172,8 @@
     "fresh_process_evidence": [],
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "client",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -178,7 +181,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -187,6 +190,10 @@
     "fingerprint": "addfc9923252b9a261787c6d",
     "source_event_id": "FE-20260812-addfc9923252"
   },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -> passed: implementation files=6 and follow-up files=2, findings=0 blocking=0 ownership fully mapped",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests and ownership files=14 mapped=14 unmapped=0 ambiguous=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
