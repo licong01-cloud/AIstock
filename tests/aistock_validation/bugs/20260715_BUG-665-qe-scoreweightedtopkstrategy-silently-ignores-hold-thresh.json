@@ -7,6 +7,7 @@
     "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
     "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260715_BUG-665-qe-scoreweightedtopkstrategy-silently-ignores-hold-thresh.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
