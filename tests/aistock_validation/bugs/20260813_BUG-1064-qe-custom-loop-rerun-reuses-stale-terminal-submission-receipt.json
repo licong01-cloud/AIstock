@@ -46,6 +46,12 @@
       "actor": "codex",
       "note": "DESIGN-COMPLIANCE-001 passed item by item: complete rerun-generation delivery, explicit malformed-metadata failure, unchanged normal submit/retry and business config semantics, and no new approval gate.",
       "timestamp": "2026-08-13T05:12:00Z"
+    },
+    {
+      "action": "pr_opened",
+      "actor": "codex",
+      "note": "Opened PR #3397 with current runtime contract, validation receipts, and Refs linkage; merge was not executed.",
+      "timestamp": "2026-08-13T05:18:00Z"
     }
   ],
   "evidence_uris": [
@@ -129,6 +135,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3397",
   "reproduce_command": "POST /api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9/loops/7/rerun with confirm_delete_old_result=true; observe immediate failure QE Workspace inspected receipt request digest does not match the payload",
   "required_verification": [
     "l0",
