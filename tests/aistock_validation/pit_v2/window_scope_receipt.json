@@ -1,19 +1,34 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-13T12:06:26.0789281Z",
-  "source_head": "de10d1c0bdf15cdcd152523f0110e0e174c4a635",
+  "observed_at": "2026-08-13T15:45:24.4942346Z",
+  "source_head": "bb93f2fdcbb6e6f6baef85a1e667873fd9eeb8a2",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
   "current_revision": {
     "branch": "docs/qe-pit-v2-w3-sliced-delivery-design-20260813",
     "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3-sliced-delivery-design-20260813",
     "base_head": "de10d1c0bdf15cdcd152523f0110e0e174c4a635",
-    "status": "review_4c_passed_pending_user_confirmation",
+    "status": "merged_via_pr_3425",
+    "merge_commit": "0c1097cd968161c5c234d268959c4c01fcb06314",
     "allowed_write_files": [
       "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
       "tests/aistock_validation/pit_v2/window_scope_receipt.json"
     ],
     "forbidden": ["business_code", "data_build", "data_export", "dataset_mutation", "ddl_dml", "activation", "distribution", "restart", "cleanup", "process_control"]
+  },
+  "active_slice": {
+    "id": "W3-A",
+    "branch": "feature/qe-pit-v2-w3a-consumer-20260813",
+    "worktree": "F:\\Dev\\AIstock_worktrees\\qe-pit-v2-w3a-consumer-20260813",
+    "base_head": "bb93f2fdcbb6e6f6baef85a1e667873fd9eeb8a2",
+    "status": "implementation_verified_pending_pr",
+    "actual_write_files": [
+      "backend/services/canonical_pit_dataset_consumer.py",
+      "backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py",
+      "docs/architecture/qe_pit_v2_dataset_upgrade_master_f2_design_20260813.md",
+      "tests/aistock_validation/pit_v2/window_scope_receipt.json"
+    ],
+    "forbidden": ["w1_w2_core", "qe_business_files", "hmm_business_files", "data_export", "dataset_mutation", "ddl_dml", "runtime_activation", "process_control"]
   },
   "windows": {
     "W0": {
@@ -106,7 +121,7 @@
     "W3": {
       "depends_on": ["W2_merged"],
       "owner": "W3 contract and integration lead with short-lived per-slice writer",
-      "status": "revised_design_pending_user_confirmation",
+      "status": "w3a_implementation_verified_pending_pr",
       "coordination_model": "short_lived_exact_file_lease_v1",
       "sub_sequence": ["W3-A", "W3-B", "W3-C", "W3-D"],
       "lease_contract": {
@@ -127,7 +142,7 @@
           "owner": "W3 Shared Dataset Consumer Contract",
           "planned_exact_write_files": [
             "backend/services/canonical_pit_dataset_consumer.py",
-            "backend/tests/test_canonical_pit_dataset_consumer.py"
+            "backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py"
           ],
           "depends_on": ["W2_merged"],
           "exit_gate": ["neutral_adapter_uses_w1_w2_public_api", "full_pass_sample_v1_tamper_rejected"],
@@ -168,7 +183,7 @@
           "owner": "W3 final validation",
           "write_scope": "no business source writes",
           "depends_on": ["W3-A_merged", "W3-B_merged", "W3-C_merged"],
-          "validation_command": "python -m pytest backend/tests/test_canonical_pit_dataset_consumer.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py backend/tests/hmm_data_source/test_isolation_constraints.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q",
+          "validation_command": "python -m pytest backend/tests/dataset_release/test_canonical_pit_dataset_consumer.py backend/tests/quantevolver/test_canonical_pit_dataset_binding.py backend/tests/hmm_data_source/test_isolation_constraints.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q",
           "evidence_binding": "structured receipt and CI check rollup bound to the final origin/main commit containing PR-3A, PR-3B and PR-3C",
           "exit_gate": ["final_main_identity_matrix_pass", "consumer_inventory_no_unknown", "v1_reproduction_and_formal_rejection_pass", "old_experiments_not_used_as_v2_evidence"],
           "failure_route": "return to owning W3 slice, merge fix from latest main, rerun all W3-D evidence"
