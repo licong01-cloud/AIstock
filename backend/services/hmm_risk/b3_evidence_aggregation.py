@@ -257,7 +257,6 @@ _FINITE_NUMBER_PATTERN = rb"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?
 _SECTOR_PATTERN = re.compile(rb'"sector_code":"([^"]+)"')
 _SIZE_PATTERN = re.compile(rb'"price_expected_weight":(' + _FINITE_NUMBER_PATTERN + rb")")
 _LIQUIDITY_PATTERN = re.compile(rb'"moneyflow_contributor_amount":(' + _FINITE_NUMBER_PATTERN + rb")")
-_PRICE_DOMAIN_REASON_PATTERN = re.compile(rb'"price_domain_reason_code":"([^"]+)"')
 
 
 def _canonical_file_sha256(path: Path) -> str:
@@ -379,14 +378,21 @@ def _compact_invalid_domain_objects(
         array_end=array_end,
         object_prefix=b'{"direct_sector_level":"L2"',
     ):
-        sector = _SECTOR_PATTERN.search(raw)
-        reason = _PRICE_DOMAIN_REASON_PATTERN.search(raw)
-        if not sector or not reason:
+        raw_bytes = bytes(raw)
+        try:
+            parsed = json.loads(raw_bytes, object_pairs_hook=_reject_duplicate_keys)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise B3EvidenceAggregationError("invalid L2 domain receipt is invalid JSON") from exc
+        if not isinstance(parsed, dict) or canonical_json_bytes(parsed) != raw_bytes:
+            raise B3EvidenceAggregationError("invalid L2 domain receipt is not canonical")
+        sector = parsed.get("sector_code")
+        reason = parsed.get("price_domain_reason_code")
+        if not isinstance(sector, str) or not sector or not isinstance(reason, str) or not reason:
             raise B3EvidenceAggregationError("invalid L2 domain receipt is missing its typed reason")
         values.append(
             {
-                "sector_code": sector.group(1).decode("utf-8"),
-                "price_domain_reason_code": reason.group(1).decode("utf-8"),
+                "sector_code": sector,
+                "price_domain_reason_code": reason,
             }
         )
     return values
