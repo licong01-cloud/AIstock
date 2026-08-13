@@ -1,9 +1,9 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: e1d415a287653cd05ff627d8b52beea0139d1accb46e58576bc8c6b5eba2cb55
+source_sha256: 4a7476a59883b5c71bf9c067a6b70ebcce1033081088e4cd3aac9cb7b48410ef
 source_digest_normalization: utf8_lf
 source_version: "1.5"
-updated_at: "2026-08-12"
+updated_at: "2026-08-13"
 rule_sync_policy:
   authority: human_markdown_standard
   catalog_role: machine_enforcement_metadata_only
@@ -662,6 +662,7 @@ rules:
         - ignored_artifact_manifest_classifies_transient_protected_unknown
         - active_process_and_path_boundary_preflight
         - exact_transient_roots_only_no_git_clean_or_wildcard
+        - ignored_asset_tree_transients_require_exact_bounded_structural_classifier
         - manifest_unchanged_before_purge
         - path_registration_local_remote_four_state_readback
         - bare_merge_does_not_imply_cleanup
