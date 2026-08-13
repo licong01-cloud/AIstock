@@ -37,9 +37,11 @@ from backend.services.miniqmt_execution_runtime.kernel_product_evidence import (
     KernelProductEvidenceError,
     KernelProductEvidenceProviderV3,
     ProductEvidenceBuildResultV3,
+    VirtualAccountProjectionError,
     _CursorLedgerReadRepository,
     _CursorTradingCalendar,
     bind_product_transition_bundle_v3,
+    virtual_account_projection_v1,
 )
 from backend.services.miniqmt_execution_runtime.kernel_product_callbacks import (
     KernelProductCallbackIngressError,
@@ -101,6 +103,10 @@ from backend.services.simulation_runtime.miniqmt_kernel_product import (
 )
 from backend.services.simulation_runtime.miniqmt_quote_activation import build_miniqmt_quote_ingress_activation_from_env
 from backend.services.simulation_runtime.models import SimulationBrokerBackend
+from backend.services.qmt_strategy_ledger.models import (
+    VirtualAccount,
+    VirtualAccountStatus,
+)
 from backend.services.strategy_package.execution_policy import compute_execution_policy_sha256
 from backend.services.trading_core.models import OrderSide
 from backend.tests.miniqmt_execution_runtime.test_kernel_delivery import _worker_facts
@@ -194,18 +200,52 @@ class _EvidenceCursor:
 
 
 def _evidence_account():
-    return SimpleNamespace(
+    return VirtualAccount(
         strategy_id="strategy_product_evidence",
         strategy_name="strategy-product-evidence",
+        display_name="Strategy product evidence",
         account_id="account-product-evidence",
         mode="SIM",
+        initial_cash=Decimal("100000"),
         cash=Decimal("100000"),
         frozen_cash=Decimal("0"),
         market_value=Decimal("0"),
-        status=SimpleNamespace(value="ACTIVE"),
+        status=VirtualAccountStatus.ENABLED,
         risk_config={"kill_switch": False},
+        created_at=datetime(2026, 7, 26, 0, 0, tzinfo=UTC),
         updated_at=datetime(2026, 7, 26, 1, 29, tzinfo=UTC),
     )
+
+
+def test_virtual_account_projection_is_exact_json_safe_and_fail_loud() -> None:
+    account = replace(
+        _evidence_account(),
+        risk_config={"nested": [{"ratio": 0.25, "enabled": True, "optional": None}]},
+        updated_at=datetime.fromisoformat("2026-07-26T09:29:00+08:00"),
+    )
+    projection = virtual_account_projection_v1(account)
+    assert projection["updated_at_utc"] == "2026-07-26T01:29:00+00:00"
+    assert projection["risk_config"] == {"nested": [{"enabled": True, "optional": None, "ratio": 0.25}]}
+
+    malformed = (
+        object(),
+        replace(account, strategy_id=" "),
+        replace(account, strategy_name=1),  # type: ignore[arg-type]
+        replace(account, mode="PAPER"),
+        replace(account, initial_cash=Decimal("NaN")),
+        replace(account, initial_cash=Decimal("0")),
+        replace(account, cash=Decimal("-1")),
+        replace(account, frozen_cash=Decimal("-1")),
+        replace(account, status="ENABLED"),  # type: ignore[arg-type]
+        replace(account, risk_config=[]),  # type: ignore[arg-type]
+        replace(account, risk_config={1: "bad-key"}),  # type: ignore[dict-item]
+        replace(account, risk_config={"ratio": float("nan")}),
+        replace(account, risk_config={"opaque": object()}),
+        replace(account, updated_at=datetime(2026, 7, 26, 1, 29)),
+    )
+    for item in malformed:
+        with pytest.raises(VirtualAccountProjectionError):
+            virtual_account_projection_v1(item)  # type: ignore[arg-type]
 
 
 def _evidence_plan(algo) -> dict[str, object]:
@@ -1445,7 +1485,19 @@ def _plan_reader_facts():
         trading_rule_decisions=[decision],
     )
     release = SimpleNamespace(release_id=binding.release_id, release_hash=release_hash)
-    account = SimpleNamespace(model_dump=lambda **_values: {"strategy_id": binding.strategy_id, "cash": "100000"})
+    account = VirtualAccount(
+        strategy_id=binding.strategy_id,
+        strategy_name="strategy_plan_reader",
+        display_name="Strategy plan reader",
+        account_id="miniqmt_sim_account",
+        mode="SIM",
+        initial_cash=Decimal("100000"),
+        cash=Decimal("100000"),
+        status=VirtualAccountStatus.ENABLED,
+        risk_config={"max_position_ratio": "0.25"},
+        created_at=datetime(2026, 7, 27, 0, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 7, 27, 1, 15, tzinfo=UTC),
+    )
     runtime_id = _runtime_id(plan, binding)
     original = _authority()
     session = type(original).create(
@@ -1797,6 +1849,21 @@ def test_plan_authority_reader_closes_plan_binding_session_account_and_policy() 
     assert request.parent_intent_id == "intent_plan_reader"
     assert request.algo_code == "SNIPER_MINIQMT"
     assert request.parent_quantity == 100
+    assert thaw_json_v1(request.account_projection) == {
+        "strategy_id": "strategy_plan_reader",
+        "strategy_name": "strategy_plan_reader",
+        "account_id": "miniqmt_sim_account",
+        "mode": "SIM",
+        "cash": "100000",
+        "frozen_cash": "0",
+        "market_value": "0",
+        "status": "ENABLED",
+        "risk_config": {"max_position_ratio": "0.25"},
+        "updated_at_utc": "2026-07-27T01:15:00+00:00",
+    }
+    assert kernel_product_evidence.KernelProductEvidenceProviderV3._account_payload(
+        accounts.get_virtual_account(binding.strategy_id)
+    ) == thaw_json_v1(request.account_projection)
 
     mismatched_session = _authority()
     invalid = SimulationK6DPlanAuthorityReader(
@@ -1890,6 +1957,31 @@ def test_plan_authority_reader_rejects_policy_fallback_and_incomplete_plan_sets(
     with pytest.raises(MiniQMTKernelProductCompositionError) as account_failure:
         read(plan, account_repository=SimpleNamespace(get_virtual_account=lambda _strategy_id: object()))
     assert account_failure.value.reason_code == "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID"
+
+    old_parallel_carrier = SimpleNamespace(
+        model_dump=lambda **_values: {"strategy_id": binding.strategy_id, "cash": "100000"}
+    )
+    with pytest.raises(MiniQMTKernelProductCompositionError) as parallel_carrier_failure:
+        read(
+            plan,
+            account_repository=SimpleNamespace(get_virtual_account=lambda _strategy_id: old_parallel_carrier),
+        )
+    assert parallel_carrier_failure.value.reason_code == "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID"
+
+    wrong_owner = replace(accounts.get_virtual_account(binding.strategy_id), strategy_id="strategy_other")
+    with pytest.raises(MiniQMTKernelProductCompositionError) as owner_failure:
+        read(plan, account_repository=SimpleNamespace(get_virtual_account=lambda _strategy_id: wrong_owner))
+    assert owner_failure.value.reason_code == "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID"
+    assert owner_failure.value.context["expected_strategy_id"] == binding.strategy_id
+    assert owner_failure.value.context["actual_strategy_id"] == "strategy_other"
+
+    malformed_account = replace(accounts.get_virtual_account(binding.strategy_id), risk_config={"bad": object()})
+    with pytest.raises(MiniQMTKernelProductCompositionError) as malformed_failure:
+        read(
+            plan,
+            account_repository=SimpleNamespace(get_virtual_account=lambda _strategy_id: malformed_account),
+        )
+    assert malformed_failure.value.reason_code == "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID"
 
 
 def test_product_committed_source_reader_requires_strict_route_event_and_receipt() -> None:
