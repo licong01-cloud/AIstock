@@ -46,6 +46,12 @@
       "actor": "codex",
       "note": "Because basename alone did not close CodeQL's interprocedural taint path, each descriptor filesystem sink now performs the documented realpath and safe-root-prefix check immediately before stat/read while retaining the stricter identity and symlink checks.",
       "timestamp": "2026-08-13T03:28:00Z"
+    },
+    {
+      "action": "path_resolution_sink_completed",
+      "actor": "codex",
+      "note": "CodeQL alert 317 is fixed; follow-on alert 318 identified Path.resolve itself as a filesystem sink, so descriptor paths now use realpath strings and safe-root-prefix checks before Path construction and before publisher filesystem access.",
+      "timestamp": "2026-08-13T03:42:00Z"
     }
   ],
   "evidence_uris": [
@@ -99,7 +105,7 @@
   },
   "first_seen_at": "2026-08-13T02:05:54.419934Z",
   "fix_branch": "feature/advisory-forward-p0ab-design-20260813",
-  "fix_commit": "9f3fb7a2ea1b5c1b306f5f825b87620fc9e9e9bf",
+  "fix_commit": "a4402fefbd7d309dc44a7c375079ef35c9a63c6d",
   "fixed_at": "2026-08-13T02:24:34Z",
   "github_issue_number": 3372,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3372",
@@ -194,7 +200,7 @@
     "changed-file Ruff, compileall, git diff --check and guardrail -> passed; 0 blocking findings",
     "fresh-process descriptor containment source smoke -> passed"
   ],
-  "verification_run_id": "local-BUG-1050-9f3fb7a2",
+  "verification_run_id": "local-BUG-1050-a4402fef",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
