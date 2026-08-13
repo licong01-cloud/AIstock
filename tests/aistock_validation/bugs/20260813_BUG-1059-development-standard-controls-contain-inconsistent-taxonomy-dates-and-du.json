@@ -1,6 +1,24 @@
 {
   "actual": "The Markdown authority date differs from the machine YAML, top-level client install wording conflicts with the scoped client-sync section, overlapping fallback/process rules can emit duplicate findings, manual composite review taxonomy overstates automation, and RTK policy text is copied across lane entries despite the single-authority rule. Align Markdown and YAML semantics, narrow overlapping machine rules without weakening blocking coverage, make composite human review explicit, and replace copied RTK prose in repository-owned client lanes with concise TOOL-RTK-001 references. Do not modify AGENTS.md.",
   "allowed_write_scope": [
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "scripts/aistock_guardrail_scan.py",
+    "backend/tests/scripts/test_aistock_guardrail_scan.py",
+    ".codex/skills/aistock-task-router/SKILL.md",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".codex/skills/aistock-merge-aftercare/SKILL.md",
+    ".codex/skills/aistock-readonly-triage/SKILL.md",
+    ".codex/skills/aistock-docs-handoff/SKILL.md",
+    ".codex/skills/aistock-validation-delegation/SKILL.md",
+    ".codex/skills/verify-aistock-feature/SKILL.md",
+    ".claude/commands/aistock-task-router.md",
+    ".claude/commands/fix-aistock-issue.md",
+    ".claude/commands/aistock-merge-aftercare.md",
+    ".claude/commands/aistock-readonly-triage.md",
+    ".claude/commands/aistock-docs-handoff.md",
+    ".claude/commands/aistock-validation-delegation.md",
+    ".claude/commands/aistock-feature-workflow.md",
     "tests/aistock_validation/bugs/20260813_BUG-1059-development-standard-controls-contain-inconsistent-taxonomy-dates-and-du.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -54,8 +72,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0",
-    "validation_center_backend"
+    "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {

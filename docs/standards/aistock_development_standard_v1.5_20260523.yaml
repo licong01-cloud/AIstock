@@ -1,6 +1,6 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
-source_sha256: 4a7476a59883b5c71bf9c067a6b70ebcce1033081088e4cd3aac9cb7b48410ef
+source_sha256: 0b54455f1cf9f81ced5a6ffdeac527eaf69a76f64906da687e0195eda0d57487
 source_digest_normalization: utf8_lf
 source_version: "1.5"
 updated_at: "2026-08-13"
@@ -102,8 +102,6 @@ rules:
       include_globs:
         - backend/**/*.py
         - frontend/src/**/*
-        - scripts/**/*
-        - noxfile.py
       exclude_globs: []
     checker:
       type: regex
@@ -156,6 +154,9 @@ rules:
         - scripts/**/*.py
       exclude_globs:
         - backend/tests/**
+        - debug_tools/**
+        - scripts/**/*debug*.py
+        - scripts/**/*diagnos*.py
     checker:
       type: regex
       patterns:
@@ -708,6 +709,10 @@ manual_review_controls:
     title: "Completed implementation records four explicit checks against approved requirements: complete delivery, visible failures, preserved business semantics, and approved gates or approvals."
     effect: block
     enforcement_phase: pr_readiness
+    control_kind: composite_manual_review
+    machine_evidence_refs:
+      - ERR-FALLBACK-001
+      - TRADING-FALLBACK-001
     required_evidence:
       - no_simplified_delivery
       - no_silent_error

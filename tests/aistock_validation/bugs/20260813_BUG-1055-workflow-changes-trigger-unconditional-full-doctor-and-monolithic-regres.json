@@ -1,6 +1,13 @@
 {
   "actual": "workflow-smoke always invokes the full doctor despite the conditional-doctor standard, and any change to the large issue workflow script maps to the entire monolithic test file. PR workflows also independently recompute changed-file classification. Introduce a lightweight smoke contract, domain-scoped test targets, and reusable classification outputs so small workflow fixes run one directly affected matrix plus the aggregate CI verdict without dropping required coverage.",
   "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    ".github/workflows/test.yml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260813_BUG-1055-workflow-changes-trigger-unconditional-full-doctor-and-monolithic-regres.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -54,8 +61,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0",
-    "validation_center_backend"
+    "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {

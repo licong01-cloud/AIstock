@@ -604,6 +604,19 @@ def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
     monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
     monkeypatch.setattr(workflow, "_github_bug_issue_by_number", lambda _issue_number, **_kwargs: (None, []))
+
+    def isolated_read_command(args: list[str], cwd: Path | None = None, timeout: int = 30, attempts: int = 3) -> dict[str, Any]:
+        if args[:2] == ["git", "fetch"]:
+            return {**workflow._run_command(args, cwd=cwd, timeout=timeout), "attempts": 1}
+        if args and args[0] == "git":
+            try:
+                stdout = workflow._git(args[1:], cwd=cwd, check=False)
+                return {"ok": True, "returncode": 0, "stdout": stdout, "stderr": "", "attempts": 1}
+            except Exception as exc:
+                return {"ok": False, "returncode": 1, "stdout": "", "stderr": str(exc), "attempts": 1}
+        return {**workflow._run_command(args, cwd=cwd, timeout=timeout), "attempts": 1}
+
+    monkeypatch.setattr(workflow, "_run_read_command_with_retry", isolated_read_command)
     submit_scope_root = tmp_path / "submit-scope"
     monkeypatch.setattr(workflow, "_submit_bug_file_root", lambda: submit_scope_root)
     for relative_path in (
@@ -3147,13 +3160,8 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["dry_run"] is True
     assert payload["synthetic_record"] is True
     assert payload["unexpected_dirty_paths"] == []
-    assert payload["client_manifest"]["codex_skill_status"] in {
-        "current",
-        "missing_authority",
-        "missing_global",
-        "stale",
-    }
-    assert payload["h7_code_intelligence"]["workflow_gate"] in {"ready", "warning"}
+    assert payload["client_manifest"] is None
+    assert payload["h7_code_intelligence"] is None
     assert payload["fast_path"]["task_tier"] == "T1"
     assert payload["start"]["worktree_plan"]["dry_run"] is True
     assert payload["finish"]["workflow_gate"] == "plan_ready"
@@ -8763,6 +8771,11 @@ def test_worktree_creation_puts_branch_option_before_path(
     monkeypatch.setattr(workflow, "_git", fake_git)
     monkeypatch.setattr(
         workflow,
+        "_run_read_command_with_retry",
+        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
+    monkeypatch.setattr(
+        workflow,
         "_close_sync_worktree_names",
         lambda bug_id: ("chore/BUG-199-close-sync", isolated_workflow_root / "worktrees" / "BUG-199-close-sync"),
     )
@@ -9051,6 +9064,11 @@ def test_cleanup_after_merge_blocks_unmerged_branch(
         return ""
 
     monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_run_read_command_with_retry",
+        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": "", "stderr": "", "attempts": 1},
+    )
     monkeypatch.setattr(
         workflow,
         "_git_snapshot",

@@ -116,6 +116,7 @@ def test_standard_skill_workflow_and_runtime_catalog_stay_in_focused_lane(tmp_pa
         "backend/tests/test_aistock_guardrail_scan.py",
         "backend/tests/scripts/test_aistock_issue_workflow.py",
         "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     ]
 
 
@@ -481,7 +482,7 @@ def test_validation_mcp_issue_files_use_focused_workflow_lane(tmp_path: Path) ->
     assert payload["backend_required"] is False
     assert payload["unmapped_code_files"] == []
     assert payload["workflow_test_targets"] == [
-        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
         "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
     ]
 
@@ -1047,6 +1048,11 @@ def test_github_workflow_has_single_fail_closed_ci_verdict() -> None:
         "workflow-validation-tests",
         "prompt-evaluation",
     }
+    registrar_if = str(registrar["if"])
+    assert "needs.backend-tests.result == 'failure'" in registrar_if
+    assert "needs.workflow-validation-tests.result == 'failure'" in registrar_if
+    assert "needs.prompt-evaluation.result == 'failure'" in registrar_if
+    assert not any(step.get("name") == "No targeted CI failure evidence required" for step in registrar["steps"])
 
     classify_steps = jobs["classify-changes"]["steps"]
     install = next(step for step in classify_steps if step.get("name") == "Install change-classifier dependency")
@@ -1134,7 +1140,7 @@ def test_workflow_sources_select_only_their_direct_test_targets(tmp_path: Path) 
     )
 
     assert payload["workflow_test_targets"] == [
-        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
         "backend/tests/scripts/test_issue_flow.py",
         "backend/tests/scripts/test_issue_flow_pr_quality.py",
         "backend/tests/scripts/test_ci_change_classifier.py",
@@ -1266,6 +1272,19 @@ def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
     assert issue_writer["permissions"]["issues"] == "write"
     assert "github.rest.issues.create" in issue_writer_text
     assert "workflow_run:" in issue_writer_text
+
+
+def test_non_required_pr_workflows_skip_pure_bug_registry_changes() -> None:
+    for relative_path in (
+        ".github/workflows/codeql.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/pr-quality.yml",
+        ".github/workflows/issue-auto-link.yml",
+    ):
+        text = Path(relative_path).read_text(encoding="utf-8")
+        assert "pull_request:" in text
+        assert "paths-ignore:" in text
+        assert "- 'tests/aistock_validation/bugs/**'" in text
 
     guardrail = yaml.safe_load(Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8"))
     guardrail_text = Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8")

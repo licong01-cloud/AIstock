@@ -19,7 +19,7 @@ Use this lane for documentation and handoff work. Keep the path classification, 
 
 ## Rules
 
-- Follow `TOOL-RTK-001`: eligible supported high-output interactive commands must use RTK; direct fallback is limited to unsupported/unavailable calls, exact-raw-output diagnostics, or a first wrapper failure, with one concise reason. Never self-authorize `rtk trust`, and never make RTK or telemetry a task/PR/CI gate.
+- Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine it.
 - Docs work never authorizes backend start/stop/restart. User backend process control remains user-owned even when a runbook or restart contract is being documented.
 - Use an isolated worktree/branch for tracked docs changes.
 - For docs-fast, use `git diff --check` as the validation step.

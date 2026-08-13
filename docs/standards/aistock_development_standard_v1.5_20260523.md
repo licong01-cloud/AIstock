@@ -1,7 +1,7 @@
 # AIstock 项目开发规范 v1.5
 
 > 版本：1.5
-> 更新日期：2026-08-11
+> 更新日期：2026-08-13
 > 状态：唯一人类可读开发规范
 > 权威文件：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 > 机器派生目录：`docs/standards/aistock_development_standard_v1.5_20260523.yaml`
@@ -15,7 +15,7 @@
 - YAML 是本文的机器派生目录，用于扫描和流水线；规则含义以本文为准，稳定 rule ID 供工具引用。
 - 规范路径保持稳定。修订直接更新本文和同版本 YAML，历史由 Git 和 `docs/standards/archive/` 保存。
 - `docs/standards/README.md` 只维护权威入口和场景路由。
-- 规则变更与对应测试在同一 PR 中提交；客户端入口在合入后由 `install-client` 同步。
+- 规则变更与对应测试在同一 PR 中提交；仅当 `.codex/**` 或 `.claude/**` 客户端入口发生变化时，合入后才由单一 owner 执行一次 `install-client` 同步。
 
 ## 2. 统一执行流程
 
@@ -42,7 +42,7 @@
 
 #### 2.3.1 控制效果、阶段与计数
 
-1. 每个稳定控制 ID 在机器目录中只出现一次。`rules` 保存可自动扫描或已有机器入口的控制；`manual_review_controls` 只保存没有对应 machine rule 的人工控制，禁止为同一 ID 建立第二份记录。
+1. 每个稳定控制 ID 在机器目录中只出现一次。`rules` 保存可自动扫描或已有机器入口的控制；`manual_review_controls` 保存纯人工控制或组合人工验收，组合人工验收可以引用已有 machine evidence，但不得宣称其人工语义已被自动化，也禁止为同一 ID 建立第二份记录。
 2. 每个控制明确记录 `effect` 和 `enforcement_phase`：
    - `block` 只阻断该控制适用的任务类型、文件范围和阶段，不升级为全任务或全仓门禁；
    - `warn` 产生可见警告和修复建议，但不阻断当前阶段；
@@ -55,7 +55,7 @@
 
 1. PR 前运行本任务的最小本地 gate，并执行 BUG `finish --plan-only` 或 feature design validation。
 2. CI 只执行变更模块的必要计划和全仓通用轻量检查；深度回归由 Validation Center/CI/nightly 去重执行。
-3. 合入后同步 BUG/GitHub 状态、根目录 `main`、task worktree/branch 和客户端入口。
+3. 合入后同步 BUG/GitHub 状态、根目录 `main` 和已授权的 task worktree/branch；客户端入口未变化时明确记为 `noop`，只有 `.codex/**` 或 `.claude/**` 变化才进入单一 owner 的客户端同步流程。
 4. 生产 DDL、依赖安装、运行时激活分别报告为 `noop`、`applied_and_verified` 或 `pending`；代码合入与运行时激活是两个独立结果。
 5. 授权按动作和目标独立判断，但不按消息次数拆分。同一条用户指令可以明确打包源码合入、精确命名的 source worktree/local branch/remote branch cleanup，以及已通过 DEV 验证的具体生产目标与 migration；授权包完整时，合入后直接继续这些已授权动作，禁止再次索要同一授权。
 6. 裸 `merge` 授权仍只覆盖源码合入和必要 BUG/metadata 同步，不推导 cleanup、DDL/DML、依赖、激活、进程控制或删除。打包动作逐项执行和报告；某一项前置条件失败只阻断该项，不伪造成功，也不扩大其他授权。

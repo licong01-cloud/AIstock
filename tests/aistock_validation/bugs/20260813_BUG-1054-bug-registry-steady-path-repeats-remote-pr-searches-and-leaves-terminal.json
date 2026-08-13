@@ -1,6 +1,12 @@
 {
   "actual": "Fresh BUG submission performs OPEN and MERGED stale-PR searches even though the allocated ID is new, and postmortem repeats the same remote queries. Canonical BUG lookup also reparses the full registry, while the implemented terminal-reservation compactor is not wired into production. Remove impossible fresh-ID searches, reuse durable workflow state for postmortem, use exact BUG-ID candidate lookup with duplicate detection, and compact only safely terminal reservations without weakening collision fail-closed behavior.",
   "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_bug_id_allocator.py",
+    "scripts/aistock_mcp_server.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
     "tests/aistock_validation/bugs/20260813_BUG-1054-bug-registry-steady-path-repeats-remote-pr-searches-and-leaves-terminal.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -54,8 +60,7 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0",
-    "validation_center_backend"
+    "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {

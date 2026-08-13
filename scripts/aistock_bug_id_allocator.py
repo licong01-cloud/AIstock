@@ -45,7 +45,7 @@ TERMINAL_RESERVATION_STATUSES = {
 DEFAULT_TERMINAL_RETENTION_SECONDS = 300.0
 ALLOCATOR_STATE_SCHEMA = "aistock_bug_id_allocator_state_v1"
 FINGERPRINT_INDEX_SCHEMA = "aistock_bug_fingerprint_index_v1"
-FINGERPRINT_INDEX_VERSION = 1
+FINGERPRINT_INDEX_VERSION = 2
 
 
 _PROCESS_LOCKS_GUARD = threading.Lock()
@@ -306,6 +306,46 @@ def compact_terminal_reservations(
         except FileNotFoundError:
             continue
     return removed
+
+
+def compact_terminal_reservation(
+    root: Path,
+    bug_id: str,
+    *,
+    min_age_seconds: float = DEFAULT_TERMINAL_RETENTION_SECONDS,
+) -> str | None:
+    """Remove one durable terminal reservation without scanning the inventory.
+
+    Callers must hold :class:`GlobalBugIdLock`.  The fingerprint index is kept
+    because it remains the constant-time duplicate-intake guard after cleanup.
+    """
+
+    normalized = str(bug_id or "").strip().upper()
+    if not normalized:
+        return None
+    path = root / f"{normalized}.json"
+    try:
+        record = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BugIdLockError(f"invalid BUG reservation: {path}") from exc
+    if not isinstance(record, dict) or str(record.get("bug_id") or "").upper() != normalized:
+        raise BugIdLockError(f"BUG reservation identity mismatch: {path}")
+    status = str(record.get("status") or "")
+    if status and status not in TERMINAL_RESERVATION_STATUSES:
+        return None
+    try:
+        age_seconds = max(0.0, time.time() - path.stat().st_mtime)
+    except OSError:
+        return None
+    if age_seconds < max(0.0, float(min_age_seconds)):
+        return None
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return None
+    return str(path)
 
 
 class GlobalBugIdLock:
