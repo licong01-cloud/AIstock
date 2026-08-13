@@ -473,6 +473,7 @@ rules:
       - backend/tests/test_factor_metrics_h20_contract.py
       - backend/tests/test_qe_evolution_scheduler.py
       - backend/tests/test_qe_experiment_status_scanner.py
+      - backend/tests/test_simulation_runtime_scheduler_startup.py
       - backend/tests/unified_engine/test_backtest_executor.py
       - backend/tests/unified_engine/test_qe_*.py
     primary_module: qe.core
