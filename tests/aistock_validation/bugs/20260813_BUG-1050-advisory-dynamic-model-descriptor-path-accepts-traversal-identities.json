@@ -28,6 +28,12 @@
       "actor": "codex",
       "note": "Validated field-specific descriptor identities and resolved-path containment, including traversal, absolute-fragment and symlink-escape rejection; merge and user-owned backend restart remain pending.",
       "timestamp": "2026-08-13T02:24:34Z"
+    },
+    {
+      "action": "shared_feature_pr_gate_reconciled",
+      "actor": "codex",
+      "note": "BUG-1050 itself adds no DDL, but its source fix is carried by Feature PR #3366, whose pre-existing migration remains pending explicit authorization; metadata records the aggregate PR gate without authorizing execution.",
+      "timestamp": "2026-08-13T02:47:32Z"
     }
   ],
   "evidence_uris": [
@@ -92,7 +98,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3366",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending_explicit_authorization",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "CodeQL alert 317 on PR #3366",
   "required_verification": [
