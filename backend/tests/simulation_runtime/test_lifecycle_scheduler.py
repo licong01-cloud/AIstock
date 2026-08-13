@@ -9274,7 +9274,7 @@ def test_localsim_state_authority_accepts_hash_closed_superseded_plan_generation
             "rebuilt_after_side_effect_free_failure": True,
             "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
             "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
-            "rebuilt_execution_plan_id": "plan_pre_cash_fit_successor",
+            "rebuilt_execution_plan_id": successor_plan.plan_id,
             "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
         },
     )
@@ -9282,6 +9282,168 @@ def test_localsim_state_authority_accepts_hash_closed_superseded_plan_generation
     authoritative = repo.list_local_sim_execution_states(run.run_id, authoritative=True)
 
     assert {state.state_id for state in authoritative} == {state.state_id for state in successor_states}
+
+
+def test_localsim_state_authority_accepts_monotonic_successor_generation_progress() -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    predecessor_plan = repo.get_execution_plan(run.execution_plan_id)
+    predecessor_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    predecessor_receipt = max(
+        _local_sim_economic_receipt_map(run.run_payload_json).values(),
+        key=lambda item: item.generation,
+    )
+    successor_plan = SimulationLifecycleScheduler._copy_localsim_plan_with_intents(  # noqa: SLF001
+        plan=predecessor_plan,
+        intents=list(reversed(predecessor_plan.intents)),
+        cash_fit_payload={
+            "schema_version": "localsim_capital_dependency_v1",
+            "status": "SELL_FIRST_DEPENDENCY_ORDERED",
+            "reason": "localsim_sell_first_durable_dependent_buy",
+            "initial_cash": 100_000.0,
+            "original_intent_count": len(predecessor_plan.intents),
+            "prepared_intent_count": len(predecessor_plan.intents),
+            "sell_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.SELL),
+            "buy_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "dependent_buy_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "capital_waiting_owner": "LocalSimExecutionStateV1",
+        },
+    )
+    repo.save_execution_plan(successor_plan)
+    successor_states: list[LocalSimExecutionStateV1] = []
+    progressed_intent_id = predecessor_states[0].intent_id
+    for state in predecessor_states:
+        progressed = state.intent_id == progressed_intent_id
+        successor_states.append(
+            LocalSimExecutionStateV1.model_validate(
+                {
+                    **state.model_dump(mode="json"),
+                    "state_id": "",
+                    "plan_id": successor_plan.plan_id,
+                    "algo_instance_id": f"successor_{state.algo_instance_id}",
+                    "order_id": f"successor_{state.order_id}",
+                    "idempotency_key": f"successor_{state.idempotency_key}",
+                    "filled_quantity": state.filled_quantity + (1 if progressed else 0),
+                    "remaining_quantity": state.remaining_quantity - (1 if progressed else 0),
+                    "runtime_status": (
+                        LocalSimExecutionRuntimeStatus.ACTIVE.value if progressed else state.runtime_status.value
+                    ),
+                    "sequence": state.sequence + (1 if progressed else 0),
+                    "latest_fill_sequence": state.latest_fill_sequence + (1 if progressed else 0),
+                    "state_hash": "",
+                }
+            )
+        )
+    successor_facts = deepcopy(predecessor_receipt.economic_facts)
+    successor_facts["plan_id"] = successor_plan.plan_id
+    successor_facts["state_hashes"] = {state.state_id: state.state_hash for state in successor_states}
+    successor_receipt = LocalSimEconomicReceiptV1(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id=successor_plan.plan_id,
+        generation=predecessor_receipt.generation + 1,
+        economic_facts=successor_facts,
+    )
+    repo.update_simulation_daily_run(
+        run.run_id,
+        execution_plan=successor_plan,
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                state.state_id: state.model_dump(mode="json") for state in (*predecessor_states, *successor_states)
+            },
+            "local_sim_economic_receipts_v1": {
+                predecessor_receipt.receipt_id: predecessor_receipt.model_dump(mode="json"),
+                successor_receipt.receipt_id: successor_receipt.model_dump(mode="json"),
+            },
+            "local_sim_economic_generation": successor_receipt.generation,
+            "rebuilt_after_side_effect_free_failure": True,
+            "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
+            "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
+            "rebuilt_execution_plan_id": successor_plan.plan_id,
+            "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
+        },
+    )
+
+    authoritative = repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+
+    assert {state.state_id for state in authoritative} == {state.state_id for state in successor_states}
+    progressed = next(state for state in authoritative if state.intent_id == progressed_intent_id)
+    assert progressed.filled_quantity == predecessor_states[0].filled_quantity + 1
+
+
+def test_localsim_state_authority_rejects_missing_durable_rebuild_plan() -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    predecessor_plan = repo.get_execution_plan(run.execution_plan_id)
+    predecessor_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    predecessor_receipt = max(
+        _local_sim_economic_receipt_map(run.run_payload_json).values(),
+        key=lambda item: item.generation,
+    )
+    successor_plan = SimulationLifecycleScheduler._copy_localsim_plan_with_intents(  # noqa: SLF001
+        plan=predecessor_plan,
+        intents=list(reversed(predecessor_plan.intents)),
+        cash_fit_payload={
+            "schema_version": "localsim_capital_dependency_v1",
+            "status": "SELL_FIRST_DEPENDENCY_ORDERED",
+            "reason": "localsim_sell_first_durable_dependent_buy",
+            "initial_cash": 100_000.0,
+            "original_intent_count": len(predecessor_plan.intents),
+            "prepared_intent_count": len(predecessor_plan.intents),
+            "sell_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.SELL),
+            "buy_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "dependent_buy_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "capital_waiting_owner": "LocalSimExecutionStateV1",
+        },
+    )
+    successor_states = tuple(
+        LocalSimExecutionStateV1.model_validate(
+            {
+                **state.model_dump(mode="json"),
+                "state_id": "",
+                "plan_id": successor_plan.plan_id,
+                "algo_instance_id": f"successor_{state.algo_instance_id}",
+                "order_id": f"successor_{state.order_id}",
+                "idempotency_key": f"successor_{state.idempotency_key}",
+                "state_hash": "",
+            }
+        )
+        for state in predecessor_states
+    )
+    successor_facts = deepcopy(predecessor_receipt.economic_facts)
+    successor_facts["plan_id"] = successor_plan.plan_id
+    successor_facts["state_hashes"] = {state.state_id: state.state_hash for state in successor_states}
+    successor_receipt = LocalSimEconomicReceiptV1(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id=successor_plan.plan_id,
+        generation=predecessor_receipt.generation + 1,
+        economic_facts=successor_facts,
+    )
+    repo.update_simulation_daily_run(
+        run.run_id,
+        execution_plan=successor_plan,
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                state.state_id: state.model_dump(mode="json") for state in (*predecessor_states, *successor_states)
+            },
+            "local_sim_economic_receipts_v1": {
+                predecessor_receipt.receipt_id: predecessor_receipt.model_dump(mode="json"),
+                successor_receipt.receipt_id: successor_receipt.model_dump(mode="json"),
+            },
+            "local_sim_economic_generation": successor_receipt.generation,
+            "rebuilt_after_side_effect_free_failure": True,
+            "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
+            "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
+            "rebuilt_execution_plan_id": "plan_missing_rebuild_authority",
+            "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
+        },
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+
+    assert exc_info.value.context["reason_code"] == ("LOCALSIM_DURABLE_STATE_SUPERSEDED_PLAN_AUTHORITY_MISSING")
 
 
 def test_localsim_state_authority_rejects_unproven_cross_plan_receipt_history() -> None:
@@ -9341,6 +9503,7 @@ def test_localsim_state_authority_rejects_forged_superseded_plan_state_hash() ->
             "capital_waiting_owner": "LocalSimExecutionStateV1",
         },
     )
+    repo.save_execution_plan(successor_plan)
     successor_states = tuple(
         LocalSimExecutionStateV1.model_validate(
             {
@@ -9384,7 +9547,7 @@ def test_localsim_state_authority_rejects_forged_superseded_plan_state_hash() ->
             "rebuilt_after_side_effect_free_failure": True,
             "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
             "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
-            "rebuilt_execution_plan_id": "plan_pre_cash_fit_successor",
+            "rebuilt_execution_plan_id": successor_plan.plan_id,
             "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
         },
     )
@@ -9419,6 +9582,7 @@ def test_localsim_state_authority_rejects_superseded_plan_semantic_drift() -> No
             "capital_waiting_owner": "LocalSimExecutionStateV1",
         },
     )
+    repo.save_execution_plan(successor_plan)
     successor_states = []
     for index, state in enumerate(predecessor_states):
         successor_states.append(
@@ -9462,7 +9626,7 @@ def test_localsim_state_authority_rejects_superseded_plan_semantic_drift() -> No
             "rebuilt_after_side_effect_free_failure": True,
             "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
             "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
-            "rebuilt_execution_plan_id": "plan_pre_cash_fit_successor",
+            "rebuilt_execution_plan_id": successor_plan.plan_id,
             "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
         },
     )
