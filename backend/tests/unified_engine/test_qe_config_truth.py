@@ -25,6 +25,7 @@ from backend.routers.quantevolver_evolution import (
     _reject_nested_runtime_flags,
 )
 from backend.services.quantevolver import qe_evolution_service as qes
+from backend.services.quantevolver import qe_reconciliation_coordinator as qerc
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
 from backend.services.quantevolver.config_composer import (
     PRECOMPUTED_HMM_COEFF_JSON_PARAM,
@@ -79,6 +80,16 @@ DATA_SPLIT = {
     "test_end": "2021-12-31",
     "backtest_end": "2021-12-31",
 }
+
+
+def test_backend_lifespan_has_one_qe_coordinator_and_no_legacy_poll_loops() -> None:
+    source = (PROJECT_ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+    assert source.count("run_qe_reconciliation_coordinator(shutdown_event)") == 1
+    assert "_timer_scan_loop" not in source
+    assert "_qe_experiment_scan_loop" not in source
+    assert "_qe_reservation_reconcile_loop" not in source
+    assert "_qe_long_trend_reconcile_loop" not in source
 
 
 def _load_qrun_minute_module(monkeypatch):
@@ -1164,6 +1175,11 @@ class _CustomEvoQueueCursor:
         self.state["params"].append(params)
 
     def fetchone(self):
+        if self.sql.startswith("SELECT status, node_id FROM qe_evolution_loops"):
+            return self.state.get("existing_loop")
+        if self.sql.startswith("SELECT status FROM qe_evolution_loops"):
+            existing = self.state.get("existing_loop")
+            return (existing[0],) if existing else None
         if "RETURNING status" in self.sql and self.state.get("transitioned", True):
             return ("running",)
         return None
@@ -1256,7 +1272,8 @@ def test_custom_evo_parallelism_queue_helper_marks_pending_then_running():
 
     assert "ELSE 'pending'" in source
     assert "status = 'running'" in source
-    assert "await asyncio.sleep(poll_seconds)" in source
+    assert "wait_for_qe_reconciliation" in source
+    assert "await asyncio.sleep(poll_seconds)" not in source
 
 
 def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
@@ -1285,12 +1302,13 @@ def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
     def fake_enforce(cur, *, task, loop_index, target_node_id, loop_db_id):
         return slots.pop(0)
 
-    async def fake_sleep(seconds):
-        state["sleeps"].append(seconds)
+    async def fake_wait(*_args, **kwargs):
+        state["sleeps"].append(kwargs["timeout_seconds"])
+        return 0
 
     monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", fake_enforce)
     monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
-    monkeypatch.setattr(qes.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", fake_wait)
 
     slot = asyncio.run(
         scheduler._mark_custom_evo_loop_running_when_slot_available(
@@ -1306,10 +1324,61 @@ def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
 
     assert slot is not None
     assert slot["available"] is True
-    assert state["sleeps"] == [15]
+    assert state["sleeps"] == [60]
     assert state["enters"] == state["exits"] == 2
     assert any("VALUES (%s, %s, %s, 'pending', %s, %s)" in sql for sql in state["sql"])
     assert any("VALUES (%s, %s, %s, 'running', %s, %s)" in sql for sql in state["sql"])
+
+
+def test_custom_evo_100_unchanged_pending_wakes_execute_select_only(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    state = {
+        "sql": [],
+        "params": [],
+        "commits": 0,
+        "enters": 0,
+        "exits": 0,
+        "existing_loop": ("pending", "node-a"),
+    }
+    waits = 0
+
+    def fake_enforce(cur, *, task, loop_index, target_node_id, loop_db_id):
+        return {
+            "task_id": task["task_id"],
+            "node_id": target_node_id,
+            "active_count": 1,
+            "limit": 1,
+            "available": False,
+        }
+
+    async def stop_after_100(*_args, **_kwargs):
+        nonlocal waits
+        waits += 1
+        if waits == 100:
+            raise asyncio.CancelledError
+        return waits
+
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", fake_enforce)
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", stop_after_100)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            scheduler._mark_custom_evo_loop_running_when_slot_available(
+                task=_custom_evo_task_for_parallelism(limit=1),
+                loop_index=2,
+                target_node_id="node-a",
+                loop_db_id="qe_parallel_task_Loop2",
+                action_type="retry",
+                insert_if_missing=True,
+            )
+        )
+
+    statements = [sql.upper() for sql in state["sql"]]
+    assert waits == 100
+    assert len(statements) == 100
+    assert all(sql.startswith("SELECT ") for sql in statements)
+    assert not any(sql.startswith(("UPDATE ", "INSERT ", "DELETE ")) for sql in statements)
 
 
 def test_custom_evo_parallelism_queue_helper_does_not_resubmit_active_loop(monkeypatch):
@@ -1371,7 +1440,16 @@ def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(mo
         def mark_session_terminal(self, session_id, *, status, reason_code=None):
             observations.append(("terminal", session_id, status, reason_code))
 
-    statuses = iter(["running", "completed"])
+    class FakeWake:
+        @staticmethod
+        def resource_state(_session_id):
+            return {
+                "current_phase": "gpu_phase_released",
+                "loop_status": "completed",
+            }
+
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
 
     class Cursor:
         def __enter__(self):
@@ -1385,7 +1463,7 @@ def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(mo
 
         def fetchone(self):
             observations.append(("loop_poll", lease.active))
-            return (next(statuses),)
+            return ("completed",)
 
     class Conn:
         def __enter__(self):
@@ -1397,12 +1475,10 @@ def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(mo
         def cursor(self, *_args, **_kwargs):
             return Cursor()
 
-    async def no_sleep(_seconds):
-        return None
-
     monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
     monkeypatch.setattr(qes, "get_conn", lambda: Conn())
-    monkeypatch.setattr(qes.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(qerc, "qe_reconciliation_wakeup", FakeWake())
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     asyncio.run(
         scheduler._wait_resource_session_until_safe_release(
@@ -1413,7 +1489,7 @@ def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(mo
         )
     )
 
-    assert observations[0] == ("loop_poll", False)
+    assert lease.active is False
     assert observations[-1] == ("terminal", "qers_1", "completed", None)
 
 
@@ -1529,10 +1605,10 @@ def test_scheduler_releases_local_gate_before_retrying_durable_busy_session(monk
                 raise qes.QEResourcePhaseError(qes.GPU_LEASE_BUSY_REASON, "occupied")
             return types.SimpleNamespace(session_id="session-after-retry")
 
-    async def no_sleep(_seconds):
-        return None
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
 
-    monkeypatch.setattr(qes.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     async def scenario():
         lease, session = await scheduler._reserve_gpu_phase_session(
@@ -1570,6 +1646,17 @@ def test_gpu_phase_waiter_keeps_slot_for_release_rejected_until_terminal(monkeyp
 
     statuses = iter(["running", "completed"])
 
+    class FakeWake:
+        @staticmethod
+        def resource_state(_session_id):
+            return {
+                "current_phase": "release_rejected",
+                "loop_status": next(statuses),
+            }
+
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
+
     class Cursor:
         def __enter__(self):
             return self
@@ -1594,12 +1681,10 @@ def test_gpu_phase_waiter_keeps_slot_for_release_rejected_until_terminal(monkeyp
         def cursor(self, *_args, **_kwargs):
             return Cursor()
 
-    async def no_sleep(_seconds):
-        return None
-
     monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
     monkeypatch.setattr(qes, "get_conn", lambda: Conn())
-    monkeypatch.setattr(qes.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(qerc, "qe_reconciliation_wakeup", FakeWake())
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     asyncio.run(
         scheduler._wait_resource_session_until_safe_release(
@@ -1610,14 +1695,14 @@ def test_gpu_phase_waiter_keeps_slot_for_release_rejected_until_terminal(monkeyp
         )
     )
 
-    assert observations[0] == ("loop_poll", True)
-    assert observations[1] == ("loop_poll", True)
-    assert observations[-1] == (
-        "terminal",
-        "qers_2",
-        "completed",
-        "QE_GPU_PHASE_LIFECYCLE_INCOMPLETE",
-    )
+    assert observations == [
+        (
+            "terminal",
+            "qers_2",
+            "completed",
+            "QE_GPU_PHASE_LIFECYCLE_INCOMPLETE",
+        )
+    ]
 
 
 def test_gpu_phase_waiter_releases_local_slot_when_terminal_session_write_fails(monkeypatch):
@@ -1662,8 +1747,21 @@ def test_gpu_phase_waiter_releases_local_slot_when_terminal_session_write_fails(
         def cursor(self, *_args, **_kwargs):
             return Cursor()
 
+    class FakeWake:
+        @staticmethod
+        def resource_state(_session_id):
+            return {
+                "current_phase": "release_rejected",
+                "loop_status": "completed",
+            }
+
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
+
     monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
     monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+    monkeypatch.setattr(qerc, "qe_reconciliation_wakeup", FakeWake())
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     asyncio.run(
         scheduler._wait_resource_session_until_safe_release(
@@ -1729,8 +1827,21 @@ def test_gpu_phase_waiter_releases_parallel_lease_at_terminal_without_unsupporte
         def cursor(self, *_args, **_kwargs):
             return Cursor()
 
+    class FakeWake:
+        @staticmethod
+        def resource_state(_session_id):
+            return {
+                "current_phase": "bootstrap",
+                "loop_status": "completed",
+            }
+
+    async def immediate_wait(*_args, **_kwargs):
+        return 0
+
     monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
     monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+    monkeypatch.setattr(qerc, "qe_reconciliation_wakeup", FakeWake())
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", immediate_wait)
 
     asyncio.run(
         scheduler._wait_resource_session_until_safe_release(
@@ -4081,6 +4192,52 @@ def test_general_ptnn_default_mse_path_stays_on_qlib_adapter():
     assert "class: TSDatasetH" in yaml_text
 
 
+def test_general_ptnn_local_wsl_uses_host_safe_single_process_loader():
+    parsed = _parse_conf_yaml_with_jinja_placeholders(
+        _base_yaml(
+            model_info=_custom_timeseries_lstm_model_info(),
+            node_id="wsl2-5080",
+        )
+    )
+    model_kwargs = parsed["task"]["model"]["kwargs"]
+
+    assert model_kwargs["batch_size"] == 4096
+    assert model_kwargs["n_jobs"] == 0
+    assert model_kwargs["pin_memory"] is False
+    assert model_kwargs["persistent_workers"] is False
+    assert "prefetch_factor" not in model_kwargs
+
+
+def test_general_ptnn_remote_node_keeps_existing_parallel_loader_contract():
+    parsed = _parse_conf_yaml_with_jinja_placeholders(
+        _base_yaml(
+            model_info=_custom_timeseries_lstm_model_info(),
+            node_id="rdagent-node1",
+        )
+    )
+    model_kwargs = parsed["task"]["model"]["kwargs"]
+
+    assert model_kwargs["n_jobs"] == 2
+    assert model_kwargs["pin_memory"] is True
+    assert model_kwargs["prefetch_factor"] == 2
+
+
+def test_general_ptnn_local_wsl_rejects_unsafe_catalog_loader_override():
+    model_info = _custom_timeseries_lstm_model_info(
+        training_hp={
+            "n_epochs": 200,
+            "lr": 0.001,
+            "batch_size": 4096,
+            "early_stop": 20,
+            "weight_decay": 0.001,
+            "n_jobs": 2,
+        }
+    )
+
+    with pytest.raises(ValueError, match="qe_wsl_host_resource_override_unsafe"):
+        _base_yaml(model_info=model_info, node_id="wsl2-5080")
+
+
 def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
     yaml_text = _base_yaml(
         model_info=_custom_timeseries_lstm_model_info(),
@@ -4274,6 +4431,112 @@ def test_qe_resource_session_env_is_opt_in_and_complete(monkeypatch):
         composer._build_auto_wsl_command_parts(
             "/tmp/qe-invalid",
             resource_session_id="qers_incomplete",
+        )
+
+
+def test_auto_wsl_command_scrubs_credentials_and_bounds_local_threads(monkeypatch):
+    composer = ConfigComposer()
+    credential_marker = "bug1014-credential-marker"
+    monkeypatch.setenv("OPENAI_API_KEY", credential_marker)
+    monkeypatch.setenv("TDX_DB_PASSWORD", credential_marker)
+    monkeypatch.setenv("AISTOCK_PREDICTION_STORE_BASE_URL", "http://prediction-store:9000")
+
+    env_lines, core_parts = composer._build_auto_wsl_command_parts(
+        "/tmp/qe-host-safe",
+        node_id="wsl2-5080",
+        prediction_store_base_url="http://prediction-store:9000",
+    )
+    command = " && ".join(core_parts)
+
+    assert core_parts[0].startswith('if [ -z "${BASH_VERSION:-}" ]')
+    assert "for __qe_credvar in $(compgen -e)" in core_parts[0]
+    assert "TDX_DB_*" in command
+    assert "*_API_KEY" in command
+    assert credential_marker not in command
+    assert "export OMP_NUM_THREADS=4" in core_parts
+    assert "export MKL_NUM_THREADS=4" in core_parts
+    assert "export OPENBLAS_NUM_THREADS=4" in core_parts
+    assert "export NUMEXPR_NUM_THREADS=4" in core_parts
+    assert "export AISTOCK_PREDICTION_STORE_BASE_URL=http://prediction-store:9000" in env_lines
+
+    full_command = composer._generate_wsl_command(
+        "/tmp/qe-host-safe",
+        has_custom_factors=True,
+        use_custom_model=True,
+        model_type_tag="TimeSeries",
+        mode="auto",
+        node_id="wsl2-5080",
+        prediction_store_base_url="http://prediction-store:9000",
+    )
+    scrub_marker = "for __qe_credvar in $(compgen -e)"
+    scrub_positions = [
+        index for index in range(len(full_command)) if full_command.startswith(scrub_marker, index)
+    ]
+    conda_pos = full_command.index("conda activate")
+    prepare_pos = full_command.index("python prepare_factors.py")
+    factor_env_pos = full_command.index(". ./.factor_env")
+    qrun_pos = full_command.index("python qrun_limit_minute.py conf.yaml")
+    read_pos = full_command.index("QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py")
+    assert len(scrub_positions) >= 6
+    assert scrub_positions[0] < conda_pos < scrub_positions[1]
+    assert prepare_pos < factor_env_pos < scrub_positions[-3] < qrun_pos
+    assert qrun_pos < scrub_positions[-1] < read_pos
+
+    manual_command = composer._generate_wsl_command(
+        "/tmp/qe-host-safe",
+        has_custom_factors=True,
+        use_custom_model=True,
+        model_type_tag="TimeSeries",
+        mode="manual",
+        node_id="wsl2-5080",
+        prediction_store_base_url="http://prediction-store:9000",
+    )
+    assert "\n(\ncd -- /tmp/qe-host-safe" in manual_command
+    assert "set -euo pipefail" in manual_command
+    assert manual_command.count("reason_code=qe_subprocess_bash_required") >= 5
+    assert "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py\n)" in manual_command
+
+
+def test_auto_remote_command_does_not_apply_local_wsl_thread_cap():
+    composer = ConfigComposer()
+    _, core_parts = composer._build_auto_wsl_command_parts(
+        "/tmp/qe-remote",
+        node_id="rdagent-node1",
+        factor_cache_dir="/home/lc999/data/factor_values",
+    )
+
+    assert "export OMP_NUM_THREADS=4" not in core_parts
+    assert core_parts[0].startswith('if [ -z "${BASH_VERSION:-}" ]')
+
+
+@pytest.mark.parametrize(
+    "workspace_path",
+    [
+        "/tmp/qe workspace",
+        "/tmp/qe'quoted",
+        '/tmp/qe"double',
+        "/tmp/qe;touch SHOULD_NOT_RUN",
+        "/tmp/qe$(touch SHOULD_NOT_RUN)",
+    ],
+)
+def test_qe_wsl_command_shell_quotes_workspace_path(workspace_path: str):
+    command = ConfigComposer()._generate_wsl_command(
+        workspace_path,
+        mode="auto",
+        node_id="wsl2-5080",
+    )
+
+    assert command.startswith("cd -- ")
+    assert f"cd -- {workspace_path}" not in command
+    assert " && if [ -z \"${BASH_VERSION:-}\" ]" in command
+
+
+def test_qe_wsl_command_rejects_multiline_workspace_path():
+    with pytest.raises(ValueError, match="reason_code=qe_shell_path_invalid"):
+        ConfigComposer()._generate_wsl_command(
+            "/tmp/qe\nmalicious",
+            mode="auto",
+            node_id="wsl2-5080",
         )
 
 

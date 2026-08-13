@@ -6483,6 +6483,76 @@ async def run_experiment(experiment_id: str, engine_mode: Optional[str] = "unifi
     return await _run_experiment_unified(experiment_id, node_id=node_id)
 
 
+def _persist_multi_alpha_parent_running_state(
+    *,
+    experiment_id: str,
+    qe_task_id: str,
+    primary_loop_id: str,
+) -> bool:
+    """Persist and notify one parent only when its durable state changes."""
+
+    parent_changed = False
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status, qe_task_id, qe_loop_id, started_at
+                FROM qe_experiments
+                WHERE experiment_id = %s
+                """,
+                (experiment_id,),
+            )
+            current = cur.fetchone()
+            if current is None:
+                raise RuntimeError(
+                    f"QE experiment disappeared before parent transition: {experiment_id}"
+                )
+            current_status, current_task_id, current_loop_id, current_started_at = current
+            if (
+                current_status != "running"
+                or current_task_id != qe_task_id
+                or current_loop_id != primary_loop_id
+                or current_started_at is None
+            ):
+                cur.execute(
+                    """
+                    UPDATE qe_experiments
+                    SET status = 'running',
+                        qe_task_id = %s,
+                        qe_loop_id = %s,
+                        started_at = COALESCE(started_at, NOW())
+                    WHERE experiment_id = %s
+                      AND status IS NOT DISTINCT FROM %s
+                      AND qe_task_id IS NOT DISTINCT FROM %s
+                      AND qe_loop_id IS NOT DISTINCT FROM %s
+                      AND started_at IS NOT DISTINCT FROM %s
+                    RETURNING experiment_id
+                    """,
+                    (
+                        qe_task_id,
+                        primary_loop_id,
+                        experiment_id,
+                        current_status,
+                        current_task_id,
+                        current_loop_id,
+                        current_started_at,
+                    ),
+                )
+                parent_changed = cur.fetchone() is not None
+        conn.commit()
+    if parent_changed:
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(
+            QEReconciliationScope.EXPERIMENT,
+            key=experiment_id,
+        )
+    return parent_changed
+
+
 async def _run_multi_alpha_experiment(
     experiment_id: str,
     node_id: str = None,
@@ -6730,15 +6800,25 @@ async def _run_multi_alpha_experiment(
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        UPDATE qe_experiments
-                        SET status = 'pending',
-                            qe_task_id = %s,
-                            qe_loop_id = 'Loop1',
-                            updated_at = NOW()
+                        SELECT status, qe_task_id, qe_loop_id
+                        FROM qe_experiments
                         WHERE experiment_id = %s
                         """,
-                        (qe_task_id, experiment_id),
+                        (experiment_id,),
                     )
+                    current = cur.fetchone()
+                    if current != ("pending", qe_task_id, "Loop1"):
+                        cur.execute(
+                            """
+                            UPDATE qe_experiments
+                            SET status = 'pending',
+                                qe_task_id = %s,
+                                qe_loop_id = 'Loop1',
+                                updated_at = NOW()
+                            WHERE experiment_id = %s
+                            """,
+                            (qe_task_id, experiment_id),
+                        )
                 conn.commit()
             return {
                 "ok": True,
@@ -6829,13 +6909,23 @@ async def _run_multi_alpha_experiment(
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        UPDATE qe_experiments
-                        SET status = 'pending', qe_task_id = %s, qe_loop_id = %s,
-                            updated_at = NOW()
+                        SELECT status, qe_task_id, qe_loop_id
+                        FROM qe_experiments
                         WHERE experiment_id = %s
                         """,
-                        (qe_task_id, expected_loop_id, experiment_id),
+                        (experiment_id,),
                     )
+                    current = cur.fetchone()
+                    if current != ("pending", qe_task_id, expected_loop_id):
+                        cur.execute(
+                            """
+                            UPDATE qe_experiments
+                            SET status = 'pending', qe_task_id = %s, qe_loop_id = %s,
+                                updated_at = NOW()
+                            WHERE experiment_id = %s
+                            """,
+                            (qe_task_id, expected_loop_id, experiment_id),
+                        )
                 conn.commit()
             return {
                 "ok": True,
@@ -6869,17 +6959,11 @@ async def _run_multi_alpha_experiment(
         })
 
     # 更新 qe_experiments
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE qe_experiments
-                SET status = 'running',
-                    qe_task_id = %s,
-                    qe_loop_id = %s,
-                    started_at = NOW()
-                WHERE experiment_id = %s
-            """, (qe_task_id, primary_loop_id, experiment_id))
-        conn.commit()
+    _persist_multi_alpha_parent_running_state(
+        experiment_id=experiment_id,
+        qe_task_id=qe_task_id,
+        primary_loop_id=primary_loop_id,
+    )
 
     return {
         "ok": True,
@@ -7008,6 +7092,13 @@ async def _run_experiment_unified(
                 """, (experiment_name, result.job_id, effective_node_id, effective_node_id, experiment_id))
             conn.commit()
 
+        from ..services.quantevolver.qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        notify_qe_reconciliation(QEReconciliationScope.EXPERIMENT, key=experiment_id)
+
         return {
             "ok": True,
             "experiment_id": experiment_id,
@@ -7080,7 +7171,7 @@ def _find_experiments_for_loop_callback(task_id: str, loop_id: str) -> list[str]
 
 @router.post("/webhook/loop-completed", summary="QE loop ???????/?Alpha???")
 async def on_qe_loop_completed_webhook(request: Request, payload: QELoopCompletedPayload):
-    """Receive RD-Agent loop completion and trigger the same status sync as run-status."""
+    """Receive RD-Agent completion and wake background reconciliation."""
     secret = os.getenv("QE_WEBHOOK_SECRET", "")
     if secret:
         provided_secret = request.headers.get("X-Webhook-Secret", "")
@@ -7102,26 +7193,17 @@ async def on_qe_loop_completed_webhook(request: Request, payload: QELoopComplete
             "matched": 0,
         }
 
-    async def _process():
-        for exp_id in experiment_ids:
-            try:
-                await get_experiment_run_status(exp_id)
-            except Exception as exc:
-                logger.error(
-                    "QE loop callback status sync failed: experiment=%s task=%s loop=%s error=%s",
-                    exp_id,
-                    payload.task_id,
-                    payload.loop_id,
-                    exc,
-                    exc_info=True,
-                )
-
-    task = asyncio.create_task(_process())
-    task.add_done_callback(
-        lambda t: logger.error("QE callback task error: %s", t.exception(), exc_info=True)
-        if t.exception()
-        else None
+    from ..services.quantevolver.qe_reconciliation_coordinator import (
+        QEReconciliationScope,
+        notify_qe_reconciliation,
     )
+
+    for exp_id in experiment_ids:
+        notify_qe_reconciliation(
+            QEReconciliationScope.EXPERIMENT,
+            key=exp_id,
+            force=True,
+        )
     return {
         "status": "accepted",
         "task_id": payload.task_id,
@@ -7133,6 +7215,50 @@ async def on_qe_loop_completed_webhook(request: Request, payload: QELoopComplete
 
 @router.get("/experiments/{experiment_id}/run-status")
 async def get_experiment_run_status(experiment_id: str):
+    """Return only persisted state; lifecycle reconciliation is background-owned."""
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status, qe_task_id, qe_loop_id, result_metrics, alpha_mode
+                    FROM qe_experiments
+                    WHERE experiment_id = %s
+                    """,
+                    (experiment_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="experiment not found")
+                cols = [desc[0] for desc in cur.description]
+                record = dict(zip(cols, row))
+        result = {
+            "experiment_id": experiment_id,
+            "status": record["status"],
+            "qe_task_id": record.get("qe_task_id"),
+            "qe_loop_id": record.get("qe_loop_id"),
+            "result_metrics": record.get("result_metrics"),
+            "alpha_mode": record.get("alpha_mode", "single"),
+            "status_source": "persisted",
+        }
+        if record.get("alpha_mode") == "multi":
+            multi_alpha_status = _load_multi_alpha_status_payload(
+                experiment_id,
+                str(record["status"]),
+            )
+            result["multi_alpha"] = multi_alpha_status
+            result["multi_alpha_stage"] = multi_alpha_status["stage"]
+            result["artifact_status"] = multi_alpha_status["artifact_status"]
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("persisted QE run-status read failed: %s", experiment_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+async def reconcile_experiment_run_status(experiment_id: str):
     """查询实验执行状态。如果有 qe_loop_id 则实时查询 RDAgent 侧。"""
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
 
@@ -7398,7 +7524,11 @@ async def stream_experiment_logs(experiment_id: str):
                 },
             )
 
-        from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+        from ..services.quantevolver.qe_log_broker import (
+            QELogBrokerSource,
+            get_qe_log_broker,
+        )
+        from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient, QEWorkspaceLogEvent
 
         try:
             client = QEWorkspaceClient.for_node(execution_node_id)
@@ -7420,22 +7550,53 @@ async def stream_experiment_logs(experiment_id: str):
         async def event_generator():
             streamed_any = False
             try:
-                async for line in client.stream_task_logs(qe_task_id):
-                    streamed_any = True
-                    raw = line
-                    if raw.startswith("data:"):
-                        raw = raw[5:].strip()
+                async def open_stream(source_cursor: str | None):
+                    typed_stream = getattr(client, "stream_task_log_events", None)
+                    if callable(typed_stream):
+                        async for source_event in typed_stream(
+                            qe_task_id,
+                            after_cursor=source_cursor,
+                        ):
+                            yield source_event
+                        return
+                    if source_cursor:
+                        raise RuntimeError("legacy QE log source cannot resume a cursor")
+                    async for raw_line in client.stream_task_logs(qe_task_id):
+                        data = raw_line[len("data:"):].strip() if raw_line.startswith("data:") else raw_line
+                        if data:
+                            yield QEWorkspaceLogEvent(
+                                data=data,
+                                cursor=None,
+                                event_type=None,
+                                terminal=QEWorkspaceClient._log_event_is_terminal(data, None),
+                            )
+
+                source = QELogBrokerSource(
+                    node_key=str(execution_node_id),
+                    node_label=str(execution_node_id),
+                    open_stream=open_stream,
+                )
+                async for broker_event in get_qe_log_broker().stream(qe_task_id, [source]):
+                    raw = broker_event.data
                     if raw:
                         try:
                             payload = json.loads(raw)
                             if isinstance(payload, dict) and "logs" in payload:
+                                if payload.get("event") not in {
+                                    "node_log_stream_error",
+                                    "qe_live_log_store_error",
+                                }:
+                                    streamed_any = True
                                 for log_line in payload["logs"]:
                                     yield f"data: {log_line}\n\n"
                                 continue
                         except (json.JSONDecodeError, TypeError):
                             pass
+                        streamed_any = True
                         for sub in raw.split("\n"):
                             yield f"data: {sub}\n\n"
+                if not streamed_any:
+                    raise RuntimeError("QE live log upstream ended before any business log event")
             except Exception as e:
                 if not streamed_any:
                     source, tail_lines = await _load_experiment_node_log_tail(
@@ -7490,6 +7651,7 @@ async def stream_multi_node_logs(experiment_id: str):
     """
     import asyncio
 
+    from ..services.quantevolver.qe_log_broker import QELogBrokerSource, get_qe_log_broker
     from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
 
     with get_conn() as conn:
@@ -7529,10 +7691,20 @@ async def stream_multi_node_logs(experiment_id: str):
         try:
             client = QEWorkspaceClient.for_node(node_id)
             async with client:
-                async for line in client.stream_task_logs(qe_task_id):
-                    raw = line
-                    if raw.startswith("data:"):
-                        raw = raw[5:].strip()
+                async def open_stream(source_cursor: str | None):
+                    async for source_event in client.stream_task_log_events(
+                        qe_task_id,
+                        after_cursor=source_cursor,
+                    ):
+                        yield source_event
+
+                source = QELogBrokerSource(
+                    node_key=str(node_id),
+                    node_label=str(node_id),
+                    open_stream=open_stream,
+                )
+                async for broker_event in get_qe_log_broker().stream(qe_task_id, [source]):
+                    raw = broker_event.data
                     if not raw:
                         continue
                     try:

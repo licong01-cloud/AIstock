@@ -435,7 +435,7 @@ def test_artifact_stream_uses_bounded_client_timeout_and_cleans_partial(tmp_path
     assert not (tmp_path / "terminal.json.partial").exists()
 
 
-def test_collection_renews_fenced_lease_until_publish_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_collection_uses_zero_periodic_database_lease_heartbeats() -> None:
     renewals: list[tuple[QELongTrendControlLease, int]] = []
 
     class Repository:
@@ -449,28 +449,21 @@ def test_collection_renews_fenced_lease_until_publish_finishes(monkeypatch: pyte
         fencing_token=3,
         row_version=7,
     )
-    monkeypatch.setattr(phase2_module, "COLLECT_LEASE_HEARTBEAT_SECONDS", 0.01)
-
     async def work() -> str:
-        for _attempt in range(100):
-            if len(renewals) >= 2:
-                return "published"
-            await asyncio.sleep(0.005)
-        pytest.fail("lease heartbeat did not run twice before the deterministic test deadline")
+        await asyncio.sleep(0.02)
+        return "published"
 
-    assert asyncio.run(service._await_with_lease_heartbeat(lease=lease, awaitable=work())) == "published"
-    assert len(renewals) >= 2
-    assert all(seconds == phase2_module.COLLECT_LEASE_SECONDS for _lease, seconds in renewals)
+    assert asyncio.run(service._await_with_fenced_lease(lease=lease, awaitable=work())) == "published"
+    assert renewals == []
 
 
-def test_collection_aborts_when_fenced_lease_heartbeat_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_collection_cancellation_propagates_without_detached_heartbeat_task() -> None:
     cancelled = False
 
     class Repository:
         @staticmethod
         def renew_lease(_lease, *, lease_seconds):  # type: ignore[no-untyped-def]
-            assert lease_seconds == phase2_module.COLLECT_LEASE_SECONDS
-            raise RuntimeError("lease owner changed")
+            pytest.fail("periodic database lease renewal is forbidden")
 
     service = QELongTrendPhase2Service(control_repository=Repository(), owner_id="owner")  # type: ignore[arg-type]
     lease = QELongTrendControlLease(
@@ -479,8 +472,6 @@ def test_collection_aborts_when_fenced_lease_heartbeat_fails(monkeypatch: pytest
         fencing_token=8,
         row_version=13,
     )
-    monkeypatch.setattr(phase2_module, "COLLECT_LEASE_HEARTBEAT_SECONDS", 0.01)
-
     async def work() -> None:
         nonlocal cancelled
         try:
@@ -488,8 +479,16 @@ def test_collection_aborts_when_fenced_lease_heartbeat_fails(monkeypatch: pytest
         finally:
             cancelled = True
 
-    with pytest.raises(QELongTrendPhase2Error, match="heartbeat failed"):
-        asyncio.run(service._await_with_lease_heartbeat(lease=lease, awaitable=work()))
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            service._await_with_fenced_lease(lease=lease, awaitable=work())
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
     assert cancelled is True
 
 
@@ -860,11 +859,10 @@ def test_submit_persists_identity_conflict_after_remote_receipt() -> None:
 
 def test_backend_wires_continuous_long_trend_reconciliation() -> None:
     source = (Path(__file__).resolve().parents[3] / "backend/main.py").read_text(encoding="utf-8")
-    assert "async def _qe_long_trend_reconcile_loop(stop_event: asyncio.Event)" in source
-    assert "while not stop_event.is_set():" in source
-    assert "results = await service.reconcile_nonterminal(limit=100)" in source
+    assert "run_qe_reconciliation_coordinator(shutdown_event)" in source
+    assert 'name="qe-reconciliation-coordinator"' in source
     assert "QELongTrendPhase2Service().reconcile_nonterminal" not in source
-    assert 'name="qe-long-trend-reconciler"' in source
+    assert 'name="qe-long-trend-reconciler"' not in source
 
 
 def test_reconcile_node_resolution_failure_is_persisted_for_retry(
@@ -894,7 +892,15 @@ def test_reconcile_node_resolution_failure_is_persisted_for_retry(
         def bind_available_archive_run(self, _evaluation_id):  # type: ignore[no-untyped-def]
             return dict(self.row)
 
-        def claim(self, _evaluation_id, *, owner_id, lease_seconds):  # type: ignore[no-untyped-def]
+        def claim(
+            self,
+            _evaluation_id,
+            *,
+            owner_id,
+            lease_seconds,
+            expected_row_version=None,
+        ):  # type: ignore[no-untyped-def]
+            assert expected_row_version == 5
             self.row.update(
                 {
                     "owner_id": owner_id,
@@ -938,6 +944,98 @@ def test_reconcile_node_resolution_failure_is_persisted_for_retry(
     assert results[0]["recovery_persisted"] is True
     assert repository.transitions[-1]["updates"]["status"] == "remote_state_unknown"  # type: ignore[index]
     assert repository.transitions[-1]["release_owner"] is True
+
+
+def test_reconcile_unchanged_running_observation_100x_has_zero_claims_and_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evaluation_id = "qelt_" + "2" * 64
+    row = {
+        "evaluation_id": evaluation_id,
+        "parent_task_id": "task-1",
+        "parent_loop_index": 1,
+        "node_id": "node-1",
+        "job_id": "job-1",
+        "status": "running",
+        "current_attempt_id": "attempt-1",
+        "platform_delivery_status_json": {
+            "worker": "running",
+            "cas": "awaiting_worker",
+        },
+        "reason_code": None,
+        "reason_json": {},
+        "owner_id": None,
+        "fencing_token": 2,
+        "row_version": 5,
+    }
+
+    class Repository:
+        def __init__(self) -> None:
+            self.claims = 0
+            self.transitions = 0
+
+        def list_nonterminal(self, *, limit):  # type: ignore[no-untyped-def]
+            assert limit == 100
+            return [dict(row)]
+
+        def claim(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            self.claims += 1
+            pytest.fail("unchanged remote state must not claim a control lease")
+
+        def transition(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            self.transitions += 1
+            pytest.fail("unchanged remote state must not write")
+
+    class Client:
+        inspections = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def inspect_long_trend_evaluation(self, **_kwargs):  # type: ignore[no-untyped-def]
+            self.inspections += 1
+            return QELongTrendJobInspection(
+                schema_version="qe_long_trend_job_receipt_v1",
+                task_id="task-1",
+                loop_id="Loop1",
+                evaluation_id=evaluation_id,
+                job_id="job-1",
+                request_sha="a" * 64,
+                status="running",
+                current_attempt_id="attempt-1",
+                process_identity={"pid": 123},
+                terminal_receipt=None,
+                updated_at="2026-08-11T00:00:00Z",
+            )
+
+    repository = Repository()
+    client = Client()
+    monkeypatch.setattr(
+        QEWorkspaceClient,
+        "for_node",
+        classmethod(lambda _cls, _node_id: client),
+    )
+    service = QELongTrendPhase2Service(
+        control_repository=repository,  # type: ignore[arg-type]
+        owner_id="owner",
+    )
+
+    for _ in range(100):
+        result = asyncio.run(service.reconcile_nonterminal(limit=100))
+        assert result == [
+            {
+                "evaluation_id": evaluation_id,
+                "status": "running",
+                "unchanged": True,
+            }
+        ]
+
+    assert client.inspections == 100
+    assert repository.claims == 0
+    assert repository.transitions == 0
 
 
 def test_normal_loop_command_orders_qrun_registration_and_read_result() -> None:

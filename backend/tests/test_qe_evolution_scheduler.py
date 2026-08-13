@@ -125,6 +125,7 @@ def test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume(
 ) -> None:
     state = _RetryState()
     captured_source_ids: list[str] = []
+    captured_claim_ids: list[str] = []
 
     async def preflight(_node_id: str) -> None:
         return None
@@ -135,6 +136,7 @@ def test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume(
 
         async def submit(self, _cfg: Any, ctx: Any, **_kwargs: Any) -> ExecutionResult:
             captured_source_ids.append(ctx.submission_source_execution_id)
+            captured_claim_ids.append(ctx.submission_source_claim_id)
             if len(captured_source_ids) == 1:
                 state.loop["status"] = "pending"
                 return ExecutionResult(
@@ -188,6 +190,7 @@ def test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume(
     assert second["mode"] == QE_LOOP_RETRY_MODE_FULL_TRAIN
     assert captured_source_ids[0] == captured_source_ids[1]
     assert captured_source_ids[0].startswith("task_retry_Loop1:retry:")
+    assert captured_claim_ids == ["task_retry_Loop1", "task_retry_Loop1"]
     metadata = state.loop["config_json"]["_qe_retry_submission"]
     assert metadata["source_execution_id"] == captured_source_ids[0]
     assert metadata["state"] == "submitted"

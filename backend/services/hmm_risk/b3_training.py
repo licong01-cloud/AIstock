@@ -16,12 +16,14 @@ from backend.services.hmm_risk.b3_acceptance import (
     D4_LIKELIHOOD_VERSION,
     D4_OCCUPANCY_VERSION,
     D5_SELECTION_VERSION,
+    D6_AVAILABILITY_VERSION,
+    D6_NA_SEMANTIC_VERSION,
     D6_SEMANTIC_VERSION,
     L2_RETRAIN_VERSION,
     RESTART_SCHEDULE,
     evaluate_covariance_acceptance,
     evaluate_likelihood_acceptance,
-    evaluate_semantic_validation,
+    evaluate_semantic_validation_calendar,
     evaluate_train_occupancy,
     map_covariance_prior_objective,
     map_numeric_envelope,
@@ -30,7 +32,7 @@ from backend.services.hmm_risk.b3_acceptance import (
 from backend.services.hmm_risk.b3_mixed_dimension import (
     INACTIVE_DIMENSION_REASON_CODE,
     MIXED_DIMENSION_CONTRACT_VERSION,
-    MIXED_LEVEL_SCHEMA_VERSION,
+    MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
     MIXED_MODEL_SCHEMA_VERSION,
     MIXED_REPEAT_SCHEMA_VERSION,
     MIXED_TRAINING_ENTRY_SCHEMA_VERSION,
@@ -39,10 +41,19 @@ from backend.services.hmm_risk.b3_mixed_dimension import (
     uses_mixed_dimension_level,
     validate_projection_receipt,
 )
+from backend.services.hmm_risk.b3_transition_dwell import (
+    CONTRACT_VERSION as TRANSITION_DWELL_CONTRACT_VERSION,
+    REASON_MAP_NON_FINITE as TRANSITION_MAP_NON_FINITE_REASON,
+    TransitionDwellContractError,
+    assert_target_scope as assert_transition_dwell_target_scope,
+    build_transition_prior,
+    transition_map_objective,
+)
 from backend.services.hmm_risk.state_model_set import (
     ALL_CORE_FEATURES,
     BASE_FEATURES,
     C008_B3_DIAG04_NU,
+    D6ValidationCalendarSeries,
     HMM_N_ITER,
     L1TrainingSeries,
     SCHEMA_VERSION,
@@ -61,6 +72,8 @@ from backend.services.hmm_risk.state_model_set import (
     canonical_json_bytes,
     canonical_sha256,
     causal_forward_posteriors,
+    causal_forward_posteriors_calendar,
+    validate_d6_frozen_input_manifest,
 )
 from backend.services.hmm_risk.stock_fact_observation import C010_FORMULA_VERSION, validate_c010_policy_manifest
 
@@ -68,6 +81,7 @@ from backend.services.hmm_risk.stock_fact_observation import C010_FORMULA_VERSIO
 REFIT03_RAW_COVARIANCE_SCHEMA_VERSION = "hmm_risk_c008_b3_d1_covariance_raw_capture_v1"
 REFIT03_RAW_COVARIANCE_AUTHORITY = "gaussian_hmm_internal_diag_covars_v1"
 REFIT03_STAGE_EVIDENCE_SCHEMA_VERSION = "hmm_risk_b3_training_stage_evidence_v1"
+SELECTED_LEVEL_SCHEMA_VERSION_D6_NA = "hmm_risk_b3_selected_level_artifact_v2_d6_na"
 
 
 class B3TrainingStageError(StateModelSetError):
@@ -126,6 +140,8 @@ class B3FittedModel:
     pit_constituent_manifest_hash: str
     model_payload_sha256: str
     projection_receipt: Mapping[str, Any] | None = None
+    transition_dwell_contract: str | None = None
+    transition_prior_sha256: str | None = None
 
     def payload(self) -> dict[str, Any]:
         body = {
@@ -158,6 +174,13 @@ class B3FittedModel:
                     "likelihood_feature_count": self.projection_receipt["likelihood_feature_count"],
                     "projection_receipt": dict(self.projection_receipt),
                     "projection_sha256": self.projection_receipt["projection_sha256"],
+                }
+            )
+        if self.transition_dwell_contract is not None:
+            body.update(
+                {
+                    "transition_dwell_contract": self.transition_dwell_contract,
+                    "transition_prior_sha256": self.transition_prior_sha256,
                 }
             )
         return {**body, "model_payload_sha256": self.model_payload_sha256}
@@ -239,6 +262,8 @@ class _B3PreparedTrainOnlyInitialization:
     means: np.ndarray
     covars: np.ndarray
     prior: np.ndarray
+    transmat_prior: float | np.ndarray
+    transition_prior_evidence: Mapping[str, Any] | None
     evidence: Mapping[str, Any]
 
 
@@ -422,9 +447,9 @@ def build_train_only_series(
     return {value.sector_code: value for value in values}
 
 
-def formal_b3_parameter_profile() -> dict[str, Any]:
+def formal_b3_parameter_profile(*, transition_dwell_b: bool = False) -> dict[str, Any]:
     diagnostic_profile = c008_b3_diag04_parameter_profile()
-    return {
+    profile = {
         **diagnostic_profile,
         "schema_version": "hmm_risk_b3_parameter_profile_v1",
         "contract": D3_CONTRACT_VERSION,
@@ -438,6 +463,17 @@ def formal_b3_parameter_profile() -> dict[str, Any]:
         "formal_acceptance_thresholds_applied_by_independent_d4_receipts": True,
         "selection_performed_by_profile": False,
     }
+    if transition_dwell_b:
+        profile.update(
+            {
+                "schema_version": "hmm_risk_b3_transition_dwell_parameter_profile_v1",
+                "transition_contract": TRANSITION_DWELL_CONTRACT_VERSION,
+                "convergence_authority": "covariance_and_transition_prior_map_objective_with_d4_02_joint_stop",
+                "transmat_prior_role": "train_only_kmeans_sequence_dirichlet_map_prior",
+                "expected_dwell_role": "diagnostic_only",
+            }
+        )
+    return profile
 
 
 def _prepare_b3_preprocessed_train_only_initialization(
@@ -445,6 +481,7 @@ def _prepare_b3_preprocessed_train_only_initialization(
     *,
     train: np.ndarray,
     seed: int,
+    transition_dwell_b: bool = False,
 ) -> _B3PreparedTrainOnlyInitialization:
     """Apply the exact D3 initialization contract without invoking HMM fit."""
 
@@ -474,13 +511,33 @@ def _prepare_b3_preprocessed_train_only_initialization(
             "hmm_risk_model_initialization_failed",
             exc,
         ) from exc
-    initialization = {
+    transition_prior_evidence: Mapping[str, Any] | None = None
+    transmat_prior: float | np.ndarray = 1.0
+    if transition_dwell_b:
+        try:
+            transition_prior_evidence = build_transition_prior(initialization.get("transition_counts"))
+            transmat_prior = np.asarray(transition_prior_evidence["transmat_prior"], dtype=np.float64)
+        except TransitionDwellContractError as exc:
+            raise B3TrainingStageError(
+                "initialization",
+                exc.reason_code,
+                exc,
+            ) from exc
+    initialization_body = {
         **initialization,
         "schema_version": "hmm_risk_b3_manual_initialization_v1",
         "contract_version": D3_CONTRACT_VERSION,
         "diagnostic_source_contract": initialization.get("schema_version"),
         "formal_initialization_contract_applied": True,
     }
+    if transition_dwell_b:
+        initialization_body.update(
+            {
+                "transition_dwell_contract": TRANSITION_DWELL_CONTRACT_VERSION,
+                "transition_prior_evidence": dict(transition_prior_evidence or {}),
+            }
+        )
+    initialization = initialization_body
     prior = C008_B3_DIAG04_NU * np.broadcast_to(reference, (3, prepared.shape[1])).copy()
     return _B3PreparedTrainOnlyInitialization(
         train=prepared,
@@ -490,6 +547,8 @@ def _prepare_b3_preprocessed_train_only_initialization(
         means=means,
         covars=initialized_covars,
         prior=prior,
+        transmat_prior=transmat_prior,
+        transition_prior_evidence=transition_prior_evidence,
         evidence=initialization,
     )
 
@@ -499,10 +558,16 @@ def prepare_b3_preprocessed_train_only_initialization(
     *,
     train: np.ndarray,
     seed: int,
+    transition_dwell_b: bool = False,
 ) -> Mapping[str, Any]:
     """Return canonical initialization evidence without importing or invoking HMM."""
 
-    prepared = _prepare_b3_preprocessed_train_only_initialization(item, train=train, seed=seed)
+    prepared = _prepare_b3_preprocessed_train_only_initialization(
+        item,
+        train=train,
+        seed=seed,
+        transition_dwell_b=transition_dwell_b,
+    )
     return dict(prepared.evidence)
 
 
@@ -646,9 +711,12 @@ def _map_joint_loop_evidence(
     covariance_valid_history: Sequence[bool],
     covariance_receipt_sha256_history: Sequence[str],
     joint_stop_iteration: int | None,
+    transition_dwell_b: bool = False,
 ) -> dict[str, Any]:
     return {
-        "authority": "covariance_prior_map_objective",
+        "authority": (
+            "covariance_and_transition_prior_map_objective" if transition_dwell_b else "covariance_prior_map_objective"
+        ),
         "maximum_iterations": HMM_N_ITER,
         "raw_likelihood_history": list(raw_likelihood_history),
         "map_objective_history": list(map_objective_history),
@@ -695,7 +763,13 @@ def _evaluate_map_loop_or_fail(
         ) from exc
 
 
-def _run_b3_map_joint_em(model: Any, prepared: np.ndarray, reference: np.ndarray) -> _MapJointFitResult:
+def _run_b3_map_joint_em(
+    model: Any,
+    prepared: np.ndarray,
+    reference: np.ndarray,
+    *,
+    transition_dwell_b: bool = False,
+) -> _MapJointFitResult:
     """Run the approved MAP/D4-02 joint-stop loop without hmmlearn's raw-likelihood monitor."""
 
     lengths = np.asarray([prepared.shape[0]], dtype=np.int64)
@@ -793,6 +867,40 @@ def _run_b3_map_joint_em(model: Any, prepared: np.ndarray, reference: np.ndarray
                 str(exc),
                 evidence={"iteration": iteration, "raw_covariance_evidence": raw_capture},
             ) from exc
+        if transition_dwell_b:
+            try:
+                transition_component = transition_map_objective(model.transmat_, model.transmat_prior)
+            except TransitionDwellContractError as exc:
+                raise _MapJointFitFailure(
+                    "likelihood",
+                    exc.reason_code,
+                    str(exc),
+                    evidence={"iteration": iteration, **exc.evidence},
+                ) from exc
+            covariance_adjustment = float(objective["prior_adjustment"])
+            transition_adjustment = float(transition_component["transition_prior_adjustment"])
+            total_adjustment = covariance_adjustment + transition_adjustment
+            combined_map = float(objective["raw_log_likelihood"]) + total_adjustment
+            if not np.isfinite(combined_map):
+                raise _MapJointFitFailure(
+                    "likelihood",
+                    TRANSITION_MAP_NON_FINITE_REASON,
+                    "combined covariance and transition MAP objective is non-finite",
+                    evidence={"iteration": iteration},
+                )
+            objective = {
+                **objective,
+                "covariance_prior_adjustment": covariance_adjustment,
+                "transition_prior_adjustment": transition_adjustment,
+                "transition_component_sha256": transition_component["transition_component_sha256"],
+                "raw_transmat": transition_component["raw_transmat"],
+                "raw_transmat_sha256": transition_component["raw_transmat_sha256"],
+                "transmat_prior": transition_component["transmat_prior"],
+                "transmat_prior_sha256": transition_component["transmat_prior_sha256"],
+                "expected_dwell_diagnostic_only": transition_component["expected_dwell_diagnostic_only"],
+                "prior_adjustment": total_adjustment,
+                "map_objective": combined_map,
+            }
 
         try:
             covariance_evidence, _, smoothed_audit_log_likelihood = _b3_diag04_covariance_evidence(
@@ -863,6 +971,7 @@ def _run_b3_map_joint_em(model: Any, prepared: np.ndarray, reference: np.ndarray
                     covariance_valid_history=covariance_valid_history,
                     covariance_receipt_sha256_history=covariance_hash_history,
                     joint_stop_iteration=None,
+                    transition_dwell_b=transition_dwell_b,
                 )
                 likelihood = _evaluate_map_loop_or_fail(
                     loop_evidence, iteration=iteration, raw_covariance_evidence=raw_capture
@@ -896,6 +1005,7 @@ def _run_b3_map_joint_em(model: Any, prepared: np.ndarray, reference: np.ndarray
                 covariance_valid_history=covariance_valid_history,
                 covariance_receipt_sha256_history=covariance_hash_history,
                 joint_stop_iteration=iteration,
+                transition_dwell_b=transition_dwell_b,
             )
             likelihood = _evaluate_map_loop_or_fail(
                 loop_evidence, iteration=iteration, raw_covariance_evidence=raw_capture
@@ -951,6 +1061,7 @@ def _run_b3_map_joint_em(model: Any, prepared: np.ndarray, reference: np.ndarray
         covariance_valid_history=covariance_valid_history,
         covariance_receipt_sha256_history=covariance_hash_history,
         joint_stop_iteration=None,
+        transition_dwell_b=transition_dwell_b,
     )
     likelihood = _evaluate_map_loop_or_fail(
         loop_evidence,
@@ -974,6 +1085,7 @@ def fit_b3_preprocessed_train_only(
     *,
     train: np.ndarray,
     seed: int,
+    transition_dwell_b: bool = False,
 ) -> B3CoreFitEvidence:
     """Fit one already-preprocessed train matrix without artifact or selection semantics."""
 
@@ -982,7 +1094,12 @@ def fit_b3_preprocessed_train_only(
     except ImportError as exc:  # pragma: no cover - dependency gate is explicit.
         raise StateModelSetError("hmmlearn==0.3.3 is required for formal B3 training") from exc
     try:
-        prepared_initialization = _prepare_b3_preprocessed_train_only_initialization(item, train=train, seed=seed)
+        prepared_initialization = _prepare_b3_preprocessed_train_only_initialization(
+            item,
+            train=train,
+            seed=seed,
+            transition_dwell_b=transition_dwell_b,
+        )
     except (StateModelSetError, ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
         stage_evidence = _training_stage_evidence(
             fit_invoked=False,
@@ -1015,7 +1132,7 @@ def fit_b3_preprocessed_train_only(
             covariance_type="diag",
             min_covar=0.0,
             startprob_prior=1.0,
-            transmat_prior=1.0,
+            transmat_prior=prepared_initialization.transmat_prior,
             means_prior=0.0,
             means_weight=0.0,
             covars_prior=prior,
@@ -1034,7 +1151,15 @@ def fit_b3_preprocessed_train_only(
         model.means_ = means.copy()
         model.covars_ = initialized_covars.copy()
         fit_invoked = True
-        map_fit = _run_b3_map_joint_em(model, prepared, reference)
+        if transition_dwell_b:
+            map_fit = _run_b3_map_joint_em(
+                model,
+                prepared,
+                reference,
+                transition_dwell_b=True,
+            )
+        else:
+            map_fit = _run_b3_map_joint_em(model, prepared, reference)
     except _MapJointFitFailure as exc:
         stage_evidence = _training_stage_evidence(
             fit_invoked=fit_invoked,
@@ -1228,6 +1353,7 @@ def _fit_b3_train_only(
     seed: int,
     numeric_environment: Mapping[str, Any],
     dimension_contract_version: str | None = None,
+    transition_dwell_b: bool = False,
 ) -> tuple[dict[str, Any], B3FittedModel]:
     """Fit one formal B3 entry without touching validation or future utility."""
 
@@ -1269,7 +1395,20 @@ def _fit_b3_train_only(
                 INACTIVE_DIMENSION_REASON_CODE,
                 exc,
             ) from exc
-    core = fit_b3_preprocessed_train_only(item, train=train, seed=seed)
+    if transition_dwell_b:
+        try:
+            assert_transition_dwell_target_scope(family=family, level=level)
+        except TransitionDwellContractError as exc:
+            raise B3TrainingStageError("initialization", exc.reason_code, exc) from exc
+    if transition_dwell_b:
+        core = fit_b3_preprocessed_train_only(
+            item,
+            train=train,
+            seed=seed,
+            transition_dwell_b=True,
+        )
+    else:
+        core = fit_b3_preprocessed_train_only(item, train=train, seed=seed)
     fitted_startprob = core.startprob
     fitted_transmat = core.transmat
     fitted_means = core.means
@@ -1290,7 +1429,9 @@ def _fit_b3_train_only(
         "means": fitted_means.tolist(),
         "covariance_type": "diag",
         "covars": raw_covars.tolist(),
-        "parameter_profile_sha256": canonical_sha256(formal_b3_parameter_profile()),
+        "parameter_profile_sha256": canonical_sha256(
+            formal_b3_parameter_profile(transition_dwell_b=transition_dwell_b)
+        ),
         "numeric_environment_sha256": canonical_sha256(dict(numeric_environment)),
         "observation_manifest_hash": item.observation_manifest_hash,
         "pit_constituent_manifest_hash": item.pit_constituent_manifest_hash,
@@ -1304,6 +1445,15 @@ def _fit_b3_train_only(
                 "likelihood_feature_count": projection_receipt["likelihood_feature_count"],
                 "projection_receipt": dict(projection_receipt),
                 "projection_sha256": projection_receipt["projection_sha256"],
+            }
+        )
+    transition_prior_sha256 = None
+    if transition_dwell_b:
+        transition_prior_sha256 = str(core.initialization["transition_prior_evidence"]["transition_prior_sha256"])
+        model_body.update(
+            {
+                "transition_dwell_contract": TRANSITION_DWELL_CONTRACT_VERSION,
+                "transition_prior_sha256": transition_prior_sha256,
             }
         )
     model_hash = canonical_sha256(model_body)
@@ -1324,6 +1474,8 @@ def _fit_b3_train_only(
         pit_constituent_manifest_hash=item.pit_constituent_manifest_hash,
         model_payload_sha256=model_hash,
         projection_receipt=projection_receipt,
+        transition_dwell_contract=(TRANSITION_DWELL_CONTRACT_VERSION if transition_dwell_b else None),
+        transition_prior_sha256=transition_prior_sha256,
     )
     entry_body = {
         "schema_version": (
@@ -1343,7 +1495,7 @@ def _fit_b3_train_only(
         "model_entry_status": core.model_entry_status,
         "model_entry_valid": core.model_entry_valid,
         "initialization_evidence": dict(core.initialization),
-        "parameter_profile": formal_b3_parameter_profile(),
+        "parameter_profile": formal_b3_parameter_profile(transition_dwell_b=transition_dwell_b),
         "numeric_environment": dict(numeric_environment),
         "monitor_evidence": dict(core.monitor_evidence),
         "likelihood": dict(core.likelihood),
@@ -1366,6 +1518,13 @@ def _fit_b3_train_only(
                 "dimension_contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
                 "projection_receipt": dict(projection_receipt),
                 "projection_sha256": projection_receipt["projection_sha256"],
+            }
+        )
+    if transition_dwell_b:
+        entry_body.update(
+            {
+                "transition_dwell_contract": TRANSITION_DWELL_CONTRACT_VERSION,
+                "transition_prior_sha256": transition_prior_sha256,
             }
         )
     return {**entry_body, "entry_receipt_sha256": canonical_sha256(entry_body)}, fitted
@@ -1407,10 +1566,13 @@ def run_level_repeat(
     feature_names: Sequence[str],
     preprocess_family: str,
     process_identity: str,
+    transition_dwell_b: bool = False,
 ) -> tuple[dict[str, Any], dict[tuple[int, str], B3FittedModel]]:
     """Run the complete 8-seed level grid; failures are retained and never trigger early stop."""
 
     features = tuple(str(value) for value in feature_names)
+    if transition_dwell_b:
+        assert_transition_dwell_target_scope(family=family, level=level)
     if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
         raise StateModelSetError("formal B3 feature_names must be the approved 7/20 dimensional family")
     expected_count = 31 if level == "L1" else 131 if level == "L2" else 0
@@ -1440,6 +1602,7 @@ def run_level_repeat(
                     seed=seed,
                     numeric_environment=environment,
                     dimension_contract_version=(MIXED_DIMENSION_CONTRACT_VERSION if mixed_dimension else None),
+                    transition_dwell_b=transition_dwell_b,
                 )
             except B3TrainingStageError as exc:
                 failure_body = {
@@ -1518,6 +1681,8 @@ def run_level_repeat(
         "selection_performed": False,
         "artifact_write_performed": False,
     }
+    if transition_dwell_b:
+        payload["transition_dwell_contract"] = TRANSITION_DWELL_CONTRACT_VERSION
     if mixed_dimension:
         payload.update(
             {
@@ -1541,6 +1706,9 @@ def models_from_repeat(repeat: Mapping[str, Any]) -> dict[tuple[int, str], B3Fit
     expected_codes = tuple(str(value) for value in repeat.get("canonical_sector_codes") or ())
     expected_features = tuple(str(value) for value in repeat.get("feature_names") or ())
     mixed_dimension = uses_mixed_dimension_level(repeat_family, repeat_level)
+    transition_dwell_contract = str(repeat.get("transition_dwell_contract") or "") or None
+    if transition_dwell_contract is not None and transition_dwell_contract != TRANSITION_DWELL_CONTRACT_VERSION:
+        raise StateModelSetError("repeat transition-dwell contract is invalid")
     if mixed_dimension:
         if (
             repeat.get("schema_version") != MIXED_REPEAT_SCHEMA_VERSION
@@ -1549,6 +1717,8 @@ def models_from_repeat(repeat: Mapping[str, Any]) -> dict[tuple[int, str], B3Fit
             or repeat.get("feature_count") != len(ALL_CORE_FEATURES)
         ):
             raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+    if transition_dwell_contract is not None and (repeat_family != "autocycle_all_core" or repeat_level != "L2"):
+        raise StateModelSetError("repeat transition-dwell scope is invalid")
     for raw in repeat.get("models") or ():
         feature_names = tuple(str(value) for value in raw.get("feature_names") or ())
         startprob = _probability_vector(raw.get("startprob"), "repeat.startprob", 3)
@@ -1556,6 +1726,13 @@ def models_from_repeat(repeat: Mapping[str, Any]) -> dict[tuple[int, str], B3Fit
         means = _finite_array(raw.get("means"), "repeat.means", ndim=2)
         covars = _finite_array(raw.get("covars"), "repeat.covars", ndim=2)
         projection_receipt = raw.get("projection_receipt")
+        raw_transition_contract = str(raw.get("transition_dwell_contract") or "") or None
+        raw_transition_prior_sha256 = str(raw.get("transition_prior_sha256") or "") or None
+        if raw_transition_contract != transition_dwell_contract or (
+            transition_dwell_contract is not None
+            and (raw_transition_prior_sha256 is None or len(raw_transition_prior_sha256) != 64)
+        ):
+            raise StateModelSetError("repeat transition-dwell model identity is invalid")
         effective_count = len(feature_names)
         if mixed_dimension:
             if not isinstance(projection_receipt, Mapping):
@@ -1602,6 +1779,8 @@ def models_from_repeat(repeat: Mapping[str, Any]) -> dict[tuple[int, str], B3Fit
             pit_constituent_manifest_hash=str(raw.get("pit_constituent_manifest_hash") or ""),
             model_payload_sha256=expected_hash,
             projection_receipt=(dict(projection_receipt) if isinstance(projection_receipt, Mapping) else None),
+            transition_dwell_contract=transition_dwell_contract,
+            transition_prior_sha256=raw_transition_prior_sha256,
         )
         if (
             fitted.family != repeat_family
@@ -1618,6 +1797,37 @@ def models_from_repeat(repeat: Mapping[str, Any]) -> dict[tuple[int, str], B3Fit
     if canonical_sha256([models[key].payload() for key in sorted(models)]) != repeat.get("model_payload_sha256"):
         raise StateModelSetError("repeat aggregate model hash mismatch")
     return models
+
+
+def _prepare_d6_calendar_observations(
+    carrier: D6ValidationCalendarSeries,
+    fitted: B3FittedModel,
+) -> np.ndarray:
+    """Validate full-dimensional availability, then preprocess full features before fixed projection."""
+
+    carrier.validate(len(fitted.feature_names))
+    raw_validation = np.asarray(carrier.observation_values_f64, dtype=np.float64)
+    if fitted.projection_receipt is not None:
+        inactive_indices = tuple(fitted.projection_receipt["inactive_feature_indices"])
+        if inactive_indices and not np.all(raw_validation[:, inactive_indices] == 0.0):
+            raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
+    validation = _apply_preprocess(raw_validation, fitted.preprocess)
+    if fitted.projection_receipt is not None:
+        validate_projection_receipt(
+            fitted.projection_receipt,
+            family=fitted.family,
+            level=fitted.level,
+            sector_code=fitted.sector_code,
+            full_feature_names=fitted.feature_names,
+            preprocess=fitted.preprocess,
+            means_shape=fitted.means.shape,
+            covariance_shape=fitted.covars.shape,
+        )
+        validation = np.ascontiguousarray(
+            validation[:, tuple(fitted.projection_receipt["active_feature_indices"])],
+            dtype=np.float64,
+        )
+    return validation
 
 
 def build_selected_level_artifact(
@@ -1673,41 +1883,21 @@ def build_selected_level_artifact(
             or training_receipt.get("model_payload_sha256") != fitted.model_payload_sha256
         ):
             raise StateModelSetError(f"selected training receipt is not accepted for {code}")
-        validation = _apply_preprocess(item.validation_observations, fitted.preprocess)
-        if fitted.projection_receipt is not None:
-            validate_projection_receipt(
-                fitted.projection_receipt,
-                family=fitted.family,
-                level=fitted.level,
-                sector_code=fitted.sector_code,
-                full_feature_names=fitted.feature_names,
-                preprocess=fitted.preprocess,
-                means_shape=fitted.means.shape,
-                covariance_shape=fitted.covars.shape,
-            )
-            validation = np.ascontiguousarray(
-                validation[:, tuple(fitted.projection_receipt["active_feature_indices"])],
-                dtype=np.float64,
-            )
-        posterior = causal_forward_posteriors(
+        carrier = item.validation_calendar_series
+        if carrier is None:
+            raise StateModelSetError("active D6-NA-A requires frozen input manifest v2 calendar carrier")
+        validation = _prepare_d6_calendar_observations(carrier, fitted)
+        posterior = causal_forward_posteriors_calendar(
             validation,
+            carrier.observation_available_mask,
             startprob=fitted.startprob,
             transmat=fitted.transmat,
             means=fitted.means,
             covars=fitted.covars,
         )
-        semantic = evaluate_semantic_validation(
+        semantic = evaluate_semantic_validation_calendar(
             posterior,
-            item.validation_dates,
-            {
-                **item.validation_future_components,
-                "source_cutoff": (
-                    None
-                    if item.validation_utility_source_cutoff is None
-                    else item.validation_utility_source_cutoff.isoformat()
-                ),
-                "formula_version": item.validation_utility_formula_version,
-            },
+            carrier,
             frozen_input_manifest=item.validation_input_manifest,
             selected_model_payload_sha256=fitted.model_payload_sha256,
         )
@@ -1715,6 +1905,7 @@ def build_selected_level_artifact(
             **fitted.payload(),
             "training_receipt": training_receipt,
             "semantic": semantic,
+            "validation_input_manifest": dict(item.validation_input_manifest),
             "validation_accessed_after_selection": True,
             "future_utility_accessed_after_selection": True,
             "selection_reexecuted": False,
@@ -1736,12 +1927,15 @@ def build_selected_level_artifact(
             family=str(selection.get("evidence", {}).get("family") or ""),
             level=str(selection.get("evidence", {}).get("level") or ""),
             expected_sector_codes=expected_codes,
+            schema_version=MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
         )
         if mixed_dimension
         else None
     )
     body = {
-        "schema_version": (MIXED_LEVEL_SCHEMA_VERSION if mixed_dimension else "hmm_risk_b3_selected_level_artifact_v1"),
+        "schema_version": (
+            MIXED_LEVEL_SCHEMA_VERSION_D6_NA if mixed_dimension else SELECTED_LEVEL_SCHEMA_VERSION_D6_NA
+        ),
         "family": selection.get("evidence", {}).get("family"),
         "level": selection.get("evidence", {}).get("level"),
         "selected_seed": selected_seed,
@@ -1788,7 +1982,7 @@ def _validate_ready_layer(
 ) -> None:
     mixed_dimension = uses_mixed_dimension_level(family, level)
     expected_artifact_schema = (
-        MIXED_LEVEL_SCHEMA_VERSION if mixed_dimension else "hmm_risk_b3_selected_level_artifact_v1"
+        MIXED_LEVEL_SCHEMA_VERSION_D6_NA if mixed_dimension else SELECTED_LEVEL_SCHEMA_VERSION_D6_NA
     )
     if artifact.get("schema_version") != expected_artifact_schema:
         raise StateModelSetError(f"B3 READY selected artifact schema is invalid for {family}/{level}")
@@ -1995,7 +2189,9 @@ def _validate_ready_layer(
             or code not in canonical_codes
             or not isinstance(training_receipt, Mapping)
             or not isinstance(semantic, Mapping)
-            or semantic.get("contract_version") != D6_SEMANTIC_VERSION
+            or semantic.get("contract_version") != D6_NA_SEMANTIC_VERSION
+            or semantic.get("base_contract_version") != D6_SEMANTIC_VERSION
+            or semantic.get("availability_contract_version") != D6_AVAILABILITY_VERSION
             or entry.get("semantic_mapping") != semantic.get("semantic_mapping")
             or entry.get("validation_accessed_after_selection") is not True
             or entry.get("future_utility_accessed_after_selection") is not True
@@ -2099,12 +2295,31 @@ def _validate_ready_layer(
             or set(semantic["semantic_mapping"].values()) != {"fading", "neutral", "trending"}
             or not assignment.get("evidence")
             or not semantic_evidence.get("evidence")
-            or assignment.get("evidence", {}).get("validation_rows") != 182
+            or assignment.get("evidence", {}).get("calendar_rows") != 182
             or assignment.get("evidence", {}).get("selected_model_payload_sha256") != entry.get("model_payload_sha256")
             or semantic_evidence.get("evidence", {}).get("selected_model_payload_sha256")
             != entry.get("model_payload_sha256")
         ):
             raise StateModelSetError(f"B3 READY semantic evidence is not accepted for {family}/{level}/{code}")
+        validation_manifest = entry.get("validation_input_manifest")
+        if not isinstance(validation_manifest, Mapping):
+            raise StateModelSetError(f"B3 READY D6 manifest v2 is missing for {family}/{level}/{code}")
+        carrier_payload = validation_manifest.get("calendar_carrier_payload")
+        if not isinstance(carrier_payload, Mapping):
+            raise StateModelSetError(f"B3 READY D6 calendar carrier is missing for {family}/{level}/{code}")
+        carrier = D6ValidationCalendarSeries.from_payload(carrier_payload)
+        validate_d6_frozen_input_manifest(
+            validation_manifest,
+            carrier,
+            sector_code=code,
+            direct_sector_level=level,
+        )
+        if (
+            assignment.get("evidence", {}).get("calendar_carrier_sha256") != carrier.carrier_sha256
+            or semantic_evidence.get("evidence", {}).get("calendar_carrier_sha256") != carrier.carrier_sha256
+            or semantic_evidence.get("evidence", {}).get("evidence_rows", 0) < 30
+        ):
+            raise StateModelSetError(f"B3 READY D6 calendar readback is invalid for {family}/{level}/{code}")
         for evidence_receipt in (assignment, semantic_evidence):
             receipt_evidence = evidence_receipt["evidence"]
             if (
@@ -2126,6 +2341,7 @@ def _validate_ready_layer(
             family=family,
             level=level,
             expected_sector_codes=canonical_codes,
+            schema_version=MIXED_LEVEL_SCHEMA_VERSION_D6_NA,
         )
         for field, expected_value in expected_dimension_identity.items():
             if artifact.get(field) != expected_value:
@@ -2284,6 +2500,9 @@ def write_b3_ready_model_set(
             "d3": D3_CONTRACT_VERSION,
             "l2_retrain": L2_RETRAIN_VERSION,
             "d1_d5_compat": MIXED_DIMENSION_CONTRACT_VERSION,
+            "d6_base": D6_SEMANTIC_VERSION,
+            "d6_availability": D6_AVAILABILITY_VERSION,
+            "d6_composite": D6_NA_SEMANTIC_VERSION,
         },
         "layers": layers,
         "selection_receipts": {
@@ -2377,6 +2596,9 @@ def read_b3_ready_model_set(manifest_path: str | Path) -> dict[str, Any]:
             "d3": D3_CONTRACT_VERSION,
             "l2_retrain": L2_RETRAIN_VERSION,
             "d1_d5_compat": MIXED_DIMENSION_CONTRACT_VERSION,
+            "d6_base": D6_SEMANTIC_VERSION,
+            "d6_availability": D6_AVAILABILITY_VERSION,
+            "d6_composite": D6_NA_SEMANTIC_VERSION,
         }
     ):
         raise StateModelSetError("B3 READY manifest identity is invalid")

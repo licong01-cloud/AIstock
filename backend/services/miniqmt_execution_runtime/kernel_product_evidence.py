@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -18,6 +18,7 @@ from backend.services.qmt_strategy_ledger.repository import (
     _row_to_position_lot,
     _row_to_virtual_account,
 )
+from backend.services.qmt_strategy_ledger.models import VirtualAccount, VirtualAccountStatus
 from backend.execution_algos.vnpy_compat.facade_contracts import VnpyFacadeAuthorityInputV2
 
 from .kernel_delivery import KernelTransitionWriteBundleV1
@@ -71,6 +72,82 @@ class KernelProductEvidenceError(RuntimeError):
         self.reason_code = reason_code
         self.context = json_safe_evidence_v1(context)
         super().__init__(message)
+
+
+class VirtualAccountProjectionError(ValueError):
+    """The durable virtual-account carrier cannot form the V1 kernel projection."""
+
+
+def _virtual_account_json_value_v1(value: Any, *, path: str) -> Any:
+    if value is None or type(value) in {str, bool, int}:
+        return value
+    if type(value) is float:
+        if value != value or value in {float("inf"), float("-inf")}:
+            raise VirtualAccountProjectionError(f"{path} must contain a finite JSON number")
+        return value
+    if type(value) is list:
+        return [_virtual_account_json_value_v1(item, path=f"{path}[{index}]") for index, item in enumerate(value)]
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
+            raise VirtualAccountProjectionError(f"{path} must contain only string object keys")
+        return {key: _virtual_account_json_value_v1(value[key], path=f"{path}.{key}") for key in sorted(value)}
+    raise VirtualAccountProjectionError(f"{path} contains non-JSON value type {type(value).__name__}")
+
+
+def virtual_account_projection_v1(account: VirtualAccount) -> dict[str, Any]:
+    """Project the repository-owned account into the sole KERNEL_V2 account authority."""
+
+    if type(account) is not VirtualAccount:
+        raise VirtualAccountProjectionError(
+            f"account must be the exact VirtualAccount carrier, got {type(account).__name__}"
+        )
+    text_fields = {
+        "strategy_id": account.strategy_id,
+        "strategy_name": account.strategy_name,
+        "account_id": account.account_id,
+        "mode": account.mode,
+    }
+    for field_name, value in text_fields.items():
+        if type(value) is not str or not value.strip():
+            raise VirtualAccountProjectionError(f"{field_name} must be a non-empty string")
+    if account.mode not in {"SIM", "LIVE"}:
+        raise VirtualAccountProjectionError("mode must be SIM or LIVE")
+    decimal_fields = {
+        "initial_cash": account.initial_cash,
+        "cash": account.cash,
+        "frozen_cash": account.frozen_cash,
+        "market_value": account.market_value,
+        "realized_pnl": account.realized_pnl,
+        "unrealized_pnl": account.unrealized_pnl,
+    }
+    for field_name, value in decimal_fields.items():
+        if type(value) is not Decimal or not value.is_finite():
+            raise VirtualAccountProjectionError(f"{field_name} must be a finite Decimal")
+    if account.initial_cash <= Decimal("0"):
+        raise VirtualAccountProjectionError("initial_cash must be positive")
+    if account.cash < Decimal("0") or account.frozen_cash < Decimal("0"):
+        raise VirtualAccountProjectionError("cash and frozen_cash must be non-negative")
+    if type(account.status) is not VirtualAccountStatus:
+        raise VirtualAccountProjectionError("status must be VirtualAccountStatus")
+    if type(account.risk_config) is not dict:
+        raise VirtualAccountProjectionError("risk_config must be an exact JSON object")
+    if type(account.updated_at) is not datetime or account.updated_at.tzinfo is None:
+        raise VirtualAccountProjectionError("updated_at must be timezone-aware datetime")
+    risk_config = _virtual_account_json_value_v1(account.risk_config, path="risk_config")
+    if type(risk_config) is not dict:
+        raise VirtualAccountProjectionError("risk_config must project to an exact JSON object")
+    return {
+        "strategy_id": account.strategy_id,
+        "strategy_name": account.strategy_name,
+        "account_id": account.account_id,
+        "mode": account.mode,
+        "cash": str(account.cash),
+        "frozen_cash": str(account.frozen_cash),
+        "market_value": str(account.market_value),
+        "status": account.status.value,
+        "risk_config": risk_config,
+        "updated_at_utc": account.updated_at.astimezone(UTC).isoformat(),
+    }
 
 
 @dataclass(frozen=True)
@@ -339,7 +416,7 @@ class KernelProductEvidenceProviderV3:
                 "mqcontract_" + hash_hex_v1("miniqmt_contract_projection_v1", contract_payload)[:32],
                 "miniqmt_contract_projection_v1",
                 contract_payload,
-                market_source_event_id,
+                event.event_id,
             ),
             (
                 KernelProjectionTypeV1.ACCOUNT,
@@ -453,8 +530,14 @@ class KernelProductEvidenceProviderV3:
         if same_cursor_base != base_services:
             raise self._error("PRODUCT_BASE_PROJECTION_DRIFT", event=event, delivery=delivery, algo=algo)
         contract = thaw_json_v1(base_services.contract_projection)
-        market = thaw_json_v1(base_services.market_data_projection)
-        if not isinstance(contract, dict) or not contract or not isinstance(market, dict) or not market:
+        market = (
+            None if base_services.market_data_projection is None else thaw_json_v1(base_services.market_data_projection)
+        )
+        if (
+            not isinstance(contract, dict)
+            or not contract
+            or (market is not None and (not isinstance(market, dict) or not market))
+        ):
             raise self._error("PRODUCT_PROJECTION_MISSING", event=event, delivery=delivery, algo=algo)
 
         plan = self._locked_plan_context(cur, event=event, algo=algo)
@@ -579,21 +662,9 @@ class KernelProductEvidenceProviderV3:
         event: RuntimeEventEnvelopeV2,
         algo: ExecutionAlgoInstancePersistenceV2,
     ) -> tuple[str | None, dict[str, Any] | None, str | None]:
-        selected = event
         if event.event_type is not EventTypeV2.TICK:
-            cur.execute(
-                "SELECT payload FROM qmt_strategy.execution_runtime_event e "
-                "JOIN qmt_strategy.execution_algo_event_delivery d ON d.runtime_id=e.runtime_id AND d.event_id=e.event_id "
-                "WHERE e.runtime_id=%s AND d.algo_instance_id=%s AND e.sequence<%s "
-                "AND e.event_contract_version='KERNEL_V2' AND e.event_type='TICK' "
-                "AND e.source='B0_QUOTE_V2' AND e.payload_schema_version='miniqmt_market_data_view_v2' "
-                "AND d.status='APPLIED' ORDER BY e.sequence DESC LIMIT 1 FOR SHARE OF e,d",
-                (event.runtime_id, algo.algo_instance_id, event.sequence),
-            )
-            row = cur.fetchone()
-            if row is None:
-                return None, None, None
-            selected = RuntimeEventEnvelopeV2.model_validate(row["payload"], strict=True)
+            return None, None, None
+        selected = event
         if selected.symbol != algo.symbol:
             raise KernelProductEvidenceError(
                 "MINIQMT_K6_PRODUCT_MARKET_OWNER_CONFLICT",
@@ -777,18 +848,14 @@ class KernelProductEvidenceProviderV3:
 
     @staticmethod
     def _account_payload(account: Any) -> dict[str, Any]:
-        return {
-            "strategy_id": account.strategy_id,
-            "strategy_name": account.strategy_name,
-            "account_id": account.account_id,
-            "mode": account.mode,
-            "cash": str(account.cash),
-            "frozen_cash": str(account.frozen_cash),
-            "market_value": str(account.market_value),
-            "status": account.status.value,
-            "risk_config": account.risk_config,
-            "updated_at_utc": account.updated_at.isoformat(),
-        }
+        try:
+            return virtual_account_projection_v1(account)
+        except VirtualAccountProjectionError as exc:
+            raise KernelProductEvidenceError(
+                "MINIQMT_K6_PRODUCT_VIRTUAL_ACCOUNT_INVALID",
+                "product evidence virtual account failed strict projection",
+                context={"account_type": type(account).__name__, "error": str(exc)},
+            ) from exc
 
     @staticmethod
     def _command_lineage(command: BrokerCommandV2) -> tuple[str, str, str]:
@@ -1043,6 +1110,8 @@ class KernelProductEvidenceProviderV3:
                 context={"delivery_id": delivery.delivery_id, "command_count": len(evidence_parts)},
             )
         refs = {item.projection_type: item for item in base_services.execution_projection_set.ordered_projection_refs}
+        if base_services.market_data_projection is None:
+            refs.pop(KernelProjectionTypeV1.MARKET_DATA, None)
         account_hash = hash_hex_v1("miniqmt_account_projection_v1", account_payload)
         refs[KernelProjectionTypeV1.ACCOUNT] = ExecutionProjectionRefV1.create(
             projection_type=KernelProjectionTypeV1.ACCOUNT,
@@ -1099,7 +1168,6 @@ class KernelProductEvidenceProviderV3:
             )
         required = {
             KernelProjectionTypeV1.CONTRACT,
-            KernelProjectionTypeV1.MARKET_DATA,
             KernelProjectionTypeV1.MARKET_CAPABILITY,
             KernelProjectionTypeV1.ACCOUNT,
             KernelProjectionTypeV1.KILL_SWITCH_STATE,
@@ -1107,6 +1175,8 @@ class KernelProductEvidenceProviderV3:
             KernelProjectionTypeV1.RISK_DECISION,
             KernelProjectionTypeV1.ROUTE_COMPATIBILITY,
         }
+        if base_services.market_data_projection is not None:
+            required.add(KernelProjectionTypeV1.MARKET_DATA)
         if set(refs) != required:
             raise KernelProductEvidenceError(
                 "MINIQMT_K6_PRODUCT_PROJECTION_SET_INVALID",

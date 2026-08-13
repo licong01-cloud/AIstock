@@ -385,7 +385,7 @@ def _guardrail_baseline_json(session: nox.Session) -> str:
 def _l0_changed_files() -> list[str]:
     paths: list[str] = []
     commands = (
-        ("diff", "--name-only", "--diff-filter=ACMRT", "origin/main", "HEAD", "--"),
+        ("diff", "--name-only", "--diff-filter=ACMRT", "origin/main...HEAD", "--"),
         ("diff", "--name-only", "--diff-filter=ACMRT", "--"),
         ("diff", "--cached", "--name-only", "--diff-filter=ACMRT", "--"),
         ("ls-files", "--others", "--exclude-standard"),
@@ -1117,6 +1117,7 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
         "backend/tests/quantevolver/test_sector_risk_overlay_artifacts.py",
         "backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py",
+        "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
         "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
         "backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py",
         "tests/aistock_validation/test_qe_sector_risk_overlay_isolation.py",

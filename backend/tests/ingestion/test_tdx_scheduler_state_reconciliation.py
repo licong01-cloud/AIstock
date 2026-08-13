@@ -40,6 +40,34 @@ def test_canonical_weekend_compensation_is_weekly_saturday_and_defaults_are_uniq
         )
 
 
+@pytest.mark.parametrize(
+    ("frequency", "options", "expected_time"),
+    [
+        ("daily", {"at": "20:30"}, dt.time(20, 30)),
+        (
+            "weekly",
+            {"day_of_week": "saturday", "at": "10:00"},
+            dt.time(10, 0),
+        ),
+    ],
+)
+def test_fixed_time_schedules_use_authoritative_china_timezone(
+    frequency,
+    options,
+    expected_time,
+):
+    scheduler = scheduler_module.schedule.Scheduler()
+    job = scheduler_module._build_frequency_job(scheduler, frequency, options).do(
+        lambda: None
+    )
+
+    assert job.at_time_zone.zone == "Asia/Shanghai"
+    next_run_cn = scheduler_module._coerce_datetime(job.next_run).astimezone(
+        scheduler_module._CN_TZ
+    )
+    assert next_run_cn.time().replace(tzinfo=None) == expected_time
+
+
 def test_default_schedule_catalog_rejects_mode_insensitive_duplicate(monkeypatch):
     duplicate = dict(next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "stock_basic"))
     duplicate["mode"] = "incremental"
@@ -49,6 +77,38 @@ def test_default_schedule_catalog_rejects_mode_insensitive_duplicate(monkeypatch
 
     assert catalog["complete"] is False
     assert "mode-insensitive default dataset has multiple schedules: stock_basic" in catalog["errors"]
+
+
+def test_targeted_dividend_refresh_uses_current_and_next_window(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    updates = []
+    scheduler._resolve_suspend_d_refresh_range = lambda strategy: (
+        dt.date(2026, 8, 10),
+        dt.date(2026, 8, 11),
+    )
+    scheduler._update_ingestion_schedule = lambda schedule_id, **kwargs: updates.append(
+        (schedule_id, kwargs)
+    )
+
+    class _Engine:
+        def sync(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr(scheduler_module, "TushareSyncEngine", _Engine)
+    scheduler._run_targeted_tushare_refresh(
+        uuid.uuid4(),
+        "schedule-dividend",
+        "dividend",
+        "incremental",
+        "schedule",
+        {"date_strategy": "current_and_next_trading_day"},
+    )
+    assert calls[0]["spec"].name == "dividend"
+    assert calls[0]["start_date"] == dt.date(2026, 8, 10)
+    assert calls[0]["end_date"] == dt.date(2026, 8, 11)
+    assert updates[0][1]["last_status"] == "success"
 
 
 def test_schedule_hygiene_reports_without_automatic_cleanup():

@@ -29,6 +29,7 @@ def test_l0_scan_paths_use_explicit_scope_without_git(monkeypatch: pytest.Monkey
 
 
 def test_l0_scan_paths_default_to_branch_and_worktree_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
     outputs = iter(
         [
             "scripts/issue_flow.py\n",
@@ -39,6 +40,7 @@ def test_l0_scan_paths_default_to_branch_and_worktree_changes(monkeypatch: pytes
     )
 
     def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
         return subprocess.CompletedProcess(args, 0, stdout=next(outputs), stderr="")
 
     monkeypatch.setattr(noxfile.subprocess, "run", fake_run)
@@ -48,6 +50,14 @@ def test_l0_scan_paths_default_to_branch_and_worktree_changes(monkeypatch: pytes
         "noxfile.py",
         "backend/tests/test_noxfile_validation_env.py",
         "backend/services/new_feature.py",
+    ]
+    assert commands[0] == [
+        "git",
+        "diff",
+        "--name-only",
+        "--diff-filter=ACMRT",
+        "origin/main...HEAD",
+        "--",
     ]
 
 

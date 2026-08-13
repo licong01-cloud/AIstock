@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,9 @@ import pandas as pd
 
 from backend.services.advisory_model_first.feature_schema_v1 import MODEL_FEATURE_COLUMNS
 from backend.services.advisory_model_first.model_bundle import LoadedAdvisoryModelBundle
+from backend.services.advisory_model_first.model_binding_resolution import (
+    AdvisoryModelBindingResolutionV1,
+)
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService, _score
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.realtime_feature_source import (
@@ -30,6 +34,14 @@ from backend.services.advisory_model_first.target_binding import (
 from backend.services.selection_center.models import SelectionRunStatus
 from backend.services.trading_core.errors import DataUnavailableError
 
+REVIEW_POLICY_HASH = "a" * 64
+REVIEW_POLICY = {
+    "stop_loss_bps": 800,
+    "take_profit_bps": 1800,
+    "trailing_stop_bps": 700,
+    "take_profit_mode": "trailing",
+}
+
 
 class _ProgramService:
     def __init__(self, *, target_count: int = 2) -> None:
@@ -37,6 +49,8 @@ class _ProgramService:
             program_id=PROGRAM_ID,
             package_ids=[PACKAGE_ID],
             target_count=target_count,
+            review_policy=REVIEW_POLICY,
+            review_policy_sha256=REVIEW_POLICY_HASH,
         )
         self.binding = {
             "binding_version_id": BINDING_VERSION_ID,
@@ -70,15 +84,19 @@ class _ProgramService:
             "list_version": self.recommendation_list_versions(PROGRAM_ID, limit=500, offset=0)[0],
             "items": [
                 {
+                    "symbol": "000001.SZ",
                     "evidence_json": {
                         "source_run_id": "old-selection-run",
                         "reference_price_trade_date": "2026-07-20",
+                        "review_policy_sha256": REVIEW_POLICY_HASH,
                     }
                 },
                 {
+                    "symbol": "000002.SZ",
                     "evidence_json": {
                         "source_run_id": "selection-1",
                         "reference_price_trade_date": "2026-07-20",
+                        "review_policy_sha256": REVIEW_POLICY_HASH,
                     }
                 },
             ],
@@ -139,6 +157,28 @@ class _Booster:
         return np.asarray([0.1, 0.9], dtype=float)
 
 
+class _BindingResolver:
+    def is_configured(self, **kwargs: object) -> bool:
+        return kwargs.get("program_id") == PROGRAM_ID and kwargs.get("binding_version_id") == BINDING_VERSION_ID
+
+    def resolve(self, **_: object) -> AdvisoryModelBindingResolutionV1:
+        return AdvisoryModelBindingResolutionV1(
+            program_id=PROGRAM_ID,
+            binding_version_id=BINDING_VERSION_ID,
+            package_id=PACKAGE_ID,
+            manifest_sha256=MANIFEST_SHA256,
+            style_profile_id=STYLE_PROFILE_ID,
+            style_profile_hash="8e8226885af25dbf1830403ea2ba768ec4a135a35680f827ad30994c0369904b",
+            selection_runtime_semantics_hash=RUNTIME_SEMANTICS_HASH,
+            feature_schema_version="advisory_feature_schema_v1",
+            feature_schema_hash="e56adb47d444df26e35eb327d3aacacd273477edf67c4c1db201ea5b4c3bd49c",
+            bundle_id="bundle-1",
+            bundle_manifest_sha256="c" * 64,
+            component_roles={"lstm": LSTM_LEG_ID, "fund": FUND_LEG_ID},
+            descriptor_sha256="d" * 64,
+        )
+
+
 class _InspectingBooster(_Booster):
     def __init__(self) -> None:
         self.seen: pd.DataFrame | None = None
@@ -188,15 +228,19 @@ def _bundle() -> LoadedAdvisoryModelBundle:
         bundle_id="bundle-1",
         bundle_path=Path("/model/bundle-1"),
         manifest={
+            "package_id": PACKAGE_ID,
+            "manifest_sha256": MANIFEST_SHA256,
             "status": "EXPERIMENTAL_SHADOW",
             "calibration_state": "UNCALIBRATED",
             "selection_runtime_semantics_hash": RUNTIME_SEMANTICS_HASH,
             "selection_runtime_semantics": RUNTIME_SEMANTICS_PAYLOAD,
             "style_profile_id": STYLE_PROFILE_ID,
+            "style_profile_hash": "8e8226885af25dbf1830403ea2ba768ec4a135a35680f827ad30994c0369904b",
             "terminal_weights": {LSTM_LEG_ID: 0.6966591521, FUND_LEG_ID: 0.3033408479},
             "continuation_cutoff": "2026-03-10",
             "request_id": "request-1",
             "feature_schema_version": "advisory_feature_schema_v1",
+            "feature_schema_hash": "e56adb47d444df26e35eb327d3aacacd273477edf67c4c1db201ea5b4c3bd49c",
         },
         feature_schema={
             "trained_feature_names": list(MODEL_FEATURE_COLUMNS),
@@ -205,6 +249,7 @@ def _bundle() -> LoadedAdvisoryModelBundle:
         hmm_models={},
         baselines={"model_top5": {"mean_excess_return_5": -0.01}},
         booster=_Booster(),
+        manifest_file_sha256="c" * 64,
     )
 
 
@@ -272,9 +317,14 @@ def _feature_inputs() -> RealtimeFeatureInputs:
     )
 
 
+def _shadow_service(**kwargs: object) -> AdvisoryModelShadowService:
+    kwargs.setdefault("binding_resolver", _BindingResolver())
+    return AdvisoryModelShadowService(**kwargs)
+
+
 def test_model_shadow_keeps_rule_path_available_when_model_root_is_missing() -> None:
     feature_source = _FeatureSource(_feature_inputs())
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
         review_source=_ReviewSource(),
@@ -287,6 +337,64 @@ def test_model_shadow_keeps_rule_path_available_when_model_root_is_missing() -> 
     assert feature_source.calls == 0
 
 
+def test_forward_model_shadow_uses_frozen_program_binding_without_reading_current_binding() -> None:
+    service = _shadow_service(
+        program_service=SimpleNamespace(
+            get_program=lambda _program_id: (_ for _ in ()).throw(AssertionError("current Program read")),
+            active_binding=lambda _program_id: (_ for _ in ()).throw(AssertionError("current binding read")),
+            recommendation_list_versions=lambda *_args, **_kwargs: [],
+        ),
+        model_root_provider=lambda: "",
+    )
+    frozen_program = SimpleNamespace(
+        program_id=PROGRAM_ID,
+        package_ids=[PACKAGE_ID],
+        target_count=20,
+    )
+
+    result = service.model_shadow_for_forward(
+        program=frozen_program,
+        binding_version_id=BINDING_VERSION_ID,
+        target_trade_date=date(2026, 7, 21),
+        list_version_id="list-frozen",
+        review_run_id="review-frozen",
+        selection_run_id="selection-frozen",
+    )
+
+    assert result["status"] == "MODEL_UNAVAILABLE"
+    assert result["reason_code"] == "ADVISORY_MODEL_ROOT_NOT_CONFIGURED"
+
+
+def test_forward_selection_context_uses_exact_list_id_without_date_scan() -> None:
+    service = _shadow_service(
+        program_service=SimpleNamespace(
+            recommendation_list_versions=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("forward inference scanned list versions")
+            ),
+            recommendation_list_version_detail=lambda list_version_id: {
+                "list_version": {
+                    "list_version_id": list_version_id,
+                    "program_id": PROGRAM_ID,
+                    "binding_version_id": BINDING_VERSION_ID,
+                    "review_run_id": "review-frozen",
+                    "trade_date": "2026-07-21",
+                    "target_trade_date": "2026-07-21",
+                },
+                "items": [{"symbol": "000001.SZ"}],
+            },
+        )
+    )
+
+    version, items = service._selection_list_context(
+        program_id=PROGRAM_ID,
+        target_trade_date=date(2026, 7, 21),
+        list_version_id="list-frozen",
+    )
+
+    assert version["list_version_id"] == "list-frozen"
+    assert items == [{"symbol": "000001.SZ"}]
+
+
 def test_model_shadow_never_applies_parent_bundle_to_another_program() -> None:
     feature_source = _FeatureSource(_feature_inputs())
     bundle_loads = 0
@@ -296,7 +404,7 @@ def test_model_shadow_never_applies_parent_bundle_to_another_program() -> None:
         bundle_loads += 1
         return _bundle()
 
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_OtherProgramService(),
         selection_service=_SelectionService(),
         review_source=_ReviewSource(),
@@ -317,7 +425,7 @@ def test_model_shadow_never_applies_parent_bundle_to_another_program() -> None:
 
 def test_model_shadow_scores_complete_persisted_candidate_group() -> None:
     feature_source = _FeatureSource(_feature_inputs())
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
         review_source=_ReviewSource(),
@@ -352,7 +460,7 @@ def test_model_shadow_attaches_outcome_predictions_from_same_feature_matrix() ->
             for symbol in features["instrument"]
         ]
 
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
         review_source=_ReviewSource(),
@@ -377,6 +485,123 @@ def test_model_shadow_attaches_outcome_predictions_from_same_feature_matrix() ->
     assert feature_source.calls == 1
 
 
+def test_model_shadow_attaches_exact_price_range_without_changing_m2_order() -> None:
+    price_loads: list[dict[str, object]] = []
+    feature_source = _FeatureSource(_feature_inputs())
+
+    def outcome_scorer(_bundle, features):
+        return [
+            {
+                "symbol": str(symbol),
+                "horizons": [],
+                "holding_period": {},
+            }
+            for symbol in features["instrument"]
+        ]
+
+    def price_loader(**kwargs):
+        price_loads.append(kwargs)
+        return SimpleNamespace(
+            price_range_bundle_id="price-1",
+            manifest={"request_id": "advprreq-runtime", "calibration_state": "UNCALIBRATED"},
+        )
+
+    def price_scorer(_bundle, features, **_kwargs):
+        return [
+            {
+                "symbol": str(symbol),
+                "status": "EXPERIMENTAL_SHADOW",
+                "reason_code": None,
+                "message": None,
+            }
+            for symbol in features["instrument"]
+        ]
+
+    service = _shadow_service(
+        program_service=_ProgramService(),
+        selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
+        feature_source=feature_source,
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+        outcome_bundle_loader=lambda **_: SimpleNamespace(
+            outcome_bundle_id="e" * 64,
+            manifest={"request_id": "advoutreq-runtime", "horizons": [1, 3, 5, 10, 20]},
+        ),
+        outcome_scorer=outcome_scorer,
+        price_range_bundle_loader=price_loader,
+        price_range_scorer=price_scorer,
+    )
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+    assert result["price_range"]["status"] == "EXPERIMENTAL_SHADOW"
+    assert [item["symbol"] for item in result["price_range"]["candidates"]] == [
+        item["symbol"] for item in result["candidates"]
+    ]
+    assert price_loads[0]["parent_bundle_id"] == "bundle-1"
+    assert price_loads[0]["outcome_bundle_id"] == "e" * 64
+    assert feature_source.calls == 1
+
+
+def test_calibrated_outcome_keeps_price_range_bound_to_parent_m3_bundle() -> None:
+    price_loads: list[dict[str, object]] = []
+    parent_m3 = "3" * 64
+
+    service = _shadow_service(
+        program_service=_ProgramService(),
+        selection_service=_SelectionService(),
+        review_source=_ReviewSource(),
+        feature_source=_FeatureSource(_feature_inputs()),
+        model_root_provider=lambda: "/model",
+        bundle_loader=lambda **_: _bundle(),
+        outcome_bundle_loader=lambda **_: SimpleNamespace(
+            outcome_bundle_id="4" * 64,
+            manifest={
+                "request_id": "advoutcal_runtime",
+                "horizons": [1, 3, 5, 10, 20],
+                "calibration_state": "PARTIAL",
+                "parent_outcome_bundle_id": parent_m3,
+                "binary_calibration_state": "CALIBRATED",
+                "return_interval_calibration_state": "CALIBRATED",
+                "path_upper_calibration_state": "CALIBRATED",
+                "holding_calibration_state": "UNCALIBRATED",
+            },
+        ),
+        outcome_scorer=lambda _bundle, features: [
+            {"symbol": str(symbol), "horizons": [], "holding_period": {}}
+            for symbol in features["instrument"]
+        ],
+        price_range_bundle_loader=lambda **kwargs: (
+            price_loads.append(kwargs)
+            or SimpleNamespace(
+                price_range_bundle_id="price-v1-m3",
+                manifest={"request_id": "advprreq-runtime", "calibration_state": "UNCALIBRATED"},
+            )
+        ),
+        price_range_scorer=lambda _bundle, features, **_kwargs: [
+            {
+                "symbol": str(symbol),
+                "status": "EXPERIMENTAL_SHADOW",
+                "reason_code": None,
+                "message": None,
+            }
+            for symbol in features["instrument"]
+        ],
+    )
+
+    result = service.model_shadow(
+        program_id=PROGRAM_ID,
+        target_trade_date=pd.Timestamp("2026-07-21").date(),
+    )
+
+    assert result["outcome"]["outcome_bundle_id"] == "4" * 64
+    assert result["outcome"]["parent_outcome_bundle_id"] == parent_m3
+    assert result["price_range"]["outcome_bundle_id"] == parent_m3
+    assert price_loads[0]["outcome_bundle_id"] == parent_m3
+
+
 def test_outcome_unavailable_does_not_remove_m2_ranking() -> None:
     feature_source = _FeatureSource(_feature_inputs())
 
@@ -386,7 +611,7 @@ def test_outcome_unavailable_does_not_remove_m2_ranking() -> None:
             reason_code="ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
         )
 
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
         review_source=_ReviewSource(),
@@ -412,7 +637,7 @@ def test_duplicate_outcome_symbol_is_typed_unavailable_without_changing_m2() -> 
         outcome_bundle_id="outcome-1",
         manifest={"request_id": "advoutreq_runtime", "horizons": [1, 3, 5, 10, 20]},
     )
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
         review_source=_ReviewSource(),
@@ -445,7 +670,7 @@ def test_unexpected_outcome_error_is_logged_and_visible_without_changing_m2(capl
     def broken_scorer(_bundle, _features):
         raise RuntimeError("broken outcome scorer")
 
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
         review_source=_ReviewSource(),
@@ -469,7 +694,7 @@ def test_unexpected_outcome_error_is_logged_and_visible_without_changing_m2(capl
 
 def test_model_shadow_accepts_legal_shallow_candidate_group() -> None:
     feature_source = _FeatureSource(_feature_inputs())
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(target_count=20),
         selection_service=_SelectionService(),
         review_source=_ReviewSource(),
@@ -492,7 +717,7 @@ def test_model_shadow_rejects_parent_score_that_differs_from_frozen_leg_sum() ->
     selection_service = _SelectionService()
     selection_service.run.aggregate_results[0].score = 0.7
     feature_source = _FeatureSource(_feature_inputs())
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(),
         selection_service=selection_service,
         review_source=_ReviewSource(),
@@ -517,7 +742,7 @@ def test_model_shadow_exposes_missing_review_run_as_typed_unavailable() -> None:
             raise DataUnavailableError("advisory review run does not exist", context={"review_run_id": "review-1"})
 
     feature_source = _FeatureSource(_feature_inputs())
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
         review_source=_MissingReviewSource(),
@@ -541,7 +766,7 @@ def test_model_shadow_rejects_non_numeric_terminal_weight_as_typed_mismatch() ->
     bundle = _bundle()
     bundle.manifest["terminal_weights"] = {LSTM_LEG_ID: "invalid", FUND_LEG_ID: 0.3033408479}
     feature_source = _FeatureSource(_feature_inputs())
-    service = AdvisoryModelShadowService(
+    service = _shadow_service(
         program_service=_ProgramService(),
         selection_service=_SelectionService(),
         review_source=_ReviewSource(),

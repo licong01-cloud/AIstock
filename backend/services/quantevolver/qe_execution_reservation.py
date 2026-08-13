@@ -748,6 +748,7 @@ class QEExecutionReservationRepository:
         source_execution_id: str,
         owner_id: str,
         lease_seconds: int,
+        expected_row_version: int | None = None,
     ) -> dict[str, Any] | None:
         if source_kind not in QE_EXECUTION_SOURCE_KINDS:
             raise QEExecutionReservationError(
@@ -758,6 +759,8 @@ class QEExecutionReservationRepository:
         _validate_nonempty("source_execution_id", source_execution_id)
         _validate_nonempty("owner_id", owner_id)
         _validate_positive("lease_seconds", lease_seconds)
+        if expected_row_version is not None:
+            _validate_positive("expected_row_version", expected_row_version)
         with self._connection_provider() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
@@ -771,6 +774,14 @@ class QEExecutionReservationRepository:
                 )
                 current = cur.fetchone()
                 if current is None:
+                    return None
+                if (
+                    expected_row_version is not None
+                    and int(current.get("row_version") or 0) != expected_row_version
+                ):
+                    # The observe-then-claim caller inspected an older durable
+                    # revision.  Losing this CAS is an ownership result, not an
+                    # excuse to refresh a heartbeat or overwrite newer state.
                     return None
                 if str(current["status"]) in TERMINAL_RESERVATION_STATUSES:
                     return dict(current)

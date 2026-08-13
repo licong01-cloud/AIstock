@@ -10,7 +10,7 @@ Use this as the lightweight entry for broad or unclear AIstock work. The sole de
 ## Start
 
 1. For repository, workflow, runtime, architecture, backend, frontend, data or trading decisions, read `F:\Dev\AIstock\docs\codex_project_memory.md` once.
-2. Run `python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor` before repository mutation.
+2. Go directly to the selected lane. Run `doctor` once only when client/bootstrap readiness is unknown, workflow/client code changed, resumed state is stale or conflicting, or the user explicitly requests diagnostics.
 3. Use `docs/standards/README.md` when standards routing is unclear; active work uses the sole authority rather than archived material.
 4. Treat `F:\Dev\AIstock` as the sync/runtime root and use a task worktree for implementation.
 
@@ -26,8 +26,9 @@ Use this as the lightweight entry for broad or unclear AIstock work. The sole de
 ## Execution Boundaries
 
 - Load one selected lane plus its task card and direct artifacts.
-- If `doctor` reports client entry staleness, run `verify-clients --workflow-only --selected-lane <lane>` against this window's explicit client home. Only router/current-lane staleness blocks the task; unrelated lane staleness is warning-only. Do not run a broad repeated install from an active task window.
-- Prefer RTK for supported high-output interactive commands; use direct commands for unsupported PowerShell/file operations and record the capability fallback. RTK is never a gate and no window may run `rtk trust` on its own.
+- If `doctor` reports client entry staleness, run `python F:\Dev\AIstock\scripts\aistock_issue_workflow.py verify-clients --workflow-only --selected-lane <lane>` against this window's explicit client home. Always use the canonical CLI, even while the task itself is in another worktree. Verification uses the clean canonical `main` aligned with `origin/main` as merged client authority: an older/ahead task checkout is advisory and must never be installed over the profile. Only router/current-lane profile drift blocks the task; unrelated lane drift is warning-only.
+- When verification returns `request_single_owner_sync`, do not self-install from the active task window. One explicit owner runs the emitted target-profile command from merged canonical authority; every other window only reruns the emitted verification command. `continue_without_install` means proceed without install or restart.
+- Follow `TOOL-RTK-001` from the sole development standard; this router does not redefine RTK fallback, trust, telemetry, or CI semantics.
 - Every user backend has `backend_restart_owner=user`. No lane, delegation, merge, aftercare, or cleanup grants start/stop/restart authority; only explicit authorization for the current target does.
 - Read-only requests remain diagnostic and return evidence without repository or runtime mutation.
 - Ordinary BUG work uses the Context Pack; design documents are added when cited by the issue/user or when T3 classification requires them.

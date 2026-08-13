@@ -8,10 +8,17 @@ from decimal import Decimal, InvalidOperation
 import json
 from typing import Any
 
+import psycopg2
+from psycopg2.pool import PoolError
+
 from backend.execution_algos.adaptive_is.contracts import MarketCode, canonical_json_bytes
+from backend.execution_algos.vnpy_style.hot_best_limit_plugin import BestLimitHotTargetV4
+from backend.execution_algos.vnpy_style.hot_sniper_plugin import SniperHotTargetV4
+from backend.execution_algos.vnpy_style.hot_twap_lite_plugin import TwapLiteHotTargetV4
+from backend.execution_algos.vnpy_compat.hot_facade_adapter import IcebergHotTargetV4, StopHotTargetV4
 from backend.services.miniqmt_execution_runtime.full_five_catalog_authority import (
     FULL_FIVE_ALGO_CODES_V1,
-    build_full_five_catalog_authority_v1,
+    build_hot_full_five_catalog_authority_v1,
 )
 from backend.services.miniqmt_execution_runtime.kernel_clock import (
     ExchangeSessionClockV1,
@@ -24,6 +31,16 @@ from backend.services.miniqmt_execution_runtime.kernel_delivery import (
     KernelProductDeliveryWorkerV3,
 )
 from backend.services.miniqmt_execution_runtime.kernel_ingress import KernelIngressCoordinatorV1
+from backend.execution_algos.hot_market_contracts import (
+    HotMarketDataEconomicEffectV1,
+    HotMarketDataViewV1,
+    validate_hot_market_economic_payload_v1,
+)
+from backend.services.miniqmt_execution_runtime.hot_market_data import (
+    HotMarketDataEffectRetryableError,
+    HotMarketDataEffectTerminalError,
+    HotMarketDataIngressV1,
+)
 from backend.services.miniqmt_execution_runtime.kernel_outbox import (
     KernelOutboxDispatcherV1,
     KernelOutboxOutcomeIngressV1,
@@ -35,7 +52,11 @@ from backend.services.miniqmt_execution_runtime.kernel_product_callbacks import 
     KernelProductCallbackIngressV1,
     KernelProductSnapshotIngressV1,
 )
-from backend.services.miniqmt_execution_runtime.kernel_product_evidence import KernelProductEvidenceProviderV3
+from backend.services.miniqmt_execution_runtime.kernel_product_evidence import (
+    KernelProductEvidenceProviderV3,
+    VirtualAccountProjectionError,
+    virtual_account_projection_v1,
+)
 from backend.services.miniqmt_execution_runtime.kernel_product_runtime import (
     K6DCommittedSourceEventReaderV1,
     K6DCommittedSourceEventReadbackV1,
@@ -54,12 +75,17 @@ from backend.services.miniqmt_execution_runtime.plugin_canonical import (
     canonical_decimal_string_v1,
     hash_hex_v1,
     require_sha256_v1,
+    thaw_json_v1,
 )
 from backend.services.miniqmt_execution_runtime.plugin_contracts import (
+    AlgoDeliveryPersistenceV1,
     BrokerCommandOutboxStatusV1,
+    DeliveryStatusV1,
     EventSourceV2,
     EventTypeV2,
     ExchangeSessionAuthorityV1,
+    ExecutionAlgoInstancePersistenceV2,
+    ExecutionAlgoPersistenceStatusV2,
     ExecutionProjectionRefV1,
     GatewayCapabilityCatalogV1,
     KernelProjectionTypeV1,
@@ -93,6 +119,53 @@ class MiniQMTKernelProductCompositionError(RuntimeError):
         self.reason_code = reason_code
         self.context = {**context, "broker_called": False}
         super().__init__(message)
+
+
+class _BoundHotMarketEffectCommitterV1:
+    """Bind-once bridge from the process-local actor to economic ingress."""
+
+    def __init__(self) -> None:
+        self._runtime: SimulationMiniQMTProductRuntimeV1 | None = None
+
+    def bind_v1(self, runtime: "SimulationMiniQMTProductRuntimeV1") -> None:
+        if self._runtime is not None and self._runtime is not runtime:
+            raise RuntimeError("hot market effect committer is already bound")
+        self._runtime = runtime
+
+    def __call__(self, effect: HotMarketDataEconomicEffectV1) -> Any:
+        if self._runtime is None:
+            raise RuntimeError("hot market effect committer is not bound")
+        try:
+            return self._runtime.commit_hot_market_effect_v1(effect)
+        except (HotMarketDataEffectRetryableError, HotMarketDataEffectTerminalError):
+            raise
+        except Exception as exc:
+            if not _is_retryable_hot_market_database_failure_v1(exc):
+                raise
+            raise HotMarketDataEffectRetryableError(
+                "MINIQMT_HOT_MARKET_EFFECT_DATABASE_TRANSIENT",
+                "hot economic effect encountered an allowlisted transient database failure",
+                context={
+                    "stage": "ECONOMIC_EFFECT_COMMIT",
+                    "exception_type": type(exc).__name__,
+                    "sqlstate": getattr(exc, "pgcode", None),
+                },
+            ) from exc
+
+
+def _is_retryable_hot_market_database_failure_v1(exc: Exception) -> bool:
+    """Recognize only transaction uncertainty or explicit PostgreSQL availability failures."""
+
+    if isinstance(exc, KernelRepositoryCommitUnknown):
+        return True
+    if isinstance(exc, (psycopg2.errors.SerializationFailure, psycopg2.errors.DeadlockDetected, PoolError)):
+        return True
+    if isinstance(exc, psycopg2.InterfaceError):
+        return True
+    if isinstance(exc, psycopg2.OperationalError):
+        sqlstate = getattr(exc, "pgcode", None)
+        return sqlstate is None or (isinstance(sqlstate, str) and sqlstate.startswith("08"))
+    return False
 
 
 class _ProductOutcomePublisherV1:
@@ -259,12 +332,28 @@ class SimulationK6DPlanAuthorityReader:
             )
         algo_code, policy_id, policy_sha256, plugin_config = _policy(plan)
         account = self._accounts.get_virtual_account(binding.strategy_id)
-        account_dump = getattr(account, "model_dump", None)
-        if not callable(account_dump) or not isinstance((account_payload := account_dump(mode="json")), dict):
+        try:
+            account_payload = virtual_account_projection_v1(account)
+        except VirtualAccountProjectionError as exc:
             raise MiniQMTKernelProductCompositionError(
                 "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID",
-                "virtual account authority does not expose an exact JSON object",
-                context={"runtime_id": runtime_id, "strategy_id": binding.strategy_id},
+                "virtual account authority failed strict projection",
+                context={
+                    "runtime_id": runtime_id,
+                    "strategy_id": binding.strategy_id,
+                    "account_type": type(account).__name__,
+                    "error": str(exc),
+                },
+            ) from exc
+        if account_payload["strategy_id"] != binding.strategy_id:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_ACCOUNT_AUTHORITY_INVALID",
+                "virtual account owner differs from the product binding",
+                context={
+                    "runtime_id": runtime_id,
+                    "expected_strategy_id": binding.strategy_id,
+                    "actual_strategy_id": account_payload["strategy_id"],
+                },
             )
         capability_payload = self._gateway.model_dump(mode="json")
         if not plan.intents:
@@ -455,15 +544,18 @@ class SimulationMiniQMTProductRuntimeV1:
     trade_date: date
     symbols: tuple[str, ...]
     source_capability_sha256: str
+    quote_context_id: str
+    exchange_session_authority: ExchangeSessionAuthorityV1
     repository: PostgresMiniQMTKernelRepository
     clock: ExchangeSessionClockV1
     outbox_dispatcher: KernelOutboxDispatcherV1 | None
     outbox_reconciler: KernelOutboxReconcilerV1 | None
     callback_ingress: KernelProductCallbackIngressV1
     snapshot_ingress: KernelProductSnapshotIngressV1 | None
+    hot_market_data_ingress: HotMarketDataIngressV1
 
     def __post_init__(self) -> None:
-        for name in ("worker_incarnation_id", "runtime_id", "binding_id"):
+        for name in ("worker_incarnation_id", "runtime_id", "binding_id", "quote_context_id"):
             value = getattr(self, name)
             if type(value) is not str or not value or value != value.strip():
                 raise TypeError(f"{name} must be a canonical identity")
@@ -477,6 +569,13 @@ class SimulationMiniQMTProductRuntimeV1:
         ):
             raise TypeError("symbols must be one nonempty ordered unique identity tuple")
         require_sha256_v1(self.source_capability_sha256, field_name="source_capability_sha256")
+        if not isinstance(self.exchange_session_authority, ExchangeSessionAuthorityV1):
+            raise TypeError("exchange_session_authority must be ExchangeSessionAuthorityV1")
+        if (
+            self.exchange_session_authority.runtime_id != self.runtime_id
+            or self.exchange_session_authority.exchange_trade_date != self.trade_date.isoformat()
+        ):
+            raise ValueError("exchange_session_authority crosses the frozen runtime owner")
         if not callable(getattr(self.coordinator, "start_execution_plan_v1", None)):
             raise TypeError("coordinator must expose start_execution_plan_v1")
         if not callable(getattr(self.repository, "list_dispatchable_outbox_commands", None)):
@@ -496,6 +595,10 @@ class SimulationMiniQMTProductRuntimeV1:
             getattr(self.callback_ingress, "ingest_trade_v1", None)
         ):
             raise TypeError("callback_ingress must expose ORDER and TRADE ingress")
+        if not isinstance(self.hot_market_data_ingress, HotMarketDataIngressV1):
+            raise TypeError("hot_market_data_ingress must be HotMarketDataIngressV1")
+        if self.hot_market_data_ingress.runtime_id != self.runtime_id:
+            raise ValueError("hot_market_data_ingress crosses runtime owner")
 
     def observe_b0_quote_v1(
         self,
@@ -510,6 +613,16 @@ class SimulationMiniQMTProductRuntimeV1:
                 "normalized B0 observation differs from its context authority",
                 context={"runtime_id": self.runtime_id, "market_data_id": observation.market_data_id},
             )
+        if context.context_id != self.quote_context_id:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_B0_CONTEXT_OWNER_CONFLICT",
+                "normalized B0 observation does not belong to the frozen product quote context",
+                context={
+                    "runtime_id": self.runtime_id,
+                    "expected_context_id": self.quote_context_id,
+                    "actual_context_id": context.context_id,
+                },
+            )
         if observation.quote.symbol not in self.symbols:
             raise MiniQMTKernelProductCompositionError(
                 "MINIQMT_K6_PRODUCT_B0_SYMBOL_OWNER_CONFLICT",
@@ -520,10 +633,16 @@ class SimulationMiniQMTProductRuntimeV1:
                     "owned_symbols": list(self.symbols),
                 },
             )
-        self.wake_clock_v1(
-            observed_at=observation.quote.received_at_utc,
-            monotonic_ns=observation.quote.received_monotonic_ns,
-        )
+        if observation.quote.clock_trade_date != self.trade_date:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_B0_TRADE_DATE_CONFLICT",
+                "normalized B0 observation crosses the frozen product trade date",
+                context={
+                    "runtime_id": self.runtime_id,
+                    "expected_trade_date": self.trade_date.isoformat(),
+                    "actual_trade_date": observation.quote.clock_trade_date.isoformat(),
+                },
+            )
         quote = observation.quote
         if (
             quote.bid_prices is None
@@ -538,52 +657,31 @@ class SimulationMiniQMTProductRuntimeV1:
                 "native B0 observation lacks exact L1 bid/ask depth",
                 context={"runtime_id": self.runtime_id, "market_data_id": observation.market_data_id},
             )
-        authority = self.repository.read_exchange_session_authority(
-            runtime_id=self.runtime_id,
-            exchange_trade_date=quote.clock_trade_date,
+        projection = project_exchange_session_v1(
+            self.exchange_session_authority,
+            quote.received_at_utc,
         )
-        projection = project_exchange_session_v1(authority, quote.received_at_utc)
-        payload = {
-            "generation": quote.ingress_generation,
-            "session_phase": projection.session_phase.value,
-            "exchange_time_utc": (quote.source_exchange_time_utc or quote.received_at_utc)
-            .astimezone(UTC)
-            .isoformat()
-            .replace("+00:00", "Z"),
-            "bid_price_1": canonical_decimal_string_v1(quote.bid_prices[0]),
-            "ask_price_1": canonical_decimal_string_v1(quote.ask_prices[0]),
-            "bid_volume_1": quote.bid_quantities[0],
-            "ask_volume_1": quote.ask_quantities[0],
-            "last_price": None if quote.last_price is None else canonical_decimal_string_v1(quote.last_price),
-            "pre_close": None if quote.pre_close is None else canonical_decimal_string_v1(quote.pre_close),
-            "quote_source": quote.source.value,
-            "source_session_id": quote.source_session_id,
-            "ingress_sequence": quote.ingress_sequence,
-            "normalized_quote_sha256": quote.normalized_quote_sha256,
-            "context_id": observation.context_id,
-        }
-
-        def build(sequence: int) -> RuntimeEventEnvelopeV2:
-            return RuntimeEventEnvelopeV2.create(
+        self.hot_market_data_ingress.ingest_v1(
+            HotMarketDataViewV1(
                 runtime_id=self.runtime_id,
-                sequence=sequence,
-                event_type=EventTypeV2.TICK,
-                event_time_utc=quote.received_at_utc,
-                monotonic_ns=None,
-                source=EventSourceV2.B0_QUOTE_V2,
                 symbol=quote.symbol,
-                payload_schema_version="miniqmt_market_data_view_v2",
-                payload=payload,
-                source_identity={"market_data_id": observation.market_data_id},
-                correlation={
-                    "exchange_trade_date": authority.exchange_trade_date,
-                    "session_epoch": projection.session_epoch,
-                    "session_phase": projection.session_phase.value,
-                },
+                generation=quote.ingress_generation,
+                sequence=quote.ingress_sequence,
+                observed_at_utc=quote.received_at_utc,
+                exchange_time_utc=quote.source_exchange_time_utc or quote.received_at_utc,
+                exchange_trade_date=quote.clock_trade_date.isoformat(),
+                session_epoch=projection.session_epoch,
+                session_phase=projection.session_phase.value,
+                bid_price_1=quote.bid_prices[0],
+                ask_price_1=quote.ask_prices[0],
+                bid_volume_1=quote.bid_quantities[0],
+                ask_volume_1=quote.ask_quantities[0],
+                last_price=quote.last_price,
+                pre_close=quote.pre_close,
+                limit_up=None if observation.tradability is None else observation.tradability.limit_up,
+                limit_down=None if observation.tradability is None else observation.tradability.limit_down,
             )
-
-        self._ingest_bounded_v1(builder=build)
-        self.dispatch_due_outbox_v1(observed_at=quote.received_at_utc)
+        )
 
     def wake_clock_v1(self, *, observed_at: datetime, monotonic_ns: int) -> None:
         if type(monotonic_ns) is not int or monotonic_ns <= 0:
@@ -604,6 +702,174 @@ class SimulationMiniQMTProductRuntimeV1:
             event = self.repository.read_runtime_event(event_id)
             self.coordinator.ingest_native_event_v1(event=event)
         self.dispatch_due_outbox_v1(observed_at=observed)
+
+    def commit_hot_market_effect_v1(self, effect: HotMarketDataEconomicEffectV1) -> Any:
+        if not isinstance(effect, HotMarketDataEconomicEffectV1):
+            raise TypeError("effect must be HotMarketDataEconomicEffectV1")
+        if effect.runtime_id != self.runtime_id:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_EFFECT_RUNTIME_CONFLICT",
+                "hot economic effect crosses runtime owner",
+                context={"runtime_id": self.runtime_id, "effect_runtime_id": effect.runtime_id},
+            )
+        economic_payload = validate_hot_market_economic_payload_v1(effect.economic_payload)
+        payload = {
+            "schema_version": "miniqmt_hot_market_economic_action_v1",
+            "runtime_id": self.runtime_id,
+            "algo_instance_id": effect.algo_instance_id,
+            "expected_algo_row_version": effect.expected_algo_row_version,
+            "effect_identity": effect.effect_identity,
+            "economic_effect": economic_payload,
+        }
+        action_time = economic_payload.get("action_time_utc")
+        if type(action_time) is not str:
+            raise ValueError("hot economic effect requires canonical action_time_utc")
+
+        def build(sequence: int) -> RuntimeEventEnvelopeV2:
+            return RuntimeEventEnvelopeV2.create(
+                runtime_id=self.runtime_id,
+                sequence=sequence,
+                event_type=EventTypeV2.OPERATOR,
+                event_time_utc=action_time,
+                monotonic_ns=None,
+                source=EventSourceV2.SIMULATION_RUNTIME_OPERATOR,
+                symbol=economic_payload.get("symbol"),
+                payload_schema_version="miniqmt_operator_command_v1",
+                payload=payload,
+                source_identity={"operator_command_id": effect.effect_identity},
+                correlation={
+                    "algo_instance_id": effect.algo_instance_id,
+                    "exchange_trade_date": economic_payload["exchange_trade_date"],
+                    "session_epoch": economic_payload["session_epoch"],
+                    "session_phase": economic_payload["session_phase"],
+                },
+            )
+
+        event = self._ingest_bounded_v1(builder=build)
+        transaction = self.repository.read_event_transaction(event.event_id)
+        if transaction.get("event") != event:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_EFFECT_EVENT_READBACK_DRIFT",
+                "hot economic event readback differs from the committed event",
+                context={"runtime_id": self.runtime_id, "event_id": event.event_id},
+            )
+        receipt = transaction.get("receipt")
+        deliveries = transaction.get("deliveries")
+        if (
+            not isinstance(receipt, RuntimeEventIngressReceiptV1)
+            or type(deliveries) is not tuple
+            or len(deliveries) != 1
+            or not isinstance(deliveries[0], AlgoDeliveryPersistenceV1)
+            or receipt.ordered_target_algo_instance_ids != (effect.algo_instance_id,)
+            or receipt.ordered_delivery_ids != (deliveries[0].delivery_id,)
+        ):
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_EFFECT_DELIVERY_SET_INVALID",
+                "hot economic event did not close to one exact target delivery",
+                context={
+                    "runtime_id": self.runtime_id,
+                    "event_id": event.event_id,
+                    "algo_instance_id": effect.algo_instance_id,
+                },
+            )
+        delivery = deliveries[0]
+        if delivery.status is DeliveryStatusV1.FAILED_TERMINAL:
+            raise HotMarketDataEffectTerminalError(
+                "MINIQMT_HOT_MARKET_EFFECT_DELIVERY_FAILED_TERMINAL",
+                "hot economic effect delivery failed terminally",
+                context={
+                    "event_id": event.event_id,
+                    "delivery_id": delivery.delivery_id,
+                    "failure_receipt_id": delivery.failure_receipt_id,
+                    "delivery_error": None
+                    if delivery.last_error_json is None
+                    else thaw_json_v1(delivery.last_error_json),
+                },
+            )
+        if delivery.status is not DeliveryStatusV1.APPLIED or delivery.transition_id is None:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_EFFECT_DELIVERY_NOT_APPLIED",
+                "hot economic effect delivery has no exact applied transition",
+                context={
+                    "runtime_id": self.runtime_id,
+                    "event_id": event.event_id,
+                    "delivery_id": delivery.delivery_id,
+                    "delivery_status": delivery.status.value,
+                },
+            )
+        readback = self.repository.read_algo_instance(effect.algo_instance_id)
+        if (
+            not isinstance(readback, ExecutionAlgoInstancePersistenceV2)
+            or readback.row_version != effect.expected_algo_row_version + 1
+            or readback.status is not ExecutionAlgoPersistenceStatusV2.ACTIVE
+            or readback.last_applied_delivery_id != delivery.delivery_id
+            or readback.last_applied_delivery_sequence != delivery.algo_delivery_sequence
+        ):
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_EFFECT_ALGO_READBACK_DRIFT",
+                "hot economic effect algo readback is not the exact applied successor",
+                context={
+                    "runtime_id": self.runtime_id,
+                    "event_id": event.event_id,
+                    "delivery_id": delivery.delivery_id,
+                    "algo_instance_id": effect.algo_instance_id,
+                    "expected_row_version": effect.expected_algo_row_version + 1,
+                    "actual_row_version": readback.row_version,
+                    "actual_status": readback.status.value,
+                },
+            )
+        return readback
+
+    def activate_hot_market_targets_v1(self, algo_instance_ids: tuple[str, ...]) -> None:
+        if type(algo_instance_ids) is not tuple or len(algo_instance_ids) != len(set(algo_instance_ids)):
+            raise TypeError("algo_instance_ids must be an exact unique tuple")
+        targets = [
+            self._build_hot_market_target_v1(self.repository.read_algo_instance(item)) for item in algo_instance_ids
+        ]
+        self.hot_market_data_ingress.replace_targets_v1(tuple(targets))
+
+    def _build_hot_market_target_v1(self, algo: ExecutionAlgoInstancePersistenceV2) -> Any:
+        if not isinstance(algo, ExecutionAlgoInstancePersistenceV2):
+            raise TypeError("hot target readback must be ExecutionAlgoInstancePersistenceV2")
+        target_types = {
+            "BEST_LIMIT_MINIQMT": BestLimitHotTargetV4,
+            "ICEBERG": IcebergHotTargetV4,
+            "SNIPER_MINIQMT": SniperHotTargetV4,
+            "STOP": StopHotTargetV4,
+            "TWAP_LITE_MINIQMT": TwapLiteHotTargetV4,
+        }
+        if algo.runtime_id != self.runtime_id or algo.plugin_version != "4.0.0":
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_TARGET_VERSION_INVALID",
+                "hot target requires the exact V4 runtime owner",
+                context={
+                    "runtime_id": self.runtime_id,
+                    "algo_instance_id": algo.algo_instance_id,
+                    "actual_runtime_id": algo.runtime_id,
+                    "plugin_version": algo.plugin_version,
+                },
+            )
+        try:
+            target_type = target_types[algo.algo_code]
+        except KeyError as exc:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_HOT_MARKET_TARGET_ALGO_UNREGISTERED",
+                "hot target has no registered five-algorithm adapter",
+                context={"algo_instance_id": algo.algo_instance_id, "algo_code": algo.algo_code},
+            ) from exc
+        return target_type(algo=algo)
+
+    def refresh_hot_market_targets_v1(self) -> None:
+        """Refresh process-local targets only at scheduler cadence."""
+
+        if self.hot_market_data_ingress.has_uncommitted_effects_v1():
+            return
+        targets = []
+        for algo_instance_id in self.hot_market_data_ingress.registered_algo_instance_ids_v1():
+            algo = self.repository.read_algo_instance(algo_instance_id)
+            if algo.status is ExecutionAlgoPersistenceStatusV2.ACTIVE:
+                targets.append(self._build_hot_market_target_v1(algo))
+        self.hot_market_data_ingress.replace_targets_v1(tuple(targets))
 
     def dispatch_due_outbox_v1(self, *, observed_at: datetime) -> tuple[str, ...]:
         """Drain due commands through the sole K2 dispatcher.
@@ -744,11 +1010,14 @@ class SimulationMiniQMTProductRuntimeV1:
         visible to the algorithm before its next time transition.
         """
 
-        callback_ids = self.sync_gateway_callbacks_v1(observed_at=observed_at)
-        self.wake_clock_v1(observed_at=observed_at, monotonic_ns=monotonic_ns)
+        observed = self._observed_utc_v1(observed_at)
+        self.hot_market_data_ingress.retry_pending_v1(observed_at_utc=observed)
+        callback_ids = self.sync_gateway_callbacks_v1(observed_at=observed)
+        self.wake_clock_v1(observed_at=observed, monotonic_ns=monotonic_ns)
+        self.refresh_hot_market_targets_v1()
         return callback_ids
 
-    def _ingest_bounded_v1(self, *, builder: Any) -> None:
+    def _ingest_bounded_v1(self, *, builder: Any) -> RuntimeEventEnvelopeV2:
         probe = builder(1)
         try:
             existing = self.repository.read_event_transaction(probe.event_id)
@@ -763,13 +1032,13 @@ class SimulationMiniQMTProductRuntimeV1:
                     context={"runtime_id": self.runtime_id, "event_id": probe.event_id},
                 )
             self.coordinator.ingest_native_event_v1(event=existing["event"])
-            return
+            return existing["event"]
         last_error: Exception | None = None
         for _ in range(3):
             event = builder(self.repository.read_runtime_last_event_sequence(self.runtime_id) + 1)
             try:
                 self.coordinator.ingest_native_event_v1(event=event)
-                return
+                return event
             except (KernelRepositoryConflict, KernelRepositoryCommitUnknown) as exc:
                 last_error = exc
                 try:
@@ -791,7 +1060,7 @@ class SimulationMiniQMTProductRuntimeV1:
                         context={"runtime_id": self.runtime_id, "event_id": event.event_id},
                     ) from exc
                 self.coordinator.ingest_native_event_v1(event=committed["event"])
-                return
+                return committed["event"]
         raise MiniQMTKernelProductCompositionError(
             "MINIQMT_K6_PRODUCT_SOURCE_EVENT_CONTENTION",
             "native source event could not acquire the exact runtime sequence",
@@ -822,6 +1091,165 @@ def _session_authority(runtime_id: str, context: QuoteEvaluationContext) -> Exch
         ),
         ordered_session_segments=tuple(item.canonical_payload() for item in first.session_segments),
         source_effective_at_utc=first.effective_at_utc,
+    )
+
+
+def _exchange_session_economic_authority_payload_v1(
+    authority: ExchangeSessionAuthorityV1,
+) -> dict[str, Any]:
+    """Project restart-stable exchange facts while retaining the durable generation separately."""
+
+    if not isinstance(authority, ExchangeSessionAuthorityV1):
+        raise TypeError("authority must be ExchangeSessionAuthorityV1")
+    snapshot_set = thaw_json_v1(authority.calendar_snapshot_set_json)
+    snapshots = snapshot_set["snapshot_by_market"]
+    ordered_snapshots: list[dict[str, Any]] = []
+    for market in (MarketCode.SH, MarketCode.SZ, MarketCode.BJ):
+        snapshot = dict(snapshots[f"MarketCode.{market.value}"])
+        snapshot.pop("effective_at_utc")
+        ordered_snapshots.append(snapshot)
+    return {
+        "runtime_id": authority.runtime_id,
+        "exchange_trade_date": authority.exchange_trade_date,
+        "timezone": authority.timezone,
+        "session_definition_version": authority.session_definition_version,
+        "ordered_session_segments": [thaw_json_v1(item) for item in authority.ordered_session_segments],
+        "ordered_market_snapshots": ordered_snapshots,
+    }
+
+
+def _exchange_session_economic_authority_sha256_v1(authority: ExchangeSessionAuthorityV1) -> str:
+    return hash_hex_v1(
+        "miniqmt_exchange_session_economic_authority_v1",
+        _exchange_session_economic_authority_payload_v1(authority),
+    )
+
+
+def _exchange_session_drift_context_v1(
+    *,
+    persisted: ExchangeSessionAuthorityV1,
+    candidate: ExchangeSessionAuthorityV1,
+) -> dict[str, Any]:
+    persisted_economic = _exchange_session_economic_authority_payload_v1(persisted)
+    candidate_economic = _exchange_session_economic_authority_payload_v1(candidate)
+    return {
+        "persisted_runtime_id": persisted.runtime_id,
+        "candidate_runtime_id": candidate.runtime_id,
+        "persisted_exchange_trade_date": persisted.exchange_trade_date,
+        "candidate_exchange_trade_date": candidate.exchange_trade_date,
+        "persisted_authority_sha256": persisted.authority_sha256,
+        "candidate_authority_sha256": candidate.authority_sha256,
+        "persisted_calendar_snapshot_set_id": persisted.calendar_snapshot_set_id,
+        "candidate_calendar_snapshot_set_id": candidate.calendar_snapshot_set_id,
+        "persisted_calendar_snapshot_set_sha256": persisted.calendar_snapshot_set_sha256,
+        "candidate_calendar_snapshot_set_sha256": candidate.calendar_snapshot_set_sha256,
+        "persisted_source_effective_at_utc": persisted.source_effective_at_utc,
+        "candidate_source_effective_at_utc": candidate.source_effective_at_utc,
+        "persisted_economic_authority_sha256": _exchange_session_economic_authority_sha256_v1(persisted),
+        "candidate_economic_authority_sha256": _exchange_session_economic_authority_sha256_v1(candidate),
+        "economic_conflict_fields": sorted(
+            key
+            for key in set(persisted_economic) | set(candidate_economic)
+            if persisted_economic.get(key) != candidate_economic.get(key)
+        ),
+    }
+
+
+def _resolve_product_exchange_session_authority_v1(
+    *,
+    repository: Any,
+    candidate: ExchangeSessionAuthorityV1,
+) -> ExchangeSessionAuthorityV1:
+    """Resolve one insert-once durable session without treating observation identity as economic drift."""
+
+    if not isinstance(candidate, ExchangeSessionAuthorityV1):
+        raise TypeError("candidate must be ExchangeSessionAuthorityV1")
+
+    def read_persisted() -> ExchangeSessionAuthorityV1:
+        try:
+            persisted = repository.read_exchange_session_authority(
+                runtime_id=candidate.runtime_id,
+                exchange_trade_date=date.fromisoformat(candidate.exchange_trade_date),
+            )
+        except KeyError:
+            raise
+        except KernelRepositoryConflict as exc:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_CONFLICT",
+                "durable exchange-session authority failed strict repository readback",
+                context={
+                    "runtime_id": candidate.runtime_id,
+                    "exchange_trade_date": candidate.exchange_trade_date,
+                    "candidate_authority_sha256": candidate.authority_sha256,
+                    "repository_conflict_type": type(exc).__name__,
+                    "repository_conflict": str(exc),
+                },
+            ) from exc
+        if not isinstance(persisted, ExchangeSessionAuthorityV1):
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_INVALID",
+                "durable exchange-session authority readback is not a strict carrier",
+                context={
+                    "runtime_id": candidate.runtime_id,
+                    "exchange_trade_date": candidate.exchange_trade_date,
+                    "candidate_authority_sha256": candidate.authority_sha256,
+                    "readback_type": type(persisted).__name__,
+                },
+            )
+        return persisted
+
+    try:
+        persisted = read_persisted()
+    except KeyError:
+        try:
+            persisted = repository.write_exchange_session_authority(candidate)
+        except (KernelRepositoryConflict, KernelRepositoryCommitUnknown) as exc:
+            try:
+                persisted = read_persisted()
+            except KeyError:
+                if isinstance(exc, KernelRepositoryCommitUnknown):
+                    raise exc
+                raise MiniQMTKernelProductCompositionError(
+                    "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_WRITE_CONFLICT",
+                    "exchange-session write conflicted without an exact durable readback",
+                    context={
+                        "runtime_id": candidate.runtime_id,
+                        "exchange_trade_date": candidate.exchange_trade_date,
+                        "candidate_authority_sha256": candidate.authority_sha256,
+                        "repository_conflict_type": type(exc).__name__,
+                        "repository_conflict": str(exc),
+                    },
+                ) from exc
+        if not isinstance(persisted, ExchangeSessionAuthorityV1):
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_READBACK_INVALID",
+                "exchange-session writer did not return a strict durable carrier",
+                context={
+                    "runtime_id": candidate.runtime_id,
+                    "exchange_trade_date": candidate.exchange_trade_date,
+                    "candidate_authority_sha256": candidate.authority_sha256,
+                    "readback_type": type(persisted).__name__,
+                },
+            )
+
+    if persisted == candidate:
+        return persisted
+    persisted_economic = _exchange_session_economic_authority_payload_v1(persisted)
+    candidate_economic = _exchange_session_economic_authority_payload_v1(candidate)
+    if persisted_economic == candidate_economic:
+        persisted_effective = datetime.fromisoformat(persisted.source_effective_at_utc.replace("Z", "+00:00"))
+        candidate_effective = datetime.fromisoformat(candidate.source_effective_at_utc.replace("Z", "+00:00"))
+        if candidate_effective < persisted_effective:
+            raise MiniQMTKernelProductCompositionError(
+                "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_REBUILD_STALE",
+                "current exchange-session observation predates the durable generation",
+                context=_exchange_session_drift_context_v1(persisted=persisted, candidate=candidate),
+            )
+        return persisted
+    raise MiniQMTKernelProductCompositionError(
+        "MINIQMT_K6_PRODUCT_EXCHANGE_SESSION_AUTHORITY_DRIFT",
+        "current exchange-session facts conflict with the insert-once durable authority",
+        context=_exchange_session_drift_context_v1(persisted=persisted, candidate=candidate),
     )
 
 
@@ -891,7 +1319,7 @@ def build_simulation_miniqmt_product_runtime_v1(
                 )
             return existing
     gateway = build_k6d_gateway_catalog_v1()
-    authority = build_full_five_catalog_authority_v1(gateway_catalog=gateway)
+    authority = build_hot_full_five_catalog_authority_v1(gateway_catalog=gateway)
     repository = PostgresMiniQMTKernelRepository(
         product_catalog_snapshot=authority.catalog_runtime.snapshot,
         product_gateway_catalog=gateway,
@@ -902,15 +1330,10 @@ def build_simulation_miniqmt_product_runtime_v1(
         execution_plan_id=execution_plan.plan_id,
     )
     session = _session_authority(runtime_id, context)
-    try:
-        persisted_session = repository.write_exchange_session_authority(session)
-    except KernelRepositoryConflict:
-        persisted_session = repository.read_exchange_session_authority(
-            runtime_id=runtime_id,
-            exchange_trade_date=execution_plan.target_trade_date,
-        )
-        if persisted_session != session:
-            raise
+    persisted_session = _resolve_product_exchange_session_authority_v1(
+        repository=repository,
+        candidate=session,
+    )
     startup = repository.start_worker_incarnation(
         worker_id="miniqmt_kernel_v2_product",
         process_role="K6D_PRODUCT_DELIVERY",
@@ -1001,6 +1424,11 @@ def build_simulation_miniqmt_product_runtime_v1(
         catalog_runtime=authority.catalog_runtime,
         lease_owner=f"{startup.worker_id}:{startup.process_incarnation_id}",
     )
+    hot_effect_committer = _BoundHotMarketEffectCommitterV1()
+    hot_market_data_ingress = HotMarketDataIngressV1(
+        runtime_id=runtime_id,
+        effect_committer=hot_effect_committer,
+    )
     runtime = SimulationMiniQMTProductRuntimeV1(
         coordinator=coordinator,
         worker_incarnation_id=startup.process_incarnation_id,
@@ -1009,13 +1437,17 @@ def build_simulation_miniqmt_product_runtime_v1(
         trade_date=execution_plan.target_trade_date,
         symbols=tuple(dict.fromkeys(intent.symbol for intent in execution_plan.intents)),
         source_capability_sha256=source_capability.capability_sha256,
+        quote_context_id=context.context_id,
+        exchange_session_authority=persisted_session,
         repository=repository,
         clock=clock,
         outbox_dispatcher=outbox_dispatcher,
         outbox_reconciler=outbox_reconciler,
         callback_ingress=callback_ingress,
         snapshot_ingress=snapshot_ingress,
+        hot_market_data_ingress=hot_market_data_ingress,
     )
+    hot_effect_committer.bind_v1(runtime)
     register(runtime=runtime, symbols=tuple(intent.symbol for intent in execution_plan.intents))
     return runtime
 

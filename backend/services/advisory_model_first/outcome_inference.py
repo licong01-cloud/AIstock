@@ -5,6 +5,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backend.services.advisory_model_first.outcome_calibration import (
+    apply_path_upper_adjustment,
+    apply_platt_calibrator,
+    apply_return_interval_adjustment,
+)
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.feature_schema_v1 import (
     CATEGORICAL_FEATURE_COLUMNS,
@@ -37,6 +42,13 @@ def score_outcome_bundle(
         for name, model in bundle.models.items()
         if name != "holding_bucket"
     }
+    raw_margins: dict[str, np.ndarray] = {}
+    if bundle.calibration is not None:
+        for name in bundle.models:
+            if name.startswith(("positive_excess", "signal_survival")):
+                raw_margins[name] = _predict_head(
+                    bundle.models[name], matrix, head=name, raw_score=True
+                )
     try:
         holding = np.asarray(bundle.models["holding_bucket"].predict(matrix), dtype=float)
     except Exception as exc:
@@ -81,8 +93,7 @@ def score_outcome_bundle(
             survival_probability = float(predictions[f"signal_survival_h{horizon}"][row_index])
             _require_probability(positive_probability, head=f"positive_excess_h{horizon}")
             _require_probability(survival_probability, head=f"signal_survival_h{horizon}")
-            horizons.append(
-                {
+            horizon_output: dict[str, Any] = {
                     "horizon_days": horizon,
                     "excess_return_q10": excess[0],
                     "excess_return_q50": excess[1],
@@ -93,13 +104,56 @@ def score_outcome_bundle(
                     "path_mfe_q90": mfe[1],
                     "path_mae_loss_q50": mae[0],
                     "path_mae_loss_q90": mae[1],
-                }
-            )
-        output.append(
-            {
-                "symbol": str(row["instrument"]),
-                "horizons": horizons,
-                "holding_period": {
+            }
+            if bundle.calibration is not None:
+                return_spec = bundle.calibration["return_intervals"][f"excess_return_h{horizon}"]
+                calibrated_return = apply_return_interval_adjustment(
+                    q10=np.asarray([excess[0]]),
+                    q50=np.asarray([excess[1]]),
+                    q90=np.asarray([excess[2]]),
+                    delta=float(return_spec["delta"]),
+                )
+                horizon_output.update(
+                    {
+                        "excess_return_calibrated_q10": float(calibrated_return[0][0]),
+                        "excess_return_calibrated_q50": float(calibrated_return[1][0]),
+                        "excess_return_calibrated_q90": float(calibrated_return[2][0]),
+                        "return_interval_calibration_state": "CALIBRATED",
+                    }
+                )
+                for family, output_name in (
+                    ("positive_excess", "positive_probability"),
+                    ("signal_survival", "signal_survival_probability"),
+                ):
+                    head = f"{family}_h{horizon}"
+                    spec = bundle.calibration["binary_heads"][head]
+                    horizon_output[f"{output_name}_calibration_state"] = spec["state"]
+                    horizon_output[f"{output_name}_calibrated"] = (
+                        float(
+                            apply_platt_calibrator(
+                                raw_margin=np.asarray([raw_margins[head][row_index]]),
+                                coefficient=float(spec["coefficient"]),
+                                intercept=float(spec["intercept"]),
+                            )[0]
+                        )
+                        if spec["state"] == "CALIBRATED"
+                        else None
+                    )
+                for family, raw_values in (
+                    ("path_mfe", mfe),
+                    ("path_mae_loss", mae),
+                ):
+                    spec = bundle.calibration["path_upper"][f"{family}_h{horizon}"]
+                    calibrated_path = apply_path_upper_adjustment(
+                        q50=np.asarray([raw_values[0]]),
+                        q90=np.asarray([raw_values[1]]),
+                        delta=float(spec["delta"]),
+                    )
+                    horizon_output[f"{family}_calibrated_q50"] = float(calibrated_path[0][0])
+                    horizon_output[f"{family}_calibrated_q90"] = float(calibrated_path[1][0])
+                    horizon_output[f"{family}_calibration_state"] = "CALIBRATED"
+            horizons.append(horizon_output)
+        holding_period: dict[str, Any] = {
                     "probabilities": {
                         str(horizon): float(holding[row_index, position])
                         for position, horizon in enumerate(OUTCOME_HORIZONS)
@@ -107,7 +161,14 @@ def score_outcome_bundle(
                     "mode_days": int(buckets[int(holding[row_index].argmax())]),
                     "range_low_days": int(buckets[int(low_indices[row_index])]),
                     "range_high_days": int(buckets[int(high_indices[row_index])]),
-                },
+        }
+        if bundle.calibration is not None:
+            holding_period["calibration_state"] = "UNCALIBRATED"
+        output.append(
+            {
+                "symbol": str(row["instrument"]),
+                "horizons": horizons,
+                "holding_period": holding_period,
             }
         )
     return output
@@ -121,6 +182,12 @@ def unavailable_outcome_envelope(
     return {
         "status": "OUTCOME_UNAVAILABLE",
         "calibration_state": "UNCALIBRATED",
+        "calibration_policy_version": None,
+        "parent_outcome_bundle_id": None,
+        "binary_calibration_state": "UNCALIBRATED",
+        "return_interval_calibration_state": "UNCALIBRATED",
+        "path_upper_calibration_state": "UNCALIBRATED",
+        "holding_calibration_state": "UNCALIBRATED",
         "outcome_bundle_id": None,
         "parent_bundle_id": None,
         "model_version": None,
@@ -186,9 +253,14 @@ def _prepare_outcome_matrix(
     return matrix
 
 
-def _predict_head(model: Any, matrix: pd.DataFrame, *, head: str) -> np.ndarray:
+def _predict_head(
+    model: Any, matrix: pd.DataFrame, *, head: str, raw_score: bool = False
+) -> np.ndarray:
     try:
-        values = np.asarray(model.predict(matrix), dtype=float)
+        values = np.asarray(
+            model.predict(matrix, raw_score=True) if raw_score else model.predict(matrix),
+            dtype=float,
+        )
     except Exception as exc:
         raise AdvisoryModelFirstError(
             "outcome head inference failed",

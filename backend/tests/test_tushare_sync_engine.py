@@ -11,6 +11,7 @@ import backend.services.stock_universe_pit_service as pit_service
 from backend.services.tushare_dataset_specs import (
     CYQ_PERF,
     DATASET_REGISTRY,
+    DIVIDEND,
     QueryMode,
     STOCK_ST_EVENTS,
     SUSPEND_D,
@@ -147,6 +148,34 @@ def test_sync_by_date_treats_empty_stock_st_events_as_valid_no_change(monkeypatc
     assert audit_params[-2] == "empty_valid"
 
 
+def test_sync_by_date_treats_empty_dividend_as_valid_complete_set(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    ex_date = dt.date(2026, 8, 12)
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: [])
+    monkeypatch.setattr(engine, "_upsert_batch", lambda conn, spec, rows: 0)
+    monkeypatch.setattr(engine, "_update_progress", lambda conn, job_id, result: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, DIVIDEND, ex_date, ex_date, uuid.uuid4())
+
+    assert result.ok is True
+    assert result.success_batches == 1
+    assert result.inserted_rows == 0
+    assert conn.executed[0] == (
+        "DELETE FROM market.dividend WHERE ex_date = %s",
+        (ex_date,),
+    )
+    audit_params = next(
+        params
+        for sql, params in conn.executed
+        if "dataset_date_refresh_audit" in sql
+    )
+    assert audit_params[4] == "success"
+    assert audit_params[-2] == "empty_valid"
+
+
 def test_sync_by_date_uses_upsert_only_when_replace_existing_dates_is_disabled(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
@@ -180,6 +209,53 @@ def test_financial_event_raw_dataset_specs_use_period_vip_sync_mode():
         assert spec.tushare_api == api
         assert spec.date_column == "ann_date"
         assert spec.incremental_cursor_from_audit is True
+
+
+def test_dividend_dataset_is_target_ex_date_refreshable() -> None:
+    assert DATASET_REGISTRY["dividend"] is DIVIDEND
+    assert DIVIDEND.query_mode == QueryMode.BY_DATE
+    assert DIVIDEND.tushare_api == "dividend"
+    assert DIVIDEND.date_column == "ex_date"
+    assert DIVIDEND.date_param_name == "ex_date"
+    assert DIVIDEND.replace_existing_dates is True
+    assert DIVIDEND.incremental_cursor_from_audit is True
+    assert DIVIDEND.nullable_identity_columns == ["ann_date"]
+    assert DIVIDEND.create_table_script.endswith(
+        "add_advisory_price_range_dividend_20260810.sql"
+    )
+
+
+def test_dividend_provider_contract_preserves_nullable_plan_announcement_date() -> None:
+    row = {
+        "ts_code": "300750.SZ",
+        "end_date": "20260630",
+        "ann_date": None,
+        "div_proc": "implemented",
+        "ex_date": "20260810",
+        "imp_ann_date": "20260804",
+        "cash_div_tax": 1.411,
+    }
+
+    TushareSyncEngine()._validate_rows_for_date(DIVIDEND, [row], dt.date(2026, 8, 10))
+
+    missing_symbol = {**row, "ts_code": None}
+    with pytest.raises(RuntimeError, match="missing required fields.*ts_code"):
+        TushareSyncEngine()._validate_rows_for_date(
+            DIVIDEND,
+            [missing_symbol],
+            dt.date(2026, 8, 10),
+        )
+
+
+def test_provider_contract_rejects_nullable_identity_columns_outside_primary_keys() -> None:
+    invalid_spec = replace(DIVIDEND, nullable_identity_columns=["imp_ann_date"])
+
+    with pytest.raises(RuntimeError, match="nullable identity columns are not primary keys"):
+        TushareSyncEngine()._validate_rows_for_date(
+            invalid_spec,
+            [{"ts_code": "300750.SZ"}],
+            dt.date(2026, 8, 10),
+        )
 
 
 def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monkeypatch):

@@ -1,6 +1,10 @@
 ﻿import asyncio
 
+from pathlib import Path
+
 from backend.routers import quantevolver as qt
+from backend.services.quantevolver.qe_log_broker import QELogBroker
+from backend.services.quantevolver.qe_log_store import QELiveLogStore
 
 
 class _Cursor:
@@ -111,16 +115,24 @@ def test_terminal_experiment_log_tail_endpoint_uses_node_api(monkeypatch):
     assert node_client.calls == [(task_id, loop_id, "run.log")]
 
 
-def test_active_log_stream_falls_back_to_node_tail_not_local_fs(monkeypatch):
+def test_active_log_stream_falls_back_to_node_tail_not_local_fs(monkeypatch, tmp_path: Path):
     task_id = "qe_active_exp"
     loop_id = "Loop1"
     row = (task_id, loop_id, "running", {"execution_node_id": "node-a"})
+    source_ring_root = Path(__file__).resolve().parents[3] / "rdagent_assets" / "qe_live_logs"
+    assert not source_ring_root.exists()
     node_client = _NodeClient("tail after stream failure\n")
 
     monkeypatch.setattr(qt, "get_conn", lambda: _Conn(row))
     monkeypatch.setattr(
         "backend.services.quantevolver.qe_workspace_client.QEWorkspaceClient.for_node",
         lambda node_id: node_client,
+    )
+    ring_root = tmp_path / "qe_live_logs"
+    broker = QELogBroker(QELiveLogStore(ring_root, max_file_bytes=4096))
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_log_broker._PROCESS_BROKER",
+        broker,
     )
 
     async def _run():
@@ -136,3 +148,8 @@ def test_active_log_stream_falls_back_to_node_tail_not_local_fs(monkeypatch):
     assert "tail after stream failure" in body
     assert "local run.log" not in body
     assert node_client.calls == [(task_id, loop_id, "run.log")]
+    assert broker.store.root == ring_root.resolve()
+    assert sorted(path.name for path in ring_root.iterdir()) == [
+        f"qe-live-{index}.jsonl" for index in range(5)
+    ]
+    assert not source_ring_root.exists()

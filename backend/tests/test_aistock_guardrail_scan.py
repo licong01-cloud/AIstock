@@ -28,6 +28,19 @@ def _load_module():
     return module
 
 
+def _unified_controls(catalog: dict) -> dict[str, dict]:
+    controls: dict[str, dict] = {}
+    for item in catalog["rules"]:
+        control_id = item["rule_id"]
+        assert control_id not in controls
+        controls[control_id] = item
+    for item in catalog.get("manual_review_controls", []):
+        control_id = item["control_id"]
+        assert control_id not in controls
+        controls[control_id] = item
+    return controls
+
+
 def test_catalog_loads_and_compiles_regex_rules() -> None:
     scanner = _load_module()
 
@@ -35,11 +48,14 @@ def test_catalog_loads_and_compiles_regex_rules() -> None:
     rules = scanner.compile_rules(catalog)
 
     rule_ids = {rule.rule_id for rule in rules}
+    rules_by_id = {rule.rule_id: rule for rule in rules}
     assert "ARCH-WSL-001" in rule_ids
     assert "ERR-FALLBACK-001" in rule_ids
     assert "MEMORY-DATAFRAME-001" in rule_ids
     assert "BACKEND-RESTART-OWNERSHIP-001" in rule_ids
     assert "DB-COMMENT-001" not in rule_ids  # external checker, not regex scanner scope
+    assert rules_by_id["ROOT-POLLUTION-001"].effect == "block"
+    assert rules_by_id["DOC-LOCATION-001"].effect == "warn"
 
 
 def test_catalog_references_current_human_readable_standard() -> None:
@@ -55,22 +71,42 @@ def test_catalog_references_current_human_readable_standard() -> None:
     assert catalog["source_digest_normalization"] == "utf8_lf"
     assert catalog["source_sha256"] == hashlib.sha256(normalized_standard).hexdigest()
     assert standard_path.name == "aistock_development_standard_v1.5_20260523.md"
+    effects = set(catalog["control_taxonomy"]["effects"])
+    phases = set(catalog["control_taxonomy"]["enforcement_phases"])
     for rule in catalog["rules"]:
         if not rule.get("enabled", True):
             continue
         assert rule.get("standard_ref", "").startswith(catalog["source_standard"])
         assert rule["rule_id"] in standard_text
+        assert rule["effect"] in effects
+        assert rule["enforcement_phase"] in phases
+        if (rule.get("checker") or {}).get("type") == "manual_review":
+            assert rule.get("failure_policy")
     for control in catalog.get("manual_review_controls", []):
         assert control.get("standard_ref", "").startswith(catalog["source_standard"])
         control_ref = control["standard_ref"].split("#", 1)[1]
         assert control_ref in standard_text
+        assert control["effect"] in effects
+        assert control["enforcement_phase"] in phases
+        assert control.get("failure_policy")
+
+    controls = _unified_controls(catalog)
+    assert len(controls) == 30
+    assert set(item["control_id"] for item in catalog["manual_review_controls"]) == {
+        "DESIGN-COMPLIANCE-001",
+        "ISSUE-GITHUB-SYNC-001",
+        "DESIGN-MAIN-001",
+        "STD-SYNC-001",
+    }
+    effect_counts = {effect: sum(item["effect"] == effect for item in controls.values()) for effect in effects}
+    assert effect_counts == {"block": 20, "warn": 8, "advisory": 2}
 
 
 def test_rdagent_release_identity_control_is_fail_closed() -> None:
     scanner = _load_module()
 
     catalog = scanner.load_catalog(CATALOG_PATH)
-    controls = {item["control_id"]: item for item in catalog["manual_review_controls"]}
+    controls = _unified_controls(catalog)
     control = controls["RDAGENT-RELEASE-IDENTITY-001"]
 
     assert control["failure_policy"] == "block_release_deploy_restart_and_verified_claims"
@@ -85,13 +121,34 @@ def test_rdagent_release_identity_control_is_fail_closed() -> None:
         "separate_source_deploy_restart_runtime_states",
         "rollback_target",
         "no_source_overlay",
-    } <= set(control["required_evidence"])
+    } <= set(control["checker"]["required_evidence"])
+
+
+def test_worktree_cleanup_evidence_control_is_fail_closed() -> None:
+    scanner = _load_module()
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    control = _unified_controls(catalog)["WORKTREE-CLEANUP-EVIDENCE-001"]
+
+    assert control["effect"] == "block"
+    assert control["enforcement_phase"] == "issue_lifecycle"
+    assert control["failure_policy"] == (
+        "block_cleanup_done_when_durable_or_unknown_artifacts_or_four_state_drift_remain"
+    )
+    assert {
+        "compact_commit_bound_receipt_persisted",
+        "runtime_post_restart_receipt_summary_durable_before_local_copy_cleanup",
+        "ignored_artifact_manifest_classifies_transient_protected_unknown",
+        "active_process_and_path_boundary_preflight",
+        "manifest_unchanged_before_purge",
+        "path_registration_local_remote_four_state_readback",
+    } <= set(control["checker"]["required_evidence"])
 
 
 def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     scanner = _load_module()
     catalog = scanner.load_catalog(CATALOG_PATH)
-    controls = {item["control_id"]: item for item in catalog["manual_review_controls"]}
+    controls = _unified_controls(catalog)
 
     assert controls["BACKEND-RESTART-OWNERSHIP-001"]["failure_policy"] == (
         "block_process_control_and_runtime_verified_claims"
@@ -252,6 +309,20 @@ def test_scanner_detects_root_pollution_by_path(tmp_path: Path) -> None:
     assert any(finding.rule_id == "ROOT-POLLUTION-001" for finding in findings)
 
 
+def test_scanner_allows_root_agents_authority_file(tmp_path: Path) -> None:
+    scanner = _load_module()
+    agents_file = tmp_path / "AGENTS.md"
+    agents_file.write_text("# Repository instructions\n", encoding="utf-8")
+
+    catalog = scanner.load_catalog(CATALOG_PATH)
+    findings = scanner.scan_files([agents_file], rules=scanner.compile_rules(catalog), root=tmp_path)
+
+    assert not any(
+        finding.rule_id in {"ROOT-POLLUTION-001", "DOC-LOCATION-001"}
+        for finding in findings
+    )
+
+
 def test_scanner_allows_debug_tools_one_off_scripts(tmp_path: Path) -> None:
     scanner = _load_module()
     debug_script = tmp_path / "debug_tools" / "qe" / "20260504_issue" / "one_off_debug.py"
@@ -409,6 +480,27 @@ def test_baseline_status_and_new_only_blocking(tmp_path: Path) -> None:
     assert scanner.blocking_findings(classified, "P1", fail_new_only=False) == classified
 
 
+def test_only_block_effect_can_fail_the_gate() -> None:
+    scanner = _load_module()
+    common = {
+        "title": "Repository placement finding",
+        "severity": "P1",
+        "category": "repository_hygiene",
+        "file": "AGENTS.md",
+        "line": 1,
+        "message": "Repository placement finding",
+        "remediation": "Review placement.",
+        "baseline_policy": "block_new_only",
+        "baseline_status": "new",
+    }
+    block = scanner.Finding(rule_id="BLOCK-001", fingerprint="block", effect="block", **common)
+    warn = scanner.Finding(rule_id="WARN-001", fingerprint="warn", effect="warn", **common)
+    advisory = scanner.Finding(rule_id="ADVISORY-001", fingerprint="advisory", effect="advisory", **common)
+
+    assert scanner.blocking_findings([block, warn, advisory], "P1", fail_new_only=True) == [block]
+    assert warn.to_dict()["effect"] == "warn"
+
+
 def test_missing_baseline_marks_findings_as_new() -> None:
     scanner = _load_module()
     finding = scanner.Finding(
@@ -474,6 +566,7 @@ def test_guardrail_summarize_includes_scope_visibility_without_changing_blocking
 
     summary = scanner.summarize(findings)
 
+    assert summary["by_effect"] == {"block": 2}
     assert summary["by_scope"] == {"docs_or_historical": 1, "runtime_or_pipeline": 1}
     assert summary["by_scope_and_severity"]["runtime_or_pipeline"]["P0"] == 1
     assert summary["top_runtime_or_pipeline_rules"] == [{"rule_id": "ERR-FALLBACK-001", "count": 1}]
@@ -514,10 +607,12 @@ def test_scanner_writes_json_and_markdown_summary(tmp_path: Path) -> None:
     assert payload["schema_version"] == "aistock_guardrail_scan_result_v1"
     assert payload["gate"]["status"] == "failed"
     assert payload["summary"]["by_baseline_status"]["new"] >= 1
+    assert payload["summary"]["by_effect"]["block"] >= 1
     assert payload["summary"]["by_scope"]["runtime_or_pipeline"] >= 1
     assert payload["summary"]["total_findings"] >= 1
     assert "AIstock Guardrail Baseline Scan" in summary
     assert "Summary By Baseline Status" in summary
+    assert "Summary By Effect" in summary
     assert "Summary By Scope" in summary
     assert "Top Runtime Or Pipeline Rules" in summary
     assert "ERR-FALLBACK-001" in summary

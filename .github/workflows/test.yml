@@ -398,7 +398,7 @@ jobs:
       - name: Install workflow validation deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyyaml pytest ruff nox requests
+          python -m pip install pyyaml pytest ruff nox requests httpx
 
       - name: Run focused workflow validation tests
         env:
@@ -469,25 +469,20 @@ jobs:
 
   failure-bug-register:
     name: Publish PR CI failure evidence
+    # Diagnostics must never replace the deterministic test verdict. Preserve
+    # logs/artifacts/comments when possible, but tolerate publisher failures.
+    continue-on-error: true
     needs: [backend-tests, workflow-validation-tests, prompt-evaluation]
     # Keep this job green/no-op when targeted tests pass or are intentionally
     # skipped. PR failures retain compact evidence without creating a second
     # Issue alongside the default-branch failure workflow.
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && (needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - name: No targeted CI failure evidence required
-        if: ${{ needs.backend-tests.result != 'failure' && needs.workflow-validation-tests.result != 'failure' && needs.prompt-evaluation.result != 'failure' }}
-        run: |
-          echo "backend-tests result: ${{ needs.backend-tests.result }}"
-          echo "workflow-validation-tests result: ${{ needs.workflow-validation-tests.result }}"
-          echo "prompt-evaluation result: ${{ needs.prompt-evaluation.result }}"
-          echo "No CI failure evidence required."
-
       - uses: actions/checkout@v4
         if: ${{ needs.backend-tests.result == 'failure' || needs.workflow-validation-tests.result == 'failure' || needs.prompt-evaluation.result == 'failure' }}
 
@@ -554,7 +549,6 @@ jobs:
       - tdx-go-tests
       - workflow-validation-tests
       - prompt-evaluation
-      - failure-bug-register
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -569,7 +563,6 @@ jobs:
           GO_RESULT: ${{ needs.tdx-go-tests.result }}
           WORKFLOW_RESULT: ${{ needs.workflow-validation-tests.result }}
           PROMPT_RESULT: ${{ needs.prompt-evaluation.result }}
-          REGISTRAR_RESULT: ${{ needs.failure-bug-register.result }}
         run: |
           failures=()
           for entry in "classify:${CLASSIFY_RESULT}" "static:${STATIC_RESULT}"; do
@@ -585,8 +578,7 @@ jobs:
             "frontend:${FRONTEND_RESULT}" \
             "go:${GO_RESULT}" \
             "workflow:${WORKFLOW_RESULT}" \
-            "prompt:${PROMPT_RESULT}" \
-            "registrar:${REGISTRAR_RESULT}"; do
+            "prompt:${PROMPT_RESULT}"; do
             lane="${entry%%:*}"
             result="${entry#*:}"
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then

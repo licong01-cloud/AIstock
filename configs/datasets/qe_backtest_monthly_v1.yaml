@@ -1,0 +1,122 @@
+schema_version: qe_backtest_monthly_profile_v2
+profile: qe_hmm_full_v1
+start_date: 2018-08-01
+minute_start_date: 2024-01-02
+cutoff_policy: previous_month_last_completed_trading_day
+source_content_probe_ttl_seconds: 86400
+reconcile_catchup_months: 3
+reconcile_lease_ttl_seconds: 300
+worker_heartbeat_ttl_seconds: 30
+source_audit_reuse_policy: require_complete_for_reuse_v1
+stage_timeouts_seconds:
+  source_freeze: 172800
+  full_build: 172800
+  qlib_dump: 86400
+  consumer: 43200
+
+storage:
+  candidate_root: X:/AIstock_dataset_candidates/backtest_dataset_candidates
+  control_root: X:/AIstock_dataset_release_control
+  candidate_root_id: aistock-x-candidate-v1
+  production_activation_default: not_requested
+
+runtime:
+  qlib_toolchain:
+    schema_version: qe_qlib_toolchain_v1
+    distro: Ubuntu
+    conda_sh_wsl: /home/lc999/miniconda3/etc/profile.d/conda.sh
+    conda_env: rdagent-gpu
+    dump_script_windows: F:/Dev/RD-Agent-main/scripts/dump_bin.py
+    dump_script_wsl: /mnt/f/Dev/RD-Agent-main/scripts/dump_bin.py
+    dump_script_sha256: b8f34c57ce1ef4b1772f3909735e66058f21b25bd7ab8a5f16318822401fe53f
+    guardian_python_wsl: /usr/bin/python3
+    guardian_script_repo_relative: backend/services/dataset_release/wsl_resource_guardian.py
+    runner_python_wsl: /usr/bin/python3
+    runner_script_repo_relative: backend/services/dataset_release/subprocess_runner.py
+
+components:
+  daily_bin: {required: true}
+  minute_bin: {required: true}
+  factor_h5_static: {required: true}
+  domestic_index_context: {required: true}
+
+semantic:
+  universe_key: shsz_st_pit_active_v1
+  universe_rule_version: st_pub_next_trade_restore_active_l_v1
+  moneyflow_contract: tushare_moneyflow_shares_yuan_v1
+  static_authority:
+    schema_version: qe_static_factors_121_v1
+    ordered_columns_digest: d6e9907bfe42338abde3807f826583dcc063de411ae2d4f80d8d4ca17a41ebfa
+    column_count: 121
+    default_numeric_dtype: float32
+    l2_code_id_dtype: int16
+    l2_code_id_missing: -1
+  qlib_stock_authority:
+    schema_version: qe_qlib_stock_12_v1
+    ordered_fields_digest: 62e0be14f60740a2999272713947b7cde481083add37aebaf67fb43644bb5d3c
+    dtype: float32
+    daily_fields: [open, high, low, close, volume, amount, factor, up_limit_price, down_limit_price, prev_close, limit_up, limit_down]
+    minute_fields: [open, high, low, close, volume, amount, factor, up_limit_price, down_limit_price, prev_close, limit_up, limit_down]
+  minute_source_policy: tdx_then_tushare_missing_keys_conflict_fail_v1
+  source_partitioning:
+    schema_version: qe_source_stable_partitioning_v1
+    date_chunk_months: 3
+    minute_bucket_schema_version: qe_minute_sha256_bucket_v1
+    minute_bucket_count: 1024
+    minute_bucket_capacity: 20
+  index_context:
+    schema_version: qe_index_context_v1
+    universe_version: qe_hmm_domestic_core_v1
+    benchmark_code: 000300.SH
+    index_weight_consumed: false
+    codes:
+      - {daily_code: 000001.SH, semantic_role: shanghai_composite, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 000016.SH, semantic_role: super_large_cap, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 000300.SH, semantic_role: hmm_benchmark_large_cap, required_from: 2018-08-01, hmm_benchmark: true, weight_api_code: 399300.SZ}
+      - {daily_code: 000688.SH, semantic_role: star_50, required_from: 2020-01-02, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 000852.SH, semantic_role: small_cap_1000, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 000905.SH, semantic_role: mid_cap_500, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 000985.CSI, semantic_role: all_a_proxy, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 932000.CSI, semantic_role: micro_cap_2000, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 399001.SZ, semantic_role: shenzhen_component, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 399006.SZ, semantic_role: chinext_component, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 399102.SZ, semantic_role: chinext_composite, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+      - {daily_code: 399107.SZ, semantic_role: shenzhen_a_composite, required_from: 2018-08-01, hmm_benchmark: false, weight_api_code: null}
+
+resources:
+  defaults: &resource_contract
+    heavy_full_concurrency: 1
+    aggregate_private_commit_bytes: 12884901888
+    windows_job_commit_bytes: 8589934592
+    hybrid_job_commit_bytes: 4294967296
+    wsl_memory_high_bytes: 6442450944
+    wsl_memory_max_bytes: 8589934592
+    wsl_swap_max_bytes: 0
+    host_start_available_bytes: 17179869184
+    host_emergency_available_bytes: 8589934592
+    host_start_commit_headroom_bytes: 17179869184
+    host_emergency_commit_headroom_bytes: 8589934592
+    wsl_start_available_bytes: 12884901888
+    wsl_emergency_available_bytes: 6442450944
+    db_pool_size: 4
+    row_query_concurrency: 1
+    db_statement_timeout_seconds: 300
+    provider_request_concurrency: 1
+    qlib_dump_workers: 8
+    minute_code_batch_size: 20
+    date_chunk_months: 3
+    h5_load_batch_size: 100
+    parquet_row_group_rows: 100000
+    validation_read_chunk_rows: 100000
+    enforcement_sample_seconds: 1.0
+    receipt_rollup_seconds: 5.0
+    wait_deadline_seconds: 3600
+    candidate_free_space_floor_bytes: 34359738368
+    predicted_new_bytes_multiplier: 1.25
+  hard_boundaries: *resource_contract
+  pressure_ladder:
+    h5_batch: [100, 50, 20]
+    minute_batch: [20, 10, 5]
+    date_chunk_months: [3, 1]
+    row_group_rows: [100000, 50000]
+    dump_workers: [8, 4, 2]

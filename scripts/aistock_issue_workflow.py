@@ -24,6 +24,37 @@ from typing import Any, Iterable
 
 import yaml
 
+try:
+    from scripts.aistock_bug_id_allocator import (
+        FINGERPRINT_INDEX_VERSION,
+        BugIdLockError,
+        GlobalBugIdLock,
+        bootstrap_fingerprint_index,
+        compact_terminal_reservation,
+        compact_terminal_reservations as compact_terminal_reservations,
+        find_matching_reservation,
+        read_allocator_state,
+        read_reservations,
+        remove_fingerprint_index,
+        write_fingerprint_index,
+        write_allocator_state,
+    )
+except ModuleNotFoundError:  # Direct execution: python scripts/aistock_issue_workflow.py
+    from aistock_bug_id_allocator import (
+        FINGERPRINT_INDEX_VERSION,
+        BugIdLockError,
+        GlobalBugIdLock,
+        bootstrap_fingerprint_index,
+        compact_terminal_reservation,
+        compact_terminal_reservations as compact_terminal_reservations,
+        find_matching_reservation,
+        read_allocator_state,
+        read_reservations,
+        remove_fingerprint_index,
+        write_fingerprint_index,
+        write_allocator_state,
+    )
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUGS_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
@@ -56,6 +87,7 @@ ARTIFACT_PATH_PATTERNS = (
     "node_modules",
 )
 BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
+BUG_ID_FILENAME_RE = re.compile(r"(?:^|[^A-Za-z0-9])BUG-(\d{3,})(?!\d)", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
 PR_BODY_CODEGRAPH_TEST_LIMIT = 10
@@ -74,32 +106,64 @@ FAST_PATH_TIER_ORDER = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
 VALIDATION_RECEIPT_SCHEMA = "aistock_validation_receipt_v1"
 RUNTIME_CONTRACT_SCHEMA = "aistock_bug_runtime_contract_v1"
 RUNTIME_VERIFY_RECEIPT_SCHEMA = "aistock_post_restart_verify_receipt_v1"
+RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA = "aistock_post_restart_verify_receipt_summary_v1"
 RUNTIME_TARGET_CATALOG = REPO_ROOT / "docs" / "standards" / "aistock_runtime_targets_v1.yaml"
 RUNTIME_IMPACTS = {"none", "frontend", "client", "database", "backend", "worker_scheduler", "unknown"}
 VALIDATION_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
 VALIDATION_FAIL_RE = re.compile(r"\b(?:fail|failed|failure|error|blocked)\b", re.IGNORECASE)
+VALIDATION_RECEIPT_COMMIT_RE = re.compile(
+    r"validation-receipt:\s+id=[0-9a-f]{16}\s+commit=([0-9a-f]{7,40})\b",
+    re.IGNORECASE,
+)
+WORKTREE_TRANSIENT_CACHE_DIRS = {
+    ".codex_tmp",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "catboost_info",
+    "node_modules",
+}
+WORKTREE_TRANSIENT_PREFIXES = ("tmp/", "var/research_assistant/")
+WORKTREE_TRANSIENT_EXACT_FILES = {".coverage", "debug.log"}
+WORKTREE_QE_LIVE_LOG_ROOT = "rdagent_assets/qe_live_logs"
+WORKTREE_QE_LIVE_LOG_SCHEMA = "qe_live_log_record_v1"
+WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES = 16 * 1024 * 1024
+WORKTREE_QE_LIVE_LOG_PATHS = frozenset(
+    f"{WORKTREE_QE_LIVE_LOG_ROOT}/qe-live-{index}.jsonl" for index in range(5)
+)
+WORKTREE_BACKEND_LOG_ROOT = "backend/logs"
+WORKTREE_BACKEND_LOG_LIMITS = {
+    "backend/logs/aistock.log": 10 * 1024 * 1024,
+    "backend/logs/errors.log": 5 * 1024 * 1024,
+}
+WORKTREE_BACKEND_LOG_LINE_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} "
+    r"(?:DEBUG|INFO|WARNING|ERROR|CRITICAL) \[[^\]\r\n]+\] .+$"
+)
+RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("nox", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
+    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
     (
         "pytest",
         re.compile(
-            r"^(?:python(?:\.exe)?\s+-m\s+)?pytest\b[^\r\n]*(?:backend[/\\]tests|frontend[/\\]tests|tests)[/\\]\S+",
+            rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?pytest\b[^\r\n]*(?:backend[/\\]tests|frontend[/\\]tests|tests)[/\\]\S+",
             re.IGNORECASE,
         ),
     ),
-    ("ruff", re.compile(r"^(?:python(?:\.exe)?\s+-m\s+)?ruff\s+check\b", re.IGNORECASE)),
-    ("diff_check", re.compile(r"^git\s+diff\s+--check\b", re.IGNORECASE)),
-    ("compile", re.compile(r"^python(?:\.exe)?\s+-m\s+(?:compileall|py_compile)\b", re.IGNORECASE)),
+    ("ruff", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?ruff\s+check\b", re.IGNORECASE)),
+    ("diff_check", re.compile(rf"^{RTK_COMMAND_PREFIX}git\s+diff\s+--check\b", re.IGNORECASE)),
+    ("compile", re.compile(rf"^{RTK_COMMAND_PREFIX}python(?:\.exe)?\s+-m\s+(?:compileall|py_compile)\b", re.IGNORECASE)),
     (
         "workflow_smoke",
         re.compile(
-            r"^python(?:\.exe)?\s+scripts/aistock_issue_workflow\.py\s+(?:batch-)?workflow-smoke\b",
+            rf"^{RTK_COMMAND_PREFIX}python(?:\.exe)?\s+scripts/aistock_issue_workflow\.py\s+(?:batch-)?workflow-smoke\b",
             re.IGNORECASE,
         ),
     ),
-    ("feature_validation", re.compile(r"^python(?:\.exe)?\s+scripts/aistock_feature_workflow\.py\s+validate\b", re.IGNORECASE)),
-    ("frontend", re.compile(r"^(?:npm|npx)\s+(?:run|exec|test)\b", re.IGNORECASE)),
-    ("go", re.compile(r"^go\s+test\b", re.IGNORECASE)),
+    ("feature_validation", re.compile(rf"^{RTK_COMMAND_PREFIX}python(?:\.exe)?\s+scripts/aistock_feature_workflow\.py\s+validate\b", re.IGNORECASE)),
+    ("frontend", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:npm|npx)\s+(?:run|exec|test)\b", re.IGNORECASE)),
+    ("go", re.compile(rf"^{RTK_COMMAND_PREFIX}go\s+test\b", re.IGNORECASE)),
 )
 FAST_PATH_REGISTRY_PREFIXES = ("tests/aistock_validation/bugs/",)
 FAST_PATH_CATALOG_PREFIXES = ("tests/aistock_validation/catalog/",)
@@ -165,6 +229,10 @@ class WorkflowError(ValueError):
     """Raised when the high-level AIstock issue workflow cannot proceed safely."""
 
 
+class GitHubOutcomeUnknownError(WorkflowError):
+    """Raised when a GitHub write may have succeeded but cannot be confirmed."""
+
+
 class WorkflowPayloadError(WorkflowError):
     """Raised with a compact machine-readable recovery payload."""
 
@@ -222,7 +290,12 @@ def _size_and_token_estimate(path: Path) -> dict[str, Any]:
     }
 
 
-LOCAL_PREMERGE_PLAN_KEYS = {"l0", "validation_module_registry_l0", "guardrail_changed_files"}
+LOCAL_PREMERGE_PLAN_KEYS = {
+    "l0",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+}
 BROAD_VALIDATION_PLAN_SUFFIXES = ("_backend", "_ui", "_l2", "_l3")
 BROAD_VALIDATION_PLAN_KEYS = {
     "data_quality_deep",
@@ -365,15 +438,25 @@ def _sha256_tree(path: Path) -> str | None:
 
 
 WORKFLOW_RULE_DIGEST_REFS = (
+    "AGENTS.md",
     ".codex/skills/aistock-task-router/SKILL.md",
     ".codex/skills/fix-aistock-issue/SKILL.md",
     ".codex/skills/aistock-merge-aftercare/SKILL.md",
+    ".codex/skills/aistock-readonly-triage/SKILL.md",
+    ".codex/skills/aistock-docs-handoff/SKILL.md",
+    ".codex/skills/aistock-validation-delegation/SKILL.md",
+    ".codex/skills/verify-aistock-feature/SKILL.md",
     ".claude/commands/aistock-task-router.md",
     ".claude/commands/fix-aistock-issue.md",
     ".claude/commands/aistock-merge-aftercare.md",
+    ".claude/commands/aistock-readonly-triage.md",
+    ".claude/commands/aistock-docs-handoff.md",
+    ".claude/commands/aistock-validation-delegation.md",
+    ".claude/commands/aistock-feature-workflow.md",
     "docs/codex_project_memory.md",
     "docs/standards/README.md",
-    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
 )
 
 
@@ -1357,6 +1440,8 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "selected_lane_keys",
                 "blocking",
                 "warnings",
+                "checkout_advisories",
+                "remediation",
                 "restart_recommended",
             )
         )
@@ -1439,7 +1524,8 @@ def _format_summary_lines(payload: dict[str, Any], compact: dict[str, Any]) -> l
             (
                 f"{prefix} client-sync workflow_gate={gate} lane={compact.get('selected_lane') or 'all'} "
                 f"blocking={len(compact.get('blocking') or [])} warnings={len(compact.get('warnings') or [])} "
-                f"restart_recommended={str(bool(compact.get('restart_recommended'))).lower()}"
+                f"restart_recommended={str(bool(compact.get('restart_recommended'))).lower()} "
+                f"action={(compact.get('remediation') or {}).get('action') or 'unknown'}"
             )
         ]
     if schema == "aistock_issue_workflow_client_install_v2":
@@ -1637,21 +1723,31 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
         "backend/services/hmm_risk/b3_mixed_dimension.py",
         "backend/services/hmm_risk/b3_training.py",
+        "backend/services/hmm_risk/state_model_set.py",
         "scripts/advisory_short_rebound_batch_b.py",
+        "scripts/aistock_bug_id_allocator.py",
+        "scripts/bug_registry_metadata_check.py",
         "scripts/aistock_issue_workflow.py",
         "scripts/issue_flow.py",
         "scripts/aistock_guardrail_scan.py",
         "scripts/ci_failure_issue_summary.py",
+        "scripts/export_qe_qlib_candidate.py",
         "scripts/export_suspend_d_candidate.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "scripts/dataset_release_control_store.py",
+        "scripts/update_backtest_dataset_monthly.py",
         "scripts/llm_provider_adapter.py",
         "scripts/nightly_session_runner.py",
         "scripts/ci_change_classifier.py",
         "scripts/hmm_risk/prepare_state_model_set.py",
         "noxfile.py",
     }
+    known_client_files = {
+        "scripts/aistock_mcp_server.py",
+    }
     for path in normalized:
         lower = path.lower()
-        if lower.startswith((".codex/", ".claude/")):
+        if path in known_client_files or lower.startswith((".codex/", ".claude/")):
             impacts.add("client")
             continue
         if path in known_non_runtime_files or lower.startswith(known_non_runtime_prefixes):
@@ -2199,6 +2295,25 @@ def _probe_evidence_digest(results: list[dict[str, Any]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _post_restart_receipt_summary(receipt_path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA,
+        "receipt_sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        "bug_id": receipt.get("bug_id"),
+        "target_id": receipt.get("target_id"),
+        "generated_at": receipt.get("generated_at"),
+        "expected_identity": receipt.get("expected_identity"),
+        "observed_identity": receipt.get("observed_identity"),
+        "runtime_identity_proof_digest": receipt.get("runtime_identity_proof_digest"),
+        "contract_digest": receipt.get("contract_digest"),
+        "catalog_sha256": receipt.get("catalog_sha256"),
+        "probe_evidence_digest": receipt.get("probe_evidence_digest"),
+        "post_restart_effective_gate": receipt.get("post_restart_effective_gate"),
+        "mode": receipt.get("mode"),
+        "response_content_persisted": False,
+    }
+
+
 def build_post_restart_verify(
     *,
     bug_id: str | None,
@@ -2393,6 +2508,26 @@ def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) ->
         }
     except Exception as exc:
         return {"ok": False, "returncode": None, "stdout": "", "stderr": str(exc)}
+
+
+def _run_read_command_with_retry(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 30,
+    attempts: int = 3,
+) -> dict[str, Any]:
+    """Retry a bounded idempotent remote/read command with short backoff."""
+
+    total = max(1, int(attempts))
+    last: dict[str, Any] = {"ok": False, "returncode": None, "stdout": "", "stderr": "not run"}
+    for index in range(total):
+        last = _run_command(args, cwd=cwd, timeout=timeout)
+        if last.get("ok"):
+            return {**last, "attempts": index + 1}
+        if index + 1 < total:
+            time.sleep(0.5 * (index + 1))
+    return {**last, "attempts": total}
 
 
 def _subprocess_env(args: list[str]) -> dict[str, str] | None:
@@ -2979,6 +3114,11 @@ def _bug_id_number(value: str | None) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _bug_id_number_from_filename(value: str | None) -> int | None:
+    match = BUG_ID_FILENAME_RE.search(value or "")
+    return int(match.group(1)) if match else None
+
+
 def _unique_existing_paths(paths: list[Path]) -> list[Path]:
     seen: set[str] = set()
     unique: list[Path] = []
@@ -3025,21 +3165,22 @@ def _bug_id_scan_roots(root: Path | None = None) -> list[Path]:
         _bugs_root(REPO_ROOT),
         _bugs_root(_canonical_root()),
     ]
-    worktree_root = _default_worktree_root()
-    if worktree_root.exists():
-        for child in worktree_root.iterdir():
-            if child.is_dir():
-                candidates.append(_bugs_root(child))
-    for item in _parse_worktree_list():
-        worktree = item.get("worktree")
-        if worktree:
-            candidates.append(_bugs_root(Path(worktree)))
+    # Active allocations are represented by the global reservation ledger.
+    # Scanning every worktree re-reads hundreds of copies of the same BUG
+    # registry and makes allocation cost grow as worktrees * BUG records.
+    # Keep legacy/canonical recovery bounded to the current, invocation and
+    # canonical registry roots; reservations cover in-flight task worktrees.
     return _unique_existing_paths(candidates)
 
 
 def _bug_id_reservation_root() -> Path:
     override = os.environ.get("AISTOCK_BUG_ID_RESERVATION_ROOT")
     return Path(override) if override else _default_worktree_root() / ".locks" / "bug-id-reservations"
+
+
+def _bug_id_state_path() -> Path:
+    override = os.environ.get("AISTOCK_BUG_ID_STATE_PATH")
+    return Path(override) if override else _default_worktree_root() / ".locks" / "bug-id-state.json"
 
 
 def _scan_bug_id_reservations() -> list[dict[str, Any]]:
@@ -3093,13 +3234,16 @@ def _scan_bug_registry_ids(
                     }
                 )
         for path in sorted(p for p in bugs_root.glob("*.json") if not p.name.startswith(".")):
-            bug_id: str | None = None
-            try:
-                payload = _load_json(path)
-                bug_id = str(payload.get("bug_id") or "")
-            except (OSError, json.JSONDecodeError, WorkflowError):
-                bug_id = None
-            number = _bug_id_number(bug_id) or _bug_id_number(path.name)
+            # Canonical BUG filenames already carry BUG-NNN. Avoid opening and
+            # parsing every historical JSON; only legacy/non-standard names
+            # need a content fallback.
+            number = _bug_id_number_from_filename(path.name)
+            if number is None:
+                try:
+                    payload = _load_json(path)
+                    number = _bug_id_number(str(payload.get("bug_id") or ""))
+                except (OSError, json.JSONDecodeError, WorkflowError):
+                    number = None
             if number:
                 sources.append(
                     {
@@ -3110,6 +3254,55 @@ def _scan_bug_registry_ids(
                     }
                 )
     return sources
+
+
+def _fast_bug_id_sources(
+    root: Path | None = None,
+    *,
+    tolerate_unrelated_allocator_errors: bool = True,
+    warnings: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Use one host-wide counter plus reservation filenames on the normal path.
+
+    A missing state file is a one-time migration case.  That bootstrap is
+    bounded to the invocation/current/canonical registries and never visits
+    every worktree or performs network I/O.
+    """
+
+    state_path = _bug_id_state_path()
+    try:
+        state = read_allocator_state(state_path)
+    except BugIdLockError as exc:
+        raise WorkflowError(str(exc)) from exc
+    sources: list[dict[str, Any]] = []
+    bootstrapped = state is None
+    fingerprint_index_bootstrap_required = (
+        state is None
+        or int(state.get("fingerprint_index_version") or 0) != FINGERPRINT_INDEX_VERSION
+    )
+    if state is None:
+        sources.extend(
+            _scan_bug_registry_ids(
+                root,
+                tolerate_unrelated_allocator_errors=tolerate_unrelated_allocator_errors,
+                warnings=warnings,
+            )
+        )
+        # Reservation filenames participate only in the one-time high-water
+        # bootstrap. They are not opened on the steady-state path.
+        sources.extend(_scan_bug_id_reservations())
+    else:
+        number = int(state.get("last_allocated") or 0)
+        if number > 0:
+            sources.append(
+                {
+                    "bug_id": f"BUG-{number:03d}",
+                    "number": number,
+                    "kind": "allocator_state",
+                    "source": str(state_path),
+                }
+            )
+    return sources, fingerprint_index_bootstrap_required or bootstrapped
 
 
 def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[dict[str, Any]], list[str]]:
@@ -3168,18 +3361,51 @@ def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[
     return sources, []
 
 
-def _github_bug_issue_for_id(bug_id: str, *, limit: int = 1000, timeout: int = 30) -> tuple[dict[str, Any] | None, list[str]]:
+def _github_bug_issue_for_id(bug_id: str, *, limit: int = 20, timeout: int = 30) -> tuple[dict[str, Any] | None, list[str]]:
     normalized = bug_id.strip().upper()
-    sources, warnings = _scan_github_bug_ids(limit=limit, timeout=timeout)
+    result = _run_command(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--state",
+            "all",
+            "--search",
+            f"{normalized} in:title",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,url,state,labels",
+        ],
+        timeout=timeout,
+    )
+    if not result.get("ok"):
+        message = result.get("stderr") or result.get("stdout") or "gh issue lookup failed"
+        return None, [f"GitHub lookup for {normalized} unavailable: {message}"]
+    try:
+        issues = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError as exc:
+        return None, [f"GitHub lookup for {normalized} returned invalid JSON: {exc}"]
     matches = [
-        item
-        for item in sources
-        if str(item.get("bug_id") or "").upper() == normalized and item.get("kind") == "github_issue"
+        issue
+        for issue in issues if isinstance(issue, dict) and _bug_id_number(str(issue.get("title") or "")) == _bug_id_number(normalized)
     ]
     if not matches:
-        return None, warnings
-    matches.sort(key=lambda item: int(item.get("github_issue_number") or 0), reverse=True)
-    return matches[0], warnings
+        return None, []
+    matches.sort(key=lambda item: int(item.get("number") or 0), reverse=True)
+    issue = matches[0]
+    return {
+        "bug_id": normalized,
+        "number": _bug_id_number(normalized),
+        "kind": "github_issue",
+        "source": issue.get("url") or f"github_issue:{issue.get('number')}",
+        "github_issue_number": issue.get("number"),
+        "github_state": issue.get("state"),
+        "title": issue.get("title"),
+        "labels": issue.get("labels") or [],
+    }, []
 
 
 def _github_bug_issue_by_number(issue_number: int | str, *, timeout: int = 30) -> tuple[dict[str, Any] | None, list[str]]:
@@ -3214,26 +3440,93 @@ def _github_bug_issue_by_number(issue_number: int | str, *, timeout: int = 30) -
     }, []
 
 
-def _bug_id_allocation_report(
-    root: Path | None = None,
-    *,
-    include_github: bool = False,
-    github_required: bool = False,
-    tolerate_unrelated_allocator_errors: bool = True,
-) -> dict[str, Any]:
-    warnings: list[str] = []
-    sources = _scan_bug_registry_ids(
-        root,
-        tolerate_unrelated_allocator_errors=tolerate_unrelated_allocator_errors,
-        warnings=warnings,
+def _looks_like_github_transport_failure(message: str) -> bool:
+    normalized = message.casefold()
+    return bool(re.search(r"\beof\b", normalized)) or any(
+        token in normalized
+        for token in (
+            "timeout",
+            "timed out",
+            "tls handshake",
+            "unexpected eof",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "network is unreachable",
+            "remote end hung up",
+            "http2",
+            "stream error",
+            "temporary failure",
+        )
     )
-    sources.extend(_scan_bug_id_reservations())
-    if include_github:
-        github_sources, github_warnings = _scan_github_bug_ids()
-        sources.extend(github_sources)
-        warnings.extend(github_warnings)
-        if github_required and github_warnings:
-            raise WorkflowError("; ".join(github_warnings))
+
+
+def _create_github_issue_with_recovery(
+    *,
+    bug_id: str,
+    title: str,
+    body_path: Path,
+    labels: list[str],
+    cwd: Path,
+) -> dict[str, Any]:
+    result = _run_command(
+        [
+            "gh",
+            "issue",
+            "create",
+            "--repo",
+            GITHUB_REPO,
+            "--title",
+            title,
+            "--body-file",
+            str(body_path),
+            "--label",
+            _csv_arg(labels),
+        ],
+        cwd=cwd,
+        timeout=120,
+    )
+    issue_url = str(result.get("stdout") or "").splitlines()[-1].strip() if result.get("ok") else ""
+    issue_number = _github_issue_number_from_url(issue_url) if issue_url else None
+    if result.get("ok") and issue_url and issue_number:
+        return {
+            "created": True,
+            "url": issue_url,
+            "number": issue_number,
+            "recovered_after_transport_error": False,
+            "warnings": [],
+        }
+
+    message = str(result.get("stderr") or result.get("stdout") or "gh issue create failed")
+    uncertain_remote_result = bool(result.get("ok")) or _looks_like_github_transport_failure(message)
+    if uncertain_remote_result:
+        recovered, warnings = _github_bug_issue_for_id(bug_id)
+        if recovered is not None and str(recovered.get("title") or "").strip() == title.strip():
+            recovered_number = recovered.get("github_issue_number")
+            recovered_url = str(recovered.get("source") or _github_issue_url(recovered_number))
+            return {
+                "created": True,
+                "url": recovered_url,
+                "number": recovered_number,
+                "recovered_after_transport_error": True,
+                "warnings": warnings,
+            }
+        recovery_detail = "; ".join(warnings) if warnings else f"no exact {bug_id} GitHub Issue found yet"
+        raise GitHubOutcomeUnknownError(
+            f"{message}; GitHub create outcome is unknown: {recovery_detail}; "
+            "reservation preserved and automatic recreate blocked"
+        )
+    raise WorkflowError(message)
+
+
+def _build_bug_id_allocation_report(
+    sources: list[dict[str, Any]],
+    warnings: list[str],
+    *,
+    github_scanned: bool,
+) -> dict[str, Any]:
+    sources = list(sources)
+    warnings = flow._unique_strings(warnings)
     max_number = max((int(source.get("number") or 0) for source in sources), default=0)
     max_by_kind: dict[str, int] = {}
     for source in sources:
@@ -3241,7 +3534,7 @@ def _bug_id_allocation_report(
         number = int(source.get("number") or 0)
         if number > max_by_kind.get(kind, 0):
             max_by_kind[kind] = number
-    allocator_max = max_by_kind.get("allocator", 0)
+    allocator_max = max(max_by_kind.get("allocator", 0), max_by_kind.get("allocator_state", 0))
     observed_max = max(
         max_by_kind.get("bug_json", 0),
         max_by_kind.get("reservation", 0),
@@ -3259,12 +3552,43 @@ def _bug_id_allocation_report(
         "next_number": max_number + 1,
         "sources": sources,
         "warnings": warnings,
-        "github_scanned": include_github,
+        "github_scanned": github_scanned,
         "max_by_kind": max_by_kind,
         "allocator_max_number": allocator_max,
+        "allocator_state_max_number": max_by_kind.get("allocator_state", 0),
         "observed_max_number": observed_max,
         "github_max_number": max_by_kind.get("github_issue", 0),
     }
+
+
+def _bug_id_allocation_report(
+    root: Path | None = None,
+    *,
+    include_github: bool = False,
+    github_required: bool = False,
+    tolerate_unrelated_allocator_errors: bool = True,
+) -> dict[str, Any]:
+    warnings: list[str] = []
+    sources, bootstrapped = _fast_bug_id_sources(
+        root,
+        tolerate_unrelated_allocator_errors=tolerate_unrelated_allocator_errors,
+        warnings=warnings,
+    )
+    github_lookup_mode = "not_requested"
+    if include_github:
+        local_report = _build_bug_id_allocation_report(sources, warnings, github_scanned=False)
+        candidate_bug_id = f"BUG-{int(local_report['next_number']):03d}"
+        github_issue, github_warnings = _github_bug_issue_for_id(candidate_bug_id)
+        if github_issue is not None:
+            sources.append(github_issue)
+        warnings.extend(github_warnings)
+        if github_required and github_warnings:
+            raise WorkflowError("; ".join(github_warnings))
+        github_lookup_mode = "exact_candidate"
+    report = _build_bug_id_allocation_report(sources, warnings, github_scanned=False)
+    report["github_lookup_mode"] = github_lookup_mode
+    report["allocator_state_bootstrap_required"] = bootstrapped
+    return report
 
 
 def _bug_id_allocation_summary(report: dict[str, Any]) -> dict[str, Any]:
@@ -3273,9 +3597,12 @@ def _bug_id_allocation_summary(report: dict[str, Any]) -> dict[str, Any]:
         "max_number": report.get("max_number"),
         "next_number": report.get("next_number"),
         "allocator_max_number": report.get("allocator_max_number"),
+        "allocator_state_max_number": report.get("allocator_state_max_number"),
+        "allocator_state_bootstrap_required": report.get("allocator_state_bootstrap_required"),
         "observed_max_number": report.get("observed_max_number"),
         "github_max_number": report.get("github_max_number"),
         "github_scanned": report.get("github_scanned"),
+        "github_lookup_mode": report.get("github_lookup_mode"),
         "warnings": report.get("warnings", []),
     }
 
@@ -3285,6 +3612,7 @@ def _duplicate_bug_id_sources(
     bug_id: str,
     *,
     allowed_github_issue_number: int | str | None = None,
+    allowed_reservation_source: str | None = None,
 ) -> list[dict[str, Any]]:
     number = _bug_id_number(bug_id)
     allowed_issue = str(allowed_github_issue_number) if allowed_github_issue_number is not None else None
@@ -3297,8 +3625,113 @@ def _duplicate_bug_id_sources(
             continue
         if kind == "github_issue" and allowed_issue and str(source.get("github_issue_number")) == allowed_issue:
             continue
+        if kind == "reservation" and allowed_reservation_source and _same_path(Path(str(source.get("source") or "")), Path(allowed_reservation_source)):
+            continue
         duplicates.append(source)
     return duplicates
+
+
+def _normalized_github_bug_subject(title: str | None) -> str:
+    raw = re.sub(r"^\s*BUG-\d{3,}\s+(?:P[0-3]\s*:\s*)?", "", str(title or ""), flags=re.IGNORECASE)
+    return " ".join(raw.casefold().split())
+
+
+def _matching_open_github_issue(sources: list[dict[str, Any]], title: str | None) -> dict[str, Any] | None:
+    expected = _normalized_github_bug_subject(title)
+    if not expected:
+        return None
+    matches = [
+        source
+        for source in sources
+        if source.get("kind") == "github_issue"
+        and str(source.get("github_state") or "").upper() == "OPEN"
+        and _normalized_github_bug_subject(str(source.get("title") or "")) == expected
+    ]
+    if not matches:
+        return None
+    matches.sort(key=lambda item: int(item.get("github_issue_number") or 0), reverse=True)
+    return matches[0]
+
+
+def _update_bug_id_reservation(path: Path | None, **updates: Any) -> None:
+    if path is None or not path.exists():
+        return
+    payload = _load_json(path)
+    payload.update({key: value for key, value in updates.items() if value is not None})
+    payload["updated_at"] = _utc_now()
+    _write_json(path, payload)
+    write_fingerprint_index(
+        _bug_id_reservation_root(),
+        {**payload, "reservation_path": str(path)},
+    )
+
+
+def _reservation_can_resume(
+    payload: dict[str, Any],
+    *,
+    github_issue_number: int | str | None,
+    reservation_title: str | None,
+    reservation_fingerprint: str | None,
+) -> bool:
+    if str(payload.get("status") or "") not in {
+        "reserved",
+        "github_preflight_unknown",
+        "github_create_outcome_unknown",
+        "github_issue_confirmed",
+        "github_issue_confirmed_local_incomplete",
+    }:
+        return False
+    existing_issue = payload.get("github_issue_number")
+    if existing_issue is not None and github_issue_number is not None and str(existing_issue) != str(github_issue_number):
+        return False
+    existing_title = str(payload.get("title") or "")
+    if existing_title and reservation_title and _normalized_github_bug_subject(existing_title) != _normalized_github_bug_subject(reservation_title):
+        return False
+    existing_fingerprint = str(payload.get("fingerprint") or "")
+    if existing_fingerprint and reservation_fingerprint and existing_fingerprint != reservation_fingerprint:
+        return False
+    return bool(github_issue_number or existing_issue)
+
+
+def _matching_automatic_reservation(
+    *,
+    reservation_title: str | None,
+    reservation_fingerprint: str | None,
+) -> tuple[Path, dict[str, Any]] | None:
+    if not reservation_fingerprint:
+        return None
+    root = _bug_id_reservation_root()
+    payload = find_matching_reservation(root, reservation_fingerprint)
+    if payload is None:
+        return None
+    resumable_statuses = {
+        "github_preflight_unknown",
+        "github_create_outcome_unknown",
+        "github_issue_confirmed",
+        "github_issue_confirmed_local_incomplete",
+    }
+    if str(payload.get("status") or "") not in resumable_statuses:
+        return None
+    if _normalized_github_bug_subject(str(payload.get("title") or "")) != _normalized_github_bug_subject(reservation_title):
+        return None
+    return Path(str(payload["reservation_path"])), payload
+
+
+def _fingerprint_bootstrap_records(root: Path | None) -> list[dict[str, Any]]:
+    """Read bounded current/canonical records for a one-time index migration."""
+
+    records: list[dict[str, Any]] = []
+    for bugs_root in _bug_id_scan_roots(root):
+        for path in bugs_root.glob("*.json"):
+            try:
+                payload = _load_json(path)
+            except (OSError, json.JSONDecodeError, WorkflowError):
+                continue
+            if not str(payload.get("fingerprint") or "").strip():
+                continue
+            records.append({**payload, "registry_path": str(path)})
+    records.extend(read_reservations(_bug_id_reservation_root()))
+    return records
 
 
 def _reserve_bug_id(
@@ -3308,94 +3741,349 @@ def _reserve_bug_id(
     include_github: bool,
     github_required: bool,
     allowed_github_issue_number: int | str | None,
+    reservation_title: str | None = None,
+    reservation_fingerprint: str | None = None,
+    _candidate_attempt: int = 0,
 ) -> tuple[str, int, dict[str, Any], Path]:
-    with _GlobalBugIdAllocatorLock():
-        canonical_bug_id = (bug_id or "").strip().upper()
-        number = _bug_id_number(canonical_bug_id) if canonical_bug_id else None
-        if canonical_bug_id and (not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id)):
-            raise WorkflowError("--bug-id must match BUG-NNN when provided")
-        direct_linked_issue = bool(canonical_bug_id and allowed_github_issue_number)
-        report = _bug_id_allocation_report(
+    if _candidate_attempt >= 20:
+        raise WorkflowError("unable to find an available BUG id after 20 exact GitHub candidate checks")
+    canonical_bug_id = (bug_id or "").strip().upper()
+    number = _bug_id_number(canonical_bug_id) if canonical_bug_id else None
+    if canonical_bug_id and (not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id)):
+        raise WorkflowError("--bug-id must match BUG-NNN when provided")
+    direct_linked_issue = bool(canonical_bug_id and allowed_github_issue_number)
+    github_warnings: list[str] = []
+    linked_issue: dict[str, Any] | None = None
+
+    # Explicit linkage can be verified before the critical section because it
+    # does not depend on the next local candidate. Automatic allocation first
+    # reserves a local candidate, then performs one exact GitHub lookup.
+    if direct_linked_issue:
+        linked_issue, github_warnings = _github_bug_issue_by_number(allowed_github_issue_number)
+        if (github_warnings or linked_issue is None) and github_required:
+            raise WorkflowError("; ".join(github_warnings or ["linked GitHub Issue lookup failed"]))
+        if linked_issue is not None and str(linked_issue.get("bug_id") or "").upper() != canonical_bug_id:
+            raise WorkflowError(
+                f"linked GitHub Issue {allowed_github_issue_number} title does not match {canonical_bug_id}"
+            )
+
+    resumed_status: str | None = None
+    allocation_lock = _GlobalBugIdAllocatorLock()
+    with allocation_lock:
+        local_warnings: list[str] = []
+        sources, allocator_bootstrap_required = _fast_bug_id_sources(
             root,
-            include_github=include_github and not direct_linked_issue,
-            github_required=github_required and not direct_linked_issue,
+            tolerate_unrelated_allocator_errors=True,
+            warnings=local_warnings,
         )
-        if direct_linked_issue:
-            linked_issue, linked_warnings = _github_bug_issue_by_number(allowed_github_issue_number)
-            if (linked_warnings or linked_issue is None) and github_required:
-                raise WorkflowError("; ".join(linked_warnings or ["linked GitHub Issue lookup failed"]))
-            if linked_issue is not None and str(linked_issue.get("bug_id") or "").upper() != canonical_bug_id:
-                raise WorkflowError(
-                    f"linked GitHub Issue {allowed_github_issue_number} title does not match {canonical_bug_id}"
+        if linked_issue is not None:
+            sources.append(linked_issue)
+        report = _build_bug_id_allocation_report(
+            sources,
+            [*local_warnings, *github_warnings],
+            github_scanned=False,
+        )
+        report["github_lookup_mode"] = "linked_issue_number" if direct_linked_issue else (
+            "exact_candidate" if include_github else "not_requested"
+        )
+        if allocator_bootstrap_required:
+            bootstrap_records = _fingerprint_bootstrap_records(root)
+            report["fingerprint_index_bootstrap_count"] = bootstrap_fingerprint_index(
+                _bug_id_reservation_root(),
+                bootstrap_records,
+            )
+            durable_bug_ids = {
+                str(item.get("bug_id") or "").upper()
+                for item in bootstrap_records
+                if item.get("registry_path") and item.get("bug_id")
+            }
+            report["terminal_reservation_compaction_count"] = len(
+                compact_terminal_reservations(
+                    _bug_id_reservation_root(),
+                    durable_bug_ids,
                 )
-            if linked_issue is not None:
-                report["sources"].append(linked_issue)
-            report["warnings"].extend(linked_warnings)
+            )
+            try:
+                write_allocator_state(
+                    _bug_id_state_path(),
+                    last_allocated=int(report.get("max_number") or 0),
+                    updated_at=_utc_now(),
+                    updated_by="aistock_issue_workflow.py/bootstrap",
+                    fingerprint_index_version=FINGERPRINT_INDEX_VERSION,
+                )
+            except BugIdLockError as exc:
+                raise WorkflowError(str(exc)) from exc
+        try:
+            matching_reservation = find_matching_reservation(
+                _bug_id_reservation_root(),
+                reservation_fingerprint,
+            )
+        except BugIdLockError as exc:
+            raise WorkflowError(str(exc)) from exc
+        resumed_automatic = None if bug_id else _matching_automatic_reservation(
+            reservation_title=reservation_title,
+            reservation_fingerprint=reservation_fingerprint,
+        )
+        if not bug_id and matching_reservation is not None and resumed_automatic is None:
+            existing_title = _normalized_github_bug_subject(str(matching_reservation.get("title") or ""))
+            expected_title = _normalized_github_bug_subject(reservation_title)
+            if not expected_title or existing_title == expected_title:
+                existing_id = matching_reservation.get("bug_id") or Path(
+                    str(matching_reservation.get("reservation_path") or "")
+                ).stem
+                existing_status = matching_reservation.get("status") or "unknown"
+                raise WorkflowError(
+                    f"matching BUG registration already exists: {existing_id} status={existing_status}; "
+                    "resume the existing intake instead of allocating another id"
+                )
+        if resumed_automatic is not None:
+            reservation_path, existing_reservation = resumed_automatic
+            canonical_bug_id = str(existing_reservation.get("bug_id") or reservation_path.stem).upper()
+            number = _bug_id_number(canonical_bug_id)
+            allowed_github_issue_number = existing_reservation.get("github_issue_number")
+            resumed_status = str(existing_reservation.get("status") or "")
+        else:
+            existing_reservation = None
+            if not bug_id:
+                number = int(report["next_number"])
+                canonical_bug_id = f"BUG-{number:03d}"
+        assert number is not None
+        reservation_root = _bug_id_reservation_root()
+        reservation_path = reservation_root / f"{canonical_bug_id}.json"
+        if not bug_id and existing_reservation is None:
+            while reservation_path.exists():
+                number += 1
+                canonical_bug_id = f"BUG-{number:03d}"
+                reservation_path = reservation_root / f"{canonical_bug_id}.json"
+            report["next_number"] = number
+        if existing_reservation is None and reservation_path.exists():
+            existing_reservation = _load_json(reservation_path)
+        reusable_reservation = bool(
+            existing_reservation
+            and _reservation_can_resume(
+                existing_reservation,
+                github_issue_number=allowed_github_issue_number,
+                reservation_title=reservation_title,
+                reservation_fingerprint=reservation_fingerprint,
+            )
+        )
+        automatic_resume = resumed_automatic is not None
         if bug_id:
             duplicates = _duplicate_bug_id_sources(
                 report,
                 canonical_bug_id,
                 allowed_github_issue_number=allowed_github_issue_number,
+                allowed_reservation_source=str(reservation_path) if reusable_reservation else None,
             )
             if duplicates:
                 detail = "; ".join(f"{item.get('kind')}:{item.get('source')}" for item in duplicates[:5])
                 raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
-        else:
-            number = int(report["next_number"])
-            canonical_bug_id = f"BUG-{number:03d}"
-        assert number is not None
-        reservation_root = _bug_id_reservation_root()
-        reservation_path = reservation_root / f"{canonical_bug_id}.json"
-        if reservation_path.exists():
+        if existing_reservation is not None and not (reusable_reservation or automatic_resume):
             raise WorkflowError(f"{canonical_bug_id} is already reserved: {reservation_path}")
-        _write_json(
-            reservation_path,
-            {
+        if existing_reservation is None:
+            reservation_payload = {
                 "schema_version": "aistock_bug_id_reservation_v1",
                 "bug_id": canonical_bug_id,
                 "reserved_at": _utc_now(),
                 "reserved_by": "aistock_issue_workflow.py",
                 "root": str((root or REPO_ROOT).resolve()),
-            },
+                "status": "reserved",
+                "title": reservation_title,
+                "fingerprint": reservation_fingerprint,
+            }
+            _write_json(reservation_path, reservation_payload)
+            write_fingerprint_index(
+                reservation_root,
+                {**reservation_payload, "reservation_path": str(reservation_path)},
+            )
+        elif not automatic_resume:
+            _update_bug_id_reservation(
+                reservation_path,
+                status="reserved",
+                github_issue_number=allowed_github_issue_number,
+                title=reservation_title,
+                fingerprint=reservation_fingerprint,
+            )
+        try:
+            write_allocator_state(
+                _bug_id_state_path(),
+                last_allocated=max(int(report.get("max_number") or 0), int(number)),
+                updated_at=_utc_now(),
+                updated_by="aistock_issue_workflow.py",
+                fingerprint_index_version=FINGERPRINT_INDEX_VERSION,
+            )
+        except BugIdLockError as exc:
+            raise WorkflowError(str(exc)) from exc
+        report["allocator_state_bootstrap_required"] = allocator_bootstrap_required
+        report["allocator_state_path"] = str(_bug_id_state_path())
+
+    telemetry = getattr(allocation_lock, "telemetry", None)
+    report["allocator_lock"] = telemetry() if callable(telemetry) else {"wait_ms": None, "hold_ms": None}
+
+    if direct_linked_issue or not include_github:
+        return canonical_bug_id, number, report, reservation_path
+
+    github_issue, lookup_warnings = _github_bug_issue_for_id(canonical_bug_id)
+    report["warnings"] = flow._unique_strings([*(report.get("warnings") or []), *lookup_warnings])
+    if lookup_warnings:
+        unknown_status = (
+            "github_create_outcome_unknown"
+            if resumed_status in {
+                "github_create_outcome_unknown",
+                "github_issue_confirmed",
+                "github_issue_confirmed_local_incomplete",
+            }
+            else "github_preflight_unknown"
         )
+        _update_bug_id_reservation(
+            reservation_path,
+            status=unknown_status,
+            last_error="; ".join(lookup_warnings),
+        )
+        if github_required:
+            raise GitHubOutcomeUnknownError(
+                f"GitHub exact lookup for {canonical_bug_id} is unavailable; reservation preserved: "
+                + "; ".join(lookup_warnings)
+            )
+        return canonical_bug_id, number, report, reservation_path
+
+    if github_issue is not None:
+        report.setdefault("sources", []).append(github_issue)
+        same_subject = _normalized_github_bug_subject(str(github_issue.get("title") or "")) == _normalized_github_bug_subject(reservation_title)
+        is_open = str(github_issue.get("github_state") or "").upper() == "OPEN"
+        if same_subject and is_open:
+            report["recovered_existing_github_issue"] = github_issue
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_issue_confirmed",
+                github_issue_number=github_issue.get("github_issue_number"),
+                github_issue_url=github_issue.get("source"),
+            )
+            return canonical_bug_id, number, report, reservation_path
+        _update_bug_id_reservation(
+            reservation_path,
+            status="remote_collision",
+            github_issue_number=github_issue.get("github_issue_number"),
+            github_issue_url=github_issue.get("source"),
+            remote_title=github_issue.get("title"),
+        )
+        remove_fingerprint_index(
+            _bug_id_reservation_root(),
+            reservation_fingerprint,
+            bug_id=canonical_bug_id,
+        )
+        if bug_id:
+            raise WorkflowError(f"{canonical_bug_id} already exists on GitHub with a different title or state")
+        return _reserve_bug_id(
+            root,
+            bug_id=None,
+            include_github=include_github,
+            github_required=github_required,
+            allowed_github_issue_number=None,
+            reservation_title=reservation_title,
+            reservation_fingerprint=reservation_fingerprint,
+            _candidate_attempt=_candidate_attempt + 1,
+        )
+
+    if resumed_status in {
+        "github_create_outcome_unknown",
+        "github_issue_confirmed",
+        "github_issue_confirmed_local_incomplete",
+    }:
+        _update_bug_id_reservation(
+            reservation_path,
+            status="github_create_outcome_unknown",
+            last_error=f"exact GitHub lookup still has no indexed {canonical_bug_id}; automatic recreate remains blocked",
+        )
+        raise GitHubOutcomeUnknownError(
+            f"GitHub create outcome for {canonical_bug_id} is still unknown; reservation preserved and automatic recreate blocked"
+        )
+    _update_bug_id_reservation(
+        reservation_path,
+        status="reserved",
+        github_preflight_checked_at=_utc_now(),
+    )
     return canonical_bug_id, number, report, reservation_path
 
 
 def _release_bug_id_reservation(path: Path | None) -> None:
     if not path:
         return
+    payload: dict[str, Any] = {}
+    try:
+        payload = _load_json(path)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, WorkflowError):
+        pass
     try:
         path.unlink()
     except FileNotFoundError:
         pass
+    remove_fingerprint_index(
+        _bug_id_reservation_root(),
+        payload.get("fingerprint"),
+        bug_id=str(payload.get("bug_id") or path.stem),
+    )
+
+
+def _process_id_is_alive(pid: int) -> bool | None:
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            # Access denied still proves that the PID exists.
+            return True if ctypes.get_last_error() == 5 else False
+        except (AttributeError, OSError, ValueError):
+            return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
 
 
 class _GlobalBugIdAllocatorLock:
     def __init__(self, *, timeout: float = 30.0) -> None:
         self.timeout = timeout
         self.path = Path(os.environ.get("AISTOCK_BUG_ID_LOCK_PATH") or (_default_worktree_root() / ".locks" / "bug-id-allocator.lock"))
-        self._fd: int | None = None
+        self._delegate: GlobalBugIdLock | None = None
 
     def __enter__(self) -> "_GlobalBugIdAllocatorLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + self.timeout
-        while True:
-            try:
-                self._fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(self._fd, f"{os.getpid()}\n{_utc_now()}\n".encode("ascii"))
-                return self
-            except FileExistsError as exc:
-                if time.monotonic() >= deadline:
-                    raise WorkflowError(f"timed out waiting for global BUG id allocator lock: {self.path}") from exc
-                time.sleep(0.1)
-
-    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
-        if self._fd is not None:
-            os.close(self._fd)
+        self._delegate = GlobalBugIdLock(
+            self.path,
+            timeout=self.timeout,
+            process_is_alive=_process_id_is_alive,
+        )
         try:
-            self.path.unlink()
-        except FileNotFoundError:
-            pass
+            self._delegate.__enter__()
+        except BugIdLockError as exc:
+            raise WorkflowError(str(exc)) from exc
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._delegate is None:
+            return
+        try:
+            self._delegate.__exit__(exc_type, exc, tb)
+        except BugIdLockError as lock_exc:
+            if exc_type is None:
+                raise WorkflowError(str(lock_exc)) from lock_exc
+
+    def telemetry(self) -> dict[str, float | None]:
+        return self._delegate.telemetry() if self._delegate is not None else {"wait_ms": None, "hold_ms": None}
 
 
 def _next_bug_id(
@@ -4635,8 +5323,14 @@ def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) ->
     if not bug_id:
         raise WorkflowError("Either --bug-id or --issue-json is required")
     normalized = bug_id.strip().upper()
+    target_number = _bug_id_number(normalized)
     matches: list[tuple[dict[str, Any], Path]] = []
+    candidates: list[Path] = []
     for path in _bug_files():
+        filename_number = _bug_id_number_from_filename(path.name)
+        if filename_number == target_number or filename_number is None:
+            candidates.append(path)
+    for path in candidates:
         record = _load_json(path)
         if str(record.get("bug_id") or "").upper() == normalized:
             matches.append((record, path))
@@ -4771,12 +5465,30 @@ def _verification_budget_for_record(
         str(record.get(key) or "noop") not in {"", "noop"}
         for key in ("production_ddl_gate", "production_backend_dependency_gate", "production_frontend_dependency_gate")
     )
+    scope_files = flow._unique_strings(
+        [
+            *flow._as_list(record.get("allowed_write_scope")),
+            *flow._as_list((record.get("file_scope_contract") or {}).get("scope_files")),
+        ]
+    )
+    normalized_scope = [str(path).replace("\\", "/").lower() for path in scope_files]
+    schema_scope = (
+        module in {"database", "db", "platform.database", "validation.database"}
+        or any(
+            path.endswith(".sql")
+            or "/migrations/" in f"/{path}"
+            or path.startswith(("backend/db/", "scripts/migrations/", "scripts/db/"))
+            for path in normalized_scope
+        )
+    )
     high_risk_modules = {"paper_v2", "strategy_package", "selection_center", "research_assistant", "validation_center"}
     runtime_markers = ("runtime", "order", "cash", "position", "miniqmt", "broker", "ddl", "migration")
     text = _small_text_blob(
         [str(record.get("title") or ""), str(record.get("description") or ""), str(record.get("actual") or ""), str(record.get("expected") or "")]
     ).lower()
-    if has_production_gate or any(marker in text for marker in ("ddl", "migration", "production db")):
+    if has_production_gate or (
+        schema_scope and any(marker in text for marker in ("ddl", "migration", "production db"))
+    ):
         budget = "deep"
         target_pct = "45-60%"
     elif severity in {"P0", "P1"} or module in high_risk_modules or any(marker in text for marker in runtime_markers):
@@ -5056,6 +5768,28 @@ def build_submit_bug_plan(
     canonical_bug_id: str
     allocated_number: int
     allocation_report: dict[str, Any]
+    event_args = argparse.Namespace(
+        source="manual",
+        source_json=None,
+        title=title,
+        module=module,
+        severity_guess=severity,
+        actual=actual or description or title,
+        plan_key=plan_key,
+        nox_session=nox_session,
+        reproduce_command=reproduce_command,
+        evidence_ref=evidence_refs,
+        changed_file=scope_files,
+    )
+    event = flow.build_failure_event(event_args)
+    candidate = flow.candidate_from_event(
+        event,
+        title=title,
+        candidate_type=candidate_type,
+        expected=expected,
+        actual=actual or description,
+    )
+    remote_issue_confirmed = False
     try:
         if effective_apply:
             canonical_bug_id, allocated_number, allocation_report, reservation_path = _reserve_bug_id(
@@ -5064,6 +5798,8 @@ def build_submit_bug_plan(
                 include_github=include_github_scan,
                 github_required=create_github,
                 allowed_github_issue_number=github_issue_number,
+                reservation_title=title,
+                reservation_fingerprint=str(candidate.get("fingerprint") or ""),
             )
         else:
             allocation_report = _bug_id_allocation_report(
@@ -5085,32 +5821,20 @@ def build_submit_bug_plan(
                 raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
             allocated_number = number
 
-        event_args = argparse.Namespace(
-            source="manual",
-            source_json=None,
-            title=title,
-            module=module,
-            severity_guess=severity,
-            actual=actual or description or title,
-            plan_key=plan_key,
-            nox_session=nox_session,
-            reproduce_command=reproduce_command,
-            evidence_ref=evidence_refs,
-            changed_file=scope_files,
-        )
-        event = flow.build_failure_event(event_args)
-        candidate = flow.candidate_from_event(
-            event,
-            title=title,
-            candidate_type=candidate_type,
-            expected=expected,
-            actual=actual or description,
-        )
+        recovered_existing_issue = allocation_report.get("recovered_existing_github_issue")
+        effective_github_issue_number = github_issue_number
+        effective_github_issue_url = github_issue_url
+        if isinstance(recovered_existing_issue, dict):
+            effective_github_issue_number = recovered_existing_issue.get("github_issue_number")
+            effective_github_issue_url = str(
+                recovered_existing_issue.get("source") or _github_issue_url(effective_github_issue_number)
+            )
+            remote_issue_confirmed = True
         record = flow.promote_candidate_to_bug(
             candidate,
             bug_id=canonical_bug_id,
-            github_issue_number=github_issue_number,
-            github_issue_url=github_issue_url,
+            github_issue_number=effective_github_issue_number,
+            github_issue_url=effective_github_issue_url,
         )
         now = _utc_now()
         record.setdefault("created_at", now)
@@ -5174,7 +5898,16 @@ def build_submit_bug_plan(
             _repo_rel(bug_path, registry_root),
             _repo_rel(_allocator_path(registry_root), registry_root),
         )
-        github_result: dict[str, Any] | None = None
+        github_result: dict[str, Any] | None = (
+            {
+                "created": False,
+                "recovered_existing": True,
+                "url": effective_github_issue_url,
+                "number": effective_github_issue_number,
+            }
+            if isinstance(recovered_existing_issue, dict)
+            else None
+        )
         github_labels = flow._unique_strings(
             _issue_labels_for_bug(module=module, severity=severity, ui_hints=ui_hints)
             + list(extra_github_labels or [])
@@ -5189,32 +5922,39 @@ def build_submit_bug_plan(
                 github_body_for_create = Path(tempfile.gettempdir()) / "aistock_issue_workflow" / f"{canonical_bug_id}-github-issue-body.md"
             _write_text(github_body_for_create, _render_github_issue_body(record, candidate))
             github_title = f"{canonical_bug_id} {severity}: {title}"
-            result = _execute_checked(
-                [
-                    "gh",
-                    "issue",
-                    "create",
-                    "--repo",
-                    GITHUB_REPO,
-                    "--title",
-                    github_title,
-                    "--body-file",
-                    str(github_body_for_create),
-                    "--label",
-                    _csv_arg(github_labels),
-                ],
-        cwd=github_create_root,
-                timeout=120,
+            github_result = _create_github_issue_with_recovery(
+                bug_id=canonical_bug_id,
+                title=github_title,
+                body_path=github_body_for_create,
+                labels=github_labels,
+                cwd=github_create_root,
             )
-            issue_url = str(result.get("stdout") or "").splitlines()[-1].strip()
-            issue_number = _github_issue_number_from_url(issue_url)
-            if not issue_url or not issue_number:
-                raise WorkflowError(f"cannot parse created GitHub issue URL: {issue_url!r}")
+            issue_url = str(github_result.get("url") or "")
+            issue_number = github_result.get("number")
             record["github_issue_url"] = issue_url
             record["github_issue_number"] = issue_number
-            github_result = {"created": True, "url": issue_url, "number": issue_number}
+            remote_issue_confirmed = True
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_issue_confirmed",
+                github_issue_number=issue_number,
+                github_issue_url=issue_url,
+                github_issue_title=github_title,
+                recovered_after_transport_error=github_result.get("recovered_after_transport_error"),
+            )
         elif create_github and not record.get("github_issue_url"):
             github_result = {"created": False, "planned": True, "body_path": _repo_rel(github_body_path, registry_root)}
+
+        if effective_apply and record.get("github_issue_number") and record.get("github_issue_url"):
+            remote_issue_confirmed = True
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_issue_confirmed",
+                github_issue_number=record.get("github_issue_number"),
+                github_issue_url=record.get("github_issue_url"),
+                title=title,
+                fingerprint=str(candidate.get("fingerprint") or ""),
+            )
 
         has_linkage = bool(record.get("github_issue_number") and record.get("github_issue_url"))
         if effective_apply and not has_linkage:
@@ -5279,11 +6019,19 @@ def build_submit_bug_plan(
         "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
         "github_issue_labels": github_labels,
         "registry_pr_only": registry_pr_only,
-        "stale_pr_check": _stale_pr_check_for_bug(canonical_bug_id) if effective_apply else {"status": "not_applicable_before_apply"},
+        "stale_pr_check": (
+            _stale_pr_check_for_bug(canonical_bug_id)
+            if effective_apply and bug_id
+            else {
+                "status": "skipped_fresh_allocation" if effective_apply else "not_applicable_before_apply",
+                "reason": "a newly allocated BUG id cannot have a stale PR",
+            }
+        ),
         "bug_id_allocation": {
             "allocator_root": str(allocation_root),
             "global_max_number": allocation_report.get("max_number"),
             "github_scanned": allocation_report.get("github_scanned"),
+            "github_lookup_mode": allocation_report.get("github_lookup_mode"),
             "warnings": allocation_report.get("warnings", []),
             "reservation_path": str(reservation_path) if reservation_path else None,
         },
@@ -5319,7 +6067,7 @@ def build_submit_bug_plan(
             _write_json(write_candidate_path, {"event": event, "candidate": candidate})
             _write_text(write_github_body_path, _render_github_issue_body(record, candidate))
             _write_json(write_bug_path, record)
-            _write_allocator(allocated_number, write_root)
+            _write_allocator(max(allocated_number, int(allocation_report.get("max_number") or 0)), write_root)
             fix_registration_commit = (
                 _commit_bug_registration_in_fix_worktree(write_root, canonical_bug_id)
                 if create_fix_worktree and write_root != registry_root
@@ -5344,6 +6092,12 @@ def build_submit_bug_plan(
                     if create_fix_worktree
                     else ["run_issue_workflow_plan", "create_worktree", "read_context_pack"]
                 ),
+            )
+            _update_bug_id_reservation(
+                reservation_path,
+                status="registered",
+                bug_json=_repo_rel(write_bug_path, write_root),
+                registration_root=str(write_root.resolve()),
             )
             payload["state_path"] = _repo_rel(_state_path(canonical_bug_id, write_root), write_root)
             payload["events_path"] = _repo_rel(_events_path(canonical_bug_id, write_root), write_root)
@@ -5386,8 +6140,23 @@ def build_submit_bug_plan(
                 ),
             }
         return payload
-    except Exception:
-        _release_bug_id_reservation(reservation_path)
+    except Exception as exc:
+        if remote_issue_confirmed:
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_issue_confirmed_local_incomplete",
+                last_error_type=type(exc).__name__,
+                last_error=str(exc)[:1000],
+            )
+        elif isinstance(exc, GitHubOutcomeUnknownError) and reservation_path is not None:
+            _update_bug_id_reservation(
+                reservation_path,
+                status="github_create_outcome_unknown",
+                last_error_type=type(exc).__name__,
+                last_error=str(exc)[:1000],
+            )
+        else:
+            _release_bug_id_reservation(reservation_path)
         raise
 
 
@@ -5953,13 +6722,15 @@ def _build_batch_code_intelligence_summary(
 
 
 def _normalize_changed_files(changed_files: list[str] | None) -> list[str]:
-    return flow._unique_strings(
-        [
-            str(path).replace("\\", "/").lstrip("./")
-            for path in changed_files or []
-            if str(path).strip()
-        ]
-    )
+    normalized: list[str] = []
+    for path in changed_files or []:
+        value = str(path).strip().replace("\\", "/")
+        if not value:
+            continue
+        while value.startswith("./"):
+            value = value[2:]
+        normalized.append(value)
+    return flow._unique_strings(normalized)
 
 
 def _submit_bug_file_root() -> Path:
@@ -6290,27 +7061,27 @@ def build_fast_path_plan(
 def _estimated_fast_path_steps(tier: str, *, has_bug: bool) -> list[str]:
     if tier == "T0":
         return [
-            "doctor once",
+            "conditional doctor only for client/bootstrap/stale-state diagnostics",
             "targeted diff or metadata edit",
             "changed-file lint or l0 only when code/catalog changed",
             "commit and PR evidence",
         ]
     if tier == "T1":
         return [
-            "doctor once",
+            "conditional doctor only for client/bootstrap/stale-state diagnostics",
             "run plan/create worktree and read compact Context Pack",
             "targeted fix within allowed_write_scope",
             "finish plan-only, selected validation, PR automation",
         ]
     if tier == "T2":
         return [
-            "doctor once",
+            "conditional doctor only for client/bootstrap/stale-state diagnostics",
             "run-p0/start-batch when issues share module and validation",
             "shared context/code-intelligence refs",
             "selected module validation plus per-issue evidence",
         ]
     return [
-        "doctor once",
+        "conditional doctor only for client/bootstrap/stale-state diagnostics",
         "design/architecture doc and acceptance matrix",
         "implementation with broader scope review",
         "full required validation and production gates",
@@ -6363,7 +7134,10 @@ def build_workflow_smoke_plan(
     finish: dict[str, Any] | None = None
     postmortem_preview: dict[str, Any] | None = None
     try:
-        doctor_payload = build_doctor_report(skip_external=True)
+        doctor_payload = {
+            "workflow_gate": "skipped",
+            "reason": "workflow-smoke validates the lightweight state-machine contract; run doctor explicitly for diagnostics",
+        }
         fast_path = build_fast_path_plan(
             bug_id=bug_id,
             issue_json=issue_json,
@@ -6372,6 +7146,20 @@ def build_workflow_smoke_plan(
             allow_missing_linkage=True,
             allow_closed=True,
         )
+        shared_code_intelligence = {
+            "schema_version": "aistock_code_intelligence_summary_v1",
+            "provider": "workflow_smoke_contract",
+            "status": "skipped_external_in_smoke",
+            "context_ref": "not_required_workflow_smoke",
+            "manifest_ref": "not_required_workflow_smoke",
+            "affected_tests_ref": "not_required_workflow_smoke",
+            "affected_tests_count": 0,
+            "affected_quality": "not_required_workflow_smoke",
+            "affected_tests": {"suggested_tests": []},
+            "fallback_used": False,
+            "understand_anything": {"status": "not_required_workflow_smoke", "graph_exists": True},
+            "understand_anything_summary_ref": "not_required_workflow_smoke",
+        }
         start = build_start_plan(
             bug_id=bug_id,
             issue_json=issue_json,
@@ -6381,6 +7169,7 @@ def build_workflow_smoke_plan(
             task_slug="workflow-smoke",
             allow_missing_linkage=True,
             allow_closed=True,
+            code_intelligence_summary_override=shared_code_intelligence,
         )
         finish = build_finish_plan(
             bug_id=bug_id,
@@ -6391,6 +7180,7 @@ def build_workflow_smoke_plan(
             validation_evidence=[],
             plan_only=True,
             allow_missing_evidence=False,
+            code_intelligence_summary_override=shared_code_intelligence,
         )
         postmortem_preview = {
             "schema_version": "aistock_issue_workflow_smoke_postmortem_preview_v1",
@@ -6769,6 +7559,7 @@ def build_start_plan(
     allow_missing_linkage: bool,
     allow_closed: bool,
     active_decision: dict[str, Any] | None = None,
+    code_intelligence_summary_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not issue_json and active_decision and active_decision.get("registry_issue_json"):
         issue_json = str(active_decision["registry_issue_json"])
@@ -6802,7 +7593,7 @@ def build_start_plan(
     context_pack["required_verification"] = budgeted_validation["required_plans"]
     context_pack["recommended_verification"] = budgeted_validation["recommended_plans"]
     context_pack["deferred_nightly_plans"] = budgeted_validation.get("deferred_nightly_plans") or []
-    code_intelligence_summary = _build_code_intelligence_summary(
+    code_intelligence_summary = code_intelligence_summary_override or _build_code_intelligence_summary(
         item_id=canonical_bug_id,
         record=record,
         changed_files=changed_files,
@@ -6961,6 +7752,17 @@ def build_start_plan(
     }
 
 
+def _finish_changed_files(base: str, head: str, *, root: Path = REPO_ROOT) -> list[str]:
+    """Combine committed branch changes with the current staged, dirty, and untracked task paths."""
+
+    return _normalize_changed_files(
+        [
+            *flow.changed_files_from_git(base, head),
+            *_dirty_files(root),
+        ]
+    )
+
+
 def build_finish_plan(
     *,
     bug_id: str | None,
@@ -6972,16 +7774,17 @@ def build_finish_plan(
     plan_only: bool,
     allow_missing_evidence: bool,
     fresh_process_evidence: list[str] | None = None,
+    code_intelligence_summary_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
-    changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
+    changed = _normalize_changed_files(changed_files) if changed_files is not None else _finish_changed_files(base, head)
     validation = _apply_validation_budget(
         record=record,
         validation=flow.select_validation(changed, module=record.get("module")),
     )
     pr_quality = flow.build_pr_quality(base=base, head=head, issue_record=record, changed_files=changed)
-    code_intelligence_summary = _build_code_intelligence_summary(
+    code_intelligence_summary = code_intelligence_summary_override or _build_code_intelligence_summary(
         item_id=canonical_bug_id,
         record=record,
         changed_files=changed,
@@ -8072,6 +8875,235 @@ def _selected_client_lane_keys(selected_lane: str | None) -> set[str]:
     return {"router", normalized}
 
 
+def _client_lanes_for_changed_files(changed_files: Iterable[str]) -> list[str]:
+    normalized = {
+        str(path).replace("\\", "/").removeprefix("./").strip("/")
+        for path in changed_files
+        if str(path).strip()
+    }
+    lanes: set[str] = set()
+    for key, skill_name in CLIENT_CODEX_SKILLS:
+        prefix = f".codex/skills/{skill_name}/"
+        if any(path == prefix.rstrip("/") or path.startswith(prefix) for path in normalized):
+            lanes.add(key)
+    for key, command_name in CLIENT_CLAUDE_COMMANDS:
+        path = f".claude/commands/{command_name}"
+        if path in normalized:
+            lanes.add(key)
+    return sorted(lanes)
+
+
+def _stale_client_lanes(manifest: dict[str, Any]) -> list[str]:
+    stale_statuses = {"stale", "stale_global", "missing_global"}
+    lanes: set[str] = set()
+    for entries_key in ("codex_entries", "claude_entries"):
+        entries = manifest.get(entries_key) if isinstance(manifest.get(entries_key), dict) else {}
+        for lane, entry in entries.items():
+            if str((entry or {}).get("status") or "") in stale_statuses:
+                lanes.add(str(lane))
+    return sorted(lanes)
+
+
+def _merge_commit_changed_files(merge_commit: str, *, root: Path) -> dict[str, Any]:
+    parent_result = _run_command(
+        ["git", "rev-list", "--parents", "-n", "1", merge_commit],
+        cwd=root,
+        timeout=30,
+    )
+    if not parent_result.get("ok"):
+        return {"ok": False, "files": [], "error": parent_result.get("stderr") or "merge commit unavailable"}
+    parts = str(parent_result.get("stdout") or "").split()
+    if len(parts) < 2:
+        return {"ok": False, "files": [], "error": f"merge commit has no parent: {merge_commit}"}
+    diff_result = _run_command(
+        ["git", "diff", "--name-only", parts[1], merge_commit],
+        cwd=root,
+        timeout=30,
+    )
+    return {
+        "ok": bool(diff_result.get("ok")),
+        "base": parts[1],
+        "merge_commit": merge_commit,
+        "files": sorted(set(str(diff_result.get("stdout") or "").splitlines())),
+        "error": None if diff_result.get("ok") else diff_result.get("stderr") or "merge diff unavailable",
+    }
+
+
+def _publish_changed_clients_after_merge(
+    *,
+    merge_commit: str,
+    sync_root: bool,
+    apply: bool,
+) -> dict[str, Any]:
+    root = _canonical_root()
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_merge_aftercare_client_publish_v1",
+        "merge_commit": merge_commit,
+        "canonical_root": str(root),
+        "sync_root": sync_root,
+        "dry_run": not apply,
+        "changed_files": [],
+        "selected_lanes": [],
+        "installs": [],
+        "verifications": [],
+        "blocking": [],
+    }
+    if not sync_root:
+        payload.update({"workflow_gate": "deferred", "reason": "canonical_root_sync_not_requested"})
+        return payload
+    if not apply:
+        payload.update({"workflow_gate": "ready_for_apply", "reason": "inspect_after_source_merge"})
+        return payload
+
+    fetch = _cleanup_preflight_fetch_origin(root, apply=True)
+    payload["fetch"] = fetch
+    if fetch.get("status") != "fetched":
+        result = fetch.get("result") if isinstance(fetch.get("result"), dict) else {}
+        payload["blocking"].append(result.get("stderr") or result.get("stdout") or "failed to fetch origin")
+    root_git = _git_snapshot(root)
+    payload["root_before"] = root_git
+    if root_git.get("branch") != "main":
+        payload["blocking"].append(f"canonical root is not on main: {root_git.get('branch')}")
+    if root_git.get("dirty") and root_git.get("head") != root_git.get("origin_main"):
+        payload["blocking"].append("canonical root is dirty and behind origin/main")
+    if payload["blocking"]:
+        payload["workflow_gate"] = "blocked"
+        return payload
+    if root_git.get("head") != root_git.get("origin_main"):
+        sync_result = _run_command(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)
+        payload["root_sync"] = sync_result
+        if not sync_result.get("ok"):
+            payload["blocking"].append(sync_result.get("stderr") or "canonical root fast-forward failed")
+            payload["workflow_gate"] = "blocked"
+            return payload
+
+    changed = _merge_commit_changed_files(merge_commit, root=root)
+    payload["merge_diff"] = changed
+    payload["changed_files"] = changed.get("files") or []
+    if not changed.get("ok"):
+        payload["blocking"].append(str(changed.get("error") or "merge changed-file inspection failed"))
+        payload["workflow_gate"] = "blocked"
+        return payload
+    changed_lanes = _client_lanes_for_changed_files(payload["changed_files"])
+    payload["changed_lanes"] = changed_lanes
+    if not changed_lanes:
+        payload.update({"workflow_gate": "not_required", "reason": "merge_did_not_change_workflow_clients"})
+        return payload
+    with _ClientInstallLock():
+        preinstall_manifest = _client_manifest()
+    stale_lanes = _stale_client_lanes(preinstall_manifest)
+    lanes = sorted(set(changed_lanes) | set(stale_lanes))
+    payload["stale_lanes_before"] = stale_lanes
+    payload["selected_lanes"] = lanes
+
+    for lane in lanes:
+        install = build_client_install_plan(apply=True, selected_lane=lane)
+        payload["installs"].append({"lane": lane, **install})
+        if install.get("workflow_gate") != "installed":
+            payload["blocking"].extend(install.get("blocking") or [f"client install failed for lane {lane}"])
+            continue
+        with _ClientInstallLock():
+            manifest = _client_manifest()
+        verification = _client_lane_verification(
+            manifest,
+            selected_lane=lane,
+            verify_codex=True,
+            verify_claude=True,
+        )
+        payload["verifications"].append({"lane": lane, **verification})
+        payload["blocking"].extend(verification.get("blocking") or [])
+    payload["workflow_gate"] = "blocked" if payload["blocking"] else "installed_and_verified"
+    payload["restart_recommended"] = False
+    return payload
+
+
+def _client_source_authority() -> dict[str, Any]:
+    canonical_root = _canonical_root()
+    canonical_git = _git_snapshot(canonical_root)
+    head_result = _run_command(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=canonical_root, timeout=15)
+    head = str(head_result.get("stdout") or "").strip().lower()
+    origin_main = _origin_main_commit(root=canonical_root)
+    authority_status = _run_command(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--",
+            ".codex/skills",
+            ".claude/commands",
+            "scripts/aistock_issue_workflow.py",
+        ],
+        cwd=canonical_root,
+        timeout=15,
+    )
+    authority_paths_dirty = bool(str(authority_status.get("stdout") or "").strip())
+    if (
+        canonical_git.get("ok")
+        and canonical_git.get("branch") == "main"
+        and authority_status.get("ok")
+        and not authority_paths_dirty
+        and head
+        and origin_main
+        and head == origin_main
+    ):
+        return {
+            "ready": True,
+            "source": "canonical_main",
+            "root": str(canonical_root),
+            "commit": head,
+            "origin_main_commit": origin_main,
+            "authority_paths_clean": True,
+            "blocking_reason": None,
+            "blocking_reasons": [],
+        }
+
+    reasons: list[str] = []
+    if not canonical_git.get("ok"):
+        reasons.append("canonical root is not a readable Git checkout")
+    if canonical_git.get("branch") != "main":
+        reasons.append(f"canonical root branch is {canonical_git.get('branch') or 'unknown'}, expected main")
+    if not authority_status.get("ok"):
+        reasons.append("canonical client-authority path status is unavailable")
+    elif authority_paths_dirty:
+        reasons.append("canonical client-authority paths are dirty")
+    if not origin_main:
+        reasons.append("origin/main identity is unavailable")
+    if head and origin_main and head != origin_main:
+        reasons.append("canonical main is not aligned with origin/main")
+    return {
+        "ready": False,
+        "source": "canonical_main",
+        "root": str(canonical_root),
+        "commit": head or None,
+        "origin_main_commit": origin_main,
+        "authority_paths_clean": bool(authority_status.get("ok")) and not authority_paths_dirty,
+        "blocking_reason": reasons[0] if reasons else "canonical client authority is unavailable",
+        "blocking_reasons": reasons,
+    }
+
+
+def _client_checkout_root() -> Path:
+    result = _run_command(["git", "rev-parse", "--show-toplevel"], cwd=Path.cwd(), timeout=15)
+    value = str(result.get("stdout") or "").strip()
+    return Path(value) if result.get("ok") and value else REPO_ROOT
+
+
+def _client_checkout_relation(authority: dict[str, Any]) -> str:
+    checkout_root = _client_checkout_root()
+    authority_commit = str(authority.get("commit") or "").strip()
+    head_result = _run_command(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=checkout_root, timeout=15)
+    checkout_commit = str(head_result.get("stdout") or "").strip().lower()
+    if not authority_commit or not checkout_commit:
+        return "authority_checkout" if _same_path(Path(authority["root"]), checkout_root) else "unknown"
+    if checkout_commit == authority_commit:
+        return "matches_authority"
+    if _git_commit_is_ancestor(checkout_commit, authority_commit, root=checkout_root):
+        return "behind_authority"
+    if _git_commit_is_ancestor(authority_commit, checkout_commit, root=checkout_root):
+        return "ahead_of_authority"
+    return "divergent_from_authority"
+
+
 class _ClientInstallLock:
     def __init__(self, *, timeout: float = 30.0) -> None:
         self.timeout = timeout
@@ -8137,28 +9169,40 @@ def _staged_replace_file(source: Path, target: Path) -> None:
 def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = None) -> dict[str, Any]:
     codex_home = codex_home or _codex_home()
     claude_home = claude_home or _claude_home()
+    checkout_root = _client_checkout_root()
     cli = REPO_ROOT / "scripts" / "aistock_issue_workflow.py"
-    repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=15)
+    checkout_cli = checkout_root / "scripts" / "aistock_issue_workflow.py"
+    repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=checkout_root, timeout=15)
     cli_sha = _sha256_file(cli)
+    authority = _client_source_authority()
+    authority_root = Path(authority["root"])
+    authority_cli = authority_root / "scripts" / "aistock_issue_workflow.py"
+    checkout_relation = _client_checkout_relation(authority)
 
-    def _tree_status(repo_sha: str | None, global_sha: str | None) -> str:
-        if repo_sha and global_sha:
-            return "current" if repo_sha == global_sha else "stale"
-        if repo_sha and not global_sha:
+    def _tree_status(authority_sha: str | None, global_sha: str | None) -> str:
+        if not authority.get("ready"):
+            return "authority_unavailable"
+        if authority_sha and global_sha:
+            return "current" if authority_sha == global_sha else "stale"
+        if authority_sha and not global_sha:
             return "missing_global"
-        return "missing_repo_skill"
+        return "missing_authority"
 
-    def _file_status(repo_sha: str | None, global_sha: str | None) -> str:
-        if repo_sha and global_sha:
-            return "current" if repo_sha == global_sha else "stale_global"
-        if repo_sha and not global_sha:
+    def _file_status(authority_sha: str | None, global_sha: str | None) -> str:
+        if not authority.get("ready"):
+            return "authority_unavailable"
+        if authority_sha and global_sha:
+            return "current" if authority_sha == global_sha else "stale_global"
+        if authority_sha and not global_sha:
             return "missing_global"
-        return "missing_repo"
+        return "missing_authority"
 
-    def _combined_status(statuses: Iterable[str], *, missing_repo_status: str, stale_status: str) -> str:
+    def _combined_status(statuses: Iterable[str], *, stale_status: str) -> str:
         values = list(statuses)
-        if any(value == missing_repo_status for value in values):
-            return missing_repo_status
+        if any(value == "authority_unavailable" for value in values):
+            return "authority_unavailable"
+        if any(value == "missing_authority" for value in values):
+            return "missing_authority"
         if any(value.startswith("stale") for value in values):
             return stale_status
         if any(value == "missing_global" for value in values):
@@ -8167,81 +9211,112 @@ def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = 
 
     codex_entries: dict[str, dict[str, Any]] = {}
     for key, skill_name in CLIENT_CODEX_SKILLS:
-        repo_path = REPO_ROOT / ".codex" / "skills" / skill_name
+        repo_path = checkout_root / ".codex" / "skills" / skill_name
+        authority_path = authority_root / ".codex" / "skills" / skill_name
         global_path = codex_home / "skills" / skill_name
         repo_sha = _sha256_tree(repo_path)
+        authority_sha = _sha256_tree(authority_path) if authority.get("ready") else None
         global_sha = _sha256_tree(global_path)
         codex_entries[key] = {
             "name": skill_name,
             "repo_path": str(repo_path),
+            "authority_path": str(authority_path),
             "global_path": str(global_path),
             "repo_sha256": repo_sha,
+            "authority_sha256": authority_sha,
             "global_sha256": global_sha,
-            "status": _tree_status(repo_sha, global_sha),
+            "checkout_status": "matches_authority" if repo_sha == authority_sha else "differs_from_authority",
+            "status": _tree_status(authority_sha, global_sha),
         }
 
     claude_entries: dict[str, dict[str, Any]] = {}
     for key, command_name in CLIENT_CLAUDE_COMMANDS:
-        repo_path = REPO_ROOT / ".claude" / "commands" / command_name
+        repo_path = checkout_root / ".claude" / "commands" / command_name
+        authority_path = authority_root / ".claude" / "commands" / command_name
         global_path = claude_home / "commands" / command_name
         repo_sha = _sha256_file(repo_path)
+        authority_sha = _sha256_file(authority_path) if authority.get("ready") else None
         global_sha = _sha256_file(global_path)
         claude_entries[key] = {
             "name": command_name,
             "repo_path": str(repo_path),
+            "authority_path": str(authority_path),
             "global_path": str(global_path),
             "repo_sha256": repo_sha,
+            "authority_sha256": authority_sha,
             "global_sha256": global_sha,
-            "status": _file_status(repo_sha, global_sha),
+            "checkout_status": "matches_authority" if repo_sha == authority_sha else "differs_from_authority",
+            "status": _file_status(authority_sha, global_sha),
         }
 
     codex_status = _combined_status(
         (entry["status"] for entry in codex_entries.values()),
-        missing_repo_status="missing_repo_skill",
         stale_status="stale",
     )
     claude_status = _combined_status(
         (entry["status"] for entry in claude_entries.values()),
-        missing_repo_status="missing_repo",
         stale_status="stale_global",
     )
 
-    paths: dict[str, str] = {"workflow_cli": str(cli)}
+    paths: dict[str, str] = {"workflow_cli": str(cli), "checkout_workflow_cli": str(checkout_cli)}
     for key, entry in codex_entries.items():
         paths[f"repo_codex_{key}_skill"] = entry["repo_path"]
+        paths[f"authority_codex_{key}_skill"] = entry["authority_path"]
         paths[f"global_codex_{key}_skill"] = entry["global_path"]
     for key, entry in claude_entries.items():
         paths[f"claude_{key}_command"] = entry["repo_path"]
+        paths[f"authority_claude_{key}_command"] = entry["authority_path"]
         paths[f"global_claude_{key}_command"] = entry["global_path"]
 
     payload: dict[str, Any] = {
         "schema_version": "aistock_issue_workflow_client_manifest_v2",
         "repo_commit": repo_head.get("stdout") if repo_head.get("ok") else None,
+        "checkout_root": str(checkout_root),
+        "checkout_commit_relation": checkout_relation,
+        "source_authority": authority,
+        "codex_home": str(codex_home),
+        "claude_home": str(claude_home),
         "workflow_cli_sha256": cli_sha,
+        "authority_workflow_cli_sha256": _sha256_file(authority_cli) if authority.get("ready") else None,
         "codex_skill_status": codex_status,
         "claude_command_status": claude_status,
         "codex_entries": codex_entries,
         "claude_entries": claude_entries,
         "paths": paths,
-        "restart_recommended": codex_status != "current" or claude_status != "current",
-        "install_client_next_command": f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} install-client --apply",
+        "restart_recommended": False,
+        "install_client_next_command": subprocess.list2cmdline(
+            [
+                "python",
+                str(authority_cli),
+                "install-client",
+                "--apply",
+                "--codex-home",
+                str(codex_home),
+                "--claude-home",
+                str(claude_home),
+            ]
+        ),
     }
 
     # Backward-compatible flat fields used by compact output and older tests.
     if "issue" in codex_entries:
-        payload["codex_skill_sha256"] = codex_entries["issue"]["repo_sha256"]
+        payload["codex_skill_sha256"] = codex_entries["issue"]["authority_sha256"]
+        payload["checkout_codex_skill_sha256"] = codex_entries["issue"]["repo_sha256"]
         payload["global_codex_skill_sha256"] = codex_entries["issue"]["global_sha256"]
         payload["codex_issue_skill_status"] = codex_entries["issue"]["status"]
     if "feature" in codex_entries:
-        payload["codex_feature_skill_sha256"] = codex_entries["feature"]["repo_sha256"]
+        payload["codex_feature_skill_sha256"] = codex_entries["feature"]["authority_sha256"]
+        payload["checkout_codex_feature_skill_sha256"] = codex_entries["feature"]["repo_sha256"]
         payload["global_codex_feature_skill_sha256"] = codex_entries["feature"]["global_sha256"]
         payload["codex_feature_skill_status"] = codex_entries["feature"]["status"]
     if "issue" in claude_entries:
-        payload["claude_command_sha256"] = claude_entries["issue"]["repo_sha256"]
+        payload["claude_command_sha256"] = claude_entries["issue"]["authority_sha256"]
+        payload["checkout_claude_command_sha256"] = claude_entries["issue"]["repo_sha256"]
         payload["global_claude_command_sha256"] = claude_entries["issue"]["global_sha256"]
         payload["claude_issue_command_status"] = claude_entries["issue"]["status"]
     if "feature" in claude_entries:
-        payload["claude_feature_command_sha256"] = claude_entries["feature"]["repo_sha256"]
+        payload["claude_feature_command_sha256"] = claude_entries["feature"]["authority_sha256"]
+        payload["checkout_claude_feature_command_sha256"] = claude_entries["feature"]["repo_sha256"]
         payload["global_claude_feature_command_sha256"] = claude_entries["feature"]["global_sha256"]
         payload["claude_feature_command_status"] = claude_entries["feature"]["status"]
     for key in ("router", "docs_handoff", "merge_aftercare", "readonly_triage", "validation_delegation"):
@@ -8262,6 +9337,7 @@ def _client_lane_verification(
     selected_keys = _selected_client_lane_keys(selected_lane)
     blocking: list[str] = []
     warnings: list[str] = []
+    checkout_advisories: list[str] = []
     checked: list[dict[str, str]] = []
     for client, enabled, entries_key in (
         ("codex", verify_codex, "codex_entries"),
@@ -8272,8 +9348,22 @@ def _client_lane_verification(
         entries = manifest.get(entries_key) or {}
         for key, entry in entries.items():
             status = str((entry or {}).get("status") or "missing")
+            checkout_status = str((entry or {}).get("checkout_status") or "unknown")
             relevant = key in selected_keys
-            checked.append({"client": client, "lane": key, "status": status, "relevance": "selected" if relevant else "unrelated"})
+            checked.append(
+                {
+                    "client": client,
+                    "lane": key,
+                    "status": status,
+                    "checkout_status": checkout_status,
+                    "relevance": "selected" if relevant else "unrelated",
+                }
+            )
+            if relevant and checkout_status == "differs_from_authority":
+                checkout_advisories.append(
+                    f"{client} lane {key} checkout differs from merged client authority; "
+                    "do not install from this task worktree"
+                )
             if status == "current":
                 continue
             message = f"{client} lane {key} is {status}"
@@ -8281,12 +9371,47 @@ def _client_lane_verification(
                 blocking.append(message)
             else:
                 warnings.append(f"unrelated {message}")
+    authority = manifest.get("source_authority") if isinstance(manifest.get("source_authority"), dict) else {}
+    authority_cli = Path(str(authority.get("root") or _canonical_root())) / "scripts" / "aistock_issue_workflow.py"
+    install_args = ["python", str(authority_cli), "install-client", "--apply"]
+    verify_args = ["python", str(authority_cli), "verify-clients", "--workflow-only"]
+    if selected_lane:
+        install_args.extend(["--selected-lane", selected_lane])
+        verify_args.extend(["--selected-lane", selected_lane])
+    if verify_codex:
+        install_args.extend(["--codex-home", str(manifest.get("codex_home") or _codex_home())])
+        verify_args.extend(["--codex-home", str(manifest.get("codex_home") or _codex_home())])
+    else:
+        install_args.append("--skip-codex")
+        verify_args.append("--skip-codex")
+    if verify_claude:
+        install_args.extend(["--claude-home", str(manifest.get("claude_home") or _claude_home())])
+        verify_args.extend(["--claude-home", str(manifest.get("claude_home") or _claude_home())])
+    else:
+        install_args.append("--skip-claude")
+        verify_args.append("--skip-claude")
+    if blocking:
+        authority_blocked = any("authority_unavailable" in item or "missing_authority" in item for item in blocking)
+        action = "sync_canonical_main_then_single_owner_install" if authority_blocked else "request_single_owner_sync"
+    else:
+        action = "continue_without_install"
+    remediation = {
+        "action": action,
+        "single_owner_required": bool(blocking),
+        "must_not_install_from_task_worktree": True,
+        "owner_command": subprocess.list2cmdline(install_args) if blocking else None,
+        "window_verify_command": subprocess.list2cmdline(verify_args),
+        "authority_root": str(authority.get("root") or _canonical_root()),
+        "authority_commit": authority.get("commit"),
+    }
     return {
         "selected_lane": selected_lane,
         "selected_lane_keys": sorted(selected_keys),
         "checked": checked,
         "blocking": blocking,
         "warnings": warnings,
+        "checkout_advisories": checkout_advisories,
+        "remediation": remediation,
         "ready": not blocking,
     }
 
@@ -8383,15 +9508,15 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         warnings.append("MCP/Codex config mentions AIstock_worktrees; verify it is not a stale server target")
 
     client_manifest = _client_manifest()
-    if client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
+    if client_manifest["codex_skill_status"] in {"authority_unavailable", "missing_authority"}:
+        blocking.append("merged Codex workflow authority is unavailable or incomplete")
+    elif client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
         warnings.append(
             "global Codex workflow skill set is missing or stale; verify the router and selected lane for this window "
             "before any target-scoped install"
         )
-    elif client_manifest["codex_skill_status"] == "missing_repo_skill":
-        blocking.append("repo Codex workflow skill set is missing")
-    if client_manifest["claude_command_status"] == "missing_repo":
-        warnings.append("repo Claude Code workflow command set is missing; Claude can still call the repo CLI directly")
+    if client_manifest["claude_command_status"] in {"authority_unavailable", "missing_authority"}:
+        blocking.append("merged Claude Code workflow authority is unavailable or incomplete")
     elif client_manifest["claude_command_status"] in {"missing_global", "stale_global"}:
         warnings.append(
             "global Claude Code workflow command set is missing or stale; verify the router and selected lane for this "
@@ -8449,17 +9574,24 @@ def build_client_install_plan(
     target_home = Path(codex_home) if codex_home else _codex_home()
     target_claude_home = Path(claude_home) if claude_home else _claude_home()
     selected_keys = _selected_client_lane_keys(selected_lane)
+    source_authority = _client_source_authority()
+    authority_root = Path(source_authority["root"])
     source_codex_skills = [
-        (key, name, REPO_ROOT / ".codex" / "skills" / name, target_home / "skills" / name)
+        (key, name, authority_root / ".codex" / "skills" / name, target_home / "skills" / name)
         for key, name in CLIENT_CODEX_SKILLS
         if key in selected_keys
     ] if install_codex else []
     source_claude_commands = [
-        (key, name, REPO_ROOT / ".claude" / "commands" / name, target_claude_home / "commands" / name)
+        (key, name, authority_root / ".claude" / "commands" / name, target_claude_home / "commands" / name)
         for key, name in CLIENT_CLAUDE_COMMANDS
         if key in selected_keys
     ] if install_claude else []
     blocking: list[str] = []
+    if not source_authority.get("ready"):
+        blocking.append(
+            "merged client authority is unavailable: "
+            f"{source_authority.get('blocking_reason') or 'sync canonical main with origin/main'}"
+        )
     for _key, name, source, _target in source_codex_skills:
         if not source.exists():
             blocking.append(f"missing repo Codex skill {name}: {source}")
@@ -8512,6 +9644,9 @@ def build_client_install_plan(
         "install_claude": install_claude,
         "selected_lane": selected_lane,
         "selected_lane_keys": sorted(selected_keys),
+        "source_authority": source_authority,
+        "single_owner_required": any(bool(item.get("sync_required")) for item in actions),
+        "task_worktree_is_install_source": False,
         "client_manifest_before": _client_manifest(target_home, target_claude_home),
     }
     if apply:
@@ -8520,6 +9655,15 @@ def build_client_install_plan(
         installed: list[dict[str, str]] = []
         skipped_current: list[dict[str, str]] = []
         with _ClientInstallLock():
+            locked_authority = _client_source_authority()
+            if (
+                not locked_authority.get("ready")
+                or not _same_path(Path(locked_authority["root"]), authority_root)
+                or locked_authority.get("commit") != source_authority.get("commit")
+            ):
+                raise WorkflowError(
+                    "merged client authority changed before install; rerun from synchronized canonical main"
+                )
             for key, _name, source, target in source_codex_skills:
                 if _sha256_tree(source) == _sha256_tree(target):
                     skipped_current.append({"client": "codex", "lane": key, "target": str(target)})
@@ -8672,7 +9816,10 @@ def build_postmortem_plan(
             return prior
     active = _active_workflows_for_bug(canonical_bug_id)
     duplicate_active_count = max(0, len(active) - 1)
-    stale_pr_check = _stale_pr_check_for_bug(canonical_bug_id)
+    stale_pr_check = state.get("stale_pr_check") or {
+        "status": "skipped_postmortem_remote_read",
+        "reason": "postmortem reuses durable workflow state and does not repeat GitHub PR inventory queries",
+    }
     context_metrics = state.get("context_metrics") or {}
     if not context_metrics:
         context_metrics = _fallback_context_metrics(canonical_bug_id, root)
@@ -9872,6 +11019,530 @@ def _is_reparse_or_symlink(path: Path) -> bool:
         return False
 
 
+def _normalize_worktree_artifact_path(value: str) -> str:
+    normalized = str(value or "").replace("\\", "/").strip()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _worktree_transient_root(
+    relative_path: str,
+    *,
+    worktree_path: Path,
+    canonical_root: Path,
+) -> tuple[str | None, str]:
+    rel = _normalize_worktree_artifact_path(relative_path)
+    rel_path = Path(rel)
+    if not rel or rel_path.is_absolute() or ".." in rel_path.parts:
+        return None, "invalid_path"
+    parts = rel.split("/")
+    if rel.startswith(WORKTREE_TRANSIENT_PREFIXES):
+        if rel.startswith("var/research_assistant/"):
+            return "var/research_assistant", "task_local_runtime_artifact"
+        return "/".join(parts[:2]), "task_temporary_artifact"
+    for index, part in enumerate(parts):
+        if part in WORKTREE_TRANSIENT_CACHE_DIRS or part == ".next" or part.startswith(".next-"):
+            return "/".join(parts[: index + 1]), "reproducible_cache"
+    if rel in WORKTREE_TRANSIENT_EXACT_FILES or rel.startswith(".coverage.") or rel.endswith((".pyc", ".pyo")):
+        return rel, "reproducible_cache_file"
+    if rel == "proxy_config.json":
+        candidate = worktree_path / rel
+        canonical = canonical_root / rel
+        if candidate.is_file() and canonical.is_file() and hashlib.sha256(candidate.read_bytes()).digest() == hashlib.sha256(canonical.read_bytes()).digest():
+            return rel, "canonical_equivalent_local_config"
+        return None, "non_equivalent_local_config"
+    return None, "unknown_ignored_artifact"
+
+
+def _validated_qe_live_log_transient_paths(
+    ignored_paths: Iterable[str],
+    *,
+    worktree_path: Path,
+) -> tuple[set[str], str]:
+    prefix = WORKTREE_QE_LIVE_LOG_ROOT + "/"
+    observed = {
+        _normalize_worktree_artifact_path(item)
+        for item in ignored_paths
+        if _normalize_worktree_artifact_path(item).startswith(prefix)
+    }
+    if not observed:
+        return set(), "qe_live_log_ring_not_present"
+    if observed != WORKTREE_QE_LIVE_LOG_PATHS:
+        return set(), "qe_live_log_ring_inventory_mismatch"
+
+    root = worktree_path / WORKTREE_QE_LIVE_LOG_ROOT
+    if (
+        not root.is_dir()
+        or _is_reparse_or_symlink(root.parent)
+        or _is_reparse_or_symlink(root)
+    ):
+        return set(), "qe_live_log_ring_unsafe_directory"
+
+    for relative_path in sorted(WORKTREE_QE_LIVE_LOG_PATHS):
+        candidate = worktree_path / relative_path
+        try:
+            if _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                return set(), "qe_live_log_ring_unsafe_file"
+            if candidate.stat().st_size > WORKTREE_QE_LIVE_LOG_MAX_FILE_BYTES:
+                return set(), "qe_live_log_ring_file_too_large"
+            with candidate.open("r", encoding="utf-8", errors="strict") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    if not isinstance(record, dict) or record.get("schema_version") != WORKTREE_QE_LIVE_LOG_SCHEMA:
+                        return set(), "qe_live_log_ring_schema_mismatch"
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return set(), "qe_live_log_ring_invalid_jsonl"
+    return set(WORKTREE_QE_LIVE_LOG_PATHS), "bounded_non_authoritative_qe_live_log_ring"
+
+
+def _validated_backend_lifespan_log_transient_paths(
+    ignored_paths: Iterable[str],
+    *,
+    worktree_path: Path,
+) -> tuple[set[str], str]:
+    prefix = WORKTREE_BACKEND_LOG_ROOT + "/"
+    observed = {
+        _normalize_worktree_artifact_path(item)
+        for item in ignored_paths
+        if _normalize_worktree_artifact_path(item).startswith(prefix)
+    }
+    if not observed:
+        return set(), "backend_lifespan_logs_not_present"
+    allowed = set(WORKTREE_BACKEND_LOG_LIMITS)
+    if not observed.issubset(allowed):
+        return set(), "backend_lifespan_log_inventory_mismatch"
+
+    root = worktree_path / WORKTREE_BACKEND_LOG_ROOT
+    if not root.is_dir() or _is_reparse_or_symlink(root.parent) or _is_reparse_or_symlink(root):
+        return set(), "backend_lifespan_log_unsafe_directory"
+    for relative_path in sorted(observed):
+        candidate = worktree_path / relative_path
+        try:
+            if _is_reparse_or_symlink(candidate) or not candidate.is_file():
+                return set(), "backend_lifespan_log_unsafe_file"
+            if candidate.stat().st_size > WORKTREE_BACKEND_LOG_LIMITS[relative_path]:
+                return set(), "backend_lifespan_log_file_too_large"
+            with candidate.open("r", encoding="utf-8", errors="strict") as handle:
+                for line in handle:
+                    text = line.rstrip("\r\n")
+                    if not text or not WORKTREE_BACKEND_LOG_LINE_RE.fullmatch(text):
+                        return set(), "backend_lifespan_log_format_mismatch"
+        except (OSError, UnicodeError):
+            return set(), "backend_lifespan_log_unreadable"
+    return observed, "bounded_test_created_backend_lifespan_log"
+
+
+def _minimal_relative_roots(roots: Iterable[str]) -> list[str]:
+    ordered = sorted({_normalize_worktree_artifact_path(item) for item in roots if item}, key=lambda item: (item.count("/"), item))
+    minimal: list[str] = []
+    for item in ordered:
+        if any(item == parent or item.startswith(parent + "/") for parent in minimal):
+            continue
+        minimal.append(item)
+    return minimal
+
+
+def _cleanup_protected_receipt_paths(bug_id: str | None) -> set[str]:
+    if not bug_id:
+        return set()
+    try:
+        record, _source_path = find_bug_record(bug_id=bug_id, issue_json=None)
+    except Exception:
+        return set()
+    runtime = record.get("runtime_contract") if isinstance(record.get("runtime_contract"), dict) else {}
+    receipt_ref = _normalize_worktree_artifact_path(str(runtime.get("post_restart_receipt_ref") or ""))
+    workflow_marker = WORKFLOW_ROOT.as_posix().rstrip("/") + "/"
+    marker_index = receipt_ref.find(workflow_marker)
+    if marker_index > 0:
+        receipt_ref = receipt_ref[marker_index:]
+    summary = runtime.get("post_restart_receipt_summary")
+    required_summary_fields = (
+        "receipt_sha256",
+        "expected_identity",
+        "observed_identity",
+        "runtime_identity_proof_digest",
+        "contract_digest",
+        "catalog_sha256",
+        "probe_evidence_digest",
+    )
+    summary_durable = (
+        isinstance(summary, dict)
+        and summary.get("schema_version") == RUNTIME_VERIFY_RECEIPT_SUMMARY_SCHEMA
+        and all(bool(str(summary.get(field) or "").strip()) for field in required_summary_fields)
+        and summary.get("post_restart_effective_gate") == "passed"
+        and summary.get("response_content_persisted") is False
+    )
+    return {receipt_ref} if receipt_ref and not summary_durable else set()
+
+
+def _cleanup_evidence_finalization(bug_id: str | None) -> dict[str, Any]:
+    if not bug_id:
+        return {
+            "schema_version": "aistock_cleanup_evidence_finalization_v1",
+            "status": "not_required_without_bug_record",
+            "durable_receipt_present": True,
+        }
+    try:
+        record, source_path = find_bug_record(bug_id=bug_id, issue_json=None)
+    except Exception as exc:
+        return {
+            "schema_version": "aistock_cleanup_evidence_finalization_v1",
+            "status": "bug_record_unavailable",
+            "durable_receipt_present": False,
+            "error": str(exc),
+        }
+    evidence = [
+        *flow._as_list(record.get("validation_receipts")),
+        *flow._as_list(record.get("validation_evidence")),
+    ]
+    structured_receipt_present = any(flow._has_validation_receipt(item) for item in evidence)
+    legacy_closure_present = bool(
+        str(record.get("status") or "") in {"fixed", "verified"}
+        and str(record.get("fix_commit") or "").strip()
+        and str(record.get("pr_url") or "").strip()
+        and evidence
+    )
+    durable_receipt_present = structured_receipt_present or legacy_closure_present
+    return {
+        "schema_version": "aistock_cleanup_evidence_finalization_v1",
+        "status": (
+            "finalized_structured_receipt"
+            if structured_receipt_present
+            else ("finalized_legacy_closed_bug" if legacy_closure_present else "missing_durable_receipt")
+        ),
+        "durable_receipt_present": durable_receipt_present,
+        "structured_receipt_present": structured_receipt_present,
+        "legacy_closure_present": legacy_closure_present,
+        "bug_json": _repo_rel(source_path),
+        "evidence_item_count": len(evidence),
+    }
+
+
+def _worktree_active_process_profile(worktree_path: Path) -> dict[str, Any]:
+    resolved = str(worktree_path.resolve())
+    profile: dict[str, Any] = {
+        "schema_version": "aistock_worktree_process_reference_v1",
+        "target": resolved,
+        "scan_status": "complete",
+        "reference_count": 0,
+        "references": [],
+    }
+    if os.name == "nt":
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if not powershell:
+            profile.update({"scan_status": "unavailable", "error": "PowerShell unavailable"})
+            return profile
+        env = os.environ.copy()
+        env["AISTOCK_CLEANUP_TARGET"] = resolved
+        env["AISTOCK_CLEANUP_CALLER_PID"] = str(os.getpid())
+        script = (
+            "$target=$env:AISTOCK_CLEANUP_TARGET;"
+            "$forward=$target.Replace('\\','/');"
+            "$all=@(Get-CimInstance Win32_Process);"
+            "$exclude=New-Object 'System.Collections.Generic.HashSet[int]';"
+            "$null=$exclude.Add([int]$PID);$cursor=[int]$env:AISTOCK_CLEANUP_CALLER_PID;"
+            "while($cursor -gt 0 -and $exclude.Add($cursor)){"
+            "$row=$all|Where-Object{[int]$_.ProcessId -eq $cursor}|Select-Object -First 1;"
+            "if($null -eq $row){break};$cursor=[int]$row.ParentProcessId};"
+            "$hits=@($all|Where-Object{-not $exclude.Contains([int]$_.ProcessId)}|"
+            "Where-Object{([string]$_.CommandLine).IndexOf($target,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or "
+            "([string]$_.CommandLine).IndexOf($forward,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or "
+            "([string]$_.ExecutablePath).IndexOf($target,[StringComparison]::OrdinalIgnoreCase)-ge 0}|"
+            "Select-Object ProcessId,Name);$hits|ConvertTo-Json -Compress"
+        )
+        try:
+            proc = subprocess.run(
+                [powershell, "-NoProfile", "-Command", script],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=30,
+                env=env,
+            )
+            if proc.returncode != 0:
+                profile.update({"scan_status": "failed", "error": (proc.stderr or proc.stdout).strip()})
+                return profile
+            raw = proc.stdout.strip()
+            parsed = json.loads(raw) if raw else []
+            references = parsed if isinstance(parsed, list) else [parsed]
+            profile["references"] = references[:20]
+            profile["reference_count"] = len(references)
+            return profile
+        except Exception as exc:
+            profile.update({"scan_status": "failed", "error": str(exc)})
+            return profile
+
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        profile.update({"scan_status": "unsupported"})
+        return profile
+    references: list[dict[str, Any]] = []
+    for item in proc_root.iterdir():
+        if not item.name.isdigit() or int(item.name) in {os.getpid(), os.getppid()}:
+            continue
+        try:
+            cwd = (item / "cwd").resolve()
+            executable = (item / "exe").resolve()
+            command_line = (item / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", errors="replace")
+            target = worktree_path.resolve()
+            matched = (
+                cwd == target
+                or target in cwd.parents
+                or executable == target
+                or target in executable.parents
+                or str(target) in command_line
+            )
+            if matched:
+                references.append({"process_id": int(item.name), "name": (item / "comm").read_text(encoding="utf-8").strip()})
+        except (OSError, PermissionError):
+            continue
+    profile["references"] = references[:20]
+    profile["reference_count"] = len(references)
+    return profile
+
+
+def _worktree_ignored_artifact_profile(
+    worktree_path: Path,
+    *,
+    canonical_root: Path,
+    protected_paths: set[str] | None = None,
+) -> dict[str, Any]:
+    protected = {_normalize_worktree_artifact_path(item) for item in (protected_paths or set()) if item}
+    result = _run_command(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
+        cwd=worktree_path,
+        timeout=120,
+    )
+    profile: dict[str, Any] = {
+        "schema_version": "aistock_worktree_ignored_artifact_profile_v1",
+        "scan_status": "complete" if result.get("ok") else "failed",
+        "ignored_count": 0,
+        "transient_count": 0,
+        "protected_count": 0,
+        "unknown_count": 0,
+        "transient_roots": [],
+        "transient_samples": [],
+        "protected_samples": [],
+        "unknown_samples": [],
+        "manifest_sha256": None,
+    }
+    if not result.get("ok"):
+        profile["error"] = result.get("stderr") or result.get("stdout") or "ignored artifact scan failed"
+        return profile
+    ignored = sorted({_normalize_worktree_artifact_path(item) for item in str(result.get("stdout") or "").split("\0") if item})
+    qe_live_log_paths, qe_live_log_reason = _validated_qe_live_log_transient_paths(
+        ignored,
+        worktree_path=worktree_path,
+    )
+    qe_live_log_prefix = WORKTREE_QE_LIVE_LOG_ROOT + "/"
+    backend_log_paths, backend_log_reason = _validated_backend_lifespan_log_transient_paths(
+        ignored,
+        worktree_path=worktree_path,
+    )
+    backend_log_prefix = WORKTREE_BACKEND_LOG_ROOT + "/"
+    roots: list[str] = []
+    canonical_lines: list[str] = []
+    for rel in ignored:
+        if rel in protected:
+            category, reason, root = "protected", "durable_receipt_not_finalized", None
+            profile["protected_count"] += 1
+            if len(profile["protected_samples"]) < 20:
+                profile["protected_samples"].append(rel)
+        else:
+            if rel.startswith(qe_live_log_prefix):
+                root = WORKTREE_QE_LIVE_LOG_ROOT if rel in qe_live_log_paths else None
+                reason = qe_live_log_reason
+            elif rel.startswith(backend_log_prefix):
+                root = rel if rel in backend_log_paths else None
+                reason = backend_log_reason
+            else:
+                root, reason = _worktree_transient_root(rel, worktree_path=worktree_path, canonical_root=canonical_root)
+            if root:
+                category = "transient"
+                roots.append(root)
+                profile["transient_count"] += 1
+                if len(profile["transient_samples"]) < 20:
+                    profile["transient_samples"].append(rel)
+            else:
+                category = "unknown"
+                profile["unknown_count"] += 1
+                if len(profile["unknown_samples"]) < 20:
+                    profile["unknown_samples"].append({"path": rel, "reason": reason})
+        canonical_lines.append(f"{rel}\t{category}\t{reason}\t{root or ''}")
+    minimal_roots = _minimal_relative_roots(roots)
+    tracked_conflicts: list[str] = []
+    for root in minimal_roots:
+        tracked = _run_command(["git", "ls-files", "-z", "--", root], cwd=worktree_path, timeout=60)
+        if not tracked.get("ok"):
+            tracked_conflicts.append(root)
+        elif str(tracked.get("stdout") or "").strip("\0"):
+            tracked_conflicts.append(root)
+    if tracked_conflicts:
+        profile["unknown_count"] += len(tracked_conflicts)
+        profile["unknown_samples"].extend(
+            {"path": item, "reason": "transient_root_contains_tracked_files"}
+            for item in tracked_conflicts[: max(0, 20 - len(profile["unknown_samples"]))]
+        )
+        minimal_roots = [item for item in minimal_roots if item not in set(tracked_conflicts)]
+    profile["ignored_count"] = len(ignored)
+    profile["transient_roots"] = minimal_roots
+    profile["transient_root_count"] = len(minimal_roots)
+    profile["manifest_sha256"] = hashlib.sha256("\n".join(canonical_lines).encode("utf-8")).hexdigest()
+    return profile
+
+
+def _validated_transient_root_target(worktree_path: Path, relative_root: str) -> Path:
+    normalized = _normalize_worktree_artifact_path(relative_root)
+    rel = Path(normalized)
+    if not normalized or rel.is_absolute() or ".." in rel.parts:
+        raise WorkflowError(f"invalid transient cleanup root: {relative_root}")
+    lexical_root = Path(os.path.abspath(worktree_path))
+    target = Path(os.path.abspath(lexical_root / rel))
+    try:
+        target.relative_to(lexical_root)
+    except ValueError as exc:
+        raise WorkflowError(f"transient cleanup escaped worktree: {target}") from exc
+    cursor = lexical_root
+    for part in rel.parts[:-1]:
+        cursor /= part
+        if _is_reparse_or_symlink(cursor):
+            raise WorkflowError(f"transient cleanup root crosses reparse point: {cursor}")
+    return target
+
+
+def _remove_exact_transient_root(worktree_path: Path, relative_root: str, *, target: Path | None = None) -> None:
+    target = target or _validated_transient_root_target(worktree_path, relative_root)
+    if not target.exists() and not _is_reparse_or_symlink(target):
+        return
+    if target.is_symlink():
+        target.unlink()
+    elif _is_reparse_or_symlink(target):
+        if target.is_dir():
+            target.rmdir()
+        else:
+            target.unlink()
+    elif target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+
+
+def _purge_worktree_transient_artifacts(
+    worktree_path: Path,
+    *,
+    canonical_root: Path,
+    expected_profile: dict[str, Any],
+    protected_paths: set[str] | None = None,
+) -> dict[str, Any]:
+    live = _worktree_ignored_artifact_profile(
+        worktree_path,
+        canonical_root=canonical_root,
+        protected_paths=protected_paths,
+    )
+    if live.get("scan_status") != "complete":
+        raise WorkflowError(str(live.get("error") or "ignored artifact rescan failed"))
+    if live.get("manifest_sha256") != expected_profile.get("manifest_sha256"):
+        raise WorkflowError("ignored artifact manifest changed after cleanup preflight")
+    if live.get("protected_count") or live.get("unknown_count"):
+        raise WorkflowError("ignored artifacts include protected or unknown files")
+    validated_roots = [
+        (str(relative_root), _validated_transient_root_target(worktree_path, str(relative_root)))
+        for relative_root in live.get("transient_roots") or []
+    ]
+    removed_roots: list[str] = []
+    for relative_root, target in validated_roots:
+        _remove_exact_transient_root(worktree_path, relative_root, target=target)
+        removed_roots.append(relative_root)
+    after = _worktree_ignored_artifact_profile(
+        worktree_path,
+        canonical_root=canonical_root,
+        protected_paths=protected_paths,
+    )
+    if after.get("scan_status") != "complete" or after.get("ignored_count"):
+        raise WorkflowError("transient artifact purge did not leave an empty ignored-artifact inventory")
+    return {
+        "ok": True,
+        "schema_version": "aistock_worktree_transient_purge_v1",
+        "manifest_sha256": live.get("manifest_sha256"),
+        "removed_root_count": len(removed_roots),
+        "removed_roots": removed_roots[:50],
+        "removed_roots_truncated": len(removed_roots) > 50,
+        "ignored_count_before": live.get("ignored_count"),
+        "ignored_count_after": after.get("ignored_count"),
+    }
+
+
+def _cleanup_post_removal_verification(
+    *,
+    root: Path,
+    worktree_path: Path | None,
+    branch: str,
+) -> dict[str, Any]:
+    local_refs = set(
+        _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
+    )
+    remote_result = _run_read_command_with_retry(
+        ["git", "ls-remote", "--heads", "origin", branch],
+        cwd=root,
+        timeout=60,
+    )
+    remote_output = str(remote_result.get("stdout") or "") if remote_result.get("ok") else ""
+    remote_check_ok = bool(remote_result.get("ok"))
+    local_absent = branch not in local_refs
+    remote_absent = remote_check_ok and not remote_output.strip()
+    path_absent = worktree_path is None or not worktree_path.exists()
+    registration_absent = worktree_path is None or not _path_is_registered_worktree(worktree_path, cwd=root)
+    all_clear = bool(path_absent and registration_absent and local_absent and remote_absent)
+    return {
+        "schema_version": "aistock_worktree_cleanup_verification_v1",
+        "path_absent": path_absent,
+        "registration_absent": registration_absent,
+        "local_branch_absent": local_absent,
+        "remote_branch_absent": remote_absent,
+        "remote_check_ok": remote_check_ok,
+        "remote_check_attempts": remote_result.get("attempts"),
+        "all_clear": all_clear,
+    }
+
+
+def _remote_branch_sha(remote_ref: str, branch: str) -> str | None:
+    expected_name = f"refs/heads/{branch}"
+    for line in str(remote_ref or "").splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == expected_name and _FULL_GIT_COMMIT_RE.fullmatch(fields[0].lower()):
+            return fields[0].lower()
+    return None
+
+
+def _delete_remote_branch_with_lease(
+    *,
+    root: Path,
+    branch: str,
+    expected_remote_ref: str,
+) -> dict[str, Any]:
+    expected_sha = _remote_branch_sha(expected_remote_ref, branch)
+    if not expected_sha:
+        raise WorkflowError(f"remote branch preflight identity is invalid: {branch}")
+    result = _execute_checked(
+        [
+            "git",
+            "push",
+            "origin",
+            "--delete",
+            f"--force-with-lease=refs/heads/{branch}:{expected_sha}",
+            branch,
+        ],
+        cwd=root,
+        timeout=180,
+    )
+    return {**result, "expected_sha": expected_sha, "already_absent": False}
+
+
 def _orphan_worktree_dir_profile(path: Path) -> dict[str, Any]:
     sample_limit = 20
     profile: dict[str, Any] = {
@@ -10046,6 +11717,50 @@ def _classify_pr_checks(checks: list[dict[str, Any]]) -> dict[str, list[str]]:
             if conclusion in {"NEUTRAL", "SKIPPED"}:
                 non_blocking.append(name)
         elif conclusion:
+            failed.append(name)
+    return {
+        "failed": failed,
+        "pending": pending,
+        "non_blocking": non_blocking,
+        "passed": passed,
+    }
+
+
+def _required_pr_check_summary(result: dict[str, Any]) -> dict[str, list[str]]:
+    """Classify only checks GitHub says are required by branch protection."""
+    raw = str(result.get("stdout") or "").strip()
+    if not raw:
+        if result.get("ok"):
+            checks: list[dict[str, Any]] = []
+        else:
+            raise WorkflowError(
+                str(result.get("stderr") or "required PR check query failed without a result").strip()
+            )
+    else:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise WorkflowError(f"required PR check query returned invalid JSON: {exc}") from exc
+        if not isinstance(parsed, list):
+            raise WorkflowError("required PR check query returned a non-list payload")
+        checks = [item for item in parsed if isinstance(item, dict)]
+
+    failed: list[str] = []
+    pending: list[str] = []
+    non_blocking: list[str] = []
+    passed: list[str] = []
+    for item in checks:
+        name = _check_name(item)
+        bucket = str(item.get("bucket") or "").lower()
+        if bucket == "pass":
+            passed.append(name)
+        elif bucket == "skipping":
+            passed.append(name)
+            non_blocking.append(name)
+        elif bucket == "pending":
+            pending.append(name)
+        else:
+            # fail, cancel, and unknown buckets must all fail closed.
             failed.append(name)
     return {
         "failed": failed,
@@ -10422,7 +12137,7 @@ def _maybe_create_pr(
 def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[str, Any]:
     if skip_github_check:
         return {"checked": False, "merged": True, "reason": "skip_github_check"}
-    result = _run_command(
+    result = _run_read_command_with_retry(
         ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,mergeCommit,url,headRefName,headRefOid"],
         cwd=REPO_ROOT,
         timeout=30,
@@ -10437,6 +12152,63 @@ def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[s
     if not merged:
         raise WorkflowError(f"PR is not merged: {pr_url}")
     return {"checked": True, "merged": True, "pr": payload}
+
+
+def _merged_pr_validation_receipt_profile(pr_url: str) -> dict[str, Any]:
+    """Confirm a merged PR carries a durable validation receipt without retaining its body."""
+
+    profile: dict[str, Any] = {
+        "schema_version": "aistock_merged_pr_validation_receipt_v1",
+        "pr_url": pr_url,
+        "checked": False,
+        "merged": False,
+        "durable_receipt_present": False,
+        "status": "check_failed",
+    }
+    result = _run_read_command_with_retry(
+        ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,url,headRefOid,body"],
+        cwd=REPO_ROOT,
+        timeout=30,
+    )
+    if not result.get("ok"):
+        profile["error"] = result.get("stderr") or result.get("stdout") or "cannot inspect merged PR receipt"
+        return profile
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        profile["error"] = f"cannot parse merged PR receipt check: {exc}"
+        return profile
+    merged = payload.get("state") == "MERGED" or bool(payload.get("mergedAt"))
+    head_oid = str(payload.get("headRefOid") or "").strip().lower()
+    receipt_commits = sorted(
+        {item.lower() for item in VALIDATION_RECEIPT_COMMIT_RE.findall(str(payload.get("body") or ""))}
+    )
+    matching_commit = next(
+        (item for item in receipt_commits if _FULL_GIT_COMMIT_RE.fullmatch(head_oid) and head_oid.startswith(item)),
+        None,
+    )
+    structured_receipt_present = flow._has_validation_receipt(payload.get("body"))
+    receipt_present = bool(merged and structured_receipt_present and matching_commit)
+    profile.update(
+        {
+            "pr_url": str(payload.get("url") or pr_url),
+            "checked": True,
+            "merged": merged,
+            "durable_receipt_present": receipt_present,
+            "head_oid": head_oid or None,
+            "receipt_commit": matching_commit,
+            "status": (
+                "finalized_merged_pr_receipt"
+                if receipt_present
+                else (
+                    "receipt_commit_mismatch"
+                    if merged and structured_receipt_present
+                    else ("missing_structured_receipt" if merged else "pr_not_merged")
+                )
+            ),
+        }
+    )
+    return profile
 
 
 def _merge_commit_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
@@ -10648,6 +12420,18 @@ def _cleanup_merge_verification(
 
     head_oid = _pr_head_oid_from_pr_check(pr_check)
     merge_commit = _merge_commit_from_pr_check(pr_check)
+    if head_oid and merge_commit and _git_commit_is_ancestor(head_oid, merge_commit, root=root):
+        payload.update(
+            {
+                "method": "merged_pr_head_is_ancestor_of_merge_commit",
+                "verified": True,
+                "squash_merge_verified": False,
+                "tree_equivalent_to_origin_main": False,
+                "tree_equivalence_ref": head_oid,
+                "tree_equivalence_target": merge_commit,
+            }
+        )
+        return payload
     if head_oid and merge_commit:
         merge_commit_equivalence = _git_squash_head_equivalent_to_ref(
             head_oid,
@@ -10703,7 +12487,11 @@ def _cleanup_merge_verification(
 def _cleanup_preflight_fetch_origin(root: Path, *, apply: bool) -> dict[str, Any]:
     if not apply:
         return {"status": "skipped", "reason": "dry_run"}
-    result = _run_command(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)
+    result = _run_read_command_with_retry(
+        ["git", "fetch", "origin", "--prune"],
+        cwd=root,
+        timeout=120,
+    )
     return {
         "status": "fetched" if result.get("ok") else "failed",
         "command": "git fetch origin --prune",
@@ -10793,7 +12581,14 @@ def build_registry_intake_cleanup_plan(
                 }
             )
         if branch and remote_ref:
-            actions.append({"action": "delete_remote_branch", "branch": branch, "safe": safe})
+            actions.append(
+                {
+                    "action": "delete_remote_branch",
+                    "branch": branch,
+                    "expected_remote_ref": remote_ref,
+                    "safe": safe,
+                }
+            )
         if not safe and reason:
             warnings.append(f"registry intake cleanup skipped for {worktree_path}: {reason}")
         candidates.append(
@@ -10847,8 +12642,12 @@ def build_registry_intake_cleanup_plan(
             elif action["action"] == "delete_remote_branch":
                 applied.append(
                     {
-                        "command": f"git push origin --delete {action['branch']}",
-                        "result": _execute_checked(["git", "push", "origin", "--delete", str(action["branch"])], cwd=REPO_ROOT, timeout=180),
+                        "command": f"git push origin --delete --force-with-lease {action['branch']}",
+                        "result": _delete_remote_branch_with_lease(
+                            root=REPO_ROOT,
+                            branch=str(action["branch"]),
+                            expected_remote_ref=str(action.get("expected_remote_ref") or ""),
+                        ),
                     }
                 )
     payload["applied"] = applied
@@ -10994,11 +12793,16 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
         timeout=60,
     )
     payload = json.loads(str(view.get("stdout") or "{}"))
-    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
-    failed = check_summary["failed"]
-    pending = check_summary["pending"]
     if payload.get("state") == "MERGED":
         return {"already_merged": True, "view": payload}
+    required_result = _run_command(
+        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    check_summary = _required_pr_check_summary(required_result)
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _run_command(["gh", "pr", "merge", pr_url, "--squash"], cwd=REPO_ROOT, timeout=180)
@@ -11031,11 +12835,20 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         event="command:gh_pr_view_before_merge",
     )
     payload = json.loads(str(view.get("stdout") or "{}"))
-    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
-    failed = check_summary["failed"]
-    pending = check_summary["pending"]
     if payload.get("state") == "MERGED":
         return {"already_merged": True, "view": payload}
+    required_result = _execute_workflow_command(
+        bug_id,
+        ["gh", "pr", "checks", pr_url, "--required", "--json", "name,state,bucket,workflow"],
+        state="ci_green",
+        cwd=REPO_ROOT,
+        timeout=60,
+        event="command:gh_pr_required_checks_before_merge",
+        allow_failure=True,
+    )
+    check_summary = _required_pr_check_summary(required_result)
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _execute_workflow_command(
@@ -11878,15 +13691,50 @@ def build_merge_finalizer_plan(
         return payload
     if not apply:
         payload["workflow_gate"] = "ready_for_apply"
-        bug_args = " ".join(f"--bug-id {item}" for item in canonical_bug_ids)
-        payload["next_command"] = (
-            f"python scripts/aistock_issue_workflow.py merge-finalizer {bug_args} "
-            f"--source-pr-url {source_pr_url} --validation-evidence \"<command> -> passed\" --apply"
-        )
+        command_parts = [
+            "python scripts/aistock_issue_workflow.py merge-finalizer",
+            *(f"--bug-id {item}" for item in canonical_bug_ids),
+            f"--source-pr-url {_shell_quote(source_pr_url)}",
+        ]
+        if issue_json:
+            command_parts.append(f"--issue-json {_shell_quote(issue_json)}")
+        if source_branch:
+            command_parts.append(f"--source-branch {_shell_quote(source_branch)}")
+        if source_worktree:
+            command_parts.append(f"--source-worktree {_shell_quote(source_worktree)}")
+        for item in evidence or ["<command> -> passed"]:
+            command_parts.append(f"--validation-evidence {_shell_quote(item)}")
+        if allow_missing_linkage:
+            command_parts.append("--allow-missing-linkage")
+        if sync_root:
+            command_parts.append("--sync-root")
+        if merge_close_sync_pr:
+            command_parts.append("--merge-close-sync-pr")
+        if cleanup:
+            command_parts.append("--cleanup")
+        for key, flag in (
+            ("production_ddl_gate", "--production-ddl-gate"),
+            ("production_frontend_dependency_gate", "--production-frontend-dependency-gate"),
+            ("production_backend_dependency_gate", "--production-backend-dependency-gate"),
+        ):
+            command_parts.append(f"{flag} {_shell_quote(str(payload['production_gates'].get(key) or 'noop'))}")
+        command_parts.append("--apply")
+        payload["next_command"] = " ".join(command_parts)
         return payload
 
     source_pr_check = source_pr_check or _verify_pr_merged(source_pr_url)
     merge_commit = _merge_commit_from_pr_check(source_pr_check)
+    client_publish = _publish_changed_clients_after_merge(
+        merge_commit=merge_commit,
+        sync_root=sync_root,
+        apply=True,
+    )
+    payload["client_publish"] = client_publish
+    if client_publish.get("workflow_gate") == "blocked":
+        payload["workflow_gate"] = "blocked"
+        payload["blocking"] = flow._unique_strings(client_publish.get("blocking") or [])
+        payload["next_actions"] = ["restore_canonical_client_authority_then_resume_merge_finalizer"]
+        return payload
     if batch_mode:
         incomplete_bug_ids: list[str] = []
         complete_markers: list[dict[str, Any]] = []
@@ -11997,16 +13845,27 @@ def build_merge_finalizer_plan(
                 production_gates=production_gates or _production_gates_payload(),
                 create_registry_worktree=True,
             )
-            close_sync_commit = _maybe_commit_and_pr_close_sync(
-                bug_id=canonical_bug_id,
-                close_sync=close_sync,
-                validation_evidence=evidence,
-            )
-            close_sync_pr_merge = _merge_close_sync_pr_if_ready(
-                bug_id=canonical_bug_id,
-                close_sync_commit=close_sync_commit,
-                auto_merge=merge_close_sync_pr,
-            )
+            if close_sync.get("workflow_gate") == "fixed_source_pending_user_restart":
+                close_sync_commit = {
+                    "workflow_gate": "deferred_runtime_verification",
+                    "reason": "persist pending state in workflow/GitHub evidence and create only the final verified close-sync PR",
+                }
+                close_sync_pr_merge = {
+                    "workflow_gate": "deferred_runtime_verification",
+                    "auto_merge": False,
+                    "reason": "runtime verification receipt is not available yet",
+                }
+            else:
+                close_sync_commit = _maybe_commit_and_pr_close_sync(
+                    bug_id=canonical_bug_id,
+                    close_sync=close_sync,
+                    validation_evidence=evidence,
+                )
+                close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+                    bug_id=canonical_bug_id,
+                    close_sync_commit=close_sync_commit,
+                    auto_merge=merge_close_sync_pr,
+                )
 
     cleanup_plan = None
     if cleanup and source_branch:
@@ -12367,11 +14226,13 @@ def build_close_sync_plan(
     if apply and runtime_contract_errors:
         raise WorkflowError("runtime contract blocks close-sync: " + "; ".join(runtime_contract_errors))
     runtime_receipt: dict[str, Any] | None = None
+    runtime_receipt_path: Path | None = None
     runtime_receipt_errors: list[str] = []
     if post_restart_receipt:
         receipt_path = Path(post_restart_receipt)
         if not receipt_path.is_absolute():
             receipt_path = REPO_ROOT / receipt_path
+        runtime_receipt_path = receipt_path
         if not receipt_path.exists():
             runtime_receipt_errors.append(f"post-restart receipt not found: {receipt_path}")
         else:
@@ -12581,6 +14442,16 @@ def build_close_sync_plan(
                 "post_restart_receipt_ref": post_restart_receipt,
             }
         )
+        if (
+            runtime_contract.get("backend_restart_required")
+            and not runtime_pending
+            and runtime_receipt
+            and runtime_receipt_path
+        ):
+            updated_runtime["post_restart_receipt_summary"] = _post_restart_receipt_summary(
+                runtime_receipt_path,
+                runtime_receipt,
+            )
         updated["runtime_contract"] = updated_runtime
         _write_json(source_path, updated)
         evidence_payload = {
@@ -12845,12 +14716,30 @@ def build_cleanup_after_merge_plan(
     canonical_root: str | None = None,
 ) -> dict[str, Any]:
     root = Path(canonical_root) if canonical_root else _canonical_root()
+    branch_bug_match = BUG_ID_RE.search(branch)
+    evidence_bug_id = bug_id or (branch_bug_match.group(0).upper() if branch_bug_match else None)
     pre_cleanup_fetch = _cleanup_preflight_fetch_origin(root, apply=apply)
     current_branch = _git(["branch", "--show-current"], cwd=root, check=False)
     local_branches = set(
         _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
     )
-    remote_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=False)
+    if apply:
+        remote_ref_result = _run_read_command_with_retry(
+            ["git", "ls-remote", "--heads", "origin", branch],
+            cwd=root,
+            timeout=60,
+        )
+        remote_ref = str(remote_ref_result.get("stdout") or "") if remote_ref_result.get("ok") else ""
+    else:
+        remote_ref = _git(["ls-remote", "--heads", "origin", branch], cwd=root, check=False)
+        remote_ref_result = {
+            "ok": True,
+            "returncode": 0,
+            "stdout": remote_ref,
+            "stderr": "",
+            "attempts": 1,
+            "mode": "single_dry_run_read",
+        }
     merged_refs = set(_git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], cwd=root, check=False).splitlines())
     merged = branch in merged_refs
     merge_verification = _cleanup_merge_verification(branch, pr_url, merged, cwd=root)
@@ -12858,13 +14747,18 @@ def build_cleanup_after_merge_plan(
     pr_check = merge_verification["pr_check"]
     tree_equivalent = bool(merge_verification["tree_equivalent_to_origin_main"])
     merge_verified = bool(merge_verification["verified"])
-    worktree_path = Path(worktree) if worktree else None
+    worktree_path = Path(worktree) if worktree else _registered_worktree_for_branch(branch, cwd=root)
     worktree_clean = True
     worktree_registered = False
     worktree_exists = bool(worktree_path and worktree_path.exists())
     worktree_empty = False
     worktree_is_current_cwd = False
     worktree_orphan_profile: dict[str, Any] | None = None
+    worktree_ignored_artifacts: dict[str, Any] | None = None
+    worktree_process_references: dict[str, Any] | None = None
+    merged_pr_receipt_profile: dict[str, Any] | None = None
+    protected_receipt_paths = _cleanup_protected_receipt_paths(evidence_bug_id)
+    evidence_finalization = _cleanup_evidence_finalization(evidence_bug_id)
     if worktree_path and worktree_path.exists():
         try:
             current_cwd = Path.cwd().resolve()
@@ -12884,6 +14778,38 @@ def build_cleanup_after_merge_plan(
         worktree_clean = bool(status_result.get("ok")) and status_result.get("stdout") == ""
         if not worktree_registered:
             worktree_orphan_profile = _orphan_worktree_dir_profile(worktree_path)
+        elif worktree_clean:
+            worktree_ignored_artifacts = _worktree_ignored_artifact_profile(
+                worktree_path,
+                canonical_root=root,
+                protected_paths=protected_receipt_paths,
+            )
+            worktree_process_references = (
+                _worktree_active_process_profile(worktree_path)
+                if apply
+                else {
+                    "schema_version": "aistock_worktree_process_reference_v1",
+                    "target": str(worktree_path),
+                    "scan_status": "deferred_until_apply",
+                    "reference_count": 0,
+                    "references": [],
+                }
+            )
+    if (
+        worktree_ignored_artifacts
+        and worktree_ignored_artifacts.get("transient_count")
+        and not evidence_finalization.get("durable_receipt_present")
+        and pr_url
+    ):
+        merged_pr_receipt_profile = _merged_pr_validation_receipt_profile(pr_url)
+        if merged_pr_receipt_profile.get("durable_receipt_present"):
+            evidence_finalization = {
+                **evidence_finalization,
+                "status": "finalized_merged_pr_receipt",
+                "durable_receipt_present": True,
+                "merged_pr_receipt_present": True,
+                "pr_url": merged_pr_receipt_profile.get("pr_url") or pr_url,
+            }
     root_git = _git_snapshot(root) if root.exists() else {"ok": False, "error": "canonical root missing"}
     root_dirty_files = _dirty_files(root) if root.exists() else []
     origin_equivalent_dirty_files = _origin_equivalent_dirty_files(root, root_dirty_files) if root_dirty_files else []
@@ -12895,6 +14821,9 @@ def build_cleanup_after_merge_plan(
         result = pre_cleanup_fetch.get("result") if isinstance(pre_cleanup_fetch.get("result"), dict) else {}
         detail = result.get("stderr") or result.get("stdout") or "unknown error"
         blocking.append(f"failed to refresh origin/main before cleanup: {detail}")
+    if not remote_ref_result.get("ok"):
+        detail = remote_ref_result.get("stderr") or remote_ref_result.get("stdout") or "unknown error"
+        blocking.append(f"failed to inspect remote branch before cleanup: {detail}")
     if branch == current_branch and apply:
         blocking.append("refusing to cleanup the currently checked-out branch")
     if not merge_verified:
@@ -12911,6 +14840,40 @@ def build_cleanup_after_merge_plan(
         blocking.append(f"worktree path exists but is not a registered git worktree: {worktree_path}")
     if worktree_path and worktree_registered and not worktree_clean:
         blocking.append(f"worktree is dirty: {worktree_path}")
+    if worktree_ignored_artifacts and worktree_ignored_artifacts.get("scan_status") != "complete":
+        blocking.append(
+            "ignored artifact scan failed: "
+            f"{worktree_ignored_artifacts.get('error') or worktree_path}"
+        )
+    if worktree_ignored_artifacts and worktree_ignored_artifacts.get("protected_count"):
+        blocking.append(
+            "worktree contains a durable receipt that has not been finalized: "
+            f"{worktree_ignored_artifacts.get('protected_samples') or []}"
+        )
+    if worktree_ignored_artifacts and worktree_ignored_artifacts.get("unknown_count"):
+        blocking.append(
+            "worktree contains unknown ignored artifacts: "
+            f"{worktree_ignored_artifacts.get('unknown_samples') or []}"
+        )
+    if (
+        worktree_ignored_artifacts
+        and worktree_ignored_artifacts.get("transient_count")
+        and not evidence_finalization.get("durable_receipt_present")
+    ):
+        blocking.append(
+            "transient evidence cannot be purged before compact durable receipt finalization: "
+            f"{evidence_finalization.get('status')}"
+        )
+    if worktree_process_references and worktree_process_references.get("scan_status") in {"failed", "unavailable", "unsupported"}:
+        blocking.append(
+            "active-process reference scan failed: "
+            f"{worktree_process_references.get('error') or worktree_process_references.get('scan_status')}"
+        )
+    if worktree_process_references and worktree_process_references.get("reference_count"):
+        blocking.append(
+            "worktree is referenced by active processes: "
+            f"{worktree_process_references.get('references') or []}"
+        )
     if sync_root:
         if not root.exists():
             blocking.append(f"canonical root missing: {root}")
@@ -12933,6 +14896,17 @@ def build_cleanup_after_merge_plan(
     if worktree_path and worktree_exists and worktree_registered:
         if worktree_is_current_cwd:
             actions.append({"action": "relocate_current_cwd", "root": str(root), "safe": root.exists()})
+        if worktree_ignored_artifacts and worktree_ignored_artifacts.get("transient_count"):
+            actions.append(
+                {
+                    "action": "purge_transient_worktree_artifacts",
+                    "worktree": str(worktree_path),
+                    "manifest_sha256": worktree_ignored_artifacts.get("manifest_sha256"),
+                    "ignored_count": worktree_ignored_artifacts.get("ignored_count"),
+                    "root_count": worktree_ignored_artifacts.get("transient_root_count"),
+                    "safe": not blocking,
+                }
+            )
         actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": merge_verified and worktree_clean})
     elif worktree_path and worktree_exists and (worktree_empty or (worktree_orphan_profile or {}).get("safe_reparse_or_empty_only")):
         if worktree_is_current_cwd:
@@ -12963,8 +14937,14 @@ def build_cleanup_after_merge_plan(
         "worktree_registered": worktree_registered,
         "worktree_empty": worktree_empty,
         "worktree_orphan_profile": worktree_orphan_profile,
+        "worktree_ignored_artifacts": worktree_ignored_artifacts,
+        "worktree_process_references": worktree_process_references,
+        "evidence_finalization": evidence_finalization,
+        "merged_pr_receipt_profile": merged_pr_receipt_profile,
+        "evidence_bug_id": evidence_bug_id,
         "worktree_is_current_cwd": worktree_is_current_cwd,
         "pre_cleanup_fetch": pre_cleanup_fetch,
+        "remote_ref_check": remote_ref_result,
         "root_git": root_git,
         "root_dirty_files": root_dirty_files,
         "origin_equivalent_dirty_files": origin_equivalent_dirty_files,
@@ -13028,6 +15008,24 @@ def build_cleanup_after_merge_plan(
                     "result": {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
                 }
             )
+        if (
+            worktree_path
+            and worktree_path.exists()
+            and worktree_registered
+            and worktree_ignored_artifacts
+            and worktree_ignored_artifacts.get("transient_count")
+        ):
+            applied.append(
+                {
+                    "command": f"purge finalized transient artifacts from {worktree_path}",
+                    "result": _purge_worktree_transient_artifacts(
+                        worktree_path,
+                        canonical_root=root,
+                        expected_profile=worktree_ignored_artifacts,
+                        protected_paths=protected_receipt_paths,
+                    ),
+                }
+            )
         if worktree_path and worktree_path.exists() and worktree_registered:
             applied.append({"command": f"git worktree remove {worktree_path}", "result": _remove_worktree_with_reparse_fallback(root=root, worktree_path=worktree_path)})
         elif worktree_path and worktree_path.exists() and (worktree_empty or (worktree_orphan_profile or {}).get("safe_reparse_or_empty_only")):
@@ -13053,7 +15051,36 @@ def build_cleanup_after_merge_plan(
             delete_flag = "-d" if merged else "-D"
             applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=root, timeout=120)})
         if remote_ref:
-            applied.append({"command": f"git push origin --delete {branch}", "result": _execute_checked(["git", "push", "origin", "--delete", branch], cwd=root, timeout=180)})
+            applied.append(
+                {
+                    "command": f"git push origin --delete --force-with-lease {branch}",
+                    "result": _delete_remote_branch_with_lease(
+                        root=root,
+                        branch=branch,
+                        expected_remote_ref=remote_ref,
+                    ),
+                }
+            )
+        cleanup_verification = _cleanup_post_removal_verification(
+            root=root,
+            worktree_path=worktree_path,
+            branch=branch,
+        )
+        payload["cleanup_verification"] = cleanup_verification
+        if not cleanup_verification.get("all_clear"):
+            payload["applied"] = applied
+            deferred_only = bool(
+                payload.get("deferred_cleanup")
+                and cleanup_verification.get("registration_absent")
+                and cleanup_verification.get("local_branch_absent")
+                and cleanup_verification.get("remote_branch_absent")
+            )
+            payload["workflow_gate"] = "cleanup_deferred" if deferred_only else "cleanup_incomplete"
+            payload["dry_run"] = False
+            _write_json(output_dir / f"{_slug(branch)}-cleanup-evidence.json", payload)
+            if deferred_only:
+                return payload
+            raise WorkflowError(f"post-cleanup verification failed: {cleanup_verification}")
         if bug_id:
             registry_cleanup = build_registry_intake_cleanup_plan(
                 bug_id=bug_id,
@@ -13063,6 +15090,21 @@ def build_cleanup_after_merge_plan(
             payload["registry_intake_cleanup"] = registry_cleanup
             if registry_cleanup.get("warnings"):
                 payload["warnings"].extend(registry_cleanup.get("warnings") or [])
+            try:
+                with _GlobalBugIdAllocatorLock(timeout=30.0):
+                    removed_reservation = compact_terminal_reservation(
+                        _bug_id_reservation_root(),
+                        bug_id,
+                        min_age_seconds=0,
+                    )
+                payload["reservation_cleanup"] = {
+                    "status": "removed" if removed_reservation else "already_absent_or_non_terminal",
+                    "path": removed_reservation,
+                    "inventory_scanned": False,
+                }
+            except (BugIdLockError, WorkflowError) as exc:
+                payload["reservation_cleanup"] = {"status": "deferred", "error": str(exc)}
+                payload["warnings"].append(f"terminal BUG reservation cleanup deferred: {exc}")
         payload["applied"] = applied
         payload["workflow_gate"] = "cleanup_done"
         payload["dry_run"] = False
@@ -13280,8 +15322,10 @@ def cmd_verify_clients(args: argparse.Namespace) -> int:
             "selected_lane_keys": lane_verification["selected_lane_keys"],
             "blocking": lane_verification["blocking"],
             "warnings": lane_verification["warnings"],
+            "checkout_advisories": lane_verification["checkout_advisories"],
+            "remediation": lane_verification["remediation"],
             "checked": lane_verification["checked"],
-            "restart_recommended": not workflow_clients_current,
+            "restart_recommended": False,
         }
         _emit_args(payload, args)
         return 0 if workflow_clients_current else 2
@@ -13437,12 +15481,17 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
         allow_current_worktree=args.allow_current_worktree,
         post_restart_receipt=args.post_restart_receipt,
     )
-    if args.create_pr:
+    if args.create_pr and payload.get("workflow_gate") != "fixed_source_pending_user_restart":
         payload["close_sync_commit"] = _maybe_commit_and_pr_close_sync(
             bug_id=str(payload.get("bug_id") or args.bug_id or "").upper(),
             close_sync=payload,
             validation_evidence=list(args.validation_evidence or []),
         )
+    elif args.create_pr:
+        payload["close_sync_commit"] = {
+            "workflow_gate": "deferred_runtime_verification",
+            "reason": "skip the intermediate pending close-sync PR; create one final PR after post-restart verification",
+        }
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced", "fixed_source_pending_user_restart"} else 2
 

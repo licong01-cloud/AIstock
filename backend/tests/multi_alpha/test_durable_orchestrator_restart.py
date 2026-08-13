@@ -658,7 +658,9 @@ def test_worker_retries_transient_initialization_instead_of_exiting(tmp_path: Pa
         heartbeat_seconds=5,
         items_per_pass=1,
         archive_batch_size=1,
+        safety_sweep_seconds=0.01,
     )
+    repository.has_due_orchestrator_work = lambda **_kwargs: True  # type: ignore[attr-defined]
     stop_event = asyncio.Event()
     initialize_calls = 0
 

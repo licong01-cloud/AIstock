@@ -101,6 +101,7 @@ from backend.services.simulation_runtime.lifecycle import (
 )
 from backend.services.simulation_runtime.miniqmt_quote_activation import MiniQMTKernelProductSyncError
 from backend.services.simulation_runtime.models import (
+    ExecutionPlan,
     LocalSimEconomicReceiptV1,
     LocalSimExecutionRuntimeStatus,
     LocalSimExecutionStateV1,
@@ -108,7 +109,9 @@ from backend.services.simulation_runtime.models import (
     LocalSimMarketMarkV1,
     LocalSimProjectionOutboxV1,
     LocalSimProjectionReceiptV1,
+    SimulationReleaseBinding,
     canonical_json_sha256,
+    miniqmt_kernel_runtime_id,
 )
 from backend.services.simulation_runtime.repository import (
     LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY,
@@ -231,9 +234,13 @@ class SimulationLifecycleScheduler(ProductionSimulationLifecycleScheduler):
     def __init__(self, **values: Any) -> None:
         super().__init__(**values)
         self._test_k6d_start_calls: list[dict[str, Any]] = []
+        self._test_k6d_activation_calls: list[tuple[str, ...]] = []
         self.orchestrator.miniqmt_product_runtime_factory = lambda **factory_values: SimpleNamespace(
             coordinator=_TestK6DCoordinator(factory_values["plan"], self._test_k6d_start_calls),
             worker_incarnation_id="test_k6d_worker_incarnation",
+            activate_hot_market_targets_v1=lambda algo_instance_ids: self._test_k6d_activation_calls.append(
+                algo_instance_ids
+            ),
         )
 
 
@@ -1090,6 +1097,38 @@ class _RealB0QuoteSupervisor:
         }
 
 
+class _TestKernelOutboxRepository:
+    def __init__(self, commands: tuple[Mapping[str, Any], ...] = ()) -> None:
+        self.commands = tuple(SimpleNamespace(**dict(command)) for command in commands)
+
+    def list_recovery_outbox_commands(
+        self,
+        *,
+        runtime_id: str,
+        trade_date: date,
+        statuses: tuple[str, ...],
+        limit: int,
+    ) -> tuple[SimpleNamespace, ...]:
+        del trade_date
+        accepted = set(statuses)
+        return tuple(
+            command for command in self.commands if command.runtime_id == runtime_id and str(command.status) in accepted
+        )[:limit]
+
+    def read_command_identity_chain(self, command_id: str) -> dict[str, Any]:
+        command = next(command for command in self.commands if command.command_id == command_id)
+        mapping = SimpleNamespace(
+            runtime_id=command.runtime_id,
+            command_id=command.command_id,
+            mapping_id=command.mapping_id,
+            parent_intent_id=command.parent_intent_id,
+            deterministic_client_order_ref=command.deterministic_client_order_ref,
+            order_remark=command.order_remark,
+            broker_order_id=command.broker_order_id,
+        )
+        return {"outbox": command, "mapping": mapping}
+
+
 class _RealB0TestActivation:
     """Publish exact quote context, then deliver genuine callback observations."""
 
@@ -1108,6 +1147,9 @@ class _RealB0TestActivation:
         )
         self.quote_context_adapter = None
         self._continuity_generation = 0
+        self.released_runtime_ids: list[str] = []
+        self._failure_runtimes: dict[str, SimpleNamespace] = {}
+        self._failure_attempts: dict[str, dict[str, int]] = {}
 
     def begin_lifecycle_epoch(self) -> dict[str, object]:
         self.supervisor.begin_lifecycle_epoch()
@@ -1115,6 +1157,40 @@ class _RealB0TestActivation:
 
     def watchdog_tick(self) -> dict[str, object]:
         return self.health()
+
+    def stage_failure_runtime(
+        self,
+        *,
+        runtime_id: str,
+        binding_id: str,
+        trade_date: date,
+        execution_plan_id: str | None = None,
+        lifecycle_generation: int = 1,
+        attempt_token: int = 1,
+        outbox_commands: tuple[Mapping[str, Any], ...] = (),
+    ) -> None:
+        self._failure_runtimes[runtime_id] = SimpleNamespace(
+            runtime_id=runtime_id,
+            binding_id=binding_id,
+            trade_date=trade_date,
+            execution_plan_id=execution_plan_id,
+            lifecycle_generation=lifecycle_generation,
+            attempt_token=attempt_token,
+            repository=_TestKernelOutboxRepository(outbox_commands),
+        )
+        self._failure_attempts[runtime_id] = {
+            "lifecycle_generation": lifecycle_generation,
+            "attempt_token": attempt_token,
+        }
+
+    def get_kernel_product_runtime(self, runtime_id: str) -> SimpleNamespace | None:
+        return self._failure_runtimes.get(runtime_id)
+
+    def release_kernel_product_runtime(self, runtime_id: str) -> None:
+        if self._failure_runtimes.pop(runtime_id, None) is None:
+            raise AssertionError(f"unknown staged KERNEL_V2 runtime: {runtime_id}")
+        self._failure_attempts.pop(runtime_id, None)
+        self.released_runtime_ids.append(runtime_id)
 
     def prepare_runtime_context(
         self,
@@ -1289,6 +1365,28 @@ class _RealB0TestActivation:
             "status": "READY",
             "production_ddl_gate": "test_only_not_production",
             "ingress": self.supervisor.health(),
+            "kernel_product_runtimes": [
+                {
+                    "runtime_id": runtime_id,
+                    "binding_id": runtime.binding_id,
+                    "trade_date": runtime.trade_date.isoformat(),
+                    "ingress_retry": {
+                        "lifecycle_generation": runtime.lifecycle_generation,
+                        "active_failure": {
+                            "runtime_id": runtime_id,
+                            "lifecycle_generation": runtime.lifecycle_generation,
+                            "attempt_token": runtime.attempt_token,
+                        },
+                        "last_failure": {
+                            "runtime_id": runtime_id,
+                            "lifecycle_generation": runtime.lifecycle_generation,
+                            "attempt_token": runtime.attempt_token,
+                        },
+                        "operations": {},
+                    },
+                }
+                for runtime_id, runtime in sorted(self._failure_runtimes.items())
+            ],
         }
 
     def shutdown(self) -> dict[str, object]:
@@ -1617,6 +1715,157 @@ def _miniqmt_two_strategy_scheduler():
     return scheduler, repo, broker, qmt_binding_a, qmt_binding_b
 
 
+def _exact_kernel_outbox_command(
+    *,
+    runtime_id: str,
+    suffix: str = "safe",
+    status: str = "FAILED_TERMINAL",
+    broker_called: bool | None = False,
+    broker_order_id: str | None = None,
+    order_remark: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "command_id": f"mqcmd_{suffix}",
+        "runtime_id": runtime_id,
+        "mapping_id": f"mqmap_{suffix}",
+        "parent_intent_id": f"mqparent_{suffix}",
+        "status": status,
+        "broker_called": broker_called,
+        "broker_order_id": broker_order_id,
+        "deterministic_client_order_ref": f"mqref_{suffix}",
+        "order_remark": order_remark or f"mqremark_{suffix}",
+    }
+
+
+def _current_kernel_runtime_identity(
+    repo: InMemorySimulationRuntimeRepository,
+    binding: SimulationReleaseBinding,
+) -> tuple[SimulationDailyRun, ExecutionPlan, str]:
+    run = repo.get_simulation_daily_run_by_key(
+        strategy_id=binding.strategy_id,
+        binding_id=binding.binding_id,
+        trade_date=TRADE_DATE,
+    )
+    assert run is not None and run.execution_plan_id
+    plan = repo.get_execution_plan(run.execution_plan_id)
+    return (
+        run,
+        plan,
+        miniqmt_kernel_runtime_id(
+            plan_id=plan.plan_id,
+            binding_id=binding.binding_id,
+            trade_date=TRADE_DATE,
+        ),
+    )
+
+
+def _stage_exact_kernel_failure(
+    *,
+    scheduler: SimulationLifecycleScheduler,
+    repo: InMemorySimulationRuntimeRepository,
+    binding: SimulationReleaseBinding,
+    lifecycle_generation: int = 1,
+    attempt_token: int = 1,
+    outbox_commands: tuple[Mapping[str, Any], ...] | None = None,
+    runtime_trade_date: date = TRADE_DATE,
+) -> tuple[SimulationDailyRun, ExecutionPlan, str, dict[str, Any]]:
+    run, plan, runtime_id = _current_kernel_runtime_identity(repo, binding)
+    commands = outbox_commands
+    if commands is None:
+        commands = (_exact_kernel_outbox_command(runtime_id=runtime_id),)
+    scheduler._miniqmt_quote_ingress_activation.stage_failure_runtime(
+        runtime_id=runtime_id,
+        binding_id=binding.binding_id,
+        trade_date=runtime_trade_date,
+        execution_plan_id=plan.plan_id,
+        lifecycle_generation=lifecycle_generation,
+        attempt_token=attempt_token,
+        outbox_commands=commands,
+    )
+    failure = {
+        "runtime_id": runtime_id,
+        "binding_id": binding.binding_id,
+        "lifecycle_generation": lifecycle_generation,
+        "attempt_token": attempt_token,
+        "reason_code": "MINIQMT_K6_PRODUCT_CALLBACK_SYNC_FAILED",
+        "exception_type": "RuntimeError",
+        "exception_message": "injected exact current-plan callback failure",
+    }
+    return run, plan, runtime_id, failure
+
+
+def _orphan_current_kernel_plan_run(
+    *,
+    repo: InMemorySimulationRuntimeRepository,
+    run: SimulationDailyRun,
+) -> SimulationDailyRun:
+    identity_keys = {
+        "schema_version",
+        "strategy_id",
+        "binding_id",
+        "binding_hash",
+        "release_id",
+        "release_hash",
+        "broker_backend",
+        "trade_date",
+        "created_by",
+    }
+    orphan = run.model_copy(
+        update={
+            "execution_plan_id": None,
+            "execution_plan_hash": None,
+            "status": SimulationDailyRunStatus.SIGNAL_GENERATING,
+            "run_payload_json": {key: value for key, value in run.run_payload_json.items() if key in identity_keys},
+        }
+    )
+    repo.daily_runs[run.run_id] = orphan
+    return orphan
+
+
+def _persist_exact_preplan_unknown(
+    *,
+    scheduler: SimulationLifecycleScheduler,
+    repo: InMemorySimulationRuntimeRepository,
+    binding: SimulationReleaseBinding,
+    observed: datetime,
+    outbox_commands: tuple[Mapping[str, Any], ...] | None = None,
+) -> tuple[SimulationDailyRun, str]:
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    original = {item.binding_id: item for item in planned.results}[binding.binding_id].run
+    assert original is not None
+    _run, _plan, runtime_id, exact_failure = _stage_exact_kernel_failure(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding,
+        outbox_commands=outbox_commands,
+    )
+    _orphan_current_kernel_plan_run(repo=repo, run=original)
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError((exact_failure,))
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    failed = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = lambda: None
+    failed_run = {item.binding_id: item for item in failed.results}[binding.binding_id].run
+    assert failed_run is not None
+    assert failed_run.execution_plan_id is None
+    assert failed_run.run_payload_json["broker_side_effect_state"] == "UNKNOWN"
+    return failed_run, runtime_id
+
+
 def _runtime_store_contains_shadow_marker(path) -> bool:
     paths = [path, path.with_suffix(".jsonl")]
     return any(
@@ -1659,10 +1908,46 @@ def test_scheduler_miniqmt_uses_only_kernel_v2_product_root_and_is_restart_idemp
     assert broker.place_order_payloads == []
 
 
-def test_scheduler_miniqmt_product_root_pre_run_failure_never_strands_submitting_run() -> None:
+def test_scheduler_miniqmt_product_root_failure_uses_durable_backoff_without_plan_rebuild() -> None:
     scheduler, repo, broker, _binding = _miniqmt_event_loop_test_scheduler()
+    product_root_calls = 0
+    full_context_calls = 0
+    existing_context_calls = 0
+    retry_claim_calls = 0
+    base_provider = scheduler.context_provider
+    original_retry_claim = repo.claim_simulation_retry_attempt
+
+    def count_retry_claim(**values: Any) -> Any:
+        nonlocal retry_claim_calls
+        retry_claim_calls += 1
+        return original_retry_claim(**values)
+
+    repo.claim_simulation_retry_attempt = count_retry_claim  # type: ignore[method-assign]
+
+    class PhaseAwareProvider:
+        def load_context(self, *, runtime_release, binding, trade_date):
+            nonlocal full_context_calls
+            full_context_calls += 1
+            return base_provider.load_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
+            )
+
+        def load_existing_plan_context(self, *, runtime_release, binding, plan, trade_date, as_of_time):
+            nonlocal existing_context_calls
+            existing_context_calls += 1
+            return base_provider.load_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
+            )
+
+    scheduler.context_provider = PhaseAwareProvider()
 
     def fail_product_runtime(**_values: Any) -> Any:
+        nonlocal product_root_calls
+        product_root_calls += 1
         raise RuntimeError('column "release_hash" does not exist')
 
     scheduler.orchestrator.miniqmt_product_runtime_factory = fail_product_runtime
@@ -1680,13 +1965,23 @@ def test_scheduler_miniqmt_product_root_pre_run_failure_never_strands_submitting
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
         submit=True,
+        as_of_time=observed + timedelta(seconds=30),
+    )
+    third = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
         as_of_time=observed + timedelta(minutes=1),
     )
 
     assert first.results[0].status == "FAILED_RETRYABLE"
-    assert second.results[0].status == "FAILED_RETRYABLE"
-    assert second.results[0].run is not None
-    run = repo.get_simulation_daily_run(second.results[0].run.run_id)
+    assert second.results[0].status == "RETRY_BACKOFF"
+    assert second.results[0].error is None
+    assert second.results[0].lifecycle_diagnostic["reason_code"] == "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE"
+    assert third.results[0].status == "FAILED_RETRYABLE"
+    assert third.results[0].run is not None
+    run = repo.get_simulation_daily_run(third.results[0].run.run_id)
     assert run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
     assert run.run_payload_json["last_stage"] == "FAILED_RETRYABLE"
     assert run.run_payload_json["broker_called"] is False
@@ -1699,7 +1994,501 @@ def test_scheduler_miniqmt_product_root_pre_run_failure_never_strands_submitting
         "message": 'column "release_hash" does not exist',
         "context": None,
     }
+    retry_control = run.run_payload_json["simulation_scheduler_retry_control_v1"]
+    retry_entry = retry_control["entries"]["BINDING_FAILED_RETRYABLE"]
+    assert retry_entry["failure_stage"] == "MINIQMT_KERNEL_V2_PRODUCT_ROOT_BUILD_FAILED"
+    assert retry_entry["consecutive_failure_count"] == 2
+    assert retry_entry["attempt_count"] == 2
+    assert retry_entry["next_retry_at"] == (observed + timedelta(minutes=3)).astimezone(UTC).isoformat()
+    assert product_root_calls == 2
+    assert full_context_calls == 1
+    assert existing_context_calls == 1
+    assert retry_claim_calls == 1
+    assert first.results[0].run.execution_plan_id == second.results[0].execution_plan.plan_id
+    assert second.results[0].execution_plan.plan_id == third.results[0].run.execution_plan_id
     assert broker.place_order_payloads == []
+
+
+def test_simulation_retry_control_is_hash_closed_bounded_and_single_claimed() -> None:
+    scheduler, repo, _broker, _binding = _miniqmt_event_loop_test_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=observed,
+    )
+    run = planned.results[0].run
+    assert run is not None
+
+    first = repo.record_simulation_retry_failure(
+        run_id=run.run_id,
+        retry_key="BINDING_FAILED_RETRYABLE",
+        source_fingerprint="a" * 64,
+        failure_fingerprint="b" * 64,
+        failure_stage="MINIQMT_KERNEL_V2_PRODUCT_ROOT_BUILD_FAILED",
+        error={
+            "type": "RuntimeConfigInvalidError",
+            "message": "exchange-session authority drift",
+            "reason_code": "MINIQMT_EXCHANGE_SESSION_AUTHORITY_DRIFT",
+            "context": {"plan_id": run.execution_plan_id},
+        },
+        as_of_time=observed,
+        base_delay_seconds=60,
+        max_delay_seconds=3600,
+    )
+    entry = first.run_payload_json["simulation_scheduler_retry_control_v1"]["entries"]["BINDING_FAILED_RETRYABLE"]
+    assert entry["consecutive_failure_count"] == 1
+    assert entry["attempt_count"] == 1
+
+    early = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="BINDING_FAILED_RETRYABLE",
+        source_fingerprint="a" * 64,
+        as_of_time=observed + timedelta(seconds=30),
+        lease_seconds=600,
+    )
+    assert early.should_execute is False
+    assert early.reason == "backoff_not_due"
+
+    due = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="BINDING_FAILED_RETRYABLE",
+        source_fingerprint="a" * 64,
+        as_of_time=observed + timedelta(seconds=60),
+        lease_seconds=600,
+    )
+    assert due.should_execute is True
+    assert due.reason == "retry_claimed"
+    duplicate = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="BINDING_FAILED_RETRYABLE",
+        source_fingerprint="a" * 64,
+        as_of_time=observed + timedelta(seconds=60),
+        lease_seconds=600,
+    )
+    assert duplicate.should_execute is False
+    assert duplicate.reason == "attempt_in_progress"
+
+    changed = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="BINDING_FAILED_RETRYABLE",
+        source_fingerprint="c" * 64,
+        as_of_time=observed + timedelta(seconds=61),
+        lease_seconds=600,
+    )
+    assert changed.should_execute is True
+    assert changed.reason == "source_changed"
+    assert "simulation_scheduler_retry_control_v1" not in changed.run.run_payload_json
+
+    corrupted = repo.record_simulation_retry_failure(
+        run_id=run.run_id,
+        retry_key="BINDING_FAILED_RETRYABLE",
+        source_fingerprint="c" * 64,
+        failure_fingerprint="d" * 64,
+        failure_stage="MINIQMT_KERNEL_V2_PRODUCT_ROOT_BUILD_FAILED",
+        error={
+            "type": "RuntimeConfigInvalidError",
+            "message": "exchange-session authority drift",
+            "reason_code": "MINIQMT_EXCHANGE_SESSION_AUTHORITY_DRIFT",
+            "context": {},
+        },
+        as_of_time=observed + timedelta(seconds=62),
+        base_delay_seconds=60,
+        max_delay_seconds=3600,
+        expected_claim_token=changed.claim_token,
+    )
+    forged_payload = deepcopy(corrupted.run_payload_json)
+    forged_payload["simulation_scheduler_retry_control_v1"]["entries"]["BINDING_FAILED_RETRYABLE"]["next_retry_at"] = (
+        (observed + timedelta(days=7)).astimezone(UTC).isoformat()
+    )
+    repo.daily_runs[run.run_id] = corrupted.model_copy(update={"run_payload_json": forged_payload})
+    with pytest.raises(InvalidStateTransitionError, match="retry entry hash drifted"):
+        repo.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="BINDING_FAILED_RETRYABLE",
+            source_fingerprint="c" * 64,
+            as_of_time=observed + timedelta(seconds=63),
+            lease_seconds=600,
+        )
+
+
+def test_simulation_retry_first_and_source_changed_attempts_are_durably_single_claimed() -> None:
+    scheduler, repo, _broker, _binding = _miniqmt_event_loop_test_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=observed,
+    )
+    run = planned.results[0].run
+    assert run is not None
+
+    first = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_FIRST_CLAIM",
+        source_fingerprint="a" * 64,
+        as_of_time=observed,
+        lease_seconds=600,
+    )
+    duplicate_first = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_FIRST_CLAIM",
+        source_fingerprint="a" * 64,
+        as_of_time=observed,
+        lease_seconds=600,
+    )
+    assert first.should_execute is True
+    assert first.claim_token is not None
+    assert duplicate_first.should_execute is False
+    assert duplicate_first.reason == "attempt_in_progress"
+    assert duplicate_first.claim_token == first.claim_token
+    with pytest.raises(InvalidStateTransitionError) as missing_record_token:
+        repo.record_simulation_retry_failure(
+            run_id=run.run_id,
+            retry_key="RECOVERY:TEST_FIRST_CLAIM",
+            source_fingerprint="a" * 64,
+            failure_fingerprint="f" * 64,
+            failure_stage="TEST_FIRST_CLAIM",
+            error={"type": "RuntimeError", "message": "missing token", "reason_code": None, "context": {}},
+            as_of_time=observed + timedelta(seconds=1),
+            base_delay_seconds=60,
+            max_delay_seconds=3600,
+        )
+    assert missing_record_token.value.context["reason_code"] == ("SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED")
+    with pytest.raises(InvalidStateTransitionError) as missing_clear_token:
+        repo.clear_simulation_retry_control(
+            run_id=run.run_id,
+            retry_key="RECOVERY:TEST_FIRST_CLAIM",
+        )
+    assert missing_clear_token.value.context["reason_code"] == "SIMULATION_SCHEDULER_RETRY_CLAIM_TOKEN_REQUIRED"
+
+    failed = repo.record_simulation_retry_failure(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="b" * 64,
+        failure_fingerprint="c" * 64,
+        failure_stage="TEST_SOURCE_CHANGE",
+        error={"type": "RuntimeError", "message": "old source", "reason_code": None, "context": {}},
+        as_of_time=observed,
+        base_delay_seconds=60,
+        max_delay_seconds=3600,
+    )
+    assert failed.run_id == run.run_id
+    changed = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="d" * 64,
+        as_of_time=observed + timedelta(seconds=1),
+        lease_seconds=600,
+    )
+    duplicate_changed = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="d" * 64,
+        as_of_time=observed + timedelta(seconds=1),
+        lease_seconds=600,
+    )
+    assert changed.should_execute is True
+    assert changed.reason == "source_changed"
+    assert changed.claim_token is not None
+    assert duplicate_changed.should_execute is False
+    assert duplicate_changed.reason == "attempt_in_progress"
+    assert duplicate_changed.claim_token == changed.claim_token
+
+    successor = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="d" * 64,
+        as_of_time=observed + timedelta(seconds=602),
+        lease_seconds=600,
+    )
+    assert successor.should_execute is True
+    assert successor.reason == "initial_claim_recovered"
+    assert successor.claim_token is not None
+    assert successor.claim_token != changed.claim_token
+    with pytest.raises(InvalidStateTransitionError) as stale_exc:
+        repo.record_simulation_retry_failure(
+            run_id=run.run_id,
+            retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+            source_fingerprint="d" * 64,
+            failure_fingerprint="e" * 64,
+            failure_stage="TEST_SOURCE_CHANGE",
+            error={"type": "RuntimeError", "message": "stale writer", "reason_code": None, "context": {}},
+            as_of_time=observed + timedelta(seconds=603),
+            base_delay_seconds=60,
+            max_delay_seconds=3600,
+            expected_claim_token=changed.claim_token,
+        )
+    assert stale_exc.value.context["reason_code"] == "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER"
+    with pytest.raises(InvalidStateTransitionError) as stale_clear:
+        repo.clear_simulation_retry_control(
+            run_id=run.run_id,
+            retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+            expected_claim_token=changed.claim_token,
+        )
+    assert stale_clear.value.context["reason_code"] == "SIMULATION_SCHEDULER_RETRY_CLAIM_STALE_WRITER"
+    recorded = repo.record_simulation_retry_failure(
+        run_id=run.run_id,
+        retry_key="RECOVERY:TEST_SOURCE_CHANGE",
+        source_fingerprint="d" * 64,
+        failure_fingerprint="e" * 64,
+        failure_stage="TEST_SOURCE_CHANGE",
+        error={"type": "RuntimeError", "message": "current writer", "reason_code": None, "context": {}},
+        as_of_time=observed + timedelta(seconds=604),
+        base_delay_seconds=60,
+        max_delay_seconds=3600,
+        expected_claim_token=successor.claim_token,
+    )
+    assert (
+        "RECOVERY:TEST_SOURCE_CHANGE" not in recorded.run_payload_json["simulation_scheduler_retry_claims_v1"]["claims"]
+    )
+
+
+def test_simulation_retry_initial_claim_strict_readback_rejects_hash_drift() -> None:
+    scheduler, repo, _broker, _binding = _miniqmt_event_loop_test_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=observed,
+    )
+    run = planned.results[0].run
+    assert run is not None
+    claimed = repo.claim_simulation_retry_attempt(
+        run_id=run.run_id,
+        retry_key="RECOVERY:CLAIM_HASH",
+        source_fingerprint="a" * 64,
+        as_of_time=observed,
+        lease_seconds=600,
+    )
+    forged_payload = deepcopy(claimed.run.run_payload_json)
+    forged_payload["simulation_scheduler_retry_claims_v1"]["claims"]["RECOVERY:CLAIM_HASH"]["lease_until"] = (
+        (observed + timedelta(days=1)).astimezone(UTC).isoformat()
+    )
+    repo.daily_runs[run.run_id] = claimed.run.model_copy(update={"run_payload_json": forged_payload})
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="RECOVERY:CLAIM_HASH",
+            source_fingerprint="a" * 64,
+            as_of_time=observed + timedelta(seconds=1),
+            lease_seconds=600,
+        )
+    assert exc_info.value.context["reason_code"] == "SIMULATION_SCHEDULER_RETRY_CLAIM_HASH_DRIFT"
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_reason"),
+    (
+        ("envelope_type", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("schema_version", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("entries_type", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("entry_fields", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("entry_schema", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("entry_identity", "SIMULATION_SCHEDULER_RETRY_CONTROL_IDENTITY_CONFLICT"),
+        ("source_hash", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("counter", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("timestamp_format", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("timestamp_naive", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("timeline", "SIMULATION_SCHEDULER_RETRY_CONTROL_TIMELINE_INVALID"),
+        ("lease_half", "SIMULATION_SCHEDULER_RETRY_CONTROL_TIMELINE_INVALID"),
+        ("last_error", "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"),
+        ("control_hash", "SIMULATION_SCHEDULER_RETRY_CONTROL_HASH_DRIFT"),
+    ),
+)
+def test_simulation_retry_control_strict_readback_rejects_malformed_carriers(
+    corruption: str,
+    expected_reason: str,
+) -> None:
+    scheduler, repo, _broker, _binding = _miniqmt_event_loop_test_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=observed,
+    )
+    run = planned.results[0].run
+    assert run is not None
+    recorded = repo.record_simulation_retry_failure(
+        run_id=run.run_id,
+        retry_key="BINDING_FAILED_RETRYABLE",
+        source_fingerprint="a" * 64,
+        failure_fingerprint="b" * 64,
+        failure_stage="MINIQMT_KERNEL_V2_PRODUCT_ROOT_BUILD_FAILED",
+        error={"type": "RuntimeError", "message": "authority drift", "reason_code": None, "context": {}},
+        as_of_time=observed,
+        base_delay_seconds=60,
+        max_delay_seconds=3600,
+    )
+    payload = deepcopy(recorded.run_payload_json)
+    control = payload["simulation_scheduler_retry_control_v1"]
+    entry = control["entries"]["BINDING_FAILED_RETRYABLE"]
+    if corruption == "envelope_type":
+        payload["simulation_scheduler_retry_control_v1"] = []
+    elif corruption == "schema_version":
+        control["schema_version"] = "simulation_scheduler_retry_control_v0"
+    elif corruption == "entries_type":
+        control["entries"] = []
+    elif corruption == "entry_fields":
+        entry.pop("failure_stage")
+    elif corruption == "entry_schema":
+        entry["schema_version"] = "simulation_scheduler_retry_entry_v0"
+    elif corruption == "entry_identity":
+        entry["retry_key"] = "OTHER_RETRY"
+    elif corruption == "source_hash":
+        entry["source_fingerprint"] = "invalid"
+    elif corruption == "counter":
+        entry["consecutive_failure_count"] = False
+    elif corruption == "timestamp_format":
+        entry["first_failed_at"] = "not-a-timestamp"
+    elif corruption == "timestamp_naive":
+        entry["first_failed_at"] = "2026-05-22T10:00:00"
+    elif corruption == "timeline":
+        entry["next_retry_at"] = (observed - timedelta(seconds=1)).astimezone(UTC).isoformat()
+    elif corruption == "lease_half":
+        entry["last_attempt_at"] = observed.astimezone(UTC).isoformat()
+    elif corruption == "last_error":
+        entry["last_error"] = []
+    else:
+        control["control_sha256"] = "f" * 64
+    repo.daily_runs[run.run_id] = recorded.model_copy(update={"run_payload_json": payload})
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="BINDING_FAILED_RETRYABLE",
+            source_fingerprint="a" * 64,
+            as_of_time=observed + timedelta(seconds=30),
+            lease_seconds=600,
+        )
+    assert exc_info.value.context["reason_code"] == expected_reason
+
+
+def test_localsim_pre_trade_blocked_replan_uses_same_durable_retry_contract() -> None:
+    release, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=[], valid_no_candidate=True),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_blocked_retry")}
+        ),
+    )
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=observed,
+    )
+    plan = planned.results[0].execution_plan
+    run = repo.update_simulation_daily_run(
+        planned.results[0].run.run_id,
+        status=SimulationDailyRunStatus.SUCCEEDED,
+        payload_patch={
+            "last_stage": SimulationDailyRunStatus.SUCCEEDED.value,
+            "broker_called": False,
+            "pre_trade_blocked_order_generation": {
+                "schema_version": "pre_trade_blocked_order_generation_v1",
+                "plan_id": plan.plan_id,
+                "blocked_intent_ids": [],
+                "reason_codes": ["NO_TRADABLE_REALTIME_QUOTE"],
+            },
+        },
+    )
+    first = scheduler._finalize_binding_retry_result(  # noqa: SLF001
+        result=SimulationSchedulerBindingResult(
+            binding_id=local_binding.binding_id,
+            strategy_id=local_binding.strategy_id,
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            status=SimulationDailyRunStatus.SUCCEEDED.value,
+            run=run,
+            execution_plan=plan,
+            data_source=MinuteDataSource.TDX_REALTIME.value,
+        ),
+        as_of_time=observed,
+    )
+    retry_entry = first.run.run_payload_json["simulation_scheduler_retry_control_v1"]["entries"][
+        "BINDING_FAILED_RETRYABLE"
+    ]
+    assert retry_entry["failure_stage"] == "LOCAL_SIM_PRE_TRADE_BLOCKED_REPLAN"
+    assert retry_entry["next_retry_at"] == (observed + timedelta(minutes=1)).astimezone(UTC).isoformat()
+
+    _, deferred, claim_token, source_fingerprint = scheduler._claim_binding_retry_or_defer(  # noqa: SLF001
+        binding=local_binding,
+        run=first.run,
+        plan=plan,
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        submit=True,
+        as_of_time=observed + timedelta(seconds=30),
+    )
+    assert deferred is not None
+    assert claim_token is None
+    assert source_fingerprint is None
+    assert deferred.status == "RETRY_BACKOFF"
+    assert deferred.error is None
+    assert deferred.lifecycle_diagnostic["reason_code"] == "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE"
+
+
+def test_simulation_retry_failure_evidence_normalizes_unsupported_context_before_hashing() -> None:
+    scheduler, repo, _broker, _binding = _miniqmt_event_loop_test_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=observed,
+    )
+    run = planned.results[0].run
+    assert run is not None
+
+    class UnsupportedContextValue:
+        pass
+
+    error = {
+        "type": "RuntimeError",
+        "message": "durable authority drift",
+        "reason_code": "SIMULATION_TEST_AUTHORITY_DRIFT",
+        "context": {"unsupported": UnsupportedContextValue(), "unordered": {3, 1, 2}},
+    }
+    first = scheduler._record_simulation_retry_failure_evidence(  # noqa: SLF001
+        run=run,
+        retry_key="BINDING_FAILED_RETRYABLE",
+        failure_stage="TEST_FAILURE_STAGE",
+        error=error,
+        as_of_time=observed,
+    )
+    second = scheduler._record_simulation_retry_failure_evidence(  # noqa: SLF001
+        run=first,
+        retry_key="BINDING_FAILED_RETRYABLE",
+        failure_stage="TEST_FAILURE_STAGE",
+        error=error,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+    entry = second.run_payload_json["simulation_scheduler_retry_control_v1"]["entries"]["BINDING_FAILED_RETRYABLE"]
+    assert entry["consecutive_failure_count"] == 2
+    assert entry["last_error"]["context"]["unordered"] == [1, 2, 3]
+    assert entry["last_error"]["context"]["unsupported"] == {
+        "schema_version": "simulation_scheduler_retry_unsupported_evidence_v1",
+        "type": (
+            "test_lifecycle_scheduler."
+            "test_simulation_retry_failure_evidence_normalizes_unsupported_context_before_hashing."
+            "<locals>.UnsupportedContextValue"
+        ),
+    }
+    assert repo.get_simulation_daily_run(run.run_id) == second
 
 
 @pytest.mark.parametrize(
@@ -1776,21 +2565,25 @@ def test_scheduler_miniqmt_kernel_v2_keeps_two_bindings_independent() -> None:
 
 
 def test_scheduler_kernel_product_tick_failure_isolated_to_owning_binding() -> None:
-    scheduler, _repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    first_by_binding = {item.binding_id: item for item in first.results}
     activation = scheduler._miniqmt_quote_ingress_activation
+    original, _plan, runtime_id, exact_failure = _stage_exact_kernel_failure(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+    )
 
     def failing_watchdog() -> None:
-        raise MiniQMTKernelProductSyncError(
-            (
-                {
-                    "runtime_id": "runtime_failed_tick",
-                    "binding_id": binding_a.binding_id,
-                    "reason_code": "MINIQMT_K6_PRODUCT_CALLBACK_SYNC_FAILED",
-                    "exception_type": "RuntimeError",
-                    "exception_message": "injected callback failure",
-                },
-            )
-        )
+        raise MiniQMTKernelProductSyncError((exact_failure,))
 
     activation.watchdog_tick = failing_watchdog
     result = scheduler.run_once(
@@ -1798,14 +2591,955 @@ def test_scheduler_kernel_product_tick_failure_isolated_to_owning_binding() -> N
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
         submit=True,
-        as_of_time=datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai")),
+        as_of_time=observed + timedelta(minutes=1),
     )
     by_binding = {item.binding_id: item for item in result.results}
-    assert by_binding[binding_a.binding_id].status == "FAILED_RETRYABLE"
+    assert by_binding[binding_a.binding_id].status == original.status.value
     assert by_binding[binding_a.binding_id].error["context"]["reason_code"] == (
         "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED"
     )
-    assert by_binding[binding_b.binding_id].status == "MINIQMT_KERNEL_V2_ACTIVE"
+    assert by_binding[binding_a.binding_id].error["context"]["broker_side_effect_state"] == "UNKNOWN"
+    assert "broker_called" not in by_binding[binding_a.binding_id].error["context"]
+    failed_run = repo.get_simulation_daily_run(by_binding[binding_a.binding_id].run.run_id)
+    assert failed_run.run_payload_json["broker_side_effect_state"] == "UNKNOWN"
+    assert "broker_called" not in failed_run.run_payload_json
+    assert "submitted_intents" not in failed_run.run_payload_json
+    assert "failed_intents" not in failed_run.run_payload_json
+    assert failed_run.run_payload_json["pre_run_failure"]["broker_side_effect_state"] == "UNKNOWN"
+    assert "reconcile broker and durable outbox state" in failed_run.run_payload_json["pre_run_failure"]["next_action"]
+    assert scheduler._run_has_broker_side_effect_evidence(failed_run) is True
+    assert by_binding[binding_b.binding_id].status == "REUSED_EXISTING_PLAN"
+    assert failed_run.execution_plan_id == original.execution_plan_id
+    assert runtime_id in failed_run.run_payload_json["pre_run_failure"]["context"]["ordered_failures"][0]["runtime_id"]
+    assert first_by_binding[binding_b.binding_id].run.run_id == by_binding[binding_b.binding_id].run.run_id
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_unmatched_kernel_product_tick_failure_is_not_silently_successful() -> None:
+    scheduler, _repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError(
+            (
+                {
+                    "runtime_id": "runtime_not_in_current_binding_page",
+                    "binding_id": "simbind_not_in_current_binding_page",
+                    "reason_code": "MINIQMT_K6_PRODUCT_CALLBACK_SYNC_FAILED",
+                    "exception_type": "RuntimeError",
+                    "exception_message": "injected failure outside the current binding page",
+                },
+            )
+        )
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    # Every current peer is attempted before the bounded unmatched aggregate is
+    # surfaced.  A stale/limit-excluded activation failure must not turn this
+    # scheduler tick into failed_count=0.
+    assert {item.binding_id for item in result.results[:2]} == {binding_a.binding_id, binding_b.binding_id}
+    assert {item.status for item in result.results[:2]} == {"MINIQMT_KERNEL_V2_ACTIVE"}
+    assert result.failed_count == 1
+    unmatched = result.results[-1]
+    assert unmatched.status == "MINIQMT_KERNEL_V2_UNMATCHED_FAILURE"
+    assert unmatched.error["type"] == "MiniQMTKernelProductSyncError"
+    assert unmatched.error["context"]["reason_code"] == "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_UNMATCHED"
+    assert unmatched.error["context"]["failure_count"] == 1
+    assert unmatched.error["context"]["ordered_failures"][0]["runtime_id"] == ("runtime_not_in_current_binding_page")
+    assert unmatched.error["context"]["ordered_failures"][0]["binding_id"] == ("simbind_not_in_current_binding_page")
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_shared_supervisor_failure_attempts_all_peers_before_blocking_receipt() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError(
+            (
+                {
+                    "runtime_id": None,
+                    "binding_id": None,
+                    "operation": "SUPERVISOR_WATCHDOG",
+                    "lifecycle_generation": None,
+                    "reason_code": "MINIQMT_SHARED_QUOTE_SUPERVISOR_WATCHDOG_FAILED",
+                    "broker_side_effect_state": "UNKNOWN",
+                    "exception_type": "RuntimeError",
+                    "exception_message": "injected shared-supervisor owner failure",
+                },
+            )
+        )
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert {item.binding_id for item in result.results[:2]} == {binding_a.binding_id, binding_b.binding_id}
+    assert {item.status for item in result.results[:2]} == {"MINIQMT_KERNEL_V2_ACTIVE"}
+    assert result.failed_count == 1
+    synthetic = result.results[-1]
+    assert synthetic.status == "MINIQMT_KERNEL_V2_UNMATCHED_FAILURE"
+    failure = synthetic.error["context"]["ordered_failures"][0]
+    assert failure["runtime_id"] is None
+    assert failure["binding_id"] is None
+    assert failure["scheduler_match_state"] == "GLOBAL_SHARED_OWNER_FAILURE"
+    assert len(repo.list_simulation_daily_runs(trade_date=TRADE_DATE, limit=10)) == 2
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_unmatched_failure_fingerprint_closes_over_omitted_tail() -> None:
+    shared = tuple(
+        {
+            "runtime_id": f"runtime_bounded_{index}",
+            "binding_id": f"binding_bounded_{index}",
+            "reason_code": "MINIQMT_K6_PRODUCT_CALLBACK_SYNC_FAILED",
+            "exception_type": "RuntimeError",
+            "exception_message": "bounded failure",
+        }
+        for index in range(100)
+    )
+    left = ProductionSimulationLifecycleScheduler._unmatched_kernel_product_failure_result(
+        failures=(
+            *shared,
+            {
+                "runtime_id": "runtime_tail_left",
+                "binding_id": "binding_tail_left",
+                "reason_code": "TAIL_LEFT",
+            },
+        ),
+        data_source="DB_HISTORICAL",
+    )
+    right = ProductionSimulationLifecycleScheduler._unmatched_kernel_product_failure_result(
+        failures=(
+            *shared,
+            {
+                "runtime_id": "runtime_tail_right",
+                "binding_id": "binding_tail_right",
+                "reason_code": "TAIL_RIGHT",
+            },
+        ),
+        data_source="DB_HISTORICAL",
+    )
+
+    assert left is not None and right is not None
+    left_context = left.error["context"]
+    right_context = right.error["context"]
+    assert len(left_context["ordered_failures"]) == 100
+    assert left_context["truncated_failure_count"] == 1
+    assert left_context["omitted_failures_sha256"] != right_context["omitted_failures_sha256"]
+    assert left_context["failure_fingerprint"] != right_context["failure_fingerprint"]
+
+
+def test_scheduler_expired_kernel_product_failure_is_aggregated_after_current_peers() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    _run, _plan, runtime_id, exact_failure = _stage_exact_kernel_failure(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        runtime_trade_date=TRADE_DATE - timedelta(days=1),
+    )
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError((exact_failure,))
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+
+    current = result.results[:-1]
+    assert {item.binding_id for item in current} == {binding_a.binding_id, binding_b.binding_id}
+    assert {item.status for item in current} == {"REUSED_EXISTING_PLAN"}
+    assert result.failed_count == 1
+    unmatched = result.results[-1]
+    assert unmatched.status == "MINIQMT_KERNEL_V2_UNMATCHED_FAILURE"
+    failure = unmatched.error["context"]["ordered_failures"][0]
+    assert failure["runtime_id"] == runtime_id
+    assert failure["binding_id"] == binding_a.binding_id
+    assert failure["scheduler_match_state"] == "RUNTIME_TRADE_DATE_STALE"
+    current_run = repo.get_simulation_daily_run_by_key(
+        strategy_id=binding_a.strategy_id,
+        binding_id=binding_a.binding_id,
+        trade_date=TRADE_DATE,
+    )
+    assert current_run.execution_plan_id
+    assert "pre_run_failure" not in current_run.run_payload_json
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_unknown_preplan_failure_reconciles_before_automatic_plan_retry() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    original = {item.binding_id: item for item in planned.results}[binding_a.binding_id].run
+    _run, _plan, runtime_id, exact_failure = _stage_exact_kernel_failure(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+    )
+    _orphan_current_kernel_plan_run(repo=repo, run=original)
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError((exact_failure,))
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+    first_by_binding = {item.binding_id: item for item in first.results}
+    failed_run = repo.get_simulation_daily_run(first_by_binding[binding_a.binding_id].run.run_id)
+    assert failed_run.execution_plan_id is None
+    assert failed_run.run_payload_json["broker_side_effect_state"] == "UNKNOWN"
+
+    trace: list[str] = []
+    original_selection = scheduler.selection_service.run_selection
+    activation = scheduler._miniqmt_quote_ingress_activation
+    original_release = activation.release_kernel_product_runtime
+    delattr(activation._failure_runtimes[runtime_id], "execution_plan_id")
+
+    def traced_release(runtime_to_release: str) -> None:
+        trace.append("runtime_release")
+        original_release(runtime_to_release)
+
+    activation.release_kernel_product_runtime = traced_release
+
+    def traced_selection(**kwargs: Any):
+        trace.append("selection")
+        return original_selection(**kwargs)
+
+    scheduler.selection_service.run_selection = traced_selection
+    context = scheduler.context_provider._by_binding_id[binding_a.binding_id]
+    original_sync = context.qmt_sync_service
+
+    class TracedSync:
+        def sync_snapshot(self):
+            trace.append("automatic_reconcile_sync")
+            return original_sync.sync_snapshot()
+
+    scheduler.context_provider._by_binding_id[binding_a.binding_id] = replace(
+        context,
+        qmt_sync_service=TracedSync(),
+    )
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = lambda: None
+
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2),
+    )
+    second_by_binding = {item.binding_id: item for item in second.results}
+    latest = repo.get_simulation_daily_run(failed_run.run_id)
+
+    assert trace[:2] == ["runtime_release", "automatic_reconcile_sync"]
+    assert second_by_binding[binding_a.binding_id].status == "MINIQMT_KERNEL_V2_ACTIVE"
+    assert second_by_binding[binding_b.binding_id].error is None
+    assert latest.execution_plan_id
+    proof = latest.run_payload_json["miniqmt_preplan_unknown_reconciliation"]
+    assert proof["status"] == "NO_BROKER_SIDE_EFFECT"
+    assert proof["runtime_id"] == runtime_id
+    assert proof["broker_side_effect_count"] == 0
+    assert proof["open_order_count"] == 0
+    assert proof["runtime_release_status"] == "RELEASED"
+    assert proof["automatic"] is True
+    assert proof["replacement_plan_created"] is True
+    assert proof["replacement_plan_id"] == latest.execution_plan_id
+    assert "broker_side_effect_state" not in latest.run_payload_json
+    assert "pre_run_failure" not in latest.run_payload_json
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_unknown_preplan_broker_side_effect_is_terminalized_without_replacement_plan() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    original = {item.binding_id: item for item in planned.results}[binding_a.binding_id].run
+    run, plan, runtime_id = _current_kernel_runtime_identity(repo, binding_a)
+    order_remark = "sched-qmt-a-unknown-preplan"
+    outbox_commands = (
+        _exact_kernel_outbox_command(
+            runtime_id=runtime_id,
+            suffix="accepted",
+            status="ACKED",
+            broker_called=True,
+            broker_order_id="900099991",
+            order_remark=order_remark,
+        ),
+    )
+    _run, _plan, _runtime_id, exact_failure = _stage_exact_kernel_failure(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        outbox_commands=outbox_commands,
+    )
+    assert run.execution_plan_id == plan.plan_id
+    _orphan_current_kernel_plan_run(repo=repo, run=original)
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError((exact_failure,))
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+    first_by_binding = {item.binding_id: item for item in first.results}
+    failed_run = repo.get_simulation_daily_run(first_by_binding[binding_a.binding_id].run.run_id)
+    context = scheduler.context_provider._by_binding_id[binding_a.binding_id]
+    context.qmt_ledger_repository.upsert_order_ledger(
+        OrderLedgerRecord(
+            intent_id="intent_unknown_preplan_broker_fact",
+            strategy_id=binding_a.strategy_id,
+            strategy_name=binding_a.strategy_name or binding_a.strategy_id,
+            qmt_order_id="900099991",
+            symbol="000001.SZ",
+            order_type=BUY_ORDER_TYPE,
+            order_volume=100,
+            traded_volume=100,
+            order_status=STATUS_FILLED,
+            account_id=binding_a.broker_account_id or "QMT_SIM_ACCOUNT",
+            trade_date=TRADE_DATE,
+            price_type=11,
+            price=Decimal("10.00"),
+            traded_price=Decimal("10.00"),
+            status_msg="terminal broker fact from the failed runtime",
+            order_remark=order_remark,
+        )
+    )
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = lambda: None
+
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2),
+    )
+    second_by_binding = {item.binding_id: item for item in second.results}
+    terminal = repo.get_simulation_daily_run(failed_run.run_id)
+
+    assert second_by_binding[binding_a.binding_id].status == SimulationDailyRunStatus.FAILED_TERMINAL.value
+    assert second_by_binding[binding_b.binding_id].error is None
+    assert terminal.status == SimulationDailyRunStatus.FAILED_TERMINAL
+    assert terminal.execution_plan_id is None
+    proof = terminal.run_payload_json["miniqmt_preplan_unknown_reconciliation"]
+    assert proof["status"] == "BROKER_SIDE_EFFECT_RECONCILED_TERMINAL"
+    assert proof["runtime_id"] == runtime_id
+    assert proof["broker_side_effect_count"] == 1
+    assert proof["open_order_count"] == 0
+    assert proof["replacement_plan_created"] is False
+    assert terminal.run_payload_json["broker_called"] is True
+    assert scheduler._miniqmt_quote_ingress_activation.released_runtime_ids == [runtime_id]
+    assert broker.place_order_payloads == []
+
+    repeated = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2, seconds=30),
+    )
+    repeated_by_binding = {item.binding_id: item for item in repeated.results}
+    assert repeated_by_binding[binding_a.binding_id].status == SimulationDailyRunStatus.FAILED_TERMINAL.value
+    assert repo.get_simulation_daily_run(failed_run.run_id).execution_plan_id is None
+    assert scheduler._miniqmt_quote_ingress_activation.released_runtime_ids == [runtime_id]
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_preplan_unknown_fresh_process_closes_absent_runtime_from_durable_authority() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    failed_run, runtime_id = _persist_exact_preplan_unknown(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        observed=observed,
+    )
+    fresh_activation = _RealB0TestActivation()
+    scheduler._miniqmt_quote_ingress_activation = fresh_activation
+    scheduler._b0_quote_v2_controller_factory = fresh_activation.controller_factory
+    scheduler.orchestrator.b0_quote_v2_controller_factory = fresh_activation.controller_factory
+    scheduler._miniqmt_quote_context_adapter = fresh_activation.quote_context_adapter
+
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2),
+    )
+    recovered_by_binding = {item.binding_id: item for item in recovered.results}
+    latest = repo.get_simulation_daily_run(failed_run.run_id)
+
+    assert recovered_by_binding[binding_a.binding_id].status == "MINIQMT_KERNEL_V2_ACTIVE"
+    assert recovered_by_binding[binding_b.binding_id].error is None
+    assert latest.execution_plan_id
+    assert latest.run_payload_json["miniqmt_preplan_unknown_runtime_release"] == {
+        **latest.run_payload_json["miniqmt_preplan_unknown_runtime_release"],
+        "status": "ALREADY_ABSENT",
+        "runtime_id": runtime_id,
+        "process_local_runtime_present": False,
+    }
+    assert fresh_activation.released_runtime_ids == []
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_preplan_unknown_release_persist_crash_retries_as_already_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    failed_run, runtime_id = _persist_exact_preplan_unknown(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        observed=observed,
+    )
+    activation = scheduler._miniqmt_quote_ingress_activation
+    original_update = repo.update_simulation_daily_run
+    crashed = False
+
+    def crash_after_release(run_id: str, **kwargs: Any):
+        nonlocal crashed
+        payload_patch = kwargs.get("payload_patch")
+        if (
+            not crashed
+            and isinstance(payload_patch, dict)
+            and "miniqmt_preplan_unknown_runtime_release" in payload_patch
+        ):
+            crashed = True
+            raise RuntimeError("injected crash after process-local release before durable receipt")
+        return original_update(run_id, **kwargs)
+
+    monkeypatch.setattr(repo, "update_simulation_daily_run", crash_after_release)
+    first_retry = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2),
+    )
+    first_by_binding = {item.binding_id: item for item in first_retry.results}
+    assert first_by_binding[binding_a.binding_id].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert first_by_binding[binding_b.binding_id].error is None
+    assert activation.released_runtime_ids == [runtime_id]
+    assert activation.get_kernel_product_runtime(runtime_id) is None
+
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=4),
+    )
+    recovered_by_binding = {item.binding_id: item for item in recovered.results}
+    latest = repo.get_simulation_daily_run(failed_run.run_id)
+    assert recovered_by_binding[binding_a.binding_id].status == "MINIQMT_KERNEL_V2_ACTIVE"
+    assert latest.run_payload_json["miniqmt_preplan_unknown_runtime_release"]["status"] == "ALREADY_ABSENT"
+    assert activation.released_runtime_ids == [runtime_id]
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_preplan_unknown_never_releases_current_successor_attempt() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    failed_run, runtime_id = _persist_exact_preplan_unknown(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        observed=observed,
+    )
+    activation = scheduler._miniqmt_quote_ingress_activation
+    failure = failed_run.run_payload_json["miniqmt_preplan_unknown_failure"]
+    authority = failure["runtime_authorities"][0]
+    activation.stage_failure_runtime(
+        runtime_id=runtime_id,
+        binding_id=binding_a.binding_id,
+        trade_date=TRADE_DATE,
+        execution_plan_id=authority["execution_plan_id"],
+        lifecycle_generation=authority["lifecycle_generation"] + 1,
+        attempt_token=authority["attempt_token"] + 1,
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2),
+    )
+    result_by_binding = {item.binding_id: item for item in result.results}
+    latest = repo.get_simulation_daily_run(failed_run.run_id)
+    assert result_by_binding[binding_a.binding_id].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert result_by_binding[binding_b.binding_id].error is None
+    assert latest.execution_plan_id is None
+    assert activation.get_kernel_product_runtime(runtime_id) is not None
+    assert activation.released_runtime_ids == []
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_preplan_unknown_generic_reconcile_failure_isolated_from_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    failed_run, _runtime_id = _persist_exact_preplan_unknown(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        observed=observed,
+    )
+
+    def fail_reconcile(**_kwargs: Any):
+        raise RuntimeError("injected generic reconciliation failure")
+
+    monkeypatch.setattr(scheduler, "_reconcile_after_submit_with_timeout", fail_reconcile)
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2),
+    )
+    result_by_binding = {item.binding_id: item for item in result.results}
+    latest = repo.get_simulation_daily_run(failed_run.run_id)
+    assert result_by_binding[binding_a.binding_id].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert result_by_binding[binding_b.binding_id].error is None
+    assert latest.execution_plan_id is None
+    assert latest.run_payload_json["broker_side_effect_state"] == "UNKNOWN"
+    assert broker.place_order_payloads == []
+
+
+@pytest.mark.parametrize(
+    ("wrong_field", "wrong_value", "expected_conflict"),
+    [
+        ("account_id", "QMT_WRONG_ACCOUNT", "sync_account_id_conflict"),
+        ("trade_date", "2026-05-20", "sync_trade_date_conflict"),
+    ],
+)
+def test_scheduler_preplan_unknown_wrong_sync_identity_never_authorizes_replacement(
+    wrong_field: str,
+    wrong_value: str,
+    expected_conflict: str,
+) -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    failed_run, _runtime_id = _persist_exact_preplan_unknown(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        observed=observed,
+    )
+    context = scheduler.context_provider._by_binding_id[binding_a.binding_id]
+    original_sync = context.qmt_sync_service
+
+    class WrongIdentitySync:
+        def sync_snapshot(self):
+            payload = original_sync.sync_snapshot().to_dict()
+            payload[wrong_field] = wrong_value
+
+            class MutatedSummary:
+                def to_dict(self):
+                    return dict(payload)
+
+            return MutatedSummary()
+
+    scheduler.context_provider._by_binding_id[binding_a.binding_id] = replace(
+        context,
+        qmt_sync_service=WrongIdentitySync(),
+    )
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2),
+    )
+    result_by_binding = {item.binding_id: item for item in result.results}
+    latest = repo.get_simulation_daily_run(failed_run.run_id)
+    proof = latest.run_payload_json["miniqmt_preplan_unknown_reconciliation"]
+    assert result_by_binding[binding_a.binding_id].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert result_by_binding[binding_b.binding_id].error is None
+    assert latest.execution_plan_id is None
+    assert proof["status"] == "RECONCILIATION_PENDING"
+    assert expected_conflict in proof["sync_conflicts"]
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_preplan_unknown_dispatching_outbox_stays_pending_and_honors_retry_backoff() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    _run, _plan, runtime_id = _current_kernel_runtime_identity(repo, binding_a)
+    dispatching = (
+        _exact_kernel_outbox_command(
+            runtime_id=runtime_id,
+            suffix="dispatching",
+            status="DISPATCHING",
+            broker_called=None,
+        ),
+    )
+    run = repo.get_simulation_daily_run_by_key(
+        strategy_id=binding_a.strategy_id,
+        binding_id=binding_a.binding_id,
+        trade_date=TRADE_DATE,
+    )
+    assert run is not None
+    scheduler._miniqmt_quote_ingress_activation._failure_runtimes.clear()
+    repo.daily_runs.clear()
+    repo.daily_run_key_index.clear()
+    # Recreate the same exact fixture once, now with an ambiguous durable command.
+    failed_run, _runtime_id = _persist_exact_preplan_unknown(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        observed=observed,
+        outbox_commands=dispatching,
+    )
+    context = scheduler.context_provider._by_binding_id[binding_a.binding_id]
+    original_sync = context.qmt_sync_service
+    sync_calls = 0
+
+    class CountingSync:
+        def sync_snapshot(self):
+            nonlocal sync_calls
+            sync_calls += 1
+            return original_sync.sync_snapshot()
+
+    scheduler.context_provider._by_binding_id[binding_a.binding_id] = replace(
+        context,
+        qmt_sync_service=CountingSync(),
+    )
+    first_retry = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2),
+    )
+    assert {item.binding_id: item for item in first_retry.results}[binding_a.binding_id].status == (
+        SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    )
+    proof = repo.get_simulation_daily_run(failed_run.run_id).run_payload_json["miniqmt_preplan_unknown_reconciliation"]
+    assert proof["status"] == "RECONCILIATION_PENDING"
+    assert "outbox_outcome_ambiguous" in proof["sync_conflicts"]
+    assert sync_calls == 2
+
+    early = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2, seconds=30),
+    )
+    assert {item.binding_id: item for item in early.results}[binding_a.binding_id].status == "RETRY_BACKOFF"
+    assert sync_calls == 2
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_preplan_unknown_foreign_order_does_not_terminalize_exact_runtime() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    failed_run, _runtime_id = _persist_exact_preplan_unknown(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        observed=observed,
+    )
+    context = scheduler.context_provider._by_binding_id[binding_a.binding_id]
+    context.qmt_ledger_repository.upsert_order_ledger(
+        OrderLedgerRecord(
+            intent_id="intent_foreign_runtime",
+            strategy_id=binding_a.strategy_id,
+            strategy_name=binding_a.strategy_name or binding_a.strategy_id,
+            qmt_order_id="900088888",
+            symbol="000001.SZ",
+            order_type=BUY_ORDER_TYPE,
+            order_volume=100,
+            traded_volume=100,
+            order_status=STATUS_FILLED,
+            account_id=binding_a.broker_account_id or "QMT_SIM_ACCOUNT",
+            trade_date=TRADE_DATE,
+            order_remark="foreign-runtime-order",
+        )
+    )
+    recovered = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=2),
+    )
+    recovered_by_binding = {item.binding_id: item for item in recovered.results}
+    latest = repo.get_simulation_daily_run(failed_run.run_id)
+    proof = latest.run_payload_json["miniqmt_preplan_unknown_reconciliation"]
+    assert recovered_by_binding[binding_a.binding_id].status == "MINIQMT_KERNEL_V2_ACTIVE"
+    assert recovered_by_binding[binding_b.binding_id].error is None
+    assert proof["status"] == "NO_BROKER_SIDE_EFFECT"
+    assert proof["exact_broker_authority"]["foreign_order_count"] == 1
+    assert proof["exact_broker_authority"]["exact_broker_side_effect_count"] == 0
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_foreign_same_binding_runtime_does_not_pollute_existing_intraday_plan() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    first_by_binding = {item.binding_id: item for item in first.results}
+    original = repo.get_simulation_daily_run(first_by_binding[binding_a.binding_id].run.run_id)
+    assert original.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert original.execution_plan_id
+    assert original.run_payload_json["broker_called"] is False
+    scheduler._miniqmt_quote_ingress_activation.stage_failure_runtime(
+        runtime_id="runtime_failed_existing_tick",
+        binding_id=binding_a.binding_id,
+        trade_date=TRADE_DATE,
+    )
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError(
+            (
+                {
+                    "runtime_id": "runtime_failed_existing_tick",
+                    "binding_id": binding_a.binding_id,
+                    "reason_code": "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED",
+                    "broker_side_effect_state": "UNKNOWN",
+                    "exception_type": "RuntimeError",
+                    "exception_message": "injected failure after plan publication",
+                },
+            )
+        )
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+    second_by_binding = {item.binding_id: item for item in second.results}
+    latest = repo.get_simulation_daily_run(original.run_id)
+
+    assert second_by_binding[binding_a.binding_id].error is None
+    assert latest.status == original.status
+    assert latest.execution_plan_id == original.execution_plan_id
+    assert latest.execution_plan_hash == original.execution_plan_hash
+    assert latest.run_payload_json == original.run_payload_json
+    assert second_by_binding[binding_b.binding_id].error is None
+    assert repo.get_simulation_daily_run(first_by_binding[binding_b.binding_id].run.run_id).status == (
+        SimulationDailyRunStatus.INTRADAY_RUNNING
+    )
+    unmatched = second.results[-1]
+    assert unmatched.status == "MINIQMT_KERNEL_V2_UNMATCHED_FAILURE"
+    failure = unmatched.error["context"]["ordered_failures"][0]
+    expected_runtime_id = miniqmt_kernel_runtime_id(
+        plan_id=original.execution_plan_id,
+        binding_id=binding_a.binding_id,
+        trade_date=TRADE_DATE,
+    )
+    assert failure["runtime_id"] == "runtime_failed_existing_tick"
+    assert failure["scheduler_match_state"] == "RUNTIME_NOT_CURRENT_PLAN_OWNER"
+    assert failure["scheduler_expected_runtime_id"] == expected_runtime_id
+    assert broker.place_order_payloads == []
+
+
+@pytest.mark.parametrize(
+    ("runtime_generation", "runtime_attempt", "failure_generation", "failure_attempt", "expected_state"),
+    [
+        (2, 1, 1, 1, "RUNTIME_LIFECYCLE_GENERATION_STALE"),
+        (1, 2, 1, 1, "RUNTIME_ATTEMPT_TOKEN_STALE"),
+    ],
+)
+def test_scheduler_stale_kernel_attempt_never_pollutes_or_releases_current_plan(
+    runtime_generation: int,
+    runtime_attempt: int,
+    failure_generation: int,
+    failure_attempt: int,
+    expected_state: str,
+) -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    original = {item.binding_id: item for item in first.results}[binding_a.binding_id].run
+    assert original is not None
+    _run, _plan, runtime_id, failure = _stage_exact_kernel_failure(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+        lifecycle_generation=runtime_generation,
+        attempt_token=runtime_attempt,
+    )
+    failure["lifecycle_generation"] = failure_generation
+    failure["attempt_token"] = failure_attempt
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError((failure,))
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+    latest = repo.get_simulation_daily_run(original.run_id)
+    unmatched = result.results[-1]
+    assert unmatched.status == "MINIQMT_KERNEL_V2_UNMATCHED_FAILURE"
+    assert unmatched.error["context"]["ordered_failures"][0]["scheduler_match_state"] == expected_state
+    assert latest == original
+    assert scheduler._miniqmt_quote_ingress_activation.released_runtime_ids == []
+    assert {item.binding_id: item for item in result.results}[binding_b.binding_id].error is None
+    assert runtime_id not in scheduler._miniqmt_quote_ingress_activation.released_runtime_ids
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_matched_failure_persistence_is_bounded_and_hashes_omitted_tail() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    original, _plan, _runtime_id, base_failure = _stage_exact_kernel_failure(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+    )
+    failures = tuple({**base_failure, "exception_message": f"bounded exact failure {index}"} for index in range(101))
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError(failures)
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+    result_by_binding = {item.binding_id: item for item in result.results}
+    latest = repo.get_simulation_daily_run(original.run_id)
+    evidence = latest.run_payload_json["pre_run_failure"]["context"]
+    assert result_by_binding[binding_a.binding_id].error is not None
+    assert result_by_binding[binding_b.binding_id].error is None
+    assert evidence["failure_count"] == 101
+    assert len(evidence["ordered_failures"]) == 100
+    assert evidence["truncated_failure_count"] == 1
+    assert evidence["omitted_failures_sha256"]
+    assert evidence["all_failures_sha256"]
+    assert broker.place_order_payloads == []
+
+
+def test_scheduler_unknown_preserves_existing_positive_broker_side_effect_facts() -> None:
+    scheduler, repo, broker, binding_a, binding_b = _miniqmt_two_strategy_scheduler()
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed,
+    )
+    first_by_binding = {item.binding_id: item for item in first.results}
+    original = repo.update_simulation_daily_run(
+        first_by_binding[binding_a.binding_id].run.run_id,
+        payload_patch={"broker_called": True, "submitted_intents": 3, "failed_intents": 1},
+    )
+    _run, _plan, _runtime_id, exact_failure = _stage_exact_kernel_failure(
+        scheduler=scheduler,
+        repo=repo,
+        binding=binding_a,
+    )
+
+    def failing_watchdog() -> None:
+        raise MiniQMTKernelProductSyncError((exact_failure,))
+
+    scheduler._miniqmt_quote_ingress_activation.watchdog_tick = failing_watchdog
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+        as_of_time=observed + timedelta(minutes=1),
+    )
+    second_by_binding = {item.binding_id: item for item in second.results}
+    latest = repo.get_simulation_daily_run(original.run_id)
+
+    assert second_by_binding[binding_a.binding_id].error["context"]["broker_side_effect_state"] == "UNKNOWN"
+    assert latest.status == original.status
+    assert latest.execution_plan_id == original.execution_plan_id
+    assert latest.execution_plan_hash == original.execution_plan_hash
+    assert latest.run_payload_json["broker_side_effect_state"] == "UNKNOWN"
+    assert latest.run_payload_json["broker_called"] is True
+    assert latest.run_payload_json["submitted_intents"] == 3
+    assert latest.run_payload_json["failed_intents"] == 1
+    assert second_by_binding[binding_b.binding_id].error is None
     assert broker.place_order_payloads == []
 
 
@@ -4600,6 +6334,7 @@ def test_scheduler_marks_localsim_buy_only_retry_failure_with_actionable_context
 def test_scheduler_clears_localsim_retry_diagnostics_after_successful_retry() -> None:
     release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
     assert local_binding is not None
+    observed = datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai"))
     candidates = _candidate_rows()[:1]
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
@@ -4648,6 +6383,7 @@ def test_scheduler_clears_localsim_retry_diagnostics_after_successful_retry() ->
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
         submit=True,
+        as_of_time=observed,
     )
     assert failed_retry.failed_count == 1
     retry_payload = repo.get_simulation_daily_run(failed_run.run_id).run_payload_json
@@ -4668,6 +6404,7 @@ def test_scheduler_clears_localsim_retry_diagnostics_after_successful_retry() ->
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
         submit=True,
+        as_of_time=observed + timedelta(minutes=1),
     )
 
     latest_run = repo.get_simulation_daily_run(failed_run.run_id)
@@ -6831,12 +8568,28 @@ def test_scheduler_recovery_isolates_one_bad_durable_run_and_continues_peer_runs
         trade_date=TRADE_DATE,
         strategy_id="strategy-bad",
         broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        binding_id="binding-stale-bad",
+        binding_hash="binding-hash-bad",
+        release_id="release-stale-bad",
+        release_hash="release-hash-bad",
+        execution_plan_id="plan-stale-bad",
+        execution_plan_hash="plan-hash-bad",
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        run_payload_json={},
     )
     good_run = SimpleNamespace(
         run_id="stale-good",
         trade_date=TRADE_DATE,
         strategy_id="strategy-good",
         broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        binding_id="binding-stale-good",
+        binding_hash="binding-hash-good",
+        release_id="release-stale-good",
+        release_hash="release-hash-good",
+        execution_plan_id="plan-stale-good",
+        execution_plan_hash="plan-hash-good",
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        run_payload_json={},
     )
     monkeypatch.setattr(scheduler, "_is_post_close_reconcile_time", lambda **_kwargs: True)
     monkeypatch.setattr(
@@ -6844,6 +8597,23 @@ def test_scheduler_recovery_isolates_one_bad_durable_run_and_continues_peer_runs
         "list_simulation_daily_runs",
         lambda **_kwargs: [bad_run, good_run],
     )
+    monkeypatch.setattr(
+        scheduler.repository,
+        "claim_simulation_retry_attempt",
+        lambda **kwargs: SimpleNamespace(
+            run=bad_run if kwargs["run_id"] == bad_run.run_id else good_run,
+            should_execute=True,
+            reason="no_previous_failure",
+            retry_entry=None,
+            claim_token=None,
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler.repository,
+        "get_simulation_daily_run",
+        lambda run_id: bad_run if run_id == bad_run.run_id else good_run,
+    )
+    monkeypatch.setattr(scheduler, "_record_simulation_retry_failure", lambda **kwargs: kwargs["run"])
 
     def recover_one(*, run: Any, as_of_time: datetime | None) -> dict[str, Any]:  # noqa: ARG001
         if run.run_id == "stale-bad":
@@ -7442,6 +9212,439 @@ def test_localsim_state_authority_rejects_duplicate_missing_extra_and_hash_confl
     assert hash_info.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_AUTHORITY_HASH_CONFLICT"
 
 
+def test_localsim_state_authority_accepts_hash_closed_superseded_plan_generations() -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    predecessor_plan = repo.get_execution_plan(run.execution_plan_id)
+    predecessor_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    predecessor_receipt = max(
+        _local_sim_economic_receipt_map(run.run_payload_json).values(),
+        key=lambda item: item.generation,
+    )
+    successor_plan = SimulationLifecycleScheduler._copy_localsim_plan_with_intents(  # noqa: SLF001
+        plan=predecessor_plan,
+        intents=list(reversed(predecessor_plan.intents)),
+        cash_fit_payload={
+            "schema_version": "localsim_capital_dependency_v1",
+            "status": "SELL_FIRST_DEPENDENCY_ORDERED",
+            "reason": "localsim_sell_first_durable_dependent_buy",
+            "initial_cash": 100_000.0,
+            "original_intent_count": len(predecessor_plan.intents),
+            "prepared_intent_count": len(predecessor_plan.intents),
+            "sell_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.SELL),
+            "buy_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "dependent_buy_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "capital_waiting_owner": "LocalSimExecutionStateV1",
+        },
+    )
+    repo.save_execution_plan(successor_plan)
+    successor_states = tuple(
+        LocalSimExecutionStateV1.model_validate(
+            {
+                **state.model_dump(mode="json"),
+                "state_id": "",
+                "plan_id": successor_plan.plan_id,
+                "algo_instance_id": f"successor_{state.algo_instance_id}",
+                "order_id": f"successor_{state.order_id}",
+                "idempotency_key": f"successor_{state.idempotency_key}",
+                "state_hash": "",
+            }
+        )
+        for state in predecessor_states
+    )
+    successor_facts = deepcopy(predecessor_receipt.economic_facts)
+    successor_facts["plan_id"] = successor_plan.plan_id
+    successor_facts["state_hashes"] = {state.state_id: state.state_hash for state in successor_states}
+    successor_receipt = LocalSimEconomicReceiptV1(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id=successor_plan.plan_id,
+        generation=predecessor_receipt.generation + 1,
+        economic_facts=successor_facts,
+    )
+    all_states = {state.state_id: state.model_dump(mode="json") for state in (*predecessor_states, *successor_states)}
+    receipts = {
+        predecessor_receipt.receipt_id: predecessor_receipt.model_dump(mode="json"),
+        successor_receipt.receipt_id: successor_receipt.model_dump(mode="json"),
+    }
+    repo.update_simulation_daily_run(
+        run.run_id,
+        execution_plan=successor_plan,
+        payload_patch={
+            "local_sim_execution_states_v1": all_states,
+            "local_sim_economic_receipts_v1": receipts,
+            "local_sim_economic_generation": successor_receipt.generation,
+            "rebuilt_after_side_effect_free_failure": True,
+            "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
+            "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
+            "rebuilt_execution_plan_id": successor_plan.plan_id,
+            "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
+        },
+    )
+
+    authoritative = repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+
+    assert {state.state_id for state in authoritative} == {state.state_id for state in successor_states}
+
+
+def test_localsim_state_authority_accepts_monotonic_successor_generation_progress() -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    predecessor_plan = repo.get_execution_plan(run.execution_plan_id)
+    predecessor_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    predecessor_receipt = max(
+        _local_sim_economic_receipt_map(run.run_payload_json).values(),
+        key=lambda item: item.generation,
+    )
+    successor_plan = SimulationLifecycleScheduler._copy_localsim_plan_with_intents(  # noqa: SLF001
+        plan=predecessor_plan,
+        intents=list(reversed(predecessor_plan.intents)),
+        cash_fit_payload={
+            "schema_version": "localsim_capital_dependency_v1",
+            "status": "SELL_FIRST_DEPENDENCY_ORDERED",
+            "reason": "localsim_sell_first_durable_dependent_buy",
+            "initial_cash": 100_000.0,
+            "original_intent_count": len(predecessor_plan.intents),
+            "prepared_intent_count": len(predecessor_plan.intents),
+            "sell_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.SELL),
+            "buy_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "dependent_buy_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "capital_waiting_owner": "LocalSimExecutionStateV1",
+        },
+    )
+    repo.save_execution_plan(successor_plan)
+    successor_states: list[LocalSimExecutionStateV1] = []
+    progressed_intent_id = predecessor_states[0].intent_id
+    for state in predecessor_states:
+        progressed = state.intent_id == progressed_intent_id
+        successor_states.append(
+            LocalSimExecutionStateV1.model_validate(
+                {
+                    **state.model_dump(mode="json"),
+                    "state_id": "",
+                    "plan_id": successor_plan.plan_id,
+                    "algo_instance_id": f"successor_{state.algo_instance_id}",
+                    "order_id": f"successor_{state.order_id}",
+                    "idempotency_key": f"successor_{state.idempotency_key}",
+                    "filled_quantity": state.filled_quantity + (1 if progressed else 0),
+                    "remaining_quantity": state.remaining_quantity - (1 if progressed else 0),
+                    "runtime_status": (
+                        LocalSimExecutionRuntimeStatus.ACTIVE.value if progressed else state.runtime_status.value
+                    ),
+                    "sequence": state.sequence + (1 if progressed else 0),
+                    "latest_fill_sequence": state.latest_fill_sequence + (1 if progressed else 0),
+                    "state_hash": "",
+                }
+            )
+        )
+    successor_facts = deepcopy(predecessor_receipt.economic_facts)
+    successor_facts["plan_id"] = successor_plan.plan_id
+    successor_facts["state_hashes"] = {state.state_id: state.state_hash for state in successor_states}
+    successor_receipt = LocalSimEconomicReceiptV1(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id=successor_plan.plan_id,
+        generation=predecessor_receipt.generation + 1,
+        economic_facts=successor_facts,
+    )
+    repo.update_simulation_daily_run(
+        run.run_id,
+        execution_plan=successor_plan,
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                state.state_id: state.model_dump(mode="json") for state in (*predecessor_states, *successor_states)
+            },
+            "local_sim_economic_receipts_v1": {
+                predecessor_receipt.receipt_id: predecessor_receipt.model_dump(mode="json"),
+                successor_receipt.receipt_id: successor_receipt.model_dump(mode="json"),
+            },
+            "local_sim_economic_generation": successor_receipt.generation,
+            "rebuilt_after_side_effect_free_failure": True,
+            "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
+            "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
+            "rebuilt_execution_plan_id": successor_plan.plan_id,
+            "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
+        },
+    )
+
+    authoritative = repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+
+    assert {state.state_id for state in authoritative} == {state.state_id for state in successor_states}
+    progressed = next(state for state in authoritative if state.intent_id == progressed_intent_id)
+    assert progressed.filled_quantity == predecessor_states[0].filled_quantity + 1
+
+
+def test_localsim_state_authority_rejects_missing_durable_rebuild_plan() -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    predecessor_plan = repo.get_execution_plan(run.execution_plan_id)
+    predecessor_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    predecessor_receipt = max(
+        _local_sim_economic_receipt_map(run.run_payload_json).values(),
+        key=lambda item: item.generation,
+    )
+    successor_plan = SimulationLifecycleScheduler._copy_localsim_plan_with_intents(  # noqa: SLF001
+        plan=predecessor_plan,
+        intents=list(reversed(predecessor_plan.intents)),
+        cash_fit_payload={
+            "schema_version": "localsim_capital_dependency_v1",
+            "status": "SELL_FIRST_DEPENDENCY_ORDERED",
+            "reason": "localsim_sell_first_durable_dependent_buy",
+            "initial_cash": 100_000.0,
+            "original_intent_count": len(predecessor_plan.intents),
+            "prepared_intent_count": len(predecessor_plan.intents),
+            "sell_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.SELL),
+            "buy_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "dependent_buy_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "capital_waiting_owner": "LocalSimExecutionStateV1",
+        },
+    )
+    successor_states = tuple(
+        LocalSimExecutionStateV1.model_validate(
+            {
+                **state.model_dump(mode="json"),
+                "state_id": "",
+                "plan_id": successor_plan.plan_id,
+                "algo_instance_id": f"successor_{state.algo_instance_id}",
+                "order_id": f"successor_{state.order_id}",
+                "idempotency_key": f"successor_{state.idempotency_key}",
+                "state_hash": "",
+            }
+        )
+        for state in predecessor_states
+    )
+    successor_facts = deepcopy(predecessor_receipt.economic_facts)
+    successor_facts["plan_id"] = successor_plan.plan_id
+    successor_facts["state_hashes"] = {state.state_id: state.state_hash for state in successor_states}
+    successor_receipt = LocalSimEconomicReceiptV1(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id=successor_plan.plan_id,
+        generation=predecessor_receipt.generation + 1,
+        economic_facts=successor_facts,
+    )
+    repo.update_simulation_daily_run(
+        run.run_id,
+        execution_plan=successor_plan,
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                state.state_id: state.model_dump(mode="json") for state in (*predecessor_states, *successor_states)
+            },
+            "local_sim_economic_receipts_v1": {
+                predecessor_receipt.receipt_id: predecessor_receipt.model_dump(mode="json"),
+                successor_receipt.receipt_id: successor_receipt.model_dump(mode="json"),
+            },
+            "local_sim_economic_generation": successor_receipt.generation,
+            "rebuilt_after_side_effect_free_failure": True,
+            "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
+            "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
+            "rebuilt_execution_plan_id": "plan_missing_rebuild_authority",
+            "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
+        },
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+
+    assert exc_info.value.context["reason_code"] == ("LOCALSIM_DURABLE_STATE_SUPERSEDED_PLAN_AUTHORITY_MISSING")
+
+
+def test_localsim_state_authority_rejects_unproven_cross_plan_receipt_history() -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    predecessor_receipt = max(
+        _local_sim_economic_receipt_map(run.run_payload_json).values(),
+        key=lambda item: item.generation,
+    )
+    forged_facts = deepcopy(predecessor_receipt.economic_facts)
+    forged_facts["plan_id"] = "plan_unproven_successor"
+    forged = LocalSimEconomicReceiptV1(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id="plan_unproven_successor",
+        generation=predecessor_receipt.generation + 1,
+        economic_facts=forged_facts,
+    )
+    repo.update_simulation_daily_run(
+        run.run_id,
+        payload_patch={
+            "local_sim_economic_receipts_v1": {
+                predecessor_receipt.receipt_id: predecessor_receipt.model_dump(mode="json"),
+                forged.receipt_id: forged.model_dump(mode="json"),
+            },
+            "local_sim_economic_generation": forged.generation,
+        },
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+
+    assert exc_info.value.context["reason_code"] == ("LOCALSIM_DURABLE_STATE_AUTHORITY_RECEIPT_IDENTITY_CONFLICT")
+
+
+def test_localsim_state_authority_rejects_forged_superseded_plan_state_hash() -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    predecessor_plan = repo.get_execution_plan(run.execution_plan_id)
+    predecessor_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    predecessor_receipt = max(
+        _local_sim_economic_receipt_map(run.run_payload_json).values(),
+        key=lambda item: item.generation,
+    )
+    successor_plan = SimulationLifecycleScheduler._copy_localsim_plan_with_intents(  # noqa: SLF001
+        plan=predecessor_plan,
+        intents=list(reversed(predecessor_plan.intents)),
+        cash_fit_payload={
+            "schema_version": "localsim_capital_dependency_v1",
+            "status": "SELL_FIRST_DEPENDENCY_ORDERED",
+            "reason": "localsim_sell_first_durable_dependent_buy",
+            "initial_cash": 100_000.0,
+            "original_intent_count": len(predecessor_plan.intents),
+            "prepared_intent_count": len(predecessor_plan.intents),
+            "sell_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.SELL),
+            "buy_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "dependent_buy_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "capital_waiting_owner": "LocalSimExecutionStateV1",
+        },
+    )
+    repo.save_execution_plan(successor_plan)
+    successor_states = tuple(
+        LocalSimExecutionStateV1.model_validate(
+            {
+                **state.model_dump(mode="json"),
+                "state_id": "",
+                "plan_id": successor_plan.plan_id,
+                "algo_instance_id": f"successor_{state.algo_instance_id}",
+                "order_id": f"successor_{state.order_id}",
+                "idempotency_key": f"successor_{state.idempotency_key}",
+                "state_hash": "",
+            }
+        )
+        for state in predecessor_states
+    )
+    successor_facts = deepcopy(predecessor_receipt.economic_facts)
+    successor_facts["plan_id"] = successor_plan.plan_id
+    successor_facts["state_hashes"] = {state.state_id: state.state_hash for state in successor_states}
+    successor_receipt = LocalSimEconomicReceiptV1(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id=successor_plan.plan_id,
+        generation=predecessor_receipt.generation + 1,
+        economic_facts=successor_facts,
+    )
+    forged_predecessor = predecessor_states[0].model_copy(
+        update={"sequence": predecessor_states[0].sequence + 1, "state_hash": ""}
+    )
+    raw_states = {state.state_id: state.model_dump(mode="json") for state in (*predecessor_states, *successor_states)}
+    raw_states[forged_predecessor.state_id] = forged_predecessor.model_dump(mode="json")
+    repo.update_simulation_daily_run(
+        run.run_id,
+        execution_plan=successor_plan,
+        payload_patch={
+            "local_sim_execution_states_v1": raw_states,
+            "local_sim_economic_receipts_v1": {
+                predecessor_receipt.receipt_id: predecessor_receipt.model_dump(mode="json"),
+                successor_receipt.receipt_id: successor_receipt.model_dump(mode="json"),
+            },
+            "local_sim_economic_generation": successor_receipt.generation,
+            "rebuilt_after_side_effect_free_failure": True,
+            "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
+            "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
+            "rebuilt_execution_plan_id": successor_plan.plan_id,
+            "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
+        },
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+
+    assert exc_info.value.context["reason_code"] == ("LOCALSIM_DURABLE_STATE_SUPERSEDED_AUTHORITY_CONFLICT")
+
+
+def test_localsim_state_authority_rejects_superseded_plan_semantic_drift() -> None:
+    repo, run, _, _ = _localsim_authority_review_fixture()
+    predecessor_plan = repo.get_execution_plan(run.execution_plan_id)
+    predecessor_states = tuple(repo.list_local_sim_execution_states(run.run_id, authoritative=True))
+    predecessor_receipt = max(
+        _local_sim_economic_receipt_map(run.run_payload_json).values(),
+        key=lambda item: item.generation,
+    )
+    successor_plan = SimulationLifecycleScheduler._copy_localsim_plan_with_intents(  # noqa: SLF001
+        plan=predecessor_plan,
+        intents=list(reversed(predecessor_plan.intents)),
+        cash_fit_payload={
+            "schema_version": "localsim_capital_dependency_v1",
+            "status": "SELL_FIRST_DEPENDENCY_ORDERED",
+            "reason": "localsim_sell_first_durable_dependent_buy",
+            "initial_cash": 100_000.0,
+            "original_intent_count": len(predecessor_plan.intents),
+            "prepared_intent_count": len(predecessor_plan.intents),
+            "sell_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.SELL),
+            "buy_intent_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "dependent_buy_count": sum(1 for item in predecessor_plan.intents if item.side == OrderSide.BUY),
+            "capital_waiting_owner": "LocalSimExecutionStateV1",
+        },
+    )
+    repo.save_execution_plan(successor_plan)
+    successor_states = []
+    for index, state in enumerate(predecessor_states):
+        successor_states.append(
+            LocalSimExecutionStateV1.model_validate(
+                {
+                    **state.model_dump(mode="json"),
+                    "state_id": "",
+                    "plan_id": successor_plan.plan_id,
+                    "algo_instance_id": f"successor_{state.algo_instance_id}",
+                    "order_id": f"successor_{state.order_id}",
+                    "idempotency_key": f"successor_{state.idempotency_key}",
+                    "total_quantity": state.total_quantity + (1 if index == 0 else 0),
+                    "remaining_quantity": state.remaining_quantity + (1 if index == 0 else 0),
+                    "state_hash": "",
+                }
+            )
+        )
+    successor_facts = deepcopy(predecessor_receipt.economic_facts)
+    successor_facts["plan_id"] = successor_plan.plan_id
+    successor_facts["state_hashes"] = {state.state_id: state.state_hash for state in successor_states}
+    successor_receipt = LocalSimEconomicReceiptV1(
+        run_id=run.run_id,
+        binding_id=run.binding_id,
+        trade_date=run.trade_date,
+        plan_id=successor_plan.plan_id,
+        generation=predecessor_receipt.generation + 1,
+        economic_facts=successor_facts,
+    )
+    repo.update_simulation_daily_run(
+        run.run_id,
+        execution_plan=successor_plan,
+        payload_patch={
+            "local_sim_execution_states_v1": {
+                state.state_id: state.model_dump(mode="json") for state in (*predecessor_states, *successor_states)
+            },
+            "local_sim_economic_receipts_v1": {
+                predecessor_receipt.receipt_id: predecessor_receipt.model_dump(mode="json"),
+                successor_receipt.receipt_id: successor_receipt.model_dump(mode="json"),
+            },
+            "local_sim_economic_generation": successor_receipt.generation,
+            "rebuilt_after_side_effect_free_failure": True,
+            "rebuilt_failure_backend": SimulationBrokerBackend.LOCAL_SIM.value,
+            "rebuilt_from_execution_plan_id": predecessor_plan.plan_id,
+            "rebuilt_execution_plan_id": successor_plan.plan_id,
+            "local_sim_cash_fit": successor_plan.plan_payload_json["local_sim_cash_fit"],
+        },
+    )
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        repo.list_local_sim_execution_states(run.run_id, authoritative=True)
+
+    assert exc_info.value.context["reason_code"] == ("LOCALSIM_DURABLE_STATE_SUPERSEDED_SEMANTIC_CONFLICT")
+    evidence = exc_info.value.context["semantic_drift"]
+    assert evidence["total_count"] == 1
+    assert evidence["retained_count"] == 1
+    assert evidence["omitted_count"] == 0
+    assert len(evidence["full_set_sha256"]) == 64
+
+
 def _localsim_authority_review_fixture(
     *,
     package_id: str = "pkg_scheduler",
@@ -7449,6 +9652,7 @@ def _localsim_authority_review_fixture(
 ) -> tuple[
     InMemorySimulationRuntimeRepository,
     SimulationDailyRun,
+    SimulationReleaseBinding,
     LocalSimEconomicReceiptV1,
     LocalSimProjectionOutboxV1,
 ]:
@@ -7556,7 +9760,6 @@ def test_scheduler_does_not_terminalize_historical_failed_localsim_with_pending_
         ("outbox_schema", "LOCALSIM_HISTORICAL_RECOVERY_OUTBOX_SCHEMA_INVALID"),
         ("valid_failure_carrier", None),
         ("plan_missing", "LOCALSIM_HISTORICAL_RECOVERY_PLAN_MISSING"),
-        ("active_generation", None),
     ],
 )
 def test_scheduler_historical_failed_localsim_candidate_classification_is_exact(
@@ -7631,7 +9834,9 @@ def test_localsim_historical_failed_run_query_filters_trade_date_before_limit() 
     assert [item.run_id for item in rows] == [historical.run_id]
 
 
-def test_scheduler_historical_failed_localsim_authority_corruption_fails_loud() -> None:
+def test_scheduler_historical_failed_localsim_authority_corruption_is_backed_off_without_deep_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     repo, run, receipt, _ = _localsim_authority_review_fixture()
     facts = deepcopy(receipt.economic_facts)
     state_id = next(iter(facts["state_hashes"]))
@@ -7664,6 +9869,49 @@ def test_scheduler_historical_failed_localsim_authority_corruption_fails_loud() 
     latest = repo.get_simulation_daily_run(run.run_id)
     assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
     assert "localsim_post_close_terminalization" not in latest.run_payload_json
+    retry_entry = latest.run_payload_json["simulation_scheduler_retry_control_v1"]["entries"][
+        "RECOVERY:STALE_LOCALSIM_FAILED_RUN_RECOVERY"
+    ]
+    assert retry_entry["consecutive_failure_count"] == 1
+
+    def forbidden_deep_read(_plan_id: str) -> Any:
+        raise AssertionError("historical recovery must not reload the frozen plan before retry is due")
+
+    def forbidden_retry_claim(**_values: Any) -> Any:
+        raise AssertionError("non-due recovery must use the strict carrier already loaded by the bounded query")
+
+    monkeypatch.setattr(repo, "get_execution_plan", forbidden_deep_read)
+    monkeypatch.setattr(repo, "claim_simulation_retry_attempt", forbidden_retry_claim)
+    deferred = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
+        trade_date=TRADE_DATE + timedelta(days=1),
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 22, 10, 0, 30),
+    )
+    assert len(deferred) == 1
+    assert deferred[0]["status"] == "RECOVERY_BACKOFF"
+    assert deferred[0]["retry_control"]["next_retry_at"] == retry_entry["next_retry_at"]
+
+    corrupted_run = repo.get_simulation_daily_run(run.run_id)
+    corrupted_payload = deepcopy(corrupted_run.run_payload_json)
+    corrupted_payload["simulation_scheduler_retry_control_v1"]["entries"][
+        "RECOVERY:STALE_LOCALSIM_FAILED_RUN_RECOVERY"
+    ]["next_retry_at"] = datetime(2026, 5, 29, 10, 0, tzinfo=UTC).isoformat()
+    repo.daily_runs[run.run_id] = corrupted_run.model_copy(update={"run_payload_json": corrupted_payload})
+    corrupt_control = scheduler._terminalize_stale_localsim_failed_runs(  # noqa: SLF001
+        trade_date=TRADE_DATE + timedelta(days=1),
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        strategy_id=None,
+        limit=10,
+        as_of_time=datetime(2026, 5, 22, 10, 0, 45),
+    )
+    assert len(corrupt_control) == 1
+    assert corrupt_control[0]["status"] == "RECOVERY_FAILED"
+    assert corrupt_control[0]["stage"] == ("STALE_LOCALSIM_FAILED_RUN_RECOVERY:RETRY_CONTROL_CLAIM")
+    assert corrupt_control[0]["retry_control_claim_failed"] is True
+    assert corrupt_control[0]["run_id"] == run.run_id
+    assert corrupt_control[0]["error"]["context"]["reason_code"] == ("SIMULATION_SCHEDULER_RETRY_CONTROL_HASH_DRIFT")
 
 
 @pytest.mark.parametrize(
@@ -7904,9 +10152,7 @@ def test_localsim_public_authority_rejects_orphan_projection_generation_carriers
         carrier_value: object = carrier_outbox.model_dump(mode="json")
         expected_identity = carrier_outbox.outbox_id
     elif carrier_case == "projection_receipt":
-        carrier_value = {
-            projection_receipt.projection_receipt_id: projection_receipt.model_dump(mode="json")
-        }
+        carrier_value = {projection_receipt.projection_receipt_id: projection_receipt.model_dump(mode="json")}
         expected_identity = projection_receipt.projection_receipt_id
     else:
         carrier_value = {
@@ -8107,9 +10353,7 @@ def test_localsim_post_close_orphan_carrier_fails_run_and_continues_independent_
     assert bad_run.run_id in by_run_id, results
     failed = by_run_id[bad_run.run_id]
     assert failed["status"] == "RECOVERY_FAILED"
-    assert failed["error"]["context"]["reason_code"] == (
-        "LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER"
-    )
+    assert failed["error"]["context"]["reason_code"] == ("LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER")
     latest_bad = repo.get_simulation_daily_run(bad_run.run_id)
     assert latest_bad.status == SimulationDailyRunStatus.INTRADAY_RUNNING
     assert "localsim_post_close_terminalization" not in latest_bad.run_payload_json
@@ -8117,8 +10361,7 @@ def test_localsim_post_close_orphan_carrier_fails_run_and_continues_independent_
     assert repo.get_simulation_daily_run(good_run.run_id).status == SimulationDailyRunStatus.SUCCEEDED
 
 
-def test_localsim_economic_readback_rejects_extra_active_state_on_public_repository_seam(
-) -> None:
+def test_localsim_economic_readback_rejects_extra_active_state_on_public_repository_seam() -> None:
     repo, run, receipt, outbox = _localsim_authority_review_fixture()
     active = repo.list_local_sim_execution_states(run.run_id, authoritative=True)[0]
     duplicate = LocalSimExecutionStateV1.model_validate(
@@ -8158,8 +10401,7 @@ def test_localsim_economic_readback_rejects_forged_outbox_identity(
     assert exc_info.value.context["run_id"] == run.run_id
 
 
-def test_localsim_economic_readback_accepts_terminal_history_and_is_repeatable(
-) -> None:
+def test_localsim_economic_readback_accepts_terminal_history_and_is_repeatable() -> None:
     repo, run, receipt, outbox = _localsim_authority_review_fixture()
     active = repo.list_local_sim_execution_states(run.run_id, authoritative=True)[0]
     historical = LocalSimExecutionStateV1.model_validate(
@@ -8184,9 +10426,9 @@ def test_localsim_economic_readback_accepts_terminal_history_and_is_repeatable(
     first = repo.readback_local_sim_economic_commit(run_id=run.run_id, receipt=receipt, outbox=outbox)
     second = repo.readback_local_sim_economic_commit(run_id=run.run_id, receipt=receipt, outbox=outbox)
     assert first.run_id == second.run_id == run.run_id
-    assert [
-        state.state_id for state in repo.list_local_sim_execution_states(run.run_id, authoritative=True)
-    ] == sorted(receipt.economic_facts["state_hashes"])
+    assert [state.state_id for state in repo.list_local_sim_execution_states(run.run_id, authoritative=True)] == sorted(
+        receipt.economic_facts["state_hashes"]
+    )
 
 
 def test_localsim_economic_readback_uses_committed_independent_dev_postgres_connections() -> None:
@@ -8380,6 +10622,70 @@ def test_localsim_economic_readback_uses_committed_independent_dev_postgres_conn
             raw_connection.rollback()
             raw_connection.close()
 
+        retry_observed = datetime(2026, 5, 22, 10, 0, tzinfo=UTC)
+        initial_claim = writer.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_INITIAL_CLAIM",
+            source_fingerprint="f" * 64,
+            as_of_time=retry_observed,
+            lease_seconds=600,
+        )
+        duplicate_initial_claim = readback.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_INITIAL_CLAIM",
+            source_fingerprint="f" * 64,
+            as_of_time=retry_observed,
+            lease_seconds=600,
+        )
+        assert initial_claim.should_execute is True
+        assert initial_claim.claim_token is not None
+        assert duplicate_initial_claim.should_execute is False
+        assert duplicate_initial_claim.claim_token == initial_claim.claim_token
+        writer.clear_simulation_retry_control(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_INITIAL_CLAIM",
+            expected_claim_token=initial_claim.claim_token,
+        )
+        writer.record_simulation_retry_failure(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_READBACK",
+            source_fingerprint="a" * 64,
+            failure_fingerprint="b" * 64,
+            failure_stage="DEV_POSTGRES_READBACK",
+            error={
+                "type": "DataUnavailableError",
+                "message": "disposable DEV retry evidence",
+                "reason_code": "DEV_POSTGRES_RETRY_EVIDENCE",
+                "context": {"run_id": run.run_id},
+            },
+            as_of_time=retry_observed,
+            base_delay_seconds=60,
+            max_delay_seconds=3600,
+        )
+        early_retry = readback.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_READBACK",
+            source_fingerprint="a" * 64,
+            as_of_time=retry_observed + timedelta(seconds=30),
+            lease_seconds=600,
+        )
+        assert early_retry.should_execute is False
+        due_retry = readback.claim_simulation_retry_attempt(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_READBACK",
+            source_fingerprint="a" * 64,
+            as_of_time=retry_observed + timedelta(seconds=60),
+            lease_seconds=600,
+        )
+        assert due_retry.should_execute is True
+        assert due_retry.reason == "retry_claimed"
+        cleared_retry = writer.clear_simulation_retry_control(
+            run_id=run.run_id,
+            retry_key="RECOVERY:DEV_POSTGRES_READBACK",
+            expected_claim_token=due_retry.claim_token,
+        )
+        assert "simulation_scheduler_retry_control_v1" not in cleared_retry.run_payload_json
+
         active = source_repo.list_local_sim_execution_states(run.run_id, authoritative=True)[0]
         historical = LocalSimExecutionStateV1.model_validate(
             {
@@ -8395,9 +10701,7 @@ def test_localsim_economic_readback_uses_committed_independent_dev_postgres_conn
             }
         )
         legal_payload = deepcopy(run.run_payload_json)
-        legal_payload[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY][historical.state_id] = historical.model_dump(
-            mode="json"
-        )
+        legal_payload[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY][historical.state_id] = historical.model_dump(mode="json")
         replace_payload(legal_payload)
         first = readback.readback_local_sim_economic_commit(
             run_id=run.run_id,
@@ -8446,9 +10750,7 @@ def test_localsim_economic_readback_uses_committed_independent_dev_postgres_conn
                 receipt=receipt,
                 outbox=outbox,
             )
-        assert orphan_info.value.context["reason_code"] == (
-            "LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER"
-        )
+        assert orphan_info.value.context["reason_code"] == ("LOCALSIM_DURABLE_STATE_AUTHORITY_ORPHAN_CARRIER")
 
         forged_receipt = _rebuilt_local_sim_receipt(receipt, run_id=f"forged_{run.run_id}")
         forged_receipt_payload = deepcopy(run.run_payload_json)
@@ -8476,9 +10778,7 @@ def test_localsim_economic_readback_uses_committed_independent_dev_postgres_conn
                 receipt=receipt,
                 outbox=forged_outbox,
             )
-        assert outbox_info.value.context["reason_code"] == (
-            "LOCALSIM_PROJECTION_OUTBOX_READBACK_IDENTITY_CONFLICT"
-        )
+        assert outbox_info.value.context["reason_code"] == ("LOCALSIM_PROJECTION_OUTBOX_READBACK_IDENTITY_CONFLICT")
         assert writer_pids and readback_pids
         assert set(writer_pids).isdisjoint(readback_pids)
     finally:
@@ -8546,9 +10846,7 @@ def test_localsim_economic_readback_uses_committed_independent_dev_postgres_conn
                 )
                 for identity_label, query, identity_value in disposable_rows:
                     cursor.execute(query, (identity_value,))
-                    assert cursor.fetchone()[0] == 0, (
-                        f"cleanup left disposable DEV row for {identity_label}"
-                    )
+                    assert cursor.fetchone()[0] == 0, f"cleanup left disposable DEV row for {identity_label}"
         finally:
             cleanup_readback.rollback()
             cleanup_readback.close()
@@ -12279,7 +14577,16 @@ def test_scheduler_localsim_post_close_drives_active_durable_states_before_run_t
     assert schema_conflict.value.context["reason_code"] == "LOCALSIM_POST_CLOSE_PERSISTENCE_SCHEMA_INVALID"
 
 
-def test_scheduler_cross_day_recovers_historical_failed_terminal_localsim_active_generation() -> None:
+@pytest.mark.parametrize(
+    "failed_status",
+    [
+        SimulationDailyRunStatus.FAILED_RETRYABLE,
+        SimulationDailyRunStatus.FAILED_TERMINAL,
+    ],
+)
+def test_scheduler_cross_day_recovers_historical_failed_localsim_active_generation(
+    failed_status: SimulationDailyRunStatus,
+) -> None:
     release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
     assert local_binding is not None
     paper_repo = InMemoryPaperTradingV2Repository()
@@ -12318,9 +14625,9 @@ def test_scheduler_cross_day_recovers_historical_failed_terminal_localsim_active
 
     repo.update_simulation_daily_run(
         run_id,
-        status=SimulationDailyRunStatus.FAILED_TERMINAL,
+        status=failed_status,
         payload_patch={
-            "last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+            "last_stage": failed_status.value,
             "broker_called": False,
             "submitted_intents": 0,
             "failed_intents": len(initial_states),
@@ -12378,8 +14685,9 @@ def test_scheduler_cross_day_recovers_historical_failed_terminal_localsim_active
         SimulationDailyRunStatus.FAILED_TERMINAL,
     }
     assert recovered.run_payload_json["local_sim_persistence"]["terminal"] is True
-    recovery = recovered.run_payload_json["localsim_historical_failed_terminal_active_recovery_v1"]
-    assert recovery["previous_status"] == SimulationDailyRunStatus.FAILED_TERMINAL.value
+    evidence_suffix = "terminal" if failed_status == SimulationDailyRunStatus.FAILED_TERMINAL else "retryable"
+    recovery = recovered.run_payload_json[f"localsim_historical_failed_{evidence_suffix}_active_recovery_v1"]
+    assert recovery["previous_status"] == failed_status.value
     assert recovery["parent_resubmitted"] is False
     assert recovery["predecessor_projection_replayed"] is False
     assert recovery["durable_minute_loop_advanced"] is True
@@ -12387,7 +14695,7 @@ def test_scheduler_cross_day_recovers_historical_failed_terminal_localsim_active
     assert recovery["terminal_state_count"] == len(recovered_states)
     assert {order.order_id for order in paper_repo.list_orders_for_run(run_id)} == initial_order_ids
     result = next(item for item in next_day.stale_run_results if item.get("run_id") == run_id)
-    assert result["historical_failed_terminal_active_recovery"] is True
+    assert result[f"historical_failed_{evidence_suffix}_active_recovery"] is True
 
     terminal_fill_ids = {fill["fill_id"] for fill in paper_repo.list_fills_for_run(run_id)}
     repo.update_simulation_daily_run(
@@ -12622,6 +14930,86 @@ def test_production_context_provider_miniqmt_context():
     assert ctx.qmt_sync_service == "fake_sync"
     assert ctx.qmt_reconciliation_service == "fake_recon"
     assert ctx.qmt_ledger_repository is qmt_repo
+
+
+def test_existing_miniqmt_plan_context_uses_broker_marks_without_database_market_reload() -> None:
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    planning_scheduler, _planning_repo, _planning_broker, _planning_binding = _miniqmt_event_loop_test_scheduler()
+    planned = planning_scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=datetime.combine(TRADE_DATE, wall_time(9, 25), tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    plan = planned.results[0].execution_plan
+    assert plan is not None
+
+    positions = {
+        "000001.XSHE": PositionLot(
+            portfolio_id="strat1",
+            symbol="000001.XSHE",
+            quantity=1000,
+            available_quantity=1000,
+            avg_cost=12.50,
+            trade_date=TRADE_DATE,
+        )
+    }
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat1",
+            strategy_name="strat1",
+            display_name="Strategy One",
+            account_id="QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("1000000"),
+            cash=Decimal("900000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    quote_broker = FakeManagedOrderBroker(
+        positions=[],
+        quotes={"000001.XSHE": {"lastPrice": 12.7, "time": "20260521100000"}},
+    )
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    price_loader_calls: list[tuple[list[str], date]] = []
+    tradability = FakePreTradeTradabilityProvider()
+
+    def forbidden_price_loader(symbols: list[str], trade_date: date) -> dict[str, float]:
+        price_loader_calls.append((list(symbols), trade_date))
+        raise AssertionError("existing MiniQMT plan must not read database market prices")
+
+    provider = ProductionSimulationRunContextProvider(
+        position_loader=lambda strategy_id, trade_date: positions,
+        price_loader=forbidden_price_loader,
+        qmt_client_factory=lambda: quote_broker,
+        managed_order_service_factory=lambda: "fake_mos",
+        qmt_sync_service_factory=lambda: "fake_sync",
+        qmt_reconciliation_service_factory=lambda: "fake_recon",
+        qmt_ledger_repository=qmt_repo,
+        package_manifest_loader=lambda package_id: manifest,
+        pre_trade_tradability_provider=tradability,
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
+
+    context = provider.load_existing_plan_context(
+        runtime_release=release,
+        binding=binding,
+        plan=plan,
+        trade_date=TRADE_DATE,
+        as_of_time=datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert price_loader_calls == []
+    assert tradability.calls == []
+    assert context.current_prices == {"000001.XSHE": 12.7}
+    assert context.price_by_symbol == {"000001.XSHE": 12.7}
+    assert context.target_total_equity is None
+    assert context.target_equity_context["planning_market_data_reloaded"] is False
+    assert quote_broker.full_tick_calls == [["000001.XSHE"]]
 
 
 def test_production_context_provider_loads_miniqmt_positions_from_virtual_ledger_without_submit_broker():
@@ -14229,6 +16617,78 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
     }
     assert package_manifest_loads == []
     assert ctx.context_diagnostics["localsim_tplus1_settlement"]["settled_position_count"] == 0
+
+
+def test_existing_localsim_plan_context_uses_frozen_tradability_and_causal_broker_without_market_db_reads() -> None:
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    planning_scheduler, _planning_repo, _planning_broker, _planning_binding = _miniqmt_event_loop_test_scheduler()
+    planned = planning_scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+        as_of_time=datetime.combine(TRADE_DATE, wall_time(9, 25), tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    plan = planned.results[0].execution_plan
+    assert plan is not None
+
+    release = _make_test_release()
+    manifest = _frozen_manifest(package_id=release.package_id, manifest_sha256=release.manifest_sha256)
+    portfolio = PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSim existing plan context",
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_twap",
+            "policy_sha256": _local_sim_execution_policy()["policy_sha256"],
+            "policy_json": _local_sim_execution_policy()["policy_json"],
+        },
+    )
+    positions = {
+        "000001.SZ": PositionLot(
+            portfolio_id="strat1",
+            symbol="000001.SZ",
+            quantity=1000,
+            available_quantity=1000,
+            avg_cost=10.0,
+            trade_date=TRADE_DATE,
+        )
+    }
+    paper_repo = FakePaperRepository(portfolio, positions=positions, cash=980_000)
+    tradability = FakePreTradeTradabilityProvider()
+    price_loader_calls: list[tuple[list[str], date]] = []
+
+    def forbidden_price_loader(symbols: list[str], trade_date: date) -> dict[str, float]:
+        price_loader_calls.append((list(symbols), trade_date))
+        raise AssertionError("existing LocalSIM plan must not read database market prices")
+
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: paper_repo,
+        price_loader=forbidden_price_loader,
+        pre_trade_tradability_provider=tradability,
+    )
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    context = provider.load_existing_plan_context(
+        runtime_release=release,
+        binding=binding,
+        plan=plan,
+        trade_date=TRADE_DATE,
+        as_of_time=datetime.combine(TRADE_DATE, wall_time(10, 0), tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert price_loader_calls == []
+    assert tradability.calls == []
+    assert context.current_prices == {}
+    assert context.local_broker is not None
+    assert context.target_total_equity is None
+    assert context.target_equity_context["planning_market_data_reloaded"] is False
 
 
 def test_production_context_provider_loads_authoritative_manifest_for_verified_localsim_successor():

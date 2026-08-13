@@ -17,6 +17,7 @@ Use the RD-Agent section when source merge, immutable release, deployment, resta
 2. Check PR state and CI with `gh pr view <PR> --json statusCheckRollup,mergeable,state`.
 3. Do not use long `gh pr checks --watch` waits when a compact rollup is enough.
 4. Stop if required checks fail, mergeability is blocked, or source worktree is dirty.
+5. Follow `TOOL-RTK-001` from the sole development standard; this lane does not redefine it.
 
 ## Merge
 
@@ -26,16 +27,19 @@ Use the RD-Agent section when source merge, immutable release, deployment, resta
 
 ## Aftercare
 
-- Source merge, source cleanup, backend restart, post-restart verification and BUG close-sync are independent states. Source cleanup does not wait for a user restart, but cleanup still requires its own authorization.
+- Authorizations are action-scoped, not message-scoped. One user instruction may explicitly bundle source merge, exact named cleanup targets, and/or an exact production target plus migration. A complete bundle is sufficient; after merge, do not ask for the same authorization a second time.
+- Bare merge authorization covers only source merge and required BUG/metadata synchronization. It never implies cleanup, DDL/DML, dependencies, activation, process control, or deletion.
+- Source merge, source cleanup, backend restart, post-restart verification and BUG close-sync remain independent result states even when authorized in one bundle. Source cleanup does not wait for a user restart.
 - Backend restart remains user-owned even when merge/finalizer/aftercare was authorized. Emit the catalog target and operator runbook reference; do not execute process control without explicit authorization for that target.
 - A runtime BUG remains `fixed_source_pending_user_restart` with an open GitHub Issue and `runtime_identity_match=pending` until `post-restart-verify` produces a complete digest-bound identity/business-smoke receipt. Runtime BUGs use only single-issue close-sync and are never routed through close-sync-batch.
 - Run close-sync/finalizer for BUG PRs.
-- Run `python scripts/aistock_issue_workflow.py install-client --apply` when `.codex/**`, `.claude/**`, or workflow client files changed.
-- Apply committed production DDL only when the user authorized merge and DDL is required; otherwise report `production_ddl_gate=noop` or `pending`.
-- Cleanup is part of done: source worktree, source local branch, source remote branch, close-sync worktree/branch, `git fetch --prune`, and root `main...origin/main` must be reported.
+- Immediately after the canonical root fast-forward, and before close-sync or cleanup, the single merge-aftercare owner runs change-scoped `install-client --apply` plus `verify-clients --workflow-only` for lanes changed under `.codex/**` or `.claude/**` and any already-stale lanes detected in the same explicitly targeted profile. `merge-finalizer --sync-root --apply` performs this automatically; a fully current profile is a no-op and no second authorization or client restart is required.
+- When the authorization bundle names the production target and committed migration and the DEV receipt passed, confirm the immutable merge commit first, then run target preflight, apply, and readback without another prompt. Bare merge authorization never authorizes DDL; otherwise report `production_ddl_gate=noop` or `pending`.
+- When the authorization bundle names exact cleanup targets, run cleanup after merge/close-sync and report source worktree, source local/remote branch, close-sync worktree/branch, `git fetch --prune`, and root `main...origin/main`. Without cleanup authorization, report those items as pending rather than deleting them.
 - Squash merge cleanup is allowed when GitHub PR state is `MERGED`, there is no open PR for the branch, and the task worktree is clean; do not require the source HEAD to be an ancestor of `main`.
 - Clean only task-owned worktrees/branches. Keep open-PR branches, dirty worktrees, and unrelated root files; classify backup/temp leftovers for janitor review instead of dumping full lists.
 - Prefer `python scripts/aistock_issue_workflow.py cleanup-after-merge --branch <branch> --pr-url <merged-pr-url> --worktree <task-worktree> --sync-root --apply` for safe cleanup. Never use `git reset --hard` or `git clean`.
+- Authorized cleanup uses `WORKTREE-CLEANUP-EVIDENCE-001`: the workflow first finalizes compact durable receipts, inventories ignored artifacts and active process references, removes only exact manifest-classified transient roots, then performs ordinary worktree/branch cleanup and four-state readback. Protected or unknown artifacts block cleanup; do not preserve full successful logs or caches after their receipt is durable.
 - Use HTTPS rewrite if Git SSH proxy fails under PowerShell.
 
 ## RD-Agent Release Aftercare

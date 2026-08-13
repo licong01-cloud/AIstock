@@ -60,6 +60,1209 @@ def _request() -> dict:
     }
 
 
+def _transition_dwell_child(
+    process_identity: str,
+    *,
+    candidate_seeds=(),
+    source_producer_commit: str = "9" * 40,
+    treatment_producer_commit: str = "c" * 40,
+) -> dict:
+    entries = []
+    models = []
+    for index in range(1048):
+        seed = subject.RESTART_SCHEDULE[index // 131]
+        sector_code = f"S{index % 131:03d}"
+        model_body = {"seed": seed, "sector_code": sector_code}
+        model = {**model_body, "model_payload_sha256": subject.canonical_sha256(model_body)}
+        models.append(model)
+        entry_body = {
+            "seed": seed,
+            "sector_code": sector_code,
+            "fit_status": "accepted",
+            "model_entry_status": "accepted",
+            "model_entry_valid": True,
+            "model_payload_sha256": model["model_payload_sha256"],
+        }
+        entries.append({**entry_body, "entry_receipt_sha256": subject.canonical_sha256(entry_body)})
+    repeat_body = {
+        "schema_version": "hmm_risk_b3_mixed_dimension_level_repeat_v1",
+        "contract_version": subject.B3_TRANSITION_DWELL_CONTRACT,
+        "process_identity": process_identity,
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "transition_dwell_contract": subject.B3_TRANSITION_DWELL_CONTRACT,
+        "entry_count": 1048,
+        "canonical_sector_codes": [f"S{index:03d}" for index in range(131)],
+        "canonical_sector_set_sha256": subject.canonical_sha256([f"S{index:03d}" for index in range(131)]),
+        "schedule": list(subject.RESTART_SCHEDULE),
+        "entries": entries,
+        "models": models,
+        "entry_payload_sha256": subject.canonical_sha256(entries),
+        "model_payload_sha256": subject.canonical_sha256(models),
+    }
+    profiles = [
+        (lambda body: {**body, "profile_sha256": subject.canonical_sha256(body)})(
+            {
+                "seed": subject.RESTART_SCHEDULE[index // 131],
+                "sector_code": f"S{index % 131:03d}",
+                "model_payload_sha256": models[index]["model_payload_sha256"],
+                "both_windows_structurally_observed": subject.RESTART_SCHEDULE[index // 131] in set(candidate_seeds),
+            }
+        )
+        for index in range(1048)
+    ]
+    body = {
+        "schema_version": subject.B3_TRANSITION_DWELL_SINGLE_PASS_SCHEMA,
+        "contract_version": subject.B3_TRANSITION_DWELL_CONTRACT,
+        "producer_commit": treatment_producer_commit,
+        "source_producer_commit": source_producer_commit,
+        "treatment_producer_commit": treatment_producer_commit,
+        "process_identity": process_identity,
+        "target_family": subject.B3_P6_FAMILY,
+        "target_level": subject.B3_P6_LEVEL,
+        "feature_names": list(ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "planned_fit_count": 1048,
+        "terminal_entry_count": 1048,
+        "level_repeat": repeat_body,
+        "profile_count": 1048,
+        "profiles": profiles,
+        "per_seed": [
+            {
+                "seed": seed,
+                "d3_d4_accepted_sector_count": 131,
+                "d3_d4_accepted_131_of_131": True,
+                "early_late_stable_sector_count": 131 if seed in set(candidate_seeds) else 0,
+                "early_late_stable_131_of_131": seed in set(candidate_seeds),
+                "diagnostic_candidate_complete": seed in set(candidate_seeds),
+            }
+            for seed in subject.RESTART_SCHEDULE
+        ],
+        "selection_performed": False,
+        "d5_executed": False,
+        "d6_executed": False,
+        "semantic_mapping_performed": False,
+        "formal_d5_stability_gate_applied": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    return {**body, "single_pass_receipt_sha256": subject.canonical_sha256(body)}
+
+
+def test_transition_dwell_parent_never_selects_or_runs_d6_and_reports_zero_or_many_candidates(
+    monkeypatch, tmp_path
+) -> None:
+    children = [
+        _transition_dwell_child("fresh_process_1", candidate_seeds=(42, 43)),
+        _transition_dwell_child("fresh_process_2", candidate_seeds=(42, 43)),
+    ]
+    payloads = iter(subject.canonical_json_bytes(value) for value in children)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=next(payloads), stderr=b""),
+    )
+    monkeypatch.setattr(
+        subject,
+        "select_level_restart",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("D5 must not execute")),
+    )
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+
+    authority = {
+        "producer_commit": "c" * 40,
+        "source_producer_commit": "9" * 40,
+        "treatment_producer_commit": "c" * 40,
+        "feature_domain_policy": {"receipt_sha256": "p" * 64},
+        "inputs": {},
+    }
+    source_policy = {
+        "schema_version": "policy_v2",
+        "producer_commit": authority["source_producer_commit"],
+        "provider_absence_partition_receipt": {"receipt_sha256": "e" * 64},
+        "provider_absence_partition_receipt_sha256": "e" * 64,
+        "receipt_sha256": "p" * 64,
+    }
+    child_authority_keys = {
+        "producer_commit": authority["treatment_producer_commit"],
+        "dataset_manifest_hash": "1" * 64,
+        "mapping_manifest_hash": "2" * 64,
+        "calendar_manifest_hash": "3" * 64,
+        "l2_stock_fact_manifest_hash": "4" * 64,
+        "feature_domain_policy_sha256": source_policy["receipt_sha256"],
+        "feature_domain_policy_manifest": source_policy,
+        "provider_absence_partition_receipt": source_policy["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": source_policy["provider_absence_partition_receipt_sha256"],
+        "formula_version": subject.C010_FORMULA_VERSION,
+    }
+    closure = {
+        "feature_names": tuple(ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "canonical_sector_codes": tuple(f"S{index:03d}" for index in range(131)),
+        "canonical_sector_set_sha256": subject.canonical_sha256([f"S{index:03d}" for index in range(131)]),
+        "authority_keys": child_authority_keys,
+    }
+    for child in children:
+        child.update(child_authority_keys)
+        child["level_repeat"].update(
+            {
+                "canonical_sector_codes": list(closure["canonical_sector_codes"]),
+                "canonical_sector_set_sha256": closure["canonical_sector_set_sha256"],
+                "schedule": list(subject.RESTART_SCHEDULE),
+            }
+        )
+        body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+        child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+    payloads = iter(subject.canonical_json_bytes(value) for value in children)
+    monkeypatch.setattr(subject, "_load_transition_dwell_train_authority", lambda *args, **kwargs: authority)
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
+    control = {"control_authority_sha256": "a" * 64}
+    monkeypatch.setattr(subject, "_load_transition_dwell_control_authority", lambda *args, **kwargs: control)
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["status"] == "diagnostic_complete_candidate_available"
+    assert report["diagnostic_complete_candidate_seeds"] == [42, 43]
+    assert report["selection_performed"] is False
+    assert report["selected_seed"] is None
+    assert report["d5_executed"] is False
+    assert report["d6_executed"] is False
+    assert report["model_write_performed"] is False
+    assert report["ready_artifact_write_performed"] is False
+    assert report["control_authority"] == control
+
+    children = [
+        _transition_dwell_child("fresh_process_1"),
+        _transition_dwell_child("fresh_process_2"),
+    ]
+    payloads = iter(subject.canonical_json_bytes(value) for value in children)
+    args.b3_transition_dwell_output = str(tmp_path / "transition-zero.json")
+    for child in children:
+        child.update(child_authority_keys)
+        child["level_repeat"].update(
+            {
+                "canonical_sector_codes": list(closure["canonical_sector_codes"]),
+                "canonical_sector_set_sha256": closure["canonical_sector_set_sha256"],
+                "schedule": list(subject.RESTART_SCHEDULE),
+            }
+        )
+        body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+        child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+    payloads = iter(subject.canonical_json_bytes(value) for value in children)
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+    assert report["status"] == "diagnostic_complete_no_complete_candidate"
+    assert report["diagnostic_complete_candidate_seeds"] == []
+
+
+def test_transition_dwell_split_producer_authority_is_explicit_and_does_not_relax_formal_b3(
+    monkeypatch,
+) -> None:
+    request = _request()
+    source_commit = str(request["producer_commit"])
+    treatment_commit = "d" * 40
+    captured: dict[str, object] = {}
+
+    def fake_loader(value, *, db_prefix, expected_source_producer_commit, treatment_producer_commit):
+        captured.update(
+            {
+                "request": value,
+                "db_prefix": db_prefix,
+                "source": expected_source_producer_commit,
+                "treatment": treatment_producer_commit,
+            }
+        )
+        return {
+            "source_producer_commit": expected_source_producer_commit,
+            "treatment_producer_commit": treatment_producer_commit,
+        }
+
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: treatment_commit)
+    original = subject._load_b3_formal_train_authority
+    monkeypatch.setattr(subject, "_load_b3_formal_train_authority", fake_loader)
+    authority = subject._load_transition_dwell_train_authority(request, db_prefix="TDX_DB_")
+
+    assert authority == {
+        "source_producer_commit": source_commit,
+        "treatment_producer_commit": treatment_commit,
+    }
+    assert captured == {
+        "request": request,
+        "db_prefix": "TDX_DB_",
+        "source": source_commit,
+        "treatment": treatment_commit,
+    }
+
+    monkeypatch.setattr(subject, "_load_b3_formal_train_authority", original)
+    with pytest.raises(StateModelSetError, match="producer_commit differs from current code"):
+        subject._load_b3_formal_train_authority(request, db_prefix="TDX_DB_")
+
+
+def test_transition_dwell_loader_recomputes_policy_with_source_but_returns_current_treatment(
+    monkeypatch,
+) -> None:
+    request = _request()
+    source_commit = str(request["producer_commit"])
+    treatment_commit = "d" * 40
+    policy = _minimal_c010_policy()
+    coverage = _coverage_preflight(policy_sha256=policy["receipt_sha256"])
+    request.update(
+        {
+            "feature_domain_policy_manifest": policy,
+            "feature_domain_policy_sha256": policy["receipt_sha256"],
+            "train_coverage_contract_version": subject.B3_TRAIN_COVERAGE_PREFLIGHT_VERSION,
+            "train_coverage_receipt_sha256": coverage["receipt_sha256"],
+        }
+    )
+    inputs = {
+        "dataset_manifest": {
+            "schema_version": "dataset_v1",
+            "calendar_benchmark": {"schema_version": "calendar_v1"},
+        },
+        "mapping_manifest": {"schema_version": "mapping_v1"},
+        "l2_stock_fact_manifest": {"schema_version": "l2_dataset_v1"},
+    }
+    request["dataset_manifest_hash"] = subject.canonical_sha256(inputs["dataset_manifest"])
+    request["mapping_manifest_hash"] = subject.canonical_sha256(inputs["mapping_manifest"])
+    request["l2_stock_fact_manifest_hash"] = subject.canonical_sha256(inputs["l2_stock_fact_manifest"])
+    observed_policy_producers: list[str] = []
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: treatment_commit)
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_train_coverage_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda *args, **kwargs: inputs)
+
+    def fake_policy(values, value, *, producer_commit):
+        observed_policy_producers.append(producer_commit)
+        return policy
+
+    monkeypatch.setattr(subject, "_c010_policy_manifest", fake_policy)
+    monkeypatch.setattr(subject, "_b3_train_coverage_preflight", lambda values, value: coverage)
+
+    authority = subject._load_transition_dwell_train_authority(request, db_prefix="TDX_DB_")
+
+    assert observed_policy_producers == [source_commit]
+    assert authority["producer_commit"] == treatment_commit
+    assert authority["source_producer_commit"] == source_commit
+    assert authority["treatment_producer_commit"] == treatment_commit
+    assert authority["feature_domain_policy"] == policy
+
+
+@pytest.mark.parametrize("field", ["source", "treatment"])
+def test_transition_dwell_split_producer_authority_rejects_identity_drift(monkeypatch, field: str) -> None:
+    request = _request()
+    source_commit = str(request["producer_commit"])
+    treatment_commit = "d" * 40
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: treatment_commit)
+    kwargs = {
+        "expected_source_producer_commit": source_commit,
+        "treatment_producer_commit": treatment_commit,
+    }
+    if field == "source":
+        kwargs["expected_source_producer_commit"] = "e" * 40
+    else:
+        kwargs["treatment_producer_commit"] = "e" * 40
+
+    with pytest.raises(StateModelSetError, match=r"B3 (request source|treatment) producer"):
+        subject._load_b3_formal_train_authority(request, db_prefix="TDX_DB_", **kwargs)
+
+
+def test_transition_dwell_child_command_carries_exact_split_producer_authority(tmp_path) -> None:
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+    )
+    source_commit = "9" * 40
+    treatment_commit = "d" * 40
+
+    command = subject._b3_transition_dwell_child_command(
+        args,
+        "fresh_process_1",
+        source_producer_commit=source_commit,
+        treatment_producer_commit=treatment_commit,
+    )
+
+    assert command[command.index("--b3-transition-source-producer-commit") + 1] == source_commit
+    assert command[command.index("--b3-transition-treatment-producer-commit") + 1] == treatment_commit
+    assert command[command.index("--b3-process-identity") + 1] == "fresh_process_1"
+
+
+def test_transition_dwell_child_validator_rejects_self_hashed_producer_drift() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["source_producer_commit"] = "e" * 39
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(StateModelSetError, match="child receipt is invalid"):
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+
+def test_transition_dwell_child_validator_accepts_complete_grid_with_typed_failed_entry() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    failed_entry_body = {
+        "seed": subject.RESTART_SCHEDULE[0],
+        "sector_code": "S000",
+        "fit_status": "failed",
+        "model_entry_status": "failed",
+        "model_entry_valid": False,
+        "failure_stage": "covariance",
+        "failure_reason_codes": ["hmm_risk_model_covariance_acceptance_failed"],
+    }
+    child["level_repeat"]["entries"][0] = {
+        **failed_entry_body,
+        "entry_receipt_sha256": subject.canonical_sha256(failed_entry_body),
+    }
+    child["level_repeat"]["models"] = child["level_repeat"]["models"][1:]
+    child["profiles"] = child["profiles"][1:]
+    child["profile_count"] = 1047
+    child["per_seed"][0].update(
+        {
+            "d3_d4_accepted_sector_count": 130,
+            "d3_d4_accepted_131_of_131": False,
+            "diagnostic_candidate_complete": False,
+        }
+    )
+    child["level_repeat"]["entry_payload_sha256"] = subject.canonical_sha256(child["level_repeat"]["entries"])
+    child["level_repeat"]["model_payload_sha256"] = subject.canonical_sha256(child["level_repeat"]["models"])
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+
+def test_transition_dwell_child_validator_accepts_fitted_d4_rejection_and_counts_only_accepted() -> None:
+    child = _transition_dwell_child("fresh_process_1", candidate_seeds=(42,))
+    rejected = child["level_repeat"]["entries"][0]
+    rejected_body = {
+        **{key: value for key, value in rejected.items() if key != "entry_receipt_sha256"},
+        "model_entry_status": "failed",
+        "model_entry_valid": False,
+    }
+    child["level_repeat"]["entries"][0] = {
+        **rejected_body,
+        "entry_receipt_sha256": subject.canonical_sha256(rejected_body),
+    }
+    child["per_seed"][0].update(
+        {
+            "d3_d4_accepted_sector_count": 130,
+            "d3_d4_accepted_131_of_131": False,
+            "diagnostic_candidate_complete": False,
+        }
+    )
+    child["level_repeat"]["entry_payload_sha256"] = subject.canonical_sha256(child["level_repeat"]["entries"])
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    evidence = subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+    assert evidence["receipt_valid"] is True
+    assert evidence["fitted_model_count"] == 1048
+    assert evidence["d3_d4_accepted_entry_count"] == 1047
+    assert evidence["terminal_entry_count_verified"] == 1048
+
+
+def test_transition_dwell_single_pass_counts_only_d3_d4_accepted_models(monkeypatch) -> None:
+    child = _transition_dwell_child("fresh_process_1", candidate_seeds=(42,))
+    rejected = child["level_repeat"]["entries"][0]
+    rejected_body = {
+        **{key: value for key, value in rejected.items() if key != "entry_receipt_sha256"},
+        "model_entry_status": "failed",
+        "model_entry_valid": False,
+    }
+    child["level_repeat"]["entries"][0] = {
+        **rejected_body,
+        "entry_receipt_sha256": subject.canonical_sha256(rejected_body),
+    }
+    model_by_key = {
+        (model["seed"], model["sector_code"]): SimpleNamespace(model_payload_sha256=model["model_payload_sha256"])
+        for model in child["level_repeat"]["models"]
+    }
+    series = {
+        f"S{index:03d}": SimpleNamespace(
+            train_dates=tuple(date(2022, 1, 1) + timedelta(days=offset) for offset in range(400))
+        )
+        for index in range(131)
+    }
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_train_authority",
+        lambda *args, **kwargs: {
+            "producer_commit": "c" * 40,
+            "source_producer_commit": "9" * 40,
+            "treatment_producer_commit": "c" * 40,
+            "families": [
+                {
+                    "family": subject.B3_P6_FAMILY,
+                    "feature_names": list(ALL_CORE_FEATURES),
+                    "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+                }
+            ],
+            "inputs": {"trading_dates": tuple(date(2022, 1, 1) + timedelta(days=offset) for offset in range(400))},
+            "dataset_manifest_hash": "1" * 64,
+            "mapping_manifest_hash": "2" * 64,
+            "calendar_manifest_hash": "3" * 64,
+            "l2_stock_fact_manifest_hash": "4" * 64,
+            "feature_domain_policy": {
+                "receipt_sha256": "5" * 64,
+                "provider_absence_partition_receipt": {},
+                "provider_absence_partition_receipt_sha256": "6" * 64,
+            },
+        },
+    )
+    monkeypatch.setattr(subject, "_direct_l2_train_series_for_family", lambda *args, **kwargs: series)
+    monkeypatch.setattr(
+        subject,
+        "run_level_repeat",
+        lambda *args, **kwargs: (child["level_repeat"], model_by_key),
+    )
+    monkeypatch.setattr(
+        subject,
+        "project_b3_train_stability_source",
+        lambda item, models: ([0] * 400, {"comparison_sha256": "7" * 64}),
+    )
+    monkeypatch.setattr(
+        subject,
+        "evaluate_b3_train_stability_window",
+        lambda *args, **kwargs: {"status": "train_window_structurally_observed"},
+    )
+
+    result = subject.prepare_b3_transition_dwell_single_pass(
+        _request(),
+        db_prefix="TDX_DB_",
+        process_identity="fresh_process_1",
+        source_producer_commit="9" * 40,
+        treatment_producer_commit="c" * 40,
+    )
+
+    assert result["profile_count"] == 1048
+    assert result["per_seed"][0]["d3_d4_accepted_sector_count"] == 130
+    assert result["per_seed"][0]["d3_d4_accepted_131_of_131"] is False
+    assert result["per_seed"][0]["diagnostic_candidate_complete"] is False
+
+
+def test_transition_dwell_parent_preserves_compact_child_validation_evidence(monkeypatch, tmp_path) -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["profiles"][0]["model_payload_sha256"] = "f" * 64
+    profile_body = {key: value for key, value in child["profiles"][0].items() if key != "profile_sha256"}
+    child["profiles"][0]["profile_sha256"] = subject.canonical_sha256(profile_body)
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+    payload = subject.canonical_json_bytes(child)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=payload, stderr=b""),
+    )
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    authority = {
+        "producer_commit": "c" * 40,
+        "source_producer_commit": "9" * 40,
+        "treatment_producer_commit": "c" * 40,
+        "feature_domain_policy": {"receipt_sha256": "p" * 64},
+        "inputs": {},
+    }
+    closure = {
+        "feature_names": tuple(ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "canonical_sector_codes": tuple(f"S{index:03d}" for index in range(131)),
+        "canonical_sector_set_sha256": subject.canonical_sha256([f"S{index:03d}" for index in range(131)]),
+        "authority_keys": {},
+    }
+    child["level_repeat"].update(
+        {
+            "canonical_sector_codes": list(closure["canonical_sector_codes"]),
+            "canonical_sector_set_sha256": closure["canonical_sector_set_sha256"],
+            "schedule": list(subject.RESTART_SCHEDULE),
+        }
+    )
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+    payload = subject.canonical_json_bytes(child)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=payload, stderr=b""),
+    )
+    monkeypatch.setattr(subject, "_load_transition_dwell_train_authority", lambda *args, **kwargs: authority)
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_control_authority",
+        lambda *args, **kwargs: {"control_authority_sha256": "a" * 64},
+    )
+
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["status"] == "insufficient_evidence"
+    assert report["terminal_entry_count"] == 1048
+    assert report["fit_budget_completion_unknown"] is False
+    assert report["child_validation_evidence"]["entry_grid_complete"] is True
+    assert report["child_validation_evidence"]["receipt_valid"] is False
+    assert "profile_model_link_mismatch" in report["child_validation_evidence"]["mismatch_reason_codes"]
+
+
+def test_transition_dwell_child_entry_hash_drift_does_not_claim_completed_fit_budget() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["level_repeat"]["entries"][0]["entry_receipt_sha256"] = "f" * 64
+    child["level_repeat"]["entry_payload_sha256"] = subject.canonical_sha256(child["level_repeat"]["entries"])
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(subject.TransitionDwellChildReceiptError) as caught:
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+    assert caught.value.evidence["entry_grid_complete"] is True
+    assert caught.value.evidence["terminal_entry_count_verified"] == 0
+    assert "entry_receipt_hash_mismatch" in caught.value.evidence["mismatch_reason_codes"]
+
+
+def test_transition_dwell_child_malformed_repeat_returns_typed_validation_evidence() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["level_repeat"] = []
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(subject.TransitionDwellChildReceiptError) as caught:
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+    evidence = caught.value.evidence
+    assert evidence["receipt_valid"] is False
+    assert evidence["terminal_entry_count_verified"] == 0
+    assert "level_repeat_shape_invalid" in evidence["mismatch_reason_codes"]
+    assert "entry_grid_incomplete" in evidence["mismatch_reason_codes"]
+    assert "top_level_contract_mismatch" in evidence["mismatch_reason_codes"]
+
+
+def test_transition_dwell_child_malformed_entry_collection_returns_typed_validation_evidence() -> None:
+    child = _transition_dwell_child("fresh_process_1")
+    child["level_repeat"]["entries"] = {"not": "an array"}
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(subject.TransitionDwellChildReceiptError) as caught:
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+    evidence = caught.value.evidence
+    assert evidence["receipt_valid"] is False
+    assert evidence["terminal_entry_count_verified"] == 0
+    assert "entries_shape_invalid" in evidence["mismatch_reason_codes"]
+    assert "entry_grid_incomplete" in evidence["mismatch_reason_codes"]
+
+
+@pytest.mark.parametrize("drift", ["duplicate_entry", "orphan_profile", "false_complete_seed"])
+def test_transition_dwell_child_validator_rejects_rehashed_grid_closure_drift(drift: str) -> None:
+    child = _transition_dwell_child("fresh_process_1", candidate_seeds=(42,))
+    if drift == "duplicate_entry":
+        child["level_repeat"]["entries"][1] = deepcopy(child["level_repeat"]["entries"][0])
+        child["level_repeat"]["entry_payload_sha256"] = subject.canonical_sha256(child["level_repeat"]["entries"])
+    elif drift == "orphan_profile":
+        child["profiles"][0]["model_payload_sha256"] = "f" * 64
+        profile_body = {key: value for key, value in child["profiles"][0].items() if key != "profile_sha256"}
+        child["profiles"][0]["profile_sha256"] = subject.canonical_sha256(profile_body)
+    else:
+        child["profiles"][0]["both_windows_structurally_observed"] = False
+        profile_body = {key: value for key, value in child["profiles"][0].items() if key != "profile_sha256"}
+        child["profiles"][0]["profile_sha256"] = subject.canonical_sha256(profile_body)
+    body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+    child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+
+    with pytest.raises(StateModelSetError, match="child receipt is invalid"):
+        subject._validate_transition_dwell_child(child, process_identity="fresh_process_1")
+
+
+def test_transition_dwell_parent_fails_closed_on_fresh_process_hash_mismatch(monkeypatch, tmp_path) -> None:
+    first = _transition_dwell_child("fresh_process_1", candidate_seeds=(42,))
+    second = _transition_dwell_child("fresh_process_2", candidate_seeds=(42,))
+    second["profiles"][0]["profile_sha256"] = "f" * 64
+    body = {key: value for key, value in second.items() if key != "single_pass_receipt_sha256"}
+    second["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+    payloads = iter((subject.canonical_json_bytes(first), subject.canonical_json_bytes(second)))
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=next(payloads), stderr=b""),
+    )
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+
+    authority = {
+        "producer_commit": "c" * 40,
+        "source_producer_commit": "9" * 40,
+        "treatment_producer_commit": "c" * 40,
+        "feature_domain_policy": {"receipt_sha256": "p" * 64},
+        "inputs": {},
+    }
+    closure = {
+        "feature_names": tuple(ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "canonical_sector_codes": tuple(f"S{index:03d}" for index in range(131)),
+        "canonical_sector_set_sha256": subject.canonical_sha256([f"S{index:03d}" for index in range(131)]),
+        "authority_keys": {},
+    }
+    for child in (first, second):
+        child["level_repeat"].update(
+            {
+                "canonical_sector_codes": list(closure["canonical_sector_codes"]),
+                "canonical_sector_set_sha256": closure["canonical_sector_set_sha256"],
+                "schedule": list(subject.RESTART_SCHEDULE),
+            }
+        )
+        body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+        child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+    payloads = iter((subject.canonical_json_bytes(first), subject.canonical_json_bytes(second)))
+    monkeypatch.setattr(subject, "_load_transition_dwell_train_authority", lambda *args, **kwargs: authority)
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_control_authority",
+        lambda *args, **kwargs: {"control_authority_sha256": "a" * 64},
+    )
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["status"] == "insufficient_evidence"
+    assert report["canonical_payload_bitwise_equal"] is False
+    assert report["diagnostic_complete_candidate_seeds"] == []
+    assert report["selection_performed"] is False
+
+
+def _transition_dwell_control_fixture(tmp_path: Path) -> tuple[SimpleNamespace, dict, dict, dict, list[dict]]:
+    source = {
+        "dataset_manifest_hash": "1" * 64,
+        "mapping_manifest_hash": "2" * 64,
+        "calendar_manifest_hash": "3" * 64,
+        "l2_stock_fact_manifest_hash": "4" * 64,
+    }
+    child_hashes = ["5" * 64, "6" * 64]
+    selection = {"receipt_sha256": "7" * 64}
+    training = {
+        "receipt_sha256": "8" * 64,
+        "producer_commit": "9" * 40,
+        "fresh_process_receipt_paths": [str(tmp_path / "child-1.json"), str(tmp_path / "child-2.json")],
+        "fresh_process_receipt_hashes": child_hashes,
+        "selection": selection,
+        "feature_domain_policy_sha256": "a" * 64,
+        **source,
+    }
+    stability = {
+        "status": "diagnostic_complete",
+        "receipt_sha256": "b" * 64,
+        "authority": {
+            "training_authority_receipt_sha256": training["receipt_sha256"],
+            "fresh_process_receipt_hashes": child_hashes,
+            "d5_selection_receipt_sha256": selection["receipt_sha256"],
+            "feature_domain_policy_sha256": training["feature_domain_policy_sha256"],
+            "family": subject.B3_P6_FAMILY,
+            "level": subject.B3_P6_LEVEL,
+            "schedule": list(subject.RESTART_SCHEDULE),
+            **source,
+        },
+    }
+    codes = [f"S{index:03d}" for index in range(131)]
+    policy_payload = {"schema_version": "policy_v2", "formula_version": subject.C010_FORMULA_VERSION}
+    children: list[dict] = []
+    expected = {
+        "source_producer_commit": training["producer_commit"],
+        "feature_names": tuple(ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "canonical_sector_codes": tuple(codes),
+        "canonical_sector_set_sha256": subject.canonical_sha256(codes),
+        "authority_keys": {
+            "producer_commit": "d" * 40,
+            **source,
+            "feature_domain_policy_sha256": training["feature_domain_policy_sha256"],
+            "feature_domain_policy_manifest": {
+                **policy_payload,
+                "control_payload_marker": subject.B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256,
+                "producer_commit": training["producer_commit"],
+                "receipt_sha256": "e" * 64,
+            },
+        },
+    }
+    args = SimpleNamespace(
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    return args, expected, training, stability, children
+
+
+def test_transition_dwell_control_authority_closes_before_fit_without_copying_bulk_artifacts(
+    monkeypatch, tmp_path
+) -> None:
+    args, expected, training, stability, children = _transition_dwell_control_fixture(tmp_path)
+    values = iter([{"schema_version": subject.B3_P6_D5_CHECKPOINT_SCHEMA}, stability])
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda *args, **kwargs: next(values))
+    monkeypatch.setattr(subject, "_resolve_p6_zero_refit_training_authority", lambda value: training)
+    monkeypatch.setattr(subject, "validate_b3_train_stability_report", lambda value: None)
+    monkeypatch.setattr(
+        subject,
+        "_transition_dwell_policy_payload_sha256",
+        lambda value: subject.B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256,
+    )
+
+    control = subject._load_transition_dwell_control_authority(args, expected=expected)
+
+    assert control["p6_checkpoint_receipt_sha256"] == training["receipt_sha256"]
+    assert control["control_fit_performed"] is False
+    assert control["control_artifact_copy_performed"] is False
+    assert control["feature_domain_policy_payload_sha256"] == subject.B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256
+    assert control["control_authority_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in control.items() if key != "control_authority_sha256"}
+    )
+
+
+def test_transition_dwell_control_authority_rejects_missing_treatment_producer_with_typed_error(
+    monkeypatch, tmp_path
+) -> None:
+    args, expected, training, stability, children = _transition_dwell_control_fixture(tmp_path)
+    del expected["authority_keys"]["producer_commit"]
+    values = iter([{"schema_version": subject.B3_P6_D5_CHECKPOINT_SCHEMA}, stability])
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda *args, **kwargs: next(values))
+    monkeypatch.setattr(subject, "_resolve_p6_zero_refit_training_authority", lambda value: training)
+    monkeypatch.setattr(subject, "validate_b3_train_stability_report", lambda value: None)
+
+    with pytest.raises(StateModelSetError, match="treatment producer authority is invalid"):
+        subject._load_transition_dwell_control_authority(args, expected=expected)
+
+
+@pytest.mark.parametrize("drift", ["source", "policy", "stability"])
+def test_transition_dwell_control_authority_fails_closed_on_any_control_drift(
+    monkeypatch, tmp_path, drift: str
+) -> None:
+    args, expected, training, stability, children = _transition_dwell_control_fixture(tmp_path)
+    if drift == "source":
+        training["dataset_manifest_hash"] = "f" * 64
+        stability["authority"]["dataset_manifest_hash"] = training["dataset_manifest_hash"]
+    elif drift == "policy":
+        expected["authority_keys"]["feature_domain_policy_manifest"]["formula_version"] = "drifted"
+    else:
+        stability["authority"]["schedule"] = list(subject.RESTART_SCHEDULE[:-1])
+    values = iter([{"schema_version": subject.B3_P6_D5_CHECKPOINT_SCHEMA}, stability])
+    monkeypatch.setattr(subject, "_load_json_mapping", lambda *args, **kwargs: next(values))
+    monkeypatch.setattr(subject, "_resolve_p6_zero_refit_training_authority", lambda value: training)
+    monkeypatch.setattr(subject, "validate_b3_train_stability_report", lambda value: None)
+    monkeypatch.setattr(
+        subject,
+        "_transition_dwell_policy_payload_sha256",
+        lambda value: (
+            "0" * 64
+            if value.get("formula_version") == "drifted"
+            else subject.B3_TRANSITION_DWELL_CONTROL_POLICY_PAYLOAD_SHA256
+        ),
+    )
+
+    with pytest.raises(StateModelSetError, match="TRANSITION-DWELL-B"):
+        subject._load_transition_dwell_control_authority(args, expected=expected)
+
+
+def test_transition_dwell_parent_closes_control_before_spawning_fresh_process(monkeypatch, tmp_path) -> None:
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_train_authority",
+        lambda *args, **kwargs: {
+            "producer_commit": "c" * 40,
+            "source_producer_commit": "9" * 40,
+            "treatment_producer_commit": "c" * 40,
+            "feature_domain_policy": {"receipt_sha256": "p" * 64},
+            "inputs": {},
+        },
+    )
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: {"authority_keys": {}})
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_control_authority",
+        lambda *args, **kwargs: (_ for _ in ()).throw(StateModelSetError("TRANSITION-DWELL-B source drift")),
+    )
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fresh-process fit must not start")),
+    )
+
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["status"] == "insufficient_evidence"
+    assert report["primary_reason_code"] == "hmm_risk_transition_dwell_source_drift"
+    assert report["failure_stage"] == "control_authority_preflight"
+    assert report["terminal_entry_count"] == 0
+    assert report["fresh_process_receipts"] == []
+    assert report["report_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in report.items() if key != "report_sha256"}
+    )
+
+
+def test_transition_dwell_parent_failure_preserves_verified_control_and_truthful_fit_count(
+    monkeypatch, tmp_path
+) -> None:
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    control = {"control_authority_sha256": "a" * 64}
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_train_authority",
+        lambda *args, **kwargs: {
+            "producer_commit": "c" * 40,
+            "source_producer_commit": "9" * 40,
+            "treatment_producer_commit": "c" * 40,
+            "feature_domain_policy": {"receipt_sha256": "p" * 64},
+            "inputs": {},
+        },
+    )
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: {"authority_keys": {}})
+    monkeypatch.setattr(subject, "_load_transition_dwell_control_authority", lambda *args, **kwargs: control)
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=b"", stderr=b"failed"),
+    )
+
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["status"] == "insufficient_evidence"
+    assert report["terminal_entry_count"] == 0
+    assert report["control_authority"] == control
+    assert report["report_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in report.items() if key != "report_sha256"}
+    )
+
+
+def test_transition_dwell_second_child_failure_preserves_first_receipt_and_typed_stage(monkeypatch, tmp_path) -> None:
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    authority = {
+        "producer_commit": "c" * 40,
+        "source_producer_commit": "9" * 40,
+        "treatment_producer_commit": "c" * 40,
+        "feature_domain_policy": {"receipt_sha256": "p" * 64},
+        "inputs": {},
+    }
+    source_policy = {
+        "schema_version": "policy_v2",
+        "producer_commit": authority["source_producer_commit"],
+        "provider_absence_partition_receipt": {"receipt_sha256": "e" * 64},
+        "provider_absence_partition_receipt_sha256": "e" * 64,
+        "receipt_sha256": "p" * 64,
+    }
+    authority_keys = {
+        "producer_commit": authority["treatment_producer_commit"],
+        "dataset_manifest_hash": "1" * 64,
+        "mapping_manifest_hash": "2" * 64,
+        "calendar_manifest_hash": "3" * 64,
+        "l2_stock_fact_manifest_hash": "4" * 64,
+        "feature_domain_policy_sha256": source_policy["receipt_sha256"],
+        "feature_domain_policy_manifest": source_policy,
+        "provider_absence_partition_receipt": source_policy["provider_absence_partition_receipt"],
+        "provider_absence_partition_receipt_sha256": source_policy["provider_absence_partition_receipt_sha256"],
+        "formula_version": subject.C010_FORMULA_VERSION,
+    }
+    codes = tuple(f"S{index:03d}" for index in range(131))
+    closure = {
+        "feature_names": tuple(ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "canonical_sector_codes": codes,
+        "canonical_sector_set_sha256": subject.canonical_sha256(list(codes)),
+        "authority_keys": authority_keys,
+    }
+    first = _transition_dwell_child("fresh_process_1")
+    first.update(authority_keys)
+    first["level_repeat"].update(
+        {
+            "canonical_sector_codes": list(codes),
+            "canonical_sector_set_sha256": closure["canonical_sector_set_sha256"],
+            "schedule": list(subject.RESTART_SCHEDULE),
+        }
+    )
+    first_body = {key: value for key, value in first.items() if key != "single_pass_receipt_sha256"}
+    first["single_pass_receipt_sha256"] = subject.canonical_sha256(first_body)
+    completed = iter(
+        [
+            SimpleNamespace(returncode=0, stdout=subject.canonical_json_bytes(first), stderr=b""),
+            SimpleNamespace(returncode=7, stdout=b"", stderr=b"typed child failure"),
+        ]
+    )
+    monkeypatch.setattr(subject.subprocess, "run", lambda *args, **kwargs: next(completed))
+    monkeypatch.setattr(subject, "_load_transition_dwell_train_authority", lambda *args, **kwargs: authority)
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_control_authority",
+        lambda *args, **kwargs: {"control_authority_sha256": "a" * 64},
+    )
+
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["status"] == "insufficient_evidence"
+    assert report["failure_stage"] == "fresh_process_execution"
+    assert report["failed_process_identity"] == "fresh_process_2"
+    assert report["completed_process_count"] == 1
+    assert report["terminal_entry_count"] == 1048
+    assert report["fit_budget_completion_unknown"] is True
+    assert report["error_type"] == "FreshProcessExitError"
+    assert report["error"] == "typed child failure"
+    assert len(report["fresh_process_receipts"]) == 1
+    assert report["fresh_process_receipts"][0]["process_identity"] == "fresh_process_1"
+
+
+def test_transition_dwell_second_child_authority_drift_preserves_first_receipt(monkeypatch, tmp_path) -> None:
+    args = SimpleNamespace(
+        request=str(tmp_path / "request.json"),
+        output_root=str(tmp_path / "out"),
+        env_file=str(tmp_path / ".env"),
+        db_env_prefix="TDX_DB_",
+        b3_transition_dwell_output=str(tmp_path / "transition.json"),
+        b3_p6_parent_report=str(tmp_path / "p6.json"),
+        b3_transition_dwell_control_report=str(tmp_path / "stability.json"),
+    )
+    authority = {
+        "producer_commit": "c" * 40,
+        "source_producer_commit": "9" * 40,
+        "treatment_producer_commit": "c" * 40,
+        "feature_domain_policy": {"receipt_sha256": "p" * 64},
+        "inputs": {},
+    }
+    codes = tuple(f"S{index:03d}" for index in range(131))
+    authority_keys = {
+        "producer_commit": authority["treatment_producer_commit"],
+        "dataset_manifest_hash": "1" * 64,
+        "mapping_manifest_hash": "2" * 64,
+        "calendar_manifest_hash": "3" * 64,
+        "l2_stock_fact_manifest_hash": "4" * 64,
+        "feature_domain_policy_sha256": "p" * 64,
+        "feature_domain_policy_manifest": {"receipt_sha256": "p" * 64},
+        "provider_absence_partition_receipt": {"receipt_sha256": "e" * 64},
+        "provider_absence_partition_receipt_sha256": "e" * 64,
+        "formula_version": subject.C010_FORMULA_VERSION,
+    }
+    closure = {
+        "feature_names": tuple(ALL_CORE_FEATURES),
+        "preprocess_family": "winsor_zscore_1_99_train_global_v1",
+        "canonical_sector_codes": codes,
+        "canonical_sector_set_sha256": subject.canonical_sha256(list(codes)),
+        "authority_keys": authority_keys,
+    }
+
+    def complete_child(process_identity: str) -> dict:
+        child = _transition_dwell_child(process_identity)
+        child.update(authority_keys)
+        child["level_repeat"].update(
+            {
+                "canonical_sector_codes": list(codes),
+                "canonical_sector_set_sha256": closure["canonical_sector_set_sha256"],
+                "schedule": list(subject.RESTART_SCHEDULE),
+            }
+        )
+        body = {key: value for key, value in child.items() if key != "single_pass_receipt_sha256"}
+        child["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
+        return child
+
+    first = complete_child("fresh_process_1")
+    second = complete_child("fresh_process_2")
+    second["dataset_manifest_hash"] = "f" * 64
+    second_body = {key: value for key, value in second.items() if key != "single_pass_receipt_sha256"}
+    second["single_pass_receipt_sha256"] = subject.canonical_sha256(second_body)
+    completed = iter(
+        [
+            SimpleNamespace(returncode=0, stdout=subject.canonical_json_bytes(first), stderr=b""),
+            SimpleNamespace(returncode=0, stdout=subject.canonical_json_bytes(second), stderr=b""),
+        ]
+    )
+    monkeypatch.setattr(subject.subprocess, "run", lambda *args, **kwargs: next(completed))
+    monkeypatch.setattr(subject, "_load_transition_dwell_train_authority", lambda *args, **kwargs: authority)
+    monkeypatch.setattr(subject, "_b3_p6_closure_from_inputs", lambda *args, **kwargs: closure)
+    monkeypatch.setattr(
+        subject,
+        "_load_transition_dwell_control_authority",
+        lambda *args, **kwargs: {"control_authority_sha256": "a" * 64},
+    )
+
+    report = subject.run_b3_transition_dwell_repeated(args, _request())
+
+    assert report["failure_stage"] == "fresh_process_execution"
+    assert report["failed_process_identity"] == "fresh_process_2"
+    assert report["error_type"] == "StateModelSetError"
+    assert "authority drifted from parent reload" in report["error"]
+    assert report["terminal_entry_count"] == 1048
+    assert len(report["fresh_process_receipts"]) == 1
+
+
+def test_transition_dwell_cli_report_write_failure_writes_durable_parent_failure(monkeypatch, tmp_path, capsys) -> None:
+    output = tmp_path / "transition.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_state_model_set.py",
+            "--request",
+            "request.json",
+            "--output-root",
+            str(tmp_path),
+            "--env-file",
+            "ignored.env",
+            "--db-env-prefix",
+            "TEST_",
+            "--b3-transition-dwell-output",
+            str(output),
+            "--b3-p6-parent-report",
+            str(tmp_path / "p6.json"),
+            "--b3-transition-dwell-control-report",
+            str(tmp_path / "stability.json"),
+        ],
+    )
+    report_body = {
+        "schema_version": subject.B3_TRANSITION_DWELL_REPORT_SCHEMA,
+        "contract_version": subject.B3_TRANSITION_DWELL_CONTRACT,
+        "status": "diagnostic_complete_no_complete_candidate",
+        "primary_reason_code": "hmm_risk_transition_dwell_no_complete_candidate",
+        "planned_fit_count": 2096,
+        "terminal_entry_count": 2096,
+        "control_authority": {"control_authority_sha256": "a" * 64},
+        "fresh_process_receipts": [
+            {"process_identity": "fresh_process_1"},
+            {"process_identity": "fresh_process_2"},
+        ],
+        "selection_performed": False,
+        "d5_executed": False,
+        "d6_executed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    report = {**report_body, "report_sha256": subject.canonical_sha256(report_body)}
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "run_b3_transition_dwell_repeated", lambda *args, **kwargs: report)
+    real_writer = subject._write_diagnostic_report
+
+    def fail_success_writer(path, value):
+        if path == output.resolve():
+            raise OSError("report write failed")
+        return real_writer(path, value)
+
+    monkeypatch.setattr(subject, "_write_diagnostic_report", fail_success_writer)
+
+    assert subject.main() == 1
+    failure = json.loads((tmp_path / "transition.parent.failure.json").read_text(encoding="utf-8"))
+    assert failure["status"] == "insufficient_evidence"
+    assert failure["failure_stage"] == "report_write"
+    assert failure["terminal_entry_count"] == 2096
+    assert failure["completed_process_count"] == 2
+    assert failure["fresh_process_receipts"] == report["fresh_process_receipts"]
+    assert failure["selection_performed"] is False
+    assert failure["ready_artifact_write_performed"] is False
+    assert "report write failed" in capsys.readouterr().err
+
+
+def test_transition_dwell_cli_report_readback_failure_writes_durable_parent_failure(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    output = tmp_path / "transition.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_state_model_set.py",
+            "--request",
+            "request.json",
+            "--output-root",
+            str(tmp_path),
+            "--env-file",
+            "ignored.env",
+            "--db-env-prefix",
+            "TEST_",
+            "--b3-transition-dwell-output",
+            str(output),
+            "--b3-p6-parent-report",
+            str(tmp_path / "p6.json"),
+            "--b3-transition-dwell-control-report",
+            str(tmp_path / "stability.json"),
+        ],
+    )
+    report_body = {
+        "schema_version": subject.B3_TRANSITION_DWELL_REPORT_SCHEMA,
+        "contract_version": subject.B3_TRANSITION_DWELL_CONTRACT,
+        "status": "diagnostic_complete_no_complete_candidate",
+        "planned_fit_count": 2096,
+        "terminal_entry_count": 2096,
+        "fresh_process_receipts": [
+            {"process_identity": "fresh_process_1"},
+            {"process_identity": "fresh_process_2"},
+        ],
+        "selection_performed": False,
+        "d5_executed": False,
+        "d6_executed": False,
+        "model_write_performed": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    report = {**report_body, "report_sha256": subject.canonical_sha256(report_body)}
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: _request())
+    monkeypatch.setattr(subject, "run_b3_transition_dwell_repeated", lambda *args, **kwargs: report)
+    real_loader = subject._load_json_mapping
+
+    def mismatched_readback(path, *, label):
+        if path == output.resolve():
+            return {"status": "drifted"}
+        return real_loader(path, label=label)
+
+    monkeypatch.setattr(subject, "_load_json_mapping", mismatched_readback)
+
+    assert subject.main() == 1
+    failure = json.loads((tmp_path / "transition.parent.failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_stage"] == "report_readback"
+    assert failure["terminal_entry_count"] == 2096
+    assert failure["completed_process_count"] == 2
+    assert failure["fit_budget_completion_unknown"] is False
+    assert failure["fresh_process_receipts"] == report["fresh_process_receipts"]
+    assert "durable report readback differs" in capsys.readouterr().err
+
+
 def _preflight_inputs() -> dict:
     values = {
         "database": {"host": "127.0.0.1", "port": 5432, "dbname": "aistock"},
@@ -1721,6 +2924,40 @@ def _p6_series() -> dict[str, object]:
     return {f"L2-{index:03d}": object() for index in range(subject.B3_P6_EXPECTED_SECTOR_COUNT)}
 
 
+def _p6_accepted_selection(*, policy_sha256: str, codes: tuple[str, ...] | None = None) -> dict:
+    canonical_codes = tuple(sorted(_p6_series())) if codes is None else codes
+    evidence = {
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "feature_domain_policy_sha256": policy_sha256,
+        "canonical_sector_codes": list(canonical_codes),
+        "canonical_sector_set_sha256": subject.canonical_sha256(list(canonical_codes)),
+        "schedule": list(subject.RESTART_SCHEDULE),
+        "feature_count": len(subject.ALL_CORE_FEATURES),
+        "repeat_entries_sha256": "4" * 64,
+        "candidates": [],
+        "lexicographic_filters": [],
+        "selected_seed": 43,
+        "selected_schedule_index": subject.RESTART_SCHEDULE.index(43),
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "semantic_labelability_accessed": False,
+        "d6_status_accessed": False,
+        "selection_followed_by_refit": False,
+    }
+    body = {
+        "contract_version": subject.D5_SELECTION_VERSION,
+        "failure_reason_codes": [],
+        "blocking_reason_codes": [],
+        "warning_reason_codes": [],
+        "primary_reason_code": None,
+        "evidence": evidence,
+        "level_selection_status": "accepted",
+        "level_selection_valid": True,
+    }
+    return {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+
 def _p6_repeat(process_identity: str) -> dict:
     codes = tuple(sorted(_p6_series()))
     return {
@@ -1962,11 +3199,13 @@ def test_p6_l2_only_validation_constructor_never_touches_l1(monkeypatch) -> None
         expected_sector_count,
         direct_sector_level,
         frozen_input_identity=None,
+        validation_calendar_dates=None,
     ):
         captured["panel"] = panel
         captured["constituent_manifest_by_l1"] = constituent_manifest_by_l1
         captured["direct_sector_level"] = direct_sector_level
         captured["expected_sector_count"] = expected_sector_count
+        captured["validation_calendar_dates"] = validation_calendar_dates
         return _p6_series()
 
     monkeypatch.setattr(subject, "build_l1_training_series", guarded_build_l1_training_series)
@@ -1976,6 +3215,11 @@ def test_p6_l2_only_validation_constructor_never_touches_l1(monkeypatch) -> None
         lambda inputs: {"L2-000": {"l2_codes": ["L2-000"]}},
     )
     monkeypatch.setattr(subject, "_frozen_input_identity", lambda inputs: {})
+    monkeypatch.setattr(
+        subject,
+        "_validation_calendar_dates_from_manifest",
+        lambda inputs, *, validation_start, validation_end: (validation_start, validation_end),
+    )
     monkeypatch.setattr(subject, "_date", lambda value, label: value)
 
     series = subject._direct_l2_series_for_family(inputs, family)
@@ -1984,6 +3228,7 @@ def test_p6_l2_only_validation_constructor_never_touches_l1(monkeypatch) -> None
     assert captured["constituent_manifest_by_l1"] == {"L2-000": {"l2_codes": ["L2-000"]}}
     assert captured["direct_sector_level"] == "L2"
     assert captured["expected_sector_count"] == subject.B3_P6_EXPECTED_SECTOR_COUNT
+    assert captured["validation_calendar_dates"] == (family["validation_start"], family["validation_end"])
     assert set(series) == set(_p6_series())
 
 
@@ -2001,6 +3246,27 @@ def _p6_rehash_child(value: dict) -> dict:
     body = {key: item for key, item in value.items() if key != "single_pass_receipt_sha256"}
     value["single_pass_receipt_sha256"] = subject.canonical_sha256(body)
     return value
+
+
+def test_p6_zero_refit_child_validator_uses_frozen_training_producer(monkeypatch) -> None:
+    inputs, policy, closure = _p6_drift_fixture()
+    monkeypatch.setattr(subject, "_formal_producer_commit", lambda: "d" * 40)
+    value = json.loads(_p6_child_payload("fresh_process_1", inputs=inputs, policy=policy))
+
+    subject._validate_b3_p6_child_payload(
+        value,
+        process_identity="fresh_process_1",
+        expected=closure,
+        expected_producer_commit="c" * 40,
+    )
+
+    with pytest.raises(StateModelSetError, match="child receipt is invalid"):
+        subject._validate_b3_p6_child_payload(
+            value,
+            process_identity="fresh_process_1",
+            expected=closure,
+            expected_producer_commit="e" * 40,
+        )
 
 
 def test_p6_child_validator_rejects_self_hashed_feature_names_drift(monkeypatch) -> None:
@@ -2268,9 +3534,380 @@ def test_p6_cli_execution_failure_writes_parent_failure_with_unknown_states(monk
     assert failure["selection_status"] == "unknown_due_parent_failure"
     assert failure["d6_performed_after_selection"] is None
     assert failure["selected_level_artifact_write_performed"] is None
+    assert failure["d5_checkpoint_status"] == "missing"
     assert failure["phase2_ready"] is False
     assert failure["ready_artifact_write_performed"] is False
     assert not output_path.exists()
+
+
+def test_p6_d5_checkpoint_is_durable_before_semantic_failure_and_recovers_authority(monkeypatch, tmp_path) -> None:
+    request, policy, inputs, args = _p6_parent_setup(monkeypatch, tmp_path)
+    payloads = [
+        _p6_child_payload("fresh_process_1", inputs=inputs, policy=policy),
+        _p6_child_payload("fresh_process_2", inputs=inputs, policy=policy),
+    ]
+    call_index = 0
+
+    def fake_run(command, *, check, capture_output, env, timeout):
+        nonlocal call_index
+        payload = payloads[call_index]
+        call_index += 1
+        return SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    selection = _p6_accepted_selection(policy_sha256=policy["receipt_sha256"])
+    training_body = {
+        "schema_version": subject.B3_P6_D5_TRAINING_ARTIFACT_SCHEMA,
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "selected_seed": 43,
+        "selection_receipt_sha256": selection["receipt_sha256"],
+        "entry_count": subject.B3_P6_EXPECTED_SECTOR_COUNT,
+        "entries": [],
+        "selection_reexecuted": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "ready": False,
+    }
+    training_artifact = {**training_body, "artifact_sha256": subject.canonical_sha256(training_body)}
+    monkeypatch.setattr(subject, "select_level_restart", lambda *args, **kwargs: selection)
+    monkeypatch.setattr(
+        subject,
+        "_build_b3_p6_selected_training_artifact",
+        lambda frozen_selection, repeat: training_artifact,
+    )
+    monkeypatch.setattr(subject, "_p6_zero_refit_training_authority", lambda report: ({}, {}, {}, ()))
+    monkeypatch.setattr(
+        subject,
+        "_load_verified_formal_semantic_inputs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            StateModelSetError("causal posterior normalization failed at row 0")
+        ),
+    )
+
+    with pytest.raises(StateModelSetError, match="causal posterior normalization failed") as excinfo:
+        subject.run_b3_p6_autocycle_l2_repeated(args, request)
+
+    checkpoint_path = subject._b3_p6_d5_checkpoint_path(args)
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["selection"]["receipt_sha256"] == selection["receipt_sha256"]
+    assert checkpoint["semantic_source_accessed_after_selection"] is False
+    assert checkpoint["d6_performed_after_selection"] is False
+    assert checkpoint["ready_artifact_write_performed"] is False
+
+    failure = subject._build_b3_p6_parent_failure(args, excinfo.value)
+    assert failure["d5_checkpoint_status"] == "verified"
+    assert failure["d5_checkpoint_receipt_sha256"] == checkpoint["receipt_sha256"]
+    assert failure["selection_performed"] is True
+    assert failure["selection_status"] == "accepted"
+    assert failure["d6_performed_after_selection"] is None
+    assert failure["ready_artifact_write_performed"] is False
+    assert subject._resolve_p6_zero_refit_training_authority(failure) == checkpoint
+    drifted_body = {
+        **{key: value for key, value in failure.items() if key != "receipt_sha256"},
+        "d5_checkpoint_receipt_sha256": "0" * 64,
+    }
+    drifted = {**drifted_body, "receipt_sha256": subject.canonical_sha256(drifted_body)}
+    with pytest.raises(StateModelSetError, match="checkpoint receipt differs"):
+        subject._resolve_p6_zero_refit_training_authority(drifted)
+
+    drifted_checkpoint = {**checkpoint, "fresh_process_receipt_hashes": ["f" * 64, "e" * 64]}
+    monkeypatch.setattr(subject, "_load_b3_p6_d5_checkpoint", lambda path: drifted_checkpoint)
+    invalid_failure = subject._build_b3_p6_parent_failure(args, excinfo.value)
+    assert invalid_failure["d5_checkpoint_status"] == "invalid"
+    assert invalid_failure["d5_checkpoint_receipt_sha256"] is None
+    assert invalid_failure["selection_performed"] is None
+    assert invalid_failure["selection_status"] == "unknown_due_parent_failure"
+
+
+def test_p6_zero_refit_historical_failure_without_d5_checkpoint_fails_closed() -> None:
+    body = {
+        "schema_version": subject.B3_P6_FAILURE_SCHEMA,
+        "status": "failed",
+        "selection_status": "unknown_due_parent_failure",
+        "ready_artifact_write_performed": False,
+    }
+    failure = {**body, "receipt_sha256": subject.canonical_sha256(body)}
+
+    with pytest.raises(StateModelSetError, match="D5 checkpoint is missing; D5 re-execution is prohibited"):
+        subject._resolve_p6_zero_refit_training_authority(failure)
+
+
+def test_p6_zero_refit_accepts_complete_d5_checkpoint_without_reselection(monkeypatch, tmp_path) -> None:
+    codes = tuple(sorted(_p6_series()))
+    selection = _p6_accepted_selection(policy_sha256="3" * 64, codes=codes)
+    entries = []
+    for code in codes:
+        model_body = {
+            "family": subject.B3_P6_FAMILY,
+            "level": subject.B3_P6_LEVEL,
+            "seed": 43,
+            "sector_code": code,
+        }
+        model = {**model_body, "model_payload_sha256": subject.canonical_sha256(model_body)}
+        training_body = {
+            "seed": 43,
+            "sector_code": code,
+            "model_entry_status": "accepted",
+            "model_entry_valid": True,
+            "model_payload_sha256": model["model_payload_sha256"],
+        }
+        training = {**training_body, "entry_receipt_sha256": subject.canonical_sha256(training_body)}
+        entry_body = {**model, "training_receipt": training}
+        entries.append({**entry_body, "selected_entry_sha256": subject.canonical_sha256(entry_body)})
+    training_artifact_body = {
+        "schema_version": subject.B3_P6_D5_TRAINING_ARTIFACT_SCHEMA,
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "selected_seed": 43,
+        "selection_receipt_sha256": selection["receipt_sha256"],
+        "entry_count": len(entries),
+        "entries": entries,
+        "selection_reexecuted": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "ready": False,
+    }
+    training_artifact = {
+        **training_artifact_body,
+        "artifact_sha256": subject.canonical_sha256(training_artifact_body),
+    }
+    checkpoint_body = {
+        "schema_version": subject.B3_P6_D5_CHECKPOINT_SCHEMA,
+        "status": "selected",
+        "producer_commit": "a" * 40,
+        "target_family": subject.B3_P6_FAMILY,
+        "target_level": subject.B3_P6_LEVEL,
+        "planned_fit_count": 2096,
+        "terminal_entry_count": 2096,
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "d" * 64,
+        "semantic_dataset_manifest_hash": "e" * 64,
+        "semantic_mapping_manifest_hash": "f" * 64,
+        "semantic_calendar_manifest_hash": "1" * 64,
+        "semantic_l2_stock_fact_manifest_hash": "2" * 64,
+        "feature_domain_policy_sha256": "3" * 64,
+        "formula_version": subject.C010_FORMULA_VERSION,
+        "fresh_process_receipt_hashes": ["1" * 64, "2" * 64],
+        "fresh_process_receipt_paths": [
+            str((tmp_path / "fresh_process_1.json").resolve()),
+            str((tmp_path / "fresh_process_2.json").resolve()),
+        ],
+        "selection": selection,
+        "selected_training_artifact": training_artifact,
+        "selection_performed": True,
+        "selection_used_validation": False,
+        "selection_used_future_utility": False,
+        "selection_followed_by_refit": False,
+        "semantic_source_accessed_after_selection": False,
+        "d6_performed_after_selection": False,
+        "selected_level_artifact_write_performed": False,
+        "family_model_set_status": "blocked",
+        "phase2_ready": False,
+        "ready_artifact_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    checkpoint = {**checkpoint_body, "receipt_sha256": subject.canonical_sha256(checkpoint_body)}
+    fitted = {
+        (43, code): SimpleNamespace(model_payload_sha256=entries[index]["model_payload_sha256"])
+        for index, code in enumerate(codes)
+    }
+    monkeypatch.setattr(subject, "models_from_repeat", lambda repeat: fitted)
+    monkeypatch.setattr(
+        subject,
+        "select_level_restart",
+        lambda *args, **kwargs: pytest.fail("D5 must not be re-executed while reading its checkpoint"),
+    )
+
+    checkpoint_path = tmp_path / "p6.d5.checkpoint.json"
+    subject._write_diagnostic_report(checkpoint_path, checkpoint)
+    assert subject._load_b3_p6_d5_checkpoint(checkpoint_path) == checkpoint
+
+    frozen_selection, frozen_models, repeat, frozen_codes = subject._p6_zero_refit_training_authority(checkpoint)
+
+    assert frozen_selection == selection
+    assert frozen_models == fitted
+    assert frozen_codes == codes
+    expected_models = [
+        {key: entry[key] for key in ("family", "level", "seed", "sector_code", "model_payload_sha256")}
+        for entry in entries
+    ]
+    assert repeat["model_payload_sha256"] == subject.canonical_sha256(expected_models)
+
+    incomplete_training_body = {
+        **training_artifact_body,
+        "entries": entries[:-1],
+    }
+    incomplete_training = {
+        **incomplete_training_body,
+        "artifact_sha256": subject.canonical_sha256(incomplete_training_body),
+    }
+    incomplete_checkpoint_body = {
+        **checkpoint_body,
+        "selected_training_artifact": incomplete_training,
+    }
+    incomplete_checkpoint = {
+        **incomplete_checkpoint_body,
+        "receipt_sha256": subject.canonical_sha256(incomplete_checkpoint_body),
+    }
+    incomplete_path = tmp_path / "p6.incomplete.d5.checkpoint.json"
+    subject._write_diagnostic_report(incomplete_path, incomplete_checkpoint)
+    with pytest.raises(StateModelSetError, match="exactly 131 selected entries"):
+        subject._load_b3_p6_d5_checkpoint(incomplete_path)
+
+    for field in ("phase2_ready", "database_write_performed", "runtime_action_performed"):
+        forbidden_body = {**checkpoint_body, field: True}
+        forbidden = {**forbidden_body, "receipt_sha256": subject.canonical_sha256(forbidden_body)}
+        forbidden_path = tmp_path / f"p6.{field}.d5.checkpoint.json"
+        subject._write_diagnostic_report(forbidden_path, forbidden)
+        with pytest.raises(StateModelSetError, match="checkpoint authority is invalid"):
+            subject._load_b3_p6_d5_checkpoint(forbidden_path)
+        with pytest.raises(StateModelSetError, match="checkpoint authority is invalid"):
+            subject._resolve_p6_zero_refit_training_authority(forbidden)
+
+    training_ready_body = {**training_artifact_body, "ready": True}
+    training_ready = {
+        **training_ready_body,
+        "artifact_sha256": subject.canonical_sha256(training_ready_body),
+    }
+    training_ready_checkpoint_body = {
+        **checkpoint_body,
+        "selected_training_artifact": training_ready,
+    }
+    training_ready_checkpoint = {
+        **training_ready_checkpoint_body,
+        "receipt_sha256": subject.canonical_sha256(training_ready_checkpoint_body),
+    }
+    training_ready_path = tmp_path / "p6.training-ready.d5.checkpoint.json"
+    subject._write_diagnostic_report(training_ready_path, training_ready_checkpoint)
+    with pytest.raises(StateModelSetError, match="checkpoint authority is invalid"):
+        subject._load_b3_p6_d5_checkpoint(training_ready_path)
+
+    drifted_training_receipt_body = {
+        **{key: value for key, value in entries[0]["training_receipt"].items() if key != "entry_receipt_sha256"},
+        "model_entry_status": "failed",
+        "model_entry_valid": False,
+    }
+    drifted_training_receipt = {
+        **drifted_training_receipt_body,
+        "entry_receipt_sha256": subject.canonical_sha256(drifted_training_receipt_body),
+    }
+    drifted_entry_body = {
+        **{key: value for key, value in entries[0].items() if key != "selected_entry_sha256"},
+        "training_receipt": drifted_training_receipt,
+    }
+    drifted_entry = {
+        **drifted_entry_body,
+        "selected_entry_sha256": subject.canonical_sha256(drifted_entry_body),
+    }
+    drifted_training_body = {
+        **training_artifact_body,
+        "entries": [drifted_entry, *entries[1:]],
+    }
+    drifted_training = {
+        **drifted_training_body,
+        "artifact_sha256": subject.canonical_sha256(drifted_training_body),
+    }
+    drifted_checkpoint_body = {
+        **checkpoint_body,
+        "selected_training_artifact": drifted_training,
+    }
+    drifted_checkpoint = {
+        **drifted_checkpoint_body,
+        "receipt_sha256": subject.canonical_sha256(drifted_checkpoint_body),
+    }
+    drifted_checkpoint_path = tmp_path / "p6.failed-training-receipt.d5.checkpoint.json"
+    subject._write_diagnostic_report(drifted_checkpoint_path, drifted_checkpoint)
+    with pytest.raises(StateModelSetError, match="training receipt readback failed"):
+        subject._load_b3_p6_d5_checkpoint(drifted_checkpoint_path)
+    with pytest.raises(StateModelSetError, match="training receipt readback failed"):
+        subject._resolve_p6_zero_refit_training_authority(drifted_checkpoint)
+
+    validation_evidence = {**selection["evidence"], "validation_accessed": True}
+    validation_selection_body = {
+        **{key: value for key, value in selection.items() if key != "receipt_sha256"},
+        "evidence": validation_evidence,
+    }
+    validation_selection = {
+        **validation_selection_body,
+        "receipt_sha256": subject.canonical_sha256(validation_selection_body),
+    }
+    validation_training_body = {
+        **training_artifact_body,
+        "selection_receipt_sha256": validation_selection["receipt_sha256"],
+    }
+    validation_training = {
+        **validation_training_body,
+        "artifact_sha256": subject.canonical_sha256(validation_training_body),
+    }
+    validation_checkpoint_body = {
+        **checkpoint_body,
+        "selection": validation_selection,
+        "selected_training_artifact": validation_training,
+    }
+    validation_checkpoint = {
+        **validation_checkpoint_body,
+        "receipt_sha256": subject.canonical_sha256(validation_checkpoint_body),
+    }
+    validation_checkpoint_path = tmp_path / "p6.validation-accessed.d5.checkpoint.json"
+    subject._write_diagnostic_report(validation_checkpoint_path, validation_checkpoint)
+    with pytest.raises(StateModelSetError, match="checkpoint authority is invalid"):
+        subject._load_b3_p6_d5_checkpoint(validation_checkpoint_path)
+
+
+def test_p6_selected_training_checkpoint_builder_freezes_exact_d5_models_without_d6(monkeypatch) -> None:
+    codes = tuple(sorted(_p6_series()))
+    selection = _p6_accepted_selection(policy_sha256="9" * 64, codes=codes)
+    entries = []
+    fitted = {}
+    for code in codes:
+        model_body = {
+            "family": subject.B3_P6_FAMILY,
+            "level": subject.B3_P6_LEVEL,
+            "seed": 43,
+            "sector_code": code,
+        }
+        model = {**model_body, "model_payload_sha256": subject.canonical_sha256(model_body)}
+        training_body = {
+            "seed": 43,
+            "sector_code": code,
+            "model_entry_status": "accepted",
+            "model_entry_valid": True,
+            "model_payload_sha256": model["model_payload_sha256"],
+        }
+        entries.append({**training_body, "entry_receipt_sha256": subject.canonical_sha256(training_body)})
+        fitted[(43, code)] = SimpleNamespace(
+            model_payload_sha256=model["model_payload_sha256"],
+            payload=lambda value=model: value,
+        )
+    repeat = {
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "schedule": list(subject.RESTART_SCHEDULE),
+        "canonical_sector_codes": list(codes),
+        "entries": entries,
+    }
+    monkeypatch.setattr(subject, "models_from_repeat", lambda value: fitted)
+    monkeypatch.setattr(
+        subject,
+        "_load_verified_formal_semantic_inputs",
+        lambda *args, **kwargs: pytest.fail("D5 checkpoint builder must not access D6 inputs"),
+    )
+
+    artifact = subject._build_b3_p6_selected_training_artifact(selection, repeat)
+
+    assert artifact["schema_version"] == subject.B3_P6_D5_TRAINING_ARTIFACT_SCHEMA
+    assert artifact["entry_count"] == subject.B3_P6_EXPECTED_SECTOR_COUNT
+    assert artifact["selected_seed"] == 43
+    assert artifact["validation_accessed"] is False
+    assert artifact["future_utility_accessed"] is False
+    assert artifact["ready"] is False
+    assert artifact["artifact_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in artifact.items() if key != "artifact_sha256"}
+    )
 
 
 def test_p6_parent_runs_two_exact_children_and_blocks_without_d5_candidate(monkeypatch, tmp_path) -> None:
@@ -2351,11 +3988,33 @@ def test_p6_parent_persists_only_accepted_selected_level_and_never_ready(monkeyp
         return SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
 
     monkeypatch.setattr(subject.subprocess, "run", fake_run)
-    selection_body = {"level_selection_valid": True, "level_selection_status": "accepted", "evidence": {}}
-    selection = {**selection_body, "receipt_sha256": subject.canonical_sha256(selection_body)}
+    selection = _p6_accepted_selection(policy_sha256=policy["receipt_sha256"])
+    training_body = {
+        "schema_version": subject.B3_P6_D5_TRAINING_ARTIFACT_SCHEMA,
+        "family": subject.B3_P6_FAMILY,
+        "level": subject.B3_P6_LEVEL,
+        "selected_seed": 43,
+        "selection_receipt_sha256": selection["receipt_sha256"],
+        "entry_count": subject.B3_P6_EXPECTED_SECTOR_COUNT,
+        "entries": [],
+        "selection_reexecuted": False,
+        "validation_accessed": False,
+        "future_utility_accessed": False,
+        "ready": False,
+    }
+    training_artifact = {
+        **training_body,
+        "artifact_sha256": subject.canonical_sha256(training_body),
+    }
     artifact_body = {"schema_version": "test", "status": "accepted", "family": "autocycle_all_core", "level": "L2"}
     artifact = {**artifact_body, "artifact_sha256": subject.canonical_sha256(artifact_body)}
     monkeypatch.setattr(subject, "select_level_restart", lambda *args, **kwargs: selection)
+    monkeypatch.setattr(
+        subject,
+        "_build_b3_p6_selected_training_artifact",
+        lambda frozen_selection, repeat: training_artifact,
+    )
+    monkeypatch.setattr(subject, "_p6_zero_refit_training_authority", lambda report: ({}, {}, {}, ()))
     monkeypatch.setattr(subject, "models_from_repeat", lambda repeat: {})
     monkeypatch.setattr(subject, "build_selected_level_artifact", lambda *args, **kwargs: artifact)
     monkeypatch.setattr(subject, "read_b3_selected_level_artifact", lambda path, **kwargs: artifact)
@@ -2363,7 +4022,15 @@ def test_p6_parent_persists_only_accepted_selected_level_and_never_ready(monkeyp
     report = subject.run_b3_p6_autocycle_l2_repeated(args, request)
 
     artifact_path = Path(report["selected_level_artifact_path"])
+    checkpoint_path = Path(report["d5_checkpoint_path"])
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert report["status"] == "accepted"
+    assert report["d5_checkpoint_write_performed"] is True
+    assert checkpoint["status"] == "selected"
+    assert checkpoint["selection"]["receipt_sha256"] == selection["receipt_sha256"]
+    assert checkpoint["d6_performed_after_selection"] is False
+    assert checkpoint["selected_level_artifact_write_performed"] is False
+    assert checkpoint["ready_artifact_write_performed"] is False
     assert semantic_load_count == 1
     assert report["semantic_source_accessed_after_selection"] is True
     assert report["d6_performed_after_selection"] is True
@@ -2373,6 +4040,115 @@ def test_p6_parent_persists_only_accepted_selected_level_and_never_ready(monkeyp
     assert report["phase2_ready"] is False
     assert report["ready_manifest_path"] is None
     assert report["ready_artifact_write_performed"] is False
+
+
+def test_p6_d6_zero_refit_replay_preserves_model_and_selection_lineage(monkeypatch, tmp_path) -> None:
+    request = _request()
+    policy_sha256 = "9" * 64
+    request["feature_domain_policy_sha256"] = policy_sha256
+    semantic_identities = {
+        "semantic_dataset_manifest_hash": "1" * 64,
+        "semantic_mapping_manifest_hash": "2" * 64,
+        "semantic_calendar_manifest_hash": "3" * 64,
+        "semantic_l2_stock_fact_manifest_hash": "4" * 64,
+    }
+    request.update(semantic_identities)
+    codes = tuple(sorted(_p6_series()))
+    model_hashes = {code: subject.canonical_sha256({"code": code}) for code in codes}
+    models = {(43, code): SimpleNamespace(model_payload_sha256=model_hashes[code]) for code in codes}
+    selection = {
+        "receipt_sha256": "8" * 64,
+        "evidence": {"selected_seed": 43},
+        "level_selection_valid": True,
+    }
+    monkeypatch.setattr(
+        subject,
+        "_p6_zero_refit_training_authority",
+        lambda report: (selection, models, {"entries": []}, codes),
+    )
+    monkeypatch.setattr(subject, "_require_approved_b3_windows", lambda value: None)
+    monkeypatch.setattr(subject, "_require_formal_semantic_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_require_c010_policy_identity", lambda value: None)
+    monkeypatch.setattr(subject, "_validate_b3_p6_child_payload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(subject, "_load_verified_formal_semantic_inputs", lambda value, db_prefix: {})
+    monkeypatch.setattr(subject, "_semantic_input_identities", lambda value: semantic_identities)
+    monkeypatch.setattr(
+        subject,
+        "_direct_l2_series_for_family",
+        lambda value, family: {
+            code: SimpleNamespace(validation_input_manifest={"schema_version": "v2", "code": code}) for code in codes
+        },
+    )
+    selected_artifact = {
+        "status": "accepted",
+        "entries": [{"model_payload_sha256": model_hashes[code]} for code in codes],
+    }
+    monkeypatch.setattr(
+        subject,
+        "build_selected_level_artifact",
+        lambda frozen_selection, frozen_models, series, repeat: selected_artifact,
+    )
+    selected_path = tmp_path / "selected.json"
+    monkeypatch.setattr(subject, "_write_b3_p6_selected_level_artifact", lambda root, value: selected_path)
+    monkeypatch.setattr(subject, "read_b3_selected_level_artifact", lambda *args, **kwargs: selected_artifact)
+    monkeypatch.setattr(subject, "_git_commit", lambda: "b" * 40)
+    monkeypatch.setattr(
+        subject,
+        "select_level_restart",
+        lambda *args, **kwargs: pytest.fail("zero-refit replay must not execute D5"),
+    )
+    train_identities = {
+        "dataset_manifest_hash": "a" * 64,
+        "mapping_manifest_hash": "b" * 64,
+        "calendar_manifest_hash": "c" * 64,
+        "l2_stock_fact_manifest_hash": "d" * 64,
+        "feature_domain_policy_sha256": policy_sha256,
+    }
+    child_paths = []
+    child_hashes = []
+    for index, process_identity in enumerate(("fresh_process_1", "fresh_process_2"), start=1):
+        child_hash = str(index) * 64
+        child_path = tmp_path / f"{process_identity}.json"
+        subject._write_diagnostic_report(
+            child_path,
+            {"single_pass_receipt_sha256": child_hash, **train_identities},
+        )
+        child_paths.append(str(child_path))
+        child_hashes.append(child_hash)
+    parent_report = {
+        "schema_version": subject.B3_P6_REPORT_SCHEMA,
+        "receipt_sha256": "e" * 64,
+        "fresh_process_receipt_paths": child_paths,
+        "fresh_process_receipt_hashes": child_hashes,
+        **train_identities,
+        **semantic_identities,
+        "producer_commit": "a" * 40,
+    }
+    args = SimpleNamespace(db_env_prefix="TDX_DB_", output_root=str(tmp_path))
+
+    report = subject.run_b3_p6_d6_zero_refit_replay(args, request, parent_report)
+
+    assert report["status"] == "accepted"
+    assert report["fit_performed"] is False
+    assert report["refit_count"] == 0
+    assert report["selection_reexecuted"] is False
+    assert report["selected_seed_unchanged"] is True
+    assert report["model_parameter_hashes_unchanged"] is True
+    assert report["selected_model_payload_hashes"] == [model_hashes[code] for code in codes]
+    assert report["ready_artifact_write_performed"] is False
+    assert report["phase2_ready"] is False
+
+    child_drift = {**parent_report, "fresh_process_receipt_hashes": ["0" * 64, child_hashes[1]]}
+    with pytest.raises(StateModelSetError, match="fresh-process receipt hash differs"):
+        subject.run_b3_p6_d6_zero_refit_replay(args, request, child_drift)
+
+    monkeypatch.setattr(
+        subject,
+        "_semantic_input_identities",
+        lambda value: {**semantic_identities, "semantic_calendar_manifest_hash": "0" * 64},
+    )
+    with pytest.raises(StateModelSetError, match="semantic source authority drifted"):
+        subject.run_b3_p6_d6_zero_refit_replay(args, request, parent_report)
 
 
 def test_p6_child_failure_receipt_never_claims_selection_or_ready(tmp_path) -> None:
@@ -2423,6 +4199,212 @@ def test_p6_mode_isolation_rejects_legacy_full_child_combination(tmp_path) -> No
 
     with pytest.raises(StateModelSetError, match="cannot be combined"):
         subject._require_b3_p6_mode_isolation(args, p6_parent=True, p6_child=False)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        *subject.B3_HIDDEN_CHILD_ARGUMENTS,
+        "_b3_p6_autocycle_l2_child",
+        "b3_process_identity",
+        "b3_d1_producer_commit",
+        "b3_d1_current_authority_sha256",
+        "b3_d1_historical_reference_sha256",
+    ],
+)
+def test_p6_zero_refit_mode_isolation_rejects_every_child_identity(field) -> None:
+    values = {
+        **{name: False for name in subject.B3_HIDDEN_CHILD_ARGUMENTS},
+        "_b3_p6_autocycle_l2_child": False,
+        "b3_process_identity": "",
+        "b3_d1_producer_commit": "",
+        "b3_d1_current_authority_sha256": "",
+        "b3_d1_historical_reference_sha256": "",
+    }
+    values[field] = True if field.startswith("_") else "x"
+
+    with pytest.raises(StateModelSetError, match="cannot be combined with another child mode"):
+        subject._require_b3_p6_zero_refit_mode_isolation(SimpleNamespace(**values))
+
+
+def test_p6_zero_refit_cli_rejects_hidden_diagnostic_child_before_dispatch(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_state_model_set.py",
+            "--request",
+            "ignored.json",
+            "--output-root",
+            ".",
+            "--env-file",
+            "ignored.env",
+            "--db-env-prefix",
+            "TEST_",
+            "--b3-p6-d6-zero-refit-output",
+            "zero.json",
+            "--b3-p6-parent-report",
+            "parent.json",
+            "--_c008-b3-diag02-child",
+        ],
+    )
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: {})
+    monkeypatch.setattr(
+        subject,
+        "diagnose_c008_b3_diag02",
+        lambda *args, **kwargs: pytest.fail("hidden diagnostic child must not shadow zero-refit"),
+    )
+
+    assert subject.main() == 1
+    assert "cannot be combined with another child mode" in capsys.readouterr().err
+
+
+def test_train_stability_cli_requires_both_frozen_authorities(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_state_model_set.py",
+            "--request",
+            "ignored.json",
+            "--output-root",
+            ".",
+            "--env-file",
+            "ignored.env",
+            "--db-env-prefix",
+            "TEST_",
+            "--b3-train-stability-diagnostic-output",
+            "stability.json",
+            "--b3-p6-parent-report",
+            "parent.json",
+        ],
+    )
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: {})
+    monkeypatch.setattr(
+        subject,
+        "run_b3_train_stability_diagnostic",
+        lambda *args, **kwargs: pytest.fail("incomplete authority must fail before dispatch"),
+    )
+
+    assert subject.main() == 1
+    assert "--b3-p6-zero-refit-report" in capsys.readouterr().err
+
+
+def test_train_stability_cli_writes_and_reads_only_compact_report(monkeypatch, tmp_path, capsys) -> None:
+    output = tmp_path / "stability.json"
+    parent = tmp_path / "parent.json"
+    zero = tmp_path / "zero.json"
+    parent.write_text("{}", encoding="utf-8")
+    zero.write_text("{}", encoding="utf-8")
+    report = subject.build_b3_train_stability_source_drift(
+        error=StateModelSetError("source drift"),
+        diagnostic_producer_commit="f" * 40,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_state_model_set.py",
+            "--request",
+            "request.json",
+            "--output-root",
+            str(tmp_path),
+            "--env-file",
+            "ignored.env",
+            "--db-env-prefix",
+            "TEST_",
+            "--b3-train-stability-diagnostic-output",
+            str(output),
+            "--b3-p6-parent-report",
+            str(parent),
+            "--b3-p6-zero-refit-report",
+            str(zero),
+        ],
+    )
+    monkeypatch.setattr(subject, "_read_env_file", lambda path: None)
+    monkeypatch.setattr(subject, "_load_request", lambda path: {})
+    monkeypatch.setattr(subject, "run_b3_train_stability_diagnostic", lambda *args: report)
+
+    assert subject.main() == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["profile_count"] == 0
+    assert receipt["fit_performed"] is False
+    assert receipt["selection_performed"] is False
+    assert receipt["d6_executed"] is False
+    assert output.read_bytes() == subject.canonical_json_bytes(report) + b"\n"
+
+
+@pytest.mark.parametrize("mode", ["c008", "c008_b1", "diag02", "diag04"])
+def test_historical_c008_entrypoints_use_dense_diagnostic_constructor(monkeypatch, mode) -> None:
+    producer = "c" * 40
+    request = {
+        "producer_commit": producer,
+        "families": [
+            {
+                "family": "legacy_covfix",
+                "feature_names": list(BASE_FEATURES),
+                "preprocess_family": "identity",
+            }
+        ],
+    }
+    inputs = {
+        "source_spec": SimpleNamespace(universe_key="frozen-universe"),
+        "database": {},
+        "panel": object(),
+        "constituents": {},
+        "dataset_manifest": {},
+        "mapping_manifest": {},
+        "feature_definition": {},
+        "l2_stock_fact_manifest": {},
+    }
+    spec = SimpleNamespace(
+        family="legacy_covfix",
+        family_version="v1",
+        candidate_ids=(),
+        train_start=date(2022, 1, 1),
+        train_end=date(2024, 6, 30),
+        validation_start=date(2024, 7, 1),
+        validation_end=date(2025, 3, 31),
+        preprocess_family="identity",
+    )
+    dense_series = {"801010.SI": object()}
+    monkeypatch.setattr(subject, "_git_commit", lambda: producer)
+    monkeypatch.setattr(subject, "_load_l1_source_inputs", lambda *args, **kwargs: inputs)
+    monkeypatch.setattr(subject, "_family_spec", lambda *args, **kwargs: spec)
+    monkeypatch.setattr(subject, "_frozen_input_identity", lambda value: {})
+    monkeypatch.setattr(
+        subject,
+        "build_l1_training_series",
+        lambda *args, **kwargs: pytest.fail("historical diagnostics must not consume the D6 calendar constructor"),
+    )
+    monkeypatch.setattr(
+        subject,
+        "build_legacy_dense_diagnostic_series",
+        lambda *args, **kwargs: dense_series,
+    )
+    for name in (
+        "diagnose_l1_seed_grid",
+        "diagnose_l1_seed_grid_b1",
+        "diagnose_l1_seed_grid_b3_diag02",
+        "diagnose_l1_seed_grid_b3_diag04",
+    ):
+        monkeypatch.setattr(
+            subject,
+            name,
+            lambda series, **kwargs: {"dense_constructor_used": series is dense_series},
+        )
+    monkeypatch.setattr(subject, "diagnostic_runtime_versions", lambda: {})
+    monkeypatch.setattr(subject, "c008_b3_diag02_fixed_numeric_environment", lambda: {})
+    monkeypatch.setattr(subject, "c008_b3_diag04_fixed_numeric_environment", lambda: {})
+
+    if mode == "c008":
+        report = subject.diagnose_c008(request, db_prefix="TEST_")
+    elif mode == "c008_b1":
+        report = subject.diagnose_c008_b1(request, db_prefix="TEST_")
+    elif mode == "diag02":
+        report = subject.diagnose_c008_b3_diag02(request, db_prefix="TEST_")
+    else:
+        report = subject.diagnose_c008_b3_diag04(request, db_prefix="TEST_")
+    assert report["families"][0]["diagnostic"]["dense_constructor_used"] is True
 
 
 def test_p6_second_process_timeout_preserves_first_receipt_without_selection(monkeypatch, tmp_path) -> None:

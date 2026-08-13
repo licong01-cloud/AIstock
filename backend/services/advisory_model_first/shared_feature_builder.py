@@ -30,7 +30,11 @@ def build_advisory_feature_matrix(
     benchmark_daily: pd.DataFrame,
     suspend_rows: pd.DataFrame,
     hmm_states: pd.DataFrame,
+    component_roles: dict[str, str] | None = None,
+    incomplete_candidate_policy: str = "drop_date",
 ) -> FeatureBuildResult:
+    if incomplete_candidate_policy not in {"drop_date", "drop_candidate"}:
+        raise ValueError("incomplete_candidate_policy must be drop_date or drop_candidate")
     panel = candidate_daily.join(candidate_static, how="left").sort_index()
     panel_features = _build_instrument_features(panel)
     panel_features.index = panel_features.index.set_names(["decision_as_of_trade_date", "instrument"])
@@ -57,14 +61,26 @@ def build_advisory_feature_matrix(
     rows["parent_rank_pct"] = 1.0 - (
         pd.to_numeric(rows["selection_effective_rank"], errors="coerce") - 1
     ) / denominator
-    rows["lstm_raw_score"] = rows[f"raw__{LSTM_LEG_ID}"]
-    rows["lstm_norm_score"] = rows[f"norm__{LSTM_LEG_ID}"]
-    rows["lstm_leg_rank"] = rows[f"rank__{LSTM_LEG_ID}"]
-    rows["lstm_weight"] = rows[f"weight__{LSTM_LEG_ID}"]
-    rows["fund_raw_score"] = rows[f"raw__{FUND_LEG_ID}"]
-    rows["fund_norm_score"] = rows[f"norm__{FUND_LEG_ID}"]
-    rows["fund_leg_rank"] = rows[f"rank__{FUND_LEG_ID}"]
-    rows["fund_weight"] = rows[f"weight__{FUND_LEG_ID}"]
+    roles = component_roles or {"lstm": LSTM_LEG_ID, "fund": FUND_LEG_ID}
+    if set(roles) != {"lstm", "fund"} or any(not str(value).strip() for value in roles.values()):
+        raise AdvisoryModelFirstError(
+            "candidate component roles are invalid",
+            reason_code="ADVISORY_MODEL_CANDIDATE_PROJECTION_UNSUPPORTED",
+        )
+    for role in ("lstm", "fund"):
+        component_id = str(roles[role]).strip()
+        required = tuple(f"{prefix}__{component_id}" for prefix in ("raw", "norm", "rank", "weight"))
+        missing = sorted(set(required) - set(rows.columns))
+        if missing:
+            raise AdvisoryModelFirstError(
+                "candidate component projection is incomplete",
+                reason_code="ADVISORY_MODEL_CANDIDATE_GROUP_INCOMPLETE",
+                context={"role": role, "component_id": component_id, "missing_columns": missing},
+            )
+        rows[f"{role}_raw_score"] = rows[f"raw__{component_id}"]
+        rows[f"{role}_norm_score"] = rows[f"norm__{component_id}"]
+        rows[f"{role}_leg_rank"] = rows[f"rank__{component_id}"]
+        rows[f"{role}_weight"] = rows[f"weight__{component_id}"]
     rows["leg_norm_score_gap"] = rows["lstm_norm_score"] - rows["fund_norm_score"]
     rows["leg_rank_gap"] = rows["lstm_leg_rank"] - rows["fund_leg_rank"]
     rows["leg_direction_agreement"] = (
@@ -110,12 +126,18 @@ def build_advisory_feature_matrix(
     required_missing = rows[list(REQUIRED_FEATURE_COLUMNS)].isna().any(axis=1)
     required_missing_by_column = rows[list(REQUIRED_FEATURE_COLUMNS)].isna()
     by_date = required_missing.groupby(level="decision_as_of_trade_date").any()
-    valid_dates = by_date.index[~by_date]
+    modelable_by_date = (~required_missing).groupby(level="decision_as_of_trade_date").sum()
+    valid_dates = (
+        by_date.index[~by_date]
+        if incomplete_candidate_policy == "drop_date"
+        else modelable_by_date.index[modelable_by_date > 0]
+    )
     coverage = pd.DataFrame(
         {
             "decision_as_of_trade_date": by_date.index,
             "candidate_count": rows.groupby(level="decision_as_of_trade_date").size().reindex(by_date.index).to_numpy(),
             "required_missing_row_count": required_missing.groupby(level="decision_as_of_trade_date").sum().to_numpy(),
+            "modelable_candidate_count": modelable_by_date.reindex(by_date.index).to_numpy(),
             "required_missing_columns": [
                 sorted(
                     required_missing_by_column.loc[
@@ -128,7 +150,15 @@ def build_advisory_feature_matrix(
                 )
                 for decision in by_date.index
             ],
-            "status": np.where(by_date.to_numpy(), "unavailable", "available"),
+            "status": np.where(
+                (
+                    ~by_date.to_numpy()
+                    if incomplete_candidate_policy == "drop_date"
+                    else modelable_by_date.reindex(by_date.index).to_numpy() > 0
+                ),
+                "available",
+                "unavailable",
+            ),
         }
     )
     output_columns = [*IDENTITY_COLUMNS, *MODEL_FEATURE_COLUMNS]
@@ -139,7 +169,10 @@ def build_advisory_feature_matrix(
             reason_code="ADVISORY_MODEL_QE_SCHEMA_MISMATCH",
             context={"missing_columns": missing_output},
         )
-    features = rows.loc[rows.index.get_level_values("decision_as_of_trade_date").isin(valid_dates), output_columns]
+    eligible = rows.index.get_level_values("decision_as_of_trade_date").isin(valid_dates)
+    if incomplete_candidate_policy == "drop_candidate":
+        eligible &= ~required_missing.to_numpy()
+    features = rows.loc[eligible, output_columns]
     return FeatureBuildResult(features=features.reset_index(drop=True), coverage=coverage)
 
 

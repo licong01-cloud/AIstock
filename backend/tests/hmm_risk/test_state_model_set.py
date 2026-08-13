@@ -106,6 +106,90 @@ def test_causal_forward_filter_prefix_is_invariant_and_rejects_bad_parameters() 
         subject.causal_forward_posteriors(observations, **{**kwargs, "covars": np.zeros((3, 1))})
 
 
+def test_causal_forward_filter_preserves_sparse_prior_mass_without_emission_underflow() -> None:
+    posteriors = subject.causal_forward_posteriors(
+        np.asarray([[0.0], [0.0]], dtype=np.float64),
+        startprob=np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+        transmat=np.asarray(
+            [
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        ),
+        means=np.asarray([[1000.0], [-1000.0], [0.0]], dtype=np.float64),
+        covars=np.ones((3, 1), dtype=np.float64),
+    )
+
+    assert np.array_equal(
+        posteriors,
+        np.asarray(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            dtype=np.float64,
+        ),
+    )
+    assert np.array_equal(posteriors.sum(axis=1), np.ones(2, dtype=np.float64))
+
+
+def test_causal_forward_filter_matches_probability_space_for_moderate_values() -> None:
+    observations = np.asarray([[-0.5], [0.25], [0.75]], dtype=np.float64)
+    startprob = np.asarray([0.5, 0.3, 0.2], dtype=np.float64)
+    transmat = np.asarray(
+        [[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]],
+        dtype=np.float64,
+    )
+    means = np.asarray([[-1.0], [0.0], [1.0]], dtype=np.float64)
+    covars = np.asarray([[0.3], [0.4], [0.5]], dtype=np.float64)
+    expected = []
+    prior = startprob
+    for observation in observations:
+        likelihood = np.exp(
+            -0.5 * (np.log(2.0 * np.pi * covars) + ((observation[None, :] - means) ** 2) / covars).sum(axis=1)
+        )
+        posterior = prior * likelihood
+        posterior /= posterior.sum()
+        expected.append(posterior)
+        prior = posterior @ transmat
+
+    actual = subject.causal_forward_posteriors(
+        observations,
+        startprob=startprob,
+        transmat=transmat,
+        means=means,
+        covars=covars,
+    )
+
+    assert np.allclose(actual, np.asarray(expected), atol=1e-15, rtol=1e-14)
+
+
+def test_calendar_causal_filter_uses_transition_only_without_compressing_time() -> None:
+    posteriors = subject.causal_forward_posteriors_calendar(
+        np.asarray([[0.0], [1.0]], dtype=np.float64),
+        (True, False, True),
+        startprob=np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+        transmat=np.asarray([[0.5, 0.5, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64),
+        means=np.asarray([[0.0], [1.0], [2.0]], dtype=np.float64),
+        covars=np.ones((3, 1), dtype=np.float64),
+    )
+
+    assert posteriors.shape == (3, 3)
+    assert np.allclose(posteriors[1], posteriors[0] @ np.asarray([[0.5, 0.5, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]))
+    assert np.allclose(posteriors.sum(axis=1), 1.0)
+    with pytest.raises(subject.StateModelSetError, match="rows differ"):
+        subject.causal_forward_posteriors_calendar(
+            np.asarray([[0.0]], dtype=np.float64),
+            (True, False, True),
+            startprob=np.asarray([1.0, 0.0, 0.0], dtype=np.float64),
+            transmat=np.eye(3, dtype=np.float64),
+            means=np.asarray([[0.0], [1.0], [2.0]], dtype=np.float64),
+            covars=np.ones((3, 1), dtype=np.float64),
+        )
+
+
 def _training_series(feature_count: int = 7) -> dict[str, subject.L1TrainingSeries]:
     output = {}
     for index in range(subject.EXPECTED_L1_COUNT):

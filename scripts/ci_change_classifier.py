@@ -14,12 +14,16 @@ if str(ROOT) not in sys.path:
 from scripts import issue_flow as flow  # noqa: E402
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
-CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
+CLOSE_SYNC_STATUSES = {
+    "fixed",
+    "fixed_source_pending_user_restart",
+    "closed",
+    "verified",
+}
 WORKFLOW_BUG_METADATA_STATUSES = {
     "open",
     "in_progress",
     "triaged",
-    "fixed_source_pending_user_restart",
     *CLOSE_SYNC_STATUSES,
 }
 DOCS_ONLY_PREFIXES = ("docs/",)
@@ -71,6 +75,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".codex/skills/verify-aistock-feature/SKILL.md",
     ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
     "backend/tests/scripts/test_aistock_feature_workflow.py",
     "backend/tests/scripts/test_bug_registry_metadata_check.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
@@ -108,6 +113,9 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
     "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "scripts/aistock_bug_id_allocator.py",
+    "scripts/aistock_mcp_server.py",
     "scripts/aistock_feature_workflow.py",
     "scripts/aistock_validation_catalog_integrity.py",
     "scripts/aistock_guardrail_scan.py",
@@ -134,7 +142,15 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     ".github/workflows/test.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
     ".github/workflows/pr-quality.yml": ("backend/tests/scripts/test_issue_flow_pr_quality.py",),
     ".github/workflows/semgrep.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
-    "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow.py",),
+    "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow_fast.py",),
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py": (
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    ),
+    "scripts/aistock_bug_id_allocator.py": (
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    ),
+    "scripts/aistock_mcp_server.py": ("backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",),
     "scripts/aistock_feature_workflow.py": ("backend/tests/scripts/test_aistock_feature_workflow.py",),
     "scripts/aistock_guardrail_scan.py": ("backend/tests/test_aistock_guardrail_scan.py",),
     "docs/standards/aistock_development_standard_v1.5_20260523.md": ("backend/tests/test_aistock_guardrail_scan.py",),
@@ -270,13 +286,20 @@ def _workflow_test_targets(paths: list[str]) -> list[str]:
     targets: list[str] = []
     for path in paths:
         path_targets = list(WORKFLOW_TEST_TARGETS_BY_FILE.get(path, ()))
-        if path.startswith("backend/tests/") and path.endswith(".py"):
+        if (
+            path.startswith("backend/tests/")
+            and path.endswith(".py")
+            and not (
+                path == "backend/tests/scripts/test_aistock_issue_workflow.py"
+                and "scripts/aistock_issue_workflow.py" in paths
+            )
+        ):
             path_targets.append(path)
         if path in WORKFLOW_AUTHORITY_FILES or path.startswith(WORKFLOW_AUTHORITY_PREFIXES):
             path_targets.extend(
                 [
                     "backend/tests/scripts/test_issue_flow.py",
-                    "backend/tests/scripts/test_aistock_issue_workflow.py",
+                    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
                 ]
             )
         for target in path_targets:
@@ -484,7 +507,7 @@ def classify_changed_files(
             workflow_bug_metadata_files.append(rel_path)
 
     if close_sync_metadata_only:
-        reasons.append("only fixed/closed/verified BUG JSON metadata changed; backend matrix can be skipped")
+        reasons.append("only close-sync BUG JSON metadata changed; backend matrix can be skipped")
 
     workflow_fast_files = [
         path

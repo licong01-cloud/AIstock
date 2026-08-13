@@ -1,7 +1,7 @@
 # AIstock 项目开发规范 v1.5
 
 > 版本：1.5
-> 更新日期：2026-08-01
+> 更新日期：2026-08-13
 > 状态：唯一人类可读开发规范
 > 权威文件：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 > 机器派生目录：`docs/standards/aistock_development_standard_v1.5_20260523.yaml`
@@ -15,7 +15,7 @@
 - YAML 是本文的机器派生目录，用于扫描和流水线；规则含义以本文为准，稳定 rule ID 供工具引用。
 - 规范路径保持稳定。修订直接更新本文和同版本 YAML，历史由 Git 和 `docs/standards/archive/` 保存。
 - `docs/standards/README.md` 只维护权威入口和场景路由。
-- 规则变更与对应测试在同一 PR 中提交；客户端入口在合入后由 `install-client` 同步。
+- 规则变更与对应测试在同一 PR 中提交；仅当 `.codex/**` 或 `.claude/**` 客户端入口发生变化时，合入后才由单一 owner 执行一次 `install-client` 同步。
 
 ## 2. 统一执行流程
 
@@ -40,12 +40,37 @@
 3. 失败返回结构化错误或 `partial/failed`，日志包含输入摘要、失败阶段和复现线索。
 4. PR 证据记录 changed files、直接测试、scope check、生产依赖门禁和剩余风险。
 
+#### 2.3.1 控制效果、阶段与计数
+
+1. 每个稳定控制 ID 在机器目录中只出现一次。`rules` 保存可自动扫描或已有机器入口的控制；`manual_review_controls` 保存纯人工控制或组合人工验收，组合人工验收可以引用已有 machine evidence，但禁止宣称其人工语义已被自动化，也禁止为同一 ID 建立第二份记录。
+2. 每个控制明确记录 `effect` 和 `enforcement_phase`：
+   - `block` 只阻断该控制适用的任务类型、文件范围和阶段，不升级为全任务或全仓门禁；
+   - `warn` 产生可见警告和修复建议，但不阻断当前阶段；
+   - `advisory` 只提供效率或执行建议，不进入完成、PR、合入或运行时判定。
+3. `enforcement_phase` 使用 `changed_file_scan`、`task_planning`、`interactive_execution`、`pr_readiness`、`issue_lifecycle`、`design_delivery`、`standard_change`、`production_activation` 或 `release_deployment`。条件控制在不适用时记为 `noop`，禁止伪装成 pending gate。
+4. CI job、页面 check、测试计划和门禁分别计数。skipped job、warning、advisory、delegated plan、诊断 evidence publisher 和 telemetry collector 都不是合并硬门禁。
+5. 失败证据发布器保持 best-effort、可见和可审计，但禁止成为 `CI verdict` 的依赖或用自身故障覆盖真实测试结论。分支保护只消费聚合后的确定性质量判定。
+
 ### 2.4 PR、合入和 aftercare
 
 1. PR 前运行本任务的最小本地 gate，并执行 BUG `finish --plan-only` 或 feature design validation。
 2. CI 只执行变更模块的必要计划和全仓通用轻量检查；深度回归由 Validation Center/CI/nightly 去重执行。
-3. 合入后同步 BUG/GitHub 状态、根目录 `main`、task worktree/branch 和客户端入口。
+3. 合入后同步 BUG/GitHub 状态、根目录 `main` 和已授权的 task worktree/branch；客户端入口未变化时明确记为 `noop`，只有 `.codex/**` 或 `.claude/**` 变化才进入单一 owner 的客户端同步流程。
 4. 生产 DDL、依赖安装、运行时激活分别报告为 `noop`、`applied_and_verified` 或 `pending`；代码合入与运行时激活是两个独立结果。
+5. 授权按动作和目标独立判断，但不按消息次数拆分。同一条用户指令可以明确打包源码合入、精确命名的 source worktree/local branch/remote branch cleanup，以及已通过 DEV 验证的具体生产目标与 migration；授权包完整时，合入后直接继续这些已授权动作，禁止再次索要同一授权。
+6. 裸 `merge` 授权仍只覆盖源码合入和必要 BUG/metadata 同步，不推导 cleanup、DDL/DML、依赖、激活、进程控制或删除。打包动作逐项执行和报告；某一项前置条件失败只阻断该项，不伪造成功，也不扩大其他授权。
+
+<a id="rule-worktree-cleanup-evidence-001"></a>
+### 2.5 [WORKTREE-CLEANUP-EVIDENCE-001] worktree 临时证据终结与清理
+
+1. worktree 内的完整测试日志、coverage/XML、Context Pack、PR 草稿、`tmp/**`、任务本地 `var/research_assistant/**`、Python/前端缓存和与 canonical root 内容一致的本地配置只属于临时执行产物；PR、BUG 或 Validation History 已保存与当前 commit 绑定的紧凑结构化 receipt 后，不长期保留这些副本。
+2. 正式 receipt 至少保存 schema、receipt ID、commit/merge identity、验证种类或 plan、命令摘要、结果、时间和必要 digest；禁止用完整日志或 ignored 文件目录替代 receipt。Validation Center archive 成功后，worktree 内的源 artifact 立即转为可清理；archive 失败保持可见并阻断该 artifact 的清理，但不覆盖真实测试结论。规则生效前已经 `fixed`/`verified` 的历史 BUG，可用同时包含 PR、fix commit 和非空验证摘要的关闭记录作为一次性兼容终结依据；新记录禁止继续生成这种非结构化 receipt。
+3. runtime `post-restart-verify` receipt 在 close-sync 消费前属于受保护证据。close-sync 通过后必须把 expected/observed identity、runtime proof、contract/catalog/probe digest、receipt SHA-256 和 gate 保存为不含响应正文的 durable summary；只有 durable summary 完整时，worktree-local receipt 才可清理。等待用户重启不要求保留 source worktree；后续 receipt 写入 canonical/registry workflow root 并由 close-sync 固化。
+4. 已明确授权的精确 cleanup 在合入/close-sync 后连续执行，无需再次授权：先重新验证 PR/HEAD、干净状态、活动进程引用和路径边界，再生成 ignored artifact manifest；`transient` 可在同一次 cleanup 内删除，`protected` 或 `unknown` 必须 fail closed。裸 merge 仍不推导 cleanup。
+5. cleanup 只能删除 manifest 中已分类且位于目标 worktree 内的精确 transient roots；禁止 `git clean`、通配符删除、越界路径、跟随 symlink/junction 到目标外或在 manifest 漂移后继续。与 canonical root 不同的本地配置、未固化 receipt、未知文件和活动进程引用均阻断删除。
+6. 位于整体 ignored 资产树内的运行产物，只有精确分类器验证固定目录、有限且完整的文件名集合、非权威 schema、文件大小上限、无额外文件、无 tracked file、无 symlink/junction/reparse point，并继续通过活动进程引用与 manifest 漂移门禁后，才可标为 `transient`。任一条件不满足仍归为 `unknown`；禁止为兼容单类运行产物而放宽其父资产树。
+7. 执行顺序固定为：evidence finalization → ignored/process manifest → transient purge → 普通 `git worktree remove` → local branch delete → remote branch SHA 校验与 delete → 路径/注册/local/remote 四态读回。任一步失败只报告已完成状态并停止后续破坏性动作，禁止伪造 `cleanup_done`。
+8. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
 
 ## 3. 风险与工作量分级
 
@@ -139,7 +164,7 @@ Windows backend 通过 worker API、AIstock-owned artifact store、入库 payloa
 <a id="rule-prod-ddl-001"></a>
 ### 6.3 [PROD-DDL-001] Production DDL gate
 
-数据库 DDL 和 DML 先在现有 DEV 数据库完成验证。验证环境沿用该 DEV 数据库；生产库备份、导出或快照属于独立运维事项。生产 DDL/DML 在用户明确授权具体生产目标后执行。DEV 验证、生产授权、迁移执行和回读校验分别记录；无 schema 变化时 `production_ddl_gate=noop`。schema 变更以 migration/bootstrap 文件交付，并在获授权的生产目标执行 preflight、DDL/DML、前后 schema/comment 校验和 API/scheduler smoke。
+数据库 DDL 和 DML 先在现有 DEV 数据库完成验证。验证环境沿用该 DEV 数据库；生产库备份、导出或快照属于独立运维事项，不是 migration 前置门禁。生产 DDL/DML 在用户明确授权具体生产目标和 migration 后执行；该授权可以与 merge/cleanup 写在同一条指令中，完整授权包不需要合入后二次确认。执行顺序必须是 DEV receipt 已通过、不可变 merge commit 已确认进入目标分支、生产 target preflight、DDL/DML apply、前后 schema/comment 回读及 API/scheduler smoke。DEV 验证、生产授权、merge commit、迁移执行和回读校验分别记录；任一前置条件失败时仅将生产项记为 `blocked`/`pending`，不回滚或隐瞒已完成的源码合入。无 schema 变化时 `production_ddl_gate=noop`。
 
 <a id="rule-err-fallback-001"></a>
 ### 6.4 [ERR-FALLBACK-001] 错误可见性
@@ -228,7 +253,7 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 <a id="rule-tool-rtk-001"></a>
 ### 6.20 [TOOL-RTK-001] RTK 输出压缩
 
-交互开发窗口在 RTK 可用且支持目标子命令时，优先使用 `rtk git`、`rtk rg`、`rtk pytest`、`rtk nox`、`rtk npm` 等包装降低命令输出和上下文消耗。`Get-Content`、`Test-Path`、PowerShell 控制语句或 RTK 不支持的调用允许直接执行，并记录基于能力缺失的回退原因；RTK 缺失、不支持或未受信任时任务继续，`rtk trust` 只在用户明确授权后执行。CI 使用原始确定性命令，不要求安装 RTK。workflow 仅在调用方已提供 telemetry 时记录 `rtk_used/version/fallback`；telemetry 缺失时直接记录 `not_recorded`，不增加探测命令。
+交互开发窗口对 RTK 已支持且预计产生高输出的命令必须使用 `rtk git`、`rtk rg`、`rtk pytest`、`rtk nox`、`rtk npm` 等包装。只有目标调用不受支持、RTK 不可用、诊断需要精确原始输出，或包装器首次执行失败/改变语义时才直接回退，并用一句话记录原因；禁止为同一能力重复探测。未受信任的项目自定义 filter 只是不加载该 filter，不影响继续使用 RTK 内置包装；禁止任何窗口自行执行 `rtk trust`。RTK 缺失或回退产生可见警告但不阻断任务、PR、合入或 CI；CI 使用原始确定性命令且不安装 RTK。workflow 仅消费调用方已有的 `rtk_used/version/fallback` telemetry，缺失时记录 `not_recorded`，不新增探测命令或门禁。
 
 <a id="rule-backend-restart-ownership-001"></a>
 ### 6.21 [BACKEND-RESTART-OWNERSHIP-001] 后端重启所有权
@@ -249,11 +274,12 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 - T2/T3 按明确依赖加载设计和跨模块契约。
 - 命令输出采用 compact receipt；完整 JSON 只用于失败诊断、状态恢复或持久证据。
 - 精确搜索无结果时记录 scoped miss reason，再扩大搜索范围。
+- 分支 changed-file 范围以 merge base（如 `origin/main...HEAD`）为准，再合并当前 worktree、index 与未跟踪文件；禁止用会把主线新增文件反向计入任务范围的 two-dot stale-branch diff。
 
 <a id="rule-issue-batch-context-001"></a>
 ### 7.2 [ISSUE-BATCH-CONTEXT-001] 同模块批处理
 
-同模块、相同风险、相容 scope 和相同验证链的 issue 使用一个 batch worktree。Batch Context Pack 记录 issue 列表、共享文件、逐 issue 验收、提交映射、共享测试和拆分条件。
+同模块、相同风险、相容 scope 和相同验证链的 issue 在安全时可优先使用一个 batch worktree；不批处理时记录简短 split reason。Batch Context Pack 记录 issue 列表、共享文件、逐 issue 验收、提交映射、共享测试和拆分条件。
 
 <a id="rule-prod-dependency-001"></a>
 ### 7.3 [PROD-DEPENDENCY-001] Production dependency gate
@@ -272,11 +298,14 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 
 ### 8.2 客户端同步
 
-- `.codex/**` 或 `.claude/**` 合入后，由一个明确 owner 对列入本次任务的目标执行完整 `install-client --apply`，随后使用 `verify-clients --workflow-only` 校验全部 workflow lane；禁止多个窗口无差别重复安装。
+- 普通任务直接执行选定 lane 的 `run`、`resume`、`submit-bug` 或对应入口，不把 `doctor` 作为通用前置门禁。仅在客户端/bootstrap 状态未知、workflow/client 代码刚变更、恢复状态 stale/conflict，或用户明确要求诊断时运行一次 `doctor`；失败后按具体检查修复，禁止反复全量 doctor。
+- `.codex/**` 或 `.claude/**` 合入后，由一个明确 owner 在 canonical root fast-forward 完成后、close-sync 或 cleanup 开始前，从与 `origin/main` 对齐且客户端权威路径无未提交改动的 canonical `main`，对本次实际变化的 lane 以及同一明确目标 profile 中已检测到的存量 stale lane 一次性执行 `install-client --apply`，随后使用 `verify-clients --workflow-only` 校验 router 与全部目标 lane；`merge-finalizer --sync-root --apply` 自动执行该步骤，全部 hash 无漂移时为 `noop`，不再把存量漂移留给业务窗口逐 lane 阻断，也不要求转交命令或二次授权。canonical root 的无关路径状态不构成客户端门禁，禁止把 task worktree、未合入 commit 或旧 checkout 作为全局客户端安装源，禁止多个窗口无差别重复安装。
 - 官方隔离 Codex 或单一客户端目标必须显式传入 `--codex-home <path>`/`--claude-home <path>` 和对应的 `--skip-*`。客户端 profile 只在本次任务明确列入目标时更新。
-- 在途任务仅在 `doctor` 报告客户端 stale、窗口恢复或当前 lane 需要新入口时，使用 `verify-clients --workflow-only --selected-lane <lane>` 校验 router 与当前 lane。router/当前 lane stale 才阻断；无关 lane stale 只告警并记录待同步，禁止升级为全局任务门禁。
-- `install-client --selected-lane <lane>` 只同步 router 与该 lane，hash 相同时跳过，并通过跨进程锁与 staged replacement 避免并发窗口观察到部分安装。一次目标限定同步失败后停止并报告，禁止循环重装。
+- 在途任务仅在 `doctor` 报告客户端 stale、窗口恢复或当前 lane 需要新入口时，使用 canonical root 内的 CLI 执行 `verify-clients --workflow-only --selected-lane <lane>` 校验 router 与当前 lane，禁止从旧 task worktree 调用旧版 workflow CLI。校验以已合入的 canonical `main` 为入口权威并分别报告 checkout relation 与 profile status：task checkout 落后、领先或包含未合入入口变更只产生 advisory，禁止把已符合合入权威的客户端判为 stale；router/当前 lane 的 profile drift 才阻断，无关 lane drift 只告警并记录待同步。
+- profile drift 阻断时，CLI 必须返回 `request_single_owner_sync`、明确目标 profile 和 canonical-owner command；活动任务窗口禁止自行从 worktree 安装。唯一 owner 完成一次同步后，其他窗口只复验；`continue_without_install` 明确禁止重复安装或重启。
+- `install-client --selected-lane <lane>` 只从已合入的 canonical `main` 同步 router 与该 lane；canonical `main` 未与 `origin/main` 对齐，或 `.codex/skills`、`.claude/commands`、workflow CLI 存在未提交改动时 fail closed，无关路径 dirty 不阻断。hash 相同时跳过，并通过跨进程锁、authority identity 复验与 staged replacement 避免并发窗口观察到部分安装。一次目标限定同步失败后停止并报告，禁止循环重装或从不同版本 worktree 相互覆盖。
 - 同步完成且 `restart_recommended=false` 时，旧窗口重新读取 router 与当前 lane 后继续；只有 CLI 明确建议重启或客户端 UI 仍加载旧入口时才重启客户端。客户端同步不授权任何后端进程控制。
+- 授权以动作和目标为边界，而不是以消息次数为边界。同一条用户指令可明确打包 merge、精确 cleanup targets 和具体 production target/migration；完整授权包在合入后连续执行，无需二次询问，并分别报告结果。裸 PR/branch merge 授权仍只覆盖源码合入和必要 BUG/metadata 同步；禁止据此推导 source cleanup、生产 DDL/DML、依赖安装、runtime/frontend/client 激活、程序控制或任何删除。
 
 ## 9. 完成报告
 

@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 
 import backend.main as backend_main
 import backend.services.simulation_runtime as simulation_runtime_module
+from backend.services.quantevolver.qe_log_store import QELiveLogConfigurationError
 
 
 class _FakeQmtClient:
@@ -21,7 +23,12 @@ class _FakeQmtClient:
         self._calls.append(("qmt_disconnect", tuple(), {}))
 
 
-def _run_lifespan(monkeypatch, *, enable_sim_runtime: bool) -> list[tuple[str, tuple, dict]]:
+def _run_lifespan(
+    monkeypatch,
+    *,
+    enable_sim_runtime: bool,
+    qe_store_error: Exception | None = None,
+) -> list[tuple[str, tuple, dict]]:
     calls: list[tuple[str, tuple, dict]] = []
     scheduler = simulation_runtime_module.simulation_lifecycle_background_scheduler
 
@@ -37,6 +44,13 @@ def _run_lifespan(monkeypatch, *, enable_sim_runtime: bool) -> list[tuple[str, t
     monkeypatch.setenv("ENABLE_SIMULATION_RUNTIME_SCHEDULER", "1" if enable_sim_runtime else "0")
 
     monkeypatch.setattr(backend_main, "init_db_pool", lambda *args, **kwargs: calls.append(("init_db_pool", args, kwargs)))
+    def _get_qe_live_log_store():
+        calls.append(("qe_live_log_store_init", tuple(), {}))
+        if qe_store_error is not None:
+            raise qe_store_error
+        return None
+
+    monkeypatch.setattr(backend_main, "get_qe_live_log_store", _get_qe_live_log_store)
     monkeypatch.setattr(backend_main, "close_db_pool", lambda *args, **kwargs: calls.append(("close_db_pool", args, kwargs)))
     monkeypatch.setattr(backend_main, "ingestion_scheduler", SimpleNamespace(start=lambda *args, **kwargs: calls.append(("ingestion_start", args, kwargs)), shutdown=lambda *args, **kwargs: calls.append(("ingestion_shutdown", args, kwargs))))
     monkeypatch.setattr(backend_main, "strategy_scheduler", SimpleNamespace(start=lambda *args, **kwargs: calls.append(("strategy_start", args, kwargs)), shutdown=lambda *args, **kwargs: calls.append(("strategy_shutdown", args, kwargs))))
@@ -56,6 +70,9 @@ def _run_lifespan(monkeypatch, *, enable_sim_runtime: bool) -> list[tuple[str, t
 
 def test_main_lifespan_does_not_autostart_simulation_scheduler_by_default(monkeypatch) -> None:
     calls = _run_lifespan(monkeypatch, enable_sim_runtime=False)
+    assert calls.index(("qe_live_log_store_init", tuple(), {})) < calls.index(
+        ("init_db_pool", tuple(), {"minconn": 5, "maxconn": 40})
+    )
     assert ("simulation_scheduler_start", tuple(), {}) not in calls
     # The scheduler is still shut down during lifespan cleanup, but that is
     # an idempotent no-op when it was never started.
@@ -66,3 +83,17 @@ def test_main_lifespan_opt_in_starts_and_stops_simulation_scheduler(monkeypatch)
     calls = _run_lifespan(monkeypatch, enable_sim_runtime=True)
     assert ("simulation_scheduler_start", tuple(), {}) in calls
     assert ("simulation_scheduler_shutdown", tuple(), {"wait": False}) in calls
+
+
+def test_main_lifespan_fails_closed_before_db_for_invalid_qe_live_log_root(monkeypatch) -> None:
+    error = QELiveLogConfigurationError(
+        "qe_live_log_state_root_missing",
+        "external state root is required",
+    )
+
+    with pytest.raises(QELiveLogConfigurationError, match="qe_live_log_state_root_missing"):
+        _run_lifespan(
+            monkeypatch,
+            enable_sim_runtime=False,
+            qe_store_error=error,
+        )

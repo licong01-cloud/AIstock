@@ -28,6 +28,7 @@ from .routers import (
     analysis,
     cloud_screening,
     config_env,
+    dataset_releases,
     execution_policy,
     external_research,
     strategy_governance,
@@ -96,6 +97,7 @@ from .qlib_exporter.router import router as qlib_router
 from .ingestion.tdx_scheduler import scheduler as ingestion_scheduler
 from .schedulers.strategy_scheduler import scheduler as strategy_scheduler
 from .infra.qmt_client import get_qmt_client_singleton
+from .services.quantevolver.qe_log_store import get_qe_live_log_store
 
 
 def _report_bootstrap_failure(event: str, exc: BaseException) -> None:
@@ -291,6 +293,12 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:
         _report_nonfatal_lifecycle_failure("APPLICATION_LOGGER_SETUP_FAILED", exc)
 
+    # QE live logs are runtime state, never source-tree artifacts. Construct
+    # the process store before any backend service starts so a missing or
+    # unsafe state root fails startup instead of being swallowed by a lazy SSE
+    # fallback later.
+    get_qe_live_log_store()
+
     init_db_pool(minconn=5, maxconn=40)
     _configure_external_research_provider()
 
@@ -340,6 +348,16 @@ async def _lifespan(app: FastAPI):
         from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
         paper_trading_v2_scheduler.start()
 
+    enable_advisory_forward = (os.getenv("AISTOCK_ADVISORY_FORWARD_SCHEDULER_ENABLED") or "").strip().lower()
+    logging.getLogger("uvicorn.error").info(
+        "Advisory forward scheduler autostart=%s interval=%s",
+        enable_advisory_forward in {"1", "true", "yes", "y", "on"},
+        os.getenv("AISTOCK_ADVISORY_FORWARD_POLL_SECONDS") or "300",
+    )
+    if enable_advisory_forward in {"1", "true", "yes", "y", "on"}:
+        from .services.advisory_forward.scheduler import advisory_forward_scheduler
+        advisory_forward_scheduler.start()
+
     # Unified LocalSim/MiniQMT simulation lifecycle scheduler is opt-in. It
     # follows the committed simulation-runtime path and never starts by default.
     enable_sim_runtime = (os.getenv("ENABLE_SIMULATION_RUNTIME_SCHEDULER") or "").strip().lower()
@@ -375,131 +393,17 @@ async def _lifespan(app: FastAPI):
         from .routers.hmm_training import init_hmm_scheduler
         init_hmm_scheduler()
 
-    # Evolution loop timer scanner (fallback for webhook-based flow)
+    # QE lifecycle recovery is owned by one event-driven coordinator.  It
+    # coalesces local submit/callback wakes and performs one aggregate read-only
+    # safety sweep per minute for restart/cross-process recovery.
     shutdown_event = asyncio.Event()
-    scan_task = None
-    disable_evo_scanner = (os.getenv("DISABLE_EVOLUTION_SCANNER") or "").strip().lower()
-    if disable_evo_scanner not in {"1", "true", "yes", "y", "on"}:
-        async def _timer_scan_loop(stop_event: asyncio.Event):
-            from .services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
-            scanner = AutoEvolutionScheduler()
-            scan_interval = int((os.getenv("QE_EVOLUTION_SCAN_INTERVAL_SEC") or "60").strip() or "60")
-            while not stop_event.is_set():
-                try:
-                    await scanner.scan_running_loops()
-                except Exception as e:
-                    logging.getLogger("aistock.evolution_scanner").warning(f"Evolution scan error: {e}")
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
-                    break  # stop_event was set
-                except asyncio.TimeoutError:
-                    continue  # Normal timeout, run the next scan.
-
-        scan_task = asyncio.create_task(_timer_scan_loop(shutdown_event))
-
-    # One-off QE experiment scanner. This covers single-alpha and Multi-Alpha
-    # experiments whose browser/SSE session or RD-Agent callback did not update DB.
-    qe_exp_scan_task = None
-    disable_qe_exp_scanner = (os.getenv("DISABLE_QE_EXPERIMENT_SCANNER") or "").strip().lower()
-    if disable_qe_exp_scanner not in {"1", "true", "yes", "y", "on"}:
-        async def _qe_experiment_scan_loop(stop_event: asyncio.Event):
-            from .services.quantevolver.qe_experiment_status_scanner import QEExperimentStatusScanner
-            scan_interval = int((os.getenv("QE_EXPERIMENT_SCAN_INTERVAL_SEC") or "30").strip() or "30")
-            batch_size = int((os.getenv("QE_EXPERIMENT_SCAN_BATCH_SIZE") or "50").strip() or "50")
-            scanner = QEExperimentStatusScanner(batch_size=batch_size)
-            while not stop_event.is_set():
-                try:
-                    stats = await scanner.scan_once()
-                    if stats.get("checked") or stats.get("synced_terminal") or stats.get("errors"):
-                        logging.getLogger("aistock.qe_experiment_scanner").info(
-                            "QE experiment scan stats: %s", stats
-                        )
-                except Exception as e:
-                    logging.getLogger("aistock.qe_experiment_scanner").warning(
-                        "QE experiment scan error: %s", e, exc_info=True
-                    )
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
-                    break
-                except asyncio.TimeoutError:
-                    continue
-
-        qe_exp_scan_task = asyncio.create_task(_qe_experiment_scan_loop(shutdown_event))
-
-    qe_reservation_reconcile_task = None
-    async def _qe_reservation_reconcile_loop(stop_event: asyncio.Event):
-        from .services.quantevolver.qe_active_execution_capacity import (
-            QEExecutionReservationReconciler,
-        )
-
-        interval = int(
-            (os.getenv("QE_EXECUTION_RESERVATION_SCAN_INTERVAL_SEC") or "15").strip()
-            or "15"
-        )
-        reconciler = QEExecutionReservationReconciler()
-        while not stop_event.is_set():
-            try:
-                stats = await reconciler.scan_once()
-                if stats.get("checked") or stats.get("errors"):
-                    logging.getLogger("aistock.qe_execution_capacity").info(
-                        "QE execution reservation scan stats: %s",
-                        stats,
-                    )
-            except Exception as e:
-                logging.getLogger("aistock.qe_execution_capacity").error(
-                    "QE execution reservation scan failed: %s",
-                    e,
-                    exc_info=True,
-                )
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=max(1, interval))
-                break
-            except asyncio.TimeoutError:
-                continue
-
-    qe_reservation_reconcile_task = asyncio.create_task(
-        _qe_reservation_reconcile_loop(shutdown_event),
-        name="qe-execution-reservation-reconciler",
+    from .services.quantevolver.qe_reconciliation_coordinator import (
+        run_qe_reconciliation_coordinator,
     )
 
-    async def _qe_long_trend_reconcile_loop(stop_event: asyncio.Event):
-        from .services.quantevolver.long_trend_evaluation_phase2 import QELongTrendPhase2Service
-        from .services.qe_archive.long_trend_repository import QELongTrendEvaluationResultRepository
-
-        service = QELongTrendPhase2Service(result_repository=QELongTrendEvaluationResultRepository())
-        logger = logging.getLogger("aistock.qe_long_trend_phase2")
-        while not stop_event.is_set():
-            try:
-                results = await service.reconcile_nonterminal(limit=100)
-                failures = [
-                    item
-                    for item in results
-                    if item.get("status") in {"platform_error", "remote_state_unknown"}
-                    or item.get("recovery_persisted") is False
-                ]
-                if results:
-                    logger.info(
-                        "QELT_RECONCILE_COMPLETED count=%s failures=%s results=%s",
-                        len(results),
-                        len(failures),
-                        results,
-                    )
-            except Exception as exc:
-                logger.error(
-                    "QELT_RECONCILE_FAILED reason_code=%s error=%s",
-                    getattr(exc, "reason_code", type(exc).__name__),
-                    exc,
-                    exc_info=True,
-                )
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=15)
-                break
-            except asyncio.TimeoutError:
-                continue
-
-    qe_long_trend_reconcile_task = asyncio.create_task(
-        _qe_long_trend_reconcile_loop(shutdown_event),
-        name="qe-long-trend-reconciler",
+    qe_reconciliation_task = asyncio.create_task(
+        run_qe_reconciliation_coordinator(shutdown_event),
+        name="qe-reconciliation-coordinator",
     )
 
     qe_archive_worker_task = None
@@ -543,20 +447,10 @@ async def _lifespan(app: FastAPI):
     finally:
         # ── SHUTDOWN ──
         shutdown_event.set()
-        if scan_task is not None:
-            await _cancel_background_task(scan_task, task_name="evolution-scanner")
-        if qe_exp_scan_task is not None:
-            await _cancel_background_task(qe_exp_scan_task, task_name="qe-experiment-scanner")
-        if qe_reservation_reconcile_task is not None:
-            await _cancel_background_task(
-                qe_reservation_reconcile_task,
-                task_name="qe-execution-reservation-reconciler",
-            )
-        if qe_long_trend_reconcile_task is not None:
-            await _cancel_background_task(
-                qe_long_trend_reconcile_task,
-                task_name="qe-long-trend-reconciler",
-            )
+        await _cancel_background_task(
+            qe_reconciliation_task,
+            task_name="qe-reconciliation-coordinator",
+        )
         if qe_archive_worker_task is not None:
             await _cancel_background_task(qe_archive_worker_task, task_name="qe-archive-worker")
         if multi_alpha_durable_task is not None:
@@ -598,6 +492,11 @@ async def _lifespan(app: FastAPI):
             paper_trading_v2_scheduler.shutdown(wait=False)
         except Exception as exc:
             _report_nonfatal_lifecycle_failure("PAPER_V2_SCHEDULER_SHUTDOWN_FAILED", exc)
+        try:
+            from .services.advisory_forward.scheduler import advisory_forward_scheduler
+            advisory_forward_scheduler.shutdown(wait=False)
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure("ADVISORY_FORWARD_SCHEDULER_SHUTDOWN_FAILED", exc)
         try:
             from .services.simulation_runtime import simulation_lifecycle_background_scheduler
             simulation_lifecycle_background_scheduler.shutdown(wait=False)
@@ -655,6 +554,7 @@ def create_app() -> FastAPI:
     app.include_router(news.router, prefix="/api/v1")
     app.include_router(settings.router, prefix="/api/v1")
     app.include_router(config_env.router, prefix="/api/v1")
+    app.include_router(dataset_releases.router, prefix="/api/v1")
     app.include_router(smart_monitor.router, prefix="/api/v1")
     app.include_router(rdagent.router, prefix="/api/v1")
     app.include_router(rdagent_templates.router, prefix="/api/v1")

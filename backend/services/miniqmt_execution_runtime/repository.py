@@ -799,7 +799,15 @@ class PostgresMiniQMTExecutionRuntimeRepository:
 
     def _read_quote_event_schema_gate(self, reader: Callable[[Any], Any]) -> str:
         with self._conn() as conn:
-            return str(reader(conn).production_ddl_gate)
+            event_receipt = reader(conn)
+        if getattr(event_receipt, "schema_state", None) != "successor_verified":
+            return "pending"
+        from .kernel_repository import PostgresMiniQMTKernelRepository
+        from .kernel_repository_schema import validate_kernel_schema_preflight_readback
+
+        full_readback = PostgresMiniQMTKernelRepository(conn_factory=self._conn_factory).preflight_schema()
+        validate_kernel_schema_preflight_readback(full_readback)
+        return "applied_and_verified"
 
     def next_event_sequence(self, runtime_id: str) -> int:
         runtime = self.get_runtime(runtime_id)

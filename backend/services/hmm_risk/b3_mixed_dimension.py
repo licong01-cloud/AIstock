@@ -18,6 +18,7 @@ from backend.services.hmm_risk.state_model_set import (
 
 MIXED_DIMENSION_CONTRACT_VERSION = "hmm_risk_c008_b3_d1_d5_compat_a_v1"
 MIXED_LEVEL_SCHEMA_VERSION = "hmm_risk_b3_level_model_set_v2_projection"
+MIXED_LEVEL_SCHEMA_VERSION_D6_NA = "hmm_risk_b3_level_model_set_v3_projection_d6_na"
 MIXED_REPEAT_SCHEMA_VERSION = "hmm_risk_b3_level_repeat_receipt_v2_projection"
 MIXED_TRAINING_ENTRY_SCHEMA_VERSION = "hmm_risk_b3_training_entry_receipt_v2_projection"
 MIXED_MODEL_SCHEMA_VERSION = "hmm_risk_b3_inactive_dimension_model_entry_v1"
@@ -451,8 +452,15 @@ def validate_projection_receipt(
 
 
 def build_level_dimension_identity(
-    entries: Sequence[Mapping[str, Any]], *, family: str, level: str, expected_sector_codes: Sequence[str]
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    family: str,
+    level: str,
+    expected_sector_codes: Sequence[str],
+    schema_version: str = MIXED_LEVEL_SCHEMA_VERSION,
 ) -> dict[str, Any]:
+    if schema_version not in {MIXED_LEVEL_SCHEMA_VERSION, MIXED_LEVEL_SCHEMA_VERSION_D6_NA}:
+        raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
     codes = tuple(sorted(str(value) for value in expected_sector_codes))
     ordered: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -495,7 +503,7 @@ def build_level_dimension_identity(
     if uses_mixed_dimension_level(family, level) and histogram != {"19": 1, "20": 130}:
         raise StateModelSetError(INACTIVE_DIMENSION_REASON_CODE)
     return {
-        "schema_version": MIXED_LEVEL_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "contract_version": MIXED_DIMENSION_CONTRACT_VERSION,
         "feature_count": len(ALL_CORE_FEATURES),
         "likelihood_feature_count_histogram": histogram,

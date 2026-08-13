@@ -59,6 +59,7 @@ from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerS
 from backend.services.miniqmt_execution_runtime import (
     MiniQMTExecutionRuntimeKind,
 )
+from backend.services.miniqmt_execution_runtime.plugin_contracts import BrokerCommandOutboxStatusV1
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
@@ -123,7 +124,14 @@ from .miniqmt_quote_activation import (
     MiniQMTKernelProductSyncError,
     build_miniqmt_quote_ingress_activation_from_env,
 )
-from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
+from .repository import (
+    SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY,
+    SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY,
+    InMemorySimulationRuntimeRepository,
+    SimulationRuntimeRepository,
+    inspect_simulation_retry_backoff,
+    simulation_retry_json_safe_evidence,
+)
 from .selection import StrategyPackageSelectionResult, StrategyPackageSelectionService
 from .service import StrategyRuntimeReleaseService
 from .tca_eod_observation import TcaEodObservationHook
@@ -152,6 +160,12 @@ DEFAULT_MINIQMT_SUBMIT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MINIQMT_RECONCILE_TIMEOUT_SECONDS = 120.0
 DEFAULT_MINIQMT_TICK_DRIVER_TIMEOUT_SECONDS = 30.0
 _MINIQMT_QUOTE_CONTEXT_PREPARE_FAILURE_STAGE = "MINIQMT_QUOTE_CONTEXT_PREPARE_FAILED"
+_SIMULATION_BINDING_RETRY_KEY = "BINDING_FAILED_RETRYABLE"
+_SIMULATION_RECOVERY_RETRY_KEY_PREFIX = "RECOVERY:"
+_SIMULATION_RETRY_BASE_DELAY_SECONDS = 60
+_SIMULATION_RETRY_MAX_DELAY_SECONDS = 3600
+_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS = 600
+_MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT = 100
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
 _POST_CLOSE_RECONCILE_TIME = time(15, 0)
@@ -456,7 +470,12 @@ class ProductionSimulationRunContextProvider:
             "ready": True,
             "localsim_state_source": "paper_v2_portfolio",
             "miniqmt_state_source": "broker_authoritative_positions_with_strategy_slot_projection",
-            "market_price_source": "market.kline_daily_raw_latest_close",
+            "planning_market_price_source": "market.kline_daily_raw_latest_close",
+            "existing_plan_market_data_policy": {
+                "planning_market_tables_reloaded": False,
+                "localsim": "frozen_plan_tradability+TDX_REALTIME_CAUSAL_MINUTE",
+                "miniqmt": f"frozen_plan_tradability+{MINIQMT_REALTIME_QUOTE_SOURCE}",
+            },
             "pre_trade_tradability_gate": {
                 "source": type(self._pre_trade_tradability_provider).__name__,
                 "localsim_same_day_quote_required": False,
@@ -523,6 +542,85 @@ class ProductionSimulationRunContextProvider:
             },
         )
 
+    def load_existing_plan_context(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        plan: ExecutionPlan,
+        trade_date: date,
+        as_of_time: datetime | None,
+    ) -> SimulationRunContext:
+        """Load execution services without re-reading planning market tables.
+
+        Tradability is immutable plan evidence after plan creation.  Active
+        LocalSIM gets causal marks from its TDX minute broker; active MiniQMT
+        gets marks from the broker quote surface used by B0_QUOTE_V2.
+        """
+
+        frozen_pre_trade_tradability = self._frozen_pre_trade_tradability(plan)
+        if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+            return self._load_local_sim_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
+                as_of_time=as_of_time,
+                require_realtime_quote=False,
+                planning_market_data=False,
+                frozen_pre_trade_tradability=frozen_pre_trade_tradability,
+            )
+        if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
+            return self._load_miniqmt_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
+                planning_market_data=False,
+                frozen_pre_trade_tradability=frozen_pre_trade_tradability,
+            )
+        raise DataUnavailableError(
+            "ProductionSimulationRunContextProvider: unsupported broker backend for existing plan",
+            context={
+                "reason_code": "SIMULATION_EXISTING_PLAN_BROKER_BACKEND_UNSUPPORTED",
+                "broker_backend": binding.broker_backend.value,
+                "binding_id": binding.binding_id,
+                "plan_id": plan.plan_id,
+            },
+        )
+
+    @staticmethod
+    def _frozen_pre_trade_tradability(plan: ExecutionPlan) -> dict[str, dict[str, Any]]:
+        statuses: dict[str, dict[str, Any]] = {}
+        for decision in plan.trading_rule_decisions:
+            raw = decision.price_limit_rule.get("pre_trade_tradability")
+            if raw is None:
+                continue
+            if not isinstance(raw, dict):
+                raise DataUnavailableError(
+                    "frozen execution plan pre-trade tradability carrier is invalid",
+                    context={
+                        "reason_code": "SIMULATION_FROZEN_PRE_TRADE_TRADABILITY_INVALID",
+                        "plan_id": plan.plan_id,
+                        "decision_id": decision.decision_id,
+                        "symbol": decision.symbol,
+                        "actual_type": type(raw).__name__,
+                    },
+                )
+            candidate = deepcopy(raw)
+            previous = statuses.get(decision.symbol)
+            if previous is not None and previous != candidate:
+                raise DataUnavailableError(
+                    "frozen execution plan contains conflicting pre-trade tradability evidence",
+                    context={
+                        "reason_code": "SIMULATION_FROZEN_PRE_TRADE_TRADABILITY_CONFLICT",
+                        "plan_id": plan.plan_id,
+                        "symbol": decision.symbol,
+                        "existing": previous,
+                        "received": candidate,
+                    },
+                )
+            statuses[decision.symbol] = candidate
+        return dict(sorted(statuses.items()))
+
     def _load_local_sim_context(
         self,
         *,
@@ -531,6 +629,8 @@ class ProductionSimulationRunContextProvider:
         trade_date: date,
         as_of_time: datetime | None = None,
         require_realtime_quote: bool | None = None,
+        planning_market_data: bool = True,
+        frozen_pre_trade_tradability: dict[str, dict[str, Any]] | None = None,
     ) -> SimulationRunContext:
         portfolio_id = self._resolve_local_sim_portfolio_id(binding)
         paper_repository = self._build_dependency(
@@ -565,26 +665,34 @@ class ProductionSimulationRunContextProvider:
                     "trade_date": trade_date.isoformat(),
                 },
             ) from exc
-        prices = self._load_prices_for_positions(
-            positions,
-            trade_date,
-            strategy_id=binding.strategy_id,
-            binding_id=binding.binding_id,
+        prices = (
+            self._load_prices_for_positions(
+                positions,
+                trade_date,
+                strategy_id=binding.strategy_id,
+                binding_id=binding.binding_id,
+            )
+            if planning_market_data
+            else {}
         )
         market_data_source = self._resolve_local_sim_market_data_source(
             portfolio=portfolio,
             trade_date=trade_date,
             as_of_time=as_of_time,
         )
-        pre_trade_tradability = self._load_pre_trade_tradability(
-            symbols=list(positions),
-            trade_date=trade_date,
-            require_realtime_quote=bool(
-                require_realtime_quote
-                and market_data_source == MinuteDataSource.TDX_REALTIME
-                and self._position_loader is None
-            ),
-            as_of_time=as_of_time,
+        pre_trade_tradability = (
+            self._load_pre_trade_tradability(
+                symbols=list(positions),
+                trade_date=trade_date,
+                require_realtime_quote=bool(
+                    require_realtime_quote
+                    and market_data_source == MinuteDataSource.TDX_REALTIME
+                    and self._position_loader is None
+                ),
+                as_of_time=as_of_time,
+            )
+            if planning_market_data
+            else deepcopy(frozen_pre_trade_tradability or {})
         )
         manifest, manifest_identity_diagnostics = self._resolve_local_sim_manifest(
             portfolio_manifest=getattr(portfolio, "frozen_manifest", None),
@@ -614,14 +722,22 @@ class ProductionSimulationRunContextProvider:
             trade_date=trade_date,
             as_of_time=as_of_time,
         )
-        target_total_equity, target_equity_context = _build_dynamic_target_equity_basis(
-            binding=binding,
-            cash=cash,
-            frozen_cash=0.0,
-            positions=positions,
-            prices=prices,
-            source="paper_v2_portfolio_dynamic_equity",
-        )
+        if planning_market_data:
+            target_total_equity, target_equity_context = _build_dynamic_target_equity_basis(
+                binding=binding,
+                cash=cash,
+                frozen_cash=0.0,
+                positions=positions,
+                prices=prices,
+                source="paper_v2_portfolio_dynamic_equity",
+            )
+        else:
+            target_total_equity = None
+            target_equity_context = {
+                "schema_version": "simulation_existing_plan_context_v1",
+                "source": "frozen_execution_plan",
+                "planning_market_data_reloaded": False,
+            }
         return SimulationRunContext(
             current_positions=positions,
             current_prices=prices,
@@ -687,6 +803,8 @@ class ProductionSimulationRunContextProvider:
         runtime_release: StrategyRuntimeRelease,
         binding: SimulationReleaseBinding,
         trade_date: date,
+        planning_market_data: bool = True,
+        frozen_pre_trade_tradability: dict[str, dict[str, Any]] | None = None,
     ) -> SimulationRunContext:
         qmt_repository = self._qmt_ledger_repository or self._build_dependency(
             self._qmt_repository_factory,
@@ -698,6 +816,7 @@ class ProductionSimulationRunContextProvider:
             self._position_loader is None
             or self._managed_order_service_factory is None
             or self._qmt_sync_service_factory is None
+            or not planning_market_data
         )
         qmt_client = self._qmt_client_factory() if need_qmt_client else None
         try:
@@ -746,19 +865,28 @@ class ProductionSimulationRunContextProvider:
                     "trade_date": trade_date.isoformat(),
                 },
             ) from exc
-        prices = self._load_prices_for_positions(
-            positions,
-            trade_date,
-            strategy_id=binding.strategy_id,
-            binding_id=binding.binding_id,
-        )
-        pre_trade_tradability = self._load_miniqmt_pre_trade_tradability(
-            symbols=list(positions),
-            trade_date=trade_date,
-            binding=binding,
-            qmt_client=qmt_client,
-            require_realtime_quote=self._position_loader is None and trade_date == date.today(),
-        )
+        if planning_market_data:
+            prices = self._load_prices_for_positions(
+                positions,
+                trade_date,
+                strategy_id=binding.strategy_id,
+                binding_id=binding.binding_id,
+            )
+            pre_trade_tradability = self._load_miniqmt_pre_trade_tradability(
+                symbols=list(positions),
+                trade_date=trade_date,
+                binding=binding,
+                qmt_client=qmt_client,
+                require_realtime_quote=self._position_loader is None and trade_date == date.today(),
+            )
+        else:
+            prices = self._load_miniqmt_runtime_marks(
+                symbols=list(positions),
+                trade_date=trade_date,
+                binding=binding,
+                qmt_client=qmt_client,
+            )
+            pre_trade_tradability = deepcopy(frozen_pre_trade_tradability or {})
         manifest = self._load_strategy_package_manifest(
             runtime_release=runtime_release,
             binding=binding,
@@ -788,14 +916,22 @@ class ProductionSimulationRunContextProvider:
         )
         cash = float(account.cash)
         frozen_cash = float(account.frozen_cash)
-        target_total_equity, target_equity_context = _build_dynamic_target_equity_basis(
-            binding=binding,
-            cash=cash,
-            frozen_cash=frozen_cash,
-            positions=positions,
-            prices=prices,
-            source="miniqmt_strategy_slot_dynamic_equity",
-        )
+        if planning_market_data:
+            target_total_equity, target_equity_context = _build_dynamic_target_equity_basis(
+                binding=binding,
+                cash=cash,
+                frozen_cash=frozen_cash,
+                positions=positions,
+                prices=prices,
+                source="miniqmt_strategy_slot_dynamic_equity",
+            )
+        else:
+            target_total_equity = None
+            target_equity_context = {
+                "schema_version": "simulation_existing_plan_context_v1",
+                "source": MINIQMT_REALTIME_QUOTE_SOURCE,
+                "planning_market_data_reloaded": False,
+            }
         return SimulationRunContext(
             current_positions=positions,
             current_prices=prices,
@@ -820,6 +956,66 @@ class ProductionSimulationRunContextProvider:
             market_data_source=MinuteDataSource.MINIQMT_REALTIME.value,
             pre_trade_tradability=pre_trade_tradability,
         )
+
+    def _load_miniqmt_runtime_marks(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        binding: SimulationReleaseBinding,
+        qmt_client: Any | None,
+    ) -> dict[str, float]:
+        normalized_symbols = sorted({str(symbol).strip() for symbol in symbols if str(symbol).strip()})
+        if not normalized_symbols:
+            return {}
+        quote_fetcher = self._build_miniqmt_quote_fetcher(
+            qmt_client=qmt_client,
+            binding=binding,
+            trade_date=trade_date,
+        )
+        quotes = quote_fetcher(normalized_symbols)
+        marks: dict[str, float] = {}
+        invalid: list[dict[str, Any]] = []
+        for symbol in normalized_symbols:
+            quote = quotes.get(symbol)
+            if not isinstance(quote, dict):
+                invalid.append({"symbol": symbol, "reason_code": "MINIQMT_RUNTIME_QUOTE_MISSING"})
+                continue
+            kline = quote.get("K") if isinstance(quote.get("K"), dict) else {}
+            candidates = (
+                kline.get("Close"),
+                kline.get("close"),
+                quote.get("lastPrice"),
+                quote.get("last_price"),
+                quote.get("price"),
+                quote.get("close"),
+            )
+            price = None
+            for raw in candidates:
+                try:
+                    candidate = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(candidate) and candidate > 0:
+                    price = candidate
+                    break
+            if price is None:
+                invalid.append({"symbol": symbol, "reason_code": "MINIQMT_RUNTIME_QUOTE_PRICE_INVALID"})
+                continue
+            marks[symbol] = price
+        if invalid:
+            raise DataUnavailableError(
+                "MiniQMT existing-plan runtime marks are incomplete",
+                context={
+                    "reason_code": "MINIQMT_EXISTING_PLAN_RUNTIME_MARKS_INVALID",
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "trade_date": trade_date.isoformat(),
+                    "quote_source": MINIQMT_REALTIME_QUOTE_SOURCE,
+                    "invalid": invalid,
+                },
+            )
+        return marks
 
     def load_pre_trade_tradability(
         self,
@@ -2456,10 +2652,20 @@ class SimulationSchedulerBindingResult:
     error: dict[str, Any] | None = None
     lifecycle_diagnostic: dict[str, Any] | None = None
     data_source: str | None = None
+    retry_claim_token: str | None = None
+    retry_source_fingerprint: str | None = None
 
     @property
     def is_success(self) -> bool:
         return self.error is None
+
+
+class _BindingRetryAttemptError(Exception):
+    def __init__(self, *, original: Exception, claim_token: str, source_fingerprint: str) -> None:
+        super().__init__(str(original))
+        self.original = original
+        self.claim_token = claim_token
+        self.source_fingerprint = source_fingerprint
 
 
 @dataclass(frozen=True)
@@ -2503,11 +2709,23 @@ class SimulationSchedulerRunOnceResult:
 
     @property
     def stale_terminalized_count(self) -> int:
-        return sum(1 for item in self.stale_run_results if item.get("terminalization_succeeded") is not False)
+        return sum(
+            1
+            for item in self.stale_run_results
+            if item.get("status") != "RECOVERY_BACKOFF" and item.get("terminalization_succeeded") is not False
+        )
 
     @property
     def stale_recovery_failed_count(self) -> int:
-        return sum(1 for item in self.stale_run_results if item.get("terminalization_succeeded") is False)
+        return sum(
+            1
+            for item in self.stale_run_results
+            if item.get("status") != "RECOVERY_BACKOFF" and item.get("terminalization_succeeded") is False
+        )
+
+    @property
+    def recovery_backoff_count(self) -> int:
+        return sum(1 for item in self.stale_run_results if item.get("status") == "RECOVERY_BACKOFF")
 
 
 @dataclass
@@ -2887,6 +3105,7 @@ class SimulationLifecycleScheduler:
                 },
             )
         begin_epoch()
+        self._refresh_recovered_miniqmt_quote_activation_authorities()
         watchdog = getattr(activation, "watchdog_tick", None)
         if not callable(watchdog):
             raise RuntimeConfigInvalidError(
@@ -2906,15 +3125,598 @@ class SimulationLifecycleScheduler:
             failures = exc.context.get("ordered_failures")
             if not isinstance(failures, list) or any(
                 not isinstance(item, dict)
-                or type(item.get("runtime_id")) is not str
-                or not item["runtime_id"]
-                or type(item.get("binding_id")) is not str
-                or not item["binding_id"]
+                or not (
+                    (
+                        type(item.get("runtime_id")) is str
+                        and bool(item["runtime_id"])
+                        and item["runtime_id"] == item["runtime_id"].strip()
+                        and type(item.get("binding_id")) is str
+                        and bool(item["binding_id"])
+                        and item["binding_id"] == item["binding_id"].strip()
+                    )
+                    or self._is_shared_kernel_product_failure(item)
+                )
                 for item in failures
             ):
                 raise
             return tuple(dict(item) for item in failures)
         return ()
+
+    def _refresh_recovered_miniqmt_quote_activation_authorities(self) -> None:
+        activation = self._miniqmt_quote_ingress_activation
+        if activation is None:
+            return
+        recovered_factory = getattr(activation, "controller_factory", None)
+        recovered_adapter = getattr(activation, "quote_context_adapter", None)
+        if recovered_factory is not None:
+            if (
+                self._b0_quote_v2_controller_factory is not None
+                and self._b0_quote_v2_controller_factory is not recovered_factory
+            ):
+                raise RuntimeConfigInvalidError(
+                    "recovered MiniQMT quote activation conflicts with the scheduler controller factory",
+                    context={
+                        "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_AUTHORITY_CONFLICT",
+                        "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_LIFECYCLE",
+                    },
+                )
+            orchestrator_factory = getattr(self.orchestrator, "b0_quote_v2_controller_factory", None)
+            if orchestrator_factory is not None and orchestrator_factory is not recovered_factory:
+                raise RuntimeConfigInvalidError(
+                    "recovered MiniQMT quote activation conflicts with the orchestrator controller factory",
+                    context={
+                        "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_AUTHORITY_CONFLICT",
+                        "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_LIFECYCLE",
+                    },
+                )
+            self._b0_quote_v2_controller_factory = recovered_factory
+            self.orchestrator.b0_quote_v2_controller_factory = recovered_factory
+        if recovered_adapter is not None:
+            if (
+                self._miniqmt_quote_context_adapter is not None
+                and self._miniqmt_quote_context_adapter is not recovered_adapter
+            ):
+                raise RuntimeConfigInvalidError(
+                    "recovered MiniQMT quote activation conflicts with the scheduler quote context adapter",
+                    context={
+                        "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_AUTHORITY_CONFLICT",
+                        "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_LIFECYCLE",
+                    },
+                )
+            self._miniqmt_quote_context_adapter = recovered_adapter
+
+    @staticmethod
+    def _is_shared_kernel_product_failure(failure: Mapping[str, Any]) -> bool:
+        return (
+            failure.get("runtime_id") is None
+            and failure.get("binding_id") is None
+            and (
+                failure.get("operation") == "SUPERVISOR_WATCHDOG"
+                or str(failure.get("reason_code") or "").startswith("MINIQMT_SHARED_QUOTE_SUPERVISOR_")
+            )
+        )
+
+    @staticmethod
+    def _bounded_kernel_product_failure_evidence(
+        failures: tuple[dict[str, Any], ...],
+    ) -> dict[str, Any]:
+        normalized_all = simulation_retry_json_safe_evidence([dict(item) for item in failures])
+        if not isinstance(normalized_all, list) or any(not isinstance(item, dict) for item in normalized_all):
+            raise AssertionError("MiniQMT kernel-product failure evidence must normalize to ordered objects")
+        bounded = normalized_all[:_MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT]
+        omitted = normalized_all[_MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT:]
+        all_failures_sha256 = canonical_json_sha256(
+            {
+                "schema_version": "miniqmt_kernel_product_failure_set_identity_v1",
+                "ordered_failures": normalized_all,
+            }
+        )
+        omitted_failures_sha256 = (
+            canonical_json_sha256(
+                {
+                    "schema_version": "miniqmt_kernel_product_omitted_failure_identity_v1",
+                    "ordered_failures": omitted,
+                }
+            )
+            if omitted
+            else None
+        )
+        return {
+            "failure_count": len(normalized_all),
+            "evidence_limit": _MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT,
+            "truncated_failure_count": len(omitted),
+            "all_failures_sha256": all_failures_sha256,
+            "omitted_failures_sha256": omitted_failures_sha256,
+            "ordered_failures": bounded,
+        }
+
+    @staticmethod
+    def _unmatched_kernel_product_failure_result(
+        *,
+        failures: tuple[dict[str, Any], ...],
+        data_source: str,
+    ) -> SimulationSchedulerBindingResult | None:
+        if not failures:
+            return None
+        bounded_evidence = SimulationLifecycleScheduler._bounded_kernel_product_failure_evidence(failures)
+        failure_fingerprint = canonical_json_sha256(
+            {
+                "schema_version": "miniqmt_kernel_product_unmatched_failure_identity_v1",
+                "failure_count": bounded_evidence["failure_count"],
+                "all_failures_sha256": bounded_evidence["all_failures_sha256"],
+                "omitted_failures_sha256": bounded_evidence["omitted_failures_sha256"],
+            }
+        )
+        context = {
+            "schema_version": "miniqmt_kernel_product_unmatched_failure_v1",
+            "reason_code": "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_UNMATCHED",
+            "stage": "MINIQMT_K6_PRODUCT_SCHEDULER_TICK",
+            **bounded_evidence,
+            "failure_fingerprint": failure_fingerprint,
+            "broker_side_effect_state": "UNKNOWN",
+            "execution_gate": False,
+            "peer_bindings_attempted": True,
+        }
+        return SimulationSchedulerBindingResult(
+            binding_id="__miniqmt_kernel_product_unmatched__",
+            strategy_id="__scheduler__",
+            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+            status="MINIQMT_KERNEL_V2_UNMATCHED_FAILURE",
+            error={
+                "type": "MiniQMTKernelProductSyncError",
+                "message": ("KERNEL_V2 callback or exchange-clock failure did not map to the current binding page"),
+                "context": context,
+            },
+            lifecycle_diagnostic={
+                **context,
+                "alert": {
+                    "severity": "ERROR",
+                    "reason_code": "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_UNMATCHED",
+                    "failure_count": len(failures),
+                },
+            },
+            data_source=data_source,
+        )
+
+    def _kernel_product_attempt_authority(
+        self,
+        *,
+        runtime_id: str,
+        runtime: Any,
+        failure: Mapping[str, Any],
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        failure_generation = failure.get("lifecycle_generation")
+        failure_attempt_token = failure.get("attempt_token")
+        if (
+            type(failure_generation) is not int
+            or failure_generation <= 0
+            or type(failure_attempt_token) is not int
+            or failure_attempt_token <= 0
+        ):
+            return None, "FAILURE_ATTEMPT_AUTHORITY_MISSING"
+
+        activation = self._miniqmt_quote_ingress_activation
+        health_reader = getattr(activation, "health", None)
+        try:
+            health = health_reader() if callable(health_reader) else {}
+        except Exception:  # noqa: BLE001 - classify one owner readback without starving peer bindings.
+            return None, "RUNTIME_ATTEMPT_AUTHORITY_READ_FAILED"
+        runtime_rows = health.get("kernel_product_runtimes") if isinstance(health, Mapping) else None
+        runtime_health = (
+            next(
+                (
+                    dict(item)
+                    for item in runtime_rows
+                    if isinstance(item, Mapping) and item.get("runtime_id") == runtime_id
+                ),
+                None,
+            )
+            if isinstance(runtime_rows, list)
+            else None
+        )
+        ingress_retry = (
+            runtime_health.get("ingress_retry")
+            if isinstance(runtime_health, dict) and isinstance(runtime_health.get("ingress_retry"), Mapping)
+            else {}
+        )
+        current_generation = ingress_retry.get("lifecycle_generation")
+        if type(current_generation) is not int:
+            current_generation = getattr(runtime, "lifecycle_generation", None)
+        if type(current_generation) is not int or current_generation != failure_generation:
+            return None, "RUNTIME_LIFECYCLE_GENERATION_STALE"
+
+        successor_attempts: list[Mapping[str, Any]] = []
+        for collection_key in ("kernel_in_flight_attempts", "kernel_watchdog_workers"):
+            collection = health.get(collection_key) if isinstance(health, Mapping) else None
+            if isinstance(collection, list):
+                successor_attempts.extend(item for item in collection if isinstance(item, Mapping))
+        callback_workers = health.get("kernel_callback_workers") if isinstance(health, Mapping) else None
+        if isinstance(callback_workers, list):
+            successor_attempts.extend(
+                {
+                    "runtime_id": item.get("runtime_id"),
+                    "lifecycle_generation": item.get("lifecycle_generation"),
+                    "attempt_token": item.get("active_attempt_token"),
+                }
+                for item in callback_workers
+                if isinstance(item, Mapping) and item.get("active_attempt_token") is not None
+            )
+        if any(
+            item.get("runtime_id") == runtime_id
+            and item.get("lifecycle_generation") == failure_generation
+            and type(item.get("attempt_token")) is int
+            and item.get("attempt_token") != failure_attempt_token
+            for item in successor_attempts
+        ):
+            return None, "RUNTIME_ATTEMPT_SUCCESSOR_ACTIVE"
+
+        attempt_candidates: list[Mapping[str, Any]] = []
+        for candidate in (ingress_retry.get("active_failure"), ingress_retry.get("last_failure")):
+            if isinstance(candidate, Mapping):
+                attempt_candidates.append(candidate)
+        operations = ingress_retry.get("operations")
+        if isinstance(operations, Mapping):
+            for operation in operations.values():
+                if not isinstance(operation, Mapping):
+                    continue
+                for candidate in (operation.get("active_failure"), operation.get("last_failure")):
+                    if isinstance(candidate, Mapping):
+                        attempt_candidates.append(candidate)
+        runtime_attempt_token = getattr(runtime, "attempt_token", None)
+        attempt_matches = any(
+            candidate.get("runtime_id") == runtime_id
+            and candidate.get("lifecycle_generation") == failure_generation
+            and candidate.get("attempt_token") == failure_attempt_token
+            for candidate in attempt_candidates
+        ) or (type(runtime_attempt_token) is int and runtime_attempt_token == failure_attempt_token)
+        if not attempt_matches:
+            return None, "RUNTIME_ATTEMPT_TOKEN_STALE"
+        return (
+            {
+                "schema_version": "miniqmt_kernel_product_attempt_authority_v1",
+                "runtime_id": runtime_id,
+                "lifecycle_generation": failure_generation,
+                "attempt_token": failure_attempt_token,
+            },
+            None,
+        )
+
+    @staticmethod
+    def _kernel_carrier_field(carrier: Any, field_name: str) -> Any:
+        if isinstance(carrier, Mapping):
+            return carrier.get(field_name)
+        return getattr(carrier, field_name, None)
+
+    def _kernel_product_outbox_authority(
+        self,
+        *,
+        runtime: Any,
+        runtime_id: str,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        trade_date: date,
+    ) -> dict[str, Any]:
+        """Snapshot the exact K2 command chain without persisting command payloads."""
+
+        repository = getattr(runtime, "repository", None)
+        list_commands = getattr(repository, "list_recovery_outbox_commands", None)
+        read_chain = getattr(repository, "read_command_identity_chain", None)
+        base = {
+            "schema_version": "miniqmt_kernel_product_outbox_authority_v1",
+            "runtime_id": runtime_id,
+            "run_id": run.run_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "broker_account_id": binding.broker_account_id,
+            "trade_date": trade_date.isoformat(),
+            "execution_plan_id": plan.plan_id,
+            "execution_plan_hash": plan.plan_hash,
+            "evidence_limit": _MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT,
+        }
+        if not callable(list_commands) or not callable(read_chain):
+            unavailable = {
+                **base,
+                "complete": False,
+                "inventory_state": "REPOSITORY_AUTHORITY_UNAVAILABLE",
+                "command_count": 0,
+                "retained_command_count": 0,
+                "truncated_command_count_lower_bound": 0,
+                "identity_conflicts": ["repository_authority_unavailable"],
+                "commands": [],
+                "replacement_safe": False,
+                "ambiguous_command_count": 0,
+                "confirmed_broker_side_effect_count": 0,
+            }
+            return {**unavailable, "authority_sha256": canonical_json_sha256(unavailable)}
+
+        try:
+            commands = tuple(
+                list_commands(
+                    runtime_id=runtime_id,
+                    trade_date=trade_date,
+                    statuses=tuple(status.value for status in BrokerCommandOutboxStatusV1),
+                    limit=_MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT + 1,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - retain a fail-closed bounded receipt.
+            read_failed = {
+                **base,
+                "complete": False,
+                "inventory_state": "INVENTORY_READ_FAILED",
+                "command_count": 0,
+                "retained_command_count": 0,
+                "truncated_command_count_lower_bound": 0,
+                "identity_conflicts": ["inventory_read_failed"],
+                "read_error": {"type": type(exc).__name__, "message": str(exc)},
+                "commands": [],
+                "replacement_safe": False,
+                "ambiguous_command_count": 0,
+                "confirmed_broker_side_effect_count": 0,
+            }
+            return {**read_failed, "authority_sha256": canonical_json_sha256(read_failed)}
+
+        rows: list[dict[str, Any]] = []
+        conflicts: list[str] = []
+        for command in commands:
+            command_id = str(self._kernel_carrier_field(command, "command_id") or "").strip()
+            if not command_id:
+                conflicts.append("command_id_missing")
+                continue
+            try:
+                chain = read_chain(command_id)
+            except Exception as exc:  # noqa: BLE001 - one broken chain invalidates exact inventory authority.
+                conflicts.append(f"command_chain_read_failed:{command_id}:{type(exc).__name__}")
+                continue
+            chain_outbox = chain.get("outbox") if isinstance(chain, Mapping) else None
+            mapping = chain.get("mapping") if isinstance(chain, Mapping) else None
+            status_value = self._kernel_carrier_field(command, "status")
+            status = status_value.value if isinstance(status_value, Enum) else str(status_value or "")
+            row = {
+                "command_id": command_id,
+                "runtime_id": str(self._kernel_carrier_field(command, "runtime_id") or "").strip(),
+                "mapping_id": str(self._kernel_carrier_field(command, "mapping_id") or "").strip(),
+                "parent_intent_id": str(self._kernel_carrier_field(command, "parent_intent_id") or "").strip(),
+                "status": status,
+                "broker_called": self._kernel_carrier_field(command, "broker_called"),
+                "broker_order_id": self._kernel_carrier_field(command, "broker_order_id"),
+                "deterministic_client_order_ref": self._kernel_carrier_field(mapping, "deterministic_client_order_ref"),
+                "order_remark": self._kernel_carrier_field(mapping, "order_remark"),
+            }
+            chain_identity = {
+                "outbox_command_id": self._kernel_carrier_field(chain_outbox, "command_id"),
+                "mapping_runtime_id": self._kernel_carrier_field(mapping, "runtime_id"),
+                "mapping_mapping_id": self._kernel_carrier_field(mapping, "mapping_id"),
+                "mapping_parent_intent_id": self._kernel_carrier_field(mapping, "parent_intent_id"),
+            }
+            expected_chain_identity = {
+                "outbox_command_id": command_id,
+                "mapping_runtime_id": runtime_id,
+                "mapping_mapping_id": row["mapping_id"],
+                "mapping_parent_intent_id": row["parent_intent_id"],
+            }
+            if row["runtime_id"] != runtime_id:
+                conflicts.append(f"command_runtime_conflict:{command_id}")
+            if chain_identity != expected_chain_identity:
+                conflicts.append(f"command_identity_chain_conflict:{command_id}")
+            rows.append(row)
+
+        rows.sort(key=lambda item: item["command_id"])
+        normalized_rows = simulation_retry_json_safe_evidence(rows)
+        if not isinstance(normalized_rows, list):
+            raise AssertionError("MiniQMT outbox authority must normalize to a list")
+        retained = normalized_rows[:_MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT]
+        inventory_exhaustive = len(commands) <= _MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT
+        ambiguous_statuses = {
+            BrokerCommandOutboxStatusV1.CLAIMED.value,
+            BrokerCommandOutboxStatusV1.DISPATCHING.value,
+            BrokerCommandOutboxStatusV1.FAILED_RETRYABLE.value,
+            BrokerCommandOutboxStatusV1.OUTCOME_UNKNOWN.value,
+            BrokerCommandOutboxStatusV1.RECONCILING.value,
+        }
+        outstanding_statuses = {BrokerCommandOutboxStatusV1.PENDING.value, *ambiguous_statuses}
+        ambiguous_count = sum(
+            1
+            for row in rows
+            if row["status"] in ambiguous_statuses or row["broker_called"] is None and row["status"] != "PENDING"
+        )
+        outstanding_count = sum(1 for row in rows if row["status"] in outstanding_statuses)
+        confirmed_side_effect_count = sum(
+            1 for row in rows if row["broker_called"] is True or bool(row["broker_order_id"])
+        )
+        safe_terminal_nonacceptance = all(
+            row["broker_called"] is False and row["status"] == BrokerCommandOutboxStatusV1.FAILED_TERMINAL.value
+            for row in rows
+        )
+        complete = inventory_exhaustive and not conflicts and len(rows) == len(commands)
+        authority_payload = {
+            **base,
+            "complete": complete,
+            "inventory_state": "COMPLETE" if complete else "INCOMPLETE",
+            "command_count": len(rows),
+            "retained_command_count": len(retained),
+            "truncated_command_count_lower_bound": max(0, len(commands) - len(retained)),
+            "identity_conflicts": conflicts[:_MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT],
+            "commands": retained,
+            "commands_sha256": canonical_json_sha256(
+                {
+                    "schema_version": "miniqmt_kernel_product_outbox_command_set_v1",
+                    "commands": normalized_rows,
+                }
+            ),
+            "ambiguous_command_count": ambiguous_count,
+            "outstanding_command_count": outstanding_count,
+            "confirmed_broker_side_effect_count": confirmed_side_effect_count,
+            "replacement_safe": bool(
+                complete
+                and ambiguous_count == 0
+                and outstanding_count == 0
+                and confirmed_side_effect_count == 0
+                and (not rows or safe_terminal_nonacceptance)
+            ),
+        }
+        return {
+            **authority_payload,
+            "authority_sha256": canonical_json_sha256(authority_payload),
+        }
+
+    def _partition_kernel_product_tick_failures(
+        self,
+        *,
+        failures: tuple[dict[str, Any], ...],
+        bindings: list[SimulationReleaseBinding],
+        trade_date: date,
+    ) -> tuple[dict[str, tuple[dict[str, Any], ...]], tuple[dict[str, Any], ...]]:
+        current_by_id = {binding.binding_id: binding for binding in bindings}
+        matched: dict[str, list[dict[str, Any]]] = {}
+        unmatched: list[dict[str, Any]] = []
+        outbox_authority_by_runtime: dict[str, dict[str, Any]] = {}
+        get_runtime = getattr(self._miniqmt_quote_ingress_activation, "get_kernel_product_runtime", None)
+        for raw_failure in failures:
+            failure = dict(raw_failure)
+            binding_id = failure.get("binding_id")
+            runtime_id = failure.get("runtime_id")
+            if self._is_shared_kernel_product_failure(failure):
+                unmatched.append(
+                    {
+                        **failure,
+                        "scheduler_match_state": "GLOBAL_SHARED_OWNER_FAILURE",
+                        "scheduler_trade_date": trade_date.isoformat(),
+                    }
+                )
+                continue
+            assert type(binding_id) is str and type(runtime_id) is str
+            binding = current_by_id.get(binding_id)
+            match_state: str | None = None
+            runtime: Any | None = None
+            current_run: SimulationDailyRun | None = None
+            current_plan: ExecutionPlan | None = None
+            lookup_error: dict[str, str] | None = None
+            expected_runtime_id: str | None = None
+            if binding is None:
+                match_state = "BINDING_NOT_IN_CURRENT_PAGE"
+            else:
+                current_run = self.repository.get_simulation_daily_run_by_key(
+                    strategy_id=binding.strategy_id,
+                    binding_id=binding.binding_id,
+                    trade_date=trade_date,
+                )
+                if current_run is None:
+                    match_state = "CURRENT_RUN_NOT_FOUND"
+            if match_state is None and not callable(get_runtime):
+                match_state = "RUNTIME_LOOKUP_UNAVAILABLE"
+            elif match_state is None:
+                try:
+                    runtime = get_runtime(runtime_id)
+                except Exception as exc:  # noqa: BLE001 - preserve peer isolation and surface bounded diagnostics.
+                    match_state = "RUNTIME_LOOKUP_FAILED"
+                    lookup_error = {"type": type(exc).__name__, "message": str(exc)}
+                if match_state is None and runtime is None:
+                    match_state = "RUNTIME_NOT_REGISTERED"
+            if match_state is None:
+                runtime_binding_id = str(getattr(runtime, "binding_id", "") or "").strip()
+                runtime_trade_date = getattr(runtime, "trade_date", None)
+                runtime_trade_date_text = (
+                    runtime_trade_date.isoformat()
+                    if isinstance(runtime_trade_date, date)
+                    else str(runtime_trade_date or "").strip()
+                )
+                if runtime_binding_id != binding_id:
+                    match_state = "RUNTIME_BINDING_OWNER_DRIFT"
+                elif runtime_trade_date_text != trade_date.isoformat():
+                    match_state = "RUNTIME_TRADE_DATE_STALE"
+            if match_state is None:
+                runtime_plan_id = str(getattr(runtime, "execution_plan_id", "") or "").strip()
+                plan_id = str(current_run.execution_plan_id or runtime_plan_id).strip()
+                if not plan_id:
+                    match_state = "CURRENT_EXECUTION_PLAN_MISSING"
+                else:
+                    try:
+                        current_plan = self.repository.get_execution_plan(plan_id)
+                    except Exception as exc:  # noqa: BLE001 - preserve peer isolation and exact diagnostics.
+                        match_state = "CURRENT_EXECUTION_PLAN_READBACK_FAILED"
+                        lookup_error = {"type": type(exc).__name__, "message": str(exc)}
+                    else:
+                        if (
+                            current_plan.binding_id != binding.binding_id
+                            or current_plan.target_trade_date != trade_date
+                            or (
+                                current_run.execution_plan_id is not None
+                                and current_plan.plan_id != current_run.execution_plan_id
+                            )
+                            or (
+                                current_run.execution_plan_hash is not None
+                                and current_plan.plan_hash != current_run.execution_plan_hash
+                            )
+                        ):
+                            match_state = "CURRENT_EXECUTION_PLAN_OWNER_DRIFT"
+                        else:
+                            expected_runtime_id = miniqmt_kernel_runtime_id(
+                                plan_id=current_plan.plan_id,
+                                binding_id=binding.binding_id,
+                                trade_date=trade_date,
+                            )
+                            if runtime_id != expected_runtime_id:
+                                match_state = "RUNTIME_NOT_CURRENT_PLAN_OWNER"
+                            elif runtime_plan_id and runtime_plan_id != current_plan.plan_id:
+                                match_state = "RUNTIME_EXECUTION_PLAN_OWNER_DRIFT"
+            attempt_authority: dict[str, Any] | None = None
+            if match_state is None:
+                attempt_authority, match_state = self._kernel_product_attempt_authority(
+                    runtime_id=runtime_id,
+                    runtime=runtime,
+                    failure=failure,
+                )
+            if match_state is None:
+                assert binding is not None
+                assert current_run is not None
+                assert current_plan is not None
+                outbox_authority = outbox_authority_by_runtime.get(runtime_id)
+                if outbox_authority is None:
+                    outbox_authority = self._kernel_product_outbox_authority(
+                        runtime=runtime,
+                        runtime_id=runtime_id,
+                        binding=binding,
+                        run=current_run,
+                        plan=current_plan,
+                        trade_date=trade_date,
+                    )
+                    outbox_authority_by_runtime[runtime_id] = outbox_authority
+                matched.setdefault(binding_id, []).append(
+                    {
+                        **failure,
+                        "scheduler_runtime_authority": {
+                            **dict(attempt_authority or {}),
+                            "run_id": current_run.run_id,
+                            "binding_id": binding_id,
+                            "strategy_id": binding.strategy_id,
+                            "broker_account_id": binding.broker_account_id,
+                            "execution_plan_id": current_plan.plan_id,
+                            "execution_plan_hash": current_plan.plan_hash,
+                            "trade_date": trade_date.isoformat(),
+                            "expected_runtime_id": expected_runtime_id,
+                            "outbox_authority": outbox_authority,
+                        },
+                    }
+                )
+                continue
+            unmatched.append(
+                {
+                    **failure,
+                    "scheduler_match_state": match_state,
+                    "scheduler_trade_date": trade_date.isoformat(),
+                    **(
+                        {"scheduler_expected_runtime_id": expected_runtime_id}
+                        if expected_runtime_id is not None
+                        else {}
+                    ),
+                    **({"runtime_lookup_error": lookup_error} if lookup_error is not None else {}),
+                }
+            )
+        return (
+            {binding_id: tuple(items) for binding_id, items in matched.items()},
+            tuple(unmatched),
+        )
 
     def shutdown_miniqmt_quote_ingress(self) -> None:
         activation = self._miniqmt_quote_ingress_activation
@@ -3170,6 +3972,13 @@ class SimulationLifecycleScheduler:
             created_by=created_by,
             raise_on_error=raise_on_error,
         )
+        kernel_product_failures_by_binding, unmatched_kernel_product_tick_failures = (
+            self._partition_kernel_product_tick_failures(
+                failures=kernel_product_tick_failures,
+                bindings=bindings,
+                trade_date=trade_date,
+            )
+        )
         results: list[SimulationSchedulerBindingResult] = list(lifecycle_skips)
         eod_terminalized_run_ids = {
             str(item.get("run_id"))
@@ -3193,46 +4002,58 @@ class SimulationLifecycleScheduler:
                 results.append(eod_result)
                 continue
             try:
-                binding_tick_failures = tuple(
-                    item for item in kernel_product_tick_failures if item["binding_id"] == binding.binding_id
-                )
+                binding_tick_failures = kernel_product_failures_by_binding.get(binding.binding_id, ())
                 if binding_tick_failures:
+                    bounded_failure_evidence = self._bounded_kernel_product_failure_evidence(binding_tick_failures)
                     raise RuntimeConfigInvalidError(
                         "KERNEL_V2 callback or exchange-clock ingress failed for this MiniQMT binding",
                         context={
                             "reason_code": "MINIQMT_K6_PRODUCT_SCHEDULER_TICK_FAILED",
                             "stage": "MINIQMT_K6_PRODUCT_SCHEDULER_TICK",
                             "binding_id": binding.binding_id,
-                            "ordered_failures": [dict(item) for item in binding_tick_failures],
-                            "broker_called": False,
+                            **bounded_failure_evidence,
+                            "broker_side_effect_state": "UNKNOWN",
                             "execution_gate": False,
                         },
                     )
-                results.append(
-                    self._run_binding_with_watchdog(
-                        binding=binding,
-                        trade_date=trade_date,
-                        data_source=data_source,
-                        submit=submit,
-                        mode=mode,
-                        created_by=created_by,
-                        selection_cache=selection_cache,
-                        shared_selection_keys=shared_selection_keys,
-                        as_of_time=as_of_time,
-                    )
+                binding_result = self._run_binding_with_watchdog(
+                    binding=binding,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    submit=submit,
+                    mode=mode,
+                    created_by=created_by,
+                    selection_cache=selection_cache,
+                    shared_selection_keys=shared_selection_keys,
+                    as_of_time=as_of_time,
                 )
+                results.append(self._finalize_binding_retry_result(result=binding_result, as_of_time=as_of_time))
             except Exception as exc:  # noqa: BLE001 - isolate one binding without starving later eligible bindings.
                 if raise_on_error:
                     raise
+                retry_claim_token = exc.claim_token if isinstance(exc, _BindingRetryAttemptError) else None
+                retry_source_fingerprint = (
+                    exc.source_fingerprint if isinstance(exc, _BindingRetryAttemptError) else None
+                )
+                original_exc = exc.original if isinstance(exc, _BindingRetryAttemptError) else exc
                 results.append(
                     self._record_pre_run_binding_failure_result(
                         binding=binding,
                         trade_date=trade_date,
                         data_source=data_source,
                         created_by=created_by,
-                        exc=exc,
+                        exc=original_exc,
+                        as_of_time=as_of_time,
+                        retry_claim_token=retry_claim_token,
+                        retry_source_fingerprint=retry_source_fingerprint,
                     )
                 )
+        unmatched_failure_result = self._unmatched_kernel_product_failure_result(
+            failures=unmatched_kernel_product_tick_failures,
+            data_source=data_source,
+        )
+        if unmatched_failure_result is not None:
+            results.append(unmatched_failure_result)
         return SimulationSchedulerRunOnceResult(
             trade_date=trade_date,
             data_source=data_source,
@@ -3262,24 +4083,237 @@ class SimulationLifecycleScheduler:
             )
             return [diagnostic]
 
-    @staticmethod
     def _run_recovery_item_isolated(
+        self,
         *,
         stage: str,
         run: SimulationDailyRun,
         raise_on_error: bool,
         func: Callable[[], dict[str, Any] | None],
+        as_of_time: datetime | None,
     ) -> dict[str, Any] | None:
+        retry_key = f"{_SIMULATION_RECOVERY_RETRY_KEY_PREFIX}{stage}"
+        source_fingerprint = self._simulation_retry_source_fingerprint(run=run, retry_key=retry_key)
         try:
-            return func()
+            retry_decision = inspect_simulation_retry_backoff(
+                run=run,
+                retry_key=retry_key,
+                source_fingerprint=source_fingerprint,
+                as_of_time=self._scheduler_time(as_of_time),
+                lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
+            )
+            if retry_decision is None:
+                retry_decision = self.repository.claim_simulation_retry_attempt(
+                    run_id=run.run_id,
+                    retry_key=retry_key,
+                    source_fingerprint=source_fingerprint,
+                    as_of_time=self._scheduler_time(as_of_time),
+                    lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
+                )
+        except Exception as exc:  # noqa: BLE001 - corrupt retry authority must stay isolated to its run.
+            if raise_on_error:
+                raise
+            diagnostic = SimulationLifecycleScheduler._recovery_failure_diagnostic(
+                stage=f"{stage}:RETRY_CONTROL_CLAIM",
+                exc=exc,
+                run=run,
+            )
+            diagnostic["retry_control_claim_failed"] = True
+            diagnostic["retry_key"] = retry_key
+            logger.error(
+                "Simulation scheduler retry-control claim failed without starving peer runs: %s",
+                diagnostic,
+                exc_info=True,
+            )
+            return diagnostic
+        if not retry_decision.should_execute:
+            return self._recovery_backoff_diagnostic(
+                stage=stage,
+                run=retry_decision.run,
+                reason=retry_decision.reason,
+                retry_entry=retry_decision.retry_entry,
+            )
+        try:
+            result = func()
+            if retry_decision.claim_token is not None:
+                self.repository.clear_simulation_retry_control(
+                    run_id=run.run_id,
+                    retry_key=retry_key,
+                    expected_claim_token=retry_decision.claim_token,
+                )
+            return result
         except Exception as exc:  # noqa: BLE001 - one bad durable run must not starve other runs or bindings.
             if raise_on_error:
                 raise
-            diagnostic = SimulationLifecycleScheduler._recovery_failure_diagnostic(stage=stage, exc=exc, run=run)
+            failed_run = self._record_simulation_retry_failure(
+                run=self.repository.get_simulation_daily_run(run.run_id),
+                retry_key=retry_key,
+                failure_stage=stage,
+                exc=exc,
+                as_of_time=as_of_time,
+                expected_claim_token=retry_decision.claim_token,
+                source_fingerprint=source_fingerprint,
+            )
+            diagnostic = SimulationLifecycleScheduler._recovery_failure_diagnostic(stage=stage, exc=exc, run=failed_run)
+            retry_control = failed_run.run_payload_json.get(SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY)
+            if isinstance(retry_control, dict):
+                retry_entry = retry_control.get("entries", {}).get(retry_key)
+                if isinstance(retry_entry, dict):
+                    diagnostic["retry_control"] = deepcopy(retry_entry)
             logger.error(
                 "Simulation scheduler recovery item failed without starving peers: %s", diagnostic, exc_info=True
             )
             return diagnostic
+
+    @staticmethod
+    def _simulation_retry_source_fingerprint(*, run: SimulationDailyRun, retry_key: str) -> str:
+        payload = dict(run.run_payload_json or {})
+        payload.pop(SIMULATION_SCHEDULER_RETRY_CONTROL_PAYLOAD_KEY, None)
+        payload.pop(SIMULATION_SCHEDULER_RETRY_CLAIMS_PAYLOAD_KEY, None)
+        if retry_key == _SIMULATION_BINDING_RETRY_KEY:
+            payload = {
+                key: deepcopy(payload.get(key))
+                for key in (
+                    "submit_failure",
+                    "pre_run_failure",
+                    "broker_called",
+                    "submitted_intents",
+                    "failed_intents",
+                    "qmt_batch_id",
+                    "qmt_batch_status",
+                    "qmt_batch_result",
+                    "pre_trade_blocked_order_generation",
+                )
+                if key in payload
+            }
+        return canonical_json_sha256(
+            {
+                "schema_version": "simulation_scheduler_retry_source_v1",
+                "retry_key": retry_key,
+                "run_id": run.run_id,
+                "trade_date": run.trade_date.isoformat(),
+                "strategy_id": run.strategy_id,
+                "binding_id": run.binding_id,
+                "binding_hash": run.binding_hash,
+                "release_id": run.release_id,
+                "release_hash": run.release_hash,
+                "execution_plan_id": run.execution_plan_id,
+                "execution_plan_hash": run.execution_plan_hash,
+                "status": run.status.value,
+                "run_payload_json": payload,
+            }
+        )
+
+    @staticmethod
+    def _simulation_retry_error_evidence(*, exc: BaseException, failure_stage: str) -> dict[str, Any]:
+        context = getattr(exc, "context", None)
+        reason_code = context.get("reason_code") if isinstance(context, dict) else None
+        normalized = simulation_retry_json_safe_evidence(
+            {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "reason_code": str(reason_code) if reason_code is not None else None,
+                "context": deepcopy(context) if isinstance(context, dict) else context,
+                "failure_stage": failure_stage,
+            }
+        )
+        if not isinstance(normalized, dict):
+            raise AssertionError("simulation retry error evidence normalization must return an object")
+        return normalized
+
+    def _record_simulation_retry_failure(
+        self,
+        *,
+        run: SimulationDailyRun,
+        retry_key: str,
+        failure_stage: str,
+        exc: BaseException,
+        as_of_time: datetime | None,
+        expected_claim_token: str | None = None,
+        source_fingerprint: str | None = None,
+    ) -> SimulationDailyRun:
+        error = self._simulation_retry_error_evidence(exc=exc, failure_stage=failure_stage)
+        return self._record_simulation_retry_failure_evidence(
+            run=run,
+            retry_key=retry_key,
+            failure_stage=failure_stage,
+            error=error,
+            as_of_time=as_of_time,
+            expected_claim_token=expected_claim_token,
+            source_fingerprint=source_fingerprint,
+        )
+
+    def _record_simulation_retry_failure_evidence(
+        self,
+        *,
+        run: SimulationDailyRun,
+        retry_key: str,
+        failure_stage: str,
+        error: dict[str, Any],
+        as_of_time: datetime | None,
+        expected_claim_token: str | None = None,
+        source_fingerprint: str | None = None,
+    ) -> SimulationDailyRun:
+        normalized_error = simulation_retry_json_safe_evidence(error)
+        if not isinstance(normalized_error, dict):
+            raise InvalidStateTransitionError(
+                "simulation retry failure evidence must be an object",
+                context={"reason_code": "SIMULATION_SCHEDULER_RETRY_CONTROL_SCHEMA_INVALID"},
+            )
+        failure_fingerprint = canonical_json_sha256(
+            {
+                "schema_version": "simulation_scheduler_retry_failure_identity_v1",
+                "retry_key": retry_key,
+                "failure_stage": failure_stage,
+                "error": normalized_error,
+            }
+        )
+        return self.repository.record_simulation_retry_failure(
+            run_id=run.run_id,
+            retry_key=retry_key,
+            source_fingerprint=source_fingerprint
+            or self._simulation_retry_source_fingerprint(run=run, retry_key=retry_key),
+            failure_fingerprint=failure_fingerprint,
+            failure_stage=failure_stage,
+            error=normalized_error,
+            as_of_time=self._scheduler_time(as_of_time),
+            base_delay_seconds=_SIMULATION_RETRY_BASE_DELAY_SECONDS,
+            max_delay_seconds=_SIMULATION_RETRY_MAX_DELAY_SECONDS,
+            expected_claim_token=expected_claim_token,
+        )
+
+    @staticmethod
+    def _recovery_backoff_diagnostic(
+        *,
+        stage: str,
+        run: SimulationDailyRun,
+        reason: str,
+        retry_entry: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": "simulation_scheduler_recovery_backoff_v1",
+            "terminalization_succeeded": False,
+            "status": "RECOVERY_BACKOFF",
+            "stage": stage,
+            "reason_code": "SIMULATION_SCHEDULER_RECOVERY_BACKOFF_NOT_DUE",
+            "retry_reason": reason,
+            "run_id": run.run_id,
+            "trade_date": run.trade_date.isoformat(),
+            "strategy_id": run.strategy_id,
+            "broker_backend": run.broker_backend.value,
+            "retry_control": deepcopy(retry_entry),
+            "alert": {
+                "severity": "WARNING",
+                "reason_code": "SIMULATION_SCHEDULER_RECOVERY_BACKOFF_NOT_DUE",
+                "stage": stage,
+                "auto_retry": True,
+                "next_retry_at": (
+                    retry_entry.get("next_retry_at") or retry_entry.get("lease_until")
+                    if isinstance(retry_entry, dict)
+                    else None
+                ),
+            },
+        }
 
     @staticmethod
     def _recovery_failure_diagnostic(
@@ -3549,6 +4583,9 @@ class SimulationLifecycleScheduler:
         data_source: str,
         created_by: str,
         exc: Exception,
+        as_of_time: datetime | None = None,
+        retry_claim_token: str | None = None,
+        retry_source_fingerprint: str | None = None,
     ) -> SimulationSchedulerBindingResult:
         if self._is_binding_tick_in_progress_error(exc):
             return self._record_binding_tick_in_progress_result(
@@ -3608,6 +4645,16 @@ class SimulationLifecycleScheduler:
             created_by=created_by,
             exc=exc,
         )
+        if self._run_requires_binding_retry_control(failed_run):
+            failed_run = self._record_simulation_retry_failure(
+                run=failed_run,
+                retry_key=_SIMULATION_BINDING_RETRY_KEY,
+                failure_stage=self._run_failure_stage(failed_run),
+                exc=exc,
+                as_of_time=as_of_time,
+                expected_claim_token=retry_claim_token,
+                source_fingerprint=retry_source_fingerprint,
+            )
         if not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError)):
             pre_run_failure = failed_run.run_payload_json.get("pre_run_failure")
             reason_code = (
@@ -3848,6 +4895,8 @@ class SimulationLifecycleScheduler:
         payload = run.run_payload_json
         if bool(payload.get("broker_called")):
             return True
+        if payload.get("broker_side_effect_state") == "UNKNOWN":
+            return True
         if payload.get("miniqmt_side_effect_state") == "UNKNOWN_TIMEOUT":
             return True
         if isinstance(payload.get("miniqmt_submit_timeout"), dict):
@@ -3917,6 +4966,29 @@ class SimulationLifecycleScheduler:
                     run_payload_json={**identity, "created_by": created_by},
                 )
             )
+        side_effect_patch = self._pre_run_failure_side_effect_patch(
+            existing=existing,
+            diagnostic=diagnostic,
+        )
+        preplan_unknown_failure = (
+            self._preplan_unknown_failure_evidence(binding=binding, diagnostic=diagnostic)
+            if side_effect_patch.get("broker_side_effect_state") == "UNKNOWN" and self._is_pre_run_failure_run(existing)
+            else None
+        )
+        if side_effect_patch.get("broker_side_effect_state") == "UNKNOWN" and not self._is_pre_run_failure_run(
+            existing
+        ):
+            diagnostic = self._with_pre_run_failure_observation(existing, diagnostic)
+            diagnostic = self._pre_run_failure_diagnostic_with_unknown_side_effect(diagnostic)
+            return self.repository.update_simulation_daily_run(
+                existing.run_id,
+                payload_patch={
+                    "broker_side_effect_state": "UNKNOWN",
+                    "pre_run_failure": diagnostic,
+                    "pre_run_failure_last_observed_at": diagnostic["last_observed_at"],
+                },
+                payload_unset=self._unknown_side_effect_payload_unset(existing),
+            )
         if not self._is_pre_run_failure_run(existing):
             terminal_statuses = {
                 SimulationDailyRunStatus.SUCCEEDED,
@@ -3938,9 +5010,7 @@ class SimulationLifecycleScheduler:
                     status=SimulationDailyRunStatus.FAILED_RETRYABLE,
                     payload_patch={
                         "last_stage": "PRE_RUN_FAILED",
-                        "broker_called": False,
-                        "submitted_intents": 0,
-                        "failed_intents": 0,
+                        **side_effect_patch,
                         "pre_run_failure": diagnostic,
                         "submit_failure": {
                             "stage": "PRE_RUN_FAILED",
@@ -3953,6 +5023,8 @@ class SimulationLifecycleScheduler:
                 )
             return existing
         diagnostic = self._with_pre_run_failure_observation(existing, diagnostic)
+        if side_effect_patch.get("broker_side_effect_state") == "UNKNOWN":
+            diagnostic = self._pre_run_failure_diagnostic_with_unknown_side_effect(diagnostic)
         terminal_statuses = {
             SimulationDailyRunStatus.SUCCEEDED,
             SimulationDailyRunStatus.FAILED_TERMINAL,
@@ -3971,9 +5043,12 @@ class SimulationLifecycleScheduler:
             status=SimulationDailyRunStatus.FAILED_RETRYABLE,
             payload_patch={
                 "last_stage": "PRE_RUN_FAILED",
-                "broker_called": False,
-                "submitted_intents": 0,
-                "failed_intents": 0,
+                **side_effect_patch,
+                **(
+                    {"miniqmt_preplan_unknown_failure": preplan_unknown_failure}
+                    if preplan_unknown_failure is not None
+                    else {}
+                ),
                 "pre_run_failure": diagnostic,
                 "submit_failure": {
                     "stage": "PRE_RUN_FAILED",
@@ -3983,7 +5058,138 @@ class SimulationLifecycleScheduler:
                     "context": diagnostic,
                 },
             },
+            payload_unset=(
+                self._unknown_side_effect_payload_unset(existing)
+                if side_effect_patch.get("broker_side_effect_state") == "UNKNOWN"
+                else ()
+            ),
         )
+
+    @staticmethod
+    def _unknown_side_effect_payload_unset(existing: SimulationDailyRun) -> tuple[str, ...]:
+        """Remove only disproven no-side-effect assumptions, never positive facts."""
+
+        payload = existing.run_payload_json if isinstance(existing.run_payload_json, dict) else {}
+        removable: list[str] = []
+        if payload.get("broker_called") is False:
+            removable.append("broker_called")
+        for key in ("submitted_intents", "failed_intents"):
+            value = payload.get(key)
+            if type(value) is int and value == 0:
+                removable.append(key)
+        return tuple(removable)
+
+    @staticmethod
+    def _pre_run_failure_side_effect_patch(
+        *,
+        existing: SimulationDailyRun,
+        diagnostic: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = existing.run_payload_json if isinstance(existing.run_payload_json, dict) else {}
+        if (
+            diagnostic.get("broker_side_effect_state") == "UNKNOWN"
+            or payload.get("broker_side_effect_state") == "UNKNOWN"
+        ):
+            return {"broker_side_effect_state": "UNKNOWN"}
+        if SimulationLifecycleScheduler._run_has_broker_side_effect_evidence(existing):
+            return {}
+        return {
+            "broker_called": False,
+            "submitted_intents": 0,
+            "failed_intents": 0,
+        }
+
+    @staticmethod
+    def _pre_run_failure_diagnostic_with_unknown_side_effect(
+        diagnostic: dict[str, Any],
+    ) -> dict[str, Any]:
+        preserved = {
+            key: value
+            for key, value in diagnostic.items()
+            if key not in {"broker_called", "submitted_intents", "failed_intents"}
+        }
+        return {
+            **preserved,
+            "broker_side_effect_state": "UNKNOWN",
+            "next_action": (
+                "reconcile broker and durable outbox state before any retry; the scheduler cannot prove whether "
+                "the callback/clock tick produced a broker side effect"
+            ),
+        }
+
+    @staticmethod
+    def _preplan_unknown_failure_evidence(
+        *,
+        binding: SimulationReleaseBinding,
+        diagnostic: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        context = diagnostic.get("context") if isinstance(diagnostic.get("context"), dict) else {}
+        ordered_failures = context.get("ordered_failures")
+        if not isinstance(ordered_failures, list):
+            return None
+        matching = [
+            dict(item)
+            for item in ordered_failures
+            if isinstance(item, dict) and item.get("binding_id") == binding.binding_id
+        ]
+        if not matching:
+            return None
+        bounded = matching[:_MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT]
+        observed_failure_count = context.get("failure_count")
+        failure_count = (
+            observed_failure_count
+            if type(observed_failure_count) is int and observed_failure_count >= len(matching)
+            else len(matching)
+        )
+        observed_truncated_count = context.get("truncated_failure_count")
+        truncated_failure_count = (
+            observed_truncated_count
+            if type(observed_truncated_count) is int and observed_truncated_count >= 0
+            else max(0, failure_count - len(bounded))
+        )
+        normalized = simulation_retry_json_safe_evidence(bounded)
+        if not isinstance(normalized, list):
+            raise AssertionError("MiniQMT preplan unknown failure evidence must normalize to a list")
+        runtime_ids = sorted(
+            {
+                str(item.get("runtime_id") or "").strip()
+                for item in matching
+                if str(item.get("runtime_id") or "").strip()
+            }
+        )
+        runtime_authority_by_sha256: dict[str, dict[str, Any]] = {}
+        for item in matching:
+            authority = item.get("scheduler_runtime_authority")
+            if not isinstance(authority, Mapping):
+                continue
+            normalized_authority = simulation_retry_json_safe_evidence(dict(authority))
+            if not isinstance(normalized_authority, dict):
+                raise AssertionError("MiniQMT runtime authority must normalize to an object")
+            runtime_authority_by_sha256[canonical_json_sha256(normalized_authority)] = normalized_authority
+        runtime_authorities = [runtime_authority_by_sha256[key] for key in sorted(runtime_authority_by_sha256)]
+        identity_payload = {
+            "schema_version": "miniqmt_preplan_unknown_failure_identity_v2",
+            "binding_id": binding.binding_id,
+            "runtime_ids": runtime_ids,
+            "failure_count": failure_count,
+            "all_failures_sha256": context.get("all_failures_sha256"),
+            "omitted_failures_sha256": context.get("omitted_failures_sha256"),
+            "runtime_authorities": runtime_authorities,
+        }
+        return {
+            "schema_version": "miniqmt_preplan_unknown_failure_v1",
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "runtime_ids": runtime_ids,
+            "failure_count": failure_count,
+            "evidence_limit": _MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT,
+            "truncated_failure_count": truncated_failure_count,
+            "ordered_failures": normalized,
+            "all_failures_sha256": context.get("all_failures_sha256"),
+            "omitted_failures_sha256": context.get("omitted_failures_sha256"),
+            "runtime_authorities": runtime_authorities,
+            "failure_fingerprint": canonical_json_sha256(identity_payload),
+        }
 
     @staticmethod
     def _is_pre_run_failure_run(run: SimulationDailyRun) -> bool:
@@ -4040,6 +5246,7 @@ class SimulationLifecycleScheduler:
         )
         observed_at = datetime.now(UTC).isoformat()
         legacy_pre_run_error = isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError))
+        broker_side_effect_state = str(context.get("broker_side_effect_state") or "").strip().upper()
         diagnostic = {
             "schema_version": "simulation_pre_run_failure_v1",
             "stage": "PRE_RUN_FAILED" if legacy_pre_run_error else failure_stage,
@@ -4063,14 +5270,26 @@ class SimulationLifecycleScheduler:
             "first_observed_at": observed_at,
             "last_observed_at": observed_at,
             "observed_count": 1,
-            "broker_called": False,
-            "submitted_intents": 0,
-            "failed_intents": 0,
             "next_action": (
-                "fix the data/configuration dependency reported by reason_code and rerun the scheduler tick; "
-                "no broker order was submitted before this failure"
+                "reconcile broker and durable outbox state before any retry; the scheduler cannot prove whether "
+                "the callback/clock tick produced a broker side effect"
+                if broker_side_effect_state == "UNKNOWN"
+                else (
+                    "fix the data/configuration dependency reported by reason_code and rerun the scheduler tick; "
+                    "no broker order was submitted before this failure"
+                )
             ),
         }
+        if broker_side_effect_state == "UNKNOWN":
+            diagnostic["broker_side_effect_state"] = "UNKNOWN"
+        else:
+            diagnostic.update(
+                {
+                    "broker_called": False,
+                    "submitted_intents": 0,
+                    "failed_intents": 0,
+                }
+            )
         if blocked_check:
             diagnostic["blocked_check"] = blocked_check
         if blocked_context:
@@ -4255,16 +5474,820 @@ class SimulationLifecycleScheduler:
         text = str(value).strip()
         return [text] if text else []
 
+    def _preplan_unknown_terminal_result(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        data_source: str,
+    ) -> SimulationSchedulerBindingResult | None:
+        proof = run.run_payload_json.get("miniqmt_preplan_unknown_reconciliation")
+        if (
+            not isinstance(proof, dict)
+            or run.execution_plan_id is not None
+            or run.status != SimulationDailyRunStatus.FAILED_TERMINAL
+            or proof.get("status")
+            not in {
+                "BROKER_SIDE_EFFECT_RECONCILED_TERMINAL",
+                "RUNTIME_IDENTITY_INVALID_TERMINAL",
+            }
+        ):
+            return None
+        reason_code = str(proof.get("reason_code") or "MINIQMT_PREPLAN_UNKNOWN_RECONCILIATION_TERMINAL")
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status=run.status.value,
+            run=run,
+            error={
+                "type": "MiniQMTPreplanUnknownOutcome",
+                "message": "preplan UNKNOWN broker outcome was closed without creating a replacement plan",
+                "context": dict(proof),
+            },
+            lifecycle_diagnostic={
+                **proof,
+                "alert": {
+                    "severity": "ERROR",
+                    "reason_code": reason_code,
+                    "automatic": True,
+                },
+            },
+            data_source=self._effective_market_data_source_for_binding(
+                binding=binding,
+                trade_date=run.trade_date,
+                default_data_source=data_source,
+            ),
+        )
+
+    def _preplan_unknown_reconciliation_result(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        data_source: str,
+        proof: dict[str, Any],
+    ) -> SimulationSchedulerBindingResult:
+        reason_code = str(proof["reason_code"])
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status=run.status.value,
+            run=run,
+            error={
+                "type": "MiniQMTPreplanUnknownOutcome",
+                "message": "preplan UNKNOWN broker outcome is not eligible for plan creation",
+                "context": dict(proof),
+            },
+            lifecycle_diagnostic={
+                **proof,
+                "alert": {
+                    "severity": "ERROR" if run.status == SimulationDailyRunStatus.FAILED_TERMINAL else "WARNING",
+                    "reason_code": reason_code,
+                    "automatic": True,
+                    "auto_retry": bool(proof.get("auto_retry")),
+                },
+            },
+            data_source=self._effective_market_data_source_for_binding(
+                binding=binding,
+                trade_date=run.trade_date,
+                default_data_source=data_source,
+            ),
+        )
+
+    def _release_preplan_unknown_kernel_runtime(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        runtime_id: str,
+        runtime_authority: Mapping[str, Any],
+        trade_date: date,
+    ) -> tuple[SimulationDailyRun, dict[str, Any], dict[str, Any]]:
+        effective_runtime_authority = dict(runtime_authority)
+        raw_preflight = run.run_payload_json.get("miniqmt_preplan_unknown_runtime_release_preflight")
+        if isinstance(raw_preflight, dict):
+            preflight_payload = {key: value for key, value in raw_preflight.items() if key != "preflight_sha256"}
+            preflight_authority = raw_preflight.get("effective_runtime_authority")
+            if (
+                raw_preflight.get("preflight_sha256") != canonical_json_sha256(preflight_payload)
+                or raw_preflight.get("run_id") != run.run_id
+                or raw_preflight.get("binding_id") != binding.binding_id
+                or raw_preflight.get("runtime_id") != runtime_id
+                or not isinstance(preflight_authority, Mapping)
+            ):
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT preplan UNKNOWN runtime release preflight identity is invalid",
+                    context={
+                        "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE_PREFLIGHT_INVALID",
+                        "stage": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE",
+                        "run_id": run.run_id,
+                        "binding_id": binding.binding_id,
+                        "runtime_id": runtime_id,
+                    },
+                )
+            effective_runtime_authority = dict(preflight_authority)
+        existing = run.run_payload_json.get("miniqmt_preplan_unknown_runtime_release")
+        if (
+            isinstance(existing, dict)
+            and existing.get("status") in {"RELEASED", "ALREADY_ABSENT"}
+            and existing.get("run_id") == run.run_id
+            and existing.get("binding_id") == binding.binding_id
+            and existing.get("trade_date") == trade_date.isoformat()
+            and existing.get("runtime_id") == runtime_id
+            and existing.get("execution_plan_id") == runtime_authority.get("execution_plan_id")
+            and existing.get("lifecycle_generation") == runtime_authority.get("lifecycle_generation")
+            and existing.get("attempt_token") == runtime_authority.get("attempt_token")
+        ):
+            return run, dict(existing), effective_runtime_authority
+        get_runtime = getattr(self._miniqmt_quote_ingress_activation, "get_kernel_product_runtime", None)
+        release = getattr(self._miniqmt_quote_ingress_activation, "release_kernel_product_runtime", None)
+        if not callable(get_runtime) or not callable(release):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT preplan UNKNOWN recovery requires exact KERNEL_V2 runtime lookup and release",
+                context={
+                    "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE_UNAVAILABLE",
+                    "stage": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "runtime_id": runtime_id,
+                },
+            )
+        runtime = get_runtime(runtime_id)
+        status = "ALREADY_ABSENT"
+        if runtime is not None:
+            runtime_trade_date = getattr(runtime, "trade_date", None)
+            runtime_plan_id = str(getattr(runtime, "execution_plan_id", "") or "").strip()
+            identity_conflicts = []
+            if str(getattr(runtime, "binding_id", "") or "").strip() != binding.binding_id:
+                identity_conflicts.append("runtime_binding_conflict")
+            if runtime_trade_date != trade_date:
+                identity_conflicts.append("runtime_trade_date_conflict")
+            if runtime_plan_id and runtime_plan_id != runtime_authority.get("execution_plan_id"):
+                identity_conflicts.append("runtime_execution_plan_conflict")
+            attempt_authority, attempt_conflict = self._kernel_product_attempt_authority(
+                runtime_id=runtime_id,
+                runtime=runtime,
+                failure={
+                    "lifecycle_generation": runtime_authority.get("lifecycle_generation"),
+                    "attempt_token": runtime_authority.get("attempt_token"),
+                },
+            )
+            if attempt_conflict is not None:
+                identity_conflicts.append(attempt_conflict.lower())
+            if identity_conflicts:
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT preplan UNKNOWN runtime successor or foreign owner cannot be released",
+                    context={
+                        "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE_IDENTITY_CONFLICT",
+                        "stage": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE",
+                        "run_id": run.run_id,
+                        "binding_id": binding.binding_id,
+                        "runtime_id": runtime_id,
+                        "identity_conflicts": identity_conflicts,
+                    },
+                )
+            assert attempt_authority is not None
+            authority_plan = self.repository.get_execution_plan(str(runtime_authority.get("execution_plan_id") or ""))
+            effective_runtime_authority = {
+                **dict(runtime_authority),
+                "outbox_authority": self._kernel_product_outbox_authority(
+                    runtime=runtime,
+                    runtime_id=runtime_id,
+                    binding=binding,
+                    run=run,
+                    plan=authority_plan,
+                    trade_date=trade_date,
+                ),
+            }
+            preflight_payload = {
+                "schema_version": "miniqmt_preplan_unknown_runtime_release_preflight_v1",
+                "run_id": run.run_id,
+                "binding_id": binding.binding_id,
+                "runtime_id": runtime_id,
+                "execution_plan_id": runtime_authority.get("execution_plan_id"),
+                "lifecycle_generation": runtime_authority.get("lifecycle_generation"),
+                "attempt_token": runtime_authority.get("attempt_token"),
+                "effective_runtime_authority": effective_runtime_authority,
+                "prepared_at": datetime.now(UTC).isoformat(),
+                "automatic": True,
+            }
+            preflight = {
+                **preflight_payload,
+                "preflight_sha256": canonical_json_sha256(preflight_payload),
+            }
+            try:
+                run = self.repository.update_simulation_daily_run(
+                    run.run_id,
+                    payload_patch={"miniqmt_preplan_unknown_runtime_release_preflight": preflight},
+                )
+            except Exception as exc:  # noqa: BLE001 - never release before durable current authority exists.
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT preplan UNKNOWN runtime release preflight was not persisted",
+                    context={
+                        "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE_PREFLIGHT_PERSIST_FAILED",
+                        "stage": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE",
+                        "run_id": run.run_id,
+                        "binding_id": binding.binding_id,
+                        "runtime_id": runtime_id,
+                        "broker_side_effect_state": "UNKNOWN",
+                        "persistence_error": {"type": type(exc).__name__, "message": str(exc)[:2048]},
+                    },
+                ) from exc
+            release(runtime_id)
+            if get_runtime(runtime_id) is not None:
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT preplan UNKNOWN runtime remained registered after release",
+                    context={
+                        "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE_READBACK_FAILED",
+                        "stage": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE",
+                        "run_id": run.run_id,
+                        "binding_id": binding.binding_id,
+                        "runtime_id": runtime_id,
+                    },
+                )
+            status = "RELEASED"
+        evidence = {
+            "schema_version": "miniqmt_preplan_unknown_runtime_release_v1",
+            "status": status,
+            "run_id": run.run_id,
+            "binding_id": run.binding_id,
+            "trade_date": trade_date.isoformat(),
+            "runtime_id": runtime_id,
+            "execution_plan_id": runtime_authority.get("execution_plan_id"),
+            "lifecycle_generation": runtime_authority.get("lifecycle_generation"),
+            "attempt_token": runtime_authority.get("attempt_token"),
+            "effective_runtime_authority": effective_runtime_authority,
+            "process_local_runtime_present": runtime is not None,
+            "released_at": datetime.now(UTC).isoformat(),
+            "automatic": True,
+        }
+        try:
+            updated = self.repository.update_simulation_daily_run(
+                run.run_id,
+                payload_patch={"miniqmt_preplan_unknown_runtime_release": evidence},
+            )
+        except Exception as exc:  # noqa: BLE001 - release happened; preserve UNKNOWN and retry durably.
+            raise RuntimeConfigInvalidError(
+                "MiniQMT preplan UNKNOWN runtime release receipt was not persisted",
+                context={
+                    "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE_RECEIPT_PERSIST_FAILED",
+                    "stage": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_RELEASE",
+                    "run_id": run.run_id,
+                    "binding_id": binding.binding_id,
+                    "runtime_id": runtime_id,
+                    "runtime_release_status": status,
+                    "broker_side_effect_state": "UNKNOWN",
+                    "persistence_error": {"type": type(exc).__name__, "message": str(exc)},
+                },
+            ) from exc
+        return updated, evidence, effective_runtime_authority
+
+    @staticmethod
+    def _preplan_sync_receipt_conflicts(
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        sync_result: dict[str, Any] | None,
+    ) -> list[str]:
+        sync_readback = dict(sync_result) if isinstance(sync_result, dict) else {}
+        conflicts: list[str] = []
+        if sync_readback.get("account_id") != binding.broker_account_id:
+            conflicts.append("sync_account_id_conflict")
+        if sync_readback.get("trade_date") != trade_date.isoformat():
+            conflicts.append("sync_trade_date_conflict")
+        if sync_readback.get("orders_query_succeeded") is not True:
+            conflicts.append("orders_query_not_proven")
+        if sync_readback.get("trades_query_succeeded") is not True:
+            conflicts.append("trades_query_not_proven")
+        for prefix in ("orders", "trades"):
+            snapshot_count = sync_readback.get(f"{prefix}_snapshot_count")
+            snapshot_sha256 = sync_readback.get(f"{prefix}_snapshot_sha256")
+            if type(snapshot_count) is not int or snapshot_count < 0:
+                conflicts.append(f"{prefix}_snapshot_count_invalid")
+            if not isinstance(snapshot_sha256, str) or not snapshot_sha256:
+                conflicts.append(f"{prefix}_snapshot_hash_invalid")
+        if bool(sync_readback.get("stale_broker_snapshot")):
+            conflicts.append("stale_broker_snapshot")
+        return conflicts
+
+    def _preplan_exact_broker_authority(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        context: SimulationRunContext,
+        runtime_authority: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        outbox = runtime_authority.get("outbox_authority")
+        outbox_authority = dict(outbox) if isinstance(outbox, Mapping) else {}
+        command_rows = outbox_authority.get("commands")
+        commands = (
+            [dict(item) for item in command_rows if isinstance(item, Mapping)] if isinstance(command_rows, list) else []
+        )
+        broker_order_ids = {
+            str(item.get("broker_order_id") or "").strip()
+            for item in commands
+            if str(item.get("broker_order_id") or "").strip()
+        }
+        order_remarks = {
+            str(item.get("order_remark") or "").strip()
+            for item in commands
+            if str(item.get("order_remark") or "").strip()
+        }
+        deterministic_refs = {
+            str(item.get("deterministic_client_order_ref") or "").strip()
+            for item in commands
+            if str(item.get("deterministic_client_order_ref") or "").strip()
+        }
+        exact_refs = broker_order_ids | order_remarks | deterministic_refs
+
+        def is_exact_order(*, order_id: Any, order_remark: Any) -> bool:
+            return bool(str(order_id or "").strip() in exact_refs or str(order_remark or "").strip() in exact_refs)
+
+        repository = getattr(context, "qmt_ledger_repository", None)
+        list_orders = getattr(repository, "list_order_ledger", None)
+        list_unattributed_orders = getattr(repository, "list_unattributed_orders", None)
+        list_unattributed_trades = getattr(repository, "list_unattributed_trades", None)
+        authority_conflicts: list[str] = []
+        if not callable(list_orders):
+            authority_conflicts.append("order_ledger_authority_unavailable")
+            orders: list[Any] = []
+        else:
+            orders = list_orders(
+                account_id=binding.broker_account_id,
+                trade_date=run.trade_date,
+                strategy_id=binding.strategy_id,
+                batch_id=None,
+            )
+        unattributed_orders = (
+            list_unattributed_orders(account_id=binding.broker_account_id, trade_date=run.trade_date)
+            if callable(list_unattributed_orders)
+            else []
+        )
+        unattributed_trades = (
+            list_unattributed_trades(account_id=binding.broker_account_id, trade_date=run.trade_date)
+            if callable(list_unattributed_trades)
+            else []
+        )
+        if not callable(list_unattributed_orders):
+            authority_conflicts.append("unattributed_order_authority_unavailable")
+        if not callable(list_unattributed_trades):
+            authority_conflicts.append("unattributed_trade_authority_unavailable")
+
+        exact_orders = [
+            order
+            for order in orders
+            if is_exact_order(
+                order_id=getattr(order, "qmt_order_id", None), order_remark=getattr(order, "order_remark", None)
+            )
+        ]
+        exact_unattributed_orders = [
+            order
+            for order in unattributed_orders
+            if is_exact_order(
+                order_id=getattr(order, "qmt_order_id", None), order_remark=getattr(order, "order_remark", None)
+            )
+        ]
+        exact_unattributed_trades = [
+            trade
+            for trade in unattributed_trades
+            if is_exact_order(
+                order_id=getattr(trade, "qmt_order_id", None), order_remark=getattr(trade, "order_remark", None)
+            )
+        ]
+        exact_open_orders = [
+            order
+            for order in exact_orders
+            if is_open_like_order_status(getattr(order, "order_status", None))
+            and int(getattr(order, "order_volume", 0) or 0) > int(getattr(order, "traded_volume", 0) or 0)
+        ]
+        exact_unattributed_open_orders = []
+        for order in exact_unattributed_orders:
+            raw = getattr(order, "raw_json", None)
+            raw_payload = raw if isinstance(raw, Mapping) else {}
+            if is_open_like_order_status(raw_payload.get("order_status")) and int(
+                raw_payload.get("order_volume") or 0
+            ) > int(raw_payload.get("traded_volume") or 0):
+                exact_unattributed_open_orders.append(order)
+        retained_orders = [
+            {
+                "qmt_order_id": getattr(order, "qmt_order_id", None),
+                "order_remark": getattr(order, "order_remark", None),
+                "order_status": getattr(order, "order_status", None),
+                "order_volume": getattr(order, "order_volume", None),
+                "traded_volume": getattr(order, "traded_volume", None),
+            }
+            for order in exact_orders[:_MINIQMT_KERNEL_PRODUCT_FAILURE_EVIDENCE_LIMIT]
+        ]
+        exact_side_effect_ids = {
+            str(getattr(item, "qmt_order_id", None) or "").strip()
+            for item in [*exact_orders, *exact_unattributed_orders, *exact_unattributed_trades]
+            if str(getattr(item, "qmt_order_id", None) or "").strip()
+        }
+        outbox_confirmed = int(outbox_authority.get("confirmed_broker_side_effect_count") or 0)
+        outbox_ambiguous = int(outbox_authority.get("ambiguous_command_count") or 0)
+        exact_side_effect_count = max(len(exact_side_effect_ids), outbox_confirmed)
+        if outbox_authority.get("replacement_safe") is True and exact_side_effect_count > 0:
+            authority_conflicts.append("outbox_broker_order_state_conflict")
+        payload = {
+            "schema_version": "miniqmt_preplan_exact_broker_authority_v1",
+            "runtime_id": runtime_authority.get("runtime_id"),
+            "run_id": run.run_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "broker_account_id": binding.broker_account_id,
+            "trade_date": run.trade_date.isoformat(),
+            "execution_plan_id": runtime_authority.get("execution_plan_id"),
+            "outbox_authority_sha256": outbox_authority.get("authority_sha256"),
+            "outbox_complete": outbox_authority.get("complete") is True,
+            "outbox_replacement_safe": outbox_authority.get("replacement_safe") is True,
+            "outbox_ambiguous_command_count": outbox_ambiguous,
+            "outbox_confirmed_broker_side_effect_count": outbox_confirmed,
+            "exact_order_count": len(exact_orders),
+            "exact_unattributed_order_count": len(exact_unattributed_orders),
+            "exact_unattributed_trade_count": len(exact_unattributed_trades),
+            "exact_open_order_count": len(exact_open_orders) + len(exact_unattributed_open_orders),
+            "exact_unattributed_open_order_count": len(exact_unattributed_open_orders),
+            "exact_broker_side_effect_count": exact_side_effect_count,
+            "foreign_order_count": len(orders)
+            + len(unattributed_orders)
+            - len(exact_orders)
+            - len(exact_unattributed_orders),
+            "foreign_trade_count": len(unattributed_trades) - len(exact_unattributed_trades),
+            "identity_conflicts": authority_conflicts,
+            "orders": retained_orders,
+        }
+        return {**payload, "authority_sha256": canonical_json_sha256(payload)}
+
+    def _reconcile_preplan_unknown_miniqmt_run(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        data_source: str,
+        as_of_time: datetime | None,
+        retry_claim_token: str | None = None,
+    ) -> tuple[SimulationDailyRun, SimulationSchedulerBindingResult | None]:
+        raw_failure = run.run_payload_json.get("miniqmt_preplan_unknown_failure")
+        failure = raw_failure if isinstance(raw_failure, dict) else None
+        if failure is None:
+            diagnostic = run.run_payload_json.get("pre_run_failure")
+            if isinstance(diagnostic, dict):
+                failure = self._preplan_unknown_failure_evidence(binding=binding, diagnostic=diagnostic)
+        runtime_ids = (
+            sorted({str(item or "").strip() for item in failure.get("runtime_ids", []) if str(item or "").strip()})
+            if isinstance(failure, dict) and isinstance(failure.get("runtime_ids"), list)
+            else []
+        )
+        runtime_authorities = (
+            [dict(item) for item in failure.get("runtime_authorities", []) if isinstance(item, Mapping)]
+            if isinstance(failure, dict) and isinstance(failure.get("runtime_authorities"), list)
+            else []
+        )
+        runtime_authority = runtime_authorities[0] if len(runtime_authorities) == 1 else {}
+        identity_conflicts: list[str] = []
+        if not isinstance(failure, dict):
+            identity_conflicts.append("failure_evidence_missing")
+        elif failure.get("binding_id") != binding.binding_id:
+            identity_conflicts.append("binding_id_conflict")
+        if len(runtime_ids) != 1:
+            identity_conflicts.append("runtime_identity_not_exactly_one")
+        if len(runtime_authorities) != 1:
+            identity_conflicts.append("runtime_authority_not_exactly_one")
+        if isinstance(failure, dict):
+            expected_failure_fingerprint = canonical_json_sha256(
+                {
+                    "schema_version": "miniqmt_preplan_unknown_failure_identity_v2",
+                    "binding_id": binding.binding_id,
+                    "runtime_ids": runtime_ids,
+                    "failure_count": failure.get("failure_count"),
+                    "all_failures_sha256": failure.get("all_failures_sha256"),
+                    "omitted_failures_sha256": failure.get("omitted_failures_sha256"),
+                    "runtime_authorities": runtime_authorities,
+                }
+            )
+            if failure.get("failure_fingerprint") != expected_failure_fingerprint:
+                identity_conflicts.append("failure_fingerprint_conflict")
+        runtime_id = runtime_ids[0] if len(runtime_ids) == 1 else None
+        if runtime_id is not None and runtime_authority.get("runtime_id") != runtime_id:
+            identity_conflicts.append("runtime_authority_id_conflict")
+        expected_authority = {
+            "run_id": run.run_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "broker_account_id": binding.broker_account_id,
+            "trade_date": trade_date.isoformat(),
+        }
+        for field_name, expected_value in expected_authority.items():
+            if runtime_authority.get(field_name) != expected_value:
+                identity_conflicts.append(f"runtime_authority_{field_name}_conflict")
+        authority_plan_id = str(runtime_authority.get("execution_plan_id") or "").strip()
+        authority_plan_hash = str(runtime_authority.get("execution_plan_hash") or "").strip()
+        authority_plan: ExecutionPlan | None = None
+        if not authority_plan_id or not authority_plan_hash:
+            identity_conflicts.append("runtime_authority_plan_missing")
+        else:
+            try:
+                authority_plan = self.repository.get_execution_plan(authority_plan_id)
+            except Exception:  # noqa: BLE001 - converted to bounded durable identity conflict below.
+                identity_conflicts.append("runtime_authority_plan_readback_failed")
+            else:
+                if (
+                    authority_plan.plan_hash != authority_plan_hash
+                    or authority_plan.binding_id != binding.binding_id
+                    or authority_plan.target_trade_date != trade_date
+                ):
+                    identity_conflicts.append("runtime_authority_plan_owner_conflict")
+                expected_runtime_id = miniqmt_kernel_runtime_id(
+                    plan_id=authority_plan.plan_id,
+                    binding_id=binding.binding_id,
+                    trade_date=trade_date,
+                )
+                if runtime_id != expected_runtime_id:
+                    identity_conflicts.append("runtime_authority_deterministic_id_conflict")
+        if type(runtime_authority.get("lifecycle_generation")) is not int:
+            identity_conflicts.append("runtime_authority_generation_missing")
+        if type(runtime_authority.get("attempt_token")) is not int:
+            identity_conflicts.append("runtime_authority_attempt_missing")
+        outbox_authority = runtime_authority.get("outbox_authority")
+        if not isinstance(outbox_authority, Mapping):
+            identity_conflicts.append("outbox_authority_missing")
+        else:
+            outbox_identity = {
+                "runtime_id": runtime_id,
+                "run_id": run.run_id,
+                "binding_id": binding.binding_id,
+                "strategy_id": binding.strategy_id,
+                "broker_account_id": binding.broker_account_id,
+                "trade_date": trade_date.isoformat(),
+                "execution_plan_id": authority_plan_id,
+                "execution_plan_hash": authority_plan_hash,
+            }
+            for field_name, expected_value in outbox_identity.items():
+                if outbox_authority.get(field_name) != expected_value:
+                    identity_conflicts.append(f"outbox_authority_{field_name}_conflict")
+            authority_sha256 = outbox_authority.get("authority_sha256")
+            if not isinstance(authority_sha256, str) or authority_sha256 != canonical_json_sha256(
+                {key: value for key, value in outbox_authority.items() if key != "authority_sha256"}
+            ):
+                identity_conflicts.append("outbox_authority_hash_conflict")
+        if identity_conflicts:
+            proof = {
+                "schema_version": "miniqmt_preplan_unknown_reconciliation_v1",
+                "status": "RUNTIME_IDENTITY_INVALID_TERMINAL",
+                "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RUNTIME_IDENTITY_INVALID",
+                "run_id": run.run_id,
+                "binding_id": binding.binding_id,
+                "strategy_id": binding.strategy_id,
+                "trade_date": trade_date.isoformat(),
+                "runtime_ids": runtime_ids,
+                "identity_conflicts": identity_conflicts,
+                "broker_side_effect_state": "UNKNOWN",
+                "automatic": True,
+                "auto_retry": False,
+                "replacement_plan_created": False,
+            }
+            terminal = self.repository.update_simulation_daily_run(
+                run.run_id,
+                status=SimulationDailyRunStatus.FAILED_TERMINAL,
+                payload_patch={
+                    "last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+                    "miniqmt_preplan_unknown_reconciliation": proof,
+                },
+            )
+            terminal = self.repository.clear_simulation_retry_control(
+                run_id=terminal.run_id,
+                retry_key=_SIMULATION_BINDING_RETRY_KEY,
+                expected_claim_token=retry_claim_token,
+            )
+            return terminal, self._preplan_unknown_reconciliation_result(
+                binding=binding,
+                run=terminal,
+                data_source=data_source,
+                proof=proof,
+            )
+
+        assert runtime_id is not None
+        run, runtime_release_evidence, effective_runtime_authority = self._release_preplan_unknown_kernel_runtime(
+            binding=binding,
+            run=run,
+            runtime_id=runtime_id,
+            runtime_authority=runtime_authority,
+            trade_date=trade_date,
+        )
+        context = self._load_run_context(
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=trade_date,
+            as_of_time=as_of_time,
+        )
+        sync_result = self._sync_before_submit(binding=binding, run=run, context=context)
+        sync_conflicts = self._preplan_sync_receipt_conflicts(
+            binding=binding,
+            trade_date=trade_date,
+            sync_result=sync_result,
+        )
+        if sync_conflicts:
+            reconciliation = {
+                "run_status_gate": {
+                    "status": "WARNING",
+                    "reason": "sync_receipt_identity_or_snapshot_invalid",
+                    "account_level_issue_count": 0,
+                }
+            }
+        else:
+            reconciliation = self._reconcile_after_submit_with_timeout(
+                binding=binding,
+                run=run,
+                context=context,
+            )
+            if not isinstance(reconciliation, dict):
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT preplan UNKNOWN reconciliation returned no typed readback",
+                    context={
+                        "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RECONCILIATION_INVALID",
+                        "stage": "MINIQMT_PREPLAN_UNKNOWN_RECONCILIATION",
+                        "run_id": run.run_id,
+                        "binding_id": binding.binding_id,
+                        "runtime_id": runtime_id,
+                    },
+                )
+        run_status_gate = (
+            reconciliation.get("run_status_gate") if isinstance(reconciliation.get("run_status_gate"), dict) else {}
+        )
+        exact_broker_authority = self._preplan_exact_broker_authority(
+            binding=binding,
+            run=run,
+            context=context,
+            runtime_authority=effective_runtime_authority,
+        )
+        open_order_count = int(exact_broker_authority["exact_open_order_count"])
+        broker_side_effect_count = int(exact_broker_authority["exact_broker_side_effect_count"])
+        run_status = str(run_status_gate.get("status") or "").strip().upper()
+        if exact_broker_authority["outbox_complete"] is not True:
+            sync_conflicts.append("outbox_authority_incomplete")
+        if int(exact_broker_authority["outbox_ambiguous_command_count"]) > 0:
+            sync_conflicts.append("outbox_outcome_ambiguous")
+        if (
+            exact_broker_authority["outbox_replacement_safe"] is not True
+            and broker_side_effect_count == 0
+            and "outbox_outcome_ambiguous" not in sync_conflicts
+        ):
+            sync_conflicts.append("outbox_commands_not_closed_safe")
+        sync_conflicts.extend(str(item) for item in exact_broker_authority["identity_conflicts"])
+        account_level_issue_count = int(run_status_gate.get("account_level_issue_count") or 0)
+        if account_level_issue_count > 0:
+            sync_conflicts.append("account_level_reconciliation_issues_present")
+        proof_base = {
+            "schema_version": "miniqmt_preplan_unknown_reconciliation_v1",
+            "run_id": run.run_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "trade_date": trade_date.isoformat(),
+            "runtime_id": runtime_id,
+            "failure_fingerprint": failure.get("failure_fingerprint") if isinstance(failure, dict) else None,
+            "run_status_gate": dict(run_status_gate),
+            "open_order_count": open_order_count,
+            "broker_side_effect_count": broker_side_effect_count,
+            "sync_completed": sync_result is not None,
+            "sync_conflicts": sync_conflicts,
+            "account_level_issue_count": account_level_issue_count,
+            "runtime_release_status": runtime_release_evidence.get("status"),
+            "runtime_released_at": runtime_release_evidence.get("released_at"),
+            "runtime_authority": effective_runtime_authority,
+            "exact_broker_authority": exact_broker_authority,
+            "automatic": True,
+            "replacement_plan_created": False,
+        }
+        latest = self.repository.get_simulation_daily_run(run.run_id)
+        if (
+            run_status == "SUCCEEDED"
+            and not sync_conflicts
+            and open_order_count == 0
+            and broker_side_effect_count == 0
+            and exact_broker_authority["outbox_replacement_safe"] is True
+        ):
+            proof = {
+                **proof_base,
+                "status": "NO_BROKER_SIDE_EFFECT",
+                "reason_code": "MINIQMT_PREPLAN_UNKNOWN_NO_BROKER_SIDE_EFFECT",
+                "auto_retry": True,
+                "replacement_plan_authorized": True,
+            }
+            cleared = self.repository.update_simulation_daily_run(
+                latest.run_id,
+                status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+                payload_patch={
+                    "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+                    "broker_called": False,
+                    "submitted_intents": 0,
+                    "failed_intents": 0,
+                    "miniqmt_preplan_unknown_reconciliation": proof,
+                },
+                payload_unset=(
+                    "broker_side_effect_state",
+                    "pre_run_failure",
+                    "pre_run_failure_last_observed_at",
+                    "pre_run_failure_observed_after_terminal",
+                    "submit_failure",
+                ),
+            )
+            cleared = self.repository.clear_simulation_retry_control(
+                run_id=cleared.run_id,
+                retry_key=_SIMULATION_BINDING_RETRY_KEY,
+                expected_claim_token=retry_claim_token,
+            )
+            return cleared, None
+
+        if run_status == "SUCCEEDED" and not sync_conflicts and open_order_count == 0 and broker_side_effect_count > 0:
+            proof = {
+                **proof_base,
+                "status": "BROKER_SIDE_EFFECT_RECONCILED_TERMINAL",
+                "reason_code": "MINIQMT_PREPLAN_UNKNOWN_BROKER_SIDE_EFFECT_RECONCILED",
+                "auto_retry": False,
+            }
+            terminal = self.repository.update_simulation_daily_run(
+                latest.run_id,
+                status=SimulationDailyRunStatus.FAILED_TERMINAL,
+                payload_patch={
+                    "last_stage": SimulationDailyRunStatus.FAILED_TERMINAL.value,
+                    "broker_called": True,
+                    "broker_side_effect_state": "CONFIRMED_RECONCILED",
+                    "miniqmt_preplan_unknown_reconciliation": proof,
+                },
+                payload_unset=(
+                    "pre_run_failure",
+                    "pre_run_failure_last_observed_at",
+                    "submit_failure",
+                ),
+            )
+            terminal = self.repository.clear_simulation_retry_control(
+                run_id=terminal.run_id,
+                retry_key=_SIMULATION_BINDING_RETRY_KEY,
+                expected_claim_token=retry_claim_token,
+            )
+            return terminal, self._preplan_unknown_reconciliation_result(
+                binding=binding,
+                run=terminal,
+                data_source=data_source,
+                proof=proof,
+            )
+
+        proof = {
+            **proof_base,
+            "status": "RECONCILIATION_PENDING",
+            "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RECONCILIATION_PENDING",
+            "auto_retry": True,
+        }
+        pending = self.repository.update_simulation_daily_run(
+            latest.run_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+                "broker_side_effect_state": "UNKNOWN",
+                "miniqmt_preplan_unknown_reconciliation": proof,
+            },
+        )
+        return pending, self._preplan_unknown_reconciliation_result(
+            binding=binding,
+            run=pending,
+            data_source=data_source,
+            proof=proof,
+        )
+
     def _clear_pre_run_failure_after_planning(
         self,
         build_result: SimulationPlanBuildResult,
     ) -> SimulationPlanBuildResult:
-        if not any(
+        preplan_proof = build_result.run.run_payload_json.get("miniqmt_preplan_unknown_reconciliation")
+        close_safe_preplan_proof = (
+            isinstance(preplan_proof, dict)
+            and preplan_proof.get("status") == "NO_BROKER_SIDE_EFFECT"
+            and preplan_proof.get("replacement_plan_created") is not True
+        )
+        if not close_safe_preplan_proof and not any(
             key in build_result.run.run_payload_json for key in ("pre_run_failure", "selection_inference_pending")
         ):
             return build_result
+        payload_patch = (
+            {
+                "miniqmt_preplan_unknown_reconciliation": {
+                    **preplan_proof,
+                    "replacement_plan_created": True,
+                    "replacement_plan_id": build_result.execution_plan.plan_id,
+                    "replacement_plan_hash": build_result.execution_plan.plan_hash,
+                }
+            }
+            if close_safe_preplan_proof
+            else None
+        )
         cleared = self.repository.update_simulation_daily_run(
             build_result.run.run_id,
+            payload_patch=payload_patch,
             payload_unset=(
                 "pre_run_failure",
                 "pre_run_failure_last_observed_at",
@@ -4289,7 +6312,7 @@ class SimulationLifecycleScheduler:
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         if as_of_time is not None:
             as_of_time = self._scheduler_time(as_of_time)
-        self._advance_miniqmt_quote_ingress_lifecycle()
+        kernel_product_tick_failures = self._advance_miniqmt_quote_ingress_lifecycle()
         terminalized = self._terminalize_post_close_miniqmt_runs(
             trade_date=trade_date,
             broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
@@ -4306,12 +6329,16 @@ class SimulationLifecycleScheduler:
                 as_of_time=as_of_time,
             )
         )
+        unmatched_failure_result = self._unmatched_kernel_product_failure_result(
+            failures=kernel_product_tick_failures,
+            data_source=data_source,
+        )
         return SimulationSchedulerRunOnceResult(
             trade_date=trade_date,
             data_source=data_source,
             submit=False,
             total_bindings=0,
-            results=(),
+            results=(unmatched_failure_result,) if unmatched_failure_result is not None else (),
             stale_run_results=tuple(terminalized),
             as_of_time=as_of_time,
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
@@ -4503,6 +6530,7 @@ class SimulationLifecycleScheduler:
                         scheduler_trade_date=trade_date,
                         as_of_time=as_of_time,
                     ),
+                    as_of_time=as_of_time,
                 )
                 if terminalized_run is not None:
                     terminalized.append(terminalized_run)
@@ -4608,6 +6636,7 @@ class SimulationLifecycleScheduler:
                         scheduler_trade_date=trade_date,
                         as_of_time=as_of_time,
                     ),
+                    as_of_time=as_of_time,
                 )
                 if terminalized_run is not None:
                     terminalized.append(terminalized_run)
@@ -4708,6 +6737,7 @@ class SimulationLifecycleScheduler:
                         scheduler_trade_date=trade_date,
                         as_of_time=as_of_time,
                     ),
+                    as_of_time=as_of_time,
                 )
                 if terminalized_run is not None:
                     terminalized.append(terminalized_run)
@@ -4781,9 +6811,12 @@ class SimulationLifecycleScheduler:
         self._validate_local_sim_post_close_state_closure(run)
         active_states = tuple(state for state in states if not state.is_terminal)
         if active_states:
-            if run.status != SimulationDailyRunStatus.FAILED_TERMINAL:
+            if run.status not in {
+                SimulationDailyRunStatus.FAILED_RETRYABLE,
+                SimulationDailyRunStatus.FAILED_TERMINAL,
+            }:
                 return None
-            return self._recover_historical_failed_terminal_localsim_active_generation(
+            return self._recover_historical_failed_localsim_active_generation(
                 run=run,
                 plan=plan,
                 binding=binding,
@@ -4851,7 +6884,7 @@ class SimulationLifecycleScheduler:
         )
         return terminalized
 
-    def _recover_historical_failed_terminal_localsim_active_generation(
+    def _recover_historical_failed_localsim_active_generation(
         self,
         *,
         run: SimulationDailyRun,
@@ -4863,14 +6896,20 @@ class SimulationLifecycleScheduler:
         scheduler_trade_date: date,
         as_of_time: datetime | None,
     ) -> dict[str, Any]:
-        """Finish an old incorrectly-terminal run from its exact durable generation."""
+        """Finish an old failed run from its exact active durable generation."""
+
+        is_terminal_failure = run.status == SimulationDailyRunStatus.FAILED_TERMINAL
+        evidence_suffix = "terminal" if is_terminal_failure else "retryable"
+        reason_prefix = (
+            "LOCALSIM_HISTORICAL_FAILED_TERMINAL" if is_terminal_failure else "LOCALSIM_HISTORICAL_FAILED_RETRYABLE"
+        )
 
         persistence = run.run_payload_json.get("local_sim_persistence")
         if not isinstance(persistence, dict) or persistence.get("terminal") is not False:
             raise DataUnavailableError(
-                "Historical failed-terminal LocalSim active generation has invalid persistence authority",
+                "Historical failed LocalSim active generation has invalid persistence authority",
                 context={
-                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_PERSISTENCE_CONFLICT",
+                    "reason_code": f"{reason_prefix}_PERSISTENCE_CONFLICT",
                     "run_id": run.run_id,
                     "binding_id": run.binding_id,
                     "plan_id": plan.plan_id,
@@ -4883,18 +6922,19 @@ class SimulationLifecycleScheduler:
             _POST_CLOSE_RECONCILE_TIME,
             tzinfo=SCHEDULER_TZ,
         )
-        context = self._load_run_context(
+        context = self._load_existing_plan_context(
             runtime_release=runtime_release,
             binding=binding,
+            plan=plan,
             trade_date=run.trade_date,
             as_of_time=recovery_as_of,
         )
         recovery_data_source = str(context.market_data_source or "").strip()
         if not recovery_data_source:
             raise DataUnavailableError(
-                "Historical failed-terminal LocalSim recovery has no authoritative market-data source",
+                "Historical failed LocalSim recovery has no authoritative market-data source",
                 context={
-                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_MARKET_DATA_SOURCE_MISSING",
+                    "reason_code": f"{reason_prefix}_MARKET_DATA_SOURCE_MISSING",
                     "run_id": run.run_id,
                     "binding_id": run.binding_id,
                     "plan_id": plan.plan_id,
@@ -4913,7 +6953,7 @@ class SimulationLifecycleScheduler:
             binding=binding,
             trade_date=run.trade_date,
             context={
-                "stage": "STALE_LOCALSIM_FAILED_TERMINAL_ACTIVE_RECOVERY",
+                "stage": f"STALE_LOCALSIM_FAILED_{evidence_suffix.upper()}_ACTIVE_RECOVERY",
                 "run_id": run.run_id,
                 "binding_id": binding.binding_id,
                 "trade_date": run.trade_date.isoformat(),
@@ -4941,9 +6981,9 @@ class SimulationLifecycleScheduler:
             or latest_persistence.get("terminal") is not True
         ):
             raise DataUnavailableError(
-                "Historical failed-terminal LocalSim generation did not reach exact terminal closure",
+                "Historical failed LocalSim generation did not reach exact terminal closure",
                 context={
-                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_CLOSURE_INCOMPLETE",
+                    "reason_code": f"{reason_prefix}_CLOSURE_INCOMPLETE",
                     "run_id": run.run_id,
                     "binding_id": run.binding_id,
                     "plan_id": plan.plan_id,
@@ -4960,17 +7000,17 @@ class SimulationLifecycleScheduler:
             )
         except Exception as exc:
             raise DataUnavailableError(
-                "Historical failed-terminal LocalSim terminal outbox is invalid",
+                "Historical failed LocalSim terminal outbox is invalid",
                 context={
-                    "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_OUTBOX_INVALID",
+                    "reason_code": f"{reason_prefix}_OUTBOX_INVALID",
                     "run_id": run.run_id,
                     "binding_id": run.binding_id,
                     "plan_id": plan.plan_id,
                 },
             ) from exc
         recovery_evidence = {
-            "schema_version": "localsim_historical_failed_terminal_active_recovery_v1",
-            "reason_code": "LOCALSIM_HISTORICAL_FAILED_TERMINAL_ACTIVE_GENERATION_RECOVERED",
+            "schema_version": f"localsim_historical_failed_{evidence_suffix}_active_recovery_v1",
+            "reason_code": f"{reason_prefix}_ACTIVE_GENERATION_RECOVERED",
             "run_id": run.run_id,
             "binding_id": binding.binding_id,
             "plan_id": plan.plan_id,
@@ -5009,7 +7049,7 @@ class SimulationLifecycleScheduler:
             status=latest.status,
             payload_patch={
                 "last_stage": latest.status.value,
-                "localsim_historical_failed_terminal_active_recovery_v1": recovery_evidence,
+                f"localsim_historical_failed_{evidence_suffix}_active_recovery_v1": recovery_evidence,
             },
         )
         return {
@@ -5019,9 +7059,9 @@ class SimulationLifecycleScheduler:
             "broker_backend": updated.broker_backend.value,
             "previous_status": run.status.value,
             "status": updated.status.value,
-            "reason": "localsim_historical_failed_terminal_active_generation_recovered",
+            "reason": f"localsim_historical_failed_{evidence_suffix}_active_generation_recovered",
             "reason_code": recovery_evidence["reason_code"],
-            "historical_failed_terminal_active_recovery": True,
+            f"historical_failed_{evidence_suffix}_active_recovery": True,
             "scheduler_trade_date": scheduler_trade_date.isoformat(),
             "driven_status": driven.status,
         }
@@ -5146,6 +7186,7 @@ class SimulationLifecycleScheduler:
                         run=run,
                         as_of_time=as_of_time,
                     ),
+                    as_of_time=as_of_time,
                 )
                 if terminalized_run is None:
                     continue
@@ -5188,6 +7229,7 @@ class SimulationLifecycleScheduler:
                         run=run,
                         as_of_time=as_of_time,
                     ),
+                    as_of_time=as_of_time,
                 )
                 if terminalized_run is None:
                     continue
@@ -5949,6 +7991,8 @@ class SimulationLifecycleScheduler:
         payload = run.run_payload_json if isinstance(run.run_payload_json, dict) else {}
         if bool(payload.get("broker_called")):
             return True
+        if payload.get("broker_side_effect_state") == "UNKNOWN":
+            return True
         raw_submitted = payload.get("submitted_intents")
         if raw_submitted is not None:
             try:
@@ -6290,6 +8334,319 @@ class SimulationLifecycleScheduler:
             trade_date=trade_date,
         )
 
+    def _load_existing_plan_context(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        plan: ExecutionPlan,
+        trade_date: date,
+        as_of_time: datetime | None,
+    ) -> SimulationRunContext:
+        loader = getattr(self.context_provider, "load_existing_plan_context", None)
+        if callable(loader):
+            return loader(
+                runtime_release=runtime_release,
+                binding=binding,
+                plan=plan,
+                trade_date=trade_date,
+                as_of_time=as_of_time,
+            )
+        return self._load_run_context(
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=trade_date,
+            as_of_time=as_of_time,
+        )
+
+    @staticmethod
+    def _run_failure_stage(run: SimulationDailyRun) -> str:
+        for key in ("submit_failure", "pre_run_failure"):
+            failure = run.run_payload_json.get(key)
+            if isinstance(failure, dict):
+                stage = str(failure.get("stage") or failure.get("failure_stage") or "").strip()
+                if stage:
+                    return stage
+        if isinstance(run.run_payload_json.get("pre_trade_blocked_order_generation"), dict):
+            return "LOCAL_SIM_PRE_TRADE_BLOCKED_REPLAN"
+        return "SIMULATION_BINDING_FAILED_RETRYABLE"
+
+    @staticmethod
+    def _run_requires_binding_retry_control(run: SimulationDailyRun) -> bool:
+        retryable_failure = (
+            run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+            and not bool(run.run_payload_json.get("broker_called"))
+            and any(isinstance(run.run_payload_json.get(key), dict) for key in ("submit_failure", "pre_run_failure"))
+        )
+        blocked_replan = (
+            run.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+            and run.status == SimulationDailyRunStatus.SUCCEEDED
+            and not bool(run.run_payload_json.get("broker_called"))
+            and isinstance(run.run_payload_json.get("pre_trade_blocked_order_generation"), dict)
+        )
+        return retryable_failure or blocked_replan
+
+    def _claim_binding_retry_or_defer(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        trade_date: date,
+        data_source: str,
+        submit: bool,
+        as_of_time: datetime | None,
+    ) -> tuple[SimulationDailyRun, SimulationSchedulerBindingResult | None, str | None, str | None]:
+        if not submit or not self._run_requires_binding_retry_control(run):
+            return run, None, None, None
+        source_fingerprint = self._simulation_retry_source_fingerprint(
+            run=run,
+            retry_key=_SIMULATION_BINDING_RETRY_KEY,
+        )
+        decision = inspect_simulation_retry_backoff(
+            run=run,
+            retry_key=_SIMULATION_BINDING_RETRY_KEY,
+            source_fingerprint=source_fingerprint,
+            as_of_time=self._scheduler_time(as_of_time),
+            lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
+        )
+        if decision is None:
+            decision = self.repository.claim_simulation_retry_attempt(
+                run_id=run.run_id,
+                retry_key=_SIMULATION_BINDING_RETRY_KEY,
+                source_fingerprint=source_fingerprint,
+                as_of_time=self._scheduler_time(as_of_time),
+                lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
+            )
+        if decision.should_execute:
+            return decision.run, None, decision.claim_token, source_fingerprint
+        retry_entry = deepcopy(decision.retry_entry)
+        error = {
+            "schema_version": "simulation_binding_retry_backoff_v1",
+            "reason_code": "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE",
+            "retry_reason": decision.reason,
+            "run_id": decision.run.run_id,
+            "binding_id": binding.binding_id,
+            "plan_id": plan.plan_id,
+            "failure_stage": self._run_failure_stage(decision.run),
+            "retry_control": retry_entry,
+            "auto_retry": True,
+            "next_retry_at": (
+                retry_entry.get("next_retry_at") or retry_entry.get("lease_until")
+                if isinstance(retry_entry, dict)
+                else None
+            ),
+        }
+        return (
+            decision.run,
+            SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="RETRY_BACKOFF",
+                run=decision.run,
+                execution_plan=plan,
+                lifecycle_diagnostic={
+                    **error,
+                    "alert": {
+                        "severity": "WARNING",
+                        "reason_code": "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE",
+                        "auto_retry": True,
+                        "next_retry_at": error["next_retry_at"],
+                    },
+                },
+                data_source=self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            ),
+            None,
+            None,
+        )
+
+    def _claim_preplan_unknown_retry_or_defer(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        trade_date: date,
+        data_source: str,
+        as_of_time: datetime | None,
+    ) -> tuple[SimulationDailyRun, SimulationSchedulerBindingResult | None, str | None, str]:
+        source_fingerprint = self._simulation_retry_source_fingerprint(
+            run=run,
+            retry_key=_SIMULATION_BINDING_RETRY_KEY,
+        )
+        decision = inspect_simulation_retry_backoff(
+            run=run,
+            retry_key=_SIMULATION_BINDING_RETRY_KEY,
+            source_fingerprint=source_fingerprint,
+            as_of_time=self._scheduler_time(as_of_time),
+            lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
+        )
+        if decision is None:
+            decision = self.repository.claim_simulation_retry_attempt(
+                run_id=run.run_id,
+                retry_key=_SIMULATION_BINDING_RETRY_KEY,
+                source_fingerprint=source_fingerprint,
+                as_of_time=self._scheduler_time(as_of_time),
+                lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
+            )
+        if decision.should_execute:
+            return decision.run, None, decision.claim_token, source_fingerprint
+        retry_entry = deepcopy(decision.retry_entry)
+        diagnostic = {
+            "schema_version": "miniqmt_preplan_unknown_retry_backoff_v1",
+            "reason_code": "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE",
+            "retry_reason": decision.reason,
+            "run_id": decision.run.run_id,
+            "binding_id": binding.binding_id,
+            "failure_stage": "MINIQMT_PREPLAN_UNKNOWN_RECONCILIATION",
+            "retry_control": retry_entry,
+            "auto_retry": True,
+            "next_retry_at": (
+                retry_entry.get("next_retry_at") or retry_entry.get("lease_until")
+                if isinstance(retry_entry, dict)
+                else None
+            ),
+        }
+        return (
+            decision.run,
+            SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="RETRY_BACKOFF",
+                run=decision.run,
+                lifecycle_diagnostic={
+                    **diagnostic,
+                    "alert": {
+                        "severity": "WARNING",
+                        "reason_code": diagnostic["reason_code"],
+                        "auto_retry": True,
+                        "next_retry_at": diagnostic["next_retry_at"],
+                    },
+                },
+                data_source=self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            ),
+            None,
+            source_fingerprint,
+        )
+
+    def _finalize_binding_retry_result(
+        self,
+        *,
+        result: SimulationSchedulerBindingResult,
+        as_of_time: datetime | None,
+    ) -> SimulationSchedulerBindingResult:
+        run = result.run
+        if run is None or result.status == "RETRY_BACKOFF":
+            return result
+        if self._run_requires_binding_retry_control(run):
+            failure_stage = self._run_failure_stage(run)
+            raw_failure = run.run_payload_json.get("submit_failure")
+            if not isinstance(raw_failure, dict):
+                raw_failure = run.run_payload_json.get("pre_run_failure")
+            if not isinstance(raw_failure, dict):
+                blocked = run.run_payload_json.get("pre_trade_blocked_order_generation")
+                if isinstance(blocked, dict):
+                    raw_failure = {
+                        "type": "LocalSimPreTradeBlockedReplan",
+                        "message": "LocalSIM frozen plan remains pre-trade blocked",
+                        "context": blocked,
+                    }
+            failure = raw_failure if isinstance(raw_failure, dict) else {}
+            context = failure.get("context") if isinstance(failure.get("context"), dict) else {}
+            error = {
+                "type": str(failure.get("type") or "SimulationRetryableFailure"),
+                "message": str(failure.get("message") or "simulation binding failed retryably"),
+                "reason_code": str(context.get("reason_code") or failure.get("reason_code") or "") or None,
+                "context": deepcopy(context),
+                "failure_stage": failure_stage,
+            }
+            updated = self._record_simulation_retry_failure_evidence(
+                run=run,
+                retry_key=_SIMULATION_BINDING_RETRY_KEY,
+                failure_stage=failure_stage,
+                error=error,
+                as_of_time=as_of_time,
+                expected_claim_token=result.retry_claim_token,
+                source_fingerprint=result.retry_source_fingerprint,
+            )
+            return replace(result, run=updated)
+        if result.retry_claim_token is not None:
+            updated = self.repository.clear_simulation_retry_control(
+                run_id=run.run_id,
+                retry_key=_SIMULATION_BINDING_RETRY_KEY,
+                expected_claim_token=result.retry_claim_token,
+            )
+            return replace(result, run=updated)
+        return result
+
+    def _execute_existing_plan_retry_attempt(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        data_source: str,
+        submit: bool,
+        mode: str,
+        created_by: str,
+        selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None,
+        shared_selection_keys: set[tuple[Any, ...]] | None,
+        as_of_time: datetime | None,
+    ) -> SimulationSchedulerBindingResult:
+        if self._should_rebuild_localsim_plan_after_side_effect_free_failure(
+            binding=binding,
+            run=run,
+            submit=submit,
+            trade_date=trade_date,
+            as_of_time=as_of_time,
+        ):
+            return self._rebuild_localsim_plan_after_side_effect_free_failure(
+                binding=binding,
+                run=run,
+                runtime_release=runtime_release,
+                trade_date=trade_date,
+                data_source=data_source,
+                submit=submit,
+                mode=mode,
+                created_by=created_by,
+                selection_cache=selection_cache,
+                shared_selection_keys=shared_selection_keys,
+                as_of_time=as_of_time,
+            )
+        if self._should_rebuild_miniqmt_plan_after_side_effect_free_failure(binding=binding, run=run):
+            return self._rebuild_miniqmt_plan_after_side_effect_free_failure(
+                binding=binding,
+                run=run,
+                runtime_release=runtime_release,
+                trade_date=trade_date,
+                data_source=data_source,
+                submit=submit,
+                mode=mode,
+                created_by=created_by,
+                selection_cache=selection_cache,
+                shared_selection_keys=shared_selection_keys,
+                as_of_time=as_of_time,
+            )
+        return self._existing_plan_result(
+            binding=binding,
+            run=run,
+            trade_date=trade_date,
+            data_source=data_source,
+            submit=submit,
+            mode=mode,
+            as_of_time=as_of_time,
+        )
+
     def _run_binding(
         self,
         *,
@@ -6309,49 +8666,114 @@ class SimulationLifecycleScheduler:
             binding_id=binding.binding_id,
             trade_date=trade_date,
         )
-        if existing is not None and existing.execution_plan_id:
-            if self._should_rebuild_localsim_plan_after_side_effect_free_failure(
+        if existing is not None and existing.execution_plan_id is None:
+            terminal_preplan_unknown = self._preplan_unknown_terminal_result(
                 binding=binding,
                 run=existing,
-                submit=submit,
-                trade_date=trade_date,
-                as_of_time=as_of_time,
+                data_source=data_source,
+            )
+            if terminal_preplan_unknown is not None:
+                return terminal_preplan_unknown
+            if (
+                binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+                and existing.run_payload_json.get("broker_side_effect_state") == "UNKNOWN"
             ):
-                return self._rebuild_localsim_plan_after_side_effect_free_failure(
-                    binding=binding,
-                    run=existing,
-                    runtime_release=runtime_release,
-                    trade_date=trade_date,
-                    data_source=data_source,
-                    submit=submit,
-                    mode=mode,
-                    created_by=created_by,
-                    selection_cache=selection_cache,
-                    shared_selection_keys=shared_selection_keys,
-                    as_of_time=as_of_time,
+                existing, deferred, retry_claim_token, retry_source_fingerprint = (
+                    self._claim_preplan_unknown_retry_or_defer(
+                        binding=binding,
+                        run=existing,
+                        trade_date=trade_date,
+                        data_source=data_source,
+                        as_of_time=as_of_time,
+                    )
                 )
-            if self._should_rebuild_miniqmt_plan_after_side_effect_free_failure(binding=binding, run=existing):
-                return self._rebuild_miniqmt_plan_after_side_effect_free_failure(
-                    binding=binding,
-                    run=existing,
-                    runtime_release=runtime_release,
-                    trade_date=trade_date,
-                    data_source=data_source,
-                    submit=submit,
-                    mode=mode,
-                    created_by=created_by,
-                    selection_cache=selection_cache,
-                    shared_selection_keys=shared_selection_keys,
-                    as_of_time=as_of_time,
-                )
-            return self._existing_plan_result(
+                if deferred is not None:
+                    return deferred
+                try:
+                    existing, preplan_unknown_result = self._reconcile_preplan_unknown_miniqmt_run(
+                        binding=binding,
+                        run=existing,
+                        runtime_release=runtime_release,
+                        trade_date=trade_date,
+                        data_source=data_source,
+                        as_of_time=as_of_time,
+                        retry_claim_token=retry_claim_token,
+                    )
+                except Exception as exc:
+                    isolated_exc: Exception = exc
+                    if not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError)):
+                        isolated_exc = RuntimeConfigInvalidError(
+                            "MiniQMT preplan UNKNOWN reconciliation failed and remains retryable",
+                            context={
+                                "reason_code": "MINIQMT_PREPLAN_UNKNOWN_RECONCILIATION_FAILED",
+                                "stage": "MINIQMT_PREPLAN_UNKNOWN_RECONCILIATION",
+                                "run_id": existing.run_id,
+                                "binding_id": binding.binding_id,
+                                "trade_date": trade_date.isoformat(),
+                                "broker_side_effect_state": "UNKNOWN",
+                                "exception": {
+                                    "type": type(exc).__name__,
+                                    "message": str(exc)[:2048],
+                                },
+                            },
+                        )
+                    if retry_claim_token is not None:
+                        raise _BindingRetryAttemptError(
+                            original=isolated_exc,
+                            claim_token=retry_claim_token,
+                            source_fingerprint=retry_source_fingerprint,
+                        ) from exc
+                    if isolated_exc is exc:
+                        raise
+                    raise isolated_exc from exc
+                if preplan_unknown_result is not None:
+                    proof = existing.run_payload_json.get("miniqmt_preplan_unknown_reconciliation")
+                    if not isinstance(proof, dict) or proof.get("status") != "RECONCILIATION_PENDING":
+                        return preplan_unknown_result
+                    return replace(
+                        preplan_unknown_result,
+                        retry_claim_token=retry_claim_token,
+                        retry_source_fingerprint=retry_source_fingerprint,
+                    )
+        if existing is not None and existing.execution_plan_id:
+            existing_plan = self.repository.get_execution_plan(existing.execution_plan_id)
+            existing, deferred, retry_claim_token, retry_source_fingerprint = self._claim_binding_retry_or_defer(
                 binding=binding,
                 run=existing,
+                plan=existing_plan,
                 trade_date=trade_date,
                 data_source=data_source,
                 submit=submit,
-                mode=mode,
                 as_of_time=as_of_time,
+            )
+            if deferred is not None:
+                return deferred
+            try:
+                result = self._execute_existing_plan_retry_attempt(
+                    binding=binding,
+                    run=existing,
+                    runtime_release=runtime_release,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    submit=submit,
+                    mode=mode,
+                    created_by=created_by,
+                    selection_cache=selection_cache,
+                    shared_selection_keys=shared_selection_keys,
+                    as_of_time=as_of_time,
+                )
+            except Exception as exc:
+                if retry_claim_token is not None and retry_source_fingerprint is not None:
+                    raise _BindingRetryAttemptError(
+                        original=exc,
+                        claim_token=retry_claim_token,
+                        source_fingerprint=retry_source_fingerprint,
+                    ) from exc
+                raise
+            return replace(
+                result,
+                retry_claim_token=retry_claim_token,
+                retry_source_fingerprint=retry_source_fingerprint,
             )
 
         context = self._load_run_context(
@@ -7107,9 +9529,10 @@ class SimulationLifecycleScheduler:
         context: SimulationRunContext | None = None
         if self._should_reconcile_existing_miniqmt_run(binding=binding, run=run, submit=submit):
             if context is None:
-                context = self._load_run_context(
+                context = self._load_existing_plan_context(
                     runtime_release=runtime_release,
                     binding=binding,
+                    plan=plan,
                     trade_date=trade_date,
                     as_of_time=as_of_time,
                 )
@@ -7143,9 +9566,10 @@ class SimulationLifecycleScheduler:
         if self._should_submit_existing_plan(binding=binding, run=run, plan=plan, submit=submit):
             runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
             try:
-                context = self._load_run_context(
+                context = self._load_existing_plan_context(
                     runtime_release=runtime_release,
                     binding=binding,
+                    plan=plan,
                     trade_date=trade_date,
                     as_of_time=as_of_time,
                 )
@@ -7695,9 +10119,10 @@ class SimulationLifecycleScheduler:
                     "outbox_id": outbox.outbox_id,
                 },
             )
-        context = self._load_run_context(
+        context = self._load_existing_plan_context(
             runtime_release=runtime_release,
             binding=binding,
+            plan=plan,
             trade_date=trade_date,
             as_of_time=as_of_time,
         )
@@ -8250,9 +10675,10 @@ class SimulationLifecycleScheduler:
             receipt=projection_receipt,
         )
         if context is None:
-            context = self._load_run_context(
+            context = self._load_existing_plan_context(
                 runtime_release=runtime_release,
                 binding=binding,
+                plan=plan,
                 trade_date=trade_date,
                 as_of_time=as_of_time,
             )
@@ -8561,7 +10987,7 @@ class SimulationLifecycleScheduler:
         return (
             binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
             and run.status in {SimulationDailyRunStatus.FAILED_RETRYABLE, SimulationDailyRunStatus.SUCCEEDED}
-            and SimulationLifecycleScheduler._mini_qmt_batch_failed_without_broker_side_effect(run.run_payload_json)
+            and SimulationLifecycleScheduler._b0_manifest_conflict_requires_plan_rebuild(run.run_payload_json)
         )
 
     def _should_rebuild_localsim_plan_after_side_effect_free_failure(
@@ -8609,10 +11035,10 @@ class SimulationLifecycleScheduler:
                 ).lower()
                 if "insufficient cash" in text:
                     return True
-        return callable(getattr(self.context_provider, "load_context_for_phase", None)) and run.status in {
-            SimulationDailyRunStatus.PLANNING_EXECUTION,
-            SimulationDailyRunStatus.FAILED_RETRYABLE,
-        }
+        return (
+            callable(getattr(self.context_provider, "load_context_for_phase", None))
+            and run.status == SimulationDailyRunStatus.PLANNING_EXECUTION
+        )
 
     @staticmethod
     def _localsim_realtime_quote_required(
@@ -13020,9 +15446,10 @@ class SimulationLifecycleScheduler:
         context: SimulationRunContext | None = None,
     ) -> SimulationSchedulerBindingResult:
         if context is None:
-            context = self._load_run_context(
+            context = self._load_existing_plan_context(
                 runtime_release=runtime_release,
                 binding=binding,
+                plan=plan,
                 trade_date=trade_date,
                 as_of_time=as_of_time,
             )
@@ -16187,6 +18614,11 @@ class SimulationLifecycleBackgroundScheduler:
                     ),
                     "stale_terminalized_count": tick.stale_terminalized_count,
                     "stale_recovery_failed_count": tick.stale_recovery_failed_count,
+                    "recovery_backoff_count": getattr(
+                        tick,
+                        "recovery_backoff_count",
+                        sum(1 for item in tick.stale_run_results if item.get("status") == "RECOVERY_BACKOFF"),
+                    ),
                     "succeeded_with_capacity_residual_count": sum(
                         1 for item in processed if item.get("succeeded_with_capacity_residual")
                     )

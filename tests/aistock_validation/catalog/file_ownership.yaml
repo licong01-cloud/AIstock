@@ -7,11 +7,30 @@ rules:
       - backend/tests/advisory_model_first/**
       - scripts/advisory_model_prepare_request.py
       - scripts/advisory_model_train_wsl.py
+      - scripts/advisory_model_quality_prepare_request.py
+      - scripts/advisory_model_quality_train_wsl.py
+      - scripts/advisory_policy_dataset_prepare_request.py
+      - scripts/advisory_meta_label_prepare_request.py
+      - scripts/advisory_publish_program_model_descriptor.py
+      - scripts/advisory_outcome_calibration_prepare_request.py
+      - scripts/advisory_outcome_calibration_train_wsl.py
       - scripts/advisory_outcome_prepare_request.py
       - scripts/advisory_outcome_train_wsl.py
+      - scripts/advisory_price_range_calibration_prepare_request.py
+      - scripts/advisory_price_range_calibration_train_wsl.py
+      - scripts/advisory_price_range_prepare_request.py
+      - scripts/advisory_price_range_train_wsl.py
       - scripts/wsl/advisory_model_train.py
+      - scripts/wsl/advisory_model_quality_train.py
+      - scripts/wsl/advisory_policy_dataset_build.py
+      - scripts/wsl/advisory_meta_label_train.py
+      - scripts/wsl/advisory_outcome_calibration_train.py
       - scripts/wsl/advisory_outcome_train.py
+      - scripts/wsl/advisory_price_range_calibration_train.py
+      - scripts/wsl/advisory_price_range_train.py
       - docs/architecture/advisory_model_first_qe_file_training_realtime_inference_f2_design_*.md
+      - docs/architecture/advisory_p0c_policy_episode_cpcv_f2_design_*.md
+      - docs/architecture/advisory_p0d_short_rebound_meta_label_f2_design_*.md
     primary_module: advisory.model_first
     impact_modules: []
     layer: data_pipeline
@@ -78,6 +97,8 @@ rules:
       - backend/services/quantevolver/sector_risk_overlay*.py
       - backend/services/quantevolver/config_composer.py
       - backend/tests/quantevolver/test_*sector_risk_overlay*.py
+      - backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py
+      - backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py
       - backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py
       - backend/tests/unified_engine/test_score_weighted_capacity_registration.py
       - backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py
@@ -388,6 +409,7 @@ rules:
       - backend/tests/scripts/test_repo_hygiene_orphan_audit.py
       - backend/tests/scripts/test_code_intelligence_adapter.py
       - backend/tests/scripts/test_aistock_issue_workflow.py
+      - backend/tests/scripts/test_aistock_issue_workflow_fast.py
       - backend/tests/scripts/test_aistock_feature_workflow.py
       - backend/tests/scripts/test_issue_flow.py
       - backend/tests/scripts/test_issue_flow_pr_quality.py
@@ -439,6 +461,16 @@ rules:
     layer: database
     risk_level: high
     ownership_reason: Multi-Alpha P0-2 control and Archive recovery migrations jointly change durable orchestration and archive readback contracts.
+  - rule_id: qe_node_health_scheduler
+    priority: 130
+    include:
+      - backend/schedulers/node_health_scheduler.py
+      - backend/tests/test_dispatch_observer_quiet.py
+    primary_module: qe.core
+    impact_modules: [platform.api]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: The process-local QE node observer owns bounded remote health and dispatch-state reconciliation while Platform API consumes its snapshot.
   - rule_id: qe_services
     priority: 80
     include:
@@ -448,6 +480,7 @@ rules:
       - backend/tests/test_factor_metrics_h20_contract.py
       - backend/tests/test_qe_evolution_scheduler.py
       - backend/tests/test_qe_experiment_status_scanner.py
+      - backend/tests/test_simulation_runtime_scheduler_startup.py
       - backend/tests/unified_engine/test_backtest_executor.py
       - backend/tests/unified_engine/test_qe_*.py
     primary_module: qe.core
@@ -760,6 +793,7 @@ rules:
     priority: 75
     include:
       - backend/qlib_exporter/**
+      - backend/tests/qlib_exporter/**
       - scripts/qlib_*.py
       - qlib_minute_validation/**
     primary_module: qlib_data
@@ -767,6 +801,36 @@ rules:
     layer: data_pipeline
     risk_level: critical
     ownership_reason: Qlib datasets are authoritative inputs for research and backtests.
+  - rule_id: qlib_monthly_dataset_release
+    priority: 96
+    include:
+      - backend/services/canonical_equity_pit.py
+      - backend/services/dataset_release/**
+      - backend/routers/dataset_releases.py
+      - backend/deps.py
+      - backend/tests/dataset_release/**
+      - backend/tests/routers/test_dataset_releases.py
+      - backend/tests/scripts/test_dataset_release_*.py
+      - backend/tests/scripts/test_update_backtest_dataset_monthly.py
+      - backend/tests/scripts/test_export_qe_qlib_candidate.py
+      - backend/tests/test_deps_dataset_release.py
+      - backend/tests/test_canonical_equity_pit.py
+      - scripts/dataset_release_*.py
+      - scripts/update_backtest_dataset_monthly.py
+      - scripts/export_qe_qlib_candidate.py
+      - tests/aistock_validation/dataset_release_platform_smoke.py
+      - configs/datasets/qe_backtest_monthly_v1.yaml
+      - configs/datasets/qe_backtest_monthly_v2.yaml
+      - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
+      - tests/aistock_validation/pit_v2/window_scope_receipt.json
+      - .codex/skills/update-backtest-dataset/**
+      - .claude/skills/update-backtest-dataset/**
+      - docs/validation/qe_monthly_dataset_release_productization_f2_acceptance_20260812.md
+    primary_module: qlib_data
+    impact_modules: [qe.core, local_data, platform.api]
+    layer: data_pipeline
+    risk_level: critical
+    ownership_reason: The durable candidate-only monthly QE release control plane, source freeze and provider overlays, daily/minute/H5/index materializers, validators, publisher, resource supervisors, operator API/CLI, legacy-export quarantine, and their direct fixtures form one Qlib dataset delivery boundary.
   - rule_id: local_data_tushare_sync_engine
     priority: 97
     include:
@@ -774,6 +838,7 @@ rules:
       - backend/services/tushare_sync.py
       - backend/services/tushare_dataset_specs.py
       - backend/tests/test_tushare_sync_engine.py
+      - backend/tests/test_local_data_management_facade.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2, selection_center]
     layer: data_pipeline
@@ -1181,6 +1246,7 @@ rules:
       - .claude/commands/aistock-merge-aftercare.md
       - .claude/commands/aistock-readonly-triage.md
       - .claude/commands/aistock-validation-delegation.md
+      - .claude/commands/aistock-issue-doctor.md
       - .claude/commands/fix-aistock-issue.md
       - .claude/commands/aistock-feature-workflow.md
     primary_module: docs.standards
