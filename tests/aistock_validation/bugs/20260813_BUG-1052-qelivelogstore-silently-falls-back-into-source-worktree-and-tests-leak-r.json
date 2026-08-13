@@ -145,7 +145,8 @@
     "expected_identity_ref": "merged_commit",
     "fresh_process_evidence": [
       "Fresh Python pytest process at 6a851f07dbf11c71a1b907037da5c328e23edf1f loaded tracked backend.main and QE live-log source: invalid or missing external state aborts lifespan before DB/scheduler startup, valid external RDAGENT_STATE_ROOT resolves deterministically, the active-stream test writes only under tmp_path, and the source live-log directory remains absent; 4 passed; process control=false",
-      "Fresh pytest process at 6a851f07 loaded tracked startup and log-store code; invalid or missing root aborted before DB/schedulers, external root and tmp_path isolation passed 4 tests, source ring absent, process control=false"
+      "Fresh pytest process at 6a851f07 loaded tracked startup and log-store code; invalid or missing root aborted before DB/schedulers, external root and tmp_path isolation passed 4 tests, source ring absent, process control=false",
+      "Fresh Python pytest process at final HEAD 22e720c8 loaded tracked startup and QE live-log source; invalid or missing external root aborts before DB/schedulers, valid external root and tmp_path isolation pass, source ring absent, process control=false"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
