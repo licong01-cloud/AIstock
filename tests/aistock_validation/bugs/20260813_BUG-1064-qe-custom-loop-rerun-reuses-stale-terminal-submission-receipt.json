@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1064",
-  "closed_at": null,
+  "closed_at": "2026-08-13T10:01:51.288288Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -123,8 +123,8 @@
   },
   "first_seen_at": "2026-08-13T04:55:32.115568Z",
   "fix_branch": "bug/BUG-1064-qe-custom-loop-rerun-reuses-stale-terminal-submi-20260813",
-  "fix_commit": "16973538f42def87ba99434eeb61bf698eaf2f04",
-  "fixed_at": null,
+  "fix_commit": "30b346935733b45a99f46d5c1b68cb516317034a",
+  "fixed_at": "2026-08-13T07:36:03Z",
   "github_issue_number": 3393,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3393",
   "last_seen_at": "2026-08-13T04:55:32.115568Z",
@@ -157,8 +157,25 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1064\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1064",
+      "catalog_sha256": "59384174a1a46f84f1a381f013697242a3ef613532b251f11e1a435302111394",
+      "contract_digest": "ec358f84f2fe5f956a5bd21e20df5c640774c0902e1fb7190c62cae173e7e7db",
+      "expected_identity": "30b346935733b45a99f46d5c1b68cb516317034a",
+      "generated_at": "2026-08-13T09:58:10.008643Z",
+      "mode": "read_only",
+      "observed_identity": "29417cebb71a261ec27afb1d89825a968f8996fe",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "9b5b89dba011a4f25bee52773c9495ca4a03e791b009495f1432adf3f91dfc25",
+      "receipt_sha256": "8f1625ac6dda508988cd20ea0ddfc7c3ec41037f9229080a4269d0affbd440e8",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0646aac3764122579008cce3d98027cdcb6cdc54ffdac31e2aee016fcfb781cf",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -168,7 +185,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -184,7 +201,8 @@
     "python -m nox -s qe_read_backend -> 34 passed",
     "python -m ruff check and python -m py_compile on changed Python files -> passed",
     "git diff --check -> passed",
-    "fresh-process rerun reservation identity and canonical claim identity import smoke -> passed"
+    "fresh-process rerun reservation identity and canonical claim identity import smoke -> passed",
+    "post-restart-verify BUG-1064 backend-main expected 30b34693 -> verified; observed 29417ceb descendant; health identity business smoke passed"
   ],
   "verification_budget": {
     "budget": "standard",
