@@ -1,6 +1,8 @@
 {
   "actual": "MA-E16 Loop7 canonical rerun performs remote loop cleanup and deletes the failed DB row, but the subsequent identical task/Loop submission is rejected because QE Workspace still returns the old terminal qe_submission_receipt_v1. Fresh payload validation fails with 'QE Workspace inspected receipt request digest does not match the payload'; no training process starts and Loop7 immediately returns failed. Expected: rerun cleanup establishes a new durable execution generation/identity without weakening idempotency, preserves other completed loops, and allows exactly one fresh Loop7 submission under node_parallelism=1.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py",
     "tests/aistock_validation/bugs/20260813_BUG-1064-qe-custom-loop-rerun-reuses-stale-terminal-submission-receipt.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,26 +22,95 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260813-ab87a57ab741",
       "timestamp": "2026-08-13T04:55:32.115556Z"
+    },
+    {
+      "action": "runtime_reproduction",
+      "actor": "codex",
+      "note": "MA-E16 Loop7 rerun returned success from the mutation route, then failed before process start because the worker inspection returned the prior terminal receipt and its request_digest did not match the fresh payload; Loop3 and the other ten completed loops remained completed.",
+      "timestamp": "2026-08-13T04:52:21Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "Expanded only to the custom-evolution scheduler and its direct mutation-service tests after targeted root-cause analysis.",
+      "timestamp": "2026-08-13T05:00:00Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Destructive reruns now persist a unique attempt-scoped reservation identity while claiming the canonical loop row; normal submissions remain canonical and malformed rerun metadata fails closed.",
+      "timestamp": "2026-08-13T05:08:00Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "backend/logs/aistock.log:2026-08-13T12:52:20+08:00",
+    "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9/loops/7/config"
+  ],
+  "expected": "A destructive custom Loop rerun must create and persist a new rerun-attempt execution identity while retaining the canonical qe_evolution_loops claim identity. The new submission must not inspect or adopt the prior terminal receipt, must preserve all non-target completed loops, and malformed or missing rerun identity metadata must fail closed without weakening normal-submit idempotency.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py"
+    ],
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_evolution_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py"
+      ],
       "unmatched_files": []
     },
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py"
+    ]
   },
   "first_seen_at": "2026-08-13T04:55:32.115568Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-1064-qe-custom-loop-rerun-reuses-stale-terminal-submi-20260813",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 3393,
@@ -52,20 +123,31 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "POST /api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9/loops/7/rerun with confirm_delete_old_result=true; observe immediate failure QE Workspace inspected receipt request digest does not match the payload",
   "required_verification": [
-    "l0"
+    "l0",
+    "qe_read_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9?detail=summary",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python subprocess imported tracked AutoEvolutionScheduler, resolved a unique rerun reservation identity plus canonical Loop claim identity, printed fresh-process-ok, and exited 0 without database or process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -118,6 +200,15 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py -q -> 12 passed",
+    "python -m pytest backend/tests/unified_engine/test_qe_custom_evo_mutation_service.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_backtest_executor.py backend/tests/test_qe_evolution_scheduler.py -q -> 58 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership files=14 mapped=14",
+    "python -m nox -s qe_read_backend -> 34 passed",
+    "python -m ruff check and python -m py_compile on changed Python files -> passed",
+    "git diff --check -> passed",
+    "fresh-process rerun reservation identity and canonical claim identity import smoke -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
