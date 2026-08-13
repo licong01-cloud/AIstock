@@ -354,19 +354,18 @@ GET  /api/v1/advisory/programs/{program_id}/forward-runs
 GET  /api/v1/advisory/forward-runs/{forward_run_id}
 ```
 
-`run-once` 是已有用户环境中的荐股研究命令，不增加角色或审批。它返回每个 Program 的独立结果：`PUBLISHED`、`IDEMPOTENT_REPLAY`、`WAITING_DATA`、`FAILED` 或 `SKIPPED_NOT_SCHEDULED`。HTTP 200 可包含多 Program 部分失败；请求级 schema/身份错误使用 4xx，未处理异常使用 5xx并记录 correlation id。
+`run-once` 是已有用户环境中的荐股研究命令，不增加角色或审批。它返回每个 Program/target 的独立结果：`PUBLISHED`、`IDEMPOTENT_REPLAY`、`WAITING_DATA`、`FAILED`、`SETTLED`、`NOT_ENTERED` 或 `SKIPPED_PREVIOUS_SETTLEMENT_PENDING`。HTTP 200 可包含多 Program 部分失败；请求级 schema/身份错误使用 4xx，未处理异常使用 5xx并记录 correlation id。
 
-Program summary增加：
+Program 列表维持既有投影，不重复增加 forward 字段。前向历史由 `GET /programs/{program_id}/forward-runs` 返回；精确 forward run、model observation、reason 和 maturity 由 `GET /forward-runs/{forward_run_id}` 返回：
 
 ```text
-latest_forward_decision_as_of_trade_date
-latest_forward_target_trade_date
-latest_forward_publication_status
-latest_forward_settlement_status
-latest_forward_reason_code
-latest_model_observation_status
-latest_model_bundle_id
-forward_matured_episode_count
+forward_run.decision_as_of_trade_date / target_trade_date
+forward_run.publication_status / settlement_status
+forward_run.last_stage / last_reason_code / last_error_json
+forward_run.selection_run_id / review_run_id / list_version_id
+model_observation.status / reason_code / message
+model_observation.bundle_id / outcome_bundle_id / price_range_bundle_id
+model_observation.candidate_count / shortlist_count / maturity_trade_date
 ```
 
 ### 12.2 Frontend
@@ -559,6 +558,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 - Source Round 11：修复 BUG-1066 publication 异常路径只看到 persisted `PUBLISHED` 就恢复、可能吞掉并发不同payload冲突的问题；仅 canonical hash完全相同的 uncertain commit 可恢复，其他异常保持可见。
 - Source Round 12：修复 BUG-1067 跨进程 stale pending 在另一进程已完成结算后，使用结算后episode重算同一target并产生假冲突的问题；service在计算前后读回权威终态，已闭合事实直接幂等返回。
 - Source Round 13：修复 BUG-1069 同冻结descriptor下不同payload可覆盖既有成功observation、静默改写前向模型事实的问题；仅 `FAILED` 可显式恢复，成功/typed-unavailable事实保持不可变。
+- Source Round 14：修复API章节声称Program summary增加8个未实现重复字段的问题；文档改为与现有forward history/detail API及真实run-once状态完全一致，不以文档冒充不存在的实现。
 
 ## 20. Implementation Plan / 本阶段唯一实施顺序
 
