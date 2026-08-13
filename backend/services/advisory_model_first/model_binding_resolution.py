@@ -52,12 +52,28 @@ class AdvisoryModelBindingResolver:
         safe_binding_version_id = os.path.basename(
             _descriptor_identity("binding_version_id", binding_version_id)
         )
-        root = Path(model_root).resolve()
-        binding_root = (root / "program_bindings").resolve()
-        _require_contained_path(binding_root, root, field="program_bindings_root")
-        target = (binding_root / safe_program_id / f"{safe_binding_version_id}.json").resolve()
-        _require_contained_path(target, binding_root, field="descriptor_path")
-        return target
+        root = os.path.realpath(os.fspath(model_root))
+        binding_root = os.path.realpath(os.path.join(root, "program_bindings"))
+        if not binding_root.startswith(root + os.sep):
+            raise AdvisoryModelFirstError(
+                "Advisory model descriptor path escapes its configured root",
+                reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+                context={"field": "program_bindings_root"},
+            )
+        target = os.path.realpath(
+            os.path.join(
+                binding_root,
+                safe_program_id,
+                f"{safe_binding_version_id}.json",
+            )
+        )
+        if not target.startswith(binding_root + os.sep):
+            raise AdvisoryModelFirstError(
+                "Advisory model descriptor path escapes its configured root",
+                reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+                context={"field": "descriptor_path"},
+            )
+        return Path(target)
 
     def is_configured(
         self,
@@ -265,6 +281,17 @@ def publish_program_model_descriptor(
         program_id=program_id,
         binding_version_id=binding_version_id,
     )
+    normalized_path, normalized_root = _normalized_descriptor_access(
+        descriptor_path=target,
+        model_root=model_root,
+    )
+    if not normalized_path.startswith(normalized_root + os.sep):
+        raise AdvisoryModelFirstError(
+            "Advisory model descriptor path escapes its configured root",
+            reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
+            context={"field": "descriptor_path"},
+        )
+    target = Path(normalized_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     encoded = (json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     if target.exists():
@@ -361,17 +388,6 @@ def _descriptor_identity(field: str, value: str) -> str:
             context={"field": field},
         )
     return normalized
-
-
-def _require_contained_path(path: Path, root: Path, *, field: str) -> None:
-    try:
-        path.relative_to(root)
-    except ValueError as exc:
-        raise AdvisoryModelFirstError(
-            "Advisory model descriptor path escapes its configured root",
-            reason_code="ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID",
-            context={"field": field},
-        ) from exc
 
 
 def _normalized_descriptor_access(
