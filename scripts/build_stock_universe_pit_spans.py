@@ -510,10 +510,10 @@ def _ipo_eligible_date(
 
 
 def _canonical_calendar_start(
-    stocks: Iterable[StockRow], *, start_date: dt.date, fallback_lookback_days: int
+    stocks: Iterable[StockRow], *, start_date: dt.date, minimum_lookback_days: int
 ) -> dt.date:
     earliest_list_date = min((stock.list_date for stock in stocks if stock.list_date), default=start_date)
-    return min(start_date - dt.timedelta(days=fallback_lookback_days), earliest_list_date)
+    return min(start_date - dt.timedelta(days=minimum_lookback_days), earliest_list_date)
 
 
 def _load_stock_basic(conn: Any, *, active_only: bool = False, active_as_of: dt.date | None = None) -> list[StockRow]:
@@ -1399,7 +1399,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             calendar_start = _canonical_calendar_start(
                 stocks,
                 start_date=start_date,
-                fallback_lookback_days=max(args.ipo_filter_days + 31, 400),
+                minimum_lookback_days=max(args.ipo_filter_days + 31, 400),
             )
         calendar_days = _load_trading_days(
             conn,

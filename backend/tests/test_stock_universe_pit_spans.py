@@ -110,7 +110,7 @@ def test_canonical_calendar_load_begins_at_earliest_historical_listing() -> None
     assert _canonical_calendar_start(
         stocks,
         start_date=dt.date(2018, 8, 1),
-        fallback_lookback_days=400,
+        minimum_lookback_days=400,
     ) == dt.date(1991, 4, 3)
 
 
