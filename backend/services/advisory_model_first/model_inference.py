@@ -18,6 +18,10 @@ from backend.services.advisory_model_first.model_bundle import (
     LoadedAdvisoryModelBundle,
     load_exact_shadow_bundle,
 )
+from backend.services.advisory_model_first.model_binding_resolution import (
+    AdvisoryModelBindingResolutionV1,
+    AdvisoryModelBindingResolver,
+)
 from backend.services.advisory_model_first.outcome_inference import (
     score_outcome_bundle,
     unavailable_outcome_envelope,
@@ -43,19 +47,6 @@ from backend.services.advisory_model_first.realtime_feature_source import (
 )
 from backend.services.advisory_model_first.reranker_training import _coerce_numeric_feature_dtypes
 from backend.services.advisory_model_first.shared_feature_builder import build_advisory_feature_matrix
-from backend.services.advisory_model_first.target_binding import (
-    BINDING_VERSION_ID,
-    FUND_LEG_ID,
-    LSTM_LEG_ID,
-    MANIFEST_SHA256,
-    PACKAGE_ID,
-    PROGRAM_ID,
-    RUNTIME_SEMANTICS_HASH,
-    RUNTIME_SEMANTICS_PAYLOAD,
-    STYLE_PROFILE_ID,
-    STYLE_PROFILE_HASH,
-    TERMINAL_WEIGHTS,
-)
 from backend.services.advisory_program import AdvisoryProgramService
 from backend.services.selection_center.models import SelectionRunStatus
 from backend.services.selection_center.service import SelectionCenterService
@@ -79,6 +70,7 @@ class AdvisoryModelShadowService:
         outcome_scorer: Any = score_outcome_bundle,
         price_range_bundle_loader: Any = load_exact_price_range_bundle,
         price_range_scorer: Any = score_price_range_bundle,
+        binding_resolver: AdvisoryModelBindingResolver | None = None,
     ) -> None:
         self._program_service = program_service or AdvisoryProgramService()
         self._selection_service = selection_service or SelectionCenterService()
@@ -92,11 +84,62 @@ class AdvisoryModelShadowService:
         self._outcome_scorer = outcome_scorer
         self._price_range_bundle_loader = price_range_bundle_loader
         self._price_range_scorer = price_range_scorer
+        self._binding_resolver = binding_resolver or AdvisoryModelBindingResolver()
+
+    def model_root(self) -> str:
+        return str(self._model_root_provider() or "").strip()
 
     def model_shadow(self, *, program_id: str, target_trade_date: date) -> dict[str, Any]:
+        return self._visible_model_shadow(
+            program_id=program_id,
+            target_trade_date=target_trade_date,
+            frozen_program=None,
+            frozen_binding=None,
+        )
+
+    def model_shadow_for_forward(
+        self,
+        *,
+        program: Any,
+        binding_version_id: str,
+        target_trade_date: date,
+        list_version_id: str,
+        review_run_id: str,
+        selection_run_id: str,
+    ) -> dict[str, Any]:
+        return self._visible_model_shadow(
+            program_id=str(program.program_id),
+            target_trade_date=target_trade_date,
+            frozen_program=program,
+            frozen_binding={
+                "binding_version_id": binding_version_id,
+                "package_ids": list(program.package_ids),
+            },
+            frozen_input_ids={
+                "list_version_id": list_version_id,
+                "review_run_id": review_run_id,
+                "selection_run_id": selection_run_id,
+            },
+        )
+
+    def _visible_model_shadow(
+        self,
+        *,
+        program_id: str,
+        target_trade_date: date,
+        frozen_program: Any | None,
+        frozen_binding: Mapping[str, Any] | None,
+        frozen_input_ids: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
         started = time.monotonic()
         try:
-            result = self._model_shadow(program_id=program_id, target_trade_date=target_trade_date)
+            result = self._model_shadow(
+                program_id=program_id,
+                target_trade_date=target_trade_date,
+                frozen_program=frozen_program,
+                frozen_binding=frozen_binding,
+                frozen_input_ids=frozen_input_ids,
+            )
         except AdvisoryModelFirstError as exc:
             LOGGER.warning(
                 "advisory model shadow unavailable program_id=%s target_trade_date=%s reason_code=%s context=%s elapsed_ms=%d",
@@ -145,37 +188,42 @@ class AdvisoryModelShadowService:
         )
         return result
 
-    def _model_shadow(self, *, program_id: str, target_trade_date: date) -> dict[str, Any]:
-        program = self._program_service.get_program(program_id)
-        binding = self._program_service.active_binding(program_id)
+    def _model_shadow(
+        self,
+        *,
+        program_id: str,
+        target_trade_date: date,
+        frozen_program: Any | None = None,
+        frozen_binding: Mapping[str, Any] | None = None,
+        frozen_input_ids: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        program = frozen_program or self._program_service.get_program(program_id)
+        binding = dict(frozen_binding) if frozen_binding is not None else self._program_service.active_binding(program_id)
         package_ids = tuple(program.package_ids)
-        if (
-            program_id != PROGRAM_ID
-            or package_ids != (PACKAGE_ID,)
-            or binding.get("binding_version_id") != BINDING_VERSION_ID
-            or tuple(binding.get("package_ids") or ()) != (PACKAGE_ID,)
-        ):
+        if len(package_ids) != 1 or tuple(binding.get("package_ids") or ()) != package_ids:
             raise AdvisoryModelFirstError(
                 "no model bundle is bound to this Advisory Program identity",
                 reason_code="ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
             )
-        model_root = str(self._model_root_provider() or "").strip()
+        model_root = self.model_root()
         if not model_root:
             raise AdvisoryModelFirstError(
                 "AISTOCK_ADVISORY_MODEL_ROOT is not configured",
                 reason_code="ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
             )
-        bundle = self._bundle_loader(
+        if not self._binding_resolver.is_configured(
             model_root=model_root,
-            package_id=PACKAGE_ID,
-            manifest_sha256=MANIFEST_SHA256,
-            style_profile_hash=STYLE_PROFILE_HASH,
-        )
-        _validate_bundle_runtime(bundle)
-
+            program_id=program_id,
+            binding_version_id=str(binding.get("binding_version_id") or ""),
+        ):
+            raise AdvisoryModelFirstError(
+                "no exact model descriptor is configured for this Advisory Program binding",
+                reason_code="ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+            )
         list_version, list_items = self._selection_list_context(
             program_id=program_id,
             target_trade_date=target_trade_date,
+            list_version_id=(frozen_input_ids or {}).get("list_version_id"),
         )
         if list_version.get("binding_version_id") != binding["binding_version_id"]:
             raise AdvisoryModelFirstError(
@@ -187,6 +235,12 @@ class AdvisoryModelShadowService:
             raise AdvisoryModelFirstError(
                 "recommendation list does not identify its persisted Advisory review run",
                 reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
+            )
+        expected_review_run_id = str((frozen_input_ids or {}).get("review_run_id") or "").strip()
+        if expected_review_run_id and review_run_id != expected_review_run_id:
+            raise AdvisoryModelFirstError(
+                "forward recommendation list differs from the frozen review run",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
             )
         review_run = self._review_source.get(review_run_id)
         review_selection_run_ids = tuple(
@@ -202,6 +256,12 @@ class AdvisoryModelShadowService:
                 reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
             )
         selection_run_id = str(review_run.selection_run_id or "").strip()
+        expected_selection_run_id = str((frozen_input_ids or {}).get("selection_run_id") or "").strip()
+        if expected_selection_run_id and selection_run_id != expected_selection_run_id:
+            raise AdvisoryModelFirstError(
+                "forward review differs from the frozen Selection run",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            )
         if not selection_run_id or review_selection_run_ids != (selection_run_id,):
             raise AdvisoryModelFirstError(
                 "persisted Advisory review does not identify exactly one Selection run",
@@ -212,13 +272,25 @@ class AdvisoryModelShadowService:
         if (
             selection_run.status != SelectionRunStatus.SUCCEEDED
             or selection_run.trade_date != target_trade_date
-            or tuple(selection_run.package_ids) != (PACKAGE_ID,)
-            or selection_run.manifest_sha256_by_package.get(PACKAGE_ID) != MANIFEST_SHA256
+            or tuple(selection_run.package_ids) != package_ids
         ):
             raise AdvisoryModelFirstError(
                 "persisted Selection run identity differs from the model target",
                 reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
             )
+        resolution = self._binding_resolver.resolve(
+            model_root=model_root,
+            program=program,
+            active_binding=binding,
+            selection_run=selection_run,
+        )
+        bundle = self._bundle_loader(
+            model_root=model_root,
+            package_id=resolution.package_id,
+            manifest_sha256=resolution.manifest_sha256,
+            style_profile_hash=resolution.style_profile_hash,
+        )
+        _validate_bundle_runtime(bundle, resolution=resolution)
         decision_date = _resolve_decision_date(list_version=list_version, selection_run=selection_run)
         if decision_date >= target_trade_date:
             raise AdvisoryModelFirstError(
@@ -237,6 +309,7 @@ class AdvisoryModelShadowService:
             target_trade_date=target_trade_date,
             target_count=int(program.target_count),
             bundle=bundle,
+            resolution=resolution,
         )
         realtime = self._feature_source.load(
             symbols=candidates["instrument"].tolist(),
@@ -253,6 +326,7 @@ class AdvisoryModelShadowService:
             benchmark_daily=realtime.benchmark_daily,
             suspend_rows=realtime.suspend_rows,
             hmm_states=realtime.hmm_states,
+            component_roles=resolution.component_roles,
         )
         if len(built.coverage) != 1 or built.coverage.iloc[0]["status"] != "available":
             missing = built.coverage.iloc[0].get("required_missing_columns", []) if len(built.coverage) else []
@@ -275,6 +349,7 @@ class AdvisoryModelShadowService:
             scored_candidates=scored,
             program_id=program_id,
             target_trade_date=target_trade_date,
+            resolution=resolution,
         )
         price_range = self._price_range_shadow(
             model_root=model_root,
@@ -288,6 +363,7 @@ class AdvisoryModelShadowService:
             review_policy_sha256=program.review_policy_sha256,
             program_id=program_id,
             target_trade_date=target_trade_date,
+            resolution=resolution,
         )
         shortlist_count = min(5, len(scored))
         return {
@@ -295,8 +371,11 @@ class AdvisoryModelShadowService:
             "calibration_state": bundle.manifest["calibration_state"],
             "program_id": program_id,
             "binding_version_id": binding["binding_version_id"],
-            "package_id": PACKAGE_ID,
-            "manifest_sha256": MANIFEST_SHA256,
+            "package_id": resolution.package_id,
+            "manifest_sha256": resolution.manifest_sha256,
+            "style_profile_id": resolution.style_profile_id,
+            "style_profile_hash": resolution.style_profile_hash,
+            "model_descriptor_sha256": resolution.descriptor_sha256,
             "decision_as_of_trade_date": decision_date.isoformat(),
             "target_trade_date": target_trade_date.isoformat(),
             "selection_runtime_semantics_hash": bundle.manifest["selection_runtime_semantics_hash"],
@@ -328,6 +407,7 @@ class AdvisoryModelShadowService:
         review_policy_sha256: str,
         program_id: str,
         target_trade_date: date,
+        resolution: AdvisoryModelBindingResolutionV1,
     ) -> dict[str, Any]:
         started = time.monotonic()
         try:
@@ -348,9 +428,9 @@ class AdvisoryModelShadowService:
             )
             price_bundle = self._price_range_bundle_loader(
                 model_root=model_root,
-                package_id=PACKAGE_ID,
-                manifest_sha256=MANIFEST_SHA256,
-                style_profile_hash=STYLE_PROFILE_HASH,
+                package_id=resolution.package_id,
+                manifest_sha256=resolution.manifest_sha256,
+                style_profile_hash=resolution.style_profile_hash,
                 parent_bundle_id=parent_bundle.bundle_id,
                 outcome_bundle_id=price_range_outcome_bundle_id,
             )
@@ -427,14 +507,15 @@ class AdvisoryModelShadowService:
         scored_candidates: list[dict[str, Any]],
         program_id: str,
         target_trade_date: date,
+        resolution: AdvisoryModelBindingResolutionV1,
     ) -> dict[str, Any]:
         started = time.monotonic()
         try:
             outcome_bundle = self._outcome_bundle_loader(
                 model_root=model_root,
-                package_id=PACKAGE_ID,
-                manifest_sha256=MANIFEST_SHA256,
-                style_profile_hash=STYLE_PROFILE_HASH,
+                package_id=resolution.package_id,
+                manifest_sha256=resolution.manifest_sha256,
+                style_profile_hash=resolution.style_profile_hash,
                 parent_bundle_id=parent_bundle.bundle_id,
             )
             predictions = self._outcome_scorer(outcome_bundle, features)
@@ -515,7 +596,28 @@ class AdvisoryModelShadowService:
         *,
         program_id: str,
         target_trade_date: date,
+        list_version_id: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        if list_version_id:
+            detail = self._program_service.recommendation_list_version_detail(list_version_id)
+            version = dict(detail.get("list_version") or {})
+            raw_target = version.get("target_trade_date") or version.get("trade_date")
+            if (
+                version.get("program_id") != program_id
+                or not raw_target
+                or date.fromisoformat(str(raw_target)[:10]) != target_trade_date
+            ):
+                raise AdvisoryModelFirstError(
+                    "frozen recommendation list identity differs from the forward target",
+                    reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+                )
+            items = list(detail.get("items") or [])
+            if not items:
+                raise AdvisoryModelFirstError(
+                    "target recommendation list has no persisted candidates",
+                    reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
+                )
+            return version, items
         versions = self._program_service.recommendation_list_versions(program_id, limit=500, offset=0)
         matching = [
             version
@@ -538,7 +640,11 @@ class AdvisoryModelShadowService:
         return dict(detail["list_version"]), items
 
 
-def _validate_bundle_runtime(bundle: LoadedAdvisoryModelBundle) -> None:
+def _validate_bundle_runtime(
+    bundle: LoadedAdvisoryModelBundle,
+    *,
+    resolution: AdvisoryModelBindingResolutionV1,
+) -> None:
     manifest = bundle.manifest
     schema_version = manifest.get("schema_version", "advisory_model_bundle_v1")
     expected_calibration = (
@@ -554,10 +660,16 @@ def _validate_bundle_runtime(bundle: LoadedAdvisoryModelBundle) -> None:
         schema_version not in {"advisory_model_bundle_v1", "advisory_model_bundle_v2"}
         or manifest.get("status") != "EXPERIMENTAL_SHADOW"
         or manifest.get("calibration_state") != expected_calibration
-        or manifest.get("selection_runtime_semantics_hash") != RUNTIME_SEMANTICS_HASH
-        or manifest.get("selection_runtime_semantics") != RUNTIME_SEMANTICS_PAYLOAD
-        or manifest.get("style_profile_id") != STYLE_PROFILE_ID
-        or not _matches_terminal_weights(terminal_weights)
+        or manifest.get("package_id") != resolution.package_id
+        or manifest.get("manifest_sha256") != resolution.manifest_sha256
+        or manifest.get("style_profile_id") != resolution.style_profile_id
+        or manifest.get("style_profile_hash") != resolution.style_profile_hash
+        or manifest.get("selection_runtime_semantics_hash") != resolution.selection_runtime_semantics_hash
+        or manifest.get("feature_schema_version") != resolution.feature_schema_version
+        or manifest.get("feature_schema_hash") != resolution.feature_schema_hash
+        or bundle.bundle_id != resolution.bundle_id
+        or bundle.manifest_file_sha256 != resolution.bundle_manifest_sha256
+        or not _matches_terminal_weights(terminal_weights, component_roles=resolution.component_roles)
         or tuple(bundle.feature_schema.get("trained_feature_names") or ()) != tuple(MODEL_FEATURE_COLUMNS)
     ):
         raise AdvisoryModelFirstError(
@@ -611,18 +723,14 @@ def _validate_review_policy_identity(
         )
 
 
-def _matches_terminal_weights(value: Any) -> bool:
-    if not isinstance(value, Mapping) or set(value) != set(TERMINAL_WEIGHTS):
+def _matches_terminal_weights(value: Any, *, component_roles: Mapping[str, str]) -> bool:
+    component_ids = set(component_roles.values())
+    if not isinstance(value, Mapping) or set(value) != component_ids:
         return False
     try:
-        return all(
-            np.isclose(
-                float(value[leg_id]),
-                float(expected_weight),
-                rtol=0.0,
-                atol=1e-10,
-            )
-            for leg_id, expected_weight in TERMINAL_WEIGHTS.items()
+        weights = [float(value[component_id]) for component_id in component_ids]
+        return all(np.isfinite(weight) and weight > 0 for weight in weights) and np.isclose(
+            sum(weights), 1.0, rtol=0.0, atol=1e-10
         )
     except (TypeError, ValueError):
         return False
@@ -659,6 +767,7 @@ def _candidate_frame(
     target_trade_date: date,
     target_count: int,
     bundle: LoadedAdvisoryModelBundle,
+    resolution: AdvisoryModelBindingResolutionV1,
 ) -> pd.DataFrame:
     if target_count < 1 or target_count > 20:
         raise AdvisoryModelFirstError(
@@ -686,10 +795,11 @@ def _candidate_frame(
     terminal_weights = bundle.manifest.get("terminal_weights") or {}
     candidate_group_size = len(selected)
     payloads: list[dict[str, Any]] = []
+    component_ids = tuple(resolution.component_roles[role] for role in ("lstm", "fund"))
     for row in selected:
         scores = row.component_scores or {}
         legs: dict[str, Mapping[str, Any]] = {}
-        for leg_id in (LSTM_LEG_ID, FUND_LEG_ID):
+        for leg_id in component_ids:
             leg = scores.get(leg_id)
             if not isinstance(leg, Mapping):
                 raise AdvisoryModelFirstError(
@@ -713,7 +823,7 @@ def _candidate_frame(
             legs[leg_id] = leg
         weighted_score = sum(
             float(legs[leg_id]["normalized_score"]) * float(terminal_weights[leg_id])
-            for leg_id in (LSTM_LEG_ID, FUND_LEG_ID)
+            for leg_id in component_ids
         )
         if not np.isfinite(weighted_score) or not np.isclose(float(row.score), weighted_score, rtol=0.0, atol=1e-8):
             raise AdvisoryModelFirstError(
@@ -729,21 +839,25 @@ def _candidate_frame(
                 "instrument": str(row.symbol).upper(),
                 "program_id": program_id,
                 "binding_version_id": binding_version_id,
-                "package_id": PACKAGE_ID,
-                "manifest_sha256": MANIFEST_SHA256,
-                "selection_runtime_semantics_hash": RUNTIME_SEMANTICS_HASH,
+                "package_id": resolution.package_id,
+                "manifest_sha256": resolution.manifest_sha256,
+                "selection_runtime_semantics_hash": resolution.selection_runtime_semantics_hash,
                 "selection_source_rank": int(scores.get("raw_rank") or row.rank),
                 "selection_effective_rank": int(row.rank),
                 "candidate_group_size": candidate_group_size,
                 "combined_score": float(row.score),
-                f"raw__{LSTM_LEG_ID}": float(legs[LSTM_LEG_ID]["raw_score"]),
-                f"norm__{LSTM_LEG_ID}": float(legs[LSTM_LEG_ID]["normalized_score"]),
-                f"rank__{LSTM_LEG_ID}": int(legs[LSTM_LEG_ID]["leg_rank"]),
-                f"weight__{LSTM_LEG_ID}": float(legs[LSTM_LEG_ID]["weight"]),
-                f"raw__{FUND_LEG_ID}": float(legs[FUND_LEG_ID]["raw_score"]),
-                f"norm__{FUND_LEG_ID}": float(legs[FUND_LEG_ID]["normalized_score"]),
-                f"rank__{FUND_LEG_ID}": int(legs[FUND_LEG_ID]["leg_rank"]),
-                f"weight__{FUND_LEG_ID}": float(legs[FUND_LEG_ID]["weight"]),
+                **{
+                    f"{prefix}__{leg_id}": (
+                        float(legs[leg_id][field]) if field != "leg_rank" else int(legs[leg_id][field])
+                    )
+                    for leg_id in component_ids
+                    for prefix, field in (
+                        ("raw", "raw_score"),
+                        ("norm", "normalized_score"),
+                        ("rank", "leg_rank"),
+                        ("weight", "weight"),
+                    )
+                },
             }
         )
     return pd.DataFrame(payloads)

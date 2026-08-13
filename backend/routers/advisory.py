@@ -30,6 +30,8 @@ from backend.services.advisory_program import (
     review_result_to_dict,
 )
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
+from backend.services.advisory_forward.scheduler import advisory_forward_scheduler
+from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
 from backend.services.advisory_historical_range.api_models import (
     HistoricalRangeBuildBridgeRequest,
@@ -156,6 +158,10 @@ def get_advisory_program_service() -> AdvisoryProgramService:
 
 def get_advisory_model_shadow_service() -> AdvisoryModelShadowService:
     return AdvisoryModelShadowService()
+
+
+def get_advisory_forward_service() -> AdvisoryForwardService:
+    return AdvisoryForwardService()
 
 
 def get_historical_research_runner() -> HistoricalAdvisoryResearchRunner:
@@ -584,6 +590,52 @@ def list_programs(
 ) -> dict[str, Any]:
     try:
         return {"ok": True, "programs": [program_to_dict(row) for row in service.list_programs(include_archived=include_archived)]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/forward/status")
+def forward_status(
+    service: AdvisoryForwardService = Depends(get_advisory_forward_service),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "scheduler": advisory_forward_scheduler.status(),
+            "service": service.status(),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/forward/run-once")
+def run_forward_once(
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **advisory_forward_scheduler.run_once()}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/forward-runs/{forward_run_id}")
+def forward_run_detail(
+    forward_run_id: str,
+    service: AdvisoryForwardService = Depends(get_advisory_forward_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.detail(forward_run_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/programs/{program_id}/forward-runs")
+def program_forward_runs(
+    program_id: str,
+    limit: int = Query(default=100, gt=0, le=500),
+    service: AdvisoryForwardService = Depends(get_advisory_forward_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "forward_runs": service.list_runs(program_id=program_id, limit=limit)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
