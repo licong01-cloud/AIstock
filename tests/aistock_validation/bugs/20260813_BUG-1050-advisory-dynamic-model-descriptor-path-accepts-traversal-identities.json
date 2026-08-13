@@ -34,6 +34,12 @@
       "actor": "codex",
       "note": "BUG-1050 itself adds no DDL, but its source fix is carried by Feature PR #3366, whose pre-existing migration remains pending explicit authorization; metadata records the aggregate PR gate without authorizing execution.",
       "timestamp": "2026-08-13T02:47:32Z"
+    },
+    {
+      "action": "codeql_sanitizer_completed",
+      "actor": "codex",
+      "note": "The strict identity and resolved containment checks remained intact; standard basename sanitization was added so CodeQL can recognize the same path-component boundary without a manual alert dismissal.",
+      "timestamp": "2026-08-13T03:14:00Z"
     }
   ],
   "evidence_uris": [
@@ -87,7 +93,7 @@
   },
   "first_seen_at": "2026-08-13T02:05:54.419934Z",
   "fix_branch": "feature/advisory-forward-p0ab-design-20260813",
-  "fix_commit": "8498de9697e9c7d53037d347dad45a6d0bfdfb52",
+  "fix_commit": "935c4765cfd4e73bc74cdb1166f1c18653142916",
   "fixed_at": "2026-08-13T02:24:34Z",
   "github_issue_number": 3372,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3372",
@@ -109,7 +115,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
-      "A fresh Python process loaded backend.services.advisory_model_first.model_binding_resolution from fix commit 8498de96, resolved a legal descriptor beneath model_root/program_bindings, and received ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID for a traversal identity; no backend process was controlled."
+      "A fresh Python process loaded backend.services.advisory_model_first.model_binding_resolution, resolved a legal descriptor beneath model_root/program_bindings, and received ADVISORY_MODEL_PROGRAM_DESCRIPTOR_INVALID for a traversal identity; no backend process was controlled."
     ],
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -182,7 +188,7 @@
     "changed-file Ruff, compileall, git diff --check and guardrail -> passed; 0 blocking findings",
     "fresh-process descriptor containment source smoke -> passed"
   ],
-  "verification_run_id": "local-BUG-1050-8498de96",
+  "verification_run_id": "local-BUG-1050-935c4765",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
