@@ -804,3 +804,4 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-6A | W3-A嵌套身份完整性复审 | 外层浅拷贝允许嵌套manifest在digest计算后、W2解析前被调用方修改 | 只序列化一次并校验CAS digest；W1/W2从已验证字节反序列化的独立快照读取；增加TOCTOU回归测试 | resolved |
 | Review-6B | W3-A真实CAS兼容复审 | 原digest测试与实现共用辅助函数，不能独立证明Control CAS引用兼容 | 使用真实`ControlStore`和`CASStore.put_json()`生成引用并通过正式adapter验证 | resolved |
 | Review-6C | W3-A最终HEAD合入复审 | 合并最新main后逐项复核实现、测试、scope、PR设计链接和DESIGN-COMPLIANCE-001四项 | direct/adjacent 28 passed；data-sync 161 passed；Qlib 15 passed；catalog 7 passed；F2 30/30；guardrail 0 finding；ownership 4/4；无P0/P1/P2 | pass_ready_for_merge |
+| Review-6D | PR机器可审计性复审 | 人类可读的`Exact write scope`/验收编号未匹配PR Quality固定元数据语法 | PR正文使用`Design Acceptance Matrix`和`Allowed write scope`，并列出四个精确文件及三项production gate | resolved_pending_ci_readback |
