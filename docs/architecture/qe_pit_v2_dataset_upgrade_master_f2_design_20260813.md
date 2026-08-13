@@ -805,3 +805,4 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-6B | W3-A真实CAS兼容复审 | 原digest测试与实现共用辅助函数，不能独立证明Control CAS引用兼容 | 使用真实`ControlStore`和`CASStore.put_json()`生成引用并通过正式adapter验证 | resolved |
 | Review-6C | W3-A最终HEAD合入复审 | 合并最新main后逐项复核实现、测试、scope、PR设计链接和DESIGN-COMPLIANCE-001四项 | direct/adjacent 28 passed；data-sync 161 passed；Qlib 15 passed；catalog 7 passed；F2 30/30；guardrail 0 finding；ownership 4/4；无P0/P1/P2 | pass_ready_for_merge |
 | Review-6D | PR机器可审计性复审 | 人类可读的`Exact write scope`/验收编号未匹配PR Quality固定元数据语法 | PR正文使用`Design Acceptance Matrix`和`Allowed write scope`，并列出四个精确文件及三项production gate | resolved_pending_ci_readback |
+| Review-6E | 最新main漂移复审 | CI期间main前进至`458199cd`，新增Advisory P0-D源码/测试/设计和ownership登记 | 文件交集为零；无冲突合并；按最终main重跑28+161+15+7、F2、guardrail和ownership | pass_ready_for_merge |

@@ -1,7 +1,7 @@
 {
   "schema_version": "pit_v2_window_scope_receipt_v1",
-  "observed_at": "2026-08-13T16:18:19.3892455Z",
-  "source_head": "49973d6ea51f3a469fc5ded2b247ed2488256597",
+  "observed_at": "2026-08-13T16:34:17.2740064Z",
+  "source_head": "458199cd902323e006ac23d3767c908637068fa8",
   "single_writer_policy": true,
   "sequence": ["W0", "W1", "W2", "W3_sliced_with_W4_W5_disjoint_parallel", "W6", "W7", "W8", "W9"],
   "current_revision": {
