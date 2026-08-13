@@ -2,13 +2,13 @@
 
 - 文档类型：蓝图修订提案（Blueprint Revision Proposal，架构分析 / 决策输入）
 - 日期：2026-08-13
-- 状态：`PROPOSAL_PENDING_USER_APPROVAL`（仅为决策输入；不修改蓝图、不改模型、不写代码/DDL/runtime）
+- 状态：`REVIEWED_PARTIALLY_ADOPTED_IN_BLUEPRINT_V2_25`（历史决策输入；以父蓝图v2.25与Phase 2详细设计C-011为当前权威）
 - 提案人：Claude Code（应用户要求生成，供用户裁决）
-- 父级唯一产品目标权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.24
+- 父级唯一产品目标权威：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.25
 - 关联实现级设计：`docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md`
 - 关联 Design Acceptance Index：F-011（引用，不新增）、F-012、F-013
 - 任务级别：T3（架构 / 生产关键路径决策输入），本提案本体按 T0 docs-fast-new 交付
-- 授权边界：本文件是**分析与建议**，不是已批准的设计变更。它不修改父蓝图或 Phase 2 详细设计正文，不选择 seed、不训练/重训 HMM、不写 model/READY、不执行 selection/D5/D6、不触碰 `hmm_risk.*`/`hmm_evolution.*` 数据、不安装依赖、不激活 runtime。所有生产门禁在本提案范围内均为 `noop`。
+- 授权边界：本文件保留初始分析与建议的历史原文。2026-08-14用户已批准经peer review修正后的方向，并由父蓝图v2.25和详细设计C-011正式承接；未被两份权威文档吸收的表述继续只是历史提案，不能据此选择seed、fit、写model/READY、执行DDL/runtime或改变产品门禁。
 
 ---
 
@@ -16,11 +16,11 @@
 
 Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、执行扎实。**Phase 2 的产品价值（板块状态预测 + 风险预警）当前功能交付为 0**，卡在 F-011「模型验收」，自 2026-07-22 详细设计定稿至今持续 `blocked`。
 
-大量诊断（C-008-A/B1、DIAG-02/03/04、REFIT-01/02/03、TRAIN-STABILITY-DIAG-01、TRANSITION-DWELL-B，累计数千次可复现 fit）已**穷尽性地证明**：这不是代码 bug、不是数据/NA 缺失、不是 seed 选择、也不是阈值问题（P2-1 独立重算 0 mismatch）。真正的 blocker 是**建模范式与验收门禁之间的统计阻抗失配**——当前门禁要求「131 个 L2 + 31 个 L1 各自独立的 3 态对角高斯 HMM、family-global 单一 seed、禁止 per-sector 拼接、全或无 READY」，而固定训练/验证窗口内的申万板块数据在统计上无法整体满足该门禁（完整候选 seed = 0）。
+大量诊断充分否定了「固定模型类/特征/窗口、seeds 42–49、当前D3–D6、每family×level单一global seed与两family完整性」这一精确合同继续机械扩展的价值；它没有证明所有Gaussian HMM、所有seed、预注册per-sector restart、t-emission或共享先验都不可行。已确认的blocker是当前建模范式与sector×level×family系统合取之间的失配，而不是程序/数据缺陷；单sector D4/D6阈值已经偏宽，不应再放宽。
 
 本提案给出：根因分析（依据 + 分析过程 + 结论）、与产品目标的一致性检验、五个整改方向（各自映射到 F-011/F-012/F-013 blocker、最小替代、成本、不做的业务影响）、建议的蓝图修订条目（proposed change-set，供用户裁决后再执行）、验收/测试方案与本提案的可合入标准。
 
-**核心建议**：将「建模范式选择」上升为蓝图级决策；解锁一个受控的 modeling-paradigm spike（首选统计跳跃模型 / 分层 HMM），并允许「诚实子集交付」路径（eligible sector 出状态、其余显式 `insufficient_structure`），以在不违反 advisory-only / PIT / 禁止静默失败原则的前提下解锁产品价值。本提案不改变任何既有 hard semantic authority，也不主张放宽已有诚实性边界。
+**经peer review修正后的核心建议**：把最终验收单位改为日期×L1/L2横截面的轮动/风险预测，保留数值安全与逐sector语义证据，分离FULL_READY/COVERAGE_AVAILABLE/NOT_AVAILABLE；先零refit聚合既有证据，再只执行一个spike。市场regime+sector相对强弱是首要结构候选；允许精确设计评估预注册train-only per-sector restart。任何coverage输出都必须通过产品指标与代表性合同，不能无条件fallback成功。
 
 ---
 
@@ -85,7 +85,7 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 4. **假设：transition/dwell 先验修订（TRANSITION-DWELL-B）可恢复 → 已排除。** 双 fresh-process 2096 fits 后完整候选 seed 仍为 0（E-6）。
 5. **假设：放宽阈值 / validation reselect / per-sector stitching → 被诚实性边界与既有决策拒绝**（E-13，且这些会破坏 hard semantic authority 与两 family 完整性，属于 DESIGN-COMPLIANCE 违规）。
 
-**分析过程的关键推论**：上述 1–5 已覆盖「在当前建模范式（每 sector 独立 3 态对角高斯 HMM + family-global 单 seed + all-or-nothing）之内」几乎所有可动的自由度。既然范式内的每个杠杆都被证据否定，**剩余的唯一变量就是范式本身与门禁定义**。继续在范式内做第 N 轮诊断，其边际信息量已趋近于 0（E-12 印证：同一模式在自审后仍在重复）。
+**分析过程的关键推论**：现有证据足以停止当前精确合同的机械扩seed/调prior/重复fit，并把下一步提升为验收单位与范式决策；但预注册per-sector restart、低维厚尾emission、共享先验及其他Gaussian-HMM变体尚未被证伪。现有child evidence仍值得做一次零refit紧凑聚合，用于只选择一个后续spike；此后不得继续无界诊断。
 
 ### 3.3 根因结论
 
@@ -155,10 +155,10 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 - **额外成本**：低（特征与 emission 替换，复用现有训练骨架）。
 - **不做的业务影响**：即使不换模型类，也会持续与协方差病态搏斗。
 
-### 方向 D（首选并行，解锁产品价值）：诚实子集交付
+### 方向 D（产品状态修订）：FULL_READY / COVERAGE_AVAILABLE / NOT_AVAILABLE
 
-- **做法**：将 F-011 READY 的「全或无」改为「**eligible sector 出状态、不 eligible 的 sector 显式返回 `insufficient_structure` typed status**」，family/整体 READY 定义为「所有 eligible sector 均通过 + 不可建模 sector 均有显式 typed 证据」。
-- **直接解除的 blocker**：F-013（产品价值）。允许 API/UI/回测分析基于**子集 READY** 先落地（E-14 当前被 all-or-nothing 卡死），用户可看到真实价值；11 个失败 sector（E-4）以诚实状态呈现。
+- **做法**：将顶层状态拆为`FULL_READY/COVERAGE_AVAILABLE/NOT_AVAILABLE`。eligible sector可输出状态，不eligible sector显式返回typed不足；COVERAGE_AVAILABLE必须独立通过产品指标和coverage代表性合同，绝不命名为READY。
+- **直接解除的 blocker**：允许F-013在不伪造完整性的前提下展示真实可用范围；11个失败sector以诚实状态呈现。该路径不是无条件fallback，产品指标或代表性不足时必须NOT_AVAILABLE。
 - **与既有原则的一致性**：这**恰恰符合**详细设计的「禁止静默失败、禁止 neutral 补态、如实保留 11 个失败 sector」价值观——把「不可建模」如实展示，比「全或无导致零展示」更符合诚实性原则，也不改变任何 hard semantic authority。
 - **最小替代方案**：先只在内部报告层面呈现子集，UI 暂不注册（更保守）。
 - **额外成本**：低–中（需在 F-011/F-013 验收口径与 UI 状态机中增加 `insufficient_structure` 语义，属于既有 error-contract 家族的扩展）。
@@ -174,7 +174,7 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 
 ### 5.1 推荐组合
 
-**A（跳跃模型 spike）+ B（分层）择一先做 spike，并行 D（诚实子集交付）+ C（降维/t-emission 作为低成本增强）**；评估协议改为 walk-forward 多折（§9）。E 作为预警子产品的可选增强。理由：A/B 攻 RC-1/2/3/4 的建模根因，D 立刻解锁 F-013 产品价值且强化而非削弱诚实性，C 成本最低可立即叠加。
+先完成既有evidence聚合，再只选一个spike，禁止A/B/C并行。市场regime+sector相对强弱优先作为部署结构；transition/dwell主导时选A，covariance/feature主导时选C，固定少数sector跨窗口失败时选简化B。D不是并行模型工程，而是独立产品状态合同；E继续作为后续独立预警能力。
 
 ---
 
@@ -184,12 +184,12 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 
 | 序号 | 目标文件 / 位置 | 现状 | 建议修订 | 映射 blocker |
 |---|---|---|---|---|
-| CS-1 | 父蓝图 §1.0 反过度工程边界 | 只允许在既有范式内推进；范式变化无显式授权口径 | 增加一条：「当范式内自由度已被证据穷尽否定（引用 E-5/E-6/E-8）时，允许提出 modeling-paradigm spike 作为解除 F-011 的候选路径，须经用户批准」 | RC-1 |
+| CS-1 | 父蓝图 §1.0 反过度工程边界 | 只允许在既有范式内推进；范式变化无显式授权口径 | 当当前精确合同的机械扩展已被充分证据否定时，允许提出一个预注册modeling-paradigm spike；不外推为所有HMM不可能 | RC-1 |
 | CS-2 | 父蓝图 §Gate 2 / P2-2；详细设计 §24.1 第 2 条 | P2-2 锁定为「仅聚合既有 child evidence」「不进入 HSMM/不改 seed/不放宽 D4/D6」 | 将 P2-2 的目标从「在范式内找精确 seed 决策」改为「**范式决策**」：解锁受控 spike（方向 A/B/C 至少其一），HSMM/跳跃模型/分层作为**候选**而非禁止项；仍禁止未预注册的事后挑 seed | RC-1/2/3/4；E-13 |
-| CS-3 | 父蓝图 F-011 验收；详细设计 §4.3 READY 定义 | READY = L1 31/31 ∧ L2 131/131 全或无 | 增加**可选完成路径**：READY 可定义为「所有 eligible sector 通过 + 不可建模 sector 均有 `insufficient_structure` typed 证据」；保留 all-or-nothing 作为「强完整性」标签，新增「诚实子集」标签 | F-013；RC-1 |
+| CS-3 | 父蓝图 F-011 验收；详细设计 §4.3 READY 定义 | READY = L1 31/31 ∧ L2 131/131 全或无 | 严格分离FULL_READY、COVERAGE_AVAILABLE与NOT_AVAILABLE；eligibility须validation前冻结，coverage必须通过产品指标与代表性合同，不能把partial改名READY | F-013；RC-1 |
 | CS-4 | 详细设计 §4.3.1 观测契约 | autocycle 固定 20 维对角高斯 | 允许 spike 内评估降维特征集与 t-emission；正式采用须新 model-set version（不原地漂移） | RC-3 |
 | CS-5 | 父蓝图 §1.2 进度口径 | 单一 `11/17` 严格进度 | 增加「产品价值交付」维度（Phase 2 功能完成度独立计数），使「关键路径阻塞」不被 Phase 0/1 完成稀释 | 报告口径 |
-| CS-6 | 父蓝图 Design Acceptance Matrix / 详细设计 §19 | 无 spike 验收行 | 新增 proposed 验收行（spike 对比实验 + walk-forward 协议 + 诚实子集口径），状态 `PROPOSED_PENDING_USER_APPROVAL` | 追踪 |
+| CS-6 | 父蓝图 Design Acceptance Matrix / 详细设计 §19 | 无 spike 验收行 | 新增四层验收、三状态、family/restart和单一spike决策行；方向approved，精确公式/阈值/实现pending | 追踪 |
 
 > 说明：CS-2 保留「预注册、看 validation 前固定协议、禁止事后挑 seed、禁止 per-sector 拼接式 cherry-pick」的防过拟合意图；它解锁的是**范式选择**，不是放宽诚实性。
 
@@ -197,7 +197,7 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 
 ## 7. 进度口径修订建议
 
-`11/17=64.71%` 在报告层面具误导性：Phase 0/1（11 行）已 verified 是真的，但 Phase 2 的**产品价值功能完成度为 0** 且卡死。建议（CS-5）在保留 17 行严格进度的同时，并列一个「Phase 2 产品价值 = 0/N（阻塞于 F-011 建模范式决策）」的独立口径，避免「六成完成」掩盖「关键路径完全阻塞」。此建议不改变任何验收计数规则，仅增加报告维度，符合 DESIGN-COMPLIANCE-001 第 4 项（不新增门禁）。
+保留`11/17=64.71%`，并列报告可审计事实：canonical产品模型=0、F-011产品验收未通过、F-013真实预测/预警/API/UI未交付。历史源码与诊断不是“零工作”，但不计用户产品结果；该维度只用于状态透明，不新增门禁。
 
 ---
 
@@ -207,7 +207,7 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 |---|---|---|
 | 换模型类引入新复杂度或新的过拟合面 | 中 | spike 用预注册协议 + walk-forward 多折 + 与现有 HMM 同冻结输入对照（§9）；正式采用须新 version 与完整验收 |
 | 「诚实子集」被误用为静默降级 | 高 | `insufficient_structure` 必须是 typed、可见、带证据的显式状态；UI/报告如实标注，禁止 neutral 补态（沿用既有 error-contract） |
-| spike 沦为又一轮无收敛诊断 | 中 | spike 有明确的 kill-criteria：若在代表性顽固 sector（含 E-4 的 11 个 D6 失败 sector 与 E-8 的 legacy 缺态例 `801780.SI`）上仍不达标，则结论直接回到「诚实子集交付」而非再开诊断 |
+| spike 沦为又一轮无收敛诊断 | 中 | 只允许一个预注册spike；失败后停止该方向并提交NOT_AVAILABLE或新的用户决策，不能自动产生COVERAGE_AVAILABLE或再开诊断 |
 | 修订被解读为放宽 hard semantic authority | 高 | 明确：CS-1~CS-6 不改任何 hard assignment/PIT/advisory-only 语义；只改「建模手段」与「完整性口径」 |
 | 提案本体越权（改蓝图/跑模型） | 高 | 本提案仅为 proposed change-set，不改正文、不跑 fit（§1.3 边界；§12 门禁全 noop） |
 
@@ -231,15 +231,15 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 本提案作为 docs-fast-new（新增 `docs/architecture/` 设计文档，非 controlled path）交付，合入标准如下：
 
 - [x] 文档归属正确：位于 `docs/architecture/`，符合 [DOC-LOCATION-001]。
-- [x] 不修改父蓝图或 Phase 2 详细设计正文；不含代码/schema/DDL/runtime 变更。
+- [x] 初始提案未修改父蓝图；2026-08-14经用户批准后，修订方向已由父蓝图v2.25与详细设计C-011承接；本文件仅同步历史裁决，不含代码/schema/DDL/runtime变更。
 - [x] 所有事实（E-1~E-14）可回溯到两份权威文档及其登记证据。
 - [x] 每个整改方向给出 blocker 映射、最小替代、成本、不做的影响（满足父蓝图 §11.1 规则）。
 - [x] 通过 DESIGN-COMPLIANCE-001 四项自审（§11）。
 - [x] `git diff --check` 无空白/冲突标记错误（§12 报告）。
 - [x] 生产门禁全 `noop`（§12）。
-- [ ] 用户确认合入（**保留给用户**）。
+- [x] 用户已确认经peer review修正后的方向；正文合入仍按当前独立文档PR授权处理。
 
-后续（批准后、非本提案范围）：CS-1~CS-6 的正文修订与 spike 走独立 F2 设计 + `python scripts/aistock_feature_workflow.py validate --design <path> --tier F2` + feature workflow。
+后续：父蓝图方向已同步；product metrics、coverage、family/restart与单一spike的精确合同仍须独立F2审核、用户确认和feature workflow，不能从本提案直接实施。
 
 ---
 
@@ -247,10 +247,10 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 
 - **1 禁止简化交付：PASS**。本提案完整给出根因分析、依据、分析过程、结论、五个整改方向与建议修订条目；未把任何子集或占位当作完整交付。它明确自身是「决策输入」而非「已批准变更」，边界清晰。
 - **2 禁止静默错误：PASS**。所有 blocker、失败 sector、无完整候选 seed 的事实均如实引用（E-3~E-8）；方向 D 明确要求 `insufficient_structure` 为显式 typed 状态，反对静默降级。
-- **3 禁止改变业务逻辑：PASS（附显式声明）**。本提案不擅自改变任何已批准业务语义：advisory-only、PIT、hard semantic authority、禁止静默失败均原样保留。**须显式声明**：CS-3 确实**提议**把 F-011 READY 的完整性口径从「全或无 131/131 ∧ 31/31」改为「eligible sector 通过 + 不可建模 sector 显式 `insufficient_structure`」——这正是父蓝图 §11.2 当前明令禁止的「单 family / 120-of-131 完成声明」。因此 CS-3 是一个**需用户批准的完整性口径变更提议**，不是本提案单方面生效的改动；DESIGN-COMPLIANCE-001 第 3 项要求「批准后的范围调整同步回设计」，本提案严格停留在「提议 + 待批准」阶段，未修改蓝图正文、未按新口径宣称任何完成，故不构成违规。用户批准 CS-3 即等于批准该完整性口径调整。
+- **3 禁止改变业务逻辑：PASS（用户批准范围调整）**。用户已批准把产品主验收改为日期×横截面并分离三种状态；父蓝图v2.25和详细设计C-011已同步。旧B3仍按旧合同blocked，COVERAGE_AVAILABLE不得冒充FULL_READY，PIT/因果/advisory-only/禁止静默失败均不变。
 - **4 禁止私增门禁审批：PASS**。不新增模型阈值、研究淘汰门禁、运行时审批或发布阻断；CS-5 的进度口径只增加报告维度不增加门禁；spike 的 kill-criteria 是收敛条件而非新增审批。
 
-**结论**：`PASS_PROPOSAL_ONLY_NO_BLUEPRINT_OR_MODEL_CHANGE_AUTHORIZED`。该结论只确认本提案自身的设计符合性，不表示 CS-1~CS-6、spike、F-011 READY 或任何模型/DDL/runtime 已获批准或已完成。
+**结论**：`REVIEWED_PARTIALLY_ADOPTED_BLUEPRINT_V2_25_EXACT_CONTRACT_AND_IMPLEMENTATION_PENDING`。父蓝图仅吸收经peer review修正的方向；本提案中未被吸收的原始措辞不再是active决策。canonical模型、FULL_READY/COVERAGE_AVAILABLE、spike、DDL/runtime均未完成或授权。
 
 ---
 
@@ -261,7 +261,7 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 - `production_frontend_dependency_gate`：`noop`。
 - `runtime_activation_gate`：`noop`（不激活任何 runtime）。
 - `data_write_gate`：`noop`（未写 `hmm_risk.*`/`hmm_evolution.*` 或任何库）。
-- 变更文件：仅新增本文件一份。验证：`git diff --check`。
+- 当前文档修订范围：本提案、父蓝图与Phase 2详细设计；验证按docs/F2合同执行。
 - 模型/READY/selection/D5/D6/fit：均未执行。scratch：无。
 
 ---
@@ -270,7 +270,7 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 
 ### 13.1 内部权威文档
 
-- `docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.24 — 父级唯一产品目标蓝图。
+- `docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.25 — 父级唯一产品目标蓝图。
 - `docs/architecture/hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md` — Phase 2 实现级详细设计与模型验收权威状态。
 - `docs/standards/aistock_development_standard_v1.5_20260523.md` — 唯一开发规范（[DOC-LOCATION-001]、[DESIGN-MAIN-001]、[DESIGN-COMPLIANCE-001]、[TRADING-FALLBACK-001]、[ERR-FALLBACK-001]）。
 
@@ -289,6 +289,7 @@ Phase 0/1 已真实外部验收并进入生产（worker v3），方向正确、�
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v1.1 | 2026-08-14 | 记录peer review与用户裁决：收回“穷尽证明所有HMM不可能”；区分单sector D4/D6与系统合取；补入预注册train-only per-sector restart；把诚实子集READY修正为FULL_READY/COVERAGE_AVAILABLE/NOT_AVAILABLE；明确family角色由产品holdout裁决、市场regime+sector相对强弱为首要结构候选、现有K3 artifact不能无K2 fit决定K、经济产品指标为最终验收、单一spike且不无条件fallback成功。方向已由父蓝图v2.25和详细设计C-011吸收，精确合同与实现仍pending。 |
 | v1.0 | 2026-08-13 | 初始提案：Phase 2 F-011 根因分析（建模范式与验收门禁统计阻抗失配）、依据/分析过程/结论、五个整改方向、建议蓝图修订条目 CS-1~CS-6、spike 验收协议与可合入标准。状态 `PROPOSAL_PENDING_USER_APPROVAL`；不修改蓝图，DDL/DML/依赖/runtime 均 noop。 |
 
 ---

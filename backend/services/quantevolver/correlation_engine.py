@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import threading
@@ -21,22 +22,61 @@ import pandas as pd
 from scipy import stats
 
 from .factor_value_loader import FactorValueLoader
+from .wsl_runtime_guard import is_wsl_runtime
 
 logger = logging.getLogger("aistock.quantevolver.correlation_engine")
 
-# GPU 加速探测
-_USE_GPU = False
-try:
-    import torch
-    if torch.cuda.is_available():
-        # 测试实际 GEMM 是否正常工作
-        _test = torch.randn(10, 10, device="cuda") @ torch.randn(10, 10, device="cuda")
-        torch.cuda.synchronize()
-        del _test
-        _USE_GPU = True
-        logger.info(f"GPU 加速已启用: {torch.cuda.get_device_name(0)}, CUDA {torch.version.cuda}")
-except Exception as e:
-    logger.info(f"GPU 不可用，使用 CPU BLAS: {e}")
+# CUDA must be resolved only when a real correlation computation reaches the
+# matrix kernel. Importing this module is part of FastAPI startup; probing CUDA
+# here creates a process-wide CUDA context and reserves GPU memory while idle.
+_GPU_BACKEND_UNRESOLVED = object()
+_gpu_backend: Any = _GPU_BACKEND_UNRESOLVED
+_gpu_backend_lock = threading.Lock()
+
+
+def _resolve_gpu_backend() -> Any | None:
+    """Lazily validate and cache the PyTorch CUDA backend.
+
+    The small GEMM preserves the previous functional probe, but it now runs
+    only on the first actual correlation computation. Missing or unusable CUDA
+    remains an explicit CPU-BLAS fallback.
+    """
+
+    global _gpu_backend
+    if _gpu_backend is not _GPU_BACKEND_UNRESOLVED:
+        return _gpu_backend
+
+    with _gpu_backend_lock:
+        if _gpu_backend is not _GPU_BACKEND_UNRESOLVED:
+            return _gpu_backend
+        if not is_wsl_runtime():
+            _gpu_backend = None
+            logger.info("GPU correlation backend is disabled outside the WSL compute runtime")
+            return None
+        try:
+            torch_module = importlib.import_module("torch")
+            if not torch_module.cuda.is_available():
+                _gpu_backend = None
+                logger.info("GPU 不可用，使用 CPU BLAS")
+                return None
+            test_matrix = torch_module.randn(10, 10, device="cuda")
+            test_result = test_matrix @ test_matrix
+            torch_module.cuda.synchronize()
+            del test_result, test_matrix
+            _gpu_backend = torch_module
+            logger.info(
+                "GPU 加速已启用: %s, CUDA %s",
+                torch_module.cuda.get_device_name(0),
+                torch_module.version.cuda,
+            )
+        except Exception as exc:
+            _gpu_backend = None
+            logger.warning(
+                "GPU correlation initialization failed; using CPU BLAS: %s",
+                exc,
+                exc_info=True,
+            )
+        return _gpu_backend
 
 # HDF5 存储目录
 _DEFAULT_HDF5_DIR = os.path.join(
@@ -247,8 +287,12 @@ class CorrelationEngine:
         """
         t0 = time.time()
         K = len(factor_names)
-        backend = "GPU" if _USE_GPU else "CPU BLAS"
-        logger.info(f"开始计算 {K}×{K} 相关性矩阵, window={self._window}d, backend={backend}")
+        logger.info(
+            "开始计算 %s×%s 相关性矩阵, window=%sd, backend=lazy GPU/CPU BLAS",
+            K,
+            K,
+            self._window,
+        )
 
         # 确定日期范围
         if as_of_date is None:
@@ -563,8 +607,9 @@ class CorrelationEngine:
         M = (~nan_mask).astype(np.float64)
         X = np.where(nan_mask, 0.0, R)
 
-        if _USE_GPU:
-            sub_mat = self._gemm_pearson_gpu(X, M)
+        torch_module = _resolve_gpu_backend()
+        if torch_module is not None:
+            sub_mat = self._gemm_pearson_gpu(X, M, torch_module=torch_module)
         else:
             sub_mat = self._gemm_pearson_cpu(X, M)
 
@@ -604,10 +649,16 @@ class CorrelationEngine:
         np.fill_diagonal(sub_mat, 1.0)
         return sub_mat
 
-    def _gemm_pearson_gpu(self, X: np.ndarray, M: np.ndarray) -> np.ndarray:
+    def _gemm_pearson_gpu(
+        self,
+        X: np.ndarray,
+        M: np.ndarray,
+        *,
+        torch_module: Any,
+    ) -> np.ndarray:
         """5-GEMM Pearson (GPU PyTorch CUDA)。"""
-        X_t = torch.from_numpy(X).cuda()
-        M_t = torch.from_numpy(M).cuda()
+        X_t = torch_module.from_numpy(X).cuda()
+        M_t = torch_module.from_numpy(M).cuda()
 
         N_pairs = M_t.T @ M_t
         SX = X_t.T @ M_t
@@ -617,7 +668,7 @@ class CorrelationEngine:
         numerator = N_pairs * SXY - SX * SX.T
         var_x = N_pairs * SX2 - SX ** 2
         var_y = N_pairs * SX2.T - SX.T ** 2
-        denominator = torch.sqrt(torch.clamp(var_x * var_y, min=0.0))
+        denominator = torch_module.sqrt(torch_module.clamp(var_x * var_y, min=0.0))
 
         # 相对阈值：与 CPU 版本一致
         max_var = N_pairs * N_pairs * (N_pairs + 1) / 12.0
@@ -625,10 +676,14 @@ class CorrelationEngine:
         var_ok = (var_x > var_threshold * max_var) & (var_y > var_threshold * max_var)
 
         valid_pair = var_ok & (N_pairs >= 30)
-        sub_mat = torch.where(valid_pair, numerator / denominator, torch.tensor(float("nan"), device="cuda"))
+        sub_mat = torch_module.where(
+            valid_pair,
+            numerator / denominator,
+            torch_module.tensor(float("nan"), device="cuda"),
+        )
         sub_mat.fill_diagonal_(1.0)
 
-        torch.cuda.synchronize()
+        torch_module.cuda.synchronize()
         return sub_mat.cpu().numpy()
 
     def _ewma_aggregate(
