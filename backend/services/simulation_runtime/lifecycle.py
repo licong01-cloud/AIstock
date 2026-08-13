@@ -781,6 +781,16 @@ class SimulationLifecycleOrchestrator:
                     execution_plan_id=plan.plan_id,
                     worker_incarnation_id=worker_incarnation_id,
                 )
+                activate_hot_targets = getattr(product_runtime, "activate_hot_market_targets_v1", None)
+                if not callable(activate_hot_targets):
+                    raise TypeError("MiniQMT KERNEL_V2 product runtime lacks hot target activation")
+                activate_hot_targets(
+                    tuple(
+                        item.algo_instance_id
+                        for item in qmt_result.ordered_parent_results
+                        if item.start_status.value == "STARTED"
+                    )
+                )
             except Exception as exc:
                 self._annotate_event_loop_submit_failure(
                     exc=exc,

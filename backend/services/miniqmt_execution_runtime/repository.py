@@ -800,7 +800,7 @@ class PostgresMiniQMTExecutionRuntimeRepository:
     def _read_quote_event_schema_gate(self, reader: Callable[[Any], Any]) -> str:
         with self._conn() as conn:
             event_receipt = reader(conn)
-        if getattr(event_receipt, "schema_state", None) != "target_verified":
+        if getattr(event_receipt, "schema_state", None) != "successor_verified":
             return "pending"
         from .kernel_repository import PostgresMiniQMTKernelRepository
         from .kernel_repository_schema import validate_kernel_schema_preflight_readback
