@@ -11528,6 +11528,17 @@ def _delete_remote_branch_with_lease(
     expected_sha = _remote_branch_sha(expected_remote_ref, branch)
     if not expected_sha:
         raise WorkflowError(f"remote branch preflight identity is invalid: {branch}")
+    observed_remote_ref = _git(
+        ["ls-remote", "--heads", "origin", branch],
+        cwd=root,
+        check=False,
+    )
+    observed_sha = _remote_branch_sha(observed_remote_ref, branch)
+    if observed_sha != expected_sha:
+        raise WorkflowError(
+            f"remote branch changed after cleanup preflight: {branch} "
+            f"expected={expected_sha} observed={observed_sha or 'absent'}"
+        )
     result = _execute_checked(
         [
             "git",
