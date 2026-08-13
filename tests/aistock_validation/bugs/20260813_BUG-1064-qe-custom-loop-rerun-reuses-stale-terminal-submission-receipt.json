@@ -132,10 +132,10 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3397",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3397",
   "reproduce_command": "POST /api/v1/quantevolver/evolution/tasks/qe_20260810_224522_b0d9/loops/7/rerun with confirm_delete_old_result=true; observe immediate failure QE Workspace inspected receipt request digest does not match the payload",
   "required_verification": [
     "l0",
@@ -151,7 +151,8 @@
       "Fresh Python subprocess imported tracked AutoEvolutionScheduler, resolved a unique rerun reservation identity plus canonical Loop claim identity, printed fresh-process-ok, and exited 0 without database or process control.",
       "Source commit 16973538f42def87ba99434eeb61bf698eaf2f04 contains the persistent scheduler fix and direct tests; no user backend or experiment process was controlled by the BUG workflow.",
       "final HEAD e3353d6f fresh subprocess loaded rerun attempt reservation plus canonical loop claim identity and exited fresh-process-ok; process_control=false",
-      "HEAD e3353d6f fresh subprocess imported persistent scheduler fix and exited fresh-process-ok; process_control=false"
+      "HEAD e3353d6f fresh subprocess imported persistent scheduler fix and exited fresh-process-ok; process_control=false",
+      "final HEAD 18eaa8a4 fresh subprocess loaded persistent rerun attempt reservation plus canonical Loop claim identity -> fresh-process-ok; process_control=false"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
