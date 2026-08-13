@@ -190,6 +190,7 @@ def test_windows_process_scan_builds_full_caller_ancestor_exclusion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
+    monkeypatch.setattr(workflow.os, "name", "nt")
 
     def fake_run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         captured["args"] = args

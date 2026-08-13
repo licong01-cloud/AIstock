@@ -1286,6 +1286,13 @@ def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
     assert "github.rest.issues.create" in issue_writer_text
     assert "workflow_run:" in issue_writer_text
 
+    guardrail = yaml.safe_load(Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8"))
+    guardrail_text = Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8")
+    assert "issues" not in guardrail.get("permissions", {})
+    assert "workflow_run:" not in guardrail_text
+    assert "github.rest.issues" not in guardrail_text
+    assert "actions/upload-artifact@v4" in guardrail_text
+
 
 def test_non_required_pr_workflows_skip_pure_bug_registry_changes() -> None:
     for relative_path in (
@@ -1298,14 +1305,6 @@ def test_non_required_pr_workflows_skip_pure_bug_registry_changes() -> None:
         assert "pull_request:" in text
         assert "paths-ignore:" in text
         assert "- 'tests/aistock_validation/bugs/**'" in text
-
-    guardrail = yaml.safe_load(Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8"))
-    guardrail_text = Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8")
-    assert "issues" not in guardrail.get("permissions", {})
-    assert "workflow_run:" not in guardrail_text
-    assert "github.rest.issues" not in guardrail_text
-    assert "actions/upload-artifact@v4" in guardrail_text
-
 
 def test_allocator_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:
     allocator = tmp_path / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
