@@ -12,6 +12,16 @@ import psycopg2.extras as pgx
 from dotenv import load_dotenv
 
 from ..db.pg_pool import get_conn
+from .canonical_equity_pit import (
+    CANONICAL_PIT_IPO_TRADING_SESSIONS,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SCOPE,
+    CANONICAL_PIT_UNIVERSE_KEY,
+    CanonicalPitAuthorityResolver,
+    PitConsumerBinding,
+    require_canonical_consumer_binding,
+    require_canonical_rolling_universe_key,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -74,8 +84,14 @@ def _normalize_refresh_policy(refresh_policy: str | None) -> str:
 class StockUniversePitService:
     """Build and validate the derived ST-only PIT stock universe cache."""
 
-    def __init__(self, reports_dir: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        reports_dir: Optional[Path] = None,
+        *,
+        authority_resolver: CanonicalPitAuthorityResolver | None = None,
+    ) -> None:
         self.reports_dir = reports_dir or Path("reports") / "stock_universe_pit"
+        self._authority_resolver = authority_resolver or CanonicalPitAuthorityResolver()
 
     @staticmethod
     def _preserve_existing_end_date(requested_end: dt.date, state: dict[str, Any]) -> dt.date:
@@ -185,7 +201,9 @@ class StockUniversePitService:
             return row[0]
         return dt.date.today()
 
-    def compute_source_fingerprint(self, *, end_date: dt.date | None = None) -> dict[str, Any]:
+    def compute_source_fingerprint(
+        self, *, end_date: dt.date | None = None, include_canonical_terminal_events: bool = False
+    ) -> dict[str, Any]:
         fingerprint_end = end_date or self.resolve_default_end_date()
         # BUG-927: fingerprint scope must match the span builder exactly
         # (A-shares only; B-share boards excluded) or the fingerprint drifts
@@ -220,22 +238,25 @@ class StockUniversePitService:
                 )
                 stock_basic = dict(cur.fetchone() or {})
                 cur.execute(
-                    """
+                    f"""
                     SELECT COUNT(*) AS row_count, MAX(ann_date)::date AS max_ann_date
                       FROM market.stock_st
                      WHERE ann_date::date <= %s
+                       {a_share_ts_code_filter("ts_code")}
                     """,
                     (fingerprint_end,),
                 )
                 stock_st = dict(cur.fetchone() or {})
                 cur.execute(
-                    """
+                    f"""
                     SELECT
                         COUNT(*) AS row_count,
                         MAX(pub_date)::date AS max_pub_date,
-                        MAX(imp_date)::date AS max_imp_date
+                        MAX(imp_date)::date AS max_imp_date,
+                        MAX(ingested_at) AS max_ingested_at
                       FROM market.stock_st_events
                      WHERE pub_date::date <= %s
+                       {a_share_ts_code_filter("ts_code")}
                     """,
                     (fingerprint_end,),
                 )
@@ -250,13 +271,40 @@ class StockUniversePitService:
                     (fingerprint_end,),
                 )
                 trading_calendar = dict(cur.fetchone() or {})
-        return {
+                confirmed_delisting = None
+                if include_canonical_terminal_events:
+                    cur.execute(
+                        f"""
+                        SELECT COUNT(*) AS row_count,
+                               MAX(COALESCE(
+                                   (available_at AT TIME ZONE 'Asia/Shanghai')::date,
+                                   source_event_date::date
+                               )) AS max_known_date,
+                               MAX(effective_trade_date::date) AS max_effective_date,
+                               MAX(updated_at) AS max_updated_at
+                          FROM market.event_signal
+                         WHERE event_type = 'stock_delisting_confirmed'
+                           AND time_mode = 'backtest'
+                           AND signal_status IN ('ACTIVE', 'RESOLVED', 'EXPIRED')
+                           AND COALESCE(
+                               (available_at AT TIME ZONE 'Asia/Shanghai')::date,
+                               source_event_date::date
+                           ) <= %s
+                           {a_share_ts_code_filter("ts_code")}
+                        """,
+                        (fingerprint_end,),
+                    )
+                    confirmed_delisting = dict(cur.fetchone() or {})
+        fingerprint = {
             "fingerprint_end_date": fingerprint_end.isoformat(),
             "stock_basic": stock_basic,
             "stock_st": stock_st,
             "stock_st_events": stock_st_events,
             "trading_calendar": trading_calendar,
         }
+        if include_canonical_terminal_events:
+            fingerprint["confirmed_delisting_events"] = confirmed_delisting
+        return fingerprint
 
     def get_status(self, *, universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY) -> dict[str, Any]:
         self.ensure_tables()
@@ -404,6 +452,35 @@ class StockUniversePitService:
         universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY,
     ) -> dict[str, Any]:
         universe_key = require_live_st_pit_universe_key(universe_key)
+        return self._mark_dirty(
+            reason=reason,
+            source_dataset=source_dataset,
+            universe_key=universe_key,
+            rule_version=DEFAULT_ST_PIT_RULE_VERSION,
+            scope=DEFAULT_ST_PIT_SCOPE,
+        )
+
+    def mark_canonical_dirty(self, *, reason: str, source_dataset: str | None = None) -> dict[str, Any]:
+        """Mark the inactive/active canonical rolling materialization stale."""
+
+        universe_key = require_canonical_rolling_universe_key(CANONICAL_PIT_UNIVERSE_KEY)
+        return self._mark_dirty(
+            reason=reason,
+            source_dataset=source_dataset,
+            universe_key=universe_key,
+            rule_version=CANONICAL_PIT_RULE_VERSION,
+            scope=CANONICAL_PIT_SCOPE,
+        )
+
+    def _mark_dirty(
+        self,
+        *,
+        reason: str,
+        source_dataset: str | None,
+        universe_key: str,
+        rule_version: str,
+        scope: str,
+    ) -> dict[str, Any]:
         self.ensure_tables()
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -429,8 +506,8 @@ class StockUniversePitService:
                     """,
                     (
                         universe_key,
-                        DEFAULT_ST_PIT_RULE_VERSION,
-                        DEFAULT_ST_PIT_SCOPE,
+                        rule_version,
+                        scope,
                         DEFAULT_ST_PIT_START_DATE,
                         DEFAULT_ST_PIT_START_DATE,
                         reason,
@@ -450,6 +527,7 @@ class StockUniversePitService:
         rule_version: str,
         source_sha: str,
         refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
+        expected_scope: str = DEFAULT_ST_PIT_SCOPE,
     ) -> tuple[bool, str]:
         refresh_policy = _normalize_refresh_policy(refresh_policy)
         if state.get("status") == "missing":
@@ -460,7 +538,7 @@ class StockUniversePitService:
             return True, f"status_{state.get('status')}"
         if state.get("rule_version") != rule_version:
             return True, "rule_version_changed"
-        if state.get("scope") != DEFAULT_ST_PIT_SCOPE:
+        if state.get("scope") != expected_scope:
             return True, "scope_changed"
         if state.get("start_date") and state["start_date"] > start_date:
             return True, "start_coverage_insufficient"
@@ -495,6 +573,7 @@ class StockUniversePitService:
         timeout_seconds: float,
         poll_seconds: float = DEFAULT_ST_PIT_LOCK_POLL_SECONDS,
         retryable_reasons: frozenset[str] | None = None,
+        expected_scope: str = DEFAULT_ST_PIT_SCOPE,
     ) -> tuple[dict[str, Any] | None, str]:
         retryable = frozenset({"status_building"}) if retryable_reasons is None else retryable_reasons
         deadline = time.monotonic() + max(timeout_seconds, 0.0)
@@ -508,6 +587,7 @@ class StockUniversePitService:
                 rule_version=rule_version,
                 source_sha=source_sha,
                 refresh_policy=refresh_policy,
+                expected_scope=expected_scope,
             )
             last_reason = reason
             if not needs_rebuild:
@@ -545,6 +625,7 @@ class StockUniversePitService:
             rule_version=rule_version,
             source_sha=source_sha,
             refresh_policy=refresh_policy,
+            expected_scope=DEFAULT_ST_PIT_SCOPE,
         )
         if force:
             needs_rebuild, reason = True, "force"
@@ -556,6 +637,7 @@ class StockUniversePitService:
                 rule_version=rule_version,
                 source_sha=source_sha,
                 refresh_policy=refresh_policy,
+                expected_scope=DEFAULT_ST_PIT_SCOPE,
                 timeout_seconds=lock_wait_seconds,
             )
             if peer_state is not None:
@@ -648,6 +730,98 @@ class StockUniversePitService:
             skip_if_ready=skip_if_ready,
             refresh_policy=refresh_policy,
             lock_wait_seconds=lock_wait_seconds,
+            scope=DEFAULT_ST_PIT_SCOPE,
+            ipo_filter_days=365,
+            ipo_filter_unit="calendar_days",
+            include_canonical_terminal_events=False,
+        )
+
+    def ensure_canonical_pit_universe(
+        self,
+        *,
+        start_date: dt.date,
+        end_date: dt.date | None = None,
+        force: bool = False,
+        strict: bool = True,
+        rebuild_if_stale: bool = True,
+        lock_wait_seconds: float = DEFAULT_ST_PIT_LOCK_WAIT_SECONDS,
+    ) -> dict[str, Any]:
+        """Prepare the v2 rolling materialization without activating it."""
+
+        require_canonical_rolling_universe_key(CANONICAL_PIT_UNIVERSE_KEY)
+        self.ensure_tables()
+        requested_end = end_date or self.resolve_default_end_date()
+        state = self.get_status(universe_key=CANONICAL_PIT_UNIVERSE_KEY)
+        end = self._preserve_existing_end_date(requested_end, state)
+        source = self.compute_source_fingerprint(end_date=end, include_canonical_terminal_events=True)
+        source_sha = _fingerprint_sha256(source)
+        needs_rebuild, reason = self._needs_rebuild(
+            state=state,
+            start_date=start_date,
+            end_date=end,
+            rule_version=CANONICAL_PIT_RULE_VERSION,
+            source_sha=source_sha,
+            refresh_policy="source_fingerprint",
+            expected_scope=CANONICAL_PIT_SCOPE,
+        )
+        if force:
+            needs_rebuild, reason = True, "force"
+        if not needs_rebuild:
+            return {
+                "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+                "status": "ready",
+                "rebuilt": False,
+                "reason": reason,
+                "source_fingerprint_sha256": source_sha,
+                "state": state,
+            }
+        if not rebuild_if_stale:
+            message = f"canonical PIT universe is stale: {reason}"
+            if strict:
+                raise StockUniversePitError(message)
+            return {"status": "stale", "rebuilt": False, "reason": reason, "error": message}
+        try:
+            rebuilt = self.rebuild_canonical_pit_universe(
+                start_date=start_date,
+                end_date=end,
+                source_fingerprint=source,
+                source_fingerprint_sha256=source_sha,
+                skip_if_ready=not force,
+                lock_wait_seconds=lock_wait_seconds,
+            )
+            rebuilt["reason"] = reason
+            return rebuilt
+        except Exception as exc:
+            if strict:
+                raise
+            return {"status": "failed", "rebuilt": False, "reason": reason, "error": str(exc)}
+
+    def rebuild_canonical_pit_universe(
+        self,
+        *,
+        start_date: dt.date,
+        end_date: dt.date | None = None,
+        source_fingerprint: Optional[dict[str, Any]] = None,
+        source_fingerprint_sha256: Optional[str] = None,
+        skip_if_ready: bool = False,
+        lock_wait_seconds: float = DEFAULT_ST_PIT_LOCK_WAIT_SECONDS,
+    ) -> dict[str, Any]:
+        return self._rebuild_st_pit_universe(
+            universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+            start_date=start_date,
+            end_date=end_date,
+            rule_version=CANONICAL_PIT_RULE_VERSION,
+            source_fingerprint=source_fingerprint,
+            source_fingerprint_sha256=source_fingerprint_sha256,
+            write_mode="replace",
+            incremental_from=None,
+            skip_if_ready=skip_if_ready,
+            refresh_policy="source_fingerprint",
+            lock_wait_seconds=lock_wait_seconds,
+            scope=CANONICAL_PIT_SCOPE,
+            ipo_filter_days=CANONICAL_PIT_IPO_TRADING_SESSIONS,
+            ipo_filter_unit="trading_sessions",
+            include_canonical_terminal_events=True,
         )
 
     def _rebuild_st_pit_universe(
@@ -664,6 +838,10 @@ class StockUniversePitService:
         skip_if_ready: bool = False,
         refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
         lock_wait_seconds: float = DEFAULT_ST_PIT_LOCK_WAIT_SECONDS,
+        scope: str = DEFAULT_ST_PIT_SCOPE,
+        ipo_filter_days: int = 365,
+        ipo_filter_unit: str = "calendar_days",
+        include_canonical_terminal_events: bool = False,
     ) -> dict[str, Any]:
         refresh_policy = _normalize_refresh_policy(refresh_policy)
         self.ensure_tables()
@@ -674,7 +852,9 @@ class StockUniversePitService:
         source = (
             source_fingerprint
             if source_fingerprint is not None and source_matches_effective_end
-            else self.compute_source_fingerprint(end_date=end)
+            else self.compute_source_fingerprint(
+                end_date=end, include_canonical_terminal_events=include_canonical_terminal_events
+            )
         )
         source_sha = (
             source_fingerprint_sha256
@@ -694,6 +874,7 @@ class StockUniversePitService:
                     rule_version=rule_version,
                     source_sha=source_sha,
                     refresh_policy=refresh_policy,
+                    expected_scope=scope,
                     timeout_seconds=lock_wait_seconds,
                     # The advisory-lock owner may not have inserted its first
                     # ``building`` row yet.  Only this lock-loser path may
@@ -718,7 +899,9 @@ class StockUniversePitService:
                 locked_end = self._preserve_existing_end_date(end, locked_state)
                 if locked_end != end:
                     end = locked_end
-                    source = self.compute_source_fingerprint(end_date=end)
+                    source = self.compute_source_fingerprint(
+                        end_date=end, include_canonical_terminal_events=include_canonical_terminal_events
+                    )
                     source_sha = _fingerprint_sha256(source)
                 if skip_if_ready:
                     needs_rebuild, reason = self._needs_rebuild(
@@ -728,6 +911,7 @@ class StockUniversePitService:
                         rule_version=rule_version,
                         source_sha=source_sha,
                         refresh_policy=refresh_policy,
+                        expected_scope=scope,
                     )
                     if not needs_rebuild:
                         return {
@@ -738,16 +922,17 @@ class StockUniversePitService:
                             "source_fingerprint_sha256": source_sha,
                             "state": locked_state,
                         }
-                self._set_building(universe_key, start_date, end, rule_version, source, source_sha)
+                self._set_building(universe_key, start_date, end, rule_version, source, source_sha, scope=scope)
                 from scripts import build_stock_universe_pit_spans as pit_builder
 
                 args = argparse.Namespace(
                     universe_key=universe_key,
                     rule_version=rule_version,
-                    scope=DEFAULT_ST_PIT_SCOPE,
+                    scope=scope,
                     start_date=start_date.isoformat(),
                     end_date=end.isoformat(),
-                    ipo_filter_days=365,
+                    ipo_filter_days=ipo_filter_days,
+                    ipo_filter_unit=ipo_filter_unit,
                     reports_dir=str(self.reports_dir),
                     dry_run=False,
                     write_all_txt=False,
@@ -790,7 +975,7 @@ class StockUniversePitService:
                                 start_date,
                                 end,
                                 rule_version,
-                                DEFAULT_ST_PIT_SCOPE,
+                                scope,
                                 universe_key,
                             ),
                         )
@@ -807,7 +992,9 @@ class StockUniversePitService:
                     "summary": summary,
                 }
             except Exception as exc:
-                self._set_failed(universe_key, start_date, end, rule_version, source, source_sha, str(exc))
+                self._set_failed(
+                    universe_key, start_date, end, rule_version, source, source_sha, str(exc), scope=scope
+                )
                 raise
             finally:
                 with lock_conn.cursor() as cur:
@@ -821,6 +1008,8 @@ class StockUniversePitService:
         rule_version: str,
         source: dict[str, Any],
         source_sha: str,
+        *,
+        scope: str = DEFAULT_ST_PIT_SCOPE,
     ) -> None:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -846,7 +1035,7 @@ class StockUniversePitService:
                     (
                         universe_key,
                         rule_version,
-                        DEFAULT_ST_PIT_SCOPE,
+                        scope,
                         start_date,
                         end_date,
                         _json_dumps(source),
@@ -863,6 +1052,8 @@ class StockUniversePitService:
         source: dict[str, Any],
         source_sha: str,
         error: str,
+        *,
+        scope: str = DEFAULT_ST_PIT_SCOPE,
     ) -> None:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -884,7 +1075,7 @@ class StockUniversePitService:
                     (
                         universe_key,
                         rule_version,
-                        DEFAULT_ST_PIT_SCOPE,
+                        scope,
                         start_date,
                         end_date,
                         _json_dumps(source),
@@ -899,15 +1090,60 @@ class StockUniversePitService:
         trade_date: dt.date,
         universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY,
         ensure: bool = True,
+        authority_binding: PitConsumerBinding | None = None,
+        consumer: str | None = None,
     ) -> list[str]:
-        universe_key = require_live_st_pit_universe_key(universe_key)
-        if ensure:
-            self.ensure_st_pit_universe(
-                universe_key=universe_key,
-                start_date=DEFAULT_ST_PIT_START_DATE,
-                end_date=trade_date,
-                strict=True,
+        canonical_query = universe_key == CANONICAL_PIT_UNIVERSE_KEY
+        if canonical_query:
+            if authority_binding is None:
+                raise StockUniversePitError("canonical PIT query requires a resolver-issued authority_binding")
+            require_canonical_consumer_binding(authority_binding, consumer=str(consumer or ""))
+            if authority_binding.universe_key != universe_key:
+                raise StockUniversePitError("canonical PIT binding and requested universe_key differ")
+            live_binding = self._authority_resolver.resolve_live_binding()
+            require_canonical_consumer_binding(live_binding, consumer=str(consumer or ""))
+            binding_identity = (
+                authority_binding.authority_id,
+                authority_binding.authority_status,
+                authority_binding.universe_key,
+                authority_binding.rule_version,
+                authority_binding.rule_parameters_digest,
+                authority_binding.activation_generation,
+                authority_binding.activation_envelope_digest,
             )
+            live_identity = (
+                live_binding.authority_id,
+                live_binding.authority_status,
+                live_binding.universe_key,
+                live_binding.rule_version,
+                live_binding.rule_parameters_digest,
+                live_binding.activation_generation,
+                live_binding.activation_envelope_digest,
+            )
+            if binding_identity != live_identity:
+                raise StockUniversePitError("canonical PIT binding is stale relative to the live authority pointer")
+            if (
+                live_binding.coverage_start is None
+                or live_binding.coverage_end is None
+                or not (live_binding.coverage_start <= trade_date <= live_binding.coverage_end)
+            ):
+                raise StockUniversePitError(
+                    "canonical PIT query date is outside the live authority coverage: "
+                    f"trade_date={trade_date} coverage=[{live_binding.coverage_start},{live_binding.coverage_end}]"
+                )
+            # The resolver already requires a ready, clean state. Canonical
+            # online reads must never run source scans or trigger a rebuild;
+            # dirty authorities fail closed until the maintenance path repairs
+            # and re-attests them.
+        else:
+            universe_key = require_live_st_pit_universe_key(universe_key)
+            if ensure:
+                self.ensure_st_pit_universe(
+                    universe_key=universe_key,
+                    start_date=DEFAULT_ST_PIT_START_DATE,
+                    end_date=trade_date,
+                    strict=True,
+                )
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -921,4 +1157,7 @@ class StockUniversePitService:
                     """,
                     (universe_key, trade_date, trade_date),
                 )
-                return [str(row[0]) for row in cur.fetchall()]
+                codes = [str(row[0]) for row in cur.fetchall()]
+        if canonical_query and not codes:
+            raise StockUniversePitError("canonical PIT query returned an empty authoritative stock pool")
+        return codes

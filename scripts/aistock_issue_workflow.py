@@ -1423,6 +1423,8 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "selected_lane_keys",
                 "blocking",
                 "warnings",
+                "checkout_advisories",
+                "remediation",
                 "restart_recommended",
             )
         )
@@ -1505,7 +1507,8 @@ def _format_summary_lines(payload: dict[str, Any], compact: dict[str, Any]) -> l
             (
                 f"{prefix} client-sync workflow_gate={gate} lane={compact.get('selected_lane') or 'all'} "
                 f"blocking={len(compact.get('blocking') or [])} warnings={len(compact.get('warnings') or [])} "
-                f"restart_recommended={str(bool(compact.get('restart_recommended'))).lower()}"
+                f"restart_recommended={str(bool(compact.get('restart_recommended'))).lower()} "
+                f"action={(compact.get('remediation') or {}).get('action') or 'unknown'}"
             )
         ]
     if schema == "aistock_issue_workflow_client_install_v2":
@@ -8789,6 +8792,93 @@ def _selected_client_lane_keys(selected_lane: str | None) -> set[str]:
     return {"router", normalized}
 
 
+def _client_source_authority() -> dict[str, Any]:
+    canonical_root = _canonical_root()
+    canonical_git = _git_snapshot(canonical_root)
+    head_result = _run_command(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=canonical_root, timeout=15)
+    head = str(head_result.get("stdout") or "").strip().lower()
+    origin_main = _origin_main_commit(root=canonical_root)
+    authority_status = _run_command(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--",
+            ".codex/skills",
+            ".claude/commands",
+            "scripts/aistock_issue_workflow.py",
+        ],
+        cwd=canonical_root,
+        timeout=15,
+    )
+    authority_paths_dirty = bool(str(authority_status.get("stdout") or "").strip())
+    if (
+        canonical_git.get("ok")
+        and canonical_git.get("branch") == "main"
+        and authority_status.get("ok")
+        and not authority_paths_dirty
+        and head
+        and origin_main
+        and head == origin_main
+    ):
+        return {
+            "ready": True,
+            "source": "canonical_main",
+            "root": str(canonical_root),
+            "commit": head,
+            "origin_main_commit": origin_main,
+            "authority_paths_clean": True,
+            "blocking_reason": None,
+            "blocking_reasons": [],
+        }
+
+    reasons: list[str] = []
+    if not canonical_git.get("ok"):
+        reasons.append("canonical root is not a readable Git checkout")
+    if canonical_git.get("branch") != "main":
+        reasons.append(f"canonical root branch is {canonical_git.get('branch') or 'unknown'}, expected main")
+    if not authority_status.get("ok"):
+        reasons.append("canonical client-authority path status is unavailable")
+    elif authority_paths_dirty:
+        reasons.append("canonical client-authority paths are dirty")
+    if not origin_main:
+        reasons.append("origin/main identity is unavailable")
+    if head and origin_main and head != origin_main:
+        reasons.append("canonical main is not aligned with origin/main")
+    return {
+        "ready": False,
+        "source": "canonical_main",
+        "root": str(canonical_root),
+        "commit": head or None,
+        "origin_main_commit": origin_main,
+        "authority_paths_clean": bool(authority_status.get("ok")) and not authority_paths_dirty,
+        "blocking_reason": reasons[0] if reasons else "canonical client authority is unavailable",
+        "blocking_reasons": reasons,
+    }
+
+
+def _client_checkout_root() -> Path:
+    result = _run_command(["git", "rev-parse", "--show-toplevel"], cwd=Path.cwd(), timeout=15)
+    value = str(result.get("stdout") or "").strip()
+    return Path(value) if result.get("ok") and value else REPO_ROOT
+
+
+def _client_checkout_relation(authority: dict[str, Any]) -> str:
+    checkout_root = _client_checkout_root()
+    authority_commit = str(authority.get("commit") or "").strip()
+    head_result = _run_command(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=checkout_root, timeout=15)
+    checkout_commit = str(head_result.get("stdout") or "").strip().lower()
+    if not authority_commit or not checkout_commit:
+        return "authority_checkout" if _same_path(Path(authority["root"]), checkout_root) else "unknown"
+    if checkout_commit == authority_commit:
+        return "matches_authority"
+    if _git_commit_is_ancestor(checkout_commit, authority_commit, root=checkout_root):
+        return "behind_authority"
+    if _git_commit_is_ancestor(authority_commit, checkout_commit, root=checkout_root):
+        return "ahead_of_authority"
+    return "divergent_from_authority"
+
+
 class _ClientInstallLock:
     def __init__(self, *, timeout: float = 30.0) -> None:
         self.timeout = timeout
@@ -8854,28 +8944,40 @@ def _staged_replace_file(source: Path, target: Path) -> None:
 def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = None) -> dict[str, Any]:
     codex_home = codex_home or _codex_home()
     claude_home = claude_home or _claude_home()
+    checkout_root = _client_checkout_root()
     cli = REPO_ROOT / "scripts" / "aistock_issue_workflow.py"
-    repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=15)
+    checkout_cli = checkout_root / "scripts" / "aistock_issue_workflow.py"
+    repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=checkout_root, timeout=15)
     cli_sha = _sha256_file(cli)
+    authority = _client_source_authority()
+    authority_root = Path(authority["root"])
+    authority_cli = authority_root / "scripts" / "aistock_issue_workflow.py"
+    checkout_relation = _client_checkout_relation(authority)
 
-    def _tree_status(repo_sha: str | None, global_sha: str | None) -> str:
-        if repo_sha and global_sha:
-            return "current" if repo_sha == global_sha else "stale"
-        if repo_sha and not global_sha:
+    def _tree_status(authority_sha: str | None, global_sha: str | None) -> str:
+        if not authority.get("ready"):
+            return "authority_unavailable"
+        if authority_sha and global_sha:
+            return "current" if authority_sha == global_sha else "stale"
+        if authority_sha and not global_sha:
             return "missing_global"
-        return "missing_repo_skill"
+        return "missing_authority"
 
-    def _file_status(repo_sha: str | None, global_sha: str | None) -> str:
-        if repo_sha and global_sha:
-            return "current" if repo_sha == global_sha else "stale_global"
-        if repo_sha and not global_sha:
+    def _file_status(authority_sha: str | None, global_sha: str | None) -> str:
+        if not authority.get("ready"):
+            return "authority_unavailable"
+        if authority_sha and global_sha:
+            return "current" if authority_sha == global_sha else "stale_global"
+        if authority_sha and not global_sha:
             return "missing_global"
-        return "missing_repo"
+        return "missing_authority"
 
-    def _combined_status(statuses: Iterable[str], *, missing_repo_status: str, stale_status: str) -> str:
+    def _combined_status(statuses: Iterable[str], *, stale_status: str) -> str:
         values = list(statuses)
-        if any(value == missing_repo_status for value in values):
-            return missing_repo_status
+        if any(value == "authority_unavailable" for value in values):
+            return "authority_unavailable"
+        if any(value == "missing_authority" for value in values):
+            return "missing_authority"
         if any(value.startswith("stale") for value in values):
             return stale_status
         if any(value == "missing_global" for value in values):
@@ -8884,81 +8986,112 @@ def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = 
 
     codex_entries: dict[str, dict[str, Any]] = {}
     for key, skill_name in CLIENT_CODEX_SKILLS:
-        repo_path = REPO_ROOT / ".codex" / "skills" / skill_name
+        repo_path = checkout_root / ".codex" / "skills" / skill_name
+        authority_path = authority_root / ".codex" / "skills" / skill_name
         global_path = codex_home / "skills" / skill_name
         repo_sha = _sha256_tree(repo_path)
+        authority_sha = _sha256_tree(authority_path) if authority.get("ready") else None
         global_sha = _sha256_tree(global_path)
         codex_entries[key] = {
             "name": skill_name,
             "repo_path": str(repo_path),
+            "authority_path": str(authority_path),
             "global_path": str(global_path),
             "repo_sha256": repo_sha,
+            "authority_sha256": authority_sha,
             "global_sha256": global_sha,
-            "status": _tree_status(repo_sha, global_sha),
+            "checkout_status": "matches_authority" if repo_sha == authority_sha else "differs_from_authority",
+            "status": _tree_status(authority_sha, global_sha),
         }
 
     claude_entries: dict[str, dict[str, Any]] = {}
     for key, command_name in CLIENT_CLAUDE_COMMANDS:
-        repo_path = REPO_ROOT / ".claude" / "commands" / command_name
+        repo_path = checkout_root / ".claude" / "commands" / command_name
+        authority_path = authority_root / ".claude" / "commands" / command_name
         global_path = claude_home / "commands" / command_name
         repo_sha = _sha256_file(repo_path)
+        authority_sha = _sha256_file(authority_path) if authority.get("ready") else None
         global_sha = _sha256_file(global_path)
         claude_entries[key] = {
             "name": command_name,
             "repo_path": str(repo_path),
+            "authority_path": str(authority_path),
             "global_path": str(global_path),
             "repo_sha256": repo_sha,
+            "authority_sha256": authority_sha,
             "global_sha256": global_sha,
-            "status": _file_status(repo_sha, global_sha),
+            "checkout_status": "matches_authority" if repo_sha == authority_sha else "differs_from_authority",
+            "status": _file_status(authority_sha, global_sha),
         }
 
     codex_status = _combined_status(
         (entry["status"] for entry in codex_entries.values()),
-        missing_repo_status="missing_repo_skill",
         stale_status="stale",
     )
     claude_status = _combined_status(
         (entry["status"] for entry in claude_entries.values()),
-        missing_repo_status="missing_repo",
         stale_status="stale_global",
     )
 
-    paths: dict[str, str] = {"workflow_cli": str(cli)}
+    paths: dict[str, str] = {"workflow_cli": str(cli), "checkout_workflow_cli": str(checkout_cli)}
     for key, entry in codex_entries.items():
         paths[f"repo_codex_{key}_skill"] = entry["repo_path"]
+        paths[f"authority_codex_{key}_skill"] = entry["authority_path"]
         paths[f"global_codex_{key}_skill"] = entry["global_path"]
     for key, entry in claude_entries.items():
         paths[f"claude_{key}_command"] = entry["repo_path"]
+        paths[f"authority_claude_{key}_command"] = entry["authority_path"]
         paths[f"global_claude_{key}_command"] = entry["global_path"]
 
     payload: dict[str, Any] = {
         "schema_version": "aistock_issue_workflow_client_manifest_v2",
         "repo_commit": repo_head.get("stdout") if repo_head.get("ok") else None,
+        "checkout_root": str(checkout_root),
+        "checkout_commit_relation": checkout_relation,
+        "source_authority": authority,
+        "codex_home": str(codex_home),
+        "claude_home": str(claude_home),
         "workflow_cli_sha256": cli_sha,
+        "authority_workflow_cli_sha256": _sha256_file(authority_cli) if authority.get("ready") else None,
         "codex_skill_status": codex_status,
         "claude_command_status": claude_status,
         "codex_entries": codex_entries,
         "claude_entries": claude_entries,
         "paths": paths,
-        "restart_recommended": codex_status != "current" or claude_status != "current",
-        "install_client_next_command": f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} install-client --apply",
+        "restart_recommended": False,
+        "install_client_next_command": subprocess.list2cmdline(
+            [
+                "python",
+                str(authority_cli),
+                "install-client",
+                "--apply",
+                "--codex-home",
+                str(codex_home),
+                "--claude-home",
+                str(claude_home),
+            ]
+        ),
     }
 
     # Backward-compatible flat fields used by compact output and older tests.
     if "issue" in codex_entries:
-        payload["codex_skill_sha256"] = codex_entries["issue"]["repo_sha256"]
+        payload["codex_skill_sha256"] = codex_entries["issue"]["authority_sha256"]
+        payload["checkout_codex_skill_sha256"] = codex_entries["issue"]["repo_sha256"]
         payload["global_codex_skill_sha256"] = codex_entries["issue"]["global_sha256"]
         payload["codex_issue_skill_status"] = codex_entries["issue"]["status"]
     if "feature" in codex_entries:
-        payload["codex_feature_skill_sha256"] = codex_entries["feature"]["repo_sha256"]
+        payload["codex_feature_skill_sha256"] = codex_entries["feature"]["authority_sha256"]
+        payload["checkout_codex_feature_skill_sha256"] = codex_entries["feature"]["repo_sha256"]
         payload["global_codex_feature_skill_sha256"] = codex_entries["feature"]["global_sha256"]
         payload["codex_feature_skill_status"] = codex_entries["feature"]["status"]
     if "issue" in claude_entries:
-        payload["claude_command_sha256"] = claude_entries["issue"]["repo_sha256"]
+        payload["claude_command_sha256"] = claude_entries["issue"]["authority_sha256"]
+        payload["checkout_claude_command_sha256"] = claude_entries["issue"]["repo_sha256"]
         payload["global_claude_command_sha256"] = claude_entries["issue"]["global_sha256"]
         payload["claude_issue_command_status"] = claude_entries["issue"]["status"]
     if "feature" in claude_entries:
-        payload["claude_feature_command_sha256"] = claude_entries["feature"]["repo_sha256"]
+        payload["claude_feature_command_sha256"] = claude_entries["feature"]["authority_sha256"]
+        payload["checkout_claude_feature_command_sha256"] = claude_entries["feature"]["repo_sha256"]
         payload["global_claude_feature_command_sha256"] = claude_entries["feature"]["global_sha256"]
         payload["claude_feature_command_status"] = claude_entries["feature"]["status"]
     for key in ("router", "docs_handoff", "merge_aftercare", "readonly_triage", "validation_delegation"):
@@ -8979,6 +9112,7 @@ def _client_lane_verification(
     selected_keys = _selected_client_lane_keys(selected_lane)
     blocking: list[str] = []
     warnings: list[str] = []
+    checkout_advisories: list[str] = []
     checked: list[dict[str, str]] = []
     for client, enabled, entries_key in (
         ("codex", verify_codex, "codex_entries"),
@@ -8989,8 +9123,22 @@ def _client_lane_verification(
         entries = manifest.get(entries_key) or {}
         for key, entry in entries.items():
             status = str((entry or {}).get("status") or "missing")
+            checkout_status = str((entry or {}).get("checkout_status") or "unknown")
             relevant = key in selected_keys
-            checked.append({"client": client, "lane": key, "status": status, "relevance": "selected" if relevant else "unrelated"})
+            checked.append(
+                {
+                    "client": client,
+                    "lane": key,
+                    "status": status,
+                    "checkout_status": checkout_status,
+                    "relevance": "selected" if relevant else "unrelated",
+                }
+            )
+            if relevant and checkout_status == "differs_from_authority":
+                checkout_advisories.append(
+                    f"{client} lane {key} checkout differs from merged client authority; "
+                    "do not install from this task worktree"
+                )
             if status == "current":
                 continue
             message = f"{client} lane {key} is {status}"
@@ -8998,12 +9146,47 @@ def _client_lane_verification(
                 blocking.append(message)
             else:
                 warnings.append(f"unrelated {message}")
+    authority = manifest.get("source_authority") if isinstance(manifest.get("source_authority"), dict) else {}
+    authority_cli = Path(str(authority.get("root") or _canonical_root())) / "scripts" / "aistock_issue_workflow.py"
+    install_args = ["python", str(authority_cli), "install-client", "--apply"]
+    verify_args = ["python", str(authority_cli), "verify-clients", "--workflow-only"]
+    if selected_lane:
+        install_args.extend(["--selected-lane", selected_lane])
+        verify_args.extend(["--selected-lane", selected_lane])
+    if verify_codex:
+        install_args.extend(["--codex-home", str(manifest.get("codex_home") or _codex_home())])
+        verify_args.extend(["--codex-home", str(manifest.get("codex_home") or _codex_home())])
+    else:
+        install_args.append("--skip-codex")
+        verify_args.append("--skip-codex")
+    if verify_claude:
+        install_args.extend(["--claude-home", str(manifest.get("claude_home") or _claude_home())])
+        verify_args.extend(["--claude-home", str(manifest.get("claude_home") or _claude_home())])
+    else:
+        install_args.append("--skip-claude")
+        verify_args.append("--skip-claude")
+    if blocking:
+        authority_blocked = any("authority_unavailable" in item or "missing_authority" in item for item in blocking)
+        action = "sync_canonical_main_then_single_owner_install" if authority_blocked else "request_single_owner_sync"
+    else:
+        action = "continue_without_install"
+    remediation = {
+        "action": action,
+        "single_owner_required": bool(blocking),
+        "must_not_install_from_task_worktree": True,
+        "owner_command": subprocess.list2cmdline(install_args) if blocking else None,
+        "window_verify_command": subprocess.list2cmdline(verify_args),
+        "authority_root": str(authority.get("root") or _canonical_root()),
+        "authority_commit": authority.get("commit"),
+    }
     return {
         "selected_lane": selected_lane,
         "selected_lane_keys": sorted(selected_keys),
         "checked": checked,
         "blocking": blocking,
         "warnings": warnings,
+        "checkout_advisories": checkout_advisories,
+        "remediation": remediation,
         "ready": not blocking,
     }
 
@@ -9100,15 +9283,15 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         warnings.append("MCP/Codex config mentions AIstock_worktrees; verify it is not a stale server target")
 
     client_manifest = _client_manifest()
-    if client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
+    if client_manifest["codex_skill_status"] in {"authority_unavailable", "missing_authority"}:
+        blocking.append("merged Codex workflow authority is unavailable or incomplete")
+    elif client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
         warnings.append(
             "global Codex workflow skill set is missing or stale; verify the router and selected lane for this window "
             "before any target-scoped install"
         )
-    elif client_manifest["codex_skill_status"] == "missing_repo_skill":
-        blocking.append("repo Codex workflow skill set is missing")
-    if client_manifest["claude_command_status"] == "missing_repo":
-        warnings.append("repo Claude Code workflow command set is missing; Claude can still call the repo CLI directly")
+    if client_manifest["claude_command_status"] in {"authority_unavailable", "missing_authority"}:
+        blocking.append("merged Claude Code workflow authority is unavailable or incomplete")
     elif client_manifest["claude_command_status"] in {"missing_global", "stale_global"}:
         warnings.append(
             "global Claude Code workflow command set is missing or stale; verify the router and selected lane for this "
@@ -9166,17 +9349,24 @@ def build_client_install_plan(
     target_home = Path(codex_home) if codex_home else _codex_home()
     target_claude_home = Path(claude_home) if claude_home else _claude_home()
     selected_keys = _selected_client_lane_keys(selected_lane)
+    source_authority = _client_source_authority()
+    authority_root = Path(source_authority["root"])
     source_codex_skills = [
-        (key, name, REPO_ROOT / ".codex" / "skills" / name, target_home / "skills" / name)
+        (key, name, authority_root / ".codex" / "skills" / name, target_home / "skills" / name)
         for key, name in CLIENT_CODEX_SKILLS
         if key in selected_keys
     ] if install_codex else []
     source_claude_commands = [
-        (key, name, REPO_ROOT / ".claude" / "commands" / name, target_claude_home / "commands" / name)
+        (key, name, authority_root / ".claude" / "commands" / name, target_claude_home / "commands" / name)
         for key, name in CLIENT_CLAUDE_COMMANDS
         if key in selected_keys
     ] if install_claude else []
     blocking: list[str] = []
+    if not source_authority.get("ready"):
+        blocking.append(
+            "merged client authority is unavailable: "
+            f"{source_authority.get('blocking_reason') or 'sync canonical main with origin/main'}"
+        )
     for _key, name, source, _target in source_codex_skills:
         if not source.exists():
             blocking.append(f"missing repo Codex skill {name}: {source}")
@@ -9229,6 +9419,9 @@ def build_client_install_plan(
         "install_claude": install_claude,
         "selected_lane": selected_lane,
         "selected_lane_keys": sorted(selected_keys),
+        "source_authority": source_authority,
+        "single_owner_required": any(bool(item.get("sync_required")) for item in actions),
+        "task_worktree_is_install_source": False,
         "client_manifest_before": _client_manifest(target_home, target_claude_home),
     }
     if apply:
@@ -9237,6 +9430,15 @@ def build_client_install_plan(
         installed: list[dict[str, str]] = []
         skipped_current: list[dict[str, str]] = []
         with _ClientInstallLock():
+            locked_authority = _client_source_authority()
+            if (
+                not locked_authority.get("ready")
+                or not _same_path(Path(locked_authority["root"]), authority_root)
+                or locked_authority.get("commit") != source_authority.get("commit")
+            ):
+                raise WorkflowError(
+                    "merged client authority changed before install; rerun from synchronized canonical main"
+                )
             for key, _name, source, target in source_codex_skills:
                 if _sha256_tree(source) == _sha256_tree(target):
                     skipped_current.append({"client": "codex", "lane": key, "target": str(target)})
@@ -14673,8 +14875,10 @@ def cmd_verify_clients(args: argparse.Namespace) -> int:
             "selected_lane_keys": lane_verification["selected_lane_keys"],
             "blocking": lane_verification["blocking"],
             "warnings": lane_verification["warnings"],
+            "checkout_advisories": lane_verification["checkout_advisories"],
+            "remediation": lane_verification["remediation"],
             "checked": lane_verification["checked"],
-            "restart_recommended": not workflow_clients_current,
+            "restart_recommended": False,
         }
         _emit_args(payload, args)
         return 0 if workflow_clients_current else 2
