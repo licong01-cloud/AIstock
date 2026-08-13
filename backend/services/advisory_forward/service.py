@@ -90,14 +90,27 @@ class AdvisoryForwardService:
         results: list[dict[str, Any]] = []
         blocked_program_ids: set[str] = set()
         for pending in self.repository.pending_settlements(on_or_before=now.date()):
+            pending_program_id = str(pending["program_id"])
+            if pending_program_id in blocked_program_ids:
+                results.append(
+                    {
+                        "program_id": pending_program_id,
+                        "forward_run_id": pending.get("forward_run_id"),
+                        "status": "SKIPPED_PREVIOUS_SETTLEMENT_PENDING",
+                        "stage": "TARGET_OPEN_SETTLE",
+                        "reason_code": "ADVISORY_FORWARD_PREVIOUS_SETTLEMENT_PENDING",
+                        "target_trade_date": pending["target_trade_date"].isoformat(),
+                    }
+                )
+                continue
             try:
                 settlement = self._settle(pending)
                 results.append(settlement)
                 if settlement.get("status") in {"WAITING_DATA", "FAILED"}:
-                    blocked_program_ids.add(str(pending["program_id"]))
+                    blocked_program_ids.add(pending_program_id)
             except Exception as exc:
                 results.append(self._visible_failure(pending, stage="TARGET_OPEN_SETTLE", exc=exc))
-                blocked_program_ids.add(str(pending["program_id"]))
+                blocked_program_ids.add(pending_program_id)
         if not self._publication_due(now):
             return {
                 "schema_version": "advisory_forward_run_once_v1",

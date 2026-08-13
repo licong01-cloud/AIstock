@@ -93,6 +93,7 @@ exit basis = Program.exit_price_basis
 - 正常行情完整时，前一 target 的结算在下一次 D 收盘发布前已完成。
 - 若前序结算仍缺数据，新 baseline Selection 可以独立生成，但正式发布不跨越未知 episode state；该 Program 本次记录 `ADVISORY_FORWARD_PREVIOUS_SETTLEMENT_PENDING`。其它 Program 继续运行。
 - 这是 episode 连续性的确定性校验，不是人工审批或发布门禁；数据准确时自动通过。
+- pending settlement 按 `target_trade_date, program_id` 排序；同一 Program 的较早日期一旦返回 `WAITING_DATA/FAILED`，本轮对该 Program 的更晚日期返回明确 `SKIPPED_PREVIOUS_SETTLEMENT_PENDING` 且不执行 transition，其他 Program 继续，避免跨日 episode 状态倒序写入。
 
 ## 6. Architecture / 最小组件
 
@@ -488,7 +489,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 | F-130 | Program/binding exact descriptor动态解析，不扫描latest，不依赖运行时target常量 |
 | F-137 | 无资金/订单/QMT/Paper/模拟盘/Selection cross-write |
 | F-140 | D收盘 publication 与 D+1 target-open settlement 分阶段，发布不读取target行情 |
-| F-401 | P0-A runner 只处理当前自然交易日和已存在pending settlement，并真实遵循显式after-close cutoff |
+| F-401 | P0-A runner 只处理当前自然交易日和已存在pending settlement，真实遵循显式after-close cutoff，并保证同一 Program settlement 按日期顺序阻塞 |
 | F-402 | target market与suspend同步不完整时不创建episode且不做价格回退 |
 | F-403 | baseline publication复用现有PUBLISHED list；结算复用现有review policy/transition/episode，不复制算法 |
 | F-404 | publication和settlement各自单事务，无review/list/episode部分写入 |
@@ -552,6 +553,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 - Source Round 6：修复 BUG-1057 settlement hash 只覆盖聚合计数/episode ids、可能把不同逐股价格或 action 静默判为幂等的问题；canonical payload现覆盖全部逐股经济字段并排除非确定性时间戳，同时增加终态冲突与事务rollback测试。
 - Source Round 7：修复 BUG-1060 disabled scheduler 在模块import时解析可选 interval、把未启用功能变成后台启动门禁的问题；interval只在显式启动时校验，disabled import/status保持稳定。
 - Source Round 8：修复 BUG-1061 设计声明的 after-close env 未被 service 使用、显式配置被静默忽略的问题；默认16:30保持不变，合法配置真实控制 publication due，非法值明确失败。
+- Source Round 9：修复 BUG-1063 同一 Program 较早 settlement 阻塞后仍执行更晚日期、可能倒序改变 episode 状态的问题；runner 现在按 Program 传播本轮阻塞并返回明确 skip，其他 Program 不受影响。
 
 ## 20. Implementation Plan / 本阶段唯一实施顺序
 
