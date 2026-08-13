@@ -1,6 +1,8 @@
 {
   "actual": "backend.main imports quantevolver_evolution, which imports correlation_engine; correlation_engine executes torch.cuda.is_available plus a CUDA GEMM at module import. The idle backend therefore loads torch CUDA/cuDNN/cuBLAS and retains about 293.5 MiB dedicated GPU memory even when correlation status is idle and no QE task runs. Expected: backend import and idle/read-only correlation APIs consume no CUDA context; GPU is lazily initialized only inside an actual correlation compute execution, preserving CPU fallback and WSL dispatch behavior.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/correlation_engine.py",
+    "backend/tests/unified_engine/test_qe_correlation_gpu_lifecycle.py",
     "tests/aistock_validation/bugs/20260813_BUG-1076-fastapi-backend-eagerly-initializes-cuda-through-correlation-engine-impo.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260813-2a3edb5a16a6",
       "timestamp": "2026-08-13T15:27:10.907085Z"
+    },
+    {
+      "action": "fix_implemented_and_reviewed",
+      "actor": "codex",
+      "note": "Removed import-time torch/CUDA probing. Windows backend correlation paths remain CPU-only; the WSL compute runtime lazily imports and validates CUDA at the first real GEMM. First review added the non-WSL guard so a pairwise request cannot leave CUDA resident in backend-main. Focused tests, required nox plans, Windows fresh-process lifecycle, WSL lazy CUDA, and GPU/CPU numerical parity passed.",
+      "timestamp": "2026-08-13T15:39:00Z"
     }
   ],
   "evidence_uris": [],
@@ -59,13 +67,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows AIstock fresh process imported backend.main, called the correlation GPU resolver, and proved torch.cuda.is_initialized remained false for both operations",
+      "WSL rdagent-gpu fresh process proved CUDA was false before the first real correlation resolver call and true only after that call on NVIDIA GeForce RTX 5080",
+      "WSL rdagent-gpu fresh process compared the changed GPU 5-GEMM kernel with CPU BLAS and passed numpy allclose with atol=1e-10"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
