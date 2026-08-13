@@ -275,7 +275,7 @@ class AdvisoryForwardPGRepository:
                 cur.execute(
                     """SELECT program_id, binding_version_id, decision_as_of_trade_date,
                               target_trade_date, publication_status, model_resolution_json
-                       FROM app.advisory_forward_run WHERE forward_run_id=%s FOR SHARE""",
+                       FROM app.advisory_forward_run WHERE forward_run_id=%s FOR UPDATE""",
                     (observation.forward_run_id,),
                 )
                 forward = cur.fetchone()

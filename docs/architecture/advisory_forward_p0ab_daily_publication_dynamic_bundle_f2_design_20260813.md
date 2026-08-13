@@ -224,7 +224,7 @@ Selection 和模型计算不持有数据库长事务。Selection 成功后，`co
 
 ### 8.2 Challenger observation
 
-Challenger 在 baseline publication commit 后运行。它失败不能回滚已发布 baseline；服务必须写 `UNAVAILABLE` 或 `FAILED` observation，并保留 reason。重试只针对同一 `forward_run_id + model_descriptor_sha256`。
+Challenger 在 baseline publication commit 后运行。它失败不能回滚已发布 baseline；服务必须写 `UNAVAILABLE` 或 `FAILED` observation，并保留 reason。重试只针对同一 `forward_run_id + model_descriptor_sha256`。保存时先以 `FOR UPDATE` 锁定父 `forward_run`，使同一 forward 的并发首次 insert 串行收敛；不得仅使用共享锁后竞争 child unique key。
 
 ### 8.3 Settlement commit
 
@@ -554,6 +554,7 @@ backend/tests/advisory_model_first/test_forward_boundaries.py
 - Source Round 7：修复 BUG-1060 disabled scheduler 在模块import时解析可选 interval、把未启用功能变成后台启动门禁的问题；interval只在显式启动时校验，disabled import/status保持稳定。
 - Source Round 8：修复 BUG-1061 设计声明的 after-close env 未被 service 使用、显式配置被静默忽略的问题；默认16:30保持不变，合法配置真实控制 publication due，非法值明确失败。
 - Source Round 9：修复 BUG-1063 同一 Program 较早 settlement 阻塞后仍执行更晚日期、可能倒序改变 episode 状态的问题；runner 现在按 Program 传播本轮阻塞并返回明确 skip，其他 Program 不受影响。
+- Source Round 10：修复 BUG-1065 并发首次保存同一 forward observation 时共享父锁无法阻止 child unique-key 竞争的问题；父行改为排它短锁，相同重放按既有payload幂等合同收敛。
 
 ## 20. Implementation Plan / 本阶段唯一实施顺序
 

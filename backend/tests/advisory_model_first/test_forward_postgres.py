@@ -114,6 +114,39 @@ class _SettlementConnection(_Connection):
         self.committed = False
 
 
+class _ObservationCursor(_Cursor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sql: list[str] = []
+
+    def execute(self, sql, params=()):
+        assert str(sql).count("%s") == len(params), str(sql)
+        normalized = " ".join(str(sql).split())
+        self.sql.append(normalized)
+        self.one = None
+        self.rows = []
+        if "FROM app.advisory_forward_run" in normalized:
+            self.one = {
+                "program_id": "advp-test",
+                "binding_version_id": "advb-test",
+                "decision_as_of_trade_date": date(2026, 8, 14),
+                "target_trade_date": date(2026, 8, 17),
+                "publication_status": "PUBLISHED",
+                "model_resolution_json": {"status": "UNAVAILABLE"},
+            }
+        elif "FROM app.advisory_forward_model_observation" in normalized:
+            self.one = None
+        elif "INSERT INTO app.advisory_forward_model_observation" in normalized:
+            self.one = {"forward_run_id": "advfwd-test", "status": "UNAVAILABLE"}
+
+
+class _ObservationConnection(_Connection):
+    def __init__(self) -> None:
+        self.cursor_instance = _ObservationCursor()
+        self.rolled_back = False
+        self.committed = False
+
+
 def _program() -> AdvisoryProgram:
     return AdvisoryProgram(
         program_id="advp-test",
@@ -337,3 +370,27 @@ def test_model_observation_rejects_cross_forward_identity() -> None:
 
     with pytest.raises(InvalidStateTransitionError, match="identity differs"):
         _validate_observation_identity(observation, forward)
+
+
+def test_model_observation_serializes_missing_row_insert_on_forward_parent() -> None:
+    conn = _ObservationConnection()
+    repository = AdvisoryForwardPGRepository(conn_factory=lambda: conn)
+    observation = AdvisoryForwardModelObservationV1(
+        observation_id="advobs-test",
+        forward_run_id="advfwd-test",
+        program_id="advp-test",
+        binding_version_id="advb-test",
+        decision_as_of_trade_date=date(2026, 8, 14),
+        target_trade_date=date(2026, 8, 17),
+        status="UNAVAILABLE",
+    )
+
+    repository.save_observation(observation)
+
+    parent_reads = [
+        sql for sql in conn.cursor_instance.sql if "FROM app.advisory_forward_run" in sql
+    ]
+    assert len(parent_reads) == 1
+    assert parent_reads[0].endswith("FOR UPDATE")
+    assert "FOR SHARE" not in parent_reads[0]
+    assert conn.committed is True
