@@ -46,9 +46,11 @@ class AdvisoryModelBindingResolver:
         program_id: str,
         binding_version_id: str,
     ) -> Path:
-        safe_program_id = _descriptor_identity("program_id", program_id)
-        safe_binding_version_id = _descriptor_identity(
-            "binding_version_id", binding_version_id
+        safe_program_id = os.path.basename(
+            _descriptor_identity("program_id", program_id)
+        )
+        safe_binding_version_id = os.path.basename(
+            _descriptor_identity("binding_version_id", binding_version_id)
         )
         root = Path(model_root).resolve()
         binding_root = (root / "program_bindings").resolve()
