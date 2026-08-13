@@ -601,6 +601,16 @@ def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     )
     monkeypatch.setattr(workflow, "_client_checkout_relation", lambda _authority: "matches_authority")
     monkeypatch.setattr(workflow, "_client_checkout_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        workflow,
+        "_publish_changed_clients_after_merge",
+        lambda **_kwargs: {
+            "schema_version": "aistock_merge_aftercare_client_publish_v1",
+            "workflow_gate": "not_required",
+            "selected_lanes": [],
+            "blocking": [],
+        },
+    )
     monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
     monkeypatch.setattr(workflow, "_github_bug_issue_for_id", lambda _bug_id, **_kwargs: (None, []))
     monkeypatch.setattr(workflow, "_github_bug_issue_by_number", lambda _issue_number, **_kwargs: (None, []))
